@@ -45,6 +45,8 @@ describe('terminal socket', () => {
     attachTerminal(core, ws as unknown as WebSocket, 's1');
     try {
       await wait(300);
+      // Output, not an attach error: the pty started.
+      expect(ws.sent[0]).toBeInstanceOf(Buffer);
       const stalled = ws.sent.length;
       expect(stalled).toBeGreaterThan(0);
       await wait(300);

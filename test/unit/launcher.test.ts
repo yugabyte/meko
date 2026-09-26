@@ -52,6 +52,7 @@ describe('writeLauncher (run through the login shell)', () => {
     const fake = join(home, 'fake claude');
     writeFileSync(fake, `#!/bin/sh
 for a in "$@"; do printf '%s\\0' "$a"; done > ${shq(out + '.args')}
+printf '%s' "$PATH" > ${shq(out + '.path')}
 for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECKPOINT_INTERVAL-unset}" "\${AK_HOME-unset}" "\${CLAUDECODE-unset}" "\${AK_TRICKY-unset}"; do printf '%s\\0' "$v"; done > ${shq(out + '.env')}
 `);
     chmodSync(fake, 0o755);
@@ -86,5 +87,10 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
   it('keeps a variable it sets even when it is also listed to unset', () => {
     const { env } = run(spec({ resume: true, env: { MEKO_AGENT_ID: 'x', MEKO_CHECKPOINT_INTERVAL: '2147483' } }));
     expect(env.slice(2, 4)).toEqual(['x', '2147483']);
+  });
+
+  it('finds tools in ~/.local/bin (where the installer puts Claude Code and gh) even when the profile leaves it out', () => {
+    run(spec({}));
+    expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
   });
 });

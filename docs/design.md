@@ -449,12 +449,14 @@ knows to pass the right `datapack_id` when it searches them.
 >   `~/.claude/settings.json` if one is there, and asks for one otherwise (pointing to the Meko web
 >   app to create an account or key). The install stops if the key doesn't work. It then checks
 >   that Meko is set up for Claude Code: the `meko-agent-skills` plugin installed and enabled,
->   `MEKO_API_KEY` in Claude Code's settings (or the environment) for the Meko hooks, and the
->   `meko` MCP server registered. If anything is missing it offers, after showing what will
+>   the verified `MEKO_API_KEY` in Claude Code's settings (sessions don't inherit the installer's
+>   environment, and a different key there would keep the hooks on it), and the `meko` MCP server
+>   registered. If anything is missing it offers, after showing what will
 >   change, to run Meko's own setup (`@yugabytedb/meko-mcp --client claude-code`), fetched from
 >   npm, checked against the registry's integrity hash and run with the bundled Node, with the key
 >   passed in the environment. It stops if you decline (or, non-interactively, without
->   `--install-deps`) and prints the command to run yourself.
+>   `--install-deps`) and prints the command to run yourself. Once Claude Code's settings hold the
+>   key, `config.toml` keeps none, so an older key there can't shadow it.
 > - **At project creation:** a dedicated datapack is mandatory. **Create project** stays disabled
 >   until one is chosen or created.
 > - **At session start:** every session gets the Meko environment. The server refuses to start a
@@ -654,8 +656,10 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #     install whatever is missing (it shows the commands and asks first): brew on macOS, the
 #     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
 #     from its GitHub release (checksum-verified) into ~/.local/bin, and Claude Code with
-#     Anthropic's installer (claude.ai/install.sh) into ~/.local/bin; then offers `gh auth login`
-#     and `claude auth login` for whichever isn't signed in. --install-deps installs without asking,
+#     Anthropic's installer (claude.ai/install.sh, which publishes no checksum) into ~/.local/bin;
+#     with GITHUB_TOKEN set, a missing gh is only installed with --install-deps (downloads use
+#     curl and the token); then offers `gh auth login` and `claude auth login` for whichever isn't
+#     signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
 #  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
 #  3. asks for your repos folder (default ~/code), listen address and port

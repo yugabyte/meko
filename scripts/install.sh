@@ -15,9 +15,11 @@
 #                       (--non-interactive, --repos-root, --meko-key, --bind, --port, --no-service)
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
-# (with sudo), gh on Linux from its GitHub release into ~/.local/bin, and Claude Code with
-# Anthropic's installer (claude.ai/install.sh, into ~/.local/bin). The installer shows the exact
-# commands and asks first; with --non-interactive it installs only with --install-deps.
+# (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and
+# Claude Code with Anthropic's installer from claude.ai over HTTPS (it publishes no checksum for
+# that script), into ~/.local/bin. The installer shows the exact commands and asks first; with
+# --non-interactive it installs only with --install-deps. With GITHUB_TOKEN set, a missing gh
+# is only installed with --install-deps; otherwise downloads use curl and the token.
 #
 # Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
 # GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
@@ -51,8 +53,8 @@ while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
     --version=*) version=${1#--version=}; version=${version#v}; shift ;;
-    --install-deps) install_deps=yes; forward="$forward '--install-deps'"; shift ;;
-    --no-install-deps) install_deps=no; forward="$forward '--no-install-deps'"; shift ;;
+    --install-deps) install_deps=yes; shift ;;
+    --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
     *) forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
@@ -79,9 +81,9 @@ case $(uname -s) in
     # The launchd service runs tmux in the foreground (tmux -D), which needs 3.2.
     tmux_min="3 2"
     missing_hint=" Releases from before macOS support have no macOS build."
-    # Homebrew's tools may not be on PATH yet in a fresh shell.
-    for d in /opt/homebrew/bin /usr/local/bin; do
-      case ":$PATH:" in *":$d:"*) ;; *) [ -x "$d/brew" ] && PATH="$d:$PATH" ;; esac
+    # Homebrew's tools may not be on PATH yet in a fresh shell. (AK_BREW_DIRS is for tests.)
+    for brew_dir in ${AK_BREW_DIRS-/opt/homebrew/bin /usr/local/bin}; do
+      case ":$PATH:" in *":$brew_dir:"*) ;; *) [ -x "$brew_dir/brew" ] && PATH="$brew_dir:$PATH" ;; esac
     done
     ;;
   *) die "only Linux and macOS are supported (found $(uname -s))" ;;
@@ -98,6 +100,8 @@ ask() {
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but was not found on PATH. $2"; }
 # Claude Code's installer, gh (as installed here) and agent-k-local itself live in ~/.local/bin,
 # which a fresh shell may not have on PATH yet: look there too, so they aren't installed twice.
+# The user's own PATH, to tell them later whether their shell will find agent-k-local.
+user_path=$PATH
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac
 need tar ""
 if command -v sha256sum >/dev/null 2>&1; then
@@ -138,9 +142,15 @@ if ! tmux_new_enough; then
 fi
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
+gh_skipped=false
 if ! command -v gh >/dev/null 2>&1; then
-  add_missing "gh (GitHub CLI)"
-  if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
+  # With GITHUB_TOKEN, downloads work through curl, so an unattended install can go on without
+  # gh (AgentK Local then can't open PRs, follow reviews or update itself until it's installed).
+  if [ -n "${GITHUB_TOKEN:-}" ] && [ "$install_deps" != yes ]; then gh_skipped=true
+  else
+    add_missing "gh (GitHub CLI)"
+    if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
+  fi
 fi
 command -v claude >/dev/null 2>&1 || { add_missing "Claude Code"; claude_install=true; }
 
@@ -174,7 +184,7 @@ else
     case $sudo in '(as root)'|'') s="" ;; *) s="$sudo " ;; esac
     case $pm in
       apt-get) plan="$plan
-      ${s}apt-get update && ${s}apt-get install -y$pkgs" ;;
+      ${s}apt-get update && ${s}env DEBIAN_FRONTEND=noninteractive apt-get install -y$pkgs" ;;
       dnf|yum) plan="$plan
       ${s}$pm install -y$pkgs" ;;
       zypper) plan="$plan
@@ -270,7 +280,7 @@ if [ -n "$plan" ]; then
   tmux_new_enough || die "tmux $min_major.$min_minor or newer is still not on PATH (found: $(tmux_version | tr ' ' . || true)). Your package manager's tmux may be too old; install a newer one yourself."
   git_ok || die "git is still not available after installing it."
   command -v curl >/dev/null 2>&1 || die "curl is still not available after installing it."
-  command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
+  $gh_skipped || command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
   command -v claude >/dev/null 2>&1 || die "Claude Code is still not available after installing it."
   ok "Installed" "$missing"
 fi
@@ -285,7 +295,9 @@ if ! claude auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
 fi
 
 # gh signs in to GitHub for downloads (the repo is internal), and for PRs, reviews and updates.
-if ! gh auth status >/dev/null 2>&1; then
+if $gh_skipped; then
+  warn "GitHub" "gh isn't installed: downloading with GITHUB_TOKEN; install gh for PRs, reviews and updates"
+elif ! gh auth status >/dev/null 2>&1; then
   if $interactive && ask "  gh isn't signed in to GitHub. AgentK Local needs it to download releases and for PRs, reviews and updates. Sign in now (gh auth login)?"; then
     gh auth login </dev/tty || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
   else
@@ -370,10 +382,18 @@ mkdir -p "$HOME/.local/bin"
 ln -sfn "$ak_home/app/current/bin/agent-k-local" "$HOME/.local/bin/agent-k-local"
 short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
 ok "Installed" "$short_home/app/$version"
-case ":$PATH:" in
+case ":$user_path:" in
   *":$HOME/.local/bin:"*) ok "Command" "agent-k-local (in ~/.local/bin)" ;;
-  *) warn "Command" "add ~/.local/bin to your PATH to run 'agent-k-local' directly" ;;
+  *) warn "Command" "add ~/.local/bin to your PATH to run 'agent-k-local' (and tools installed there) directly" ;;
 esac
+
+# Releases from before --install-deps existed would refuse the flag: pass it only to one that has it.
+if grep -q 'install-deps' "$dest/lib/dist/server/install.js" 2>/dev/null; then
+  case $install_deps in
+    yes) forward="$forward '--install-deps'" ;;
+    no) forward="$forward '--no-install-deps'" ;;
+  esac
+fi
 
 export AK_HOME="$ak_home"
 # Tells `agent-k-local install` the heading is already printed.

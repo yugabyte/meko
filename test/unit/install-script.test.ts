@@ -82,7 +82,7 @@ const have = (...tools: string[]) => tools.forEach((t) => execFileSync('cp', [jo
 
 function run(args: string[], env: Record<string, string> = {}) {
   const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--deps-only', ...args], {
-    env: { PATH: bin, HOME: home, LANG: 'C', ...env },
+    env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '', ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -116,6 +116,8 @@ describe('install.sh: installing missing tools', () => {
     const r = run(['--non-interactive', '--install-deps'], { FAKE_UID: '0' });
     expect(r.code).toBe(0);
     expect(r.calls).toEqual(['apt-get update', 'apt-get install -y tmux git curl']);
+    // The plan shows the command exactly as it runs.
+    expect(r.err).toContain('apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get install -y tmux git curl');
   });
 
   it('refuses a gh download whose checksum is wrong', () => {
@@ -173,6 +175,29 @@ describe('install.sh: installing missing tools', () => {
     expect(r.calls.some((c) => c.startsWith('sudo'))).toBe(false);
   });
 
+  it('finds Homebrew outside PATH without garbling its own output', () => {
+    have('git', 'curl');
+    // brew in its usual folder but not on PATH, as in a fresh shell on a Mac.
+    const brewDir = join(root, 'homebrew', 'bin');
+    mkdirSync(brewDir, { recursive: true });
+    execFileSync('mv', [join(bin, 'brew'), join(brewDir, 'brew')]);
+    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', AK_BREW_DIRS: brewDir });
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain('brew install tmux gh');
+    // The folder it looked in never leaks into the messages (it once shared a name with a color code).
+    expect(r.err).not.toContain(brewDir);
+  });
+
+  it('goes on without gh when GITHUB_TOKEN can do the downloads, unless told to install it', () => {
+    have('tmux', 'git', 'curl');
+    const r = run(['--non-interactive'], { GITHUB_TOKEN: 't' });
+    expect(r.code).toBe(0);
+    expect(r.err).toMatch(/gh isn't installed: downloading with GITHUB_TOKEN/);
+    const installed = run(['--non-interactive', '--install-deps'], { GITHUB_TOKEN: 't' });
+    expect(installed.code).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
+  });
+
   it('asks for Homebrew when a Mac has none', () => {
     have('git', 'curl');
     rmSync(join(bin, 'brew'));
@@ -197,7 +222,7 @@ describe('install.sh: installing missing tools', () => {
   /** Runs the script in a terminal, answering its question with `answer`. */
   function runInTerminal(answer: string, prompt = 'Install them now?'): Promise<{ code: number; out: string; calls: string[] }> {
     return new Promise((resolve) => {
-      const p = pty.spawn(join(bin, 'sh'), [SCRIPT, '--deps-only'], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C' } });
+      const p = pty.spawn(join(bin, 'sh'), [SCRIPT, '--deps-only'], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
       let out = '';
       let asked = false;
       p.onData((d) => {

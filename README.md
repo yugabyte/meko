@@ -83,7 +83,8 @@ Claude Code in to your account (`claude auth login`) if they aren't. Later, once
 key, it checks that Meko is set up for Claude Code and offers to run Meko's own setup
 (`@yugabytedb/meko-mcp`) if the plugin, MCP server or key is missing. Pass `--install-deps` to
 install without asking (for example with `--non-interactive`), or `--no-install-deps` to never
-install anything.
+install anything. With `GITHUB_TOKEN` set, a missing gh is only installed with `--install-deps`;
+otherwise downloads go through curl and the token.
 
 Then it asks for your repos folder, listen address and port, checks Meko, installs to
 `~/.agent-k-local`, starts two background services (the web server, and the tmux server that owns
