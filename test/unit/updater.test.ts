@@ -68,10 +68,30 @@ describe('release lanes', () => {
     expect(releaseLane('1.0.0-1')).toBe('prerelease');
   });
 
-  it('keeps the newest few in each lane and never a protected version', () => {
-    const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.2.0-beta.1', '0.2.0-beta.2', '0.2.0-rc.1'];
-    expect(versionsToPrune(names, 2, new Set()).sort()).toEqual(['0.1.0', '0.1.1', '0.1.2']);
-    expect(versionsToPrune(names, 1, new Set(['0.1.0'])).sort()).toEqual(['0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']);
+});
+
+describe('removing old versions', () => {
+  const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.1.11-ctrl', '0.2.0-beta.1'];
+  const prune = (running: string[], from: string | null) => versionsToPrune(names, new Set(running), from).sort();
+
+  it('keeps the running version and the one it updated from', () => {
+    expect(prune(['0.1.10'], '0.1.3')).toEqual(['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']);
+  });
+
+  it('keeps the newest older version when there was no update (a manual switch)', () => {
+    expect(prune(['0.1.11-ctrl'], null)).toEqual(['0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']);
+    // The version it came from is gone: fall back the same way.
+    expect(prune(['0.1.10'], '0.0.9')).toEqual(['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']);
+  });
+
+  it('keeps the newest other version when nothing is older, and never touches non-versions', () => {
+    expect(prune(['0.1.0'], null)).toEqual(['0.1.1', '0.1.10', '0.1.11-ctrl', '0.1.2', '0.1.3']);
+    expect(versionsToPrune(['current', '.staging-x', '0.1.0'], new Set(['0.1.0']), null)).toEqual([]);
+  });
+
+  it('never removes the running version under either of its names', () => {
+    expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.11-ctrl');
+    expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.10');
   });
 });
 
@@ -315,11 +335,36 @@ describe('Updater', () => {
     expect(fx.kv.get('update.justUpdatedFrom')).toBe('0.0.9');
   });
 
-  it('markHealthy removes installed versions beyond five per lane', () => {
-    for (const v of ['0.0.1', '0.0.2', '0.0.3', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.0.1-beta.1']) mkdirSync(join(fx.paths.app, v));
+  it('markHealthy keeps only the running version and the one it updated from', () => {
+    for (const v of ['0.0.1', '0.0.2', '0.0.3', '0.0.7', '0.0.1-beta.1', '0.1.1-ctrl']) mkdirSync(join(fx.paths.app, v));
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to: '0.1.0', attempts: 1, at: Date.now() }));
+    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.3', '0.1.0', 'current']);
+  });
+
+  it('a clean stop of the version being tried out takes its start back off the count', () => {
+    const pending = (attempts: number, to: string) =>
+      writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to, attempts, at: 1 }));
+    const attempts = () => JSON.parse(readFileSync(fx.paths.updatePending, 'utf8')).attempts;
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
-    u.markHealthy();
-    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.1-beta.1', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.1.0', 'current']);
+    pending(2, '0.1.0');
+    u.stoppedCleanly();
+    expect(attempts()).toBe(1);
+    pending(0, '0.1.0');
+    u.stoppedCleanly();
+    expect(attempts()).toBe(0); // never below zero
+    // The old version stopping so the new one can start changes nothing.
+    pending(0, '0.2.0');
+    u.stoppedCleanly();
+    expect(attempts()).toBe(0);
+    rmSync(fx.paths.updatePending);
+    expect(() => u.stoppedCleanly()).not.toThrow(); // no update pending
+  });
+
+  it('markHealthy after a manual switch keeps the newest older version', () => {
+    for (const v of ['0.0.1', '0.0.7', '0.0.1-beta.1', '0.1.1-ctrl']) mkdirSync(join(fx.paths.app, v));
+    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.7', '0.1.0', 'current']);
   });
 });
 

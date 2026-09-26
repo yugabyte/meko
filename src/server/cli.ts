@@ -17,7 +17,7 @@ import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
 import { hostServices } from './service.js';
 import { Tmux } from './tmux.js';
-import { Updater } from './updater.js';
+import { HEALTHY_MS, Updater } from './updater.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -109,9 +109,14 @@ async function serve(): Promise<void> {
   }
 
   updater.start();
-  setTimeout(() => updater.markHealthy(), 30000).unref();
-  process.on('SIGTERM', () => void shutdown(0));
-  process.on('SIGINT', () => void shutdown(0));
+  setTimeout(() => updater.markHealthy(), HEALTHY_MS).unref();
+  // A deliberate stop isn't a failed start of a version being tried out.
+  const stop = () => {
+    updater.stoppedCleanly();
+    void shutdown(0);
+  };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
 }
 
 async function setupLink(): Promise<void> {
