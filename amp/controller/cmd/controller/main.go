@@ -176,6 +176,14 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				BackingYBTLSCABundleConfigMap: cfg.Deploy.BackingYBTLSCABundleConfigMap,
 				BackingYBTLSCertDuration:      cfg.Deploy.BackingYBTLSCertDuration,
 				BackingYBTLSCertRenewBefore:   cfg.Deploy.BackingYBTLSCertRenewBefore,
+				ComputeTLSMode:                cfg.Deploy.ComputeTLSMode,
+				ComputeTLSIssuerKind:          cfg.Deploy.ComputeTLSIssuerKind,
+				ComputeTLSIssuerName:          cfg.Deploy.ComputeTLSIssuerName,
+				ComputeTLSIssuerGroup:         cfg.Deploy.ComputeTLSIssuerGroup,
+				ComputeTLSSecret:              cfg.Deploy.ComputeTLSSecret,
+				ComputeTLSCertDuration:        cfg.Deploy.ComputeTLSCertDuration,
+				ComputeTLSCertRenewBefore:     cfg.Deploy.ComputeTLSCertRenewBefore,
+				ComputeTLSIncludeServiceDNS:   cfg.Deploy.ComputeTLSIncludeServiceDNS,
 				Timeout:                       cfg.Deploy.Timeout,
 			}, logger)
 			prov.EndpointVersion = cfg.Deploy.EndpointImageTag

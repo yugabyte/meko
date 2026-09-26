@@ -372,6 +372,31 @@ tests:
           path: spec.config.exporters.otlphttp/logs.tls.insecure
           value: true
 
+  # The pod's own view of what it is serving, as against cert-manager's view of
+  # what it issued. Appended rather than inserted: the LFC assertion above pins a
+  # job by index, so a job added mid-list moves it.
+  - it: scrapes the supervisor's certificate expiries off every endpoint pod
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[5].job_name
+          value: amp-supervisor
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[5].relabel_configs
+          content:
+            source_labels: [__meta_kubernetes_pod_ip]
+            action: replace
+            regex: (.+)
+            replacement: "$1:9899"
+            target_label: __address__
+
   - it: includes the cadvisor job only when podMetrics is on
     capabilities:
       apiVersions:
@@ -385,7 +410,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
-          count: 6
+          count: 7
 
   - it: drops the cadvisor job when podMetrics is off
     capabilities:
@@ -400,7 +425,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
-          count: 5
+          count: 6
 
   # The LFC counters are the only ones behind a non-default metrics_path, so a
   # job that silently loses it scrapes compute_ctl's own /metrics twice and the

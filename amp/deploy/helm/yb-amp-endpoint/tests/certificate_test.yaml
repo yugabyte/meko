@@ -63,3 +63,195 @@ tests:
       - equal:
           path: spec.issuerRef.group
           value: awspca.cert-manager.io
+
+  # --- the compute's client-facing server certificate ---
+
+  - it: renders no compute certificate when computeTls is off
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: issues a server certificate covering the Service DNS
+    set:
+      computeTls.enabled: true
+    release:
+      name: yb-ep-abc
+      namespace: amp
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: yb-ep-abc-yb-amp-endpoint-compute
+      - equal:
+          path: spec.secretName
+          value: yb-ep-abc-yb-amp-endpoint-compute-tls
+      - equal:
+          path: spec.dnsNames
+          value: [yb-ep-abc-yb-amp-endpoint.amp.svc.cluster.local]
+      - equal:
+          path: spec.usages
+          value: [server auth]
+      # No commonName: it is capped at 64 characters and an ACME issuer rejects
+      # one that is not among the names it validated.
+      - notExists:
+          path: spec.commonName
+
+  # The whole point of the feature: a client handed the published name must be
+  # able to verify it, so that name has to be in the certificate. The chart
+  # derives it from the slot rather than being told twice.
+  - it: covers the endpoint's published ingress name
+    set:
+      computeTls.enabled: true
+      service.connectivity: ingress_external
+      service.ingress:
+        shard: shard-a
+        entryPoint: pg20007
+        port: 20007
+        dnsName: ep-3f9a2c41.db.example.com
+        shardHost: shard-a.example.com
+        recordType: CNAME
+    release:
+      name: yb-ep-abc
+      namespace: amp
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: ep-3f9a2c41.db.example.com
+
+  # An unqualified name is what a deployment with no DNS zone allocates. It is
+  # not a name any client can reach, and no issuer will sign it.
+  - it: leaves an unpublished ingress name out of the certificate
+    set:
+      computeTls.enabled: true
+      service.ingress:
+        port: 20007
+        dnsName: ep-3f9a2c41
+    release:
+      name: yb-ep-abc
+      namespace: amp
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value: [yb-ep-abc-yb-amp-endpoint.amp.svc.cluster.local]
+
+  # The ACME shape: only the public name, because no public CA can validate a
+  # .svc.cluster.local one and its presence fails the whole order.
+  - it: omits the Service DNS when told to, and honours an ACME issuer
+    set:
+      computeTls.enabled: true
+      computeTls.includeServiceDns: false
+      computeTls.certificate.duration: ""
+      computeTls.issuerRef.name: amp-letsencrypt
+      computeTls.dnsNames: [ep-3f9a2c41.db.example.com]
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value: [ep-3f9a2c41.db.example.com]
+      - equal:
+          path: spec.issuerRef.name
+          value: amp-letsencrypt
+      # Let's Encrypt fixes the lifetime at 90 days; requesting one is ignored
+      # with a warning, so the chart asks for nothing.
+      - notExists:
+          path: spec.duration
+
+  - it: renders no Certificate for a shared wildcard secret
+    set:
+      computeTls.enabled: true
+      computeTls.mode: existingSecret
+      computeTls.existingSecret: amp-endpoints-wildcard-tls
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses a shared-secret mode with no secret to share
+    set:
+      computeTls.enabled: true
+      computeTls.mode: existingSecret
+    asserts:
+      - failedTemplate:
+          errorMessage: computeTls.mode=existingSecret needs computeTls.existingSecret
+
+  - it: refuses an unknown issuance mode
+    set:
+      computeTls.enabled: true
+      computeTls.mode: acme
+    asserts:
+      - failedTemplate:
+          errorMessage: computeTls.mode must be issue or existingSecret, got "acme"
+
+
+  # The mount mode is only half the shape: 0440 is readable by the GROUP, and the
+  # group only exists because of the pod's fsGroup. Both modes mount the Secret,
+  # so both are refused without it — at render, like every other computeTls
+  # misconfiguration, rather than as a crash-loop on an unreadable key.
+  - it: refuses to mount a certificate the non-root compute could not read
+    set:
+      computeTls.enabled: true
+      podSecurityContext: null
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            computeTls needs podSecurityContext.fsGroup (the endpoint image's gid, 1000):
+            the certificate Secret mounts root-owned 0440 and a non-root postmaster reads
+            the key through its group
+
+  - it: refuses a shared wildcard the non-root compute could not read either
+    set:
+      computeTls.enabled: true
+      computeTls.mode: existingSecret
+      computeTls.existingSecret: amp-endpoints-wildcard-tls
+      podSecurityContext: null
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            computeTls needs podSecurityContext.fsGroup (the endpoint image's gid, 1000):
+            the certificate Secret mounts root-owned 0440 and a non-root postmaster reads
+            the key through its group
+
+  # The nlb_* shape: the controller hands back an address the chart could not
+  # derive, because the cloud assigns it after the Service exists. It must land
+  # as an IP SAN — a client dialling an address does not match a dnsNames entry.
+  - it: covers a load-balancer address the controller resolved after the deploy
+    set:
+      computeTls.enabled: true
+      computeTls.ipAddresses: [34.55.1.9]
+    asserts:
+      - equal:
+          path: spec.ipAddresses
+          value: [34.55.1.9]
+        documentIndex: 0
+      - equal:
+          path: spec.dnsNames
+          value: [RELEASE-NAME-yb-amp-endpoint.NAMESPACE.svc.cluster.local]
+        documentIndex: 0
+
+  # An endpoint reached only by address — no zone, no in-cluster clients. An
+  # IP-only certificate is valid, so the "nothing to issue for" guard must not
+  # fire on it.
+  - it: issues an address-only certificate when there is no name to use
+    set:
+      computeTls.enabled: true
+      computeTls.includeServiceDns: false
+      computeTls.ipAddresses: [34.55.1.9]
+    asserts:
+      - equal:
+          path: spec.ipAddresses
+          value: [34.55.1.9]
+        documentIndex: 0
+      - isNull:
+          path: spec.dnsNames
+        documentIndex: 0
+
+  - it: still refuses a certificate with neither a name nor an address
+    set:
+      computeTls.enabled: true
+      computeTls.includeServiceDns: false
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            computeTls.mode=issue has nothing to issue for: set computeTls.dnsNames
+            or computeTls.ipAddresses, or leave computeTls.includeServiceDns on

@@ -21,6 +21,12 @@ var envAllowlist = []string{
 	// alongside a relocatable bundle.
 	"LD_LIBRARY_PATH",
 	"DYLD_LIBRARY_PATH",
+	// The compute's own server certificate (controller/architecture/ac-compute-tls.md).
+	// In a pod these come from the endpoint ConfigMap; forwarded here so the TLS
+	// path can be exercised locally, against a throwaway CA, without a cluster —
+	// which is the only place it can be tested cheaply.
+	"COMPUTE_SSL_CERT_FILE",
+	"COMPUTE_SSL_KEY_FILE",
 }
 
 // Environment-variable prefixes forwarded wholesale from the launcher to a child.

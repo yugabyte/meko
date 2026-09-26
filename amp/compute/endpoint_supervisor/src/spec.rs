@@ -7,8 +7,12 @@
 //! ones, and the precedence is
 //!
 //!   static defaults < resource-derived < chart extension paths < branch < endpoint
+//!     < server certificate paths
 //!
-//! which is the opposite of the daemons' toml, where a duplicated key is a parse
+//! The certificate paths sit past the operator's own settings deliberately: they
+//! name files the chart mounted, and a wrong one is a compute that will not start.
+//!
+//! This is the opposite of the daemons' toml, where a duplicated key is a parse
 //! error rather than an override (see [`crate::config`]).
 
 use std::collections::BTreeMap;
@@ -16,6 +20,33 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::pg_settings::Setting;
+
+/// `md5<md5(password + user)>`, the form `password_encryption = md5` expects.
+pub fn md5_role_password(password: &str, user: &str) -> String {
+    let digest = md5::compute(format!("{password}{user}").as_bytes());
+    format!("md5{digest:x}")
+}
+
+/// The server certificate the compute presents to clients, as the paths the
+/// files are mounted at. Paths rather than contents: cert-manager rewrites the
+/// files under a running postmaster, and Postgres re-reads both on reload — see
+/// [`crate::compute_tls`].
+pub struct ComputeTls<'a> {
+    pub cert_file: &'a str,
+    pub key_file: &'a str,
+}
+
+/// The settings the certificate wiring owns, and which an operator therefore
+/// cannot set.
+///
+/// They are rendered last, so an operator's value for any of them is stored and
+/// then overridden — which is exactly the case `NotApplied` exists for. Without
+/// naming them, `/v1/settings/check` accepts the edit (the value parses),
+/// `settings_of` takes the last occurrence so nothing moves, `changed_settings`
+/// comes back empty, and the reload answers 200 with nothing not-applied: an edit
+/// that silently did nothing, which is the outcome `http.rs` says naming a
+/// setting is the only way to prevent.
+pub const COMPUTE_TLS_OWNED: [&str; 3] = ["ssl", "ssl_cert_file", "ssl_key_file"];
 
 /// Everything the compute spec needs that is not a Postgres setting.
 pub struct ComputeSpecParams<'a> {
@@ -44,6 +75,9 @@ pub struct ComputeSpecParams<'a> {
     /// status tokens from the local environment's keypair — passes it here, or
     /// its own probes are the ones that get rejected.
     pub compute_ctl_jwks: Value,
+    /// `None` leaves the compute plaintext-only, which is Postgres' own default
+    /// and what every endpoint without a certificate gets.
+    pub compute_tls: Option<ComputeTls<'a>>,
 }
 
 /// Renders the compute spec, layering settings in precedence order.
@@ -119,9 +153,28 @@ pub fn render_compute_spec(
     for (k, v) in chart {
         push(k, v.clone(), "string");
     }
-    // 4. The operator's settings, last, so they win over everything derived.
+    // 4. The operator's settings, over everything derived.
     for (k, v) in registry {
         push(k, v.clone(), "string");
+    }
+    // 5. The server certificate, after the operator's settings and so beyond
+    // their reach. These are wiring, not tuning: the paths are where the chart
+    // mounted the Secret, so an override pointing `ssl_cert_file` elsewhere makes
+    // the postmaster refuse to start, and `ssl = off` would silently drop TLS for
+    // every client holding a verify-full DSN. `pg_settings` is screened only for
+    // what Postgres will parse (`guc::screen`), and a path to nothing parses fine
+    // — so position is what protects them.
+    //
+    // `ssl = on` OFFERS TLS rather than requiring it: pg_hba decides, and
+    // compute_ctl writes a `host` rule (`PG_HBA_ALL_SCRAM`), not `hostssl`,
+    // and it is the KEYWORD that decides this, not the auth method beside it.
+    // A client that
+    // asks for TLS gets it and every plaintext client keeps working, which is
+    // what makes this safe to turn on under a live endpoint.
+    if let Some(tls) = &p.compute_tls {
+        push("ssl", "on".into(), "bool");
+        push("ssl_cert_file", tls.cert_file.into(), "string");
+        push("ssl_key_file", tls.key_file.into(), "string");
     }
 
     // The file compute_ctl reads is a ComputeConfig -- `{ spec, compute_ctl_config }`
@@ -185,6 +238,7 @@ mod tests {
             autoprewarm: false,
             offload_lfc_interval_seconds: None,
             compute_ctl_jwks: json!({"keys": []}),
+            compute_tls: None,
         }
     }
 
@@ -207,6 +261,102 @@ mod tests {
             .map(|s| s["value"].as_str().unwrap().to_string())
     }
 
+    /// No certificate means no `ssl` at all, rather than `ssl = off`: Postgres'
+    /// own default is off, and an explicit entry would be one more name a
+    /// registry override collides with.
+    #[test]
+    fn a_plaintext_compute_says_nothing_about_ssl() {
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
+        assert!(!names(&spec).iter().any(|n| n.starts_with("ssl")));
+    }
+
+    /// The paths reach Postgres verbatim, because they are where the chart
+    /// mounted the Secret — deriving or rewriting them would point the postmaster
+    /// at a file that is not there, and it refuses to start.
+    #[test]
+    fn a_mounted_certificate_turns_ssl_on_with_its_own_paths() {
+        let mut p = params();
+        p.compute_tls = Some(ComputeTls {
+            cert_file: "/etc/amp/tls/compute/tls.crt",
+            key_file: "/etc/amp/tls/compute/tls.key",
+        });
+        let spec = render_compute_spec(&p, &[], &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(last_value(&spec, "ssl").as_deref(), Some("on"));
+        assert_eq!(
+            last_value(&spec, "ssl_cert_file").as_deref(),
+            Some("/etc/amp/tls/compute/tls.crt")
+        );
+        assert_eq!(
+            last_value(&spec, "ssl_key_file").as_deref(),
+            Some("/etc/amp/tls/compute/tls.key")
+        );
+    }
+
+    /// The certificate paths are the one thing the operator's own settings do not
+    /// win against. `pg_settings` is screened for what Postgres will parse, and a
+    /// path to a file that is not there parses fine — so an override would be a
+    /// compute that refuses to start, or a silent loss of TLS for every client
+    /// holding a verify-full DSN.
+    #[test]
+    fn an_override_cannot_move_or_disable_the_certificate() {
+        let mut p = params();
+        p.compute_tls = Some(ComputeTls {
+            cert_file: "/etc/amp/tls/compute/tls.crt",
+            key_file: "/etc/amp/tls/compute/tls.key",
+        });
+        let registry = BTreeMap::from([
+            ("ssl".to_string(), "off".to_string()),
+            ("ssl_cert_file".to_string(), "/tmp/mine.crt".to_string()),
+            ("ssl_key_file".to_string(), "/tmp/mine.key".to_string()),
+            // A real tuning knob beside them still wins, which is the point:
+            // this is a position, not a deny-list.
+            ("work_mem".to_string(), "64MB".to_string()),
+        ]);
+        let spec = render_compute_spec(&p, &[], &BTreeMap::new(), &registry);
+        assert_eq!(last_value(&spec, "ssl").as_deref(), Some("on"));
+        assert_eq!(
+            last_value(&spec, "ssl_cert_file").as_deref(),
+            Some("/etc/amp/tls/compute/tls.crt")
+        );
+        assert_eq!(
+            last_value(&spec, "ssl_key_file").as_deref(),
+            Some("/etc/amp/tls/compute/tls.key")
+        );
+        assert_eq!(last_value(&spec, "work_mem").as_deref(), Some("64MB"));
+    }
+
+    /// Winning by position is only half the contract: an operator who set one of
+    /// these must be TOLD, because the value parses, is stored, and then does
+    /// nothing. `COMPUTE_TLS_OWNED` is the list the render and the check both
+    /// report from, so the two cannot drift.
+    #[test]
+    fn the_certificate_settings_are_named_as_the_ones_an_operator_cannot_set() {
+        let mut p = params();
+        p.compute_tls = Some(ComputeTls {
+            cert_file: "/etc/amp/tls/compute/tls.crt",
+            key_file: "/etc/amp/tls/compute/tls.key",
+        });
+        let spec = render_compute_spec(&p, &[], &BTreeMap::new(), &BTreeMap::new());
+        let rendered: Vec<String> = names(&spec)
+            .into_iter()
+            .filter(|n| n.starts_with("ssl"))
+            .collect();
+        for owned in COMPUTE_TLS_OWNED {
+            assert!(
+                rendered.iter().any(|n| n == owned),
+                "{owned} is declared un-settable but is not rendered"
+            );
+        }
+        assert_eq!(
+            rendered.len(),
+            COMPUTE_TLS_OWNED.len(),
+            "the render puts out {rendered:?} but only {COMPUTE_TLS_OWNED:?} are reported to the \
+             caller as not-applied"
+        );
+    }
+
+    /// The md5 form is what `password_encryption = md5` expects; a wrong digest
+    /// means the compute comes up with a password nobody can authenticate with.
     /// The GUC only governs a password Postgres hashes ITSELF — a client's
     /// `ALTER ROLE ... PASSWORD 'plain'`, and remote_auth when COMPUTE_PASSWORD
     /// carries a plaintext. Left at md5 those would keep producing md5

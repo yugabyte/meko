@@ -49,11 +49,16 @@ utils.workspace = true
 # binds it as one — see registry.rs's QUERY.
 uuid.workspace = true
 ysql_client.workspace = true
+metrics.workspace = true
+once_cell.workspace = true
 tracing-subscriber.workspace = true
 workspace_hack.workspace = true
 
 [dev-dependencies]
 camino-tempfile.workspace = true
+# A real certificate for the expiry gauge test, generated rather than checked in
+# so a fixture cannot expire and fail the suite on a date nobody chose.
+rcgen.workspace = true
 # The compute spec's storage connection is deserialized into the type compute_ctl
 # parses it with, so a wrong shape fails here rather than at the compute's startup.
 remote_storage.workspace = true

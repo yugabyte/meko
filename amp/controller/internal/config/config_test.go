@@ -342,6 +342,68 @@ func TestDeployYBTLS(t *testing.T) {
 	}
 }
 
+// TestDeployComputeTLS covers the compute's client-facing certificate: off by
+// default, and each mode validated for what that mode actually needs.
+func TestDeployComputeTLS(t *testing.T) {
+	chart := t.TempDir()
+	base := func() []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+		}
+	}
+	c, err := Load(base())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.ComputeTLS() {
+		t.Errorf("compute TLS on by default: mode %q", c.Deploy.ComputeTLSMode)
+	}
+	// The Service DNS is in the certificate unless somebody turns it off, so an
+	// in-cluster client can verify-full without extra configuration.
+	if !c.Deploy.ComputeTLSIncludeServiceDNS {
+		t.Error("the Service DNS name should be covered by default")
+	}
+
+	c, err = Load(append(base(), "--deploy-compute-tls-mode", "issue"))
+	if err != nil {
+		t.Fatalf("Load(issue): %v", err)
+	}
+	if !c.Deploy.ComputeTLS() || c.Deploy.ComputeTLSIssuerName != "amp-ca" {
+		t.Errorf("compute TLS defaults not applied: %+v", c.Deploy)
+	}
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "acme")); err == nil {
+		t.Error("expected error for an unknown compute TLS mode")
+	}
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "issue", "--deploy-compute-tls-issuer-name", "")); err == nil {
+		t.Error("expected error when issuing with no issuer name")
+	}
+	// An ACME issuer fixes the lifetime itself, so asking for none is legal.
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "issue", "--deploy-compute-tls-cert-duration", "")); err != nil {
+		t.Errorf("issue with no duration: %v", err)
+	}
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "issue", "--deploy-compute-tls-cert-duration", "90d")); err == nil {
+		t.Error("expected error for a cert duration Go cannot parse")
+	}
+	// The wildcard mode has nothing to mount without a Secret, and the pod would
+	// sit in FailedMount rather than start plaintext.
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "existing-secret")); err == nil {
+		t.Error("expected error for existing-secret with no secret")
+	}
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "existing-secret", "--deploy-compute-tls-secret", "wildcard-tls")); err != nil {
+		t.Errorf("existing-secret with a secret: %v", err)
+	}
+	// existing-secret issues nothing, so it must not require an issuer.
+	if _, err := Load(append(base(), "--deploy-compute-tls-mode", "existing-secret", "--deploy-compute-tls-secret", "wildcard-tls", "--deploy-compute-tls-issuer-name", "")); err != nil {
+		t.Errorf("existing-secret with no issuer: %v", err)
+	}
+}
+
 func TestDeployStorageClass(t *testing.T) {
 	chart := t.TempDir()
 	base := func() []string {

@@ -17,6 +17,17 @@ data:
   {{- with .Values.yugabyte.sslkey }}
   YB_SSLKEY: {{ . | quote }}
   {{- end }}
+  {{- if .Values.computeTls.enabled }}
+
+  # --- Server TLS on the compute's Postgres listener ---
+  # The supervisor turns these into `ssl = on` plus ssl_cert_file/ssl_key_file in
+  # the compute spec. Paths, not contents: the files are the mounted Secret, so a
+  # renewal changes them underneath a running postmaster and the supervisor
+  # reloads it.
+  COMPUTE_SSL_CERT_FILE: "/etc/amp/tls/compute/tls.crt"
+  COMPUTE_SSL_KEY_FILE: "/etc/amp/tls/compute/tls.key"
+  {{- end }}
+
   {{- if include "yb-amp-endpoint.hasPassword" . }}
   # Name of the env var carrying the YB password (injected from a Secret).
   YB_PASSWORD_ENV: "YB_PASSWORD"

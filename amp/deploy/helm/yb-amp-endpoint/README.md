@@ -101,6 +101,13 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `tls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer of the certificate |
 | `tls.caBundleConfigMap` | `amp-ca-bundle` | ConfigMap (key `ca.crt`) holding the trusted roots |
 | `tls.certificate.duration` / `.renewBefore` | `720h` / `240h` | certificate lifetime and renewal lead |
+| `computeTls.enabled` | `false` | give the compute's Postgres listener a **server** certificate, so a client can connect with `sslmode=verify-full`. The opposite direction from `tls` above and independent of it; TLS stays optional on the wire (pg_hba is still `md5`, not `hostssl`) |
+| `computeTls.mode` | `issue` | `issue` = one cert-manager `Certificate` for this endpoint from `computeTls.issuerRef` (a private CA); `existingSecret` = mount `computeTls.existingSecret`, one wildcard the fleet shares (Let's Encrypt, where a per-endpoint order spends the 50-new-certificates-per-registered-domain weekly limit on 50 endpoint **creates**; renewals are exempt, so it caps create rate, not fleet size) |
+| `computeTls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer for `mode: issue` |
+| `computeTls.existingSecret` | _(empty)_ | the `tls.crt` + `tls.key` Secret to mount for `mode: existingSecret`; must already exist in the namespace |
+| `computeTls.dnsNames` | `[]` | extra names, on top of the compute Service's DNS name and `service.ingress.dnsName` — both of which the chart adds itself |
+| `computeTls.includeServiceDns` | `true` | cover the in-cluster Service name. Turn **off** for an ACME issuer: no public CA can validate `.svc.cluster.local` and one unvalidatable name fails the whole order |
+| `computeTls.certificate.duration` / `.renewBefore` | `2160h` / `720h` | lifetime and renewal lead. Leave the duration **empty** for ACME, which fixes it at 90 days and only warns that a request was ignored |
 | `yugabyte.password` | _(empty)_ | inline password → chart-managed Secret |
 | `yugabyte.existingSecret` / `existingSecretKey` | _(empty)_ / `password` | use an existing Secret instead |
 | `endpoint.pgVersion` | `18` | compute Postgres version (the image ships v18 only) |

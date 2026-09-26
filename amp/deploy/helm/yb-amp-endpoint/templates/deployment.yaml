@@ -217,6 +217,14 @@ spec:
               mountPath: /etc/amp/tls/ca
               readOnly: true
             {{- end }}
+            {{- if .Values.computeTls.enabled }}
+            # The compute's own server certificate. Directory mount for the same
+            # reason: a renewal reaches the pod, and Postgres re-reads
+            # ssl_cert_file on reload.
+            - name: compute-tls
+              mountPath: /etc/amp/tls/compute
+              readOnly: true
+            {{- end }}
             {{- range .Values.endpoint.extensions }}
             # Extension ImageVolume: read-only tree with share/ (control+SQL)
             # and lib/ (the .so). extension_control_path / dynamic_library_path
@@ -373,6 +381,17 @@ spec:
         - name: yb-ca-bundle
           configMap:
             name: {{ .Values.tls.caBundleConfigMap }}
+        {{- end }}
+        {{- if .Values.computeTls.enabled }}
+        # 0440 with the pod's fsGroup: the kubelet lands Secret files owned by
+        # root, and Postgres refuses a key file that is group- or world-readable
+        # UNLESS it is root-owned and at most 0640 (be-secure-common.c). A
+        # root-owned 0440 is the one shape that satisfies both that check and a
+        # non-root server reading it through its group.
+        - name: compute-tls
+          secret:
+            secretName: {{ include "yb-amp-endpoint.computeTlsSecretName" . }}
+            defaultMode: 0440
         {{- end }}
         {{- range .Values.endpoint.extensions }}
         # OCI ImageVolume (k8s 1.33+ beta, feature gate ImageVolume): mounts the

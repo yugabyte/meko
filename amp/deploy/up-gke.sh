@@ -128,6 +128,24 @@ TLS_PERMISSIVE="${TLS_PERMISSIVE:-1}"
 TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
 TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-}"
 TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP:-cert-manager.io}"
+
+# COMPUTE_TLS is the other direction and a SEPARATE switch from TLS above: the
+# certificate each compute presents to its own clients, so
+# `psql sslmode=verify-full` against an endpoint's published name works
+# (controller/architecture/ac-compute-tls.md). It needs cert-manager, which TLS=1
+# installs — with TLS=0 run deploy/tls/trust-root.sh first, or bring your own.
+#   issue            one certificate per endpoint from COMPUTE_TLS_ISSUER_NAME
+#                    (default amp-ca, the private CA); clients need its bundle.
+#   existing-secret  every compute mounts COMPUTE_TLS_SECRET — one wildcard for
+#                    the endpoint zone, issued by deploy/tls/acme-issuer.sh.
+#                    Clients need nothing. COMPUTE_TLS_SERVICE_DNS has no effect
+#                    here — no Certificate is rendered, so the chart's SAN list is
+#                    never built; set it to 0 only for `issue` against an ACME
+#                    issuer, where a .svc.cluster.local name fails the order.
+COMPUTE_TLS="${COMPUTE_TLS:-disable}"
+COMPUTE_TLS_ISSUER_NAME="${COMPUTE_TLS_ISSUER_NAME:-amp-ca}"
+COMPUTE_TLS_SECRET="${COMPUTE_TLS_SECRET:-}"
+COMPUTE_TLS_SERVICE_DNS="${COMPUTE_TLS_SERVICE_DNS:-1}"
 # The chart-deployed YugabyteDB (TLS=1 only).
 YB_CHART_VERSION="${YB_CHART_VERSION:-$(amp_version YB_CHART_VERSION)}"
 YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG:-}"              # empty => the chart's appVersion
@@ -210,6 +228,13 @@ case "${FOUNDATION}" in
 esac
 case "${TLS}" in 0|1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
 case "${TLS_PERMISSIVE}" in 0|1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
+case "${COMPUTE_TLS}" in
+  disable|issue) ;;
+  existing-secret)
+    [ -n "${COMPUTE_TLS_SECRET}" ] || die "COMPUTE_TLS=existing-secret needs COMPUTE_TLS_SECRET (see deploy/tls/acme-issuer.sh)" ;;
+  *) die "COMPUTE_TLS must be disable, issue or existing-secret, got '${COMPUTE_TLS}'" ;;
+esac
+case "${COMPUTE_TLS_SERVICE_DNS}" in 0|1) ;; *) die "COMPUTE_TLS_SERVICE_DNS must be 0 or 1, got '${COMPUTE_TLS_SERVICE_DNS}'" ;; esac
 if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" != "yugabyted" ]; then
   # deploy/tls/ replaces the yugabyted StatefulSet with the upstream chart; the
   # operator-managed universe carries its own certificate configuration.
@@ -227,6 +252,9 @@ if [ "${TLS}" = "1" ]; then
   echo "   tls          : on (permissive=${TLS_PERMISSIVE}, issuer=${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca}, chart yugabyte ${YB_CHART_VERSION})"
 else
   echo "   tls          : off"
+fi
+if [ "${COMPUTE_TLS}" != "disable" ]; then
+  echo "   compute tls  : ${COMPUTE_TLS}${COMPUTE_TLS_SECRET:+ (${COMPUTE_TLS_SECRET})}"
 fi
 
 # --- 1. (optional) build + push images to GCR ---
@@ -484,6 +512,16 @@ HELM_SET=(
   "otel.environmentId=${METRICS_ENV_ID}"
 )
 [ -n "${PULL_SECRET}" ] && HELM_SET+=("imagePullSecrets[0].name=${PULL_SECRET}")
+if [ "${COMPUTE_TLS}" != "disable" ]; then
+  HELM_SET+=(
+    "controller.endpoint.computeTlsMode=${COMPUTE_TLS}"
+    "controller.endpoint.computeTlsIssuerRef.name=${COMPUTE_TLS_ISSUER_NAME}"
+    "controller.endpoint.computeTlsSecret=${COMPUTE_TLS_SECRET}"
+  )
+  if [ "${COMPUTE_TLS_SERVICE_DNS}" = "0" ]; then
+    HELM_SET+=("controller.endpoint.computeTlsIncludeServiceDns=false")
+  fi
+fi
 if [ "${TLS}" = "1" ]; then
   HELM_SET+=(
     "tls.enabled=true"

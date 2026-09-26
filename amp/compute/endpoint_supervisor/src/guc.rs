@@ -67,6 +67,11 @@ pub const REFUSED: &str = "refused by Postgres";
 pub const CALLERS_DAEMON_CONFIG: &str = "the caller renders this daemon's config";
 /// Not refused, just inert: Postgres knows it and nothing can change it.
 pub const NOTHING_APPLIES: &str = "nothing applies this setting";
+/// Stored, but the compute's server certificate is rendered after the operator's
+/// settings and wins. Named rather than silently overridden, because the value
+/// parses and would otherwise be accepted and do nothing — see
+/// [`crate::spec::COMPUTE_TLS_OWNED`].
+pub const COMPUTE_TLS_OWNED: &str = "the compute's server certificate owns this setting";
 
 /// Which of the above a probe failure amounts to.
 fn reason_for(message: &str) -> &'static str {
@@ -314,9 +319,8 @@ mod tests {
             let dir: Utf8PathBuf = match std::env::var("PG_TEST_BIN") {
                 Ok(v) => v.into(),
                 // From this file to the workspace's built Postgres.
-                Err(_) => {
-                    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install-debug/v18/bin")
-                }
+                Err(_) => Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../pg_install-debug/v18/bin"),
             };
             if dir.join("postgres").exists() {
                 Some(dir)

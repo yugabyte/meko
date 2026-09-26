@@ -387,3 +387,24 @@ tests:
           value: http://otel-collector:4318
       - notExists:
           path: data.OTEL_SDK_DISABLED
+
+  # The supervisor turns these two paths into `ssl = on` plus
+  # ssl_cert_file/ssl_key_file. Absent, the compute is plaintext-only, which is
+  # Postgres' own default.
+  - it: names no certificate files by default
+    asserts:
+      - notExists:
+          path: data.COMPUTE_SSL_CERT_FILE
+      - notExists:
+          path: data.COMPUTE_SSL_KEY_FILE
+
+  - it: points the compute at its mounted certificate when computeTls is on
+    set:
+      computeTls.enabled: true
+    asserts:
+      - equal:
+          path: data.COMPUTE_SSL_CERT_FILE
+          value: /etc/amp/tls/compute/tls.crt
+      - equal:
+          path: data.COMPUTE_SSL_KEY_FILE
+          value: /etc/amp/tls/compute/tls.key

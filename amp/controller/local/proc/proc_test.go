@@ -58,6 +58,23 @@ func TestBuildChildEnvScrubAndPassthrough(t *testing.T) {
 	}
 }
 
+// The compute's certificate paths reach the supervisor from the launcher's own
+// environment, which is the only way the TLS path can be exercised without a
+// cluster: in a pod they come from the endpoint ConfigMap, and the launcher
+// writes no ConfigMap.
+func TestBuildChildEnvForwardsComputeTLSPaths(t *testing.T) {
+	t.Setenv("COMPUTE_SSL_CERT_FILE", "/tmp/tls.crt")
+	t.Setenv("COMPUTE_SSL_KEY_FILE", "/tmp/tls.key")
+
+	env := envMap(buildChildEnv(nil))
+	if env["COMPUTE_SSL_CERT_FILE"] != "/tmp/tls.crt" {
+		t.Errorf("COMPUTE_SSL_CERT_FILE = %q, want it forwarded", env["COMPUTE_SSL_CERT_FILE"])
+	}
+	if env["COMPUTE_SSL_KEY_FILE"] != "/tmp/tls.key" {
+		t.Errorf("COMPUTE_SSL_KEY_FILE = %q, want it forwarded", env["COMPUTE_SSL_KEY_FILE"])
+	}
+}
+
 func TestBuildChildEnvBacktracePassThrough(t *testing.T) {
 	t.Setenv("RUST_BACKTRACE", "full")
 	env := envMap(buildChildEnv(nil))

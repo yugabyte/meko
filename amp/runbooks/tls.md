@@ -4,6 +4,9 @@ Operating the certificate trust between the amp stack and its YugabyteDB. The
 design is [`../controller/architecture/ac-endpoint-tls.md`](../controller/architecture/ac-endpoint-tls.md);
 this is what an operator runs and checks.
 
+The certificate a compute presents to its own **clients** is a separate switch
+with its own section: [§Server TLS on the compute's listener](#server-tls-on-the-computes-listener).
+
 ## What is deployed
 
 | Piece | Where | Made by |
@@ -208,3 +211,159 @@ refuses the `sslcert` key at boot, which is the check).
 deploy/controller/redeploy.sh` and a re-render put endpoints back on plaintext,
 which the permissive database still accepts. After step 6, restore the permissive
 flags with a rolling restart first.
+
+## Server TLS on the compute's listener
+
+The other direction, and a separate switch: the certificate a compute presents to
+its **own clients**, so `psql "... sslmode=verify-full"` against the endpoint's
+published name succeeds. Nothing above is a prerequisite — an endpoint can do this
+on a plaintext YB lane and vice versa. Design:
+[`ac-compute-tls.md`](../controller/architecture/ac-compute-tls.md).
+
+Pick by who the client is.
+
+**Private CA — clients are ours.** One certificate per endpoint from `amp-ca`,
+which `trust-root.sh` already created:
+
+```bash
+helm upgrade --install ... \
+  --set controller.endpoint.computeTlsMode=issue \
+  --set controller.endpoint.computeTlsIssuerRef.name=amp-ca
+```
+
+Clients need the CA:
+
+```bash
+kubectl -n "${NS}" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}' > amp-ca.crt
+psql "host=ep-<id>.<zone> port=<port> user=cloud_admin dbname=postgres \
+      sslmode=verify-full sslrootcert=amp-ca.crt"
+```
+
+**Let's Encrypt — clients are somebody else's.** One wildcard for the zone, which
+every endpoint mounts; clients need nothing but their system trust store. Staging
+first — prod's limit is 50 certificates per registered domain per week and a
+failed order counts:
+
+```bash
+ZONE=db.example.com ACME_EMAIL=you@example.com NS=amp \
+  ACME_ENV=staging AWS_HOSTED_ZONE_ID=Z… deploy/tls/acme-issuer.sh
+# then re-run with ACME_ENV=prod
+helm upgrade --install ... \
+  --set controller.endpoint.computeTlsMode=existing-secret \
+  --set controller.endpoint.computeTlsSecret=amp-endpoints-wildcard-tls \
+  --set controller.endpoint.computeTlsIncludeServiceDns=false
+```
+
+`computeTlsIncludeServiceDns` has **no effect in this mode** — the chart renders
+no `Certificate`, so the SAN list it would build is never used; the names come
+from whatever `acme-issuer.sh` ordered (`*.<zone>` and `<zone>`). The flag matters
+only for `mode: issue` pointed at an ACME issuer, where it must be `false`: no
+public CA can validate a `.svc.cluster.local` name, and one unvalidatable name
+fails the whole order.
+
+`ZONE` must be the zone the controller's `--ingress-zone-*` publishes into. A
+`*.<zone>` wildcard matches exactly one label, and nothing at render time can
+compare it to the name the controller allocated — so if the two drift, every
+endpoint comes up offering TLS no client can verify, with every render and probe
+still green. Confirm from the pod after the first rollout, not from the values:
+
+```bash
+kubectl -n "${NS}" logs deploy/yb-ep-<id> | grep 'server certificate covers'
+```
+
+**Checking an external endpoint.** An `nlb_*` endpoint, and an `ingress_*` one in
+a deployment with no DNS zone, are reached by an address rather than a name, so
+their certificates carry an **IP SAN**. `verify-full` against the address then
+works with no `/etc/hosts` games:
+
+```bash
+psql "host=<address> port=<port> user=cloud_admin dbname=postgres \
+      sslmode=verify-full sslrootcert=amp-ca.crt"
+
+# what the certificate actually covers
+kubectl -n "${NS}" get secret <release>-compute-tls -o jsonpath='{.data.tls\.crt}' \
+  | base64 -d | openssl x509 -noout -ext subjectAltName
+```
+
+An `IP Address:` entry is the load balancer; `DNS:` entries are the in-cluster
+Service name and any published name. If the address is missing, the second pass
+did not run — look for `endpoint certificate does not cover its client address`
+in the controller log, and re-render the endpoint to retry it.
+
+**Existing endpoints** are re-rendered by the same fleet roll step 5 above uses —
+`curl -X POST <controller>/api/v1/endpoint-rerenders`. Until then they keep
+serving plaintext-only, which is what they did before.
+
+### Rehearsing it without a cluster
+
+`yb_amp_local` reads the same two variables the pod's ConfigMap sets, so the whole
+path — spec render, `ssl = on`, handshake, hot reload — can be exercised against a
+throwaway CA:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -keyout ca.key -out ca.crt -subj "/CN=amp-local-ca"
+openssl req -newkey rsa:2048 -nodes -keyout tls.key -out tls.csr \
+  -subj "/CN=unused" -addext "subjectAltName=DNS:localhost"
+openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -out tls.crt \
+  -days 1 -copy_extensions copyall
+chmod 0600 tls.key   # Postgres refuses a key it owns that anyone else can read
+
+export COMPUTE_SSL_CERT_FILE=$PWD/tls.crt COMPUTE_SSL_KEY_FILE=$PWD/tls.key
+# ... start yb_amp_local ...
+psql "host=localhost port=<pgport> user=cloud_admin dbname=postgres \
+      sslmode=verify-full sslrootcert=$PWD/ca.crt" \
+  -c "SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
+```
+
+Overwriting the pair with a freshly-signed one while a session is open exercises
+the reload: within 60s the log says the certificate changed, the open session
+survives, and the next connection gets the new serial.
+
+### Checks
+
+```bash
+# The endpoint has a certificate, and it covers the name clients are given.
+kubectl -n "${NS}" get certificate yb-ep-<id>-compute       # issue mode
+kubectl -n "${NS}" get certificate amp-endpoints-wildcard   # wildcard mode
+kubectl -n "${NS}" get secret <secret> -o jsonpath='{.data.tls\.crt}' \
+  | base64 -d | openssl x509 -noout -text | grep -A1 'Subject Alternative Name'
+
+# The compute is offering it.
+kubectl -n "${NS}" exec deploy/yb-ep-<id> -- \
+  psql -h 127.0.0.1 -p 55433 -U cloud_admin -d postgres \
+  -c 'show ssl' -c 'select * from pg_stat_ssl where pid = pg_backend_pid()'
+
+# A renewal was picked up without a restart: the log line, and a RESTARTS count
+# that has not moved.
+kubectl -n "${NS}" logs deploy/yb-ep-<id> | grep 'server certificate changed'
+
+# The names the compute is actually presenting, logged at startup and after each
+# renewal it loads. In existingSecret mode this is the ONLY check that the
+# wildcard covers the address clients were handed — nothing at render time can
+# see inside a Secret the chart did not create.
+kubectl -n "${NS}" logs deploy/yb-ep-<id> | grep 'server certificate covers'
+
+# A renewal that reached the volume but not the postmaster. The two expiry gauges
+# read the file and report health either way; this one is confirmed by a handshake
+# against the compute, so 0 means the server really is presenting the mounted
+# certificate. Momentary 1 is the normal path (confirmation runs for up to 10s
+# after each signal, and the poll retries every 60s); sustained 1 means the
+# compute is not taking it.
+# (port-forward, not `kubectl exec ... curl`: the endpoint image ships libcurl
+# but no curl binary, so exec'ing curl is executable-not-found.)
+kubectl -n "${NS}" port-forward deploy/yb-ep-<id> 9899:9899 &
+curl -s localhost:9899/metrics | grep compute_cert_reload_pending
+```
+
+A certificate stuck `Ready=False` in ACME mode is almost always the DNS-01 solver:
+`kubectl describe certificaterequest` then `kubectl -n cert-manager logs deploy/cert-manager`.
+A cert-manager without Route53 credentials fails every order silently from the
+outside, the same way external-dns does (`ac-ingress.md`).
+
+**Rollback.** Change the DSNs **first**, then re-render. `computeTlsMode=disable`
+(or unset) brings the compute back with `ssl` off, and only `sslmode=prefer`
+survives that: `require`, `verify-ca` and `verify-full` all fail closed once the
+server stops offering TLS. Those are exactly the modes this feature exists to
+make possible, so assume clients are pinned. Drop the pin everywhere it is set,
+confirm, and only then `computeTlsMode=disable` and a re-render.

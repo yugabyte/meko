@@ -83,6 +83,45 @@ tests:
             mountPath: /etc/amp/tls/ca
             readOnly: true
 
+  - it: mounts the compute's own server certificate as a directory when computeTls is on
+    template: templates/deployment.yaml
+    set:
+      computeTls.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: compute-tls
+            secret:
+              secretName: RELEASE-NAME-yb-amp-endpoint-compute-tls
+              # Root-owned 0440 is the one mode Postgres accepts for a key file
+              # it does not own (be-secure-common.c) and the pod's fsGroup can
+              # still read.
+              defaultMode: 0440
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: compute-tls
+            mountPath: /etc/amp/tls/compute
+            readOnly: true
+
+  # The wildcard shape: the same mount path, a Secret this release does not own.
+  # The path is what the ConfigMap's COMPUTE_SSL_* point at, so it must not move.
+  - it: mounts a shared wildcard Secret at the same path
+    template: templates/deployment.yaml
+    set:
+      computeTls.enabled: true
+      computeTls.mode: existingSecret
+      computeTls.existingSecret: amp-endpoints-wildcard-tls
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: compute-tls
+            secret:
+              secretName: amp-endpoints-wildcard-tls
+              defaultMode: 0440
+
   - it: injects the YB password from a Secret when configured
     template: templates/deployment.yaml
     set:

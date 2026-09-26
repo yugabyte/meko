@@ -8,7 +8,8 @@ plane:
   - controller: scrapes the amp controller (:8080).
   - compute:    scrapes every endpoint pod's Prometheus sources — the
     postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
-    compute_ctl (:3080) — plus per-pod cAdvisor resource metrics.
+    compute_ctl (:3080), the supervisor's certificate expiries (:9899) — plus
+    per-pod cAdvisor resource metrics.
   - logs:       tails every amp container's stdout off the node — pageserver,
     safekeeper, compute_ctl and Postgres itself — and exports OTLP to a log
     store (VictoriaLogs by default).
@@ -328,6 +329,21 @@ spec:
               relabel_configs:
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-amp-endpoint}
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            # Certificate expiries, from the supervisor. Two gauges, both read from
+            # the files the postmaster is actually configured with rather than from
+            # what cert-manager believes it issued — those diverge exactly when a
+            # renewal has not reached the pod, which is the case worth alerting on
+            # and the one a cluster-level cert-manager metric cannot see. Served
+            # only when the endpoint has a controller, which a controller-driven
+            # install always sets; a standalone install scrapes nothing here.
+            - job_name: amp-supervisor
+              scrape_interval: 60s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-amp-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "supervisor" 9899 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
             {{- if .Values.otel.podMetrics }}

@@ -192,6 +192,20 @@ export type StoragePoolList = {
 };
 export type ClusterList = { clusters: Cluster[]; count: number; total: number };
 export type BranchList = { branches: Branch[]; count: number; total: number };
+/** What a client needs to verify an endpoint's server certificate.
+ *
+ *  `required: false` is a real answer, not an error: an endpoint whose
+ *  certificate comes from a public CA needs no bundle, and so does one with TLS
+ *  off. Show that rather than an empty download. */
+export type EndpointCaBundle = {
+  required: boolean;
+  /** PEM. Empty when `required` is false. */
+  ca_crt?: string;
+  /** The name to connect to for sslmode=verify-full — the certificate covers
+   *  this one, and another address for the same endpoint may not be in it. */
+  verify_name?: string;
+};
+
 export type EndpointList = {
   endpoints: Endpoint[];
   count: number;

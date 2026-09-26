@@ -326,6 +326,52 @@ in the k8s endpoint pod (the exporter already ships in the compute VM image at
   tuples, deadlocks, temp files), bgwriter/checkpointer, connections, locks, DB
   size, and replication with no extra config.
 
+### Certificate expiry — from the pod, not from cert-manager
+
+Three gauges the **supervisor** serves on its own port (`:9899`, scrape job
+`amp-supervisor`), set by the watcher that already polls the mounted certificate
+(`compute/endpoint_supervisor/src/compute_tls.rs`):
+
+| Series | Meaning |
+|---|---|
+| `compute_cert_not_after_seconds` | `notAfter` of the certificate the compute presents to clients (0 = none) |
+| `compute_ca_not_after_seconds` | `notAfter` of the CA that issued it, from the leaf Secret's `ca.crt` (0 = none, which is what an ACME issuer gives) |
+| `compute_cert_reload_pending` | `1` while the mounted certificate is not the one the postmaster is serving, confirmed by a handshake |
+
+cert-manager publishes `certmanager_certificate_expiration_timestamp_seconds` for
+every `Certificate` it manages, and that is the better source for *issuance*
+health across a cluster. These exist because they answer a different
+question: what the postmaster is **actually serving**. The two diverge exactly
+when a renewal has not reached the pod — the Secret rewritten, the volume not yet
+propagated, or a mount that never arrived — which is the failure the watcher
+exists to catch and which no cluster-level metric can see.
+
+Alert on `compute_cert_not_after_seconds` approaching `time()`, and on `0` for an
+endpoint whose chart has `computeTls.enabled`: zero means no certificate is being
+served at all, while the pod stays healthy and every `sslmode=verify-full` client
+fails.
+
+**And alert on `compute_cert_reload_pending == 1` sustained** — say, ten minutes,
+comfortably past the 60s poll. The two expiry gauges read the mounted *file*, so
+a renewal that reached the volume moves them whether or not the postmaster ever
+re-read it: they would report a healthy new `notAfter` while the compute went on
+serving the old certificate. The pending gauge is the difference between those two
+states, and it is the only one of the three that can show it.
+
+It is **confirmed, not inferred**: the watcher opens a TLS handshake to the
+compute's own port and compares the leaf the server presents against the leaf in
+the mount, so `0` means the postmaster is serving the file rather than that a
+signal was sent. That distinction is the whole point — a `SIGHUP` is dropped by
+`compute_ctl` when its status is neither `Empty` nor `Running`, and a Postgres
+reload whose new pair fails to load keeps the old `SSL_context` while logging and
+returning normally. Neither is visible from the signal. A momentary `1` is the
+normal path (the confirmation runs for up to 10s after each signal, and the poll
+retries every 60s); a sustained `1` means the compute is not taking the
+certificate.
+
+Served only when the endpoint has a controller (the supervisor's HTTP listener is
+gated on `SUPERVISOR_HTTP_PORT`), which a controller-driven install always sets.
+
 ### Query-level metrics — `pg_stat_statements`
 
 The richest perf signal (per-normalized statement `calls`, total/mean/max exec

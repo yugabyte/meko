@@ -879,6 +879,37 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/ca:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+      - $ref: '#/components/parameters/EndpointId'
+    get:
+      tags: [endpoints]
+      operationId: getEndpointCaBundle
+      summary: The CA a client needs to verify this endpoint
+      description: |
+        Returns the PEM to pass as `sslrootcert` when connecting with
+        `sslmode=verify-full`, together with the address it is good for.
+
+        Read from the endpoint's own certificate, not from a deployment-wide
+        bundle: cert-manager writes the issuing CA beside the leaf, so a
+        customer's own CA is reported as faithfully as the per-data-plane root.
+
+        **An empty `ca_crt` is a real answer, not a failure.** An endpoint whose
+        certificate comes from a public CA needs no bundle — the client's system
+        trust store already has the root — and so does one with compute TLS off.
+        `required` says which case the caller is in.
+      responses:
+        '200':
+          description: The CA bundle, or an explicit "none needed".
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointCaBundle'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings:
     parameters:
       - $ref: '#/components/parameters/PoolId'
@@ -1692,6 +1723,26 @@ components:
             $ref: '#/components/schemas/Error'
 
   schemas:
+    EndpointCaBundle:
+      type: object
+      description: What a client needs to verify this endpoint's server certificate.
+      required: [required]
+      properties:
+        required:
+          type: boolean
+          description: |
+            Whether a client must pass `sslrootcert` at all. False means the
+            certificate is publicly trusted, or the endpoint offers no TLS —
+            either way `ca_crt` is empty and the client needs nothing.
+        ca_crt:
+          type: string
+          description: The CA bundle, PEM encoded. Empty when `required` is false.
+        verify_name:
+          type: string
+          description: |
+            The name or address to connect to for `sslmode=verify-full`. The
+            certificate covers this; another address for the same endpoint may
+            not be in its SANs.
     Version:
       type: object
       required: [version, git_commit, build_date]

@@ -152,6 +152,39 @@ controller:
     # -- Lifetime and renewal lead of each endpoint's client certificate.
     ybTlsCertDuration: "720h"
     ybTlsCertRenewBefore: "240h"
+    # -- Server TLS on each compute's own Postgres listener, so a client can
+    # connect with sslmode=verify-full (AMP_DEPLOY_COMPUTE_TLS_MODE;
+    # controller/architecture/ac-compute-tls.md). The opposite direction from
+    # ybTlsMode above and independent of it.
+    #   disable (default)  no certificate; clients get sslmode=require at best
+    #   issue              one cert-manager Certificate per endpoint, from
+    #                      computeTlsIssuerRef. For a private CA.
+    #   existing-secret    every compute mounts computeTlsSecret — one wildcard
+    #                      certificate the fleet shares. For Let's Encrypt, whose
+    #                      50-per-registered-domain weekly limit a per-endpoint
+    #                      order spends on 50 endpoint creates a week (renewals
+    #                      are exempt, so it caps create rate, not fleet size).
+    computeTlsMode: ""
+    # -- The wildcard Secret for computeTlsMode=existing-secret. Must hold
+    # tls.crt + tls.key and live in the deploy namespace
+    # (AMP_DEPLOY_COMPUTE_TLS_SECRET). deploy/tls/acme-issuer.sh issues it.
+    computeTlsSecret: ""
+    # -- Lifetime and renewal lead of each compute's server certificate. Leave
+    # the duration EMPTY for an ACME issuer, which fixes it itself.
+    computeTlsCertDuration: "2160h"
+    computeTlsCertRenewBefore: "720h"
+    # -- Put the endpoint's in-cluster Service DNS name in its certificate. Keep
+    # it on for a private CA so an in-cluster client can verify-full too; turn it
+    # OFF for an ACME issuer, which cannot validate a .svc.cluster.local name and
+    # fails the whole order over its presence.
+    computeTlsIncludeServiceDns: true
+    # -- Issuer for computeTlsMode=issue. Separate from tls.issuerRef, which is
+    # the private CA the stack's internal certificates come from: the client-facing
+    # certificate is the one that may need a public CA instead.
+    computeTlsIssuerRef:
+      kind: ClusterIssuer
+      name: amp-ca
+      group: cert-manager.io
     # -- StorageClass for each endpoint's /data PVC; empty => emptyDir (AMP_DEPLOY_STORAGE_CLASS).
     # -- Shared ingress: put endpoints on a port of a shared load balancer
     # instead of one each (controller/architecture/ac-ingress.md). `enabled` is
@@ -587,11 +620,14 @@ otel:
     pageserver: 9898
     safekeeper: 7676
     computeCtl: 3080
+    # The supervisor's settings API, which also serves the certificate-expiry
+    # gauges. Must match ports.supervisorHttp in the endpoint chart.
+    supervisor: 9899
   collectors:
     # Scrapes the amp controller (:8080) + in-pod controller (:50051).
     controller:
       enabled: true
-    # Scrapes every endpoint pod: postgres_exporter/pageserver/safekeeper/compute_ctl.
+    # Scrapes every endpoint pod: postgres_exporter/pageserver/safekeeper/compute_ctl/supervisor.
     compute:
       enabled: true
     # Tails every amp container's stdout on the node (pageserver, safekeeper,

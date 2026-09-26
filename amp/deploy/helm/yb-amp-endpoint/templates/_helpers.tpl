@@ -111,3 +111,51 @@ documentdbGateway.enabled overrides it either way when set.
 {{- $found -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The Secret holding the compute's server certificate: cert-manager's, or the
+pre-existing one a wildcard deployment points at.
+*/}}
+{{- define "yb-amp-endpoint.computeTlsSecretName" -}}
+{{- if eq .Values.computeTls.mode "existingSecret" -}}
+{{- .Values.computeTls.existingSecret -}}
+{{- else -}}
+{{- include "yb-amp-endpoint.fullname" . }}-compute-tls
+{{- end -}}
+{{- end }}
+
+{{/*
+The names the compute's certificate must cover, as a YAML list.
+
+The Service DNS and the published ingress name are derived rather than
+configured: both are the chart's own to know, and a certificate that omits the
+name a client was handed is a certificate that fails verify-full.
+*/}}
+{{- define "yb-amp-endpoint.computeTlsDnsNames" -}}
+{{- $names := list -}}
+{{- if .Values.computeTls.includeServiceDns -}}
+{{- $names = append $names (printf "%s.%s.svc.cluster.local" (include "yb-amp-endpoint.fullname" .) .Release.Namespace) -}}
+{{- end -}}
+{{- with .Values.service.ingress.dnsName -}}
+{{- if contains "." . -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.computeTls.dnsNames -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- toYaml (uniq $names) -}}
+{{- end }}
+
+{{/*
+The IP addresses the compute's certificate must cover, as a YAML list.
+
+Separate from the names because X.509 keeps them apart: an address in dnsNames
+is not matched by a client dialling that address, it has to be an iPAddress SAN.
+Everything here is passed in rather than derived — the chart cannot know a load
+balancer's address at render time, because the cloud assigns it after the
+Service exists.
+*/}}
+{{- define "yb-amp-endpoint.computeTlsIpAddresses" -}}
+{{- toYaml (uniq (.Values.computeTls.ipAddresses | default list)) -}}
+{{- end }}

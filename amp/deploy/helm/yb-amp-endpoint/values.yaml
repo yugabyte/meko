@@ -64,6 +64,74 @@ tls:
     algorithm: ECDSA
     size: 256
 
+# The server certificate the compute's Postgres listener presents to CLIENTS
+# (controller/architecture/ac-compute-tls.md). The opposite direction from `tls`
+# above, which is the client certificate this pod presents to YugabyteDB, and
+# independent of it: either can be on without the other.
+#
+# Enabling this turns `ssl = on` in the compute, so a client may connect with
+# `sslmode=verify-full` against a name in `dnsNames`. TLS stays OPTIONAL on the
+# wire — pg_hba still accepts plaintext — so turning this on breaks no existing
+# client.
+#
+# Two issuance shapes, because the two issuer families have opposite costs:
+#   mode: issue            one cert-manager Certificate per endpoint, from
+#                          `issuerRef`. What a private CA (the `amp-ca`
+#                          ClusterIssuer deploy/tls/trust-root.sh bootstraps)
+#                          wants: issuance is local, instant and unmetered.
+#   mode: existingSecret   mount a Secret somebody else owns, typically one
+#                          wildcard `*.<zone>` certificate shared by every
+#                          endpoint in a family. What Let's Encrypt wants: ACME
+#                          allows 50 NEW certificates per registered domain per
+#                          week (renewals exempt, so it caps creates, not fleet
+#                          size). In BYOC the zone is the CUSTOMER's, so that
+#                          budget is theirs alone — per-endpoint ACME is viable
+#                          below ~50 creates a week, if they delegate DNS-01 and
+#                          are not already spending it elsewhere.
+#                          deploy/tls/acme-issuer.sh issues that wildcard.
+computeTls:
+  enabled: false
+  # -- issue | existingSecret. See above.
+  mode: issue
+  # -- Issuer for `mode: issue`. `amp-ca` is the private CA; point it at an ACME
+  # ClusterIssuer only for a deployment small enough to stay under the rate limit.
+  issuerRef:
+    kind: ClusterIssuer
+    name: amp-ca
+    group: cert-manager.io
+  # -- The Secret to mount for `mode: existingSecret`. Must hold tls.crt and
+  # tls.key, and must already exist in this namespace — the chart does not create
+  # it, and a missing one leaves the pod stuck mounting rather than starting
+  # without TLS.
+  existingSecret: ""
+  # -- Names to put in the certificate, beyond the two the chart adds itself:
+  # the compute Service's in-cluster DNS name (unless includeServiceDns is false)
+  # and service.ingress.dnsName when the endpoint holds a published ingress slot.
+  # The controller adds the endpoint's own client-facing address here when that
+  # address is a NAME it only learns after the Service exists — an nlb_* load
+  # balancer with a hostname, or an ingress shard reached by its hostname.
+  dnsNames: []
+  # -- IP addresses to put in the certificate, as IP SANs. The two cases the
+  # chart cannot derive: an nlb_* endpoint, whose load-balancer IP the cloud
+  # assigns only after the Service exists, and an ingress_* endpoint in a
+  # deployment with no DNS zone, where clients are handed the shard's address
+  # rather than a name. Without these the certificate covers only the in-cluster
+  # Service DNS, and a client dialling the external address gets `require` and no
+  # better. libpq matches an IP SAN, so `verify-full` against a bare address works.
+  ipAddresses: []
+  # -- Include the in-cluster Service DNS name. Keep it on for a private CA, so
+  # an in-cluster client can also verify-full. Turn it OFF for an ACME issuer:
+  # no public CA can validate a `.svc.cluster.local` name, so its presence fails
+  # the whole order.
+  includeServiceDns: true
+  certificate:
+    # -- Certificate lifetime. Leave EMPTY for ACME: Let's Encrypt fixes it at 90
+    # days and cert-manager only warns that the request was ignored.
+    duration: "2160h"
+    renewBefore: "720h"
+    algorithm: ECDSA
+    size: 256
+
 # Endpoint / compute settings.
 # Distributed tracing for the compute's OTLP span exporter.
 tracing:

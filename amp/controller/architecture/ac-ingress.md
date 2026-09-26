@@ -1,6 +1,6 @@
 # ac — Shared Postgres ingress
 
-**Status:** Draft (schema, allocator, API surface, lifecycle wiring and charts landed; capacity reconciler and per-endpoint certificates outstanding)
+**Status:** Draft (schema, allocator, API surface, lifecycle wiring and charts landed; capacity reconciler outstanding)
 **Last updated:** 2026-09-16
 
 How an endpoint becomes reachable from outside the cluster **without provisioning
@@ -39,7 +39,9 @@ Four properties, each a deliberate choice rather than a consequence:
   on a rename is a broken address.
 - **TLS terminates at the pod.** Traefik forwards bytes; nothing in the path
   holds a key or can read customer traffic. This is what rules out every
-  off-the-shelf hostname router, and §Routing explains why.
+  off-the-shelf hostname router, and §Routing explains why. The certificate the
+  pod presents for its published name is
+  [`ac-compute-tls.md`](ac-compute-tls.md).
 - **Access control stays per endpoint.** A shared load balancer would normally
   force a shared allowlist, because `loadBalancerSourceRanges` is a per-Service
   field. Traefik's `MiddlewareTCP.ipAllowList` filters per route instead.
@@ -223,13 +225,6 @@ reconcile since it was installed, so it has never published a record.
 `amp/test/ingress-bakeoff/run.sh preflight` reports both halves.
 
 ## Not yet built
-
-Per-endpoint certificates. TLS is passed through to the pod, so an endpoint
-presents whatever certificate it already has — which does not match the name it
-is published under, and `sslmode=verify-full` against that name therefore fails.
-`ingress_external` is usable at `sslmode=require` and is NOT gated on this, but
-an internet-facing endpoint that cannot be verified by name is a real limitation
-rather than a detail; `verify-full` needs a certificate per endpoint name.
 
 Per-listener source-IP filtering, and it needs more than the middleware. The
 shard's Service is `externalTrafficPolicy: Cluster`, so kube-proxy SNATs and the

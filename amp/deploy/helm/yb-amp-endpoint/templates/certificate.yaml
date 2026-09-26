@@ -30,3 +30,79 @@ spec:
     group: {{ . }}
     {{- end }}
 {{- end }}
+{{- if .Values.computeTls.enabled }}
+{{- $names := include "yb-amp-endpoint.computeTlsDnsNames" . | fromYamlArray }}
+{{- if not (has .Values.computeTls.mode (list "issue" "existingSecret")) }}
+{{- fail (printf "computeTls.mode must be issue or existingSecret, got %q" .Values.computeTls.mode) }}
+{{- end }}
+{{- /* Both modes mount the Secret, so both need the fsGroup: the kubelet lands
+       the files root-owned, deployment.yaml asks for 0440, and the non-root
+       postmaster reads the key through its GROUP. Without an fsGroup it is
+       root:root and the compute refuses to start on a key it cannot read —
+       which is a crash-loop with nothing in the rendered manifest to point at.
+       Checked here so it fails at render like every other computeTls
+       misconfiguration, rather than at startup. */}}
+{{- if not (dig "fsGroup" "" (.Values.podSecurityContext | default dict)) }}
+{{- fail "computeTls needs podSecurityContext.fsGroup (the endpoint image's gid, 1000): the certificate Secret mounts root-owned 0440 and a non-root postmaster reads the key through its group" }}
+{{- end }}
+{{- if eq .Values.computeTls.mode "existingSecret" }}
+{{- if not .Values.computeTls.existingSecret }}
+{{- fail "computeTls.mode=existingSecret needs computeTls.existingSecret" }}
+{{- end }}
+{{- else }}
+{{- $ips := include "yb-amp-endpoint.computeTlsIpAddresses" . | fromYamlArray }}
+{{- if and (not $names) (not $ips) }}
+{{- /* An empty SAN list renders a Certificate cert-manager rejects, and the
+       endpoint would come up with ssl = on and nothing a client can verify.
+       Refuse at render instead: includeServiceDns off with no zone, no explicit
+       names and no addresses is a misconfiguration, not a degraded mode.
+       An IP-only certificate IS valid — that is the nlb_* shape — so the guard
+       takes either list. */}}
+{{- fail "computeTls.mode=issue has nothing to issue for: set computeTls.dnsNames or computeTls.ipAddresses, or leave computeTls.includeServiceDns on" }}
+{{- end }}
+---
+# The server certificate the compute's Postgres listener presents to clients, so
+# `sslmode=verify-full` against a published endpoint name succeeds. Separate from
+# the YB client certificate above: different direction, different issuer in the
+# Let's Encrypt case, and each is independently switchable.
+#
+# No commonName. It is capped at 64 characters and carries no weight against a
+# modern client, which matches SANs only — and an ACME issuer rejects a CN that
+# is not among the names it validated.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "yb-amp-endpoint.fullname" . }}-compute
+  labels:
+    {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "yb-amp-endpoint.computeTlsSecretName" . }}
+  {{- with $names }}
+  dnsNames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $ips }}
+  # IP SANs, for the addresses no name covers: an nlb_* load balancer, or an
+  # ingress shard in a deployment with no DNS zone. A client matches these only
+  # as iPAddress entries, never as dnsNames.
+  ipAddresses:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  usages:
+    - server auth
+  {{- with .Values.computeTls.certificate.duration }}
+  duration: {{ . | quote }}
+  {{- end }}
+  renewBefore: {{ .Values.computeTls.certificate.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.computeTls.certificate.algorithm }}
+    size: {{ .Values.computeTls.certificate.size }}
+    rotationPolicy: Always
+  issuerRef:
+    kind: {{ .Values.computeTls.issuerRef.kind }}
+    name: {{ .Values.computeTls.issuerRef.name }}
+    {{- with .Values.computeTls.issuerRef.group }}
+    group: {{ . }}
+    {{- end }}
+{{- end }}
+{{- end }}

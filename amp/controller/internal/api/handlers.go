@@ -1149,6 +1149,50 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 	return GetEndpoint200JSONResponse(endpointToAPI(ep, c.documentDBGatewayReachable(branchExts, ep))), nil
 }
 
+// caBundleSource is the deployer's optional ability to report the CA behind an
+// endpoint's server certificate. Optional rather than part of Deployer: it is a
+// Kubernetes/cert-manager notion, and the docker deployer has nothing to answer
+// with. A deployer that cannot answer reports "none required", which is the
+// truth for it.
+type caBundleSource interface {
+	EndpointCABundle(ctx context.Context, id string) (string, error)
+}
+
+// GetEndpointCaBundle returns what a client needs to verify this endpoint, so a
+// console can hand it over rather than making somebody find it with kubectl.
+//
+// An empty bundle is a 200, not a 404: "you need no CA" is the correct answer
+// for a publicly-trusted certificate and for an endpoint with TLS off, and a
+// 404 would read as "something is missing" for both.
+func (c *Controllers) GetEndpointCaBundle(ctx context.Context, request GetEndpointCaBundleRequestObject) (GetEndpointCaBundleResponseObject, error) {
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return GetEndpointCaBundle404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get endpoint: %w", err)
+	}
+	// The address the certificate is good for. Its SANs cover the name clients
+	// were handed, which is what the endpoint records — another address for the
+	// same pod may well not be in them.
+	verifyName := ep.Address
+	if h, _, splitErr := net.SplitHostPort(verifyName); splitErr == nil {
+		verifyName = h
+	}
+	src, ok := c.prov.Deployer.(caBundleSource)
+	if !ok {
+		return GetEndpointCaBundle200JSONResponse{Required: false, VerifyName: &verifyName}, nil
+	}
+	pem, err := src.EndpointCABundle(ctx, deploy.EndpointName(ep.ID))
+	if err != nil {
+		return nil, fmt.Errorf("endpoint ca bundle: %w", err)
+	}
+	if pem == "" {
+		return GetEndpointCaBundle200JSONResponse{Required: false, VerifyName: &verifyName}, nil
+	}
+	return GetEndpointCaBundle200JSONResponse{Required: true, CaCrt: &pem, VerifyName: &verifyName}, nil
+}
+
 func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
 	endpoints, total, err := c.backend.ListEndpoints(ctx, request.PoolId, request.ClusterId, request.BranchId, limit, offset)

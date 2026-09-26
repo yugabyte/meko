@@ -239,7 +239,38 @@ type DeployConfig struct {
 	BackingYBTLSCertDuration      string // cert-manager duration, e.g. 720h
 	BackingYBTLSCertRenewBefore   string // cert-manager duration, e.g. 240h
 
+	// Server TLS on the compute's own Postgres listener, so a client can connect
+	// with sslmode=verify-full (k8s only; controller/architecture/ac-compute-tls.md).
+	// Independent of the BackingYBTLS* block above: that is the certificate the
+	// pod presents TO YugabyteDB, this is the one it presents to CLIENTS, and a
+	// deployment can want either without the other.
+	//
+	// ComputeTLSMode picks the issuance shape. "issue" gives every endpoint its
+	// own cert-manager Certificate from ComputeTLSIssuer*, which is what a private
+	// CA wants. "existing-secret" mounts ComputeTLSSecret instead — one wildcard
+	// certificate the whole fleet shares — which is what an ACME issuer wants,
+	// since Let's Encrypt allows 50 NEW certificates per registered domain per
+	// week (renewals exempt, so it caps creates rather than fleet size). In BYOC
+	// that budget belongs to the customer whose zone it is, so "issue" against an
+	// ACME issuer is viable for a data plane below that create rate.
+	ComputeTLSMode            string
+	ComputeTLSIssuerKind      string
+	ComputeTLSIssuerName      string
+	ComputeTLSIssuerGroup     string
+	ComputeTLSSecret          string
+	ComputeTLSCertDuration    string // cert-manager duration; empty lets the issuer decide (ACME ignores it)
+	ComputeTLSCertRenewBefore string
+	// ComputeTLSIncludeServiceDNS puts the endpoint's in-cluster Service name in
+	// the certificate. Off for an ACME issuer: no public CA can validate a
+	// .svc.cluster.local name, and its presence fails the whole order.
+	ComputeTLSIncludeServiceDNS bool
+
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait / container ready)
+}
+
+// ComputeTLS reports whether the computes present a certificate to their clients.
+func (d *DeployConfig) ComputeTLS() bool {
+	return d.ComputeTLSMode != "" && d.ComputeTLSMode != "disable"
 }
 
 // BackingYBTLS reports whether the endpoints connect to YugabyteDB over TLS.
@@ -397,6 +428,14 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.BackingYBTLSCABundleConfigMap, "deploy-yb-tls-ca-configmap", env("AMP_DEPLOY_YB_TLS_CA_CONFIGMAP", "amp-ca-bundle"), "k8s: ConfigMap (key ca.crt) in the deploy namespace holding the CA bundle endpoints verify YugabyteDB against")
 	fs.StringVar(&d.BackingYBTLSCertDuration, "deploy-yb-tls-cert-duration", env("AMP_DEPLOY_YB_TLS_CERT_DURATION", "720h"), "k8s: lifetime of each endpoint's client certificate (a cert-manager duration)")
 	fs.StringVar(&d.BackingYBTLSCertRenewBefore, "deploy-yb-tls-cert-renew-before", env("AMP_DEPLOY_YB_TLS_CERT_RENEW_BEFORE", "240h"), "k8s: how long before expiry cert-manager renews each endpoint's client certificate")
+	fs.StringVar(&d.ComputeTLSMode, "deploy-compute-tls-mode", env("AMP_DEPLOY_COMPUTE_TLS_MODE", ""), "k8s: how each compute gets the server certificate it presents to clients (disable | issue | existing-secret). issue = one cert-manager Certificate per endpoint from --deploy-compute-tls-issuer-*; existing-secret = mount --deploy-compute-tls-secret, one certificate the fleet shares. Empty = disable (clients get no verifiable certificate)")
+	fs.StringVar(&d.ComputeTLSIssuerKind, "deploy-compute-tls-issuer-kind", env("AMP_DEPLOY_COMPUTE_TLS_ISSUER_KIND", "ClusterIssuer"), "k8s: cert-manager issuer kind for compute server certificates")
+	fs.StringVar(&d.ComputeTLSIssuerName, "deploy-compute-tls-issuer-name", env("AMP_DEPLOY_COMPUTE_TLS_ISSUER_NAME", "amp-ca"), "k8s: cert-manager issuer name for compute server certificates")
+	fs.StringVar(&d.ComputeTLSIssuerGroup, "deploy-compute-tls-issuer-group", env("AMP_DEPLOY_COMPUTE_TLS_ISSUER_GROUP", "cert-manager.io"), "k8s: cert-manager issuer API group for compute server certificates")
+	fs.StringVar(&d.ComputeTLSSecret, "deploy-compute-tls-secret", env("AMP_DEPLOY_COMPUTE_TLS_SECRET", ""), "k8s: Secret (tls.crt + tls.key) every compute mounts under --deploy-compute-tls-mode=existing-secret, typically one wildcard certificate for the endpoint DNS zone")
+	fs.StringVar(&d.ComputeTLSCertDuration, "deploy-compute-tls-cert-duration", env("AMP_DEPLOY_COMPUTE_TLS_CERT_DURATION", "2160h"), "k8s: lifetime of each compute's server certificate (a cert-manager duration). Empty lets the issuer decide, which is what an ACME issuer needs")
+	fs.StringVar(&d.ComputeTLSCertRenewBefore, "deploy-compute-tls-cert-renew-before", env("AMP_DEPLOY_COMPUTE_TLS_CERT_RENEW_BEFORE", "720h"), "k8s: how long before expiry cert-manager renews each compute's server certificate")
+	fs.BoolVar(&d.ComputeTLSIncludeServiceDNS, "deploy-compute-tls-include-service-dns", envBool("AMP_DEPLOY_COMPUTE_TLS_INCLUDE_SERVICE_DNS", true), "k8s: include the endpoint's in-cluster Service DNS name in its server certificate. Turn OFF for an ACME issuer: no public CA can validate a .svc.cluster.local name, and its presence fails the whole order")
 	fs.DurationVar(&d.Timeout, "deploy-timeout", envDuration("AMP_DEPLOY_TIMEOUT", 10*time.Minute), "how long to wait for a deploy/retire to converge")
 	// Docker driver (--deploy-driver docker).
 	fs.StringVar(&d.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-amp/neon-endpoint:dev"), "docker: single-container endpoint image to run")
@@ -628,6 +667,29 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	case "", "disable", "require", "verify-ca", "verify-full":
 	default:
 		return fmt.Errorf(`invalid deploy YB TLS mode %q (want disable, require, verify-ca or verify-full)`, d.BackingYBTLSMode)
+	}
+	switch d.ComputeTLSMode {
+	case "", "disable", "issue", "existing-secret":
+	default:
+		return fmt.Errorf(`invalid deploy compute TLS mode %q (want disable, issue or existing-secret)`, d.ComputeTLSMode)
+	}
+	if d.ComputeTLSMode == "issue" {
+		if d.ComputeTLSIssuerName == "" || d.ComputeTLSIssuerKind == "" {
+			return fmt.Errorf("deploy compute TLS mode issue needs a cert-manager issuer kind and name")
+		}
+		// Empty duration is legal — an ACME issuer fixes the lifetime itself —
+		// but a value that will not parse must fail here rather than per deploy.
+		if d.ComputeTLSCertDuration != "" {
+			if _, err := time.ParseDuration(d.ComputeTLSCertDuration); err != nil {
+				return fmt.Errorf("invalid deploy compute TLS cert duration %q: %w", d.ComputeTLSCertDuration, err)
+			}
+		}
+		if _, err := time.ParseDuration(d.ComputeTLSCertRenewBefore); err != nil {
+			return fmt.Errorf("invalid deploy compute TLS cert renew-before %q: %w", d.ComputeTLSCertRenewBefore, err)
+		}
+	}
+	if d.ComputeTLSMode == "existing-secret" && d.ComputeTLSSecret == "" {
+		return fmt.Errorf("deploy compute TLS mode existing-secret needs --deploy-compute-tls-secret")
 	}
 	if d.BackingYBTLS() {
 		if d.BackingYBTLSIssuerName == "" || d.BackingYBTLSIssuerKind == "" {

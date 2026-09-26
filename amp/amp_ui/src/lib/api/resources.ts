@@ -14,6 +14,7 @@ import type {
   CreateUserInput,
   Endpoint,
   EndpointConnectivityMode,
+  EndpointCaBundle,
   EndpointList,
   Cluster,
   ClusterList,
@@ -303,6 +304,22 @@ export function getEndpoint(
 ): Promise<Endpoint> {
   return apiRequest<Endpoint>(
     `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}`,
+  );
+}
+
+/** The CA a client needs for `sslmode=verify-full` against this endpoint.
+ *
+ *  Always a 200 when the endpoint exists — `required: false` means no bundle is
+ *  needed, which is the answer for a publicly-trusted certificate and for TLS
+ *  being off. */
+export function getEndpointCaBundle(
+  poolId: string,
+  clusterId: string,
+  branchId: string,
+  endpointId: string,
+): Promise<EndpointCaBundle> {
+  return apiRequest<EndpointCaBundle>(
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}/ca`,
   );
 }
 

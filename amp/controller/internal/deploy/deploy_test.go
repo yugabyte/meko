@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -299,6 +300,56 @@ func TestKubernetesValuesTLS(t *testing.T) {
 	got := yugabyteValues{Sslmode: v.Yugabyte.Sslmode, Sslrootcert: v.Yugabyte.Sslrootcert, Sslcert: v.Yugabyte.Sslcert, Sslkey: v.Yugabyte.Sslkey}
 	if got != want {
 		t.Errorf("connection TLS fields = %+v, want %+v", got, want)
+	}
+}
+
+// TestKubernetesValuesComputeTLS asserts the compute's client-facing certificate
+// is configured independently of the YB one, and that the mode reaches the chart
+// in the chart's own spelling.
+func TestKubernetesValuesComputeTLS(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	if v := k.values(testEndpointSpec(), "yb-ep-rel"); v.ComputeTLS != nil {
+		t.Errorf("plaintext config rendered a computeTls block: %+v", v.ComputeTLS)
+	}
+
+	cfg := testKubernetesConfig()
+	cfg.ComputeTLSMode = "issue"
+	cfg.ComputeTLSIssuerKind = "ClusterIssuer"
+	cfg.ComputeTLSIssuerName = "amp-ca"
+	cfg.ComputeTLSIssuerGroup = "cert-manager.io"
+	cfg.ComputeTLSCertDuration = "2160h"
+	cfg.ComputeTLSCertRenewBefore = "720h"
+	cfg.ComputeTLSIncludeServiceDNS = true
+	v := NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "yb-ep-rel")
+	if v.ComputeTLS == nil || !v.ComputeTLS.Enabled || v.ComputeTLS.Mode != "issue" {
+		t.Fatalf("computeTls block = %+v", v.ComputeTLS)
+	}
+	if !v.ComputeTLS.IncludeServiceDns {
+		t.Errorf("IncludeServiceDns = false, want the Service DNS covered")
+	}
+	if v.ComputeTLS.Certificate != (certificateValue{Duration: "2160h", RenewBefore: "720h"}) {
+		t.Errorf("Certificate = %+v", v.ComputeTLS.Certificate)
+	}
+	// Enabling the client-facing certificate must not turn on TLS to YugabyteDB:
+	// they are different directions, and on a private network a deployment can
+	// want the first without paying for the second.
+	if v.TLS != nil || v.Yugabyte.Sslmode != "" {
+		t.Errorf("computeTls turned on the YB lane: %+v %+v", v.TLS, v.Yugabyte)
+	}
+
+	// The wildcard shape. The flag is kebab-case like every other flag value,
+	// the chart key camelCase like every other values key; a mode that reached
+	// the chart unspelled would render a Certificate the chart refuses.
+	cfg = testKubernetesConfig()
+	cfg.ComputeTLSMode = "existing-secret"
+	cfg.ComputeTLSSecret = "amp-endpoints-wildcard-tls"
+	cfg.ComputeTLSIncludeServiceDNS = false
+	v = NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "yb-ep-rel")
+	if v.ComputeTLS.Mode != "existingSecret" {
+		t.Errorf("Mode = %q, want the chart spelling existingSecret", v.ComputeTLS.Mode)
+	}
+	if v.ComputeTLS.ExistingSecret != "amp-endpoints-wildcard-tls" {
+		t.Errorf("ExistingSecret = %q", v.ComputeTLS.ExistingSecret)
 	}
 }
 
@@ -1101,5 +1152,106 @@ func TestKubernetesDocumentDBGatewayReachable(t *testing.T) {
 			t.Errorf("DocumentDBGatewayReachable(serviceType=%q, connectivity=%q) = %v, want %v",
 				tc.serviceType, tc.connectivity, got, tc.want)
 		}
+	}
+}
+
+// The compute certificate has to cover the address a client is actually given,
+// and X.509 keeps names and addresses apart: an IP listed under dnsNames is not
+// matched by a client dialling it, and a name under ipAddresses is rejected. A
+// certificate that gets this wrong renders, issues, and then fails every
+// verify-full — silently, which is the shape this whole feature exists to stop.
+func TestComputeTLSAddressIsSortedIntoTheRightSAN(t *testing.T) {
+	v := &computeTlsValues{}
+	for _, host := range []string{
+		"10.1.2.3:55433", // an nlb_* load balancer, with the port the caller carries
+		"10.1.2.3",       // the same address again: must not grow the list
+		"a1b2.elb.amazonaws.com:5432",
+		"ep-3f9a2c41.db.example.com",
+	} {
+		addComputeTLSAddress(v, host)
+	}
+	if got, want := v.IpAddresses, []string{"10.1.2.3"}; !slices.Equal(got, want) {
+		t.Errorf("IpAddresses = %v, want %v (ports stripped, duplicates dropped)", got, want)
+	}
+	want := []string{"a1b2.elb.amazonaws.com", "ep-3f9a2c41.db.example.com"}
+	if got := v.DnsNames; !slices.Equal(got, want) {
+		t.Errorf("DnsNames = %v, want %v", got, want)
+	}
+}
+
+// The second pass must not fire for an address the chart already derives, or the
+// create would pay a certificate reissue — and the reload behind it — on every
+// ordinary endpoint.
+func TestComputeTLSCoversWhatTheChartAlreadyDerives(t *testing.T) {
+	const svc = "yb-ep-1.amp.svc.cluster.local:55433"
+	cases := []struct {
+		name string
+		v    *computeTlsValues
+		host string
+		want bool
+	}{
+		{"off entirely", nil, "10.1.2.3", true},
+		{"the Service DNS the chart adds", &computeTlsValues{IncludeServiceDns: true}, svc, true},
+		{"the Service DNS when the chart was told not to add it",
+			&computeTlsValues{IncludeServiceDns: false}, svc, false},
+		{"an address already recorded",
+			&computeTlsValues{IpAddresses: []string{"10.1.2.3"}}, "10.1.2.3:55433", true},
+		{"a name already recorded",
+			&computeTlsValues{DnsNames: []string{"lb.example.com"}}, "lb.example.com", true},
+		{"a load balancer nobody has covered", &computeTlsValues{IncludeServiceDns: true}, "34.55.1.9:55433", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := computeTLSCovers(c.v, c.host, svc); got != c.want {
+				t.Errorf("computeTLSCovers(%q) = %v, want %v", c.host, got, c.want)
+			}
+		})
+	}
+}
+
+// An ingress_* endpoint in a deployment with no DNS zone gets an unqualified
+// slot name no issuer will sign, so clients are handed the shard's own address
+// instead. That address is known before the deploy, so it goes in at render time
+// and needs no second pass.
+func TestIngressWithoutADNSZoneCoversTheShardAddress(t *testing.T) {
+	k := &KubernetesDeployer{cfg: KubernetesConfig{
+		Namespace:                   "amp",
+		ComputePort:                 55433,
+		ComputeTLSMode:              "issue",
+		ComputeTLSIncludeServiceDNS: true,
+		EndpointImageTag:            "t",
+	}}
+	vals := k.values(EndpointSpec{
+		Name:         "yb-ep-1",
+		Connectivity: "ingress_external",
+		Ingress:      IngressSlot{Shard: "s1", Port: 20000, DNSName: "", ShardHost: "34.55.1.9"},
+	}, "yb-ep-1")
+	if vals.ComputeTLS == nil {
+		t.Fatal("computeTls should be rendered when the mode is set")
+	}
+	if got, want := vals.ComputeTLS.IpAddresses, []string{"34.55.1.9"}; !slices.Equal(got, want) {
+		t.Errorf("IpAddresses = %v, want %v — without it an ingress endpoint with no zone serves a certificate no client can verify", got, want)
+	}
+}
+
+// With a zone, the chart derives the published name itself and the controller
+// must stay out of it — two sources for one name is the drift the design
+// deliberately avoids.
+func TestIngressWithADNSZoneLeavesTheNamesToTheChart(t *testing.T) {
+	k := &KubernetesDeployer{cfg: KubernetesConfig{
+		Namespace:                   "amp",
+		ComputePort:                 55433,
+		ComputeTLSMode:              "issue",
+		ComputeTLSIncludeServiceDNS: true,
+		EndpointImageTag:            "t",
+	}}
+	vals := k.values(EndpointSpec{
+		Name:         "yb-ep-1",
+		Connectivity: "ingress_external",
+		Ingress:      IngressSlot{Shard: "s1", Port: 20000, DNSName: "ep-1.db.example.com", ShardHost: "34.55.1.9"},
+	}, "yb-ep-1")
+	if len(vals.ComputeTLS.IpAddresses) != 0 || len(vals.ComputeTLS.DnsNames) != 0 {
+		t.Errorf("controller added SANs the chart derives: ips=%v names=%v",
+			vals.ComputeTLS.IpAddresses, vals.ComputeTLS.DnsNames)
 	}
 }

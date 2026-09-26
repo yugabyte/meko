@@ -458,6 +458,12 @@ Kubernetes driver:
 | `--deploy-yb-tls-issuer-kind` / `-name` / `-group` | issuer the endpoint certificates come from (default `ClusterIssuer` / `amp-ca` / `cert-manager.io`) |
 | `--deploy-yb-tls-ca-configmap` | ConfigMap (key `ca.crt`) holding the trusted roots, mounted as the endpoints' `sslrootcert` (default `amp-ca-bundle`) |
 | `--deploy-yb-tls-cert-duration` / `-renew-before` | endpoint certificate lifetime and renewal lead (default `720h` / `240h`) |
+| `--deploy-compute-tls-mode` | `issue` \| `existing-secret`: the certificate each compute presents to its OWN clients, so `sslmode=verify-full` against a published endpoint name succeeds (`ac-compute-tls.md`). Empty or `disable` (default) = the compute offers no TLS. The opposite direction from `--deploy-yb-tls-*` above and independent of it |
+| `--deploy-compute-tls-issuer-kind` / `-name` / `-group` | issuer for `mode=issue`, one `Certificate` per endpoint (default `ClusterIssuer` / `amp-ca` / `cert-manager.io`) |
+| `--deploy-compute-tls-secret` | Secret (`tls.crt` + `tls.key`) every compute mounts under `mode=existing-secret`, typically one wildcard for the endpoint DNS zone |
+| `--deploy-compute-tls-cert-duration` / `-renew-before` | compute certificate lifetime and renewal lead (default `2160h` / `720h`). Leave the duration **empty** for an ACME issuer, which fixes it at 90 days and only warns that the request was ignored |
+| (no flag) | the endpoint's own client-facing address is added to its certificate automatically — as an IP SAN for an `nlb_*` load balancer or an `ingress_*` shard in a zone-less deployment, as a name otherwise (`ac-compute-tls.md` §The two addresses the chart cannot derive) |
+| `--deploy-compute-tls-include-service-dns` | put the endpoint's in-cluster Service DNS name in its certificate (default true). Must be **false** for `mode=issue` against an ACME issuer: no public CA can validate a `.svc.cluster.local` name and one unvalidatable name fails the whole order. No effect under `mode=existing-secret`, which renders no `Certificate` |
 
 `--deploy-service-type` and `--deploy-service-annotations` above are the
 deployment-wide default. **Client reachability is also a per-endpoint choice**,

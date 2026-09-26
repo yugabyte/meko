@@ -61,6 +61,7 @@ use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
 pub mod boot;
+pub mod compute_tls;
 pub mod config;
 pub mod control;
 pub mod coordinate;
@@ -147,6 +148,11 @@ pub struct Env {
     yb_sslcert: Option<String>,
     yb_sslkey: Option<String>,
     yb_password_env: Option<String>,
+    /// The mounted server certificate the compute presents to clients. Both or
+    /// neither: a cert with no key configures nothing, so
+    /// [`Self::compute_tls`] treats a half-set pair as unset and says so.
+    compute_ssl_cert_file: Option<String>,
+    compute_ssl_key_file: Option<String>,
     endpoint_id: Option<String>,
     /// The verifier for the compute default user's password, as the control
     /// plane computed it. `None` — unset or empty — means the role's password is
@@ -331,6 +337,8 @@ impl Env {
             yb_sslcert: env_opt("YB_SSLCERT"),
             yb_sslkey: env_opt("YB_SSLKEY"),
             yb_password_env: env_opt("YB_PASSWORD_ENV"),
+            compute_ssl_cert_file: env_opt("COMPUTE_SSL_CERT_FILE"),
+            compute_ssl_key_file: env_opt("COMPUTE_SSL_KEY_FILE"),
             endpoint_id,
             compute_password: env_opt("COMPUTE_PASSWORD"),
             autoprewarm: env_bool("AUTOPREWARM"),
@@ -343,6 +351,32 @@ impl Env {
             compute_ctl_jwks: compute_ctl_jwks()?,
             prerender,
         })
+    }
+
+    /// The compute's server certificate, or `None` for a plaintext compute.
+    ///
+    /// A half-configured pair is `None` rather than an error: the rest of the
+    /// endpoint is fine, and refusing to start a database because one ConfigMap
+    /// key is missing is the wrong trade. It is warned about, because the pod
+    /// would otherwise look healthy while quietly serving no TLS.
+    pub(crate) fn compute_tls(&self) -> Option<spec::ComputeTls<'_>> {
+        match (
+            self.compute_ssl_cert_file.as_deref(),
+            self.compute_ssl_key_file.as_deref(),
+        ) {
+            (Some(cert_file), Some(key_file)) => Some(spec::ComputeTls {
+                cert_file,
+                key_file,
+            }),
+            (None, None) => None,
+            _ => {
+                tracing::warn!(
+                    "COMPUTE_SSL_CERT_FILE and COMPUTE_SSL_KEY_FILE must both be set; \
+                     the compute will not offer TLS"
+                );
+                None
+            }
+        }
     }
 
     fn yb_conn(&self) -> toml_edit::Value {
@@ -571,6 +605,12 @@ fn run() -> Result<std::process::ExitCode> {
             Ok(bound) => tracing::info!(%bound, "settings API bound"),
             Err(e) => tracing::warn!("settings API unavailable: {e:#}"),
         }
+    }
+
+    // Same reasoning, and the same scope: the certificate is the endpoint's, so
+    // one watcher for the process outlives every lease it serves under.
+    if let Some(tls) = env.compute_tls() {
+        compute_tls::spawn(tls.cert_file, tls.key_file, l.compute_port);
     }
 
     let mut fence = if fence_cfg.required {
@@ -870,6 +910,28 @@ pub fn reload_config(env: &Env, fence_required: bool) -> Result<Rendered> {
     render_config(env, fence_required, &overrides)
 }
 
+/// The certificate settings an operator asked for and will not get.
+///
+/// Only when the compute actually has a certificate: with no mount there is
+/// nothing rendered after their settings, so `ssl = off` from an operator is an
+/// ordinary setting that applies like any other.
+pub(crate) fn compute_tls_refusals(
+    env: &Env,
+    operator: &std::collections::BTreeMap<String, String>,
+) -> Vec<guc::NotApplied> {
+    if env.compute_tls().is_none() {
+        return Vec::new();
+    }
+    spec::COMPUTE_TLS_OWNED
+        .iter()
+        .filter(|name| operator.contains_key(**name))
+        .map(|name| guc::NotApplied {
+            name: (*name).to_string(),
+            reason: guc::COMPUTE_TLS_OWNED.to_string(),
+        })
+        .collect()
+}
+
 pub fn render_config(
     env: &Env,
     fence_required: bool,
@@ -1017,6 +1079,7 @@ pub fn render_config(
             autoprewarm: env.autoprewarm,
             offload_lfc_interval_seconds: env.offload_lfc_interval_seconds,
             compute_ctl_jwks: env.compute_ctl_jwks.clone(),
+            compute_tls: env.compute_tls(),
         },
         &settings,
         &screened_chart.keep,
@@ -1056,6 +1119,11 @@ pub fn render_config(
             .into_iter()
             .chain(screened_chart.refused)
             .chain(refused_daemon)
+            // The certificate settings render after the operator's, so one of
+            // theirs is stored and then beaten. Say so: the probe passes it
+            // (a path parses), nothing moves, and an unreported edit that did
+            // nothing is the failure `not_applied` was added to stop.
+            .chain(compute_tls_refusals(env, &overrides.pg))
             .collect(),
     })
 }
@@ -1327,6 +1395,8 @@ mod tests {
             yb_sslcert: None,
             yb_sslkey: None,
             yb_password_env: None,
+            compute_ssl_cert_file: None,
+            compute_ssl_key_file: None,
             endpoint_id: None,
             compute_password: Some("cloud_admin".into()),
             autoprewarm: false,

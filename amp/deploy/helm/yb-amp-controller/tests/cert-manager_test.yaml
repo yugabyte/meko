@@ -35,7 +35,8 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: >-
-            tls.enabled or controller.endpoint.ybTlsMode is set but cert-manager is not
+            tls.enabled, controller.endpoint.ybTlsMode or
+            controller.endpoint.computeTlsMode=issue is set but cert-manager is not
             installed on this cluster (no cert-manager.io/v1). Install it with
             `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions
             cert-manager.io/v1.
@@ -50,7 +51,8 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: >-
-            tls.enabled or controller.endpoint.ybTlsMode is set but cert-manager is not
+            tls.enabled, controller.endpoint.ybTlsMode or
+            controller.endpoint.computeTlsMode=issue is set but cert-manager is not
             installed on this cluster (no cert-manager.io/v1). Install it with
             `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions
             cert-manager.io/v1.
@@ -67,3 +69,32 @@ tests:
           count: 1
       - isKind:
           of: Certificate
+
+  # The compute's client-facing certificate is rendered by the endpoint chart
+  # from this install's issuerRef too, so it needs cert-manager on the same
+  # terms as the YB one.
+  - it: refuses the render when only the compute TLS mode issues certificates
+    set:
+      tls.enabled: false
+      controller.endpoint.computeTlsMode: issue
+    template: templates/cert-manager-preflight.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            tls.enabled, controller.endpoint.ybTlsMode or
+            controller.endpoint.computeTlsMode=issue is set but cert-manager is not
+            installed on this cluster (no cert-manager.io/v1). Install it with
+            `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions
+            cert-manager.io/v1.
+
+  # existing-secret mounts a Secret this chart does not create, so it says
+  # nothing about cert-manager being installed here.
+  - it: is silent for a shared secret, which this chart does not issue
+    set:
+      tls.enabled: false
+      controller.endpoint.computeTlsMode: existing-secret
+      controller.endpoint.computeTlsSecret: amp-endpoints-wildcard-tls
+    template: templates/cert-manager-preflight.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

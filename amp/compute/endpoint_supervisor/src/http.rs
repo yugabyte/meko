@@ -243,7 +243,11 @@ fn daemons_to_restart(rendered: &crate::Rendered) -> Vec<&'static str> {
 /// spec, including where this compute reads its data from. A signal carries no
 /// payload and needs the pod's PID namespace, so the only thing it can apply is
 /// the file already on disk.
-fn reload_compute() -> Result<()> {
+///
+/// Public so the certificate watcher can use it: a renewed `ssl_cert_file` needs
+/// exactly this — Postgres re-reads it on reload — and it must not restart the
+/// compute to get there.
+pub fn reload_compute() -> Result<()> {
     let sup = supervisor().context("no services are running to reload")?;
     let mut sup = sup
         .lock()
@@ -390,7 +394,12 @@ async fn check_handler(mut request: Request<Body>) -> Result<Response<Body>, Api
     // Spawns processes, so not on the reactor thread.
     let not_applied = tokio::task::spawn_blocking(move || {
         let l = &state.env.layout;
-        crate::guc::screen(&l.pg_bin(), &l.run_dir, &req.pg_settings).refused
+        let mut refused = crate::guc::screen(&l.pg_bin(), &l.run_dir, &req.pg_settings).refused;
+        // The probe cannot catch these: a certificate path parses, so Postgres
+        // accepts it and the render then overrides it. Checked here so the
+        // controller refuses the edit rather than storing one that does nothing.
+        refused.extend(crate::compute_tls_refusals(&state.env, &req.pg_settings));
+        refused
     })
     .await
     .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("the check task: {e}")))?;
@@ -406,6 +415,15 @@ pub fn make_router(state: Arc<State>) -> RouterBuilder<Body, ApiError> {
         })
         .post("/v1/settings/check", |r| {
             endpoint::request_span(r, check_handler)
+        })
+        // The certificate expiries this process watches. Served here rather than
+        // from a listener of its own because this is the only HTTP server the
+        // supervisor has, and the collector scrapes endpoint pods by explicit
+        // port anyway (`otel-collectors.yaml`, job amp-supervisor). `false`:
+        // nothing is collected on scrape — the gauges are set by the watcher
+        // when the files move.
+        .get("/metrics", |r| {
+            endpoint::request_span(r, |r| endpoint::prometheus_metrics_handler(r, false))
         })
 }
 

@@ -12,13 +12,17 @@ renders offline passes --api-versions (the QA framework does, from the CRDs it
 finds).
 */ -}}
 {{- /*
-Either knob needs cert-manager: tls.enabled is this pod's own certificate, and
+Three knobs need cert-manager: tls.enabled is this pod's own certificate,
 controller.endpoint.ybTlsMode makes the controller render a Certificate into
-every endpoint release. An install that set only the second used to pass here
-and then fail one endpoint deploy task at a time.
+every endpoint release, and computeTlsMode=issue renders a second one there. An
+install that set only one of the latter two used to pass here and then fail one
+endpoint deploy task at a time.
+
+computeTlsMode=existing-secret is deliberately NOT here: it mounts a Secret this
+chart does not create, which may have been issued anywhere.
 */ -}}
-{{- if or .Values.tls.enabled .Values.controller.endpoint.ybTlsMode }}
+{{- if or .Values.tls.enabled .Values.controller.endpoint.ybTlsMode (eq .Values.controller.endpoint.computeTlsMode "issue") }}
 {{- if not (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
-{{- fail (printf "tls.enabled or controller.endpoint.ybTlsMode is set but cert-manager is not installed on this cluster (no cert-manager.io/v1). Install it with `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions cert-manager.io/v1.") }}
+{{- fail (printf "tls.enabled, controller.endpoint.ybTlsMode or controller.endpoint.computeTlsMode=issue is set but cert-manager is not installed on this cluster (no cert-manager.io/v1). Install it with `deploy/tls/trust-root.sh`. Rendering offline? pass --api-versions cert-manager.io/v1.") }}
 {{- end }}
 {{- end }}

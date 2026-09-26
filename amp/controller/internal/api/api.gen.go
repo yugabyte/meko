@@ -920,6 +920,22 @@ type Endpoint struct {
 // EndpointRole defines model for Endpoint.Role.
 type EndpointRole string
 
+// EndpointCaBundle What a client needs to verify this endpoint's server certificate.
+type EndpointCaBundle struct {
+	// CaCrt The CA bundle, PEM encoded. Empty when `required` is false.
+	CaCrt *string `json:"ca_crt,omitempty"`
+
+	// Required Whether a client must pass `sslrootcert` at all. False means the
+	// certificate is publicly trusted, or the endpoint offers no TLS —
+	// either way `ca_crt` is empty and the client needs nothing.
+	Required bool `json:"required"`
+
+	// VerifyName The name or address to connect to for `sslmode=verify-full`. The
+	// certificate covers this; another address for the same endpoint may
+	// not be in its SANs.
+	VerifyName *string `json:"verify_name,omitempty"`
+}
+
 // EndpointConnectivity How clients reach this endpoint's Postgres port.
 //
 // `cluster_ip` (the default) publishes it in-cluster only — plus the
@@ -2416,6 +2432,9 @@ type ClientInterface interface {
 	// GetEndpoint request
 	GetEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetEndpointCaBundle request
+	GetEndpointCaBundle(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ResizeEndpointWithBody request with any body
 	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2969,6 +2988,18 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, clusterId Cl
 
 func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetEndpointRequest(c.Server, poolId, clusterId, branchId, endpointId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetEndpointCaBundle(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetEndpointCaBundleRequest(c.Server, poolId, clusterId, branchId, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -4716,6 +4747,61 @@ func NewGetEndpointRequest(server string, poolId PoolId, clusterId ClusterId, br
 	return req, nil
 }
 
+// NewGetEndpointCaBundleRequest generates requests for GetEndpointCaBundle
+func NewGetEndpointCaBundleRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "endpointId", endpointId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s/ca", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewResizeEndpointRequest calls the generic ResizeEndpoint builder with application/json body
 func NewResizeEndpointRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -5516,6 +5602,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetEndpointWithResponse request
 	GetEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
+
+	// GetEndpointCaBundleWithResponse request
+	GetEndpointCaBundleWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointCaBundleResponse, error)
 
 	// ResizeEndpointWithBodyWithResponse request with any body
 	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
@@ -6612,6 +6701,37 @@ func (r GetEndpointResponse) ContentType() string {
 	return ""
 }
 
+type GetEndpointCaBundleResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *EndpointCaBundle
+	JSON404      *NotFound
+}
+
+// Status returns HTTPResponse.Status
+func (r GetEndpointCaBundleResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetEndpointCaBundleResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetEndpointCaBundleResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ResizeEndpointResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -7389,6 +7509,15 @@ func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolI
 		return nil, err
 	}
 	return ParseGetEndpointResponse(rsp)
+}
+
+// GetEndpointCaBundleWithResponse request returning *GetEndpointCaBundleResponse
+func (c *ClientWithResponses) GetEndpointCaBundleWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointCaBundleResponse, error) {
+	rsp, err := c.GetEndpointCaBundle(ctx, poolId, clusterId, branchId, endpointId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetEndpointCaBundleResponse(rsp)
 }
 
 // ResizeEndpointWithBodyWithResponse request with arbitrary body returning *ResizeEndpointResponse
@@ -9171,6 +9300,39 @@ func ParseGetEndpointResponse(rsp *http.Response) (*GetEndpointResponse, error) 
 	return response, nil
 }
 
+// ParseGetEndpointCaBundleResponse parses an HTTP response from a GetEndpointCaBundleWithResponse call
+func ParseGetEndpointCaBundleResponse(rsp *http.Response) (*GetEndpointCaBundleResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetEndpointCaBundleResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest EndpointCaBundle
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseResizeEndpointResponse parses an HTTP response from a ResizeEndpointWithResponse call
 func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -9886,6 +10048,9 @@ type ServerInterface interface {
 	// Get an endpoint
 	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
+	// The CA a client needs to verify this endpoint
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/ca)
+	GetEndpointCaBundle(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
 	// Resize an endpoint's compute (in place)
 	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
@@ -10618,6 +10783,46 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 	return err
 }
 
+// GetEndpointCaBundle converts echo context to params.
+func (w *ServerInterfaceWrapper) GetEndpointCaBundle(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// ------------- Path parameter "endpointId" -------------
+	var endpointId EndpointId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpointId", ctx.Param("endpointId"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter endpointId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetEndpointCaBundle(ctx, poolId, clusterId, branchId, endpointId)
+	return err
+}
+
 // ResizeEndpoint converts echo context to params.
 func (w *ServerInterfaceWrapper) ResizeEndpoint(ctx echo.Context) error {
 	var err error
@@ -11000,6 +11205,7 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints", wrapper.CreateEndpoint, options.OperationMiddlewares["createEndpoint"]...)
 	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint, options.OperationMiddlewares["deleteEndpoint"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint, options.OperationMiddlewares["getEndpoint"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/ca", wrapper.GetEndpointCaBundle, options.OperationMiddlewares["getEndpointCaBundle"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint, options.OperationMiddlewares["resizeEndpoint"]...)
 	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/settings", wrapper.UpdateEndpointSettings, options.OperationMiddlewares["updateEndpointSettings"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/extensions", wrapper.AddBranchExtensions, options.OperationMiddlewares["addBranchExtensions"]...)
@@ -13456,6 +13662,45 @@ func (response GetEndpoint503JSONResponse) VisitGetEndpointResponse(w http.Respo
 	return err
 }
 
+type GetEndpointCaBundleRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	ClusterId  ClusterId  `json:"clusterId"`
+	BranchId   BranchId   `json:"branchId"`
+	EndpointId EndpointId `json:"endpointId"`
+}
+
+type GetEndpointCaBundleResponseObject interface {
+	VisitGetEndpointCaBundleResponse(w http.ResponseWriter) error
+}
+
+type GetEndpointCaBundle200JSONResponse EndpointCaBundle
+
+func (response GetEndpointCaBundle200JSONResponse) VisitGetEndpointCaBundleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEndpointCaBundle404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetEndpointCaBundle404JSONResponse) VisitGetEndpointCaBundleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ResizeEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
 	ClusterId  ClusterId  `json:"clusterId"`
@@ -14458,6 +14703,9 @@ type StrictServerInterface interface {
 	// Get an endpoint
 	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error)
+	// The CA a client needs to verify this endpoint
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/ca)
+	GetEndpointCaBundle(ctx context.Context, request GetEndpointCaBundleRequestObject) (GetEndpointCaBundleResponseObject, error)
 	// Resize an endpoint's compute (in place)
 	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error)
@@ -15372,6 +15620,34 @@ func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, clusterId 
 		return err
 	} else if validResponse, ok := response.(GetEndpointResponseObject); ok {
 		return validResponse.VisitGetEndpointResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetEndpointCaBundle operation middleware
+func (sh *strictHandler) GetEndpointCaBundle(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error {
+	var request GetEndpointCaBundleRequestObject
+
+	request.PoolId = poolId
+	request.ClusterId = clusterId
+	request.BranchId = branchId
+	request.EndpointId = endpointId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetEndpointCaBundle(ctx.Request().Context(), request.(GetEndpointCaBundleRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetEndpointCaBundle")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetEndpointCaBundleResponseObject); ok {
+		return validResponse.VisitGetEndpointCaBundleResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

@@ -84,6 +84,11 @@ on:
         description: 'Deploy YugabyteDB on cert-manager TLS (TLS=1) and have the controller and endpoints authenticate with certificates'
         type: boolean
         default: false
+      compute_tls:
+        description: "Give each compute a server certificate its clients can verify (COMPUTE_TLS). 'issue' = one per endpoint from amp-ca; needs tls=1 for cert-manager, or a cluster that already has it"
+        type: choice
+        options: [disable, issue]
+        default: disable
       namespace:
         description: 'Deploy into this namespace instead of a throwaway ci-pr-<run> one, and leave it up afterwards'
         type: string
@@ -347,6 +352,11 @@ jobs:
       # say): it is not torn down at the end.
       KEEP_NS: ${{ inputs.namespace != '' && '1' || '0' }}
       TLS: ${{ inputs.tls && '1' || '0' }}
+      # Server TLS on the compute's own listener (controller/architecture/ac-compute-tls.md).
+      # Separate from TLS above, which is the lane to YugabyteDB: this is the
+      # certificate a psql client verifies. Manual dispatch only — a PR directive
+      # deploys it off, because turning it on costs one restart per endpoint.
+      COMPUTE_TLS: ${{ inputs.compute_tls || 'disable' }}
       PULL_SECRET: quay-pull-secret
       TAG: ${{ needs.images.outputs.tag }}
       # '1' for the amp_deploy_gke_ycp superset (directive or manual push_ycp),
@@ -439,6 +449,7 @@ jobs:
           OTEL_ENABLED=true \
           YCP_ENABLED="$YCP" \
           TLS="$TLS" \
+          COMPUTE_TLS="$COMPUTE_TLS" \
           YCP_BYOC_METRICS_URL="$YCP_BYOC_METRICS_URL" \
           YCP_BYOC_PASSWORD="$YCP_BYOC_PASSWORD" \
           YCP_DATADOG_API_KEY="$YCP_DATADOG_API_KEY" \

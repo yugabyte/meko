@@ -506,10 +506,237 @@ pub struct TlsFiles {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClientCertInfo {
     pub common_name: Option<String>,
+    /// The `subjectAltName` DNS entries — the names a client actually matches
+    /// against, since a modern client ignores the CN. Empty when the extension
+    /// is absent. `serde(default)` because this was added after the type was
+    /// already on the daemons' status wire, where an older peer sends none.
+    #[serde(default)]
+    pub dns_names: Vec<String>,
     /// Hex, as `openssl x509 -serial` prints it.
     pub serial: String,
     pub not_before_unix: u64,
     pub not_after_unix: u64,
+}
+
+/// What a parsed certificate says about itself. No validation: a caller that
+/// only wants to watch an expiry — a metrics gauge, a status line — must not be
+/// refused an answer because the certificate has already expired, which is
+/// precisely the case it exists to report.
+fn describe_certificate(cert: &x509_cert::Certificate) -> ClientCertInfo {
+    use x509_cert::der::asn1::{PrintableStringRef, Utf8StringRef};
+    use x509_cert::ext::pkix::SubjectAltName;
+    use x509_cert::ext::pkix::name::GeneralName;
+
+    let tbs = &cert.tbs_certificate;
+    // The names a client matches against. Only DNS names: this describes a
+    // Postgres server or client certificate, and neither is reached by IP here.
+    // An absent or unparseable extension is an empty list rather than an error —
+    // a caller watching an expiry must still get its answer.
+    let dns_names = tbs
+        .get::<SubjectAltName>()
+        .ok()
+        .flatten()
+        .map(|(_critical, san)| {
+            san.0
+                .iter()
+                .filter_map(|name| match name {
+                    GeneralName::DnsName(dns) => Some(dns.as_str().to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let common_name = tbs
+        .subject
+        .0
+        .iter()
+        .flat_map(|rdn| rdn.0.iter())
+        .find(|atv| atv.oid == CN_OID)
+        .and_then(|atv| {
+            Utf8StringRef::try_from(&atv.value)
+                .map(|s| s.as_str().to_string())
+                .or_else(|_| {
+                    PrintableStringRef::try_from(&atv.value).map(|s| s.as_str().to_string())
+                })
+                .ok()
+        });
+    ClientCertInfo {
+        common_name,
+        dns_names,
+        serial: tbs
+            .serial_number
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect(),
+        not_before_unix: tbs.validity.not_before.to_unix_duration().as_secs(),
+        not_after_unix: tbs.validity.not_after.to_unix_duration().as_secs(),
+    }
+}
+
+/// Describe the FIRST certificate in a PEM bundle, without validating it.
+///
+/// For watching a mounted certificate's expiry from outside a connection block:
+/// the supervisor reports the compute's own server certificate and the CA that
+/// issued it this way, and neither is a certificate this crate connects with.
+/// `Ok(None)` when the bytes carry no PEM CERTIFICATE block, which is how an
+/// issuer that ships no `ca.crt` (ACME) reads.
+pub fn describe_certificate_pem(pem: &[u8]) -> anyhow::Result<Option<ClientCertInfo>> {
+    let Some(chain) = load_pem_chain_guarded(pem)? else {
+        return Ok(None);
+    };
+    Ok(chain.first().map(describe_certificate))
+}
+
+/// Postgres' `SSLRequest`: length 8, then the magic 80877103. The server answers
+/// one byte — `S` to proceed with TLS, `N` to refuse — before any TLS bytes move.
+const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
+
+/// The leaf certificate a Postgres server is presenting RIGHT NOW, from a bare
+/// handshake — no authentication, no query, no connection kept.
+///
+/// This is the only place the loaded certificate is observable. Postgres re-reads
+/// `ssl_cert_file` at each reload and uses the new context for *new* backends
+/// only, and nothing in SQL reports it: `SHOW ssl_cert_file` gives the configured
+/// path, which does not change when the bytes behind it do, and
+/// `pg_conf_load_time()` advances even for a reload whose new pair failed to load
+/// and left the OLD context in place (`be_tls_init` swaps `SSL_context` only on
+/// success, and logs otherwise). So a caller that needs to know whether a renewal
+/// actually took has to ask the wire.
+///
+/// Validation is deliberately OFF, and that is not a weakening: the question is
+/// WHICH certificate is being served, not whether it is trustworthy, and the
+/// caller already holds the file it is comparing against. Nothing is sent, so no
+/// credential is at risk on an unverified connection.
+///
+/// `Ok(None)` when the server answers `N` — it is not offering TLS at all, which
+/// for a caller watching a certificate is an answer rather than an error.
+pub fn served_certificate_der(
+    host: &str,
+    port: u16,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+
+    let addr = (host, port)
+        .to_socket_addrs()
+        .with_context(|| format!("resolving `{host}:{port}`"))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("`{host}:{port}` resolved to nothing"))?;
+    let mut sock = std::net::TcpStream::connect_timeout(&addr, timeout)
+        .with_context(|| format!("connecting to `{host}:{port}`"))?;
+    sock.set_read_timeout(Some(timeout))?;
+    sock.set_write_timeout(Some(timeout))?;
+    sock.write_all(&SSL_REQUEST).context("sending SSLRequest")?;
+    let mut answer = [0u8; 1];
+    sock.read_exact(&mut answer)
+        .context("reading the SSLRequest answer")?;
+    if answer[0] != b'S' {
+        return Ok(None);
+    }
+
+    #[derive(Debug)]
+    struct AcceptAny;
+    impl rustls::client::danger::ServerCertVerifier for AcceptAny {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls::pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls::pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms
+                .supported_schemes()
+        }
+    }
+
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .context("building a rustls config")?
+    .dangerous()
+    .with_custom_certificate_verifier(Arc::new(AcceptAny))
+    .with_no_client_auth();
+
+    // The name is never matched against anything (the verifier accepts all), but
+    // rustls requires one for SNI.
+    let name = rustls::pki_types::ServerName::try_from("localhost")
+        .context("localhost is not a server name")?
+        .to_owned();
+    let mut conn = rustls::ClientConnection::new(Arc::new(config), name)
+        .context("starting the TLS handshake")?;
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    // Drives the handshake without sending a byte of Postgres protocol: there is
+    // no startup message, so the server never gets as far as asking who we are.
+    tls.flush().context("completing the TLS handshake")?;
+
+    let leaf = conn
+        .peer_certificates()
+        .and_then(|c| c.first())
+        .map(|c| c.as_ref().to_vec())
+        .ok_or_else(|| anyhow::anyhow!("the server presented no certificate"))?;
+    Ok(Some(leaf))
+}
+
+/// The DER of the first certificate in a PEM bundle — byte for byte what a TLS
+/// server presents as its leaf, which is what makes it comparable with
+/// [`served_certificate_der`] without re-parsing either side.
+///
+/// `None` when the bytes carry no certificate: absent, empty, truncated, or a
+/// PEM block of some other type. Same contract as [`describe_certificate_pem`],
+/// because both read files a kubelet writes.
+pub fn leaf_der_from_pem(pem: &[u8]) -> Option<Vec<u8>> {
+    rustls_pemfile::certs(&mut std::io::Cursor::new(pem))
+        .next()?
+        .ok()
+        .map(|c| c.as_ref().to_vec())
+}
+
+/// The `BEGIN CERTIFICATE` armour, which `load_pem_chain` requires and does not
+/// check for.
+const PEM_CERT_BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+
+/// `Certificate::load_pem_chain`, minus the panic.
+///
+/// x509-cert 0.2.5 subtracts with overflow inside `load_pem_chain` when the
+/// input carries no PEM block at all (`certificate.rs:256`) — so an empty or
+/// truncated mount does not fail the read, it kills the thread. Both callers
+/// read files a kubelet writes, where empty-for-a-moment is a real state, so the
+/// armour is checked first and absence is reported as `Ok(None)` rather than
+/// reaching upstream.
+fn load_pem_chain_guarded(pem: &[u8]) -> anyhow::Result<Option<Vec<x509_cert::Certificate>>> {
+    if !pem
+        .windows(PEM_CERT_BEGIN.len())
+        .any(|w| w == PEM_CERT_BEGIN)
+    {
+        return Ok(None);
+    }
+    x509_cert::Certificate::load_pem_chain(pem)
+        .map(Some)
+        .context("parsing the PEM chain")
 }
 
 /// The TLS posture of a connection block, as the daemons' status endpoints
@@ -629,16 +856,14 @@ impl YbConnConfig {
     /// `cert` HBA rule logs the CN in and nothing else could. Errors name the
     /// file so a bad mount reads as a bad mount, not as an RPC failure.
     pub fn inspect_client_certificate(&self) -> anyhow::Result<Option<ClientCertInfo>> {
-        use x509_cert::Certificate;
-        use x509_cert::der::asn1::{PrintableStringRef, Utf8StringRef};
-
         let Some(id) = self.client_identity()? else {
             return Ok(None);
         };
         let pem = std::fs::read(&id.cert_path)
             .with_context(|| format!("reading sslcert `{}`", id.cert_path))?;
-        let chain = Certificate::load_pem_chain(&pem)
-            .with_context(|| format!("parsing sslcert `{}`", id.cert_path))?;
+        let chain = load_pem_chain_guarded(&pem)
+            .with_context(|| format!("parsing sslcert `{}`", id.cert_path))?
+            .unwrap_or_default();
         let leaf = chain.first().ok_or_else(|| {
             anyhow::anyhow!(
                 "sslcert `{}` contains no PEM CERTIFICATE blocks",
@@ -653,32 +878,7 @@ impl YbConnConfig {
                 anyhow::anyhow!("sslkey `{}` contains no PEM private key", id.key_path)
             })?;
 
-        let tbs = &leaf.tbs_certificate;
-        let common_name = tbs
-            .subject
-            .0
-            .iter()
-            .flat_map(|rdn| rdn.0.iter())
-            .find(|atv| atv.oid == CN_OID)
-            .and_then(|atv| {
-                Utf8StringRef::try_from(&atv.value)
-                    .map(|s| s.as_str().to_string())
-                    .or_else(|_| {
-                        PrintableStringRef::try_from(&atv.value).map(|s| s.as_str().to_string())
-                    })
-                    .ok()
-            });
-        let info = ClientCertInfo {
-            common_name,
-            serial: tbs
-                .serial_number
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect(),
-            not_before_unix: tbs.validity.not_before.to_unix_duration().as_secs(),
-            not_after_unix: tbs.validity.not_after.to_unix_duration().as_secs(),
-        };
+        let info = describe_certificate(leaf);
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2720,6 +2920,29 @@ mod retry_class_tests {
         }
         for code in ["40001", "40P01", "25P03", "XX000"] {
             assert!(!code.starts_with("42"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod cert_tests {
+    /// x509-cert 0.2.5 panics rather than erroring when handed bytes with no PEM
+    /// armour, and both callers read files a kubelet writes — where empty for a
+    /// moment is a real state, not a corruption. A panic there kills the thread
+    /// that was watching for the file to arrive.
+    #[test]
+    fn bytes_with_no_pem_block_are_absence_not_a_panic() {
+        for bytes in [
+            b"".as_slice(),
+            b"not a certificate",
+            b"-----BEGIN PRIVATE KEY-----",
+        ] {
+            assert_eq!(
+                super::describe_certificate_pem(bytes).unwrap(),
+                None,
+                "{:?} should read as no certificate",
+                String::from_utf8_lossy(bytes)
+            );
         }
     }
 }

@@ -141,6 +141,15 @@ explains nothing. And reloads are serialised, because two interleaving would eac
 write the other's files and both report a "changed" that reflects the race rather
 than the registry.
 
+`GET /metrics` on the same listener serves what the supervisor's certificate
+watcher sees — the two expiries `compute_cert_not_after_seconds` and
+`compute_ca_not_after_seconds`, and `compute_cert_reload_pending`, which is the
+one to alert on: the expiries read the mounted file and report health whether or
+not the compute ever loaded it
+([`ac-metrics.md`](../../controller/architecture/ac-metrics.md#certificate-expiry--from-the-pod-not-from-cert-manager)).
+It shares this server because it is the only one the supervisor has; the
+collector scrapes endpoint pods by explicit port, so nothing had to move.
+
 `POST /v1/settings/check` is the other half, and it runs *before* a write. The
 controller asks the branch's writer whether Postgres would take the names and
 values, and refuses the request outright if not, rather than storing a setting

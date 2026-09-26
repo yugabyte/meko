@@ -13,6 +13,10 @@ of a password, and pick up renewed certificates without a restart.
 Encryption stays **optional and off by default**. TLS costs roughly 5% CPU and many
 deployments on a private network will not opt in.
 
+Every certificate here faces YugabyteDB. The one a compute presents to its **own
+clients** is the other direction and a separate switch:
+[`ac-compute-tls.md`](ac-compute-tls.md).
+
 ## Summary
 
 Nothing in the AMP stack speaks TLS to YugabyteDB today. The dev deploy runs a single

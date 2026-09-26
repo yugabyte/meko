@@ -3,8 +3,17 @@
 // connect string.
 
 import { useState } from "react";
-import { Check, Copy, Cpu, Server, SlidersHorizontal, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Cpu,
+  Server,
+  ShieldCheck,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
+import { getEndpointCaBundle } from "@/lib/api/resources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +50,7 @@ export function ComputeInstance({
   // Which connect string was last copied, so the two buttons report
   // independently rather than both flipping to "Copied".
   const [copied, setCopied] = useState<"" | "psql" | "documentdb">("");
+  const [caBusy, setCaBusy] = useState(false);
   const connStr = ep.address
     ? `postgresql://cloud_admin@${ep.address}/postgres`
     : "";
@@ -55,6 +65,51 @@ export function ComputeInstance({
   // Per-endpoint in-place resize: pre-fill with the current reservation. The
   // controller persists the new size, updates the Deployment, and resizes the
   // running pod in place; the reported outcome says whether it applied live.
+  // The CA a client needs for sslmode=verify-full. Fetched on click rather than
+  // with the endpoint: most viewers never want it, and it is a second API call
+  // per endpoint on a page that already fans out across branches.
+  //
+  // `required: false` is a real answer — a publicly-trusted certificate needs no
+  // bundle, and neither does an endpoint with TLS off — so it gets a message
+  // rather than an empty file, which would look like a broken download.
+  async function downloadCA() {
+    setCaBusy(true);
+    try {
+      const bundle = await getEndpointCaBundle(
+        poolId,
+        ep.cluster_id,
+        ep.branch_id,
+        ep.id,
+      );
+      if (!bundle.required || !bundle.ca_crt) {
+        toast.info("No CA needed", {
+          description:
+            "This endpoint's certificate is trusted without one, or it isn't serving TLS.",
+        });
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([bundle.ca_crt], { type: "application/x-pem-file" }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${ep.id}-ca.crt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("CA downloaded", {
+        description: bundle.verify_name
+          ? `Pass it as sslrootcert and connect to ${bundle.verify_name}.`
+          : "Pass it as sslrootcert with sslmode=verify-full.",
+      });
+    } catch (e) {
+      toast.error("Could not fetch the CA", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setCaBusy(false);
+    }
+  }
+
   const resize = useResizeEndpoint();
   const [showResize, setShowResize] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -269,6 +324,17 @@ export function ComputeInstance({
               <Copy className="h-3.5 w-3.5" />
             )}
             {copied === "psql" ? "Copied" : "Copy"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={downloadCA}
+            disabled={caBusy}
+            title="Download the CA to verify this endpoint (sslmode=verify-full)"
+            className="h-7 shrink-0 gap-1"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {caBusy ? "…" : "CA"}
           </Button>
         </div>
       )}

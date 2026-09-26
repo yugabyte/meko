@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -166,6 +168,18 @@ type KubernetesConfig struct {
 	BackingYBTLSCABundleConfigMap string
 	BackingYBTLSCertDuration      string
 	BackingYBTLSCertRenewBefore   string
+
+	// Server TLS on the compute's Postgres listener. "issue" gives each endpoint
+	// its own Certificate from the issuer below; "existing-secret" mounts
+	// ComputeTLSSecret instead. Empty or "disable" = off.
+	ComputeTLSMode              string
+	ComputeTLSIssuerKind        string
+	ComputeTLSIssuerName        string
+	ComputeTLSIssuerGroup       string
+	ComputeTLSSecret            string
+	ComputeTLSCertDuration      string
+	ComputeTLSCertRenewBefore   string
+	ComputeTLSIncludeServiceDNS bool
 
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait)
 }
@@ -395,6 +409,27 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		external = k.nodePortClientAddress(ctx, release)
 	}
 	addr := clientAddress(k.cfg.ServiceType, k.address(release), external)
+	// SECOND PASS. The certificate rendered above could not cover this address:
+	// a LoadBalancer's is assigned by the cloud after the Service exists, so at
+	// render time there was nothing to put in the SANs. Now there is.
+	//
+	// Re-rendered through helm rather than patched onto the Certificate,
+	// because helm owns that object — a direct patch survives exactly until the
+	// next redeploy, which is the kind of fix that works in a demo and not in a
+	// fleet. The values are the durable record.
+	//
+	// Costs a reissue and a reload, not a restart: only the Certificate's spec
+	// moves, so cert-manager reissues, the kubelet propagates, and the
+	// supervisor's watcher picks the new pair up and confirms it on the wire
+	// (compute/architecture/single-container-endpoint.md).
+	if err := k.coverComputeTLSAddress(ctx, release, &vals, addr); err != nil {
+		// Not fatal. The endpoint is up and serving; what it lacks is a
+		// certificate a client can verify by this address, which is worth a
+		// loud line and a retry on the next redeploy rather than tearing down
+		// a working create.
+		k.logger.Warn("endpoint certificate does not cover its client address; verify-full will fail against it",
+			"endpoint", release, "address", addr, "error", err)
+	}
 	// helm --wait covers the pod, not the Service in front of it: it has no
 	// endpoint check, so a release is "ready" before the pod is a backend the
 	// ClusterIP forwards to. The controller reaches this endpoint's
@@ -1154,6 +1189,154 @@ func (k *KubernetesDeployer) EndpointSupervisorURL(id string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, supervisorHTTPPort)
 }
 
+// coverComputeTLSAddress re-renders the endpoint so its certificate covers the
+// address clients were actually given.
+//
+// A no-op in every case but the one it exists for: compute TLS off, an address
+// the chart already derives (the Service DNS, or an ingress slot's published
+// name), or a repeat of one already in the values all return without touching
+// helm. So an ordinary ClusterIP or ingress_*-with-DNS create pays nothing.
+//
+// No --wait: the pod is already up and this changes nothing about it. Waiting
+// would only hold the create open while cert-manager works, and the endpoint is
+// serving throughout on the certificate it already has.
+func (k *KubernetesDeployer) coverComputeTLSAddress(ctx context.Context, release string, vals *chartValues, addr string) error {
+	if vals.ComputeTLS == nil || vals.ComputeTLS.Mode != computeTLSChartModeIssue {
+		// existing-secret mounts a Secret this chart did not create, whose SANs
+		// are the issuer's business and not reachable from here.
+		return nil
+	}
+	if computeTLSCovers(vals.ComputeTLS, addr, k.address(release)) {
+		return nil
+	}
+	addComputeTLSAddress(vals.ComputeTLS, addr)
+	k.logger.Info("extending the endpoint certificate to its client address",
+		"endpoint", release, "address", addr,
+		"dns_names", vals.ComputeTLS.DnsNames, "ip_addresses", vals.ComputeTLS.IpAddresses)
+	return k.helm.UpgradeInstall(ctx, helm.Release{
+		Name:      release,
+		Chart:     k.cfg.ChartPath,
+		Namespace: k.cfg.Namespace,
+		Values:    *vals,
+		Timeout:   k.cfg.Timeout,
+	})
+}
+
+// EndpointCABundle returns the PEM a client needs as `sslrootcert` to verify
+// this endpoint's server certificate, or "" when it needs none.
+//
+// Read from the endpoint's own certificate Secret rather than from a
+// deployment-wide bundle, because that Secret is what actually signed what the
+// compute presents: cert-manager writes the issuing CA into the leaf's `ca.crt`
+// for a `ca` issuer, so a customer's own CA is reported as faithfully as the
+// per-cluster root. It is the same file the supervisor reads for
+// `compute_ca_not_after_seconds`.
+//
+// "" is a real answer, not a failure. An ACME issuer writes no `ca.crt`, and a
+// client verifying a publicly-trusted certificate needs nothing — handing it a
+// bundle to install would be worse than handing it nothing. Compute TLS being
+// off reads the same way.
+func (k *KubernetesDeployer) EndpointCABundle(ctx context.Context, id string) (string, error) {
+	if k.cfg.ComputeTLSMode == "" || k.cfg.ComputeTLSMode == "disable" {
+		return "", nil
+	}
+	secret := k.cfg.ComputeTLSSecret
+	if computeTLSChartMode(k.cfg.ComputeTLSMode) == computeTLSChartModeIssue {
+		secret = id + "-compute-tls"
+	}
+	if secret == "" {
+		return "", nil
+	}
+	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", k.cfg.Namespace, secret)
+	body, err := k.k8sAPIGetErr(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("read certificate secret %s: %w", secret, err)
+	}
+	var out struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("parse certificate secret %s: %w", secret, err)
+	}
+	raw, ok := out.Data["ca.crt"]
+	if !ok || raw == "" {
+		return "", nil
+	}
+	pem, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return "", fmt.Errorf("decode ca.crt in %s: %w", secret, err)
+	}
+	return string(pem), nil
+}
+
+// addComputeTLSAddress records one client-facing address in the compute
+// certificate's SANs, as an IP SAN or a DNS name depending on what it is.
+//
+// X.509 keeps the two apart and so must this: an address listed in dnsNames is
+// NOT matched by a client dialling that address, and a name listed in
+// ipAddresses is rejected outright. Getting it wrong yields a certificate that
+// renders, issues, and then fails every verify-full — the silent shape this is
+// all meant to avoid.
+//
+// host may carry a port; it is stripped. Duplicates are dropped so a redeploy
+// that re-resolves the same address does not grow the SAN list and force a
+// reissue every time.
+func addComputeTLSAddress(v *computeTlsValues, host string) {
+	if v == nil || host == "" {
+		return
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !slices.Contains(v.IpAddresses, host) {
+			v.IpAddresses = append(v.IpAddresses, host)
+		}
+		return
+	}
+	if !slices.Contains(v.DnsNames, host) {
+		v.DnsNames = append(v.DnsNames, host)
+	}
+}
+
+// computeTLSCovers reports whether the rendered values already carry host, so
+// the second pass can skip a redundant helm upgrade — and with it a certificate
+// reissue and the reload that follows.
+func computeTLSCovers(v *computeTlsValues, host, serviceDNS string) bool {
+	if v == nil {
+		return true // compute TLS is off; nothing to cover.
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "" {
+		return true
+	}
+	if h, _, err := net.SplitHostPort(serviceDNS); err == nil {
+		serviceDNS = h
+	}
+	// The chart adds the Service DNS itself when includeServiceDns is on.
+	if v.IncludeServiceDns && host == serviceDNS {
+		return true
+	}
+	return slices.Contains(v.IpAddresses, host) || slices.Contains(v.DnsNames, host)
+}
+
+// computeTLSChartMode maps the flag's spelling onto the chart's. The flag is
+// kebab-case like every other flag value the controller takes; the chart value is
+// camelCase like every other key in a values file. Neither convention is worth
+// bending, so the translation lives here rather than in either surface.
+// computeTLSChartModeIssue is the chart spelling of the per-endpoint issuance
+// mode — the only one whose SANs this controller can extend.
+const computeTLSChartModeIssue = "issue"
+
+func computeTLSChartMode(mode string) string {
+	if mode == "existing-secret" {
+		return "existingSecret"
+	}
+	return mode
+}
+
 // chartValues mirrors the subset of deploy/helm/yb-amp-endpoint values.yaml
 // the controller drives. JSON tags match the chart keys; helm reads the
 // marshaled document as a values file.
@@ -1176,6 +1359,9 @@ type chartValues struct {
 	// TLS is nil (omitted) for a plaintext deployment; set when the endpoints
 	// present a certificate to YugabyteDB.
 	TLS *tlsValues `json:"tls,omitempty"`
+	// ComputeTLS is nil (omitted) unless the computes present a certificate to
+	// their own clients. Independent of TLS above.
+	ComputeTLS *computeTlsValues `json:"computeTls,omitempty"`
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
 	Persistence *persistenceValues `json:"persistence,omitempty"`
@@ -1373,6 +1559,33 @@ type certificateValue struct {
 	RenewBefore string `json:"renewBefore"`
 }
 
+// computeTlsValues mirrors the chart's computeTls block.
+//
+// The chart derives what it can — the Service DNS name and the ingress slot's
+// published name — because a second source for a name it already holds is a
+// second thing to keep in step. DnsNames and IpAddresses are the addresses it
+// CANNOT derive, and both exist because a client can be handed an address the
+// chart never sees at render time:
+//
+//   - an nlb_* endpoint's load-balancer address, which the cloud assigns after
+//     the Service exists (see coverComputeTLSAddress, the second pass);
+//   - an ingress_* endpoint in a deployment with no DNS zone, where the slot's
+//     DNSName is unqualified and clients dial the shard's own address instead.
+//
+// Without them such an endpoint serves a certificate covering only the
+// in-cluster name, so an external client gets sslmode=require and no better —
+// which is the whole gap compute TLS exists to close.
+type computeTlsValues struct {
+	Enabled           bool             `json:"enabled"`
+	Mode              string           `json:"mode"`
+	IssuerRef         issuerRefValues  `json:"issuerRef"`
+	ExistingSecret    string           `json:"existingSecret,omitempty"`
+	IncludeServiceDns bool             `json:"includeServiceDns"`
+	DnsNames          []string         `json:"dnsNames,omitempty"`
+	IpAddresses       []string         `json:"ipAddresses,omitempty"`
+	Certificate       certificateValue `json:"certificate"`
+}
+
 type endpointValues struct {
 	PgVersion   string `json:"pgVersion"`
 	ComputePort int    `json:"computePort"`
@@ -1532,6 +1745,36 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 				Duration:    k.cfg.BackingYBTLSCertDuration,
 				RenewBefore: k.cfg.BackingYBTLSCertRenewBefore,
 			},
+		}
+	}
+
+	// Server TLS on the compute's listener. Set independently of the block
+	// above: which certificate the pod PRESENTS to clients has nothing to do
+	// with which one it presents to YugabyteDB, and in the Let's Encrypt case
+	// they come from different issuers.
+	if k.cfg.ComputeTLSMode != "" && k.cfg.ComputeTLSMode != "disable" {
+		v.ComputeTLS = &computeTlsValues{
+			Enabled: true,
+			Mode:    computeTLSChartMode(k.cfg.ComputeTLSMode),
+			IssuerRef: issuerRefValues{
+				Kind:  k.cfg.ComputeTLSIssuerKind,
+				Name:  k.cfg.ComputeTLSIssuerName,
+				Group: k.cfg.ComputeTLSIssuerGroup,
+			},
+			ExistingSecret:    k.cfg.ComputeTLSSecret,
+			IncludeServiceDns: k.cfg.ComputeTLSIncludeServiceDNS,
+			Certificate: certificateValue{
+				Duration:    k.cfg.ComputeTLSCertDuration,
+				RenewBefore: k.cfg.ComputeTLSCertRenewBefore,
+			},
+		}
+		// An ingress_* endpoint in a deployment with NO DNS zone: the slot's
+		// DNSName is unqualified (`ep-3f9a2c41`), which no issuer will sign and
+		// no client can reach, so the address handed out is the shard's own.
+		// That address is known before the deploy — the slot was allocated
+		// first — so unlike the nlb_* case it needs no second pass.
+		if spec.Ingress.DNSName == "" && spec.Ingress.ShardHost != "" {
+			addComputeTLSAddress(v.ComputeTLS, spec.Ingress.ShardHost)
 		}
 	}
 	if k.cfg.PullSecret != "" {
