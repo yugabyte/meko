@@ -612,8 +612,11 @@ channel can be *stable*, *prerelease* or *off*. When a newer version appears, th
 
 Once a version has been healthy for 5 minutes, the server deletes every installed version under
 `app/` except the running one and one to roll back to by hand: the version it updated from, or
-(after a manual switch) the newest older one. Each version is about 180 MB, most of it the bundled
-Node runtime.
+(after a manual switch) the newest older one. It also deletes the database snapshots of the versions
+it removes. Nothing is removed while an update is being installed or switched to, and never the
+version `app/current` points at. Each version is about 180 MB, most of it the bundled Node runtime.
+The "Updated to" notice shows from the new version's first boot, without waiting for the healthy
+check.
 
 The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance
 window, because they never touch tmux.

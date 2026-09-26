@@ -110,9 +110,10 @@ async function serve(): Promise<void> {
 
   updater.start();
   setTimeout(() => updater.markHealthy(), HEALTHY_MS).unref();
-  // A deliberate stop isn't a failed start of a version being tried out.
+  // A deliberate stop isn't a failed start of a version being tried out. Counted once: a second
+  // signal (Ctrl+C twice) or a stop during an update's restart mustn't take off another start.
   const stop = () => {
-    updater.stoppedCleanly();
+    if (!shuttingDown) updater.stoppedCleanly();
     void shutdown(0);
   };
   process.on('SIGTERM', stop);

@@ -316,8 +316,11 @@ export class Updater {
   }
 
   start(): void {
-    // "Updated to vX" is shown for one boot only; markHealthy() sets it again for this boot.
-    this.deps.kvSet(KV_JUST, '');
+    // "Updated to vX" is shown for the first boot of a new version, from the moment it's up.
+    const p = this.readPending();
+    const from = p && this.isRunning(p.to) && p.from && !this.isRunning(p.from) ? p.from : null;
+    this.justUpdatedFrom = from;
+    this.deps.kvSet(KV_JUST, from ?? '');
     if (!this.enabled) return;
     void this.check();
     this.schedule();
@@ -484,7 +487,13 @@ export class Updater {
 
   /** Called by the server once it has been healthy for HEALTHY_MS after boot. */
   markHealthy(): void {
-    const from = this.clearPending();
+    // An update is being installed, or has been switched to while this process shuts down: the
+    // pending file and the new version's directory belong to that update, so leave both alone.
+    if (this.applying) return;
+    const pending = this.readPending();
+    // A pending file for another version is stale (say, left by a manual switch): drop it too.
+    if (pending) this.clearPending(pending);
+    const from = pending && this.isRunning(pending.to) ? pending.from : null;
     if (this.enabled) this.pruneVersions(from);
   }
 
@@ -495,13 +504,8 @@ export class Updater {
    */
   stoppedCleanly(): void {
     const file = this.deps.paths.updatePending;
-    let pending: PendingUpdate;
-    try {
-      pending = JSON.parse(readFileSync(file, 'utf8')) as PendingUpdate;
-    } catch {
-      return;
-    }
-    if (pending?.to !== this.deps.version && pending?.to !== this.currentDirName()) return;
+    const pending = this.readPending();
+    if (!pending || !this.isRunning(pending.to)) return;
     try {
       writeFileAtomic(file, JSON.stringify({ ...pending, attempts: Math.max(0, (Number(pending.attempts) || 0) - 1) }));
     } catch {
@@ -518,7 +522,15 @@ export class Updater {
     } catch {
       return;
     }
-    for (const v of versionsToPrune(names, new Set([this.currentDirName(), this.deps.version]), from)) {
+    // Whatever app/current points at is what systemd starts next: never delete it.
+    const running = new Set([this.currentDirName(), this.deps.version]);
+    try {
+      running.add(basename(realpathSync(join(app, 'current'))));
+    } catch {
+      // no current link
+    }
+    const removed = versionsToPrune(names, running, from);
+    for (const v of removed) {
       try {
         rmSync(join(app, v), { recursive: true, force: true });
         this.deps.log(`Removed old version ${v}`);
@@ -526,27 +538,56 @@ export class Updater {
         this.deps.log(`Removing old version ${v} failed: ${(e as Error).message}`);
       }
     }
+    this.pruneSnapshots(names.filter((n) => parseSemver(n) && !removed.includes(n)));
   }
 
-  /** Ends a pending update: it came up healthy. Returns the version it updated from, if any. */
-  private clearPending(): string | null {
-    let pending: PendingUpdate;
+  /**
+   * Deletes the database snapshots (state.db.bak-<version>, taken before updating away from that
+   * version) of versions that are no longer installed; the ones for kept versions stay.
+   */
+  private pruneSnapshots(kept: string[]): void {
+    const dir = dirname(dbPath(this.deps.paths, this.deps.config()));
+    let files: string[];
     try {
-      pending = JSON.parse(readFileSync(this.deps.paths.updatePending, 'utf8')) as PendingUpdate;
+      files = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const f of files) {
+      const v = /^state\.db\.bak-(.+)$/.exec(f)?.[1];
+      if (!v || !parseSemver(v) || kept.includes(v)) continue;
+      try {
+        rmSync(join(dir, f), { force: true });
+        this.deps.log(`Removed old database snapshot ${f}`);
+      } catch (e) {
+        this.deps.log(`Removing old database snapshot ${f} failed: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  private readPending(): PendingUpdate | null {
+    try {
+      const p = JSON.parse(readFileSync(this.deps.paths.updatePending, 'utf8')) as PendingUpdate;
+      return p && typeof p === 'object' ? p : null;
     } catch {
       return null;
     }
+  }
+
+  /** Whether `v` names this running version (by its version or its directory). */
+  private isRunning(v: string | undefined): boolean {
+    return !!v && (v === this.deps.version || v === this.currentDirName());
+  }
+
+  /** Ends a pending update: removes the file the launcher's rollback reads. */
+  private clearPending(pending: PendingUpdate): void {
     try {
       unlinkSync(this.deps.paths.updatePending);
     } catch {
       // already gone
     }
-    if (pending?.from && pending.from !== this.deps.version) {
-      this.justUpdatedFrom = pending.from;
-      this.deps.kvSet(KV_JUST, pending.from);
+    if (this.isRunning(pending.to) && pending.from && !this.isRunning(pending.from)) {
       this.deps.log(`Updated from ${pending.from} to ${this.deps.version}`);
-      this.changed();
     }
-    return pending?.from || null;
   }
 }
