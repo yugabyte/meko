@@ -162,3 +162,12 @@ describe('uninstall --purge', () => {
     expect(existsSync(join(root, 'var'))).toBe(true);
   });
 });
+
+describe('server PATH', () => {
+  it('adds ~/.local/bin (where the installer puts agent-k-local and gh) once', async () => {
+    const { withLocalBin } = await import('../../src/server/paths.js');
+    expect(withLocalBin('/usr/bin:/bin', '/home/me')).toBe('/usr/bin:/bin:/home/me/.local/bin');
+    expect(withLocalBin('/home/me/.local/bin:/usr/bin', '/home/me')).toBe('/home/me/.local/bin:/usr/bin');
+    expect(withLocalBin('', '/home/me')).toBe('/home/me/.local/bin');
+  });
+});

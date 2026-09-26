@@ -60,9 +60,11 @@ Design: [`docs/design.md`](docs/design.md).
 ## Requirements
 
 - Linux (x64 or arm64) with tmux ≥ 2.7, or macOS 14 or newer on Apple Silicon with tmux ≥ 3.2
-  (`brew install tmux gh`)
-- git, curl, the GitHub CLI (`gh`) and Claude Code
-- A [Meko](https://mekodata.ai) account and the `meko-agent-skills` Claude Code plugin
+- git, curl, the GitHub CLI (`gh`) and Claude Code. The installer offers to install any of them
+  for you (with Homebrew on a Mac, your package manager and sudo on Linux, and Claude Code with
+  Anthropic's own installer).
+- A [Meko](https://mekodata.ai) account and API key. The installer offers to set up Meko for
+  Claude Code (its plugin, MCP server and key) with Meko's own setup.
 
 ## Install
 
@@ -72,7 +74,19 @@ The repo is internal for now, so the installer is fetched with `gh`:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
-It asks for your repos folder, listen address and port, checks Meko, installs to
+It first checks for tmux, git, curl, gh and Claude Code. If any are missing (or tmux is too old),
+it lists the exact commands it would run, such as `sudo dnf install -y tmux git curl`,
+`brew install tmux gh` or `curl -fsSL https://claude.ai/install.sh | bash`, and asks before
+running them; on Linux, gh comes from its own GitHub release, checksum-verified, into
+`~/.local/bin`, with no root needed. It then offers to sign gh in to GitHub (`gh auth login`) and
+Claude Code in to your account (`claude auth login`) if they aren't. Later, once it has your Meko
+key, it checks that Meko is set up for Claude Code and offers to run Meko's own setup
+(`@yugabytedb/meko-mcp`) if the plugin, MCP server or key is missing. Pass `--install-deps` to
+install without asking (for example with `--non-interactive`), or `--no-install-deps` to never
+install anything. With `GITHUB_TOKEN` set, a missing gh is only installed with `--install-deps`;
+otherwise downloads go through curl and the token.
+
+Then it asks for your repos folder, listen address and port, checks Meko, installs to
 `~/.agent-k-local`, starts two background services (the web server, and the tmux server that owns
 your sessions), waits until the server answers, and prints a one-time setup link with the
 certificate fingerprint to check in your browser. The services are systemd user units on Linux and

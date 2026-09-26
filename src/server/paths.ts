@@ -72,3 +72,10 @@ export function tildify(p: string): string {
   const h = homedir();
   return p === h ? '~' : p.startsWith(h + '/') ? '~' + p.slice(h.length) : p;
 }
+
+/** PATH with ~/.local/bin appended, unless it's already there. */
+export function withLocalBin(path: string, home: string): string {
+  const local = join(home, '.local', 'bin');
+  const parts = path.split(':').filter(Boolean);
+  return parts.includes(local) ? path : [...parts, local].join(':');
+}

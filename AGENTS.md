@@ -47,6 +47,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping. |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback (tarball per platform and CPU); host install. |
+| `src/server/mekosetup.ts` | Meko set up for Claude Code (plugin, MCP server, key): what's missing, and running Meko's own setup package from npm (integrity-checked) with the bundled Node. |
+| `scripts/install.sh` | The installer: installs missing tools (tmux, git, curl, gh, Claude Code) after asking, downloads and verifies the release, then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
 | `src/server/service.ts` | The two background services (server, tmux) behind one `ServiceManager`: systemd user units on Linux, LaunchAgents on macOS. Install, start, state, remove, boot check. |
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |

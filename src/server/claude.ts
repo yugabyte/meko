@@ -262,6 +262,9 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
     `  exec ${shq(shell)} -l -c ${shq(cmd)}`,
     'fi',
     `cd ${shq(spec.worktree)} || exit 1`,
+    // The installer puts Claude Code and gh in ~/.local/bin, which a login profile (zsh on macOS
+    // by default) may not add to PATH.
+    'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac',
     ...(unset.length ? [`unset ${unset.join(' ')}`] : []),
     ...Object.entries(spec.env).map(([k, v]) => `export ${k}=${shq(v)}`),
     `exec ${shq(spec.claudeCommand)} ${args.map(shq).join(' ')}`,
