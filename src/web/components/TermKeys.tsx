@@ -43,10 +43,12 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
     el.style.height = `${el.scrollHeight + 2}px`; // + borders
   }, [text]);
 
+  /** Returns whether anything was sent. */
   const send = () => {
-    if (!text.trim() || disabled) return;
+    if (!text.trim() || disabled) return false;
     term.submit(text);
     setText('');
+    return true;
   };
 
   return (
@@ -86,7 +88,8 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
         className="compose"
         onSubmit={(e) => {
           e.preventDefault();
-          send();
+          // Tapping send puts the keyboard away, so the terminal gets the screen back for Claude's reply.
+          if (send()) box.current?.blur();
         }}
       >
         <textarea
