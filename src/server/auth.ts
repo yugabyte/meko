@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { isIPv6 } from 'node:net';
 import { audit, get, kvDelete, kvGet, kvSet, run, type Db } from './db.js';
 
 const SESSION_TTL_MS = 14 * 24 * 3600 * 1000;
@@ -19,6 +20,7 @@ export function hashPassword(password: string): string {
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
+  if (typeof password !== 'string') return false;
   const [alg, n, r, p, saltB64, hashB64] = stored.split('$');
   if (alg !== 'scrypt') return false;
   const expected = Buffer.from(hashB64, 'base64');
@@ -28,7 +30,16 @@ export function verifyPassword(password: string, stored: string): boolean {
   return timingSafeEqual(expected, got);
 }
 
+let dummyHash: string | null = null;
+
+/** Spends the same time as checking a real password, so a wrong username can't be told apart by timing. */
+export function burnPasswordCheck(password: unknown): void {
+  dummyHash ??= hashPassword('not-the-password');
+  verifyPassword(typeof password === 'string' ? password : '', dummyHash);
+}
+
 export function validatePassword(password: string): string | null {
+  if (typeof password !== 'string') return 'Enter a password.';
   if (password.length < 12) return 'Use at least 12 characters.';
   return null;
 }
@@ -54,12 +65,14 @@ export function setOwner(db: Db, username: string, password: string): void {
   run(db, 'DELETE FROM auth_sessions');
 }
 
-export function changePassword(db: Db, current: string, next: string): string | null {
+/** Changes the password and signs out every other browser (all sessions but `keepToken`'s). */
+export function changePassword(db: Db, current: string, next: string, keepToken?: string): string | null {
   const o = getOwner(db);
   if (!o || !verifyPassword(current, o.pw_scrypt)) return 'Current password is wrong.';
   const bad = validatePassword(next);
   if (bad) return bad;
   run(db, 'UPDATE owner SET pw_scrypt = ? WHERE id = 1', hashPassword(next));
+  run(db, 'DELETE FROM auth_sessions WHERE token_sha256 <> ?', keepToken ? sha256(keepToken) : '');
   audit(db, 'password_changed');
   return null;
 }
@@ -78,24 +91,32 @@ export function issueSetupToken(db: Db): string {
   return token;
 }
 
-export function consumeSetupToken(db: Db, token: string): boolean {
+/** The outstanding setup token, or null. An expired or unreadable one is deleted. */
+function liveSetupToken(db: Db): { sha256: string; expiresAt: number } | null {
   const raw = kvGet(db, 'setup_token');
-  if (!raw || !token) return false;
-  const { sha256: want, expiresAt } = JSON.parse(raw) as { sha256: string; expiresAt: number };
-  const ok = Date.now() < expiresAt && timingSafeEqual(Buffer.from(want), Buffer.from(sha256(token)));
+  if (!raw) return null;
+  try {
+    const t = JSON.parse(raw) as { sha256: string; expiresAt: number };
+    if (typeof t.sha256 === 'string' && Date.now() < t.expiresAt) return t;
+  } catch {
+    /* unreadable: drop it below */
+  }
+  kvDelete(db, 'setup_token');
+  return null;
+}
+
+export function consumeSetupToken(db: Db, token: string): boolean {
+  if (typeof token !== 'string' || !token) return false;
+  const t = liveSetupToken(db);
+  if (!t) return false;
+  const ok = timingSafeEqual(Buffer.from(t.sha256), Buffer.from(sha256(token)));
   if (ok) kvDelete(db, 'setup_token');
   return ok;
 }
 
 /** True while an unexpired setup link exists. */
 export function setupTokenOutstanding(db: Db): boolean {
-  const raw = kvGet(db, 'setup_token');
-  if (!raw) return false;
-  try {
-    return Date.now() < (JSON.parse(raw) as { expiresAt: number }).expiresAt;
-  } catch {
-    return false;
-  }
+  return liveSetupToken(db) !== null;
 }
 
 export function setupPending(db: Db): boolean {
@@ -113,17 +134,27 @@ export function createAuthSession(db: Db, userAgent: string | undefined, ip: str
   return token;
 }
 
-/** Validates a session cookie and slides its expiry forward. */
-export function validateAuthSession(db: Db, token: string | undefined): boolean {
-  if (!token) return false;
-  const h = sha256(token);
-  const row = get<{ expires_at: number }>(db, 'SELECT expires_at FROM auth_sessions WHERE token_sha256 = ?', h);
+/**
+ * Validates a session cookie and slides its expiry forward (at most once an hour). `renewed`
+ * says the expiry moved, so the caller can re-issue the cookie with a fresh Max-Age.
+ */
+export function validateAuthSession(db: Db, token: string | undefined): { valid: boolean; renewed: boolean } {
+  if (!authSessionLive(db, token)) return { valid: false, renewed: false };
+  const h = sha256(token!);
+  const row = get<{ expires_at: number }>(db, 'SELECT expires_at FROM auth_sessions WHERE token_sha256 = ?', h)!;
   const now = Date.now();
-  if (!row || row.expires_at < now) return false;
   if (row.expires_at - now < SESSION_TTL_MS - SESSION_RENEW_AFTER_MS) {
     run(db, 'UPDATE auth_sessions SET expires_at = ? WHERE token_sha256 = ?', now + SESSION_TTL_MS, h);
+    return { valid: true, renewed: true };
   }
-  return true;
+  return { valid: true, renewed: false };
+}
+
+/** True while a session cookie is signed in, without renewing it. */
+export function authSessionLive(db: Db, token: string | undefined): boolean {
+  if (!token) return false;
+  const row = get<{ expires_at: number }>(db, 'SELECT expires_at FROM auth_sessions WHERE token_sha256 = ?', sha256(token));
+  return !!row && row.expires_at >= Date.now();
 }
 
 export function deleteAuthSession(db: Db, token: string | undefined): void {
@@ -178,9 +209,37 @@ export function totpCode(secret: string, atMs: number = Date.now()): string {
 }
 
 export function totpVerify(secret: string, code: string, atMs: number = Date.now()): boolean {
+  return totpStep(secret, code, atMs) !== null;
+}
+
+/** The 30 s time step a code matches (within one step of drift), or null. */
+function totpStep(secret: string, code: unknown, atMs: number): number | null {
+  if (typeof code !== 'string') return null;
   const c = code.replace(/\s/g, '');
-  if (!/^\d{6}$/.test(c)) return false;
-  return [-1, 0, 1].some((w) => totpCode(secret, atMs + w * 30000) === c);
+  if (!/^\d{6}$/.test(c)) return null;
+  for (const w of [-1, 0, 1]) if (totpCode(secret, atMs + w * 30000) === c) return Math.floor(atMs / 30000) + w;
+  return null;
+}
+
+/**
+ * Checks a code and uses it up: a code (or an older one) that was already accepted is refused,
+ * so a code seen over someone's shoulder can't be replayed within its 90 s window (RFC 6238 §5.2).
+ */
+export function totpAccept(db: Db, secret: string, code: unknown, atMs: number = Date.now()): boolean {
+  const step = totpStep(secret, code, atMs);
+  if (step === null) return false;
+  // The last step is remembered per secret, so enrolling a new authenticator starts afresh.
+  const key = sha256(secret);
+  let last = -1;
+  try {
+    const saved = JSON.parse(kvGet(db, 'totp_last_step') ?? 'null') as { key: string; step: number } | null;
+    if (saved?.key === key) last = saved.step;
+  } catch {
+    /* unreadable: treat as none */
+  }
+  if (step <= last) return false;
+  kvSet(db, 'totp_last_step', JSON.stringify({ key, step }));
+  return true;
 }
 
 export function newTotpSecret(): string {
@@ -191,25 +250,54 @@ export function otpauthUrl(secret: string, username: string, issuer = 'AgentK Lo
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(username)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`;
 }
 
-// ---- login rate limiting (in memory, per IP) ----
+// ---- login rate limiting (in memory, per client network and site-wide) ----
+
+/**
+ * The key failed attempts are counted under. IPv6 clients usually hold a whole /64, so one
+ * address per attempt would get around a per-address limit: count per /64 instead. An IPv4
+ * address in IPv6 form (`::ffff:1.2.3.4`) counts as the IPv4 address.
+ */
+export function clientKey(ip: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
+  if (!isIPv6(ip)) return ip;
+  const [head, tail = ''] = ip.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  // A trailing embedded IPv4 part takes two groups; it is only ever in the low 64 bits.
+  const groups = [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
+}
 
 export class LoginLimiter {
   private failures = new Map<string, number[]>();
-  constructor(private max = 5, private windowMs = 15 * 60 * 1000) {}
+  private all: number[] = [];
+  /**
+   * `max` failures per client network in the window, and `siteMax` across all clients, so many
+   * addresses can't share out a guessing run. Past the site-wide limit everyone waits, including
+   * the owner; `agent-k-local setup-link` on the host still gets them in.
+   */
+  constructor(private max = 5, private windowMs = 15 * 60 * 1000, private siteMax = 50) {}
 
   blocked(ip: string, now = Date.now()): boolean {
-    return this.recent(ip, now).length >= this.max;
+    this.all = this.all.filter((t) => now - t < this.windowMs);
+    return this.recent(clientKey(ip), now).length >= this.max || this.all.length >= this.siteMax;
   }
 
   fail(ip: string, now = Date.now()): void {
-    this.failures.set(ip, [...this.recent(ip, now), now]);
+    const key = clientKey(ip);
+    this.failures.set(key, [...this.recent(key, now), now]);
+    this.all.push(now);
   }
 
+  /** Clears one client's count after it signs in. The site-wide count only runs out. */
   reset(ip: string): void {
-    this.failures.delete(ip);
+    this.failures.delete(clientKey(ip));
   }
 
-  private recent(ip: string, now: number): number[] {
-    return (this.failures.get(ip) ?? []).filter((t) => now - t < this.windowMs);
+  private recent(key: string, now: number): number[] {
+    const recent = (this.failures.get(key) ?? []).filter((t) => now - t < this.windowMs);
+    if (!recent.length) this.failures.delete(key);
+    return recent;
   }
 }

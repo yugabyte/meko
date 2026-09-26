@@ -3,6 +3,7 @@ import type { DiscardCheck, Session, SessionAction } from '../../shared/types';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
+import { trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -17,14 +18,16 @@ export function Sheet({ label, onClose, children }: { label: string; onClose: ()
         e.stopPropagation();
         closeRef.current();
       }
+      trapTab(e, ref.current);
     };
     window.addEventListener('keydown', onKey, true);
-    ref.current?.querySelector<HTMLElement>('button, a')?.focus({ preventScroll: true });
+    // Focus the sheet itself, not its first button: that can be a gate, and Enter would pass it.
+    ref.current?.focus({ preventScroll: true });
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
   return (
     <div className="sheet-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-label={label} ref={ref}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label={label} ref={ref} tabIndex={-1}>
         <span className="sheet-grab" aria-hidden="true" />
         {children}
       </div>
@@ -39,12 +42,14 @@ export function SheetItem({
   href,
   onClick,
   className,
+  disabled,
 }: {
   children: ReactNode;
   hint?: ReactNode;
   href?: string;
   onClick?: () => void;
   className?: string;
+  disabled?: boolean;
 }) {
   const inner = (
     <>
@@ -58,7 +63,7 @@ export function SheetItem({
       {inner}
     </a>
   ) : (
-    <button className={cls} onClick={onClick}>
+    <button className={cls} onClick={onClick} disabled={disabled}>
       {inner}
     </button>
   );
@@ -73,11 +78,14 @@ export function EndSessionButton({
   onAct,
   label = 'Archive',
   className = 'btn small',
+  disabled,
 }: {
   session: Session;
   onAct: (a: SessionAction) => Promise<void>;
   label?: string;
   className?: string;
+  /** Another session action is in flight. */
+  disabled?: boolean;
 }) {
   const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
   const [check, setCheck] = useState<DiscardCheck | null>(null);
@@ -105,7 +113,7 @@ export function EndSessionButton({
 
   if (step === 'closed') {
     return (
-      <button className={className} onClick={() => setStep('choose')}>
+      <button className={className} disabled={disabled} onClick={() => setStep('choose')}>
         {label}
       </button>
     );
@@ -119,10 +127,10 @@ export function EndSessionButton({
     return (
       <span className="confirm-inline">
         <span className="confirm-prompt">End this session?</span>
-        <button className="btn primary" disabled={busy || step === 'checking'} onClick={() => run('archive')}>
+        <button className="btn primary" disabled={busy || disabled || step === 'checking'} onClick={() => run('archive')}>
           Archive (keep branch)
         </button>
-        <button className="btn danger" disabled={busy || step === 'checking'} onClick={askDiscard}>
+        <button className="btn danger" disabled={busy || disabled || step === 'checking'} onClick={askDiscard}>
           {step === 'checking' ? 'Checking…' : 'Discard…'}
         </button>
         {cancel}
@@ -144,7 +152,7 @@ export function EndSessionButton({
           {w}
         </span>
       ))}
-      <button className="btn danger" disabled={busy} onClick={() => run('discard')}>
+      <button className="btn danger" disabled={busy || disabled} onClick={() => run('discard')}>
         Discard
       </button>
       {cancel}
@@ -184,6 +192,7 @@ export function SessionSheet({
   stage,
   canDesign,
   pendingComments,
+  acting,
   info,
   onDesign,
   onChanges,
@@ -196,6 +205,8 @@ export function SessionSheet({
   stage: ReactNode;
   canDesign: boolean;
   pendingComments: number;
+  /** A session action is in flight: Resume and Archive wait for it. */
+  acting: boolean;
   /** Branch, tokens, Meko and review lines from the desktop footer. */
   info: ReactNode;
   onDesign: () => void;
@@ -213,7 +224,7 @@ export function SessionSheet({
       <div className="sheet-stage">{stage}</div>
       <div className="sheet-items">
         {session.status === 'exited' && (
-          <SheetItem className="primary" onClick={then(() => void onAct('resume'))}>
+          <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('resume'))}>
             Resume Claude
           </SheetItem>
         )}
@@ -242,7 +253,13 @@ export function SessionSheet({
       </div>
       <FontSize />
       <div className="sheet-end">
-        <EndSessionButton session={session} onAct={onAct} label="Archive or discard…" className="btn block danger-outline" />
+        <EndSessionButton
+          session={session}
+          onAct={onAct}
+          disabled={acting}
+          label="Archive or discard…"
+          className="btn block danger-outline"
+        />
       </div>
       <div className="sheet-info">{info}</div>
     </Sheet>

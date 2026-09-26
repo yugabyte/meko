@@ -37,7 +37,8 @@ export function Rail({
   onNewProject: () => void;
   onSettings: () => void;
   onLogout: () => void;
-  onReorder: (ids: string[]) => void;
+  /** Moves a project to this index in the list. Touch screens use Move up/down on the project home. */
+  onReorder: (id: string, index: number) => void;
   onPalette: () => void;
   /** Phone layout: the rail is a drawer, shown while open. */
   open: boolean;
@@ -48,11 +49,16 @@ export function Rail({
   const [overId, setOverId] = useState<string | null>(null);
   const mod = isMac() ? '⌘' : 'Ctrl+';
 
+  // The dragged project takes the target's place: before it when moving up, after it when moving down.
   const drop = (targetId: string) => {
     if (!dragId || dragId === targetId) return;
-    const ids = projects.map((p) => p.id).filter((id) => id !== dragId);
-    ids.splice(ids.indexOf(targetId), 0, dragId);
-    onReorder(ids);
+    const to = projects.findIndex((p) => p.id === targetId);
+    if (to >= 0) onReorder(dragId, to);
+  };
+  // Where the dragged project would land, for the drop line: below the target when moving down.
+  const dropAfter = (targetId: string) => {
+    const ids = projects.map((p) => p.id);
+    return !!dragId && ids.indexOf(dragId) < ids.indexOf(targetId);
   };
 
   return (
@@ -67,7 +73,7 @@ export function Rail({
           return (
             <button
               key={p.id}
-              className={cx('proj', p.id === currentId && 'sel', overId === p.id && dragId !== p.id && 'drop-target')}
+              className={cx('proj', p.id === currentId && 'sel', overId === p.id && dragId !== p.id && (dropAfter(p.id) ? 'drop-after' : 'drop-target'))}
               onClick={() => onSelect(p)}
               draggable={!touch}
               onDragStart={(e) => {

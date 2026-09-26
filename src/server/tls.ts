@@ -24,9 +24,22 @@ export function fqdn(): string {
   return hostname();
 }
 
+/** A self-signed pair is made again this long before it expires, so browsers never see it lapse. */
+const RENEW_BEFORE_MS = 30 * 24 * 3600 * 1000;
+
+/** True when the PEM is unreadable or expires within `RENEW_BEFORE_MS`. */
+export function expiresSoon(certPem: string, now = Date.now()): boolean {
+  try {
+    return Date.parse(new X509Certificate(certPem).validTo) - now < RENEW_BEFORE_MS;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * TLS is mandatory for any non-loopback bind. Uses the configured cert/key,
- * or generates (once) a self-signed pair covering this host's names and IPs.
+ * or generates a self-signed pair covering this host's names and IPs: once, and again when it's
+ * about to expire (the fingerprint then changes, and the server logs the new one at startup).
  */
 export async function loadTls(paths: Paths, cfg: Config): Promise<TlsMaterial | null> {
   if (cfg.tls.cert && cfg.tls.key) {
@@ -36,7 +49,7 @@ export async function loadTls(paths: Paths, cfg: Config): Promise<TlsMaterial | 
   if (isLoopback(cfg.server.bind)) return null;
   const certFile = join(paths.certs, 'self-signed.crt');
   const keyFile = join(paths.certs, 'self-signed.key');
-  if (!existsSync(certFile) || !existsSync(keyFile)) {
+  if (!existsSync(certFile) || !existsSync(keyFile) || expiresSoon(readFileSync(certFile, 'utf8'))) {
     mkdirSync(paths.certs, { recursive: true, mode: 0o700 });
     const names = [...new Set([fqdn(), hostname(), 'localhost'])];
     const ips = Object.values(networkInterfaces()).flat().filter((i) => i && !i.internal).map((i) => i!.address);

@@ -5,9 +5,10 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { anchorComment, parsePatch, sideLine, type DiffLine } from '../diff';
+import { anchorComment, parsePatch, showsLine, sideLine, type DiffLine } from '../diff';
 import { useTouch } from '../hooks/useMedia';
 import { cx } from '../util';
+import { ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
 
 const KIND: Record<ChangeKind, { letter: string; label: string }> = {
@@ -39,6 +40,8 @@ interface Editor {
 interface Placed {
   at: Map<string, Map<number, ReviewComment[]>>;
   outdated: Map<string, ReviewComment[]>;
+  /** Outdated comments whose line the diff still shows, with other text; the rest just aren't in the diff shown. */
+  changed: Set<string>;
   gone: ReviewComment[];
 }
 
@@ -109,7 +112,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   const queued = comments.filter((c) => c.state === 'queued').length;
 
   const placed = useMemo((): Placed => {
-    const p: Placed = { at: new Map(), outdated: new Map(), gone: [] };
+    const p: Placed = { at: new Map(), outdated: new Map(), changed: new Set(), gone: [] };
     const paths = new Set(files.map((f) => f.path));
     for (const c of visible) {
       if (!paths.has(c.path)) {
@@ -119,6 +122,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
       const lines = parsed.get(c.path);
       const i = lines ? anchorComment(lines, c) : null;
       if (i === null) {
+        if (lines && showsLine(lines, c.side, c.endLine)) p.changed.add(c.id);
         p.outdated.set(c.path, [...(p.outdated.get(c.path) ?? []), c]);
       } else {
         const rows = p.at.get(c.path) ?? new Map<number, ReviewComment[]>();
@@ -270,12 +274,21 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   };
 
   const exited = session.status === 'exited';
-  const thread = (cs: ReviewComment[] | undefined, opts: { outdated?: boolean; withPath?: boolean } = {}) =>
+  /** Comment cards: `away` for comments not placed on a row, `row` for the row the others follow. */
+  const thread = (cs: ReviewComment[] | undefined, opts: { away?: boolean; withPath?: boolean; row?: DiffLine } = {}) =>
     cs?.map((c) =>
       editor?.id === c.id ? (
         <CommentEditor key={c.id} editor={editor} draft={draftText} onSave={save} onCancel={closeEditor} />
       ) : (
-        <CommentCard key={c.id} c={c} outdated={opts.outdated} withPath={opts.withPath} onEdit={() => edit(c)} onDelete={() => remove(c)} />
+        <CommentCard
+          key={c.id}
+          c={c}
+          away={opts.away ? (placed.changed.has(c.id) ? 'changed' : 'hidden') : undefined}
+          shownAt={opts.row ? sideLine(opts.row, c.side) : null}
+          withPath={opts.withPath}
+          onEdit={() => edit(c)}
+          onDelete={() => remove(c)}
+        />
       ),
     );
 
@@ -300,7 +313,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <button
             className="btn small primary"
             disabled={sending || exited}
-            title={exited ? 'Resume the session to send comments' : 'Send your draft comments to Claude'}
+            title="Send your draft comments to Claude"
             onClick={send}
           >
             {sending ? 'Sending…' : `Send ${plural(drafts, 'comment')}`}
@@ -314,8 +327,9 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <span className="mobile-only">← Back</span>
         </button>
       </div>
-      {(note || queued > 0) && (
+      {(note || queued > 0 || (exited && drafts > 0)) && (
         <div className="chg-bar" role="status">
+          {exited && drafts > 0 && <span>Claude has exited. Resume the session to send your comments.</span>}
           {queued > 0 && (
             <span>
               {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to Claude when it finishes its turn
@@ -343,7 +357,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
             {placed.gone.length > 0 && (
               <div className="cmt-gone">
                 <p className="muted small">Comments on files that are no longer changed</p>
-                {thread(placed.gone, { outdated: true, withPath: true })}
+                {thread(placed.gone, { away: true, withPath: true })}
               </div>
             )}
             {touch ? (
@@ -384,7 +398,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                 {isOpen(f.path) && (
                   <>
                     {placed.outdated.has(f.path) && (
-                      <div className="cmt-outdated">{thread(placed.outdated.get(f.path), { outdated: true })}</div>
+                      <div className="cmt-outdated">{thread(placed.outdated.get(f.path), { away: true })}</div>
                     )}
                     <FileDiff
                       file={f}
@@ -396,7 +410,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                         if (!cs && !here) return null;
                         return (
                           <>
-                            {thread(cs)}
+                            {thread(cs, { row: parsed.get(f.path)?.[i] })}
                             {here && <CommentEditor key="new" editor={editor} draft={draftText} onSave={save} onCancel={closeEditor} />}
                           </>
                         );
@@ -558,26 +572,37 @@ function linesLabel(side: CommentSide, line: number, endLine: number): string {
   return side === 'old' ? `removed ${n}` : n;
 }
 
+const AWAY_NOTE = {
+  changed: 'These lines have changed since the comment was written. It was on:',
+  hidden: 'These lines aren’t in the diff shown here. It was on:',
+};
+
 function CommentCard({
   c,
-  outdated,
+  away,
+  shownAt,
   withPath,
   onEdit,
   onDelete,
 }: {
   c: ReviewComment;
-  outdated?: boolean;
+  /** Why the comment isn't on a row: its lines changed, or they aren't in the diff shown. */
+  away?: 'changed' | 'hidden';
+  /** The line it's shown at now, which moves when lines are added or removed above it. */
+  shownAt: number | null;
   withPath?: boolean;
   onEdit: () => void;
-  onDelete: () => void;
+  onDelete: () => Promise<void>;
 }) {
+  const shift = shownAt === null ? 0 : shownAt - c.endLine;
   return (
     <div className={cx('cmt', c.state === 'sent' && 'sent')}>
       <div className="cmt-meta">
         <span className={cx('cmt-state', c.state)}>{STATE_LABEL[c.state]}</span>
         <span>
           {withPath && <span className="mono">{c.path} · </span>}
-          {linesLabel(c.side, c.line, c.endLine)}
+          {linesLabel(c.side, c.line + shift, c.endLine + shift)}
+          {shift !== 0 && ` (was ${c.line === c.endLine ? c.line : `${c.line}–${c.endLine}`})`}
         </span>
         <span className="sp" />
         {c.state === 'draft' && (
@@ -585,15 +610,13 @@ function CommentCard({
             <button className="link-btn" onClick={onEdit}>
               Edit
             </button>
-            <button className="link-btn" onClick={onDelete}>
-              Delete
-            </button>
+            <ConfirmButton className="link-btn" label="Delete" confirmLabel="Delete" prompt="Delete this draft?" danger onConfirm={onDelete} />
           </>
         )}
       </div>
-      {outdated && c.excerpt && (
+      {away && c.excerpt && (
         <>
-          <p className="cmt-outdated-note">These lines have changed since the comment was written. It was on:</p>
+          <p className={cx('cmt-outdated-note', away === 'hidden' && 'neutral')}>{AWAY_NOTE[away]}</p>
           <pre className="cmt-excerpt">{c.excerpt}</pre>
         </>
       )}

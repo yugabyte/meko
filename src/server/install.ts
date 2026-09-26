@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
 import { mekoPluginInstalls } from './capture.js';
-import { dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, saveConfig, type Config } from './config.js';
+import { claudeUserDir } from './claude.js';
+import { DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, saveConfig, type Config } from './config.js';
 import { openDb } from './db.js';
 import { checkMeko } from './meko.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
@@ -61,7 +62,7 @@ function makePrompter(interactive: boolean): { ask: Prompter; close: () => void 
 // Steps
 
 /** True when the meko-agent-skills plugin is installed and enabled for Claude Code. */
-export function mekoPluginEnabled(claudeDir: string = join(homedir(), '.claude')): { installed: boolean; enabled: boolean } {
+export function mekoPluginEnabled(claudeDir: string = claudeUserDir()): { installed: boolean; enabled: boolean } {
   const isMeko = (k: string) => k.startsWith('meko-agent-skills@');
   const installed = (mekoPluginInstalls(claudeDir)?.length ?? 0) > 0;
   let enabled = false;
@@ -117,8 +118,27 @@ function localDbLocation(): string {
     if (!isNetworkFs(join(xdg, 'agent-k-local'))) return join(xdg, 'agent-k-local', 'state.db');
   }
   const dir = join('/var/tmp', user, 'agent-k-local');
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(dir);
   return join(dir, 'state.db');
+}
+
+/**
+ * Creates `dir` for private state in a shared place like /var/tmp, where another user could have
+ * made the directories first. Refuses unless `dir` and its parent are real directories (not
+ * symlinks) owned by this user and the parent isn't writable by others; then makes `dir` 0700.
+ */
+export function ensurePrivateDir(dir: string, uid: number | undefined = process.getuid?.(), gid: number | undefined = process.getgid?.()): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const fix = 'Remove it, or set state.db_path in config.toml to a local folder only you can write to.';
+  for (const d of [dirname(dir), dir]) {
+    const st = lstatSync(d);
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new InstallError(`${d} is not a directory (it may be a symlink). ${fix}`);
+    if (uid !== undefined && st.uid !== uid) throw new InstallError(`${d} is owned by another user. ${fix}`);
+    // Group write is fine for our own primary group (a umask 002 system with a group per user).
+    const othersWrite = st.mode & 0o002 || (st.mode & 0o020 && (gid === undefined || st.gid !== gid));
+    if (d !== dir && othersWrite) throw new InstallError(`${d} can be written to by other users. ${fix}`);
+  }
+  chmodSync(dir, 0o700);
 }
 
 /** A failed service command, with what to check next and how to go without the services. */
@@ -231,7 +251,11 @@ export async function runInstall(args: string[]): Promise<void> {
     const check = await checkMeko(meko.url, meko.apiKey);
     if (!check.ok) throw new InstallError(`Meko check failed (${meko.url}): ${check.error}`);
     const fromEnv = process.env.MEKO_API_KEY === meko.apiKey || readClaudeSettingsEnv().MEKO_API_KEY === meko.apiKey;
-    if (storeKey && !fromEnv) cfg.meko.apiKey = meko.apiKey;
+    if (storeKey && !fromEnv) {
+      cfg.meko.apiKey = meko.apiKey;
+      // The URL goes with the key: resolveMeko doesn't pair a key in config with a URL from elsewhere.
+      if (meko.url !== DEFAULT_MEKO_URL) cfg.meko.url = meko.url;
+    }
     ui.ok('Meko', `${meko.url.replace(/^https?:\/\//, '')}${fromEnv ? ' (key from Claude Code settings)' : ''}`);
 
     // 3. Meko Claude Code plugin
@@ -290,7 +314,7 @@ export async function runInstall(args: string[]): Promise<void> {
     // 7. Setup link and next steps
     const handle = openDb(db);
     try {
-      const scheme = isLoopback(cfg.server.bind) ? 'http' : 'https';
+      const scheme = tls ? 'https' : 'http';
       const host = isLoopback(cfg.server.bind) ? '127.0.0.1' : publicHost();
       const base = `${scheme}://${host}:${cfg.server.port}`;
       ui.blank();
@@ -331,20 +355,105 @@ export async function runInstall(args: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 // uninstall
 
+/** Session worktree folders: <worktrees>/<project>/<session>. */
+export function sessionWorktrees(root: string): string[] {
+  const dirs = (d: string) => {
+    try {
+      return readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(d, e.name));
+    } catch {
+      return [];
+    }
+  };
+  return dirs(root).flatMap(dirs);
+}
+
+/** True when a worktree has uncommitted or untracked changes, or git can't tell. */
+function hasUncommittedWork(dir: string): boolean {
+  try {
+    return execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000 }).trim() !== '';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Deletes everything in the AgentK Local home, except the session worktrees and design files
+ * unless `all`. Returns the folders it kept (empty ones are removed, and then the home too).
+ */
+export function purgeHome(paths: Paths, all: boolean): string[] {
+  const keep = all ? [] : [paths.worktrees, paths.designs];
+  let names: string[];
+  try {
+    names = readdirSync(paths.home);
+  } catch {
+    return [];
+  }
+  for (const n of names) {
+    const p = join(paths.home, n);
+    if (!keep.includes(p)) rmSync(p, { recursive: true, force: true });
+  }
+  const kept = keep.filter((d) => {
+    try {
+      if (readdirSync(d).length) return true;
+      rmdirSync(d);
+    } catch {
+      // not there
+    }
+    return false;
+  });
+  if (!kept.length) rmSync(paths.home, { recursive: true, force: true });
+  return kept;
+}
+
+/**
+ * Deletes a database kept outside the home: the file, its SQLite side files and the update
+ * snapshots next to it. Its folder is removed only when that leaves it empty.
+ */
+export function removeDb(db: string): void {
+  const dir = dirname(db);
+  const name = basename(db);
+  for (const f of [name, `${name}-wal`, `${name}-shm`, `${name}-journal`]) rmSync(join(dir, f), { force: true });
+  try {
+    for (const f of readdirSync(dir)) if (f.startsWith('state.db.bak-')) rmSync(join(dir, f), { force: true });
+    rmdirSync(dir);
+  } catch {
+    // gone already, or other files live there
+  }
+}
+
 export async function runUninstall(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
       'non-interactive': { type: 'boolean', default: false },
       purge: { type: 'boolean', default: false },
+      'delete-worktrees': { type: 'boolean', default: false },
     },
     strict: true,
   });
   const paths = getPaths();
+  const purge = values.purge;
+  const deleteWork = purge && values['delete-worktrees'];
+  if (values['delete-worktrees'] && !purge) {
+    ui.fail('Uninstall', '--delete-worktrees only works with --purge.');
+    process.exitCode = 2;
+    return;
+  }
   const { ask, close } = makePrompter(!values['non-interactive']);
   try {
-    say('This stops agent-k-local and ends every running Claude session it hosts.');
-    say('Worktrees and branches are kept.');
+    say('This stops AgentK Local and ends every running Claude session it hosts.');
+    if (purge) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
+    const wt = tildify(paths.worktrees);
+    if (deleteWork) {
+      const trees = sessionWorktrees(paths.worktrees);
+      const dirty = trees.filter(hasUncommittedWork).length;
+      say(`--delete-worktrees also deletes ${trees.length} session worktree${trees.length === 1 ? '' : 's'} in ${wt}` +
+        `${dirty ? `, ${dirty} with uncommitted changes that will be lost` : ''}, and the sessions' design files. Branches are kept.`);
+    } else if (purge) {
+      say(`Session worktrees (${wt}), design files (${tildify(paths.designs)}) and branches are kept; add --delete-worktrees to delete the worktrees and design files too.`);
+    } else {
+      say('Worktrees and branches are kept.');
+    }
     const ok = values['non-interactive'] ? 'y' : await ask('Continue? (y/N)', 'n');
     if (!/^y(es)?$/i.test(ok)) {
       say('Cancelled.');
@@ -361,12 +470,12 @@ export async function runUninstall(args: string[]): Promise<void> {
     } catch {
       // not installed there
     }
-    if (values.purge) {
-      const cfg = loadConfig(paths);
-      const db = dbPath(paths, cfg);
-      rmSync(paths.home, { recursive: true, force: true });
-      if (!db.startsWith(paths.home + '/')) rmSync(dirname(db), { recursive: true, force: true });
-      say(`Removed ${tildify(paths.home)}.`);
+    if (purge) {
+      const db = dbPath(paths, loadConfig(paths));
+      const kept = purgeHome(paths, deleteWork);
+      if (!db.startsWith(paths.home + '/')) removeDb(db);
+      say(kept.length ? `Removed ${tildify(paths.home)} except ${kept.map(tildify).join(' and ')}.` : `Removed ${tildify(paths.home)}.`);
+      if (deleteWork) say('Run `git worktree prune` in each repo to forget the deleted worktrees.');
     } else {
       say(`State kept in ${tildify(paths.home)} (use --purge to delete it).`);
     }

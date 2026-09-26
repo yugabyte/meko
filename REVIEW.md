@@ -14,7 +14,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Server restarts and updates leave running sessions untouched.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
-- [ ] Auto-continue guards hold (once per 15 minutes; parked after two recoveries in an hour).
+- [ ] Nothing respawns a live pane, and a tmux error other than "no server" is never read as every
+      pane being gone.
+- [ ] Values in the launcher are set after the login shell's profile runs, and inherited
+      `AK_HOME`/`MEKO_CHECKPOINT_INTERVAL` are cleared.
+- [ ] Auto-continue guards hold (once per 15 minutes; after two auto-continues in an hour the next
+      mid-turn recovery is parked).
 - [ ] Status changes come from hook events or pane checks, not guesses. Deliberate stops (archive,
       cleanup) don't show up as "exited".
 - [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
@@ -25,19 +30,25 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 2. Security
 
-- [ ] New `/api/*` routes require login unless they're one of the three public auth routes.
+- [ ] New `/api/*` routes require login unless they're one of the three public auth routes. Access
+      checks key on the matched route, never the raw URL (the router decodes `/%61pi/`).
+- [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
+      re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
 - [ ] Writes and WebSocket upgrades still pass the origin check; cookies stay `HttpOnly`,
       `SameSite=Strict`, and `Secure` under TLS.
 - [ ] No user input reaches a shell. `execFile`/`spawn` take argument arrays; launcher values go
       through `shq()`.
 - [ ] Secrets never land in logs, `config.toml` (unless the user typed them), the database, or the repo.
+- [ ] Login limits hold (per address or IPv6 /64, and site-wide), and nothing sent to a browser can
+      queue in memory without limit (terminal output pauses the pty; state snapshots are skipped).
 - [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
       per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
-      `allow-same-origin`, and the frame's content policy still blocks network requests.
+      `allow-same-origin`, and the frame's content policy still blocks network requests and comes
+      first in the frame's document. Markdown designs are sanitized with no forms or styles.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
       (no answer means allow) so a slow or restarting server never blocks Claude.
 
@@ -45,12 +56,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
 - [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is
-      idle, never into a permission or question prompt; otherwise they're queued.
+      idle, never into a permission or question prompt; otherwise they're queued (the review prompt
+      in `state.db`, so it survives a restart). Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo.
 - [ ] The only change made in the user's main checkout is fast-forwarding the base branch when a
-      session starts (`merge --ff-only` or a compare-and-swap ref update), never a reset or force.
+      session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
+      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), never a reset or force.
 - [ ] `/agentk review force` is only posted when the user asks.
 
 ## 4. Data and Meko

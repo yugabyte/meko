@@ -22,12 +22,18 @@ const SOURCE_LABEL: Record<SearchResult['source'], string> = {
 
 export function ProjectHomeView({
   project,
+  order,
+  onMove,
   mekoWebUrl,
   onMenu,
   onBack,
   onError,
 }: {
   project: ProjectWithSessions;
+  /** Where the project sits in the projects list. */
+  order: { index: number; count: number };
+  /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
+  onMove: (index: number) => void;
   mekoWebUrl: string | null;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
@@ -149,7 +155,7 @@ export function ProjectHomeView({
           </section>
         </div>
         {home && <UsagePanel projectId={project.id} usage={home.usage} />}
-        <ProjectSettingsForm project={project} onError={onError} />
+        <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
       </div>
     </div>
   );
@@ -276,19 +282,26 @@ function AttachDatapack({
 
 function ProjectSettingsForm({
   project,
+  order,
+  onMove,
   onError,
 }: {
   project: ProjectWithSessions;
+  order: { index: number; count: number };
+  onMove: (index: number) => void;
   onError: (m: string) => void;
 }) {
   const [name, setName] = useState(project.name);
   const [s, setS] = useState<ProjectSettings>(project.settings);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Every state push brings a new settings object; reset the form only when the saved values change.
+  const savedKey = JSON.stringify([project.name, project.settings]);
   useEffect(() => {
-    setName(project.name);
-    setS(project.settings);
-  }, [project.id, project.name, project.settings]);
+    const [n, ps] = JSON.parse(savedKey) as [string, ProjectSettings];
+    setName(n);
+    setS(ps);
+  }, [project.id, savedKey]);
 
   const dirty = name !== project.name || JSON.stringify(s) !== JSON.stringify(project.settings);
   const set = <K extends keyof ProjectSettings>(k: K, v: ProjectSettings[K]) => setS((x) => ({ ...x, [k]: v }));
@@ -370,6 +383,22 @@ function ProjectSettingsForm({
             <span>Browser notifications</span>
           </label>
         </div>
+        {order.count > 1 && (
+          <div className="settings-actions">
+            <span className="muted small">Place in the projects list</span>
+            <button type="button" className="btn small" disabled={order.index <= 0} onClick={() => onMove(order.index - 1)}>
+              Move up
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              disabled={order.index < 0 || order.index >= order.count - 1}
+              onClick={() => onMove(order.index + 1)}
+            >
+              Move down
+            </button>
+          </div>
+        )}
         <div className="settings-actions">
           <button className="btn primary" disabled={!dirty || busy || !name.trim()}>
             {busy ? 'Saving…' : 'Save'}
@@ -379,7 +408,7 @@ function ProjectSettingsForm({
           <ConfirmButton
             label="Delete project"
             confirmLabel="Delete project"
-            prompt="Removes its sessions and worktrees. Your repo and datapacks stay."
+            prompt="Stops its sessions and removes their worktrees, except ones with uncommitted changes. Your repo, branches and datapacks stay."
             danger
             onConfirm={async () => {
               try {

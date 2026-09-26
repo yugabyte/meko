@@ -7,6 +7,11 @@ import { trackAppHeight } from './hooks/useMedia';
 
 trackAppHeight();
 
+// Only for notifications on phones (see public/sw.js); browsers allow it on HTTPS and localhost.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Root />

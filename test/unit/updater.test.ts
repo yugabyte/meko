@@ -292,6 +292,38 @@ describe('Updater', () => {
     expect(fx.kv.get('update.latest')).toBe('0.2.0');
   });
 
+  it('does not offer a remembered latest version that was rolled back since', async () => {
+    // 0.2.0 was found, applied, and rolled back: this boot of 0.1.0 still has it cached.
+    fx.kv.set('update.latest', '0.2.0');
+    fx.kv.set('update.releaseUrl', 'https://example.com/0.2.0');
+    writeFileSync(fx.paths.badVersions, '0.2.0\n');
+    buildRelease(fx.releaseDir, '0.2.0');
+    const download = vi.fn();
+    const u = fx.makeUpdater({ listReleases: async () => [rel('0.2.0')], download });
+    expect(u.status()).toMatchObject({ latest: null, available: false, releaseUrl: null });
+    const s = await u.apply();
+    expect(s.available).toBe(false);
+    expect(download).not.toHaveBeenCalled();
+    expect(fx.restart).not.toHaveBeenCalled();
+  });
+
+  it('checks again no sooner than every 24 days, however long the interval', async () => {
+    vi.useFakeTimers();
+    try {
+      fx.cfg.update.intervalHours = 1_000_000;
+      const list = vi.fn(async () => []);
+      const u = fx.makeUpdater({ listReleases: list, download: async () => '' });
+      u.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(list).toHaveBeenCalledTimes(1); // the check at start, not one per millisecond
+      await vi.advanceTimersByTimeAsync(2 ** 31);
+      expect(list).toHaveBeenCalledTimes(2);
+      u.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('applies a verified release and schedules a restart', async () => {
     buildRelease(fx.releaseDir, '0.2.0');
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, [rel('0.2.0')]));
@@ -364,6 +396,22 @@ describe('Updater', () => {
     u.markHealthy();
     expect(JSON.parse(readFileSync(fx.paths.updatePending, 'utf8'))).toMatchObject({ from: '0.1.0', to: '0.2.0' });
     expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.1', '0.0.9', '0.1.0', '0.2.0', 'current']);
+  });
+
+  it('markHealthy that came during an update runs when that update fails', async () => {
+    for (const v of ['0.0.1', '0.0.9']) mkdirSync(join(fx.paths.app, v));
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.9', to: '0.1.0', attempts: 1, at: 1 }));
+    buildRelease(fx.releaseDir, '0.2.0', 1, false, 1);
+    const u = fx.makeUpdater(fakeSource(fx.releaseDir, [rel('0.2.0')]));
+    const applying = u.apply();
+    for (let i = 0; i < 100 && !existsSync(join(fx.paths.app, '0.2.0')); i++) await new Promise((r) => setTimeout(r, 20));
+    u.markHealthy();
+    expect(existsSync(fx.paths.updatePending)).toBe(true);
+    const s = await applying;
+    expect(s.lastError).toMatch(/self-test/);
+    // This version's own update is final now: its pending file is gone and 0.0.9 is kept to go back to.
+    expect(existsSync(fx.paths.updatePending)).toBe(false);
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.9', '0.1.0', 'current']);
   });
 
   it('markHealthy drops a stale pending file and never deletes what current points at', () => {
@@ -462,8 +510,15 @@ describe('bin wrapper rollback', () => {
     expect(JSON.parse(readFileSync(join(root, 'update-pending.json'), 'utf8')).attempts).toBe(1);
   });
 
-  it('rolls back after the third failed start', () => {
+  it('still starts the new version after two failed starts', () => {
     writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 2 }));
+    expect(runServe()).toBe('new 0.2.0');
+    expect(JSON.parse(readFileSync(join(root, 'update-pending.json'), 'utf8')).attempts).toBe(3);
+    expect(existsSync(join(root, 'bad-versions'))).toBe(false);
+  });
+
+  it('rolls back after the third failed start', () => {
+    writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 3 }));
     expect(runServe()).toBe('old 0.1.0');
     expect(readlinkSync(join(root, 'app', 'current'))).toBe('0.1.0');
     expect(readFileSync(join(root, 'bad-versions'), 'utf8').trim()).toBe('0.2.0');

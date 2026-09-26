@@ -5,9 +5,10 @@
 # rollback after a bad self-update: the updater writes update-pending.json
 # before restarting into a new version, and the server deletes it once it has
 # been healthy for 5 minutes. If the new version fails to come up three times in a
-# row, this wrapper switches app/current back to the previous version, records
-# the bad one, and starts the previous version instead. A clean stop (SIGTERM)
-# of the new version takes its start back off the count, so only crashes count.
+# row, this wrapper (on the fourth start) switches app/current back to the previous
+# version, records the bad one, and starts the previous version instead. A clean
+# stop (SIGTERM) of the new version takes its start back off the count, so only
+# crashes count.
 set -eu
 
 # Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<ver>).
@@ -30,7 +31,8 @@ cli="$AK_APP_DIR/lib/dist/server/cli.js"
 ak_home=${AK_HOME:-$HOME/.agent-k-local}
 
 if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
-  # Bump the attempt counter; print "<attempts> <from> <to>".
+  # Bump the attempt counter (starts of the new version, this one included);
+  # print "<attempts> <from> <to>".
   # shellcheck disable=SC2016 # the single-quoted text is JavaScript, not shell
   state=$("$node" -e '
     const fs = require("fs");
@@ -48,8 +50,9 @@ if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
     rest=${state#* }
     from=${rest%% *}
     to=${rest#* }
-    if [ "$attempts" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
-      echo "agent-k-local: version $to failed to start $attempts times; rolling back to $from" >&2
+    failed=$((attempts - 1))
+    if [ "$failed" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
+      echo "agent-k-local: version $to failed to start $failed times; rolling back to $from" >&2
       ln -sfn "$from" "$ak_home/app/current.rollback"
       # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
       "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' \

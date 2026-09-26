@@ -136,6 +136,24 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
+/** Close code the server uses on a WebSocket whose login is missing or revoked. */
+export const WS_UNAUTHORIZED = 4401;
+
+/**
+ * After a WebSocket closed with WS_UNAUTHORIZED: if the login really is gone, runs the 401
+ * handler (drops to the login screen) and resolves false. Resolves true when still logged in or
+ * the server can't be reached, so the caller keeps retrying.
+ */
+export async function checkLogin(): Promise<boolean> {
+  try {
+    if ((await api.authStatus()).loggedIn) return true;
+  } catch {
+    return true;
+  }
+  onUnauthorized?.();
+  return false;
+}
+
 export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}${path}`;

@@ -19,8 +19,10 @@ npm ci
 npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0.1:5173
 ```
 
-Open http://127.0.0.1:5173. A dev server keeps its state in `~/.agent-k-local` unless you set
-`AK_HOME`, e.g. `AK_HOME=/tmp/ak-dev npm run dev`.
+Open http://127.0.0.1:5173. A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
+use another folder), so it never opens an installed AgentK Local's database or hook socket. It
+still uses the default tmux socket (`agentk`) unless you set `[tmux] socket` in
+`.dev-home/config.toml`, and port 7777 is taken if an installed server is running there.
 
 Local state uses Node's built-in `node:sqlite`, which prints an experimental warning on Node 22.
 The release wrapper runs Node with `--disable-warning=ExperimentalWarning`.
@@ -63,8 +65,8 @@ sorts higher.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
    Tags are kept, so release notes and version numbering are unaffected.
-5. Running installs pick the release up on their next update check (every 6 hours) and update
-   themselves without interrupting sessions. Once a version has been healthy for 5 minutes, the
+5. Running installs see the release on their next update check (every 6 hours) and offer it in
+   an "Update to vX" banner; one click installs it without interrupting sessions. Once a version has been healthy for 5 minutes, the
    server deletes every installed version under `~/.agent-k-local/app/` except the running one and
    one previous version (the one it updated from) to roll back to by hand.
 

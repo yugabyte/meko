@@ -73,9 +73,9 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
                 <Stat label="Cache read" value={t.cacheRead} />
                 <Count label="Merged PRs" value={usage.mergedPrs} />
                 <Count
-                  label="Pushed to base"
+                  label="Commits pushed to base"
                   value={usage.directCommits}
-                  title={`${plural(usage.directCommits, 'commit')} in ${plural(usage.directPushes, 'push')} straight to a base branch`}
+                  note={usage.directPushes > 0 ? `in ${plural(usage.directPushes, 'push')}` : undefined}
                 />
               </div>
               <div className="usage-chart-hd">
@@ -92,53 +92,56 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
               {usage.byProject.length === 0 ? (
                 <p className="muted">No projects yet.</p>
               ) : (
-                <div className="table-scroll">
-                  <table className="usage-table usage-projects">
-                    <thead>
-                      <tr>
-                        {projectHeader('name', 'Project', { text: true })}
-                        {projectHeader('sessions', 'Sessions', { className: 'num opt' })}
-                        {projectHeader('mergedPrs', 'Merged PRs', { className: 'num', title: 'Sessions whose PR was merged' })}
-                        {projectHeader('directCommits', 'Pushed', { className: 'num', title: "Commits a session pushed straight to the project's base branch" })}
-                        {projectHeader('output', 'Output', { className: 'num opt' })}
-                        {projectHeader('total', 'Total', { className: 'num' })}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {projects.map((p) => (
-                        <tr key={p.projectId} className={cx(p.deleted && 'deleted')} title={usageTitle(p.usage)}>
-                          <td>
-                            {p.deleted ? (
-                              <span>{p.name}</span>
-                            ) : (
-                              <button className="link-btn inline" onClick={() => navigate({ view: 'home', projectId: p.projectId })}>
-                                {p.name}
-                              </button>
-                            )}{' '}
-                            {p.deleted && <span className="tag">deleted</span>}
-                            <span className="muted small usage-when">
-                              <span className="mono" title={p.repoPath}>
-                                {repoFolder(p.repoPath)}
-                              </span>
-                              {' · '}
-                              <span>{p.lastActiveAt ? `active ${relativeTime(p.lastActiveAt).toLowerCase()}` : 'no usage yet'}</span>
-                            </span>
-                          </td>
-                          <td className="num opt">{p.sessions.toLocaleString()}</td>
-                          <td className="num">{p.mergedPrs.toLocaleString()}</td>
-                          <td
-                            className="num"
-                            title={`${plural(p.directCommits, 'commit')} in ${plural(p.directPushes, 'push')} straight to the base branch`}
-                          >
-                            {p.directCommits.toLocaleString()}
-                          </td>
-                          <td className="num opt">{formatTokens(p.usage.output)}</td>
-                          <td className="num">{formatTokens(totalTokens(p.usage))}</td>
+                <>
+                  <div className="table-scroll">
+                    <table className="usage-table usage-projects">
+                      <thead>
+                        <tr>
+                          {projectHeader('name', 'Project', { text: true })}
+                          {projectHeader('sessions', 'Sessions', { className: 'num opt' })}
+                          {projectHeader('mergedPrs', 'Merged PRs', { className: 'num', title: 'Sessions whose PR was merged' })}
+                          {projectHeader('directCommits', 'Pushed', { className: 'num', title: "Commits a session pushed straight to the project's base branch" })}
+                          {projectHeader('output', 'Output', { className: 'num opt' })}
+                          {projectHeader('total', 'Total', { className: 'num' })}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {projects.map((p) => (
+                          <tr key={p.projectId} className={cx(p.deleted && 'deleted')} title={usageTitle(p.usage)}>
+                            <td>
+                              {p.deleted ? (
+                                <span>{p.name}</span>
+                              ) : (
+                                <button className="link-btn inline" onClick={() => navigate({ view: 'home', projectId: p.projectId })}>
+                                  {p.name}
+                                </button>
+                              )}{' '}
+                              {p.deleted && <span className="tag">deleted</span>}
+                              <span className="muted small usage-when">
+                                <span className="mono" title={p.repoPath}>
+                                  {repoFolder(p.repoPath)}
+                                </span>
+                                {' · '}
+                                <span>{p.lastActiveAt ? `active ${relativeTime(p.lastActiveAt).toLowerCase()}` : 'no usage yet'}</span>
+                              </span>
+                            </td>
+                            <td className="num opt">{p.sessions.toLocaleString()}</td>
+                            <td className="num">{p.mergedPrs.toLocaleString()}</td>
+                            <td className="num">
+                              {p.directCommits.toLocaleString()}
+                              {p.directPushes > 0 && <span className="muted small usage-when">in {plural(p.directPushes, 'push')}</span>}
+                            </td>
+                            <td className="num opt">{formatTokens(p.usage.output)}</td>
+                            <td className="num">{formatTokens(totalTokens(p.usage))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="muted small usage-key">
+                    Merged PRs: sessions whose PR was merged. Pushed: commits sessions pushed straight to the project’s base branch.
+                  </p>
+                </>
               )}
             </section>
 
@@ -206,11 +209,12 @@ function SortHeader<K extends string>({
 }
 
 /** A plain count in the stats row (Stat formats token amounts). */
-function Count({ label, value, title }: { label: string; value: number; title?: string }) {
+function Count({ label, value, note }: { label: string; value: number; note?: string }) {
   return (
-    <div className="usage-stat" title={title}>
+    <div className="usage-stat">
       <span className="usage-num">{value.toLocaleString()}</span>
       <span className="usage-lbl">{label}</span>
+      {note && <span className="muted small">{note}</span>}
     </div>
   );
 }

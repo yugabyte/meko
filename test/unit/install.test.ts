@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { parseDfMountPoint, parseMountType, serviceFailure } from '../../src/server/install.js';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ensurePrivateDir, parseDfMountPoint, parseMountType, purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { getPaths } from '../../src/server/paths.js';
 import { LaunchdServices, SystemdServices } from '../../src/server/service.js';
 
 // Output of `df -P` and `mount` on macOS, used to find the filesystem type there.
@@ -47,5 +51,114 @@ describe('service failures', () => {
     const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart agent-k-local.service failed', '/home/me/.agent-k-local/logs');
     expect(linux).toContain('Check: systemctl --user status agent-k-local.service.\n');
     expect(linux).not.toContain('launchd');
+  });
+});
+
+describe('private state folder in a shared place', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'ak-priv-'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('creates the folder and its parent, owner-only', () => {
+    const dir = join(root, 'me', 'agent-k-local');
+    ensurePrivateDir(dir);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    // An existing folder of ours is tightened.
+    chmodSync(dir, 0o755);
+    ensurePrivateDir(dir);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  it('refuses a symlink another user could point anywhere', () => {
+    mkdirSync(join(root, 'elsewhere'));
+    mkdirSync(join(root, 'me'), { mode: 0o755 });
+    symlinkSync(join(root, 'elsewhere'), join(root, 'me', 'agent-k-local'));
+    expect(() => ensurePrivateDir(join(root, 'me', 'agent-k-local'))).toThrow(/not a directory/);
+    symlinkSync(join(root, 'elsewhere'), join(root, 'you'));
+    expect(() => ensurePrivateDir(join(root, 'you', 'agent-k-local'))).toThrow(/not a directory/);
+  });
+
+  it('refuses a parent others can write to', () => {
+    mkdirSync(join(root, 'me'));
+    chmodSync(join(root, 'me'), 0o777);
+    expect(() => ensurePrivateDir(join(root, 'me', 'agent-k-local'))).toThrow(/written to by other users/);
+  });
+
+  it('accepts a group-writable parent only when the group is our own', () => {
+    mkdirSync(join(root, 'me'));
+    chmodSync(join(root, 'me'), 0o775);
+    const { uid, gid } = statSync(join(root, 'me'));
+    expect(() => ensurePrivateDir(join(root, 'me', 'agent-k-local'), uid, gid)).not.toThrow();
+    expect(() => ensurePrivateDir(join(root, 'me', 'agent-k-local'), uid, gid + 1)).toThrow(/written to by other users/);
+  });
+
+  it('refuses folders owned by another user', () => {
+    const uid = statSync(root).uid;
+    expect(() => ensurePrivateDir(join(root, 'me', 'agent-k-local'), uid + 1)).toThrow(/owned by another user/);
+  });
+});
+
+describe('uninstall --purge', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'ak-purge-'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function home() {
+    const paths = getPaths(join(root, 'home'));
+    for (const d of [paths.app, paths.logs, join(paths.worktrees, 'p1', 's1'), join(paths.worktrees, 'p1', 's2'), join(paths.designs, 'x')]) {
+      mkdirSync(d, { recursive: true });
+    }
+    writeFileSync(paths.config, '');
+    writeFileSync(paths.defaultDb, '');
+    writeFileSync(join(paths.worktrees, 'p1', 'stray-file'), '');
+    return paths;
+  }
+
+  it('lists session worktrees', () => {
+    const paths = home();
+    expect(sessionWorktrees(paths.worktrees).sort()).toEqual([join(paths.worktrees, 'p1', 's1'), join(paths.worktrees, 'p1', 's2')]);
+    expect(sessionWorktrees(join(root, 'missing'))).toEqual([]);
+  });
+
+  it('keeps session worktrees and designs unless asked to delete them', () => {
+    const paths = home();
+    expect(purgeHome(paths, false)).toEqual([paths.worktrees, paths.designs]);
+    expect(readdirSync(paths.home).sort()).toEqual(['designs', 'worktrees']);
+    expect(existsSync(join(paths.worktrees, 'p1', 's1'))).toBe(true);
+  });
+
+  it('removes kept folders that are empty, and then the home', () => {
+    const paths = getPaths(join(root, 'home'));
+    mkdirSync(paths.worktrees, { recursive: true });
+    writeFileSync(paths.config, '');
+    expect(purgeHome(paths, false)).toEqual([]);
+    expect(existsSync(paths.home)).toBe(false);
+  });
+
+  it('deletes everything with --delete-worktrees', () => {
+    const paths = home();
+    expect(purgeHome(paths, true)).toEqual([]);
+    expect(existsSync(paths.home)).toBe(false);
+  });
+
+  it('deletes only the database files from a folder it shares with other files', () => {
+    const dir = join(root, 'me');
+    mkdirSync(dir);
+    for (const f of ['agentk.db', 'agentk.db-wal', 'agentk.db-shm', 'state.db.bak-0.1.0', 'notes.txt']) writeFileSync(join(dir, f), '');
+    removeDb(join(dir, 'agentk.db'));
+    expect(readdirSync(dir)).toEqual(['notes.txt']);
+  });
+
+  it('removes the database folder when that leaves it empty', () => {
+    const dir = join(root, 'var', 'agent-k-local');
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['state.db', 'state.db-wal', 'state.db.bak-0.1.0']) writeFileSync(join(dir, f), '');
+    removeDb(join(dir, 'state.db'));
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(join(root, 'var'))).toBe(true);
   });
 });

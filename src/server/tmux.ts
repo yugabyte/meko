@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { Paths } from './paths.js';
@@ -12,7 +13,12 @@ export const KEEPALIVE = '_ak';
 export const KEEPALIVE_CMD = 'sleep 2147483647';
 
 // Works on tmux 2.7 (RHEL 8). Window options need set-window-option there.
+// No prefix key: Ctrl+B belongs to Claude Code (it backgrounds a command), and tmux's own
+// commands (detach, kill pane) must not be reachable from the terminal or the phone key bar.
 const TMUX_CONF = `# Written by agent-k-local. Changes are overwritten on start.
+set -g prefix None
+set -g prefix2 None
+unbind-key C-b
 set -g default-terminal "screen-256color"
 set -ga terminal-overrides ",xterm-256color:Tc"
 set -g status off
@@ -84,6 +90,12 @@ export class Tmux {
         if (svc.tmuxForeground && (await this.addKeepalive())) return;
         await sleep(100);
       }
+      // The service's server is up but its keepalive session is gone (killed by hand): put it back.
+      // Only into a server that answers, so this never starts one in our own service.
+      if (!svc.tmuxForeground && (await this.answers()) && (await this.addKeepaliveTo2_7())) return;
+      // Never start tmux ourselves when the service owns it: it would run in the server's own
+      // service, and every server restart or update would end every session.
+      throw new Error(`The tmux service (${svc.id('tmux')}) isn't running. Check: ${svc.statusHint('tmux')}`);
     }
     await new Promise<void>((resolve, reject) => {
       const p = spawn(this.bin, ['-L', this.socket, '-f', this.confPath, 'new-session', '-d', '-s', KEEPALIVE, KEEPALIVE_CMD], {
@@ -98,6 +110,30 @@ export class Tmux {
     await this.run('source-file', this.confPath).catch(() => undefined);
   }
 
+  /** True when a tmux server is listening on our socket, whatever sessions it has. */
+  private async answers(): Promise<boolean> {
+    try {
+      await this.run('list-sessions');
+      return true;
+    } catch (e) {
+      // A server with no sessions left exits, so "no sessions" still means it answered.
+      return !isNoServer(e);
+    }
+  }
+
+  /**
+   * Creates the keepalive session in a server that was just seen answering. tmux 2.7 has no -N,
+   * so this could only start a server of its own if that one exited in the moment between.
+   */
+  private async addKeepaliveTo2_7(): Promise<boolean> {
+    try {
+      await this.run('new-session', '-d', '-s', KEEPALIVE, KEEPALIVE_CMD);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Creates the keepalive session in a running server. -N (tmux 3.2+) never starts a server of its own. */
   private async addKeepalive(): Promise<boolean> {
     try {
@@ -108,13 +144,18 @@ export class Tmux {
     }
   }
 
+  /**
+   * Every session's first pane. Empty when no tmux server is running; any other failure
+   * throws, so callers never mistake a tmux hiccup for every pane being gone.
+   */
   async panes(): Promise<Map<string, PaneInfo>> {
     const out = new Map<string, PaneInfo>();
     let text: string;
     try {
       text = await this.run('list-panes', '-a', '-F', '#{session_name}\t#{pane_dead}\t#{pane_pid}\t#{pane_dead_status}');
-    } catch {
-      return out; // no server
+    } catch (e) {
+      if (isNoServer(e)) return out;
+      throw e;
     }
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
@@ -145,7 +186,8 @@ export class Tmux {
 
   /** Pastes text into the pane as a bracketed paste, then presses Enter. */
   async submit(name: string, text: string): Promise<void> {
-    const buf = `ak-${name}`;
+    // A buffer of its own, so two pastes at once never overwrite each other.
+    const buf = `ak-${name}-${randomUUID()}`;
     await new Promise<void>((resolve, reject) => {
       const p = spawn(this.bin, ['-L', this.socket, 'load-buffer', '-b', buf, '-'], { stdio: ['pipe', 'ignore', 'pipe'] });
       let err = '';
@@ -170,7 +212,17 @@ export class Tmux {
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** tmux session names can't contain '.' or ':'. */
+/** What tmux says when there's no server on the socket (not running, or its socket is gone). */
+export function isNoServer(e: unknown): boolean {
+  const x = e as { stderr?: unknown; message?: unknown } | null;
+  return /no server running|error connecting to/i.test(`${String(x?.stderr ?? '')} ${String(x?.message ?? '')}`);
+}
+
+/**
+ * tmux session names can't contain '.' or ':'. Project ids and slugs never contain "--"
+ * (see slugify), so the double dash keeps names of two projects on one repo apart
+ * ("api" + "v2-fix" vs. "api-v2" + "fix"). Existing sessions keep their stored name.
+ */
 export function tmuxName(projectId: string, slug: string): string {
-  return `ak-${projectId}-${slug}`.replace(/[.:]/g, '-');
+  return `ak-${projectId}--${slug}`.replace(/[.:]/g, '-');
 }

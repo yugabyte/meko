@@ -7,29 +7,41 @@ export interface DiffLine {
   new: number | null;
 }
 
-/** Unified diff → display lines with old/new line numbers. The git file headers are dropped. */
+/**
+ * Unified diff → display lines with old/new line numbers. The git file headers are dropped.
+ * The hunk header's line counts say where each hunk ends, so an empty line inside a hunk is an
+ * empty context line (git writes those as "" rather than " " with diff.suppressBlankEmpty).
+ */
 export function parsePatch(patch: string): DiffLine[] {
   const out: DiffLine[] = [];
   let o = 0, n = 0, inHunk = false;
+  /** Old and new lines the current hunk still has to show. */
+  let oLeft = 0, nLeft = 0;
   for (const line of patch.split('\n')) {
-    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (h) {
       o = Number(h[1]);
-      n = Number(h[2]);
+      n = Number(h[3]);
+      oLeft = h[2] === undefined ? 1 : Number(h[2]);
+      nLeft = h[4] === undefined ? 1 : Number(h[4]);
       inHunk = true;
       out.push({ kind: 'hunk', text: line, old: null, new: null });
     } else if (!inHunk) {
       if (!/^(diff --git |index |--- |\+\+\+ )/.test(line) && line) out.push({ kind: 'meta', text: line, old: null, new: null });
-    } else if (!line) {
-      continue; // a trailing newline; real empty context lines are " "
+    } else if (!line && (oLeft <= 0 || nLeft <= 0)) {
+      continue; // a trailing newline after the hunk
     } else if (line.startsWith('+')) {
       out.push({ kind: 'add', text: line.slice(1), old: null, new: n++ });
+      nLeft--;
     } else if (line.startsWith('-')) {
       out.push({ kind: 'del', text: line.slice(1), old: o++, new: null });
+      oLeft--;
     } else if (line.startsWith('\\')) {
       out.push({ kind: 'note', text: line.slice(2), old: null, new: null });
     } else {
       out.push({ kind: 'ctx', text: line.slice(1), old: o++, new: n++ });
+      oLeft--;
+      nLeft--;
     }
   }
   return out;
@@ -41,10 +53,28 @@ export function sideLine(l: DiffLine, side: 'old' | 'new'): number | null {
   return l.kind === 'del' ? l.old : null;
 }
 
+/** Whether the diff shows line `n` on this side (so a comment there that no longer matches has changed). */
+export function showsLine(lines: DiffLine[], side: 'old' | 'new', n: number): boolean {
+  return lines.some((l) => sideLine(l, side) === n);
+}
+
 export interface Anchorable {
   side: 'old' | 'new';
   endLine: number;
   excerpt: string;
+}
+
+/** Stored excerpt lines this long may have been cut short by the server; shorter ones must match exactly. */
+const CUT_MIN = 200;
+
+/**
+ * Whether a row's text is the excerpt line `want`: the same, or, for a long line the server
+ * shortened, the row's text starting or ending with it (a trailing or leading "…" ignored).
+ */
+export function sameLine(text: string, want: string): boolean {
+  if (text === want) return true;
+  const core = want.replace(/^…|…$/g, '');
+  return core.length >= CUT_MIN && text.length > core.length && (text.startsWith(core) || text.endsWith(core));
 }
 
 /**
@@ -61,12 +91,15 @@ export function anchorComment(lines: DiffLine[], c: Anchorable): number | null {
   });
   const want = c.excerpt.split('\n');
   const last = want[want.length - 1];
-  const whole = (k: number) => want.every((t, j) => side[k - want.length + 1 + j]?.text === t);
+  const whole = (k: number) => want.every((t, j) => {
+    const row = side[k - want.length + 1 + j];
+    return row !== undefined && sameLine(row.text, t);
+  });
   const at = side.findIndex((s) => s.n === c.endLine);
-  if (at >= 0 && side[at].text === last) return side[at].i;
+  if (at >= 0 && sameLine(side[at].text, last)) return side[at].i;
   let best: { i: number; full: boolean; dist: number } | null = null;
   for (let k = 0; k < side.length; k++) {
-    if (side[k].text !== last) continue;
+    if (!sameLine(side[k].text, last)) continue;
     const cand = { i: side[k].i, full: whole(k), dist: Math.abs(side[k].n - c.endLine) };
     if (!best || (cand.full && !best.full) || (cand.full === best.full && cand.dist < best.dist)) best = cand;
   }

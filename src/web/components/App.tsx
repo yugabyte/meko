@@ -29,6 +29,37 @@ type Modal =
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
+// Notifications come from the page (`new Notification`), or through the service worker where the
+// page may not make them (Android Chrome), with a tap then opening the session through it too.
+const canNotify = typeof Notification !== 'undefined';
+let pageNotifications = canNotify;
+
+async function showNotification(n: NotifyEvent, onClick: () => void): Promise<void> {
+  const options = { body: n.body, icon: '/logo.png', tag: `ak-${n.sessionId}` };
+  if (pageNotifications) {
+    try {
+      const note = new Notification(n.title, options);
+      note.onclick = () => {
+        onClick();
+        note.close();
+      };
+      return;
+    } catch {
+      pageNotifications = false;
+    }
+  }
+  const reg = await navigator.serviceWorker?.getRegistration();
+  await reg?.showNotification(n.title, { ...options, data: { projectId: n.projectId, sessionId: n.sessionId } });
+}
+
+if (typeof navigator !== 'undefined') {
+  navigator.serviceWorker?.addEventListener('message', (ev: MessageEvent<{ type?: string; projectId?: string; sessionId?: string }>) => {
+    if (ev.data?.type === 'ak-open' && ev.data.projectId && ev.data.sessionId) {
+      navigate({ view: 'project', projectId: ev.data.projectId, sessionId: ev.data.sessionId });
+    }
+  });
+}
+
 function sortedProjects(state: AppState | null): ProjectWithSessions[] {
   if (!state) return [];
   return [...state.projects].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
@@ -51,20 +82,20 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const [toast, setToast] = useState<string | null>(null);
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
+  // A project just created: its state push can arrive after the HTTP reply, so the route waits for it.
+  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const focusRef = useRef<{ projectId: string | null; sessionId: string | null }>({ projectId: null, sessionId: null });
 
   const onNotify = useCallback((n: NotifyEvent) => {
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !notifier.leader) return;
+    if (!canNotify || Notification.permission !== 'granted' || !notifier.leader) return;
     const focused = focusRef.current;
     if (!document.hidden && focused.sessionId === n.sessionId) return;
     const project = stateRef.current?.projects.find((p) => p.id === n.projectId);
     if (project && !project.settings.notify) return;
-    const note = new Notification(n.title, { body: n.body, icon: '/logo.png', tag: `ak-${n.sessionId}` });
-    note.onclick = () => {
+    void showNotification(n, () => {
       window.focus();
       navigate({ view: 'project', projectId: n.projectId, sessionId: n.sessionId });
-      note.close();
-    };
+    }).catch(() => undefined);
   }, []);
 
   const { state, conn } = useEvents(onNotify);
@@ -75,7 +106,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   // Ask for notification permission on the first click anywhere.
   useEffect(() => {
-    if (typeof Notification === 'undefined' || Notification.permission !== 'default') return;
+    if (!canNotify || Notification.permission !== 'default') return;
     const ask = () => {
       Notification.requestPermission().catch(() => undefined);
       window.removeEventListener('click', ask);
@@ -94,7 +125,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   const currentProject =
     route.view === 'root' || route.view === 'usage' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
-  const live = currentProject ? liveSessions(currentProject).sort((a, b) => a.createdAt - b.createdAt) : [];
+  const live = useMemo(
+    () => (currentProject ? liveSessions(currentProject).sort((a, b) => a.createdAt - b.createdAt) : []),
+    [currentProject],
+  );
   const currentSession =
     route.view === 'project' && currentProject
       ? (live.find((s) => s.id === route.sessionId) ?? null)
@@ -102,11 +136,21 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
+  useEffect(() => {
+    if (pendingProjectId && projects.some((p) => p.id === pendingProjectId)) setPendingProjectId(null);
+  }, [pendingProjectId, projects]);
+  useEffect(() => {
+    if (!pendingProjectId) return;
+    const t = window.setTimeout(() => setPendingProjectId(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [pendingProjectId]);
+
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
   useEffect(() => {
     if (!state || route.view === 'usage') return;
     if (route.view === 'root' || !currentProject) {
+      if (route.view !== 'root' && route.projectId === pendingProjectId) return;
       const first = projects[0];
       if (first) {
         const s = liveSessions(first).sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -119,7 +163,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     if (route.view === 'project' && !currentSession && live.length > 0) {
       navigate({ view: 'project', projectId: currentProject.id, sessionId: live[0].id }, { replace: true });
     }
-  }, [state, route, currentProject, currentSession, live, projects]);
+  }, [state, route, currentProject, currentSession, live, projects, pendingProjectId]);
 
   const goProject = useCallback((p: ProjectWithSessions) => {
     // Open the session with the most recent activity.
@@ -159,9 +203,11 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     f();
   };
 
-  // Global shortcuts.
+  // Global shortcuts; none while a dialog is open, except ⌘K to close the palette.
+  const modalKind = modal.kind;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (modalKind !== 'none' && modalKind !== 'palette') return;
       if (modKey(e) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         setModal((m) => (m.kind === 'palette' ? { kind: 'none' } : { kind: 'palette' }));
@@ -184,7 +230,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [projects, goProject, currentProject, currentSession, live]);
+  }, [projects, goProject, currentProject, currentSession, live, modalKind]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -200,18 +246,20 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     onLoggedOut();
   };
 
-  const reorder = async (ids: string[]) => {
+  // One PATCH: the server moves the project to that index and renumbers the rest.
+  const moveProject = async (id: string, index: number) => {
     try {
-      await Promise.all(
-        ids.map((id, i) => {
-          const p = projects.find((x) => x.id === id);
-          return p && p.position !== i ? api.updateProject(id, { position: i }) : null;
-        }),
-      );
+      await api.updateProject(id, { position: index });
     } catch (e) {
       showToast(errorMessage(e));
     }
   };
+
+  // A New session dialog whose project was deleted meanwhile closes.
+  const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
+  useEffect(() => {
+    if (state && modalKind === 'new-session' && !newSessionProject) setModal({ kind: 'none' });
+  }, [state, modalKind, newSessionProject]);
 
   if (!state) {
     return <div className="boot">{conn === 'closed' ? 'Reconnecting to the server…' : 'Loading your projects…'}</div>;
@@ -261,7 +309,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
         onLogout={fromDrawer(logout)}
-        onReorder={reorder}
+        onReorder={moveProject}
         open={drawer}
       />
       <div className="main">
@@ -270,7 +318,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           <UsageView onMenu={openDrawer} />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
+            key={currentProject.id}
             project={currentProject}
+            order={{ index: projects.indexOf(currentProject), count: projects.length }}
+            onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
@@ -286,7 +337,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMenu={openDrawer}
             onError={showToast}
           />
-        ) : (
+        ) : pendingProjectId ? null : (
           <>
             {mobile && <TopBar onMenu={openDrawer} title="AgentK Local" />}
             <div className="empty-main">
@@ -309,13 +360,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(p) => {
             setModal({ kind: 'none' });
+            setPendingProjectId(p.id);
             navigate({ view: 'project', projectId: p.id, sessionId: null });
           }}
         />
       )}
-      {modal.kind === 'new-session' && (
+      {newSessionProject && (
         <NewSessionDialog
-          project={projects.find((p) => p.id === modal.projectId)!}
+          project={newSessionProject}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
             setModal({ kind: 'none' });

@@ -1,7 +1,8 @@
+import { existsSync } from 'node:fs';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { artifactUrlIn, isArtifactPublish, readArtifactHtml, readDesignFile } from './design.js';
-import { git, tryGit } from './git.js';
+import { deleteBranch, git, tryGit } from './git.js';
 import * as github from './github.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
@@ -11,6 +12,31 @@ import { dedicatedDatapack, parseSettings, projectRow, sessionRow, sessionRows, 
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
+/** How long a requested merge may leave the PR open (a merge queue) before the session goes back to Review. */
+const MERGE_GRACE_MS = 10 * 60 * 1000;
+/** Archived sessions still in Merge & Close this recently are cleanups a restart cut short. */
+const CLOSING_RESUME_MS = 24 * 60 * 60 * 1000;
+
+/** The status detail while a markdown or Artifact design waits for approval. */
+export const DESIGN_READY = 'Design ready for your approval';
+
+type ReviewPrompt = 'review' | 'review-people';
+
+/**
+ * True when the local branch has commits the PR's head lacks: committed but never pushed, or
+ * pushed after the PR merged. False when the head is unknown or the branch is gone.
+ */
+async function lacksLocalCommits(repo: string, branch: string, st: github.PrStatus): Promise<boolean> {
+  const head = st.headRefOid;
+  if (!head) return false;
+  const tip = await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
+  if (!tip || tip === head) return false;
+  // The head can be a commit made on GitHub (Update branch); fetch it to compare.
+  if ((await tryGit(repo, 'cat-file', '-e', `${head}^{commit}`)) === null) {
+    await tryGit(repo, 'fetch', '--quiet', 'origin', `refs/pull/${st.number}/head`);
+  }
+  return (await tryGit(repo, 'merge-base', '--is-ancestor', tip, head)) === null;
+}
 
 /**
  * The task lifecycle: Design → Code → PR → Review → Merge → Cleanup.
@@ -21,14 +47,16 @@ const REVIEW_POLL_MS = 45000;
 export class Lifecycle {
   private timer: NodeJS.Timeout | null = null;
   private lastPoll = new Map<string, number>();
-  /** Sessions with a review prompt waiting for Claude to finish its turn. */
-  private queuedReview = new Map<string, 'review' | 'review-people'>();
   private polling = false;
   private warned = new Map<string, number>();
   /** Sessions whose design changed during the current turn. */
   private designChanged = new Set<string>();
   /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
   private closing = new Set<string>();
+  /** Sessions with a Merge request in flight. */
+  private merging = new Set<string>();
+  /** Per session, the tail of the GitHub work (polls, review requests, merge) queued for it. */
+  private chains = new Map<string, Promise<void>>();
 
   constructor(private core: Core) {}
 
@@ -111,7 +139,7 @@ export class Lifecycle {
   /** The design is waiting for the user: say so in the activity log, the header and a notification. */
   designReady(id: string): void {
     this.sessions.event(id, 'design', 'Design ready for approval');
-    this.sessions.setStatus(id, 'needs_input', 'Design ready for your approval');
+    this.sessions.setStatus(id, 'needs_input', DESIGN_READY);
     this.sessions.notifyUser(id, 'Design ready', 'Review and approve the design.');
   }
 
@@ -132,8 +160,17 @@ export class Lifecycle {
     }
     if (row.status === 'working' || row.status === 'starting') throw new HttpError(409, 'Claude is still working. Wait for the turn to finish.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+    // Any other question (a permission prompt) would take the approval as its answer.
+    if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
+      throw new HttpError(409, 'Claude is waiting on you in the terminal. Answer it first.');
+    }
     this.designApproved(row.id, 'you');
-    await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'approved'));
+    try {
+      await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'approved'));
+    } catch (e) {
+      if (this.sessions.row(row.id).stage === 'code') this.sessions.setStage(row.id, 'design', 'auto');
+      throw new HttpError(502, `Couldn't type the approval into Claude's terminal: ${errMsg(e)}. Try again.`);
+    }
   }
 
   designApproved(id: string, by: 'you' | 'auto'): void {
@@ -151,9 +188,16 @@ export class Lifecycle {
     }
     if (row.status === 'needs_input') throw new HttpError(409, 'Claude is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+    // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
-    await this.sessions.submit(row.id, this.sessions.prompt(row, 'pr'));
+    try {
+      await this.sessions.submit(row.id, this.sessions.prompt(row, 'pr'));
+    } catch (e) {
+      this.sessions.setBusy(row.id, false);
+      if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, 'code', 'auto');
+      throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
+    }
   }
 
   /** Called on every Stop hook: a Claude turn just finished. */
@@ -164,17 +208,52 @@ export class Lifecycle {
     if (row.stage === 'pr') {
       await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
     } else if (row.stage === 'review') {
-      if (row.review_state === 'addressing') this.sessions.update(id, { review_state: 'addressed' });
-      const queued = this.queuedReview.get(id);
-      if (queued) {
-        this.queuedReview.delete(id);
-        await this.sendReviewPrompt(this.sessions.row(id), queued);
-      } else {
-        await this.pollReview(this.sessions.row(id)).catch((e) => this.warn(id, 'PR status failed', e));
-      }
+      await this.serial(id, async () => {
+        const pending = this.pendingReview(id);
+        // Only the turn that got the review prompt addresses it; a queued prompt goes out now.
+        if (pending === 'sent') this.setPendingReview(id, null);
+        if ((pending === 'sent' || !pending) && this.sessions.row(id).review_state === 'addressing') {
+          this.sessions.update(id, { review_state: 'addressed' });
+        }
+        if (pending === 'review' || pending === 'review-people') await this.deliverReview(id);
+        else await this.doPollReview(id);
+      }).catch((e) => this.warn(id, 'PR status failed', e));
+    } else if (row.stage === 'merge') {
+      // A merge that landed while Claude was working: close now that the turn is over.
+      await this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
     }
     // Review comments go after anything above that already gave Claude its next turn.
     await this.core.comments.deliver(id).catch((e) => this.warn(id, 'Sending review comments', e));
+  }
+
+  /**
+   * Runs fn after the GitHub work already queued for the session, so polls, review requests
+   * and merges never interleave and each one sees the others' writes.
+   */
+  private serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const next = (this.chains.get(id) ?? Promise.resolve()).then(fn);
+    const tail = next.then(() => undefined, () => undefined);
+    this.chains.set(id, tail);
+    void tail.then(() => {
+      if (this.chains.get(id) === tail) this.chains.delete(id);
+    });
+    return next;
+  }
+
+  private pendingReview(id: string): ReviewPrompt | 'sent' | null {
+    const r = get<{ pending_review: string | null }>(this.db, 'SELECT pending_review FROM sessions WHERE id = ?', id);
+    const v = r?.pending_review;
+    return v === 'review' || v === 'review-people' || v === 'sent' ? v : null;
+  }
+
+  private setPendingReview(id: string, v: ReviewPrompt | 'sent' | null): void {
+    run(this.db, 'UPDATE sessions SET pending_review = ? WHERE id = ?', v, id);
+  }
+
+  /** gh needs a directory in the repo; the worktree is gone once cleanup removed it. */
+  private ghCwd(row: SessionRow): string {
+    if (existsSync(row.worktree_path)) return row.worktree_path;
+    return projectRow(this.db, row.project_id)?.repo_path ?? row.worktree_path;
   }
 
   // ---- polling ----
@@ -185,14 +264,22 @@ export class Lifecycle {
     try {
       const now = Date.now();
       for (const row of sessionRows(this.db)) {
-        if (row.desired !== 'running' || !projectRow(this.db, row.project_id)) continue;
+        if (!projectRow(this.db, row.project_id)) continue;
+        const due = now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
+        if (row.desired !== 'running') {
+          // A cleanup that a restart cut short after archiving: finish it.
+          if (row.stage === 'merge' && due && now - (row.archived_at ?? 0) < CLOSING_RESUME_MS) {
+            await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
+          }
+          continue;
+        }
         if (row.stage === 'pr') {
           await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
-        } else if (row.stage === 'review' || row.stage === 'merge') {
-          if (now - (this.lastPoll.get(row.id) ?? 0) < REVIEW_POLL_MS) continue;
+        } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         }
-        // Comments queued before a restart, or while Claude was waiting on the user.
+        // Review prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.
+        await this.serial(row.id, () => this.deliverReview(row.id)).catch((e) => this.warn(row.id, 'Sending the review prompt', e));
         await this.core.comments.deliver(row.id).catch((e) => this.warn(row.id, 'Sending review comments', e));
       }
     } finally {
@@ -208,25 +295,49 @@ export class Lifecycle {
     }
   }
 
-  async pollPrStage(row: SessionRow): Promise<void> {
-    const pr = await github.findPr(row.worktree_path, row.branch);
-    if (!pr) return;
-    this.sessions.update(row.id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting' });
-    this.sessions.event(row.id, 'pr', `Opened PR #${pr.number}`, { url: pr.url });
-    this.sessions.setStage(row.id, 'review', 'auto');
-    await this.pollReview(this.sessions.row(row.id));
+  pollPrStage(row: SessionRow): Promise<void> {
+    return this.serial(row.id, () => this.doPollPrStage(row.id));
   }
 
-  async pollReview(row: SessionRow): Promise<void> {
-    if (!row.pr_number) return;
-    this.lastPoll.set(row.id, Date.now());
-    const st = await github.prStatus(row.worktree_path, row.pr_number);
+  private async doPollPrStage(id: string): Promise<void> {
+    const before = sessionRow(this.db, id);
+    if (!before || before.stage !== 'pr' || before.desired !== 'running') return;
+    const pr = await github.findPr(before.worktree_path, before.branch, before.created_at);
+    if (!pr || sessionRow(this.db, id)?.stage !== 'pr') return;
+    this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting' });
+    this.sessions.event(id, 'pr', `Opened PR #${pr.number}`, { url: pr.url });
+    this.sessions.setStage(id, 'review', 'auto');
+    await this.doPollReview(id);
+  }
+
+  pollReview(row: SessionRow): Promise<void> {
+    return this.serial(row.id, () => this.doPollReview(row.id));
+  }
+
+  private async doPollReview(id: string): Promise<void> {
+    const before = sessionRow(this.db, id);
+    if (!before?.pr_number || before.stage === 'done') return;
+    if (before.desired !== 'running' && before.stage !== 'merge') return;
+    const p = projectRow(this.db, before.project_id);
+    if (!p) return;
+    this.lastPoll.set(id, Date.now());
+    const st = await github.prStatus(this.ghCwd(before), before.pr_number);
+    const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(p.repo_path, before.branch, st));
+    // Read the row again: a turn may have ended or a review been requested during the calls above.
+    let row = sessionRow(this.db, id);
+    if (!row || row.stage === 'done') return;
     if (st.state === 'MERGED') {
       await this.merged(row, st);
       return;
     }
-    const p = projectRow(this.db, row.project_id);
-    if (!p) return;
+    if (row.desired !== 'running') return;
+    if (row.stage === 'merge' && !this.merging.has(id) && this.mergeStalled(id, st)) {
+      this.sessions.event(id, 'merge', st.state === 'CLOSED'
+        ? `PR #${st.number} was closed without merging`
+        : `PR #${st.number} still isn't merged (it may have left the merge queue)`);
+      this.sessions.setStage(id, 'review', 'auto');
+      row = this.sessions.row(id);
+    }
     const settings = parseSettings(p.settings_json);
     const ci = github.ciState(st.statusCheckRollup);
     let reviewState = row.review_state;
@@ -249,12 +360,15 @@ export class Lifecycle {
           reviewState = 'addressing';
           this.sessions.notifyUser(row.id, 'AgentK review arrived', firstLine);
           run(this.db, 'UPDATE sessions SET seen_review_ids = ?, review_state = ? WHERE id = ?', JSON.stringify([...seen]), reviewState, row.id);
-          await this.sendReviewPrompt(this.sessions.row(row.id), 'review');
+          await this.sendReviewPrompt(row.id, 'review');
         }
       } else if (reviewState === 'waiting' || reviewState === 'in_review' || reviewState === 'refused') {
-        // AgentK talks through issue comments before the review: an ack, or a refusal.
+        // AgentK talks through issue comments before the review: an ack, or a refusal. Only
+        // comments after the last review and the last request count (a forced review follows a refusal).
         const latestReviewAt = Math.max(0, ...botReviews.map((r) => Date.parse(r.submittedAt)));
-        const botComment = [...st.comments].reverse().find((c) => github.isLogin(c.author, settings.reviewerLogin) && Date.parse(c.createdAt) > latestReviewAt);
+        const requestedAt = Math.max(0, ...st.comments.filter((c) => /^\/agentk review\b/.test(c.body.trim())).map((c) => Date.parse(c.createdAt)));
+        const since = Math.max(latestReviewAt, requestedAt);
+        const botComment = [...st.comments].reverse().find((c) => github.isLogin(c.author, settings.reviewerLogin) && Date.parse(c.createdAt) > since);
         if (botComment) {
           if (/no review/i.test(botComment.body)) reviewState = 'refused';
           else if (/started reviewing|reviewing/i.test(botComment.body)) reviewState = 'in_review';
@@ -270,7 +384,7 @@ export class Lifecycle {
         if (needsWork) {
           reviewState = 'addressing';
           run(this.db, 'UPDATE sessions SET seen_review_ids = ?, review_state = ? WHERE id = ?', JSON.stringify([...seen]), reviewState, row.id);
-          await this.sendReviewPrompt(this.sessions.row(row.id), 'review-people');
+          await this.sendReviewPrompt(row.id, 'review-people');
         }
       }
       if (st.reviewDecision === 'APPROVED' && reviewState !== 'addressing') reviewState = 'approved';
@@ -285,23 +399,48 @@ export class Lifecycle {
       merge_state: st.mergeStateStatus,
       seen_review_ids: JSON.stringify([...seen]),
     });
-    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, settings.reviewer));
+    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, settings.reviewer, unpushed));
     this.core.changed();
   }
 
-  private async sendReviewPrompt(row: SessionRow, name: 'review' | 'review-people'): Promise<void> {
-    const text = this.sessions.prompt(row, name);
-    if (row.status === 'idle' || row.status === 'recovered') {
-      await this.sessions.submit(row.id, text);
-    } else {
-      this.queuedReview.set(row.id, name);
+  /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
+  private mergeStalled(id: string, st: github.PrStatus): boolean {
+    if (st.state === 'CLOSED') return true;
+    const since = get<{ entered_at: number }>(this.db,
+      'SELECT entered_at FROM session_stages WHERE session_id = ? AND left_at IS NULL ORDER BY rowid DESC LIMIT 1', id)?.entered_at;
+    return since !== undefined && Date.now() - since > MERGE_GRACE_MS;
+  }
+
+  /** Queues a review prompt (kept across restarts) and sends it if Claude is at its prompt. */
+  private async sendReviewPrompt(id: string, name: ReviewPrompt): Promise<void> {
+    this.setPendingReview(id, name);
+    // A failed send stays queued; the next poll or turn end retries it.
+    await this.deliverReview(id).catch((e) => this.warn(id, 'Sending the review prompt', e));
+  }
+
+  /** Types the queued review prompt into Claude when it's between turns in the Review stage. */
+  private async deliverReview(id: string): Promise<void> {
+    const name = this.pendingReview(id);
+    if (name !== 'review' && name !== 'review-people') return;
+    const row = this.sessions.row(id);
+    if (row.desired !== 'running' || row.stage !== 'review' || (row.status !== 'idle' && row.status !== 'recovered')) return;
+    if (this.sessions.runtime(id).busy) return;
+    // Marked first: the turn can end before submit returns, and its Stop must not send it again.
+    this.setPendingReview(id, 'sent');
+    try {
+      await this.sessions.submit(id, this.sessions.prompt(row, name));
+    } catch (e) {
+      this.setPendingReview(id, name);
+      throw e;
     }
   }
 
-  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: 'agentk' | 'people'): { canMerge: boolean; blockers: string[] } {
+  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: 'agentk' | 'people', unpushed = false): { canMerge: boolean; blockers: string[] } {
     const b: string[] = [];
     if (st.state !== 'OPEN') b.push('The PR is not open.');
     if (row.status === 'working' || this.sessions.runtime(row.id).busy) b.push('Claude is still working.');
+    else if (row.status === 'needs_input') b.push('Claude is waiting on you in the terminal.');
+    if (unpushed) b.push("The branch has commits that aren't pushed to the PR.");
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') b.push('CI is failing.');
     else if (ci === 'pending') b.push('CI is still running.');
@@ -320,10 +459,13 @@ export class Lifecycle {
   async requestReview(row: SessionRow, force: boolean): Promise<void> {
     if (row.stage !== 'review' || !row.pr_number) throw new HttpError(409, 'There is no open PR to review.');
     if (force && row.review_state !== 'refused') throw new HttpError(409, 'Force review is only for PRs AgentK declined.');
-    await github.comment(row.worktree_path, row.pr_number, force ? '/agentk review force' : '/agentk review');
-    this.sessions.update(row.id, { review_state: 'waiting' });
-    this.sessions.event(row.id, 'review', force ? 'Forced an AgentK review' : 'Requested another AgentK review');
-    this.lastPoll.delete(row.id);
+    const pr = row.pr_number;
+    await this.serial(row.id, async () => {
+      await github.comment(row.worktree_path, pr, force ? '/agentk review force' : '/agentk review');
+      this.sessions.update(row.id, { review_state: 'waiting' });
+      this.sessions.event(row.id, 'review', force ? 'Forced an AgentK review' : 'Requested another AgentK review');
+      this.lastPoll.delete(row.id);
+    });
   }
 
   // ---- merge / cleanup ----
@@ -333,31 +475,51 @@ export class Lifecycle {
     const p = projectRow(this.db, row.project_id);
     if (!p) throw new HttpError(404, 'Project not found.');
     const settings = parseSettings(p.settings_json);
-    await this.pollReview(row);
-    const fresh = this.sessions.row(row.id);
-    if (fresh.stage !== 'review') return; // merged elsewhere and already cleaned up
-    const info = this.sessions.runtime(row.id);
-    if (!info.canMerge) throw new HttpError(409, `Not ready to merge: ${info.mergeBlockers.join(' ')}`);
-    const method = await github.resolveMergeMethod(row.worktree_path, settings.mergeMethod);
-    this.sessions.setBusy(row.id, true);
+    const url = row.pr_url;
+    if (this.merging.has(row.id)) throw new HttpError(409, 'A merge is already in progress.');
+    this.merging.add(row.id);
     try {
-      this.sessions.setStage(row.id, 'merge', 'you');
-      await github.merge(row.worktree_path, row.pr_url, method);
-    } catch (e) {
-      this.sessions.setStage(row.id, 'review', 'auto');
-      throw new HttpError(502, `GitHub refused the merge: ${errMsg(e)}`);
+      await this.serial(row.id, async () => {
+        await this.doPollReview(row.id);
+        const fresh = this.sessions.row(row.id);
+        if (fresh.stage !== 'review') return; // merged elsewhere and already cleaned up
+        const info = this.sessions.runtime(row.id);
+        if (!info.canMerge) throw new HttpError(409, `Not ready to merge: ${info.mergeBlockers.join(' ')}`);
+        const method = await github.resolveMergeMethod(row.worktree_path, settings.mergeMethod);
+        this.sessions.setBusy(row.id, true);
+        try {
+          this.sessions.setStage(row.id, 'merge', 'you');
+          await github.merge(row.worktree_path, url, method);
+        } catch (e) {
+          if (this.sessions.row(row.id).stage === 'merge') this.sessions.setStage(row.id, 'review', 'auto');
+          throw new HttpError(502, `GitHub refused the merge: ${errMsg(e)}`);
+        } finally {
+          this.sessions.setBusy(row.id, false);
+        }
+        await this.doPollReview(row.id);
+        if (this.sessions.row(row.id).stage === 'merge') {
+          this.sessions.event(row.id, 'merge', `Merge requested; waiting for GitHub to merge PR #${fresh.pr_number}`);
+        }
+      });
     } finally {
-      this.sessions.setBusy(row.id, false);
+      this.merging.delete(row.id);
     }
-    await this.pollReview(this.sessions.row(row.id));
   }
 
   /** The PR is merged (here, or on GitHub): finish Merge & Close. Safe to call again after a restart. */
   private async merged(row: SessionRow, st: github.PrStatus): Promise<void> {
     if (row.stage === 'done' || this.closing.has(row.id)) return;
+    const announced = !!get(this.db, `SELECT 1 AS x FROM session_events WHERE project_id = ? AND session_id = ? AND kind = 'merged'`,
+      row.project_id, row.id);
+    if (row.desired === 'running' && (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy)) {
+      // Stopping Claude mid-turn could lose its work: onTurnEnd closes the session when the turn ends.
+      if (!announced) this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when Claude finishes`, { url: st.url });
+      if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
+      return;
+    }
     this.closing.add(row.id);
     try {
-      this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
+      if (!announced) this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
       await this.cleanup(this.sessions.row(row.id), st);
     } finally {
@@ -365,11 +527,17 @@ export class Lifecycle {
     }
   }
 
-  /** Records what shipped in the datapack, then removes the worktree and branches. */
+  /**
+   * Records what shipped in the datapack, then removes the worktree and branches. Branches
+   * with commits the merged PR lacks are kept.
+   */
   async cleanup(row: SessionRow, st: github.PrStatus): Promise<void> {
     const p = projectRow(this.db, row.project_id);
     const dp = dedicatedDatapack(this.db, row.project_id);
-    if (p && dp) {
+    // Once per session: a cleanup a restart cut short, or one that waited for Claude's turn while
+    // the user archived by hand, may run again.
+    const shipped = !!get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'shipped'", row.id);
+    if (p && dp && !shipped) {
       try {
         const conv = await this.core.projects.ensureConversation(row.project_id);
         const body = st.body.trim().slice(0, 4000);
@@ -381,19 +549,28 @@ export class Lifecycle {
           dp.id, projectAgentId(row.project_id), conv,
           { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },
         );
+        this.sessions.event(row.id, 'shipped', `Saved what shipped to ${dp.name}`);
       } catch (e) {
         this.core.log.warn(`saving the shipped summary to Meko failed for ${row.id}`, errMsg(e));
       }
     }
-    const { worktreeRemoved } = await this.sessions.archive(row, { keepBranch: false });
+    const keep = !!p && (await lacksLocalCommits(p.repo_path, row.branch, st));
+    const { worktreeRemoved } = await this.sessions.archive(row, { keepBranch: true });
     if (p) {
-      await tryGit(p.repo_path, 'push', 'origin', '--delete', row.branch); // often already deleted by GitHub
+      if (worktreeRemoved && !keep) await deleteBranch(p.repo_path, row.branch);
+      if (!keep && st.headRefOid) {
+        // Often already deleted by GitHub. The lease deletes it only while it's still the PR's head.
+        await tryGit(p.repo_path, 'push', `--force-with-lease=refs/heads/${row.branch}:${st.headRefOid}`, 'origin', '--delete', row.branch);
+      }
       await git(p.repo_path, 'fetch', '--prune', '--quiet', 'origin').catch(() => undefined);
     }
+    if (keep) this.core.log.info(`kept branch ${row.branch} of ${row.id}: it has commits PR #${st.number} doesn't have`);
     this.sessions.setStage(row.id, 'done', 'auto');
-    this.sessions.event(row.id, 'cleanup', worktreeRemoved
-      ? `Cleaned up: worktree and branch ${row.branch} removed`
-      : `Cleaned up; worktree kept at ${row.worktree_path} because it has uncommitted changes`);
+    this.sessions.event(row.id, 'cleanup', !worktreeRemoved
+      ? `Cleaned up; worktree kept at ${row.worktree_path} because it has uncommitted changes`
+      : keep
+        ? `Cleaned up: worktree removed; branch ${row.branch} kept because it has commits PR #${st.number} doesn't have`
+        : `Cleaned up: worktree and branch ${row.branch} removed`);
     this.core.changed();
   }
 }

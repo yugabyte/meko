@@ -12,6 +12,31 @@ export function StatusDot({ status, title }: { status: SessionStatus; title?: st
   return <i className={cx('dot', cls)} title={title ?? STATUS_TEXT[status]} aria-label={STATUS_TEXT[status]} />;
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Keeps Tab and Shift+Tab inside a modal, so focus can't reach the terminal behind it. */
+export function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
+  if (e.key !== 'Tab' || !root) return;
+  const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+  if (!items.length) {
+    e.preventDefault();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (!root.contains(active)) {
+    e.preventDefault();
+    first.focus();
+  } else if (e.shiftKey && (active === first || active === root)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export function Dialog({
   title,
   onClose,
@@ -30,13 +55,14 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Focus the first control once on open; Escape closes.
+  // Focus the first control once on open; Escape closes; Tab stays inside.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         closeRef.current();
       }
+      trapTab(e, ref.current);
     };
     window.addEventListener('keydown', onKey, true);
     const root = ref.current;
@@ -84,7 +110,7 @@ export function ConfirmButton({
   const [busy, setBusy] = useState(false);
   if (!asking) {
     return (
-      <button className={className ?? 'btn'} disabled={disabled} onClick={() => setAsking(true)}>
+      <button type="button" className={className ?? 'btn'} disabled={disabled} onClick={() => setAsking(true)}>
         {label}
       </button>
     );
@@ -93,6 +119,7 @@ export function ConfirmButton({
     <span className="confirm-inline">
       {prompt && <span className="confirm-prompt">{prompt}</span>}
       <button
+        type="button"
         className={cx('btn', danger ? 'danger' : 'primary')}
         disabled={busy}
         onClick={async () => {
@@ -107,7 +134,7 @@ export function ConfirmButton({
       >
         {confirmLabel}
       </button>
-      <button className="btn ghost" onClick={() => setAsking(false)}>
+      <button type="button" className="btn ghost" onClick={() => setAsking(false)}>
         Cancel
       </button>
     </span>

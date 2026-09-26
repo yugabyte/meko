@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { MekoDatapack, SearchResult } from '../shared/types.js';
 
 export interface MekoCreds {
@@ -24,6 +26,31 @@ export function pinSlug(agentId: string): string {
 
 type Json = Record<string, unknown>;
 
+/** Session key of the conversation used for server-originated calls. */
+const SERVICE_KEY = 'agent-k-local-service';
+
+/** Tools that write something new on every call: never sent twice once a call may have reached Meko. */
+const NOT_IDEMPOTENT = new Set(['datapack_create', 'memory_add', 'artifact_put', 'conversation_add_message']);
+
+/** How long connecting (the MCP handshake) may take. */
+const CONNECT_TIMEOUT_MS = 15000;
+/** How long the health check waits for Meko. */
+const CHECK_TIMEOUT_MS = 10000;
+
+function isTimeout(e: unknown): boolean {
+  return e instanceof McpError && e.code === ErrorCode.RequestTimeout;
+}
+
+/**
+ * The request surely never ran: Meko answered it with an HTTP 4xx (an expired session, a
+ * rejected key) or the connection was refused before anything was sent.
+ */
+function notDelivered(e: unknown): boolean {
+  if (e instanceof StreamableHTTPError) return typeof e.code === 'number' && e.code >= 400 && e.code < 500;
+  const code = (e as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN';
+}
+
 /**
  * Thin client over the Meko MCP server (Streamable HTTP). Tools return a JSON
  * string in content[0].text; errors come back as `{"error": ...}` with
@@ -47,7 +74,7 @@ export class MekoClient {
           requestInit: { headers: { Authorization: `Bearer ${apiKey}` } },
         });
         const c = new Client({ name: 'agent-k-local', version: this.version });
-        await c.connect(transport);
+        await c.connect(transport, { timeout: CONNECT_TIMEOUT_MS });
         c.onclose = () => {
           if (this.client === c) this.client = null;
         };
@@ -66,57 +93,88 @@ export class MekoClient {
     await c?.close().catch(() => undefined);
   }
 
-  async call(name: string, args: Json, timeoutMs = 30000): Promise<unknown> {
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const c = await this.connect();
-        const res = (await c.callTool({ name, arguments: args }, undefined, { timeout: timeoutMs })) as {
-          content?: { type: string; text?: string }[];
-          isError?: boolean;
-        };
-        const text = res.content?.find((x) => x.type === 'text')?.text ?? '';
-        let parsed: unknown = text;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          /* plain text result */
-        }
-        if (res.isError) throw new MekoError(typeof parsed === 'string' ? parsed : JSON.stringify(parsed));
-        if (parsed && typeof parsed === 'object' && 'error' in parsed && !Array.isArray(parsed)) {
-          const p = parsed as { error: unknown; detail?: unknown };
-          throw new MekoError(`${String(p.error)}${p.detail ? `: ${String(p.detail)}` : ''}`);
-        }
-        return parsed;
-      } catch (e) {
-        lastErr = e;
-        if (e instanceof MekoError) throw e;
-        await this.close(); // transport problem: reconnect once
-      }
-    }
-    throw lastErr instanceof Error ? lastErr : new MekoError(String(lastErr));
+  /** Drops a broken client, unless another call already replaced it. */
+  private closeIf(c: Client): void {
+    if (this.client !== c) return;
+    this.client = null;
+    void c.close().catch(() => undefined);
   }
 
-  async ensureConversation(agentId: string, datapackId: string | null, key: string, title: string): Promise<string> {
+  /**
+   * Runs one request, reconnecting and trying once more after a transport failure. A timeout
+   * is not retried, and a call that isn't idempotent is retried only when it surely never ran.
+   */
+  private async request<T>(idempotent: boolean, fn: (c: Client) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      let c: Client | null = null;
+      try {
+        c = await this.connect();
+        return await fn(c);
+      } catch (e) {
+        if (e instanceof MekoError) throw e;
+        // A timed-out connection may be wedged: drop it so the next call connects afresh, but
+        // don't retry (the request may still land).
+        if (c) this.closeIf(c);
+        if (isTimeout(e)) throw e;
+        const retry = attempt === 0 && (idempotent || c === null || notDelivered(e));
+        if (!retry) throw e instanceof Error ? e : new MekoError(String(e));
+      }
+    }
+  }
+
+  async call(name: string, args: Json, timeoutMs = 30000): Promise<unknown> {
+    return this.request(!NOT_IDEMPOTENT.has(name), async (c) => {
+      const res = (await c.callTool({ name, arguments: args }, undefined, { timeout: timeoutMs })) as {
+        content?: { type: string; text?: string }[];
+        isError?: boolean;
+      };
+      const text = res.content?.find((x) => x.type === 'text')?.text ?? '';
+      let parsed: unknown = text;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        /* plain text result */
+      }
+      if (res.isError) throw new MekoError(typeof parsed === 'string' ? parsed : JSON.stringify(parsed));
+      if (parsed && typeof parsed === 'object' && 'error' in parsed && !Array.isArray(parsed)) {
+        const p = parsed as { error: unknown; detail?: unknown };
+        throw new MekoError(`${String(p.error)}${p.detail ? `: ${String(p.detail)}` : ''}`);
+      }
+      return parsed;
+    });
+  }
+
+  async ensureConversation(agentId: string, datapackId: string | null, key: string, title: string, timeoutMs?: number): Promise<string> {
     const r = (await this.call('conversation_create', {
       agent_id: agentId,
       datapack_id: datapackId,
       session_id: key,
       title,
-    })) as Json;
+    }, timeoutMs)) as Json;
     const id = String(r.id ?? r.conversation_id ?? '');
     if (!id) throw new MekoError('conversation_create returned no id');
     return id;
   }
 
-  private async serviceConv(): Promise<string> {
-    this.serviceConversation ??= await this.ensureConversation('agent-k-local', null, 'agent-k-local-service', 'AgentK Local service');
+  /**
+   * Conversation id for server-originated calls (list, create, describe), which Meko requires.
+   * conversation_create needs a datapack (or an account default), which a new user doesn't have
+   * yet, so when Meko refuses it a fixed trace id stands in; Meko only uses it to nest traces.
+   */
+  private async serviceConv(timeoutMs?: number): Promise<string> {
+    if (this.serviceConversation) return this.serviceConversation;
+    try {
+      this.serviceConversation = await this.ensureConversation('agent-k-local', null, SERVICE_KEY, 'AgentK Local service', timeoutMs);
+    } catch (e) {
+      if (!(e instanceof MekoError)) throw e; // Meko unreachable: try again next time
+      this.serviceConversation = createHash('sha256').update(SERVICE_KEY).digest('hex').slice(0, 32);
+    }
     return this.serviceConversation;
   }
 
-  /** Cheap authenticated round trip, used for the health banner. */
+  /** Cheap authenticated round trip to Meko, used for the health banner. */
   async check(): Promise<void> {
-    await this.serviceConv();
+    await this.request(true, (c) => c.ping({ timeout: CHECK_TIMEOUT_MS }));
   }
 
   async listDatapacks(): Promise<MekoDatapack[]> {
@@ -141,8 +199,8 @@ export class MekoClient {
     return { id, name: String(d.datapack_name ?? d.name ?? name) };
   }
 
-  async describeDatapack(id: string): Promise<{ memoryCount: number | null; knowledgeCount: number | null }> {
-    const r = (await this.call('datapack_describe', { datapack_id: id, conversation_id: await this.serviceConv() })) as Json;
+  async describeDatapack(id: string, timeoutMs = 30000): Promise<{ memoryCount: number | null; knowledgeCount: number | null }> {
+    const r = (await this.call('datapack_describe', { datapack_id: id, conversation_id: await this.serviceConv(timeoutMs) }, timeoutMs)) as Json;
     const num = (v: unknown) => (typeof v === 'number' ? v : null);
     return { memoryCount: num(r.memory_count), knowledgeCount: num(r.knowledge_chunk_count ?? r.knowledge_count) };
   }

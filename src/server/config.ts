@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 import { parse, stringify } from 'smol-toml';
+import { claudeUserDir } from './claude.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -18,12 +18,15 @@ export interface Config {
   claude: { command: string };
 }
 
+/** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
+export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
+
 export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777 },
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { url: 'https://mcp.mekodata.ai/mcp', apiKey: '', webUrl: '', captureTranscripts: false },
+  meko: { url: '', apiKey: '', webUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },
@@ -41,34 +44,80 @@ function mapKeys(obj: unknown, fn: (k: string) => string): unknown {
   return obj;
 }
 
-function merge<T>(base: T, over: unknown): T {
-  if (!over || typeof over !== 'object' || Array.isArray(over)) return base;
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/** Layers file values over the defaults, keeping a default (with a warning) where the file has the wrong type. */
+function merge<T>(base: T, over: unknown, warn: (msg: string) => void, at = ''): T {
+  if (!isObject(over)) return base;
   const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
   for (const [k, v] of Object.entries(over)) {
     if (!(k in out)) continue; // ignore unknown keys
     const b = out[k];
-    out[k] = b && typeof b === 'object' && !Array.isArray(b) ? merge(b, v) : v;
+    const key = at ? `${at}.${snake(k)}` : snake(k);
+    if (isObject(b)) {
+      if (isObject(v)) out[k] = merge(b, v, warn, key);
+      else warn(`config.toml: [${key}] should be a table; using the defaults`);
+    } else if (Array.isArray(b) ? isStringList(v) : typeof v === typeof b) {
+      out[k] = v;
+    } else {
+      warn(`config.toml: ${key} should be ${Array.isArray(b) ? 'a list of strings' : `a ${typeof b}`}; using the default (${JSON.stringify(b)})`);
+    }
   }
   return out as T;
 }
 
-export function loadConfig(paths: Paths): Config {
+/** What config.toml says, over the defaults, without environment overrides. */
+function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   const cfg = existsSync(paths.config)
-    ? merge(structuredClone(DEFAULT_CONFIG), mapKeys(parse(readFileSync(paths.config, 'utf8')), camel))
+    ? merge(structuredClone(DEFAULT_CONFIG), mapKeys(parse(readFileSync(paths.config, 'utf8')), camel), warn)
     : structuredClone(DEFAULT_CONFIG);
-  // Environment overrides (used by `npm run dev`); never written back to the file.
+  // Older versions wrote every default, so a Meko URL equal to the default was never chosen:
+  // leave it unset so MEKO_MCP_URL or Claude Code's settings can still name the server.
+  if (cfg.meko.url === DEFAULT_MEKO_URL) cfg.meko.url = '';
+  return cfg;
+}
+
+export function loadConfig(paths: Paths, warn: (msg: string) => void = (m) => console.warn(m)): Config {
+  const cfg = readConfigFile(paths, warn);
+  // Environment overrides (used by `npm run dev`); saveConfig keeps them out of the file.
   if (process.env.AK_BIND) cfg.server.bind = process.env.AK_BIND;
   if (process.env.AK_PORT) cfg.server.port = Number(process.env.AK_PORT);
   return cfg;
 }
 
+/** The values in `cfg` that differ from `base`, or undefined when none do. */
+function changedFrom(cfg: unknown, base: unknown): unknown {
+  if (isObject(cfg) && isObject(base)) {
+    const out = Object.fromEntries(
+      Object.entries(cfg).map(([k, v]) => [k, changedFrom(v, base[k])]).filter(([, v]) => v !== undefined),
+    );
+    return Object.keys(out).length ? out : undefined;
+  }
+  return JSON.stringify(cfg) === JSON.stringify(base) ? undefined : cfg;
+}
+
+/**
+ * Writes the settings that differ from the defaults, so a changed default reaches existing
+ * installs. A value that came from AK_BIND or AK_PORT is written as the file had it.
+ */
 export function saveConfig(paths: Paths, cfg: Config): void {
+  const out = structuredClone(cfg);
+  const bind = process.env.AK_BIND;
+  const port = process.env.AK_PORT;
+  if ((bind && out.server.bind === bind) || (port && out.server.port === Number(port))) {
+    const onDisk = readConfigFile(paths, () => undefined);
+    if (bind && out.server.bind === bind) out.server.bind = onDisk.server.bind;
+    if (port && out.server.port === Number(port)) out.server.port = onDisk.server.port;
+  }
   mkdirSync(dirname(paths.config), { recursive: true });
   const header =
     '# agent-k-local configuration. Settings changed in the web UI are written here too.\n' +
+    '# Only settings that differ from the defaults are listed; add any other key to change it.\n' +
     '# Changes to [server] or [tls] take effect after a restart.\n\n';
+  const body = (changedFrom(mapKeys(out, snake), mapKeys(DEFAULT_CONFIG, snake)) ?? {}) as Record<string, unknown>;
   const tmp = paths.config + '.tmp';
-  writeFileSync(tmp, header + stringify(mapKeys(cfg, snake) as Record<string, unknown>) + '\n', { mode: 0o600 });
+  writeFileSync(tmp, header + stringify(body) + '\n', { mode: 0o600 });
   renameSync(tmp, paths.config);
 }
 
@@ -84,16 +133,28 @@ export function isLoopback(bind: string): boolean {
   return bind === '127.0.0.1' || bind === '::1' || bind === 'localhost';
 }
 
-/** Meko credentials: config first, then the environment, then Claude Code's settings.json env. */
+/**
+ * Meko credentials: config first, then the environment, then Claude Code's settings.json env.
+ * The key comes from the first of those that has one. The URL comes from the first that has one,
+ * except that a later source's URL is skipped when that source has a key of its own: it belongs
+ * to that other key. With no URL, Meko Cloud.
+ */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
-  let url = cfg.meko.url || process.env.MEKO_MCP_URL || '';
-  let apiKey = cfg.meko.apiKey || process.env.MEKO_API_KEY || '';
-  if (!apiKey || !url) {
-    const fromClaude = readClaudeSettingsEnv();
-    apiKey ||= fromClaude.MEKO_API_KEY ?? '';
-    url ||= fromClaude.MEKO_MCP_URL ?? '';
-  }
-  return { url: url || DEFAULT_CONFIG.meko.url, apiKey };
+  const sources = [
+    () => ({ url: cfg.meko.url, apiKey: cfg.meko.apiKey }),
+    () => ({ url: process.env.MEKO_MCP_URL, apiKey: process.env.MEKO_API_KEY }),
+    () => {
+      const s = readClaudeSettingsEnv();
+      return { url: s.MEKO_MCP_URL, apiKey: s.MEKO_API_KEY };
+    },
+  ].map((f) => {
+    const s = f();
+    return { url: typeof s.url === 'string' ? s.url.trim() : '', apiKey: typeof s.apiKey === 'string' ? s.apiKey : '' };
+  });
+  const keyAt = sources.findIndex((s) => s.apiKey);
+  const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
+  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url;
+  return { url: url || DEFAULT_MEKO_URL, apiKey };
 }
 
 /** Meko Cloud web app for each known Meko MCP host. */
@@ -117,14 +178,16 @@ export function mekoWebUrl(mcpUrl: string, override = ''): string | null {
 
 /** Meko web app URL: config first, then the environment, then derived from the MCP URL. */
 export function resolveMekoWebUrl(cfg: Config): string | null {
-  const override = cfg.meko.webUrl || process.env.MEKO_WEB_URL || readClaudeSettingsEnv().MEKO_WEB_URL || '';
+  const fromClaude = readClaudeSettingsEnv().MEKO_WEB_URL;
+  const override = cfg.meko.webUrl || process.env.MEKO_WEB_URL || (typeof fromClaude === 'string' ? fromClaude : '');
   return mekoWebUrl(resolveMeko(cfg).url, override);
 }
 
-export function readClaudeSettingsEnv(): Record<string, string> {
+/** The `env` block of Claude Code's user settings.json; empty when there's none. Values may be any JSON type. */
+export function readClaudeSettingsEnv(): Record<string, unknown> {
   try {
-    const s = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8'));
-    return s && typeof s.env === 'object' ? s.env : {};
+    const s = JSON.parse(readFileSync(join(claudeUserDir(), 'settings.json'), 'utf8'));
+    return isObject(s) && isObject(s.env) ? s.env : {};
   } catch {
     return {};
   }

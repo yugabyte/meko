@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ReviewComment } from '../../src/shared/types.js';
-import { BODY_MAX, EXCERPT_LINES, checkNewComment, formatComments } from '../../src/server/comments.js';
+import { BODY_MAX, EXCERPT_LINE_CHARS, EXCERPT_LINES, checkNewComment, clipExcerptLine, formatComments } from '../../src/server/comments.js';
 import { anchorComment, parsePatch } from '../../src/web/diff.js';
 
 const comment = (over: Partial<ReviewComment>): ReviewComment => ({
@@ -71,6 +71,21 @@ describe('checking new comments', () => {
     const c = checkNewComment({ ...ok, line: 1, endLine: 30, excerpt: long });
     expect(c.excerpt.split('\n')).toHaveLength(EXCERPT_LINES);
     expect(c.excerpt.endsWith('l29')).toBe(true);
+  });
+
+  it('clips long lines and drops whole lines from the front, keeping the last line matchable', () => {
+    const long = 'x'.repeat(5000);
+    const c = checkNewComment({ ...ok, excerpt: `a\n${long}` });
+    expect(c.excerpt).toBe(`a\n${clipExcerptLine(long)}`);
+    expect(clipExcerptLine(long)).toBe(`${'x'.repeat(EXCERPT_LINE_CHARS)}…`);
+    expect(clipExcerptLine('short')).toBe('short');
+    const many = Array.from({ length: 8 }, (_, i) => `${i}${'y'.repeat(900)}`);
+    const lines = checkNewComment({ ...ok, excerpt: many.join('\n') }).excerpt.split('\n');
+    expect(lines.length).toBeLessThan(8);
+    expect(lines).toEqual(many.slice(-lines.length)); // whole lines, never a partial first one
+    // The diff view still finds a comment on the long line.
+    const diff = parsePatch(['@@ -0,0 +1,2 @@', '+a', `+${long}`].join('\n'));
+    expect(anchorComment(diff, { side: 'new', endLine: 2, excerpt: c.excerpt })).toBe(2);
   });
 
   it('refuses bad input with a clear reason', () => {

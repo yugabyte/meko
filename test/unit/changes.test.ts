@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChangedFile } from '../../src/shared/types.js';
 import {
-  FILE_PATCH_CAP, TOTAL_PATCH_CAP, capPatches, newFilePatch, parseNameStatus, parseNumstat, splitPatch,
+  FILE_PATCH_CAP, TOTAL_PATCH_CAP, capPatches, matchPatches, newFilePatch, parseNameStatus, parseNumstat, quotePath, splitPatch,
 } from '../../src/server/changes.js';
 import { parsePatch } from '../../src/web/diff.js';
 
@@ -30,6 +30,45 @@ describe('changes parsing', () => {
     expect(n.get('a b.txt')).toEqual({ added: 3, removed: 1, binary: false });
     expect(n.get('new')).toEqual({ added: 1, removed: 1, binary: false });
     expect(n.get('img.png')).toEqual({ added: 0, removed: 0, binary: true });
+  });
+
+  it('matches patches to files by header, joining the two halves of a type change', () => {
+    const typeChange = [
+      'diff --git a/f b/f\ndeleted file mode 100644\nindex 1..0\n--- a/f\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye',
+      'diff --git a/f b/f\nnew file mode 120000\nindex 0..2\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+target\n\\ No newline at end of file',
+    ];
+    const chunks = [
+      'diff --git a/a b.txt b/a b.txt\n@@ -1 +1 @@\n-x\n+y',
+      ...typeChange,
+      'diff --git a/stray b/stray\n@@ -1 +1 @@\n-p\n+q', // changed after name-status ran
+      'diff --git "a/t\\tab" "b/t\\tab"\n@@ -1 +1 @@\n-1\n+2',
+      'diff --git a/old b/new\nsimilarity index 100%\nrename from old\nrename to new',
+    ];
+    const entries = [
+      { path: 'a b.txt', oldPath: null }, { path: 'f', oldPath: null }, { path: 'late', oldPath: null },
+      { path: 't\tab', oldPath: null }, { path: 'new', oldPath: 'old' },
+    ];
+    const got = matchPatches(entries, chunks);
+    expect(got[0]).toBe(chunks[0]);
+    expect(got[1]).toBe('diff --git a/f b/f\ndeleted file mode 100644\nindex 1..0\n--- a/f\n+++ /dev/null\nnew file mode 120000\n'
+      + '@@ -1 +0,0 @@\n-bye\n@@ -0,0 +1 @@\n+target\n\\ No newline at end of file');
+    expect(got[2]).toBeNull();
+    expect(got[3]).toBe(chunks[4]);
+    expect(got[4]).toBe(chunks[5]);
+    expect(parsePatch(got[1]!).map((l) => [l.kind, l.old, l.new, l.text])).toEqual([
+      ['meta', null, null, 'deleted file mode 100644'],
+      ['meta', null, null, 'new file mode 120000'],
+      ['hunk', null, null, '@@ -1 +0,0 @@'],
+      ['del', 1, null, 'bye'],
+      ['hunk', null, null, '@@ -0,0 +1 @@'],
+      ['add', null, 1, 'target'],
+      ['note', null, null, 'No newline at end of file'],
+    ]);
+  });
+
+  it('quotes paths the way git does in diff headers', () => {
+    expect(quotePath('a/plain name ü.txt')).toBe('a/plain name ü.txt');
+    expect(quotePath('a/t\tn\nq"b\\\x01\x7f')).toBe('"a/t\\tn\\nq\\"b\\\\\\001\\177"');
   });
 
   it('cuts big patches and drops the rest past the total cap', () => {

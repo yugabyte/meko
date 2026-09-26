@@ -3,6 +3,7 @@
 // events as Claude Code (through the hooks settings file agent-k-local passes
 // with --settings), records its argv, and turns each stdin line into a turn.
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -12,18 +13,26 @@ const opt = (name) => {
   return i >= 0 ? args[i + 1] : null;
 };
 const settings = JSON.parse(readFileSync(opt('--settings'), 'utf8'));
-const sessionId = opt('--session-id') ?? opt('--resume');
+let sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
-const transcript = join(dir, `${sessionId}.jsonl`);
+let transcript = join(dir, `${sessionId}.jsonl`);
 appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL } }) + '\n');
 
-// Positional prompt: the last argument that isn't a flag value.
+// Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
+// (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
 const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--') {
+    prompt = args[i + 1] ?? null;
+    break;
+  }
   if (valued.has(args[i])) i++;
-  else if (!args[i].startsWith('--')) prompt = args[i];
+  else if (args[i].startsWith('-')) {
+    process.stderr.write(`error: unknown option '${args[i]}'\n`);
+    process.exit(1);
+  } else prompt = args[i];
 }
 
 // Like Claude Code: a group's matcher is a regex on the tool name ('*' or none matches all).
@@ -119,11 +128,17 @@ process.on('SIGHUP', () => {
   process.exit(129);
 });
 
+process.stdin.setEncoding('utf8');
+// Like Claude Code in an untrusted folder: no hooks until the trust dialog is answered.
+if (existsSync(join(dir, 'trust-prompt'))) {
+  process.stdout.write('Do you trust the files in this folder?\r\n');
+  await new Promise((r) => process.stdin.once('data', r));
+}
+
 writeFileSync(transcript, '', { flag: 'a' });
 hook('SessionStart', { source: opt('--resume') ? 'resume' : 'startup' });
 if (prompt) await turn(prompt);
 
-process.stdin.setEncoding('utf8');
 let buf = '';
 let inPaste = false;
 process.stdin.on('data', async (chunk) => {
@@ -151,6 +166,15 @@ process.stdin.on('data', async (chunk) => {
     if (line === 'exit') {
       hook('SessionEnd', { reason: 'exit' });
       process.exit(0);
+    }
+    if (line === '/clear') {
+      // Like Claude Code: /clear starts a new conversation with a new session id and transcript.
+      hook('SessionEnd', { reason: 'clear' });
+      sessionId = randomUUID();
+      transcript = join(dir, `${sessionId}.jsonl`);
+      writeFileSync(transcript, '', { flag: 'a' });
+      hook('SessionStart', { source: 'clear' });
+      continue;
     }
     await turn(line);
   }

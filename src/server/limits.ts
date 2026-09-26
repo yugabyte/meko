@@ -35,8 +35,20 @@ const sameWindow = (a: LimitWindow | null, b: LimitWindow | null) =>
   a === b || (!!a && !!b && a.usedPercent === b.usedPercent && a.resetsAt === b.resetsAt);
 
 /**
- * The account's plan limits. Every session reports the same account, so the newest report
- * wins. Kept in the kv table so they show again after a restart, until they reset.
+ * The better of two readings of one window: the later window (the earlier one has reset or is
+ * a stale report), and within the same window the higher use, since use only grows until reset.
+ */
+function newerWindow(a: LimitWindow | null, b: LimitWindow | null): LimitWindow | null {
+  if (!a || !b) return a ?? b;
+  if (a.resetsAt !== b.resetsAt) return a.resetsAt > b.resetsAt ? a : b;
+  return b.usedPercent > a.usedPercent ? b : a;
+}
+
+/**
+ * The account's plan limits. Every session reports the same account, but an idle session can
+ * re-run its status line with an old reading, or one without a window, so reports are merged
+ * per window instead of replacing each other. Kept in the kv table so they show again after a
+ * restart, until they reset.
  */
 export class PlanLimitsStore {
   private last: PlanLimits | null = null;
@@ -50,13 +62,26 @@ export class PlanLimitsStore {
     }
   }
 
-  /** Takes a status line input; saves and broadcasts when the numbers moved, or a minute has passed. */
+  /**
+   * Takes a status line input; saves and broadcasts when the merged numbers moved, or when a
+   * report confirms them and a minute has passed (so "as of" stays close).
+   */
   report(input: unknown, now = Date.now()): void {
-    const next = parseRateLimits(input, now);
-    if (!next) return;
-    const same = !!this.last && sameWindow(this.last.fiveHour, next.fiveHour) && sameWindow(this.last.sevenDay, next.sevenDay);
+    const reported = currentLimits(parseRateLimits(input, now), now);
+    if (!reported) return; // nothing, or only windows that have already reset
+    const prev = currentLimits(this.last, now);
+    const next: PlanLimits = {
+      fiveHour: newerWindow(prev?.fiveHour ?? null, reported.fiveHour),
+      sevenDay: newerWindow(prev?.sevenDay ?? null, reported.sevenDay),
+      updatedAt: now,
+    };
+    const moved = !prev || !sameWindow(prev.fiveHour, next.fiveHour) || !sameWindow(prev.sevenDay, next.sevenDay);
+    if (!moved) {
+      // An older reading (a lower use, or a window that's missing) says nothing new.
+      const confirms = sameWindow(reported.fiveHour, next.fiveHour) && sameWindow(reported.sevenDay, next.sevenDay);
+      if (!confirms || now - this.savedAt < QUIET_MS) return;
+    }
     this.last = next;
-    if (same && now - this.savedAt < QUIET_MS) return;
     this.savedAt = now;
     kvSet(this.db, KV_KEY, JSON.stringify(next));
     this.changed();

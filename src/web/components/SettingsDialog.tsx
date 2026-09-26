@@ -41,6 +41,8 @@ export function SettingsDialog({
 function GeneralTab() {
   const [s, setS] = useState<Settings | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
+  // The depth as typed; clamped to 1–4 on blur and on save.
+  const [depth, setDepth] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -51,11 +53,14 @@ function GeneralTab() {
       .then((x) => {
         setS(x);
         setRoots(x.reposRoots);
+        setDepth(String(x.reposDepth));
       })
       .catch((e) => setError(errorMessage(e)));
   }, []);
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
+
+  const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -64,11 +69,12 @@ function GeneralTab() {
     try {
       const next = await api.saveSettings({
         reposRoots: roots.map((r) => r.trim()).filter(Boolean),
-        reposDepth: s.reposDepth,
+        reposDepth: clampDepth(),
         cloneInto: s.cloneInto.trim(),
       });
       setS(next);
       setRoots(next.reposRoots);
+      setDepth(String(next.reposDepth));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
@@ -113,8 +119,9 @@ function GeneralTab() {
             type="number"
             min={1}
             max={4}
-            value={s.reposDepth}
-            onChange={(e) => setS({ ...s, reposDepth: Math.max(1, Math.min(4, Number(e.target.value) || 1)) })}
+            value={depth}
+            onChange={(e) => setDepth(e.target.value)}
+            onBlur={() => setDepth(String(clampDepth()))}
           />
         </Field>
         <Field label="Clone into" hint="Where “Clone from URL” puts new repos.">
@@ -152,19 +159,35 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
   const [confirm, setConfirm] = useState('');
   const [pwMsg, setPwMsg] = useState<string | null>(null);
   const [pwErr, setPwErr] = useState<string | null>(null);
+  const [pwBusy, setPwBusy] = useState(false);
 
-  const [totpOn, setTotpOn] = useState(auth.totpEnabled);
+  // The login-time auth status goes stale once two-step sign-in is turned on or off, so ask again.
+  const [totpOn, setTotpOn] = useState<boolean | null>(null);
   const [enroll, setEnroll] = useState<TotpEnrollResponse | null>(null);
   const [code, setCode] = useState('');
   const [totpErr, setTotpErr] = useState<string | null>(null);
   const [totpMsg, setTotpMsg] = useState<string | null>(null);
+  const [totpBusy, setTotpBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .authStatus()
+      .then((a) => live && setTotpOn(a.totpEnabled))
+      .catch(() => live && setTotpOn(auth.totpEnabled));
+    return () => {
+      live = false;
+    };
+  }, [auth.totpEnabled]);
 
   const changePw = async (e: FormEvent) => {
     e.preventDefault();
+    if (pwBusy) return;
     setPwErr(null);
     setPwMsg(null);
     if (next.length < 12) return setPwErr('Use at least 12 characters.');
     if (next !== confirm) return setPwErr('The two new passwords don’t match.');
+    setPwBusy(true);
     try {
       await api.changePassword(current, next);
       setCurrent('');
@@ -173,21 +196,29 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
       setPwMsg('Password changed.');
     } catch (err) {
       setPwErr(errorMessage(err));
+    } finally {
+      setPwBusy(false);
     }
   };
 
   const startEnroll = async () => {
+    if (totpBusy) return;
     setTotpErr(null);
+    setTotpBusy(true);
     try {
       setEnroll(await api.totpEnroll());
     } catch (err) {
       setTotpErr(errorMessage(err));
+    } finally {
+      setTotpBusy(false);
     }
   };
 
   const confirmTotp = async (e: FormEvent) => {
     e.preventDefault();
+    if (totpBusy) return;
     setTotpErr(null);
+    setTotpBusy(true);
     try {
       if (totpOn) {
         await api.totpDisable(code);
@@ -202,6 +233,8 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
       setCode('');
     } catch (err) {
       setTotpErr(errorMessage(err));
+    } finally {
+      setTotpBusy(false);
     }
   };
 
@@ -244,8 +277,8 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
         <ErrorText error={pwErr} />
         {pwMsg && <p className="ok-text">{pwMsg}</p>}
         <div>
-          <button className="btn primary" disabled={!current || !next}>
-            Change password
+          <button className="btn primary" disabled={!current || !next || pwBusy}>
+            {pwBusy ? 'Changing…' : 'Change password'}
           </button>
         </div>
       </form>
@@ -253,13 +286,15 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
       <div className="stack">
         <h3>Two-step sign-in</h3>
         <p className="muted">
-          {totpOn
-            ? 'On. Sign-in asks for a code from your authenticator app.'
-            : 'Off. Add a code from an authenticator app to every sign-in.'}
+          {totpOn === null
+            ? 'Checking…'
+            : totpOn
+              ? 'On. Sign-in asks for a code from your authenticator app.'
+              : 'Off. Add a code from an authenticator app to every sign-in.'}
         </p>
-        {!totpOn && !enroll && (
+        {totpOn === false && !enroll && (
           <div>
-            <button className="btn" onClick={startEnroll}>
+            <button className="btn" disabled={totpBusy} onClick={startEnroll}>
               Set up authenticator
             </button>
           </div>
@@ -285,7 +320,7 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
             />
-            <button className={cx('btn', totpOn ? 'danger' : 'primary')} disabled={code.length !== 6}>
+            <button className={cx('btn', totpOn ? 'danger' : 'primary')} disabled={code.length !== 6 || totpBusy}>
               {totpOn ? 'Turn off' : 'Confirm'}
             </button>
           </form>

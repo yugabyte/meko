@@ -22,6 +22,8 @@ function saveDraft(id: string, text: string) {
   }
 }
 
+const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnects.';
+
 /** Keeps focus (and the on-screen keyboard) where it is when a bar button is tapped. */
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
@@ -43,10 +45,13 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
     el.style.height = `${el.scrollHeight + 2}px`; // + borders
   }, [text]);
 
-  /** Returns whether anything was sent. */
+  /** Returns whether anything was sent. The text stays in the box when it couldn't be. */
   const send = () => {
     if (!text.trim() || disabled) return false;
-    term.submit(text);
+    if (!term.submit(text)) {
+      term.showNotice('Not connected to the session. Your message is kept; send it again once it reconnects.', 4000);
+      return false;
+    }
     setText('');
     return true;
   };
@@ -63,7 +68,9 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
               disabled={disabled}
               onPointerDown={keepFocus}
               onMouseDown={keepFocus}
-              onClick={() => term.sendKey(k.key)}
+              onClick={() => {
+                if (!term.sendKey(k.key)) term.showNotice(NOT_CONNECTED, 3000);
+              }}
             >
               {k.label}
             </button>
@@ -129,7 +136,14 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
             const next = e.target.value;
             // With Ctrl armed, a typed character goes to Claude as Ctrl+character instead of the box.
             const ch = term.ctrl ? insertedChar(text, next) : null;
-            if (ch !== null && term.typeCtrl(ch)) return;
+            if (ch !== null) {
+              if (term.typeCtrl(ch)) return;
+              // Meant as Ctrl+letter but not connected: say so rather than type the letter.
+              if (term.conn !== 'open') {
+                term.showNotice(NOT_CONNECTED, 3000);
+                return;
+              }
+            }
             setText(next);
           }}
           onFocus={() => {

@@ -10,6 +10,10 @@ export function totalTokens(u: TokenUsage): number {
   return u.input + u.output + u.cacheRead + u.cacheWrite;
 }
 
+export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite, messages: a.messages + b.messages };
+}
+
 const CHUNK = 1024 * 1024;
 
 /**
@@ -195,6 +199,11 @@ export function usageBySession(db: Db): Map<string, TokenUsage> {
   return new Map(rows.map((r) => [r.session_id, toUsage(r)]));
 }
 
+/** Totals for one session, read through the primary key rather than a scan of every row. */
+export function sessionUsage(db: Db, sessionId: string): TokenUsage {
+  return toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages WHERE session_id = ?`, sessionId));
+}
+
 /** Totals per project, including archived sessions. */
 export function usageByProject(db: Db): Map<string, TokenUsage> {
   const rows = all<SumRow & { project_id: string }>(db,
@@ -257,9 +266,13 @@ export function usageOverview(db: Db, days = 14, now = Date.now()): UsageOvervie
   const byUsage = usageByProject(db);
   const counts = <T extends { project_id: string }>(sql: string) => new Map(all<T>(db, sql).map((r) => [r.project_id, r]));
   const sessions = counts<{ project_id: string; n: number }>('SELECT project_id, COUNT(*) AS n FROM sessions GROUP BY project_id');
-  // A restart mid-cleanup can log a merge twice; count sessions.
+  // A restart mid-cleanup can log a merge twice; count sessions. Merge & Close ends in Done only
+  // after a merge, so a Done session with a PR counts too (its event may predate a pruning release).
   const merged = counts<{ project_id: string; n: number }>(
-    `SELECT project_id, COUNT(DISTINCT session_id) AS n FROM session_events WHERE kind = 'merged' GROUP BY project_id`);
+    `SELECT project_id, COUNT(DISTINCT session_id) AS n FROM (
+       SELECT project_id, session_id FROM session_events WHERE kind = 'merged'
+       UNION SELECT project_id, id FROM sessions WHERE stage = 'done' AND pr_number IS NOT NULL
+     ) GROUP BY project_id`);
   // commits is -1 when git couldn't count a push's range: the push counts, its commits don't.
   const pushed = counts<{ project_id: string; pushes: number; commits: number }>(
     `SELECT s.project_id, COUNT(*) AS pushes, COALESCE(SUM(CASE WHEN p.commits > 0 THEN p.commits ELSE 0 END), 0) AS commits

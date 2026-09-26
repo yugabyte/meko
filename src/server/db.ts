@@ -189,6 +189,9 @@ const MIGRATIONS: string[] = [
   );
   DELETE FROM usage_files;
   `,
+  // 9: a review prompt waiting for Claude ('review' or 'review-people'), or 'sent' until the
+  // turn that addresses it ends; kept across restarts.
+  `ALTER TABLE sessions ADD COLUMN pending_review TEXT;`,
 ];
 
 export function openDb(path: string): Db {

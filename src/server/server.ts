@@ -11,11 +11,12 @@ import type {
   SessionChanges, SessionAction, Settings, SetupRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import {
-  COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, changePassword, consumeSetupToken, createAuthSession, deleteAuthSession,
-  getOwner, newTotpSecret, otpauthUrl, setOwner, totpVerify, validateAuthSession, validatePassword, verifyPassword,
+  COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
+  deleteAuthSession, getOwner, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, totpAccept, validateAuthSession, validatePassword,
+  verifyPassword,
 } from './auth.js';
 import type { Core } from './core.js';
-import { audit, get, kvGet, run } from './db.js';
+import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
@@ -23,6 +24,8 @@ import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 import { usageOverview } from './usage.js';
 
+/** A browser with this much unsent data skips state snapshots until it catches up. */
+const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 const ACTIONS: SessionAction[] = ['approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard'];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 
@@ -44,8 +47,19 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket, { options: { maxPayload: 1024 * 1024 } });
+  // The API only takes JSON. Without a text/plain parser, a plain HTML form (which can't send
+  // JSON) can't post to it, even from our own origin.
+  app.removeContentTypeParser('text/plain');
 
-  const authed = (req: FastifyRequest) => validateAuthSession(db, req.cookies[COOKIE_NAME]);
+  // Only the onRequest hook renews a login, since only it can re-issue the cookie with it.
+  const authed = (req: FastifyRequest) => authSessionLive(db, req.cookies[COOKIE_NAME]);
+  /**
+   * The route a request matched (`/api/sessions/:id`), or undefined when none did. Access checks
+   * key on this, never the raw URL: the router decodes `/%61pi/...` to `/api/...`, and an
+   * absolute-form target (`GET http://host/api/...`) doesn't start with `/api/` at all.
+   */
+  const routeOf = (req: FastifyRequest): string | undefined => req.routeOptions.url;
+  const isApi = (req: FastifyRequest) => routeOf(req)?.startsWith('/api/') ?? false;
 
   /** Same-origin check for writes and WebSocket upgrades (defense in depth on top of SameSite=Strict). */
   const sameOrigin = (req: FastifyRequest) => {
@@ -62,17 +76,19 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'same-origin');
-    if (secure) reply.header('Strict-Transport-Security', 'max-age=31536000');
-    if (req.url.startsWith('/api/')) reply.header('Cache-Control', 'no-store');
+    if (isApi(req)) reply.header('Cache-Control', 'no-store');
     return payload;
   });
 
   app.addHook('onRequest', async (req, reply) => {
-    const path = req.url.split('?')[0];
-    if (!path.startsWith('/api/')) return;
+    const route = routeOf(req);
+    if (!route?.startsWith('/api/')) return;
     if (req.method !== 'GET' && !sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
-    if (PUBLIC_API.has(path)) return;
-    if (!authed(req)) return reply.code(401).send({ error: 'Sign in first.' });
+    if (PUBLIC_API.has(route)) return;
+    const auth = validateAuthSession(db, req.cookies[COOKIE_NAME]);
+    if (!auth.valid) return reply.code(401).send({ error: 'Sign in first.' });
+    // The database slides the expiry as the app is used; keep the browser's cookie in step.
+    if (auth.renewed) setCookie(reply, req.cookies[COOKIE_NAME]!);
   });
 
   app.setErrorHandler((err: unknown, req, reply) => {
@@ -92,7 +108,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- auth ----
   app.get('/api/auth/status', async (req): Promise<AuthStatus> => {
     const owner = getOwner(db);
-    const tokenOutstanding = !!kvGet(db, 'setup_token');
+    const tokenOutstanding = setupTokenOutstanding(db);
     return {
       setupRequired: !owner || (tokenOutstanding && !authed(req)),
       loggedIn: authed(req),
@@ -105,15 +121,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const { token, username, password } = req.body ?? ({} as SetupRequest);
     const ip = req.ip;
     if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
-    if (!/^[A-Za-z0-9._-]{1,64}$/.test(username ?? '')) return reply.code(400).send({ error: 'Use letters, digits, dots, dashes or underscores for the username.' });
+    if (typeof username !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(username)) return reply.code(400).send({ error: 'Use letters, digits, dots, dashes or underscores for the username.' });
     const bad = validatePassword(password ?? '');
     if (bad) return reply.code(400).send({ error: bad });
-    if (!consumeSetupToken(db, token ?? '')) {
+    if (!consumeSetupToken(db, token)) {
       limiter.fail(ip);
       return reply.code(403).send({ error: 'This setup link is invalid or already used. Run `agent-k-local setup-link` on the host for a new one.' });
     }
     setOwner(db, username, password);
     audit(db, 'owner_set', { username, ip });
+    closeRevokedSockets();
     setCookie(reply, createAuthSession(db, req.headers['user-agent'], ip));
     return reply.code(204).send();
   });
@@ -123,14 +140,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many failed attempts. Try again in 15 minutes.' });
     const { username, password, totp } = req.body ?? ({} as LoginRequest);
     const owner = getOwner(db);
-    if (!owner || owner.username !== username || !verifyPassword(password ?? '', owner.pw_scrypt)) {
+    const userOk = !!owner && owner.username === username;
+    // Check a password either way, so the time taken doesn't tell whether the username is right.
+    const passOk = userOk ? verifyPassword(password, owner.pw_scrypt) : (burnPasswordCheck(password), false);
+    if (!owner || !passOk) {
       limiter.fail(ip);
-      audit(db, 'login_failed', { username, ip });
+      audit(db, 'login_failed', { username: typeof username === 'string' ? username : null, ip });
       return reply.code(401).send({ error: 'Wrong username or password.' });
     }
     if (owner.totp_secret) {
       if (!totp) return reply.code(401).send({ error: 'Enter the code from your authenticator app.', totpRequired: true });
-      if (!totpVerify(owner.totp_secret, totp)) {
+      if (!totpAccept(db, owner.totp_secret, totp)) {
         limiter.fail(ip);
         audit(db, 'login_failed_totp', { username, ip });
         return reply.code(401).send({ error: 'That code is wrong or expired.', totpRequired: true });
@@ -144,13 +164,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   app.post('/api/auth/logout', async (req, reply) => {
     deleteAuthSession(db, req.cookies[COOKIE_NAME]);
+    closeRevokedSockets();
     reply.clearCookie(COOKIE_NAME, { path: '/' });
     return reply.code(204).send();
   });
 
   app.post<{ Body: { current: string; next: string } }>('/api/auth/password', async (req, reply) => {
-    const err = changePassword(db, req.body?.current ?? '', req.body?.next ?? '');
+    const err = changePassword(db, req.body?.current ?? '', req.body?.next ?? '', req.cookies[COOKIE_NAME]);
     if (err) return reply.code(400).send({ error: err });
+    closeRevokedSockets();
     return reply.code(204).send();
   });
 
@@ -164,7 +186,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   app.post<{ Body: { code: string } }>('/api/auth/totp/confirm', async (req, reply) => {
     const owner = getOwner(db)!;
-    if (!owner.totp_pending || !totpVerify(owner.totp_pending, req.body?.code ?? '')) {
+    if (!owner.totp_pending || !totpAccept(db, owner.totp_pending, req.body?.code)) {
       return reply.code(400).send({ error: 'That code doesn\'t match. Check the time on your phone and try again.' });
     }
     run(db, 'UPDATE owner SET totp_secret = totp_pending, totp_pending = NULL WHERE id = 1');
@@ -174,7 +196,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   app.post<{ Body: { code: string } }>('/api/auth/totp/disable', async (req, reply) => {
     const owner = getOwner(db)!;
-    if (!owner.totp_secret || !totpVerify(owner.totp_secret, req.body?.code ?? '')) {
+    if (!owner.totp_secret || !totpAccept(db, owner.totp_secret, req.body?.code)) {
       return reply.code(400).send({ error: 'That code is wrong or expired.' });
     }
     run(db, 'UPDATE owner SET totp_secret = NULL WHERE id = 1');
@@ -260,6 +282,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }
     if (b.reposDepth !== undefined && (!Number.isInteger(b.reposDepth) || b.reposDepth < 1 || b.reposDepth > 4)) throw new HttpError(400, 'Scan depth must be between 1 and 4.');
     if (b.updateChannel !== undefined && !['stable', 'prerelease', 'off'].includes(b.updateChannel)) throw new HttpError(400, 'Unknown update channel.');
+    if (b.cloneInto !== undefined && typeof b.cloneInto !== 'string') throw new HttpError(400, 'The clone folder must be a path.');
     core.updateConfig((c) => {
       if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
       if (b.reposDepth) c.repos.depth = b.reposDepth;
@@ -279,10 +302,59 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- websockets ----
   const clients = new Set<WebSocket>();
+  /** Every open socket (events and terminals) with the login cookie it was opened with. */
+  const sockets = new Map<WebSocket, { token: string; alive: boolean }>();
+  /** Closes sockets whose login is gone (logout, password change or reset, expiry). */
+  function closeRevokedSockets() {
+    for (const [ws, s] of sockets) if (!authSessionLive(db, s.token)) ws.close(4401, 'unauthorized');
+  }
+  // Heartbeat: a phone that drops off the network sends no close, and its `tmux attach` would
+  // otherwise stay attached (holding the window at its size) until the server restarts.
+  const heartbeat = setInterval(() => {
+    for (const [ws, s] of sockets) {
+      if (!s.alive) {
+        ws.terminate();
+        continue;
+      }
+      s.alive = false;
+      ws.ping();
+    }
+    closeRevokedSockets();
+  }, 30_000);
+  heartbeat.unref();
+  app.addHook('onClose', async () => clearInterval(heartbeat));
   let pending: NodeJS.Timeout | null = null;
+  /**
+   * Browsers that aren't keeping up (a phone on a slow link) skip state snapshots rather than
+   * queue them without limit in memory; each snapshot is complete, so they catch up with the
+   * next one once they've drained. Notifications are small and always sent.
+   */
+  const lagging = new Set<WebSocket>();
   const broadcast = (ev: ServerEvent) => {
     const msg = JSON.stringify(ev);
-    for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(msg);
+    for (const ws of clients) {
+      if (ws.readyState !== ws.OPEN) continue;
+      if (ev.type === 'state' && ws.bufferedAmount > MAX_BUFFERED_STATE) {
+        if (!lagging.has(ws)) catchUp(ws);
+        continue;
+      }
+      ws.send(msg);
+    }
+  };
+  /** Sends the current state to a lagging socket once its backlog has drained. */
+  const catchUp = (ws: WebSocket) => {
+    lagging.add(ws);
+    const check = setInterval(() => {
+      if (ws.readyState !== ws.OPEN) {
+        clearInterval(check);
+        lagging.delete(ws);
+      } else if (ws.bufferedAmount <= MAX_BUFFERED_STATE / 4) {
+        clearInterval(check);
+        lagging.delete(ws);
+        ws.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+      }
+    }, 250);
+    check.unref();
   };
   core.on('change', () => {
     pending ??= setTimeout(() => {
@@ -297,6 +369,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       socket.close(4401, 'unauthorized');
       return false;
     }
+    const entry = { token: req.cookies[COOKIE_NAME]!, alive: true };
+    sockets.set(socket, entry);
+    socket.on('pong', () => (entry.alive = true));
+    socket.on('close', () => sockets.delete(socket));
     return true;
   };
 
@@ -307,9 +383,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     socket.on('close', () => clients.delete(socket));
   });
 
-  app.get<{ Params: { id: string } }>('/ws/term/:id', { websocket: true }, (socket: WebSocket, req: FastifyRequest<{ Params: { id: string } }>) => {
+  app.get<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>('/ws/term/:id', { websocket: true },
+    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>) => {
     if (!wsGuard(socket, req)) return;
-    attachTerminal(core, socket, req.params.id);
+    attachTerminal(core, socket, req.params.id, req.query);
   });
 
   // ---- web app ----

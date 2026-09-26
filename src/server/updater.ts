@@ -9,6 +9,10 @@ import type { Paths } from './paths.js';
 
 const run = promisify(execFile);
 
+/** Time limits, so a stalled network call can't leave a check or an update running forever. */
+const LIST_TIMEOUT_MS = 60_000;
+const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+
 // ---------------------------------------------------------------------------
 // Versions
 
@@ -125,14 +129,14 @@ function toRelease(r: GhRelease): Release {
 /** Uses the user's authenticated `gh`, which works for internal repos. */
 export class GhReleaseSource implements ReleaseSource {
   async listReleases(repo: string): Promise<Release[]> {
-    const { stdout } = await run('gh', ['api', `repos/${repo}/releases?per_page=30`], { maxBuffer: 16 << 20 });
+    const { stdout } = await run('gh', ['api', `repos/${repo}/releases?per_page=30`], { maxBuffer: 16 << 20, timeout: LIST_TIMEOUT_MS });
     return (JSON.parse(stdout) as GhRelease[]).map(toRelease);
   }
 
   async download(repo: string, tag: string, asset: string, destDir: string): Promise<string> {
     mkdirSync(destDir, { recursive: true });
     await run('gh', ['release', 'download', tag, '--repo', repo, '--pattern', asset, '--dir', destDir, '--clobber'], {
-      timeout: 10 * 60_000,
+      timeout: DOWNLOAD_TIMEOUT_MS,
     });
     return join(destDir, asset);
   }
@@ -149,7 +153,10 @@ export class HttpsReleaseSource implements ReleaseSource {
   }
 
   async listReleases(repo: string): Promise<Release[]> {
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, { headers: this.headers() });
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
     if (!res.ok) throw new Error(`GitHub API returned ${res.status} for ${repo} releases`);
     const list = (await res.json()) as GhRelease[];
     this.cache.set(repo, list);
@@ -162,9 +169,11 @@ export class HttpsReleaseSource implements ReleaseSource {
     const a = rel?.assets.find((x) => x.name === asset);
     if (!a) throw new Error(`release ${tag} has no asset ${asset}`);
     // Private/internal repos need the API asset URL + token; public ones can use the browser URL.
+    // The time limit covers reading the body too.
+    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
     const res = process.env.GITHUB_TOKEN
-      ? await fetch(a.url, { headers: this.headers('application/octet-stream') })
-      : await fetch(a.browser_download_url, { headers: { 'User-Agent': 'agent-k-local-updater' } });
+      ? await fetch(a.url, { headers: this.headers('application/octet-stream'), signal })
+      : await fetch(a.browser_download_url, { headers: { 'User-Agent': 'agent-k-local-updater' }, signal });
     if (!res.ok) throw new Error(`download of ${asset} failed with HTTP ${res.status}`);
     mkdirSync(destDir, { recursive: true });
     const dest = join(destDir, asset);
@@ -298,6 +307,8 @@ export class Updater {
   private lastCheckedAt: number | null;
   private lastError: string | null = null;
   private applying = false;
+  /** markHealthy came while an update was installing; it runs if that update fails. */
+  private healthyDuringApply = false;
   private justUpdatedFrom: string | null = null;
   private checking: Promise<UpdateStatus> | null = null;
   private readonly appDir: string | undefined;
@@ -309,6 +320,15 @@ export class Updater {
     const checked = Number(deps.kvGet(KV_CHECKED));
     this.lastCheckedAt = Number.isFinite(checked) && checked > 0 ? checked : null;
     if (!this.appDir) this.lastError = DISABLED;
+    this.dropBadLatest();
+  }
+
+  /** A remembered latest version that was rolled back since (it's in bad-versions) is no longer offered. */
+  private dropBadLatest(): void {
+    if (this.latest && readBadVersions(this.deps.paths).has(this.latest)) {
+      this.latest = null;
+      this.releaseUrl = null;
+    }
   }
 
   get enabled(): boolean {
@@ -334,9 +354,10 @@ export class Updater {
   private schedule(): void {
     this.stop();
     const hours = Math.max(0.1, this.deps.config().update.intervalHours || 6);
+    // setTimeout fires at once for delays over 2^31-1 ms (about 24 days).
     this.timer = setTimeout(() => {
       void this.check().finally(() => this.schedule());
-    }, hours * 3600_000);
+    }, Math.min(hours * 3600_000, 2 ** 31 - 1));
     this.timer.unref();
   }
 
@@ -407,6 +428,7 @@ export class Updater {
       return this.status();
     }
     if (this.applying) return this.status();
+    this.dropBadLatest();
     if (!this.status().available) await this.check();
     const target = this.status().available ? this.latest : null;
     if (!target) return this.status();
@@ -470,6 +492,7 @@ export class Updater {
       this.applying = false;
       this.lastError = `Update to ${target} failed: ${(e as Error).message}`;
       this.deps.log(this.lastError);
+      if (this.healthyDuringApply) this.markHealthy();
       return this.changed();
     } finally {
       rmSync(staging, { recursive: true, force: true });
@@ -489,7 +512,12 @@ export class Updater {
   markHealthy(): void {
     // An update is being installed, or has been switched to while this process shuts down: the
     // pending file and the new version's directory belong to that update, so leave both alone.
-    if (this.applying) return;
+    // If the install fails instead, this runs again then.
+    if (this.applying) {
+      this.healthyDuringApply = true;
+      return;
+    }
+    this.healthyDuringApply = false;
     const pending = this.readPending();
     // A pending file for another version is stale (say, left by a manual switch): drop it too.
     if (pending) this.clearPending(pending);

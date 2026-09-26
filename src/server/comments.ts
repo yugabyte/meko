@@ -13,6 +13,8 @@ export const BATCH_MAX = 50;
 /** Excerpts keep this many lines, from the end of the range. */
 export const EXCERPT_LINES = 20;
 const EXCERPT_CHARS = 4000;
+/** Longer excerpt lines are cut to this many characters plus '…'. */
+export const EXCERPT_LINE_CHARS = 1000;
 const PATH_MAX = 4096;
 
 interface CommentRow {
@@ -53,6 +55,14 @@ function checkBody(body: unknown): string {
   return b;
 }
 
+/**
+ * An excerpt line as stored: cut to EXCERPT_LINE_CHARS plus '…' when longer. The diff view
+ * clips its rows the same way when it re-anchors a comment, so long lines still match.
+ */
+export function clipExcerptLine(line: string): string {
+  return line.length > EXCERPT_LINE_CHARS ? `${line.slice(0, EXCERPT_LINE_CHARS)}…` : line;
+}
+
 /** Checks a new comment from the API and normalizes it: trimmed body, excerpt cut to its last lines. */
 export function checkNewComment(b: unknown): NewComment {
   const c = (b && typeof b === 'object' ? b : {}) as Partial<Record<keyof NewComment, unknown>>;
@@ -63,9 +73,10 @@ export function checkNewComment(b: unknown): NewComment {
     throw new HttpError(400, 'The comment needs a line range: line and endLine are line numbers, with endLine ≥ line.');
   }
   if (typeof c.excerpt !== 'string') throw new HttpError(400, 'The comment needs the excerpt of the lines it is about.');
-  let excerpt = c.excerpt.split('\n').slice(-EXCERPT_LINES).join('\n');
-  if (excerpt.length > EXCERPT_CHARS) excerpt = excerpt.slice(-EXCERPT_CHARS);
-  return { path: c.path, side: c.side, line: line as number, endLine: end as number, excerpt, body: checkBody(c.body) };
+  // Whole lines only, dropped from the front: the last line is what re-anchors the comment.
+  const lines = c.excerpt.split('\n').slice(-EXCERPT_LINES).map(clipExcerptLine);
+  while (lines.length > 1 && lines.join('\n').length > EXCERPT_CHARS) lines.shift();
+  return { path: c.path, side: c.side, line: line as number, endLine: end as number, excerpt: lines.join('\n'), body: checkBody(c.body) };
 }
 
 /** A code fence longer than any run of backticks in the text. */

@@ -20,7 +20,7 @@ export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc CXX=/opt/rh/gcc-toolset-13/roo
 npm ci
 npm run typecheck && npm run lint && npm test   # run all three before every commit
 npm run build                                   # dist/server + dist/web
-npm run dev                                     # API on 127.0.0.1:7777, Vite on :5173 (set AK_HOME to isolate state)
+npm run dev                                     # API on 127.0.0.1:7777, Vite on :5173; state in ./.dev-home (AK_DEV_HOME to change)
 ```
 
 ## Map
@@ -28,7 +28,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | Path | What it is |
 |---|---|
 | `src/shared/types.ts` | The API contract: every REST route, WebSocket message and shared type. Change it first. |
-| `src/server/cli.ts` | Entry point: `serve`, `install`, `uninstall`, `setup-link`, `status`, `selftest`, `version`. |
+| `src/server/cli.ts` | Entry point: `serve`, `install`, `uninstall`, `setup-link`, `status`, `logs`, `selftest`, `version`. |
 | `src/server/core.ts` | Wires config, db, tmux, Meko and the services; timers; `state()` snapshot for the UI. |
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
 | `src/server/sessions.ts` | Session lifecycle in tmux: create, launch, hook-driven status, recovery and auto-continue, archive. |
@@ -53,7 +53,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
 | `src/web/components/UsagePanel.tsx`, `UsageView.tsx` | Token usage: the project home's panel (headline numbers, 14-day chart with table view, per-session and per-model tables) and the all-projects Usage page at `/usage` (adds merged PRs, pushed commits and a per-project table; both its tables sort on any column through `src/web/sort.ts`). |
 | `src/web/notifyLeader.ts` | Which open page shows browser notifications: the one used last, through a Web Lock it steals on focus. |
-| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input and releasing hidden phone terminals. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
+| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input, reconnecting (backoff, and the login screen on a 4401 close via `checkLogin()` in `api.ts`) and releasing phone terminals that are hidden or off screen. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
 | `src/web/hooks/useMedia.ts`, `components/TopBar.tsx`, `SessionSheet.tsx`, `TermKeys.tsx` | The phone layout: breakpoint hooks and `--app-h`/`--app-top` (pin the app to the visible viewport, above the on-screen keyboard), the app bar, the ⋯ session sheet (which also holds the stage bar), and the terminal key bar and compose box. `src/web/keys.ts` holds the key sequences, bracketed paste and wheel reports they send. |
 | `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd and launchd templates, install and release scripts, CI and releases (Linux and macOS). |
 | `test/` | Unit tests, and integration tests against real tmux and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
@@ -63,13 +63,17 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 1. **Sessions survive the server.** tmux runs in its own service (`agent-k-local-tmux.service` on
    Linux, the `com.yugabyte.agent-k-local.tmux` LaunchAgent on macOS). Never start tmux or Claude as
    children of the server's service or process group. Server restarts and updates must never stop a
-   session. Manage the services only through `service.ts`.
+   session. Manage the services only through `service.ts`. When the tmux service is installed, the server
+   never starts tmux itself; it reports the service as down.
 2. **Recovery is idempotent.** `recover()` and `reconcile()` may run at any time. A session with a live
    pane is left alone, and so is one still being created or launched (it has no pane yet); a missing
-   pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes, parked
-   after two in an hour).
+   pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes; after two
+   auto-continues in an hour the next one is parked). Archive and project delete wait for a session
+   that is still starting; `launch()` never replaces a live pane.
 3. **Everything behind login.** Every `/api/*` route except `auth/status|setup|login` requires the
-   session cookie, and every WebSocket checks cookie and `Origin`. Hooks use the unix socket with a
+   session cookie, and every WebSocket checks the cookie and refuses a cross-origin `Origin`. Access
+   checks key on the matched route (`req.routeOptions.url`), never the raw URL, which can be
+   percent-encoded. Hooks use the unix socket with a
    per-session token, never the network port.
 4. **No shell interpolation of user input.** Use `execFile`/`spawn` with argument arrays. The only
    shell text we generate is the launcher script, and every value in it goes through `shq()`.
@@ -86,13 +90,16 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 
 - Shell commands and scripts run on Linux and macOS: stick to POSIX flags that GNU and BSD tools
   share (no `mv -T`, `stat -c`, `readlink -f`, `sleep infinity`; `sha256sum` or `shasum -a 256`).
-- TypeScript strict, ES modules, Node 22. Keep modules small and single-purpose, and match the style
+- TypeScript strict, ES modules, Node 22. Lint includes the React hooks rules (`rules-of-hooks`,
+  `exhaustive-deps`) for `src/web/`. Keep modules small and single-purpose, and match the style
   around you.
 - User-facing text: plain, direct, active voice; errors say what went wrong and how to fix it.
 - The server is the source of truth; the UI renders `AppState` pushed over `/ws/events`.
 - Tests: new behavior gets a test. Integration tests use real tmux and git; GitHub is mocked with
   `vi.mock('../../src/server/github.js')`. Tests must never touch the real `~/.claude.json` or Meko
-  (see `test/helpers.ts`).
+  (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
+  `CLAUDE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
+  folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits: Conventional Commits, **no agent attribution** (see `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`.
 

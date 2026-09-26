@@ -63,7 +63,11 @@ describe('compose box', () => {
   });
 
   it('never lets the text end the paste early', () => {
-    expect(pasteText('a\x1b[201~b', true)).toBe('\x1b[200~ab\x1b[201~');
+    expect(pasteText('a\x1b[201~b', true)).toBe('\x1b[200~a[201~b\x1b[201~');
+    // Removing one end marker must not leave another behind.
+    const nested = pasteText('hi\x1b[20\x1b[201~1~\rrm -rf x\r', true);
+    expect(nested).toBe('\x1b[200~hi[20[201~1~\nrm -rf x\n\x1b[201~');
+    expect(nested.slice('\x1b[200~'.length, -'\x1b[201~'.length)).not.toContain('\x1b');
   });
 
   it('types newlines as Enter without bracketed paste', () => {

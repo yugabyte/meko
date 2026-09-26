@@ -35,7 +35,7 @@ from a browser.
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
 | Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
 | Sharing | Everyone installs their own copy. One owner per install, with no shared instances. |
-| Client | Browser first. Chrome's "Install app" gives it a dock icon: the web app manifest (`manifest.webmanifest`) names it "AgentK" and supplies the logo as regular and maskable icons. `/favicon.ico` and `/apple-touch-icon.png` are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred. |
+| Client | Browser first. Chrome's "Install app" gives it a dock icon: the web app manifest (`manifest.webmanifest`) names it "AgentK Local" and supplies the logo as regular and maskable icons. `/favicon.ico` and `/apple-touch-icon.png` are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred. |
 
 ## Architecture
 
@@ -74,16 +74,21 @@ flowchart LR
 
 **Terminal path.** When you open a tab, the browser opens a WebSocket. The server spawns
 `tmux -L agentk attach -t ak-…` in a pty and pipes it through. Closing the tab kills only that pty,
-and Claude keeps running.
+and Claude keeps running. tmux has no prefix key, so Ctrl+B reaches Claude Code and tmux's own
+commands can't be typed from the terminal.
 
 **Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file.
-The `SessionStart`, `UserPromptSubmit`, `Notification` and `Stop` hooks post to a unix socket,
-which drives the badges in the rail. Your global Claude settings stay untouched.
+The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
+which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or
+`/resume` inside Claude) switches conversations, `SessionStart` carries the new session id, and
+Resume and recovery continue that conversation.
 
 ## The app
 
 The left rail holds projects, each with its repo's folder name in small type under the project
-name and the most urgent session state shown on it. The top tabs hold that project's sessions. The
+name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
+screen, use **Move up** / **Move down** in the project home's settings. The top tabs hold that project's sessions. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
 diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage.
 
@@ -128,8 +133,8 @@ or switch to an existing datapack, before creating the project.
 You give it a name and, optionally, a first prompt and a base branch (the default is the project's
 default branch). The server fetches the base from `origin` and fast-forwards your local base
 branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside
-it, and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks, or
-local edits would be overwritten), the session starts from `origin/<base>` and the activity log
+it, and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
+local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
 says why.
 
 ### Changes
@@ -138,7 +143,9 @@ Clicking the `+N −N` numbers in the footer opens a side panel with every file 
 branch since it left the base: committed, uncommitted and untracked (ignored files are left out).
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
 edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
-past that only line counts are shown. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
+past that only line counts are shown.
+Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
+read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
 disk, only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
@@ -153,8 +160,12 @@ Click **+** beside a line of any diff (shift-click a second line for a range) to
 as on a PR. Comments are drafts in `state.db` until you click **Send N comments**, which pastes
 them into Claude as one prompt, grouped by file, with the lines each one is about. If Claude is
 mid-turn or waiting on a permission prompt, they queue and go out when it's back at its prompt in
-the Code or Review stage. Each comment keeps an excerpt of its lines, so it follows them when
-Claude moves code, and is shown as outdated (still sendable) when they're gone. Sent comments are
+the Code or Review stage. Each comment keeps an excerpt of its last 20 lines (lines over 1,000 characters are cut short and
+marked with "…"), so it follows them when
+Claude moves code (its card then shows the line it's at now and the one it was written on). When
+its lines can't be found it's shown at the top of its file, still sendable: as changed if the diff
+still shows its line with other text, otherwise as not in the diff shown. Deleting a draft asks
+first. Sent comments are
 kept and shown with **Show sent**.
 
 ### Design panel
@@ -162,9 +173,10 @@ kept and shown with **Show sent**.
 During Design the panel opens as soon as the design exists and again whenever it's revised, at
 about 60% of the work area. An Artifact design is shown in a sandboxed frame (scripts allowed, no
 same-origin access, and a content policy that blocks network requests and limits scripts, styles
-and fonts to what Artifacts use), so the page can't read the login cookie or call the API.
-**Open on claude.ai** links to the published Artifact. A markdown design is rendered as sanitized
-HTML.
+and fonts to what Artifacts use, placed first in the frame's document so nothing of the page runs
+before it), so the page can't read the login cookie or call the API. **Open on claude.ai** links to
+the published Artifact. A markdown design is rendered as sanitized HTML with no forms or styles,
+and its links open in a new tab.
 
 ### Side panels
 
@@ -183,8 +195,10 @@ the session opens in. The session's tab shows the current step in its tooltip.
 
 ### Keyboard
 
-`⌘1–9` switches projects, `⌃Tab` cycles sessions, and `⌘K` opens a palette to jump to any
-session, create one, or search the project's datapacks. Keys pass through to the terminal whenever
+`⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
+normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
+session or project home, or create a session. On Linux and Windows these use Ctrl, so the terminal
+doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
 it has focus. To copy from the terminal, drag across the text: tmux selects it and sends it as
 OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) selects in the
 browser instead, and then `Ctrl+C` (`⌘C`) copies rather than interrupting Claude. Clipboard access
@@ -196,7 +210,9 @@ A browser notification fires when any session moves to *needs you* or finishes a
 tab is hidden. You can mute it per project. Only one open AgentK page shows them, the one used
 last (pages queue for a Web Lock and a page that gets focus steals it; when it closes, the next one
 takes over), so clicking a notification opens its session in the window you're using rather than
-in a forgotten background tab.
+in a forgotten background tab. Phones where a page can't show notifications itself (Android Chrome) get them through a
+minimal service worker (`/sw.js`); tapping one opens its session in an open AgentK window, or a new
+one. The service worker caches nothing and handles no requests.
 
 ### On a phone
 
@@ -205,13 +221,14 @@ app bar (the Back gesture closes it, and it holds **Search and commands** in pla
 app bar shows the session and project names (the session tab shows its status). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you. Dialogs open as bottom sheets. The app is pinned to the visible viewport (its height and,
+you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app is pinned to the visible viewport (its height and,
 where iOS pans the page for a focused field, its offset), so the on-screen keyboard shrinks it
 instead of covering the prompt; while you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Esc, a sticky Ctrl, Shift+Tab, arrows, Ctrl+C, Enter;
 with Ctrl lit, the next letter typed in the compose box or in typing mode goes to Claude as Ctrl
 plus that letter, such as Ctrl+O or Ctrl+R) and a compose box whose text goes in as one bracketed
-paste, then Enter. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
+paste (with any Escape characters removed), then Enter; if the terminal isn't connected, the text
+stays in the box. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
 runs full screen and takes the mouse). The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
@@ -231,15 +248,18 @@ never pushes the rest of the page down.
 A **project** is a git repository on the host, picked from your repos folder (`~/code`) or cloned
 into it at creation. The project only points at the repo. The one change it makes there: when a
 session starts, it fast-forwards the local base branch to `origin`. That's a `merge --ff-only`
-where the branch is checked out (git refuses if it would overwrite local edits), or a ref update
-where it isn't. It never rewrites, resets or discards anything in your main checkout. A
+with autostash off when your main checkout has the branch checked out (git refuses if it would
+overwrite local edits), or a non-forced local fetch (`git fetch . origin/<base>:<base>`) when no
+worktree has it checked out (git refuses anything but a fast-forward, and a branch being rebased
+or bisected). A base checked out in another session's worktree is left alone. Read-only git
+commands run with `GIT_OPTIONAL_LOCKS=0`, so they never take a lock Claude's own git commands need. It never rewrites, resets or discards anything in your main checkout. A
 **session** is one task. It has one worktree, one branch and one Claude conversation. Worktrees
 live outside the repo so they never show up in `git status`.
 
 ```sh
 # layout on the host
 ~/.agent-k-local/
-  config.toml              # port, TLS paths, update channel, Meko key reference, repo roots
+  config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
   state.db                 # SQLite: projects, sessions, events, auth (WAL)
   hook.sock                # Claude hooks → server
   certs/                   # self-signed pair, or symlinks to your own
@@ -254,18 +274,19 @@ depth = 1                 # 1 = only direct children
 clone_into = "~/code"     # where "Clone from URL" puts new repos
 
 [meko]
+# url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
 capture_transcripts = false  # send session transcripts to Meko conversations (off for now)
 ```
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, `git worktree add … -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), then `tmux -L agentk new -d -s ak-<proj>-<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [prompt]` with the Meko env vars set. |
-| Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and reconnects when shown again. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, `git worktree add … -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
-| Archive | Kills the tmux session. The worktree is removed if it is clean, and the branch is always kept. The record stays, so the session can be restored later. |
+| Archive | Kills the tmux session. The worktree is removed if it is clean, and the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits for Claude to start first. |
 | Discard | Chosen in Archive's confirmation step. Kills the tmux session, force-removes the worktree even with uncommitted changes, and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
-| Delete project | Removes the records and worktrees after confirmation. Never deletes the repo or the datapacks. |
+| Delete project | After confirmation, stops the project's sessions and removes their worktrees, keeping any worktree with uncommitted changes, and marks the project deleted. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks. |
 
 ```sql
 -- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.
@@ -282,10 +303,11 @@ CREATE TABLE sessions (
   id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, name TEXT,
   claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
-  status TEXT,                    -- working | needs_input | idle | exited | recovered
+  status TEXT,                    -- starting | working | needs_input | idle | exited | recovered | archived
   stage TEXT,                     -- design | code | pr | review | merge (Merge & Close) | done
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
-  plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions from before v0.13)
+  plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
+  pending_review TEXT,             -- review prompt queued for Claude ('review' | 'review-people'), or 'sent' until that turn ends
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
 CREATE TABLE designs (         -- one per session: markdown, or an Artifact's page + claude.ai link
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT, updated_at INTEGER);
@@ -299,7 +321,7 @@ CREATE TABLE session_events (  -- every hook call; feeds badges + project activi
 CREATE TABLE owner (id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT, pw_scrypt TEXT, totp_secret TEXT);
 CREATE TABLE auth_sessions (token_sha256 TEXT PRIMARY KEY, created_at INTEGER, expires_at INTEGER, user_agent TEXT, ip TEXT);
 CREATE TABLE audit_log (id INTEGER PRIMARY KEY, at INTEGER, action TEXT, detail_json TEXT);
-CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- UI prefs, update state, bad versions
+CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update state, plan limits
 ```
 
 - **Why SQLite.** You get transactions across projects, sessions and datapacks, an event history
@@ -307,13 +329,25 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- UI prefs, update state,
   file you can back up or inspect with the `sqlite3` CLI.
 - **Settings.** `journal_mode=WAL`, `synchronous=FULL` (so a host crash never loses a committed
   session record), `foreign_keys=ON` and `busy_timeout=5000`. There are so few writes that FULL
-  sync costs nothing noticeable. Old `session_events` are pruned after 30 days.
+  sync costs nothing noticeable. Old `session_events` are pruned after 30 days, except `merged`
+  events, which the Usage page counts.
 - **Not on NFS.** SQLite locking is unreliable on network filesystems. The installer checks the
   filesystem type of `~/.agent-k-local`. If it's NFS, the installer puts `state.db` on local disk
-  (`$XDG_STATE_HOME`, then `/var/tmp/$USER`) and records the path in `config.toml`.
+  (`$XDG_STATE_HOME`, then `/var/tmp/$USER`) and records the path in `config.toml`. The
+  `/var/tmp/$USER` folder must be a real directory owned by you that others can't write to, or the
+  installer stops rather than put the database (password hash, TOTP secret) somewhere another user
+  controls.
 
-`config.toml` keeps only what's needed before the database opens: the port, TLS paths, repo roots,
-the update channel and the database path. Everything the UI changes lives in `state.db`.
+`config.toml` holds host settings: the listen address and port, TLS paths, repo folders, the update
+channel, the Meko URL and key (only when typed at install), transcript capture, the tmux socket, the
+`claude` command and the database path. The Settings dialog writes its fields (repo folders, scan
+depth, clone folder, update channel) there too. Per-project settings, sessions and everything else
+live in `state.db`. Only values that differ from the defaults are written, so a changed default
+reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
+`AK_PORT` override `[server]` for one run (`npm run dev`) and are never written to the file. The Meko
+URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude
+Code's user `settings.json` (in `CLAUDE_CONFIG_DIR` if set); a later source's URL is skipped when that
+source has a key of its own, and with no URL it's Meko Cloud.
 
 ## Task lifecycle
 
@@ -344,18 +378,19 @@ stateDiagram-v2
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack, marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"). Small tasks can skip this stage at creation. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a summary taken from the design. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 4 · Review | When a review arrives, runs `/akr`: verifies each finding, fixes it, replies on every thread, votes, and pushes. | Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends `/akr` into the session. | You click **Merge & Close**. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in. |
-| 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the repo's merge method (or `gh stack` for a stacked PR). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, removes the worktree, deletes the local and remote branch, runs `git fetch --prune` in your main checkout, and archives the session. If the server restarts partway, the next poll finishes the job. | Done. The session record and its history stay. |
+| 4 · Review | When a review arrives, follows the `review` prompt: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused), and checks the AgentK review, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends the `review` prompt into the session. If Claude is mid-turn, waiting on you, or exited, the prompt is queued in `state.db` (so it survives restarts) and goes out when Claude is back at its prompt; the findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no AgentK findings are left unaddressed, the required approvals are in, every local commit is pushed to the PR, and Claude is neither working nor waiting on you in the terminal. |
+| 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, removes the worktree, deletes the local and remote branch, runs `git fetch --prune` in your main checkout, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
   **Request another round**, which posts `/agentk review`. If AgentK declines a PR (for example,
   because it's too large), the refusal is shown with a **Force review** button. Forcing is always
   your call.
 - **Repos AgentK doesn't watch.** Each project has a reviewer setting: *AgentK* or *People only*.
-  It's detected from recent PRs in the repo. With people only, the Review stage waits for CI and
+  It's detected from whether the AgentK bot has commented recently on the repo's PRs. With people only, the Review stage waits for CI and
   the required approvals.
-- **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults live
-  in `state.db`, and a repo can override one with `.agent-k/stages/<stage>.md`. This lets a team
+- **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
+  built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `approved`,
+  `review`, `review-people`, `continue`, `comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
@@ -376,16 +411,17 @@ Each session is launched with this environment:
 MEKO_DATAPACK_ID=dp_7f3…                 # dedicated: capture + memory writes
 MEKO_AGENT_ID=claude_code:billing-api     # one memory bucket per project, not per worktree dir
 MEKO_DATAPACK_IDS=dp_7f3…,dp_a01…,dp_c9e… # everything this session may read
-AK_SESSION=billing-api/fix-retry-backoff
+AK_SESSION=billing-api--fix-retry-backoff
 ```
 
-A short `--append-system-prompt` also lists the attached datapacks by name and purpose, so Claude
+A short `--append-system-prompt` also lists the attached datapacks by name and id, so Claude
 knows to pass the right `datapack_id` when it searches them.
 
 > **No Meko plugin change needed.** The Meko hooks already take `MEKO_AGENT_ID` over the folder
-> name, and they read the datapack pin from `~/.claude/meko-capture/pin-<agent id>.json`. AgentK
+> name, and they read the datapack pin from `~/.claude/meko-capture/pin-<agent id>.json` (with `:`
+> as `_`, e.g. `pin-claude_code_billing-api.json`). AgentK
 > Local sets `MEKO_AGENT_ID=claude_code:<project>` for every session and writes that pin when the
-> project is created. So every worktree of a project shares one memory bucket, and capture goes
+> project is created and again each time a session starts. So every worktree of a project shares one memory bucket, and capture goes
 > into the dedicated datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
 
 > **Transcript capture is off for now.** Sending every session's transcript overloaded Meko, so
@@ -394,7 +430,8 @@ knows to pass the right `datapack_id` when it searches them.
 > startup or when a session stops, and doesn't create a named conversation per session. Sessions
 > also get `MEKO_CHECKPOINT_INTERVAL=2147483`, so the plugin's checkpoint timer, which its
 > SessionStart hook starts for a resumed session, never fires in practice: that's the longest
-> interval Node's `setInterval` honours, and a larger one would fire every millisecond. The
+> interval Node's `setInterval` honours, and a larger one would fire every millisecond. With
+> capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`. The
 > plugin's own SessionStart, PreCompact and SessionEnd hooks still run. The shipped summary
 > written at Merge & Close is a single memory, not a transcript, and is still sent.
 
@@ -402,16 +439,16 @@ knows to pass the right `datapack_id` when it searches them.
 > new, and fires no hooks until that's answered. For a worktree, Claude keys that decision by the
 > main repository, so the server marks the project's repo as trusted in `~/.claude.json` when the
 > project is created, and checks again before each launch (other Claude processes can overwrite a
-> fresh entry when they start, so it re-checks after a moment). If the prompt still appears, the
-> session shows *needs you* with an explanation.
+> fresh entry when they start, so it re-checks after a moment). If the prompt still appears (for a
+> new, resumed or recovered session), the session shows *needs you* with an explanation.
 
 > **Meko is required.** AgentK Local doesn't run without Meko. Datapacks are how a project keeps
 > track of its work, so there is no mode without them.
 >
 > - **At install:** the installer needs a Meko API key. It reuses `MEKO_API_KEY` from
 >   `~/.claude/settings.json` if one is there, and asks for one otherwise. It also checks that the
->   `meko-agent-skills` plugin is installed at a version that honours the env vars above. The
->   install stops if the key doesn't work or the plugin is missing.
+>   `meko-agent-skills` plugin is installed and enabled. The install stops if the key doesn't work
+>   or the plugin is missing.
 > - **At project creation:** a dedicated datapack is mandatory. **Create project** stays disabled
 >   until one is chosen or created.
 > - **At session start:** every session gets the Meko environment. The server refuses to start a
@@ -432,7 +469,8 @@ message: `usage_messages(session_id, message_id, agent, model, at, input, output
 cache_write)`. Totals per session, project, model and day are sums over that table, and archived
 sessions keep counting toward their project.
 
-**What shipped.** A merged PR is the session's `merged` event (counted once per session). A push
+**What shipped.** A merged PR is the session's `merged` event, or a Done session with a PR (Merge &
+Close only ends in Done after a merge), counted once per session. A push
 straight to the base branch is found in the same transcript pass: a Bash tool result that is a
 push (git push's `To <remote>` line, or Claude Code's `gitOperation.push` marker, which also covers
 output cut short with `| tail`) with a fast-forward `old..new  src -> <base>` ref update is stored
@@ -451,8 +489,10 @@ background, and then runs the user's own status line command with the same input
 looks unchanged. That command is found at launch (local project settings, then project, then user
 settings) and passed as `AK_USER_STATUSLINE`; sessions launched before this existed use the
 user-level command saved in `run/user-statusline`; its `padding` and `refreshInterval` are copied.
-The newest report from any session wins, since they all share one account. It is kept in the `kv`
-table, and the rail shows each window with a bar, its reset time and how old the reading is,
+All sessions share one account, so reports are merged per window: a window that has reset is
+ignored, a later window replaces an earlier one, the higher use wins within a window, and a report
+missing a window keeps the last one, so an idle session re-running its status line with an old
+reading changes nothing. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,
 turning amber at 80% and red at 95%. A window disappears once its reset time passes. The numbers
 only move when a session gets a reply, so the rail says when they were last reported.
 
@@ -479,14 +519,26 @@ their own copy.
 - **First run.** The installer prints a one-time setup link: `https://host:7777/setup?token=…`.
   You open it, choose a username and password, and can optionally enrol TOTP. The token stops
   working after it is used.
-- **Sessions.** Passwords are hashed with scrypt. After login you get an `HttpOnly`, `Secure`,
-  `SameSite=Strict` cookie that lasts 14 days, renewed as you use the app. Every WebSocket upgrade
-  checks both the cookie and the `Origin` header.
+- **Sessions.** Passwords are hashed with scrypt. After login you get an `HttpOnly`,
+  `SameSite=Strict` cookie (`Secure` over HTTPS) that lasts 14 days, renewed as you use the app.
+  Changing the password signs out every other browser. Access checks key on the route a request
+  matched, so an encoded path (`/%61pi/…`) gets the same checks as `/api/…`. The API only takes
+  JSON bodies, so a plain HTML form can't post to it. Every WebSocket upgrade checks the cookie and
+  refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
+  out, and the server pings them every 30 seconds to drop ones whose network went away. A browser
+  that falls behind doesn't make the server buffer without limit: its terminal stops reading from
+  `tmux attach` until it catches up (tmux copes with a slow client), and it skips state snapshots
+  until it has drained, then gets the current one.
 - **TLS is mandatory.** Any address other than localhost requires HTTPS. You can point it at your
   own certificate from the corp CA, or let it generate a self-signed pair and show the fingerprint
-  so you can trust it once on your laptop.
-- **Guard rails.** Failed logins are rate-limited, with a lockout after repeated failures. There is
-  an audit log of logins and new sessions. Hooks use the local unix socket with a per-session
+  so you can trust it once on your laptop. The self-signed pair lasts 825 days and is made again
+  at startup once it's within 30 days of expiring (trust the new fingerprint then). No HSTS header
+  is sent: it would apply to every port of the host, including your other dev servers.
+- **Guard rails.** Failed logins are rate-limited: 5 per 15 minutes from one address (one /64 for
+  IPv6, since a client usually holds a whole one), and 50 across all clients, after which everyone
+  waits (`agent-k-local setup-link` on the host still gets you in). A wrong username takes as long
+  to refuse as a wrong password. A TOTP code works once. There is an
+  audit log of logins, failed logins and account changes. Hooks use the local unix socket with a per-session
   token, never the network port. The Design-stage edit guard asks the server over the same socket;
   if it gets no answer it lets the edit go ahead, so Claude is never stuck.
 
@@ -535,8 +587,8 @@ sequenceDiagram
   SD->>S: start
   S->>S: open state.db
   S->>T: list sessions
-  loop each session with desired = running and no pane (not one still being created)
-    S->>S: verify worktree, recreate from branch if missing
+  loop each session with desired = running and no pane (not one still being created, launched or stopped)
+    S->>S: verify worktree, recreate from its branch (or origin/branch) if missing; fail if the branch is gone
     S->>T: new-session in worktree
     alt session was mid-turn
       T->>C: claude --resume session-id "continue prompt"
@@ -557,9 +609,14 @@ comes back. **Auto-continue is on by default**, with guards:
 - **Check before continuing.** The prompt says the host restarted mid-turn. It asks Claude to check
   the worktree and the last commands (and, in the Review stage, the PR threads) before continuing,
   so finished steps aren't repeated and replies aren't posted twice.
-- **No crash loops.** A session is auto-continued at most once every 15 minutes. After two
-  recoveries in an hour, it's parked as *needs you* instead. Each project can turn auto-continue
-  off.
+- **No crash loops.** A session is auto-continued at most once every 15 minutes. Once it has been
+  auto-continued twice within an hour, the next mid-turn recovery parks it as *needs you* instead. Each project can turn
+  auto-continue off.
+- **Failed restarts back off.** If a session can't be restarted (for example, its worktree can't
+  be recreated), it shows *exited* with the reason and is retried every 5 minutes; if its branch
+  is gone, it waits for you to resume or discard it. A tmux error other than "no server running"
+  skips that check rather than being read as every pane being gone, and a live pane is never
+  replaced.
 
 ## Releases and auto-update
 
@@ -587,20 +644,25 @@ comes back. **Auto-continue is on by default**, with guards:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, claude, and the meko-agent-skills plugin
-#     verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks)
-#  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it
-#  3. installs both background services: systemd user units with linger if allowed,
+#  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git and claude
+#  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
+#  3. asks for your repos folder (default ~/code), listen address and port
+#  4. verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks) and
+#     checks the meko-agent-skills plugin
+#  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
+#     sets up TLS
+#  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  4. asks for your repos folder (default ~/code) and writes config.toml
-#  5. prints the one-time setup link
+#  7. prints the one-time setup link
 ```
 
-**Update loop.** The server checks the GitHub Releases API at startup and every 6 hours. The
-channel can be *stable*, *prerelease* or *off*. When a newer version appears, the server:
+**Update loop.** The server checks the GitHub Releases API at startup and every 6 hours
+(`update.interval_hours`). The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows an
+"Update to vX" banner (and Settings an **Update** button); a version that was rolled back is never
+offered again. When you click it, the server:
 
-1. downloads the tarball and verifies it against `SHA256SUMS`, and against the attestation if `gh`
-   is available;
+1. downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
+   attestation (with `gh`) when `[update] require_attestation = true`;
 2. unpacks it next to the current version and runs its self-test;
 3. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
    migrations on start, and points `app/current` at the new version;
@@ -632,7 +694,7 @@ window, because they never touch tmux.
 | Integrations | Meko MCP over HTTP (required), Claude Code hooks, git worktrees | Meko is a core dependency. The hooks and git are thin adapters. |
 | Release | GitHub Actions, date-based versions, artifact attestations | Versioning and supply-chain checks with no extra tooling. |
 
-*Escape hatch:* `ssh host -t tmux -L agentk attach -t ak-billing-api-fix-retry-backoff` attaches
+*Escape hatch:* `ssh host -t tmux -L agentk attach -t ak-billing-api--fix-retry-backoff` attaches
 to any session from iTerm.
 
 ## Milestones
@@ -647,7 +709,7 @@ to any session from iTerm.
   recovery on boot with guarded auto-continue, resume for exited sessions, and the "Meko
   unreachable" banner.
 - **M3 · Task lifecycle.** Stages and gates, the design panel, opening the PR, the AgentK review
-  loop with `/akr`, merge, and cleanup of worktrees and branches.
+  loop, merge, and cleanup of worktrees and branches.
 - **M4 · Shared datapacks.** Attaching shared datapacks, `MEKO_DATAPACK_IDS` and the system-prompt
   listing, and the project home page with activity and search.
 - **M5 · Ship it.** The release pipeline, `install.sh`, the update loop with rollback, and making
@@ -663,5 +725,3 @@ to any session from iTerm.
    open findings and CI is green?
 3. **Stacked PRs.** Should a session be able to produce a stack with `gh stack` instead of a single
    PR?
-4. **Merge method.** Always follow the repo's default, or let each project choose squash, rebase or
-   merge?

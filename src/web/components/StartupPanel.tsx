@@ -31,9 +31,14 @@ export function StartupPanel({ session }: { session: Session }) {
   const currentIdx = steps.findIndex((s) => s.step === current);
   const now = Date.now();
   const slow = current === 'loading' && st && now - st.stepSince > 20000;
+  const currentLabel = steps[currentIdx]?.label;
 
   return (
-    <div className="startup" role="status" aria-live="polite">
+    <div className="startup">
+      {/* Only the step is announced; the timers tick every second. */}
+      <span className="sr-only" role="status">
+        {slow ? `${currentLabel}. This can take up to a minute.` : currentLabel}
+      </span>
       <div className="startup-title">
         {st?.resumed ? 'Resuming session' : 'Starting session'}
         <Dots />
@@ -50,7 +55,7 @@ export function StartupPanel({ session }: { session: Session }) {
                 {s.label}
                 {state === 'current' && <Dots />}
               </span>
-              <span className="startup-time">{state === 'current' && st ? secs(now - st.stepSince) : ''}</span>
+              <span className="startup-time" aria-hidden="true">{state === 'current' && st ? secs(now - st.stepSince) : ''}</span>
             </li>
           );
         })}
@@ -61,7 +66,7 @@ export function StartupPanel({ session }: { session: Session }) {
       <p className="startup-stage">
         <span className="stchip">{STAGE_LABELS[session.stage]}</span> {STAGE_HINT[session.stage] ?? `This session is in the ${STAGE_LABELS[session.stage]} stage.`}
       </p>
-      {st && <p className="startup-elapsed">{secs(now - st.startedAt)} so far</p>}
+      {st && <p className="startup-elapsed" aria-hidden="true">{secs(now - st.startedAt)} so far</p>}
     </div>
   );
 }

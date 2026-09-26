@@ -13,12 +13,27 @@ export interface PrRef {
   number: number;
   url: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
+  createdAt: string;
 }
 
-export async function findPr(worktree: string, branch: string): Promise<PrRef | null> {
-  const out = await gh(worktree, 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state', '--limit', '1');
-  const arr = JSON.parse(out || '[]') as PrRef[];
-  return arr[0] ?? null;
+/** Leeway for the host's clock being ahead of GitHub's. */
+const CLOCK_SKEW_MS = 60_000;
+
+/**
+ * The PR for a branch that was opened at or after `since` (ms). Branch names can be reused,
+ * so an older PR from the same branch is never taken for this one.
+ */
+export async function findPr(worktree: string, branch: string, since: number): Promise<PrRef | null> {
+  const out = await gh(worktree, 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,createdAt', '--limit', '20');
+  return pickPr(JSON.parse(out || '[]') as PrRef[], since);
+}
+
+/** The newest PR opened since `since`, an open one first. */
+export function pickPr(prs: PrRef[], since: number): PrRef | null {
+  const fresh = prs
+    .filter((p) => Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return fresh.find((p) => p.state === 'OPEN') ?? fresh[0] ?? null;
 }
 
 interface Author {
@@ -59,11 +74,13 @@ export interface PrStatus {
   reviewDecision: '' | 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED';
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   mergeStateStatus: string;
+  /** The commit the PR's branch points at on GitHub (at the merge, once merged). */
+  headRefOid: string;
 }
 
 export async function prStatus(worktree: string, number: number): Promise<PrStatus> {
   const out = await gh(worktree, 'pr', 'view', String(number), '--json',
-    'number,url,title,body,state,reviews,comments,statusCheckRollup,reviewDecision,mergeable,mergeStateStatus');
+    'number,url,title,body,state,reviews,comments,statusCheckRollup,reviewDecision,mergeable,mergeStateStatus,headRefOid');
   return JSON.parse(out) as PrStatus;
 }
 

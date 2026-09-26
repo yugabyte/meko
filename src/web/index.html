@@ -19,10 +19,16 @@
       href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap"
     />
     <script>
-      // Apply the stored theme before first paint to avoid a flash.
+      // Apply the stored theme before first paint to avoid a flash (theme.ts keeps it up to date).
       try {
         var t = localStorage.getItem('ak-theme');
-        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.setAttribute('data-theme', t);
+          var bar = t === 'dark' ? '#111513' : '#f5f6f4';
+          document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+            m.setAttribute('content', bar);
+          });
+        }
       } catch (e) {}
     </script>
   </head>

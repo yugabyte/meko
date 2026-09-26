@@ -200,8 +200,11 @@ async function status(): Promise<void> {
   if (svc) {
     for (const s of ['server', 'tmux'] as const) console.log(`${svc.id(s).padEnd(32)} ${svc.installed(s) ? svc.state(s).text : 'not installed'}`);
   }
-  const panes = await new Tmux(cfg.tmux.socket, paths.tmuxConf).panes();
-  console.log(`tmux sessions: ${panes.size} (${[...panes.values()].filter((p) => !p.dead).length} running)`);
+  const panes = await new Tmux(cfg.tmux.socket, paths.tmuxConf).panes().catch((e) => {
+    console.log(`tmux:     couldn't list sessions (${errMsg(e)})`);
+    return null;
+  });
+  if (panes) console.log(`tmux sessions: ${panes.size} (${[...panes.values()].filter((p) => !p.dead).length} running)`);
   const probe = await probeLocal(cfg);
   console.log(`server:   ${probe.ok ? `responding (version ${probe.version})` : `not responding (${probe.error})`}`);
   console.log(`logs:     ${join(paths.logs, 'server.log')}`);
@@ -214,7 +217,8 @@ Usage: agent-k-local <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, install the background services (systemd or launchd), print the setup link
-  uninstall     Stop and remove the background services (--purge also deletes ~/.agent-k-local)
+  uninstall     Stop and remove the background services (--purge also deletes ~/.agent-k-local except its
+                session worktrees and designs; add --delete-worktrees to delete those too)
   setup-link    Print a one-time link to create (or reset) your login
   status        Show services, URL, certificate fingerprint and sessions
   logs [-f]     Print the server log (-f to follow, -n <lines>)

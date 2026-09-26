@@ -50,11 +50,40 @@ describe('PlanLimitsStore', () => {
     expect(changes).toBe(1);
     store.report(input({ used_percentage: 11, resets_at: NOW / 1000 + 3600 }, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 }), NOW + 6_000);
     expect(changes).toBe(2);
-    store.report(a, NOW + 70_000);
+    const b = input({ used_percentage: 11, resets_at: NOW / 1000 + 3600 }, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 });
+    store.report(b, NOW + 70_000);
     expect(changes).toBe(3);
     store.report({ model: {} }, NOW + 80_000);
     expect(changes).toBe(3);
-    expect(new PlanLimitsStore(db, () => undefined).current(NOW + 80_000)).toMatchObject({ fiveHour: { usedPercent: 10 }, updatedAt: NOW + 70_000 });
+    expect(new PlanLimitsStore(db, () => undefined).current(NOW + 80_000)).toMatchObject({ fiveHour: { usedPercent: 11 }, updatedAt: NOW + 70_000 });
+    db.close();
+  });
+
+  it('merges reports per window, so an idle session with an old reading changes nothing', () => {
+    const db = openDb(':memory:');
+    let changes = 0;
+    const store = new PlanLimitsStore(db, () => changes++);
+    const s = NOW / 1000;
+    store.report(input({ used_percentage: 40, resets_at: s + 3600 }, { used_percentage: 20, resets_at: s + 86_400 }), NOW);
+    expect(changes).toBe(1);
+    // Stale: the five-hour window reset an hour ago and the week reads lower. Nothing moves, even after a minute.
+    store.report(input({ used_percentage: 90, resets_at: s - 3600 }, { used_percentage: 15, resets_at: s + 86_400 }), NOW + 120_000);
+    // Only one window: the other one is kept.
+    store.report(input(undefined, { used_percentage: 20, resets_at: s + 86_400 }), NOW + 240_000);
+    expect(changes).toBe(1);
+    expect(store.current(NOW + 240_000)).toEqual({
+      fiveHour: { usedPercent: 40, resetsAt: (s + 3600) * 1000 },
+      sevenDay: { usedPercent: 20, resetsAt: (s + 86_400) * 1000 },
+      updatedAt: NOW,
+    });
+    // A new five-hour window replaces the old one, whatever its use.
+    store.report(input({ used_percentage: 2, resets_at: s + 7200 }, { used_percentage: 20, resets_at: s + 86_400 }), NOW + 250_000);
+    expect(changes).toBe(2);
+    expect(store.current(NOW + 250_000)).toMatchObject({ fiveHour: { usedPercent: 2 }, sevenDay: { usedPercent: 20 }, updatedAt: NOW + 250_000 });
+    // An earlier window that's still live is an old reading.
+    store.report(input({ used_percentage: 50, resets_at: s + 3600 }, null), NOW + 400_000);
+    expect(changes).toBe(2);
+    expect(new PlanLimitsStore(db, () => undefined).current(NOW + 400_000)).toMatchObject({ fiveHour: { usedPercent: 2 }, sevenDay: { usedPercent: 20 } });
     db.close();
   });
 });

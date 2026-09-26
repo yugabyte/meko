@@ -18,6 +18,9 @@ import {
   DEFAULT_SETTINGS, dedicatedDatapack, projectDatapacks, projectRow, projectRows, slugify, toProject, type ProjectRow,
 } from './store.js';
 
+/** How long the project home waits for each datapack's counts. */
+const DESCRIBE_TIMEOUT_MS = 5000;
+
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -84,10 +87,8 @@ export class ProjectService {
       repoPath = resolve(expandHome(req.repoPath!));
     }
     if (!isMainRepo(repoPath)) throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree).`);
-    // A repo can back several projects, but not two with the same name.
     const siblings = projectRows(this.db).filter((p) => resolve(p.repo_path) === repoPath);
-    const clash = siblings.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
-    if (clash) throw new HttpError(409, `That repo already has a project named "${clash.name}". Pick another name.`);
+    this.checkNameFree(siblings, name);
 
     // Datapack first: if Meko refuses, nothing is written locally.
     let dp: { id: string; name: string };
@@ -123,6 +124,12 @@ export class ProjectService {
     return this.get(id);
   }
 
+  /** A repo can back several projects, but not two with the same name. */
+  private checkNameFree(siblings: ProjectRow[], name: string): void {
+    const clash = siblings.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
+    if (clash) throw new HttpError(409, `That repo already has a project named "${clash.name}". Pick another name.`);
+  }
+
   private uniqueId(base: string): string {
     let id = base;
     for (let i = 2; get(this.db, 'SELECT 1 AS x FROM projects WHERE id = ?', id); i++) id = `${base}-${i}`;
@@ -134,6 +141,7 @@ export class ProjectService {
     if (req.name !== undefined) {
       const n = req.name.trim();
       if (!n) throw new HttpError(400, 'The name can\'t be empty.');
+      this.checkNameFree(projectRows(this.db).filter((p) => p.id !== id && resolve(p.repo_path) === resolve(r.repo_path)), n);
       run(this.db, 'UPDATE projects SET name = ? WHERE id = ?', n, id);
     }
     if (req.settings) {
@@ -184,10 +192,13 @@ export class ProjectService {
 
   async home(id: string): Promise<ProjectHome> {
     const project = this.get(id);
+    // Counts are extras: with Meko down, or slow, the page shows without them.
+    const mekoOk = this.core.mekoStatus.ok;
     const datapacks = await Promise.all(
       project.datapacks.map(async (d) => {
         try {
-          return { ...d, ...(await this.core.meko.describeDatapack(d.id)) };
+          if (!mekoOk) throw new Error('Meko is unreachable');
+          return { ...d, ...(await this.core.meko.describeDatapack(d.id, DESCRIBE_TIMEOUT_MS)) };
         } catch {
           return { ...d, memoryCount: null, knowledgeCount: null };
         }

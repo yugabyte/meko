@@ -60,12 +60,13 @@ const PASTE_END = '\x1b[201~';
 
 /**
  * Text from the compose box as terminal input, without the Enter that submits it. When the program
- * asked for bracketed paste it arrives as one paste, so its newlines stay newlines. Otherwise newlines
- * become carriage returns, as a keyboard would type them.
+ * asked for bracketed paste it arrives as one paste, so its newlines stay newlines, and every Escape
+ * is dropped so the text can't end the paste early (not even by rebuilding the end marker around a
+ * removed one). Otherwise newlines become carriage returns, as a keyboard would type them.
  */
 export function pasteText(text: string, bracketed: boolean): string {
   const t = text.replace(/\r\n?/g, '\n');
-  if (bracketed) return PASTE_START + t.split(PASTE_END).join('') + PASTE_END;
+  if (bracketed) return PASTE_START + t.split('\x1b').join('') + PASTE_END;
   return t.replace(/\n/g, '\r');
 }
 

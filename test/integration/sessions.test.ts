@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { postHook } from '../hook-client.js';
 import { get, run } from '../../src/server/db.js';
+import { sleep } from '../../src/server/tmux.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
@@ -349,6 +351,202 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await env.core.sessions.recover();
     expect(argvLog(env).length).toBe(launches);
     await waitFor(() => captureLog(env).length, (n) => n > captured, 10000, 'catch-up capture on boot');
+  });
+
+  it('waits for a session that is still starting before archiving it, and leaves no Claude behind', async () => {
+    const p = await newProject();
+    let discarding: Promise<unknown> | undefined;
+    env.meko.ensureConversation = async () => {
+      await waitFor(() => env.core.sessions.get('demo-repo--late').startup?.step, (st) => st === 'launch', 10000, 'worktree');
+      discarding = env.core.sessions.action('demo-repo--late', 'discard');
+      await sleep(300); // the discard is waiting for the start to finish
+      return 'conv-1';
+    };
+    const s = await env.core.sessions.create(p.id, { name: 'Late', prompt: 'hi', skipDesign: true });
+    await discarding;
+    expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
+    expect(existsSync(s.worktreePath)).toBe(false);
+    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).not.toContain('ak/late');
+    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'archived', status: 'archived' });
+
+    // If it is archived anyway before Claude starts, Claude isn't started.
+    env.meko.ensureConversation = async () => {
+      run(env.core.db, "UPDATE sessions SET desired = 'archived', status = 'archived' WHERE id = ?", 'demo-repo--gone');
+      return 'conv-2';
+    };
+    await expect(env.core.sessions.create(p.id, { name: 'Gone', prompt: 'hi', skipDesign: true })).rejects.toThrow(/archived while it was starting/);
+    expect((await env.core.tmux.panes()).has('ak-demo-repo--gone')).toBe(false);
+    expect(env.core.sessions.row('demo-repo--gone').status).toBe('archived');
+  });
+
+  it('keeps the tmux sessions of two projects on one repo apart', async () => {
+    const first = await newProject();
+    const second = await env.core.projects.create({ repoPath: env.repo, name: 'X', datapack: { mode: 'create', name: 'agent-k-local/test/x' } });
+    expect(second.id).toBe('demo-repo-x');
+    // "demo-repo" + "x-fix" and "demo-repo-x" + "fix" used to share the tmux name ak-demo-repo-x-fix.
+    const a = await env.core.sessions.create(first.id, { name: 'X fix', prompt: 'hi', skipDesign: true });
+    const b = await env.core.sessions.create(second.id, { name: 'Fix', prompt: 'hi', skipDesign: true });
+    expect([a.tmuxName, b.tmuxName]).toEqual(['ak-demo-repo--x-fix', 'ak-demo-repo-x--fix']);
+    await waitFor(() => [env.core.sessions.get(a.id).status, env.core.sessions.get(b.id).status], (st) => st.every((x) => x === 'idle'), 10000, 'both sessions');
+    const panes = await env.core.tmux.panes();
+    expect([panes.get(a.tmuxName)?.dead, panes.get(b.tmuxName)?.dead]).toEqual([false, false]);
+
+    // A name some other session (such as one from before this naming) holds is never reused.
+    await env.core.sessions.action(a.id, 'archive');
+    run(env.core.db, 'UPDATE sessions SET tmux_name = ? WHERE id = ?', 'ak-demo-repo-x--dup', a.id);
+    const c = await env.core.sessions.create(second.id, { name: 'Dup', prompt: 'hi', skipDesign: true });
+    expect(c.tmuxName).toBe('ak-demo-repo-x--dup-2');
+  });
+
+  it('never relaunches over a live Claude, and skips a reconcile tick when tmux fails', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Live', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    const launches = argvLog(env).length;
+    await expect(env.core.sessions.launch(env.core.sessions.row(s.id), { resume: true, prompt: null })).rejects.toThrow(/already running/);
+    const panes = env.core.tmux.panes.bind(env.core.tmux);
+    env.core.tmux.panes = async () => {
+      throw new Error('tmux hiccup');
+    };
+    await expect(env.core.sessions.reconcile()).rejects.toThrow(/hiccup/);
+    env.core.tmux.panes = panes;
+    await env.core.sessions.reconcile();
+    expect(argvLog(env)).toHaveLength(launches);
+    expect(env.core.sessions.get(s.id).status).toBe('idle');
+  });
+
+  it('parks a mid-turn session after two auto-continues in an hour', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Parked', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    const now = Date.now();
+    const history = [now - 40 * 60 * 1000, now - 20 * 60 * 1000];
+    run(env.core.db, "UPDATE sessions SET status = 'working', auto_continue_at = ? WHERE id = ?", JSON.stringify(history), s.id);
+    const launches = argvLog(env).length;
+    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.core.sessions.reconcile();
+    const after = env.core.sessions.get(s.id);
+    expect(after.status).toBe('needs_input');
+    expect(after.statusDetail).toMatch(/Recovered twice in the last hour/);
+    await waitFor(() => argvLog(env).length, (n) => n > launches, 10000, 'relaunch');
+    const relaunch = argvLog(env).at(-1)!.args;
+    expect(relaunch).toEqual(expect.arrayContaining(['--resume', s.claudeSessionId]));
+    expect(relaunch.join(' ')).not.toMatch(/host restarted/);
+    expect(JSON.parse(env.core.sessions.row(s.id).auto_continue_at)).toEqual(history);
+  });
+
+  it('follows /clear to the new conversation, so Resume continues that one', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Clear me', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    await env.core.tmux.submit(s.tmuxName, '/clear');
+    const moved = await waitFor(() => env.core.sessions.row(s.id).claude_session_id, (id) => id !== s.claudeSessionId, 10000, 'new session id');
+    expect(env.core.sessions.get(s.id).status).toBe('idle'); // /clear's SessionEnd isn't an exit
+    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).status;
+    }, (st) => st === 'exited', 10000, 'exited');
+    await env.core.sessions.action(s.id, 'resume');
+    const last = await waitFor(() => argvLog(env).at(-1)!.args, (a) => a.includes('--resume'), 10000, 'resume launch');
+    expect(last).toEqual(expect.arrayContaining(['--resume', moved]));
+  });
+
+  it('ignores hook events that carry an unknown token', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Tokens', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    for (const ev of [{ hook_event_name: 'SessionStart', session_id: 'someone-else' }, { hook_event_name: 'SessionEnd', reason: 'exit' }]) {
+      expect(await postHook(env.core.paths.hookSock, '/hook', 'not-a-session-token', ev)).toBe(204);
+    }
+    await sleep(300);
+    expect(env.core.sessions.row(s.id)).toMatchObject({ claude_session_id: s.claudeSessionId, status: 'idle' });
+  });
+
+  it('notices the folder-trust prompt in a recovered session, not only a new one', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Trust me', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    writeFileSync(join(env.fakeDir, 'trust-prompt'), '');
+    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.core.sessions.reconcile();
+    expect(env.core.sessions.get(s.id).status).toBe('recovered');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id);
+    }, (x) => x.status === 'needs_input' && /trust this folder/.test(x.statusDetail ?? ''), 15000, 'trust prompt noticed');
+    rmSync(join(env.fakeDir, 'trust-prompt'));
+    await env.core.tmux.sendKeys(s.tmuxName, 'Enter');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'answered');
+  });
+
+  it('backs off after a failed recovery instead of retrying every tick', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Unlucky', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    const tries = vi.spyOn(env.core.sessions, 'recoverOne');
+    // The worktree is gone and can't be restored (as when the remote is unreachable).
+    run(env.core.db, 'UPDATE projects SET repo_path = ? WHERE id = ?', join(env.home, 'gone'), p.id);
+    rmSync(s.worktreePath, { recursive: true, force: true });
+    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.core.sessions.reconcile();
+    expect(tries).toHaveBeenCalledTimes(1);
+    expect(env.core.sessions.get(s.id).status).toBe('exited');
+    expect(env.core.sessions.get(s.id).statusDetail).toMatch(/Couldn't restart Claude.*tries again in 5 minutes/);
+    await env.core.sessions.reconcile();
+    await env.core.sessions.reconcile();
+    expect(tries).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops recovering a session whose branch is gone, and says so', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Branchless', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    const tries = vi.spyOn(env.core.sessions, 'recoverOne');
+    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    execFileSync('git', ['worktree', 'remove', '--force', s.worktreePath], { cwd: env.repo });
+    execFileSync('git', ['branch', '-D', s.branch], { cwd: env.repo, stdio: 'ignore' });
+    await env.core.sessions.reconcile();
+    await env.core.sessions.reconcile();
+    expect(tries).toHaveBeenCalledTimes(1);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ status: 'exited', statusDetail: expect.stringMatching(/ak\/branchless is gone/) });
+    await expect(env.core.sessions.action(s.id, 'resume')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/is gone/) });
+  });
+
+  it('refuses a second prompt submitted while the first one starts a turn', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'One at a time', prompt: 'hi', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    const results = await Promise.allSettled([env.core.sessions.submit(s.id, 'first one'), env.core.sessions.submit(s.id, 'second one')]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    expect(String((results[1] as PromiseRejectedResult).reason)).toMatch(/working on another prompt/);
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'turn');
+    const prompts = transcriptText(s.claudeSessionId).trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.type === 'user').map((e) => e.text);
+    expect(prompts.at(-1)).toBe('first one');
+  });
+
+  it('re-pins the dedicated datapack when a session starts', async () => {
+    const p = await newProject();
+    const pin = join(process.env.MEKO_WATERMARK_DIR!, 'pin-claude_code_demo-repo.json');
+    rmSync(pin);
+    await env.core.sessions.create(p.id, { name: 'Pinned', prompt: 'hi', skipDesign: true });
+    expect(JSON.parse(readFileSync(pin, 'utf8')).datapack_id).toBe('dp-agent-k-local-test-demo');
+  });
+
+  it('deleting a project keeps worktrees with uncommitted changes, archived or not', async () => {
+    const p = await newProject();
+    const kept = await env.core.sessions.create(p.id, { name: 'Kept', prompt: 'hi', skipDesign: true });
+    const dirty = await env.core.sessions.create(p.id, { name: 'Dirty', prompt: 'hi', skipDesign: true });
+    const clean = await env.core.sessions.create(p.id, { name: 'Clean', prompt: 'hi', skipDesign: true });
+    await waitFor(() => [kept, dirty, clean].map((x) => env.core.sessions.get(x.id).status), (st) => st.every((x) => x === 'idle'), 10000, 'idle');
+    writeFileSync(join(kept.worktreePath, 'draft.txt'), 'wip\n');
+    await env.core.sessions.action(kept.id, 'archive'); // kept: uncommitted changes
+    writeFileSync(join(dirty.worktreePath, 'draft.txt'), 'wip\n');
+    await env.core.projects.delete(p.id);
+    expect(existsSync(join(kept.worktreePath, 'draft.txt'))).toBe(true);
+    expect(existsSync(join(dirty.worktreePath, 'draft.txt'))).toBe(true);
+    expect(existsSync(clean.worktreePath)).toBe(false);
+    expect((await env.core.tmux.panes()).has(dirty.tmuxName)).toBe(false);
   });
 
   it("reports plan limits from the status line and still prints the user's own status line", async () => {

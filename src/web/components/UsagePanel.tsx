@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { DailyUsage, ProjectUsage, TokenUsage } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
@@ -162,11 +162,23 @@ export function DailyChart({ daily }: { daily: DailyUsage[] }) {
   );
 }
 
+/** Beside the bar, on whichever side has room; over the bars, kept inside the plot, when neither has (phones). */
 function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage; index: number; count: number }) {
-  const left = ((index + 0.5) / count) * 100;
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const tip = ref.current;
+    const plot = tip?.parentElement;
+    if (!tip || !plot) return;
+    const room = plot.clientWidth;
+    const w = tip.offsetWidth;
+    const x = ((index + 0.5) / count) * room;
+    const gap = 12;
+    const left = x + gap + w <= room ? x + gap : x - gap - w >= 0 ? x - gap - w : Math.max(0, Math.min(room - w, x - w / 2));
+    tip.style.left = `${left}px`;
+  }, [index, count, day, usage]);
   const f = (n: number) => n.toLocaleString();
   return (
-    <div className={cx('chart-tip', left > 60 && 'flip')} style={{ left: `${left}%` }}>
+    <div className="chart-tip" ref={ref}>
       <div className="chart-tip-hd">{dayLabel(day, 'long')}</div>
       <div className="chart-tip-total">{f(totalTokens(usage))} tokens</div>
       <dl>

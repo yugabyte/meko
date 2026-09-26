@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { STAGE_LABELS, type ProjectWithSessions } from '../../shared/types';
 import { navigate } from '../router';
 import { STATUS_TEXT, cx, liveSessions } from '../util';
-import { StatusDot } from './common';
+import { StatusDot, trapTab } from './common';
 
 interface Item {
   id: string;
@@ -31,6 +31,7 @@ export function CommandPalette({
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
@@ -102,7 +103,13 @@ export function CommandPalette({
 
   return (
     <div className="overlay top" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="palette" role="dialog" aria-label="Command palette">
+      <div
+        className="palette"
+        role="dialog"
+        aria-label="Command palette"
+        ref={paletteRef}
+        onKeyDown={(e) => trapTab(e.nativeEvent, paletteRef.current)}
+      >
         <input
           id="palette-input"
           className="pal-input"

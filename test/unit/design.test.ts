@@ -50,10 +50,21 @@ describe('design capture', () => {
 describe('design frame', () => {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${DESIGN_FRAME_CSP}">`;
 
-  it('puts the policy first in <head>, before any of the page\'s scripts', () => {
+  it('puts the policy first, before any of the page\'s scripts', () => {
     const doc = designFrameDoc('<!doctype html><html lang="en"><head><script>x()</script></head><body></body></html>', null);
-    expect(doc).toBe(`<!doctype html><html lang="en"><head>${meta}<script>x()</script></head><body></body></html>`);
-    expect(designFrameDoc('<p>bare</p>', null)).toBe(`${meta}<p>bare</p>`);
+    expect(doc).toBe(`<!doctype html>${meta}<html lang="en"><head><script>x()</script></head><body></body></html>`);
+    expect(designFrameDoc('<p>bare</p>', null)).toBe(`<!doctype html>${meta}<p>bare</p>`);
+  });
+
+  it('keeps the policy in <head> for fragments with a <header>, a commented <head>, or an early script', () => {
+    // Each of these once got the policy placed after the page's own content (or inside <body>).
+    for (const page of [
+      '<style>h{}</style><header class="top">x</header><script>fetch("//x")</script>',
+      '<!-- <head> --><html><head></head><body></body></html>',
+      '<script>fetch("//x")</script><head></head><body></body>',
+    ]) {
+      expect(designFrameDoc(page, null).startsWith(`<!doctype html>${meta}`)).toBe(true);
+    }
   });
 
   it('allows no network requests and no same-origin access', () => {
@@ -63,9 +74,8 @@ describe('design frame', () => {
   });
 
   it('passes an explicit app theme to the page', () => {
-    expect(designFrameDoc('<html><head></head></html>', 'dark')).toMatch(/^<html data-theme="dark"><head>/);
-    expect(designFrameDoc('<html lang="en"><head></head></html>', 'light')).toMatch(/^<html data-theme="light" lang="en">/);
-    expect(designFrameDoc('<html><head></head></html>', null)).toMatch(/^<html><head>/);
-    expect(designFrameDoc('<htmlx></htmlx>', 'dark')).not.toContain('data-theme');
+    expect(designFrameDoc('<html><head></head></html>', 'dark')).toBe(`<!doctype html><html data-theme="dark">${meta}<html><head></head></html>`);
+    expect(designFrameDoc('<p>fragment</p>', 'light')).toMatch(/^<!doctype html><html data-theme="light"><meta /);
+    expect(designFrameDoc('<html><head></head></html>', null)).not.toContain('data-theme');
   });
 });

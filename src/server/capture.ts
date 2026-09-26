@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { claudeUserDir } from './claude.js';
 import { errMsg, type Logger } from './log.js';
 
 const MEKO_PLUGIN_PREFIX = 'meko-agent-skills@';
@@ -12,7 +13,7 @@ export function mekoCaptureDir(): string {
 }
 
 /** Install paths of the meko-agent-skills plugin from Claude Code's plugin registry. */
-export function mekoPluginInstalls(claudeDir: string = join(homedir(), '.claude')): string[] | null {
+export function mekoPluginInstalls(claudeDir: string = claudeUserDir()): string[] | null {
   try {
     const j = JSON.parse(readFileSync(join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf8'));
     const plugins = (j && typeof j.plugins === 'object' ? j.plugins : j) as Record<string, unknown> | null;

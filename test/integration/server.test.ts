@@ -75,8 +75,14 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const noCode = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery' } });
     expect(noCode.statusCode).toBe(401);
     expect(noCode.json().totpRequired).toBe(true);
-    const withCode = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery', totp: totpCode(secret) } });
+    // The code that confirmed enrollment is used up; the next one (within the drift window) works once.
+    const reused = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery', totp: totpCode(secret) } });
+    expect(reused.statusCode).toBe(401);
+    const next = totpCode(secret, Date.now() + 30_000);
+    const withCode = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery', totp: next } });
     expect(withCode.statusCode).toBe(204);
+    const replay = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery', totp: next } });
+    expect(replay.statusCode).toBe(401);
   });
 
   it('refuses cross-origin writes', async () => {
@@ -187,7 +193,7 @@ describe('web app: manifest and icons for the installed app', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^application\/manifest\+json/);
     const manifest = res.json() as { name: string; short_name: string; icons: { src: string; sizes: string; purpose: string }[] };
-    expect(manifest).toMatchObject({ name: 'AgentK Local', short_name: 'AgentK', start_url: '/', display: 'standalone' });
+    expect(manifest).toMatchObject({ name: 'AgentK Local', short_name: 'AgentK Local', start_url: '/', display: 'standalone' });
     expect(manifest.icons.map((i) => `${i.sizes} ${i.purpose}`)).toEqual(['192x192 any', '512x512 any', '512x512 maskable']);
     for (const icon of manifest.icons) {
       const img = await app.inject({ url: icon.src });
@@ -202,6 +208,15 @@ describe('web app: manifest and icons for the installed app', () => {
       expect(pngSize(img.rawPayload), url).toEqual({ png: true, w: size, h: size });
     }
     expect((await app.inject({ url: '/api/state' })).statusCode).toBe(401);
+  });
+
+  it('serves the service worker as a script at the root, so its scope is the whole app', async () => {
+    const res = await app.inject({ url: '/sw.js' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/javascript/);
+    expect(res.body).toContain('notificationclick');
+    // It must never cache: no fetch handler, so the app and API always come from the server.
+    expect(res.body).not.toMatch(/addEventListener\(['"]fetch/);
   });
 
   it('serves the icons phones and browsers look for at the root', async () => {

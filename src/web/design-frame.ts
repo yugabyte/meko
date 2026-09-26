@@ -14,14 +14,21 @@ export const DESIGN_FRAME_CSP = [
   'media-src data: blob:',
 ].join('; ');
 
-/** The frame's srcdoc: the page with the policy first in <head> and the app's theme applied. */
+/**
+ * The frame's srcdoc: the policy as the very first element, and the app's theme applied.
+ *
+ * The policy never goes after anything of the page's own. A CSP <meta> only counts inside
+ * <head>, and only for what comes after it, so inserting it after the page's `<head>` breaks on
+ * a fragment with no <head> but a <header>, a `<head>` inside a comment, or a script before
+ * <head>. Putting it first always works: a <meta> before any tag opens <html> and <head>
+ * itself; the page's own <html> then only adds attributes, and its <head> and doctype are
+ * ignored while their contents still land in <head>.
+ */
 export function designFrameDoc(html: string, theme: string | null): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${DESIGN_FRAME_CSP}">`;
-  // A policy in the page itself can only narrow this one, never widen it.
-  let doc = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + meta) : meta + html;
   // Artifacts theme themselves from prefers-color-scheme, overridden by data-theme on <html>.
-  if (theme === 'light' || theme === 'dark') {
-    doc = /<html[\s>]/i.test(doc) ? doc.replace(/<html(?=[\s>])/i, `<html data-theme="${theme}"`) : doc;
-  }
-  return doc;
+  // Ours comes first, so it wins over a data-theme the page sets itself.
+  const open = theme === 'light' || theme === 'dark' ? `<html data-theme="${theme}">` : '';
+  // A policy in the page itself can only narrow this one, never widen it.
+  return `<!doctype html>${open}${meta}${html.replace(/^\uFEFF?\s*<!doctype[^>]*>/i, '')}`;
 }

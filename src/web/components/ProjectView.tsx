@@ -10,7 +10,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, formatTokens, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, totalTokens, usageTitle } from '../util';
 import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
@@ -70,13 +70,21 @@ export function ProjectView({
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
 
+  // One session action at a time, so a double tap can't send two merges or resumes.
+  const [acting, setActing] = useState(false);
+  const actingRef = useRef(false);
   const act = async (action: SessionAction) => {
-    if (!session) return;
+    if (!session || actingRef.current) return;
+    actingRef.current = true;
+    setActing(true);
     try {
       await api.sessionAction(session.id, action);
       if (action === 'archive' || action === 'discard') disposeTerminal(session.id);
     } catch (e) {
       onError(errorMessage(e));
+    } finally {
+      actingRef.current = false;
+      setActing(false);
     }
   };
 
@@ -112,7 +120,7 @@ export function ProjectView({
       {mobile ? (
         <TopBar onMenu={onMenu} sub={session ? project.name : undefined} title={session?.name ?? project.name}>
           {session?.status === 'exited' && (
-            <button className="btn small primary" onClick={() => act('resume')}>
+            <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
               Resume
             </button>
           )}
@@ -145,6 +153,7 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
+          acting={acting}
           actions={
             <>
               {session?.prUrl && (
@@ -161,11 +170,11 @@ export function ProjectView({
                 </button>
               )}
               {session?.status === 'exited' && (
-                <button className="btn small primary" onClick={() => act('resume')}>
+                <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
                   Resume
                 </button>
               )}
-              {session && <EndSessionButton key={session.id} session={session} onAct={act} />}
+              {session && <EndSessionButton key={session.id} session={session} onAct={act} disabled={acting} />}
             </>
           }
         />
@@ -212,9 +221,9 @@ export function ProjectView({
           </div>
         )}
         {session && panel === 'design' && (
-          <DesignPanel session={session} onClose={() => setPanel(null)} onApprove={() => act('approve-design')} />
+          <DesignPanel key={session.id} session={session} onClose={() => setPanel(null)} onApprove={() => act('approve-design')} />
         )}
-        {session && panel === 'changes' && <ChangesPanel session={session} onClose={() => setPanel(null)} />}
+        {session && panel === 'changes' && <ChangesPanel key={session.id} session={session} onClose={() => setPanel(null)} />}
       </div>
 
       {session && (
@@ -240,9 +249,10 @@ export function ProjectView({
       {session && sheet && (
         <SessionSheet
           session={session}
-          stage={<StageBar session={session} project={project} onAct={act} actions={null} />}
+          stage={<StageBar session={session} project={project} onAct={act} acting={acting} actions={null} reasons />}
           canDesign={canDesign}
           pendingComments={pending}
+          acting={acting}
           info={
             <>
               {branchText}
@@ -266,12 +276,18 @@ function StageBar({
   session,
   project,
   onAct,
+  acting = false,
   actions,
+  reasons = false,
 }: {
   session: Session | null;
   project: ProjectWithSessions;
   onAct: (a: SessionAction) => Promise<void>;
+  /** A session action is in flight. */
+  acting?: boolean;
   actions: ReactNode;
+  /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
+  reasons?: boolean;
 }) {
   if (!session) {
     return (
@@ -285,28 +301,33 @@ function StageBar({
   }
   const idx = session.stage === 'done' ? STAGES.length : STAGES.indexOf(session.stage);
   const midTurn = session.status === 'working' || session.status === 'starting';
-  const blocked = session.busy;
+  const blocked = session.busy || acting;
+  // Why the Design or Code gate is closed, if it is.
+  let reason: string | null = null;
 
   let gate: ReactNode = null;
   switch (session.stage) {
-    case 'design':
+    case 'design': {
+      reason = designApprovalBlocker(session);
       gate = (
         <button
           className="gate"
-          disabled={blocked || !session.hasDesign}
-          title={session.hasDesign ? 'Approve the design and move to Code' : 'Claude hasn’t proposed a design yet'}
+          disabled={blocked || !!reason}
+          title={reason ?? 'Approve the design and move to Code'}
           onClick={() => onAct('approve-design')}
         >
           Approve design
         </button>
       );
       break;
+    }
     case 'code':
+      reason = midTurn ? 'Wait for Claude to finish its turn.' : null;
       gate = (
         <button
           className="gate"
-          disabled={blocked || midTurn}
-          title={midTurn ? 'Wait for Claude to finish its turn' : 'Commit, push and open a pull request'}
+          disabled={blocked || !!reason}
+          title={reason ?? 'Commit, push and open a pull request'}
           onClick={() => onAct('open-pr')}
         >
           Open PR
@@ -383,6 +404,7 @@ function StageBar({
       {session.stage === 'review' && !session.canMerge && session.mergeBlockers.length > 0 && (
         <div className="blockers">Merge is waiting on: {session.mergeBlockers.join(' · ')}</div>
       )}
+      {reasons && reason && <div className="blockers">{reason}</div>}
     </div>
   );
 }

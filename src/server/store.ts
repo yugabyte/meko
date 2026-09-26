@@ -1,5 +1,5 @@
 import { commentCounts } from './comments.js';
-import { all, get, type Db } from './db.js';
+import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
@@ -159,4 +159,12 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
 /** Lowercase, [a-z0-9-] only; the same rule Meko uses for agent ids. */
 export function slugify(s: string, max = 40): string {
   return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '') || 'x';
+}
+
+/**
+ * Drops session events older than 30 days, except merges: the Usage page counts merged PRs
+ * from them, for all time.
+ */
+export function pruneSessionEvents(db: Db, now = Date.now()): void {
+  run(db, `DELETE FROM session_events WHERE at < ? AND kind != 'merged'`, now - 30 * 24 * 3600 * 1000);
 }

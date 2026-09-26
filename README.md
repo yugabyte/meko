@@ -12,7 +12,8 @@ from a browser:
   New sessions start from the base branch after it's fast-forwarded to `origin`.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
-  can still attach from iTerm: `tmux -L agentk attach -t ak-<project>-<session>`.
+  can still attach from iTerm: `tmux -L agentk attach -t ak-<project>--<session>` (sessions created
+  before this naming keep `ak-<project>-<session>`).
 - **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
@@ -34,7 +35,8 @@ from a browser:
   shared ones.
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
-- **Updates itself** from GitHub Releases without interrupting running sessions.
+- **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback
+  if a new version won't start.
 
 ![AgentK Local: a session in the Code stage, with the live Claude Code terminal, the Changes panel with a draft review comment, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
 
@@ -91,7 +93,8 @@ On a Mac:
 | `agent-k-local status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
 | `agent-k-local logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
 | `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
-| `tmux -L agentk attach -t ak-<project>-<session>` | Attach to a session from any terminal |
+| `agent-k-local uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
+| `tmux -L agentk attach -t ak-<project>--<session>` | Attach to a session from any terminal |
 
 ## Develop
 

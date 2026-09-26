@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { Paths } from './paths.js';
 
 /**
@@ -203,12 +203,37 @@ export interface LaunchSpec {
   appendSystemPrompt: string;
   prompt: string | null;
   env: Record<string, string>;
+  /** Variables the session must not inherit (from tmux's environment or the user's profile). */
+  unsetEnv?: string[];
+}
+
+/** Shells that parse `-c` text the POSIX way, so the quoting in our launcher holds. */
+const POSIX_SHELLS = new Set(['sh', 'bash', 'zsh', 'ksh', 'mksh', 'pdksh', 'oksh', 'dash', 'ash', 'yash']);
+/** Other shells whose `-l -c` can run a plain `exec /bin/sh <path>` when the path needs no quoting. */
+const PLAIN_EXEC_SHELLS = new Set(['fish']);
+/** Argument passed to the launcher when it re-runs itself inside the login shell. */
+const INNER = '--in-login-shell';
+
+/**
+ * How the launcher runs its second half through the user's login shell: `[shell, -c text]`.
+ * The text is plain POSIX for POSIX shells; fish quotes differently, so it only gets a path
+ * that needs no quoting at all. Anything else (tcsh, csh: no `-l` with `-c`) falls back to `/bin/sh -l`.
+ */
+export function loginShellCommand(shell: string, script: string): [string, string] {
+  const name = basename(shell).replace(/^-/, '');
+  const inner = (path: string) => `exec /bin/sh ${path} ${INNER}`;
+  if (POSIX_SHELLS.has(name)) return [shell, inner(shq(script))];
+  if (PLAIN_EXEC_SHELLS.has(name) && /^[\w./-]+$/.test(script)) return [shell, inner(script)];
+  return ['/bin/sh', inner(shq(script))];
 }
 
 /**
  * Writes the per-session launcher. It runs Claude through the user's login
  * shell so PATH and tools match an interactive terminal, even when the tmux
- * server was started by systemd or launchd with a bare environment.
+ * server was started by systemd or launchd with a bare environment. The script
+ * runs twice: first it clears inherited markers and re-runs itself inside the
+ * login shell; then, after the user's profile, it sets the session's variables
+ * (so a profile can't override them) and starts Claude.
  */
 export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
   mkdirSync(paths.run, { recursive: true });
@@ -221,21 +246,27 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
   if (spec.planMode) args.push('--permission-mode', 'plan');
   for (const d of spec.addDirs) args.push('--add-dir', d);
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
-  if (spec.prompt) args.push(spec.prompt);
+  // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
+  if (spec.prompt) args.push('--', spec.prompt);
 
-  const inner = `exec ${shq(spec.claudeCommand)} ${args.map(shq).join(' ')}`;
-  const shell = loginShell();
+  const file = join(paths.run, `${spec.sessionId}.sh`);
+  const [shell, cmd] = loginShellCommand(loginShell(), file);
+  const unset = (spec.unsetEnv ?? []).filter((k) => !(k in spec.env));
   const lines = [
     '#!/bin/sh',
     `# agent-k-local launcher for session ${spec.sessionId}. Rewritten on every launch.`,
+    `if [ "$1" != ${INNER} ]; then`,
+    `  cd ${shq(spec.worktree)} || exit 1`,
+    // Never let an outer Claude Code session's markers, or this install's own state dir, leak in.
+    `  unset ${CLAUDE_SESSION_MARKERS.join(' ')} TMUX TMUX_PANE AK_HOME`,
+    `  exec ${shq(shell)} -l -c ${shq(cmd)}`,
+    'fi',
     `cd ${shq(spec.worktree)} || exit 1`,
-    // Never let an outer Claude Code session's markers leak in.
-    `unset ${CLAUDE_SESSION_MARKERS.join(' ')} TMUX TMUX_PANE`,
+    ...(unset.length ? [`unset ${unset.join(' ')}`] : []),
     ...Object.entries(spec.env).map(([k, v]) => `export ${k}=${shq(v)}`),
-    `exec ${shq(shell)} -l -c ${shq(inner)}`,
+    `exec ${shq(spec.claudeCommand)} ${args.map(shq).join(' ')}`,
     '',
   ];
-  const file = join(paths.run, `${spec.sessionId}.sh`);
   writeFileSync(file, lines.join('\n'), { mode: 0o700 });
   chmodSync(file, 0o700);
   return file;
@@ -253,5 +284,5 @@ export function loginShell(): string {
 
 /** Where Claude Code stores a session transcript for a given cwd. */
 export function transcriptPathFor(cwd: string, claudeSessionId: string): string {
-  return join(homedir(), '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${claudeSessionId}.jsonl`);
+  return join(claudeUserDir(), 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${claudeSessionId}.jsonl`);
 }

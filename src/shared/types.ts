@@ -496,7 +496,12 @@ export interface TotpEnrollResponse {
 // /ws/events: server → client JSON ServerEvent. A full `state` is sent on
 // connect and again (debounced) after every change.
 //
-// /ws/term/:sessionId: client → server JSON TermClientMessage (text frames).
+// Both sockets close with code 4401 when the login is missing or gone (logout, a password
+// change or reset); the client should show the login screen rather than reconnect. The
+// server pings every 30 s and drops sockets that don't answer.
+//
+// /ws/term/:sessionId[?cols=&rows=]: the optional query is the browser terminal's size, used
+// to start the tmux client at that size. Client → server JSON TermClientMessage (text frames).
 // server → client: binary frames are raw terminal output; text frames are
 // JSON TermServerMessage.
 
@@ -510,16 +515,21 @@ export type TermClientMessage =
 
 export type TermServerMessage =
   | { type: 'exit'; reason: string }
-  | { type: 'error'; error: string };
+  /** `retry`: the failure may pass (the attach couldn't start), so reconnect with backoff; otherwise it's final. */
+  | { type: 'error'; error: string; retry?: boolean };
 
 // ---- REST routes (all JSON; errors are { error: string } with a 4xx/5xx) ----
 //
+// Request bodies must be JSON (`Content-Type: application/json`); other body types get 415.
+// Every /api route except the three marked "no auth" answers 401 without a login cookie, and the
+// cookie is re-issued (fresh Max-Age) as its expiry slides forward.
+//
 // GET    /healthz                              → { ok: true, version }
 // GET    /api/auth/status                      → AuthStatus            (no auth)
-// POST   /api/auth/setup      SetupRequest     → 204 + cookie          (no auth)
+// POST   /api/auth/setup      SetupRequest     → 204 + cookie | 400 | 403 (bad link) | 429   (no auth)
 // POST   /api/auth/login      LoginRequest     → 204 + cookie | 401 LoginError | 429
 // POST   /api/auth/logout                      → 204
-// POST   /api/auth/password   { current, next }→ 204
+// POST   /api/auth/password   { current, next }→ 204 | 400; signs out every other browser
 // POST   /api/auth/totp/enroll                 → TotpEnrollResponse
 // POST   /api/auth/totp/confirm { code }       → 204
 // POST   /api/auth/totp/disable { code }       → 204
@@ -547,7 +557,7 @@ export type TermServerMessage =
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/settings                         → Settings
-// PUT    /api/settings        Partial<Settings>→ Settings
+// PUT    /api/settings        Partial<Settings>→ Settings   (bind and port are read-only: set them in config.toml)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus
 // POST   /api/update/apply                     → UpdateStatus

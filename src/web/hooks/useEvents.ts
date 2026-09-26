@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppState, ServerEvent } from '../../shared/types';
-import { api, wsUrl } from '../api';
+import { api, checkLogin, wsUrl, WS_UNAUTHORIZED } from '../api';
 
 export type Conn = 'connecting' | 'open' | 'closed';
 
@@ -13,7 +13,8 @@ export interface NotifyEvent {
 
 /**
  * Live AppState from /ws/events. Reconnects with exponential backoff and
- * falls back to GET /api/state for the first paint.
+ * falls back to GET /api/state for the first paint. A close for a lost login
+ * (4401) goes to the login screen instead of retrying.
  */
 export function useEvents(onNotify: (n: NotifyEvent) => void): { state: AppState | null; conn: Conn } {
   const [state, setState] = useState<AppState | null>(null);
@@ -40,10 +41,7 @@ export function useEvents(onNotify: (n: NotifyEvent) => void): { state: AppState
       if (stopped) return;
       setConn('connecting');
       ws = new WebSocket(wsUrl('/ws/events'));
-      ws.onopen = () => {
-        attempt = 0;
-        setConn('open');
-      };
+      ws.onopen = () => setConn('open');
       ws.onmessage = (ev) => {
         let msg: ServerEvent;
         try {
@@ -51,15 +49,24 @@ export function useEvents(onNotify: (n: NotifyEvent) => void): { state: AppState
         } catch {
           return;
         }
-        if (msg.type === 'state') setState(msg.state);
-        else if (msg.type === 'notify') notifyRef.current(msg);
+        if (msg.type === 'state') {
+          // The server sends the state first thing, so the connection has proved itself: the
+          // backoff starts over. (An open alone doesn't: the server upgrades, then may refuse.)
+          attempt = 0;
+          setState(msg.state);
+        } else if (msg.type === 'notify') notifyRef.current(msg);
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         ws = null;
         if (stopped) return;
         setConn('closed');
         const delay = Math.min(15000, 500 * 2 ** attempt++) + Math.random() * 300;
-        timer = setTimeout(connect, delay);
+        const retry = () => {
+          if (!stopped) timer = setTimeout(connect, delay);
+        };
+        // Logged out, password changed or login expired: the 401 handler shows the login screen.
+        if (ev.code === WS_UNAUTHORIZED) void checkLogin().then((ok) => ok && retry());
+        else retry();
       };
       ws.onerror = () => ws?.close();
     };

@@ -5,15 +5,24 @@ import { isLoopback, type Config } from './config.js';
 export type Probe = { ok: true; version: string } | { ok: false; error: string };
 
 /**
- * Asks the local server for /healthz over loopback. The certificate isn't
- * verified: this only talks to 127.0.0.1, and the default cert is self-signed.
+ * The address to reach a server listening on `bind` from this host: loopback for the wildcard
+ * addresses and localhost, else the address itself (say ::1, or one interface's IP).
+ */
+export function probeHost(bind: string): string {
+  const b = bind.trim().replace(/^\[(.*)\]$/, '$1');
+  return !b || b === '0.0.0.0' || b === '::' || b === 'localhost' ? '127.0.0.1' : b;
+}
+
+/**
+ * Asks the local server for /healthz. The certificate isn't verified: this only
+ * talks to an address on this host, and the default cert is self-signed.
  */
 export function probeLocal(cfg: Config, timeoutMs = 3000): Promise<Probe> {
   const tls = !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind);
   const req = tls ? httpsRequest : httpRequest;
   return new Promise((resolve) => {
     const r = req(
-      { host: '127.0.0.1', port: cfg.server.port, path: '/healthz', method: 'GET', timeout: timeoutMs, rejectUnauthorized: false },
+      { hostname: probeHost(cfg.server.bind), port: cfg.server.port, path: '/healthz', method: 'GET', timeout: timeoutMs, rejectUnauthorized: false },
       (res) => {
         let body = '';
         res.setEncoding('utf8');

@@ -3,12 +3,12 @@ import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
 import { ensureWorkspaceTrust } from './trust.js';
 import { userInfo } from 'node:os';
-import type { AppState, MekoStatus, ServerEvent, UpdateStatus } from '../shared/types.js';
+import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
 import { CommentService } from './comments.js';
 import { resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
-import { run, type Db } from './db.js';
+import { all, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
@@ -18,9 +18,9 @@ import type { Paths } from './paths.js';
 import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Lifecycle } from './lifecycle.js';
-import { projectRows, toProject } from './store.js';
+import { projectRows, pruneSessionEvents, toProject } from './store.js';
 import { Tmux, writeTmuxConf } from './tmux.js';
-import { ZERO_USAGE, usageByProject } from './usage.js';
+import { ZERO_USAGE, addUsage } from './usage.js';
 
 export interface CoreOptions {
   paths: Paths;
@@ -112,12 +112,14 @@ export class Core extends EventEmitter {
   state(): AppState {
     return {
       projects: (() => {
-        const usage = usageByProject(this.db);
-        return projectRows(this.db).map((r) => ({
-          ...toProject(this.db, r),
-          sessions: this.sessions.listForProject(r.id),
-          usage: usage.get(r.id) ?? { ...ZERO_USAGE },
-        }));
+        const projects = projectRows(this.db).map((r) => ({ ...toProject(this.db, r), sessions: this.sessions.listForProject(r.id) }));
+        // Summed from the session manager's per-session totals (loaded by listForProject), archived
+        // sessions included, instead of scanning every usage row on each state push.
+        const usage = new Map<string, TokenUsage>();
+        for (const s of all<{ id: string; project_id: string }>(this.db, 'SELECT id, project_id FROM sessions')) {
+          usage.set(s.project_id, addUsage(usage.get(s.project_id) ?? ZERO_USAGE, this.sessions.runtime(s.id).usage));
+        }
+        return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
       })(),
       meko: this.mekoStatus,
       update: this.updateStatus(),
@@ -145,11 +147,13 @@ export class Core extends EventEmitter {
       (token, payload) => this.sessions.guard(token, payload),
       (token, input) => this.sessions.onStatusLine(token, input),
     );
-    await this.tmux.ensureServer();
+    // A tmux service that is down must not keep the web server from starting: the UI stays
+    // reachable, and recovery (which needs tmux) retries on every reconcile tick.
+    await this.tmux.ensureServer().catch((e) => this.log.error('tmux is not available', e));
     await this.checkMeko();
     await this.sessions.recover();
     void this.sessions.refreshDiffStats().catch(() => undefined);
-    run(this.db, 'DELETE FROM session_events WHERE at < ?', Date.now() - 30 * 24 * 3600 * 1000);
+    pruneSessionEvents(this.db);
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
       this.every(60000, () => this.checkMeko());

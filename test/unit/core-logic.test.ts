@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LoginLimiter, base32Decode, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
+  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
-import { DEFAULT_CONFIG, loadConfig, mekoWebUrl, resolveMekoWebUrl, saveConfig } from '../../src/server/config.js';
+import { DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig } from '../../src/server/config.js';
 import { openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, isLogin } from '../../src/server/github.js';
@@ -50,6 +50,22 @@ describe('auth', () => {
     expect(l.blocked('5.6.7.8', 10)).toBe(false);
     expect(l.blocked('1.2.3.4', 2000)).toBe(false);
   });
+
+  it('counts IPv6 failures per /64, and caps failures across all clients', () => {
+    expect(clientKey('2001:db8:1:2::5')).toBe('2001:db8:1:2::/64');
+    expect(clientKey('2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64');
+    expect(clientKey('::ffff:10.0.0.1')).toBe('10.0.0.1');
+    expect(clientKey('::1')).toBe('0:0:0:0::/64');
+    const l = new LoginLimiter(3, 1000, 10);
+    for (let i = 0; i < 3; i++) l.fail(`2001:db8:1:2::${i + 1}`, 0);
+    expect(l.blocked('2001:db8:1:2::99', 10)).toBe(true);
+    expect(l.blocked('2001:db8:1:3::1', 10)).toBe(false);
+    for (let i = 0; i < 7; i++) l.fail(`10.0.0.${i}`, 0);
+    expect(l.blocked('192.168.1.1', 10)).toBe(true); // 10 failures site-wide
+    l.reset('192.168.1.1');
+    expect(l.blocked('192.168.1.1', 10)).toBe(true);
+    expect(l.blocked('192.168.1.1', 2000)).toBe(false);
+  });
 });
 
 describe('config and db', () => {
@@ -73,6 +89,61 @@ describe('config and db', () => {
     saveConfig(paths, cfg);
     expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = true');
     expect(loadConfig(paths).meko.captureTranscripts).toBe(true);
+  });
+
+  it('writes only settings that differ from the defaults', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.repos.depth = 2;
+    cfg.meko.apiKey = 'k';
+    saveConfig(paths, cfg);
+    const text = readFileSync(paths.config, 'utf8');
+    expect(text).toMatch(/^# agent-k-local configuration/);
+    expect(text).toContain('depth = 2');
+    expect(text).toContain('api_key = "k"');
+    expect(text.slice(text.indexOf('\n\n'))).not.toMatch(/port|roots|\[server\]|\[tmux\]/);
+    expect(loadConfig(paths)).toEqual({ ...DEFAULT_CONFIG, repos: { ...DEFAULT_CONFIG.repos, depth: 2 }, meko: { ...DEFAULT_CONFIG.meko, apiKey: 'k' } });
+    saveConfig(paths, structuredClone(DEFAULT_CONFIG));
+    expect(loadConfig(paths)).toEqual(DEFAULT_CONFIG);
+  });
+
+  it('keeps defaults, with a warning, for values of the wrong type', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    mkdirSync(paths.home, { recursive: true });
+    writeFileSync(paths.config, '[repos]\nroots = "~/src"\ndepth = 3\nclone_into = 5\n[server]\nport = "8080"\n[tmux]\nsocket = "mine"\n[update]\nrequire_attestation = true\n');
+    const warnings: string[] = [];
+    const cfg = loadConfig(paths, (m) => warnings.push(m));
+    expect(cfg.repos).toEqual({ roots: ['~/code'], depth: 3, cloneInto: '~/code' });
+    expect(cfg.server.port).toBe(7777);
+    expect(cfg.tmux.socket).toBe('mine');
+    expect(cfg.update.requireAttestation).toBe(true);
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain('repos.roots should be a list of strings');
+    expect(warnings.join('\n')).toContain('server.port should be a number');
+  });
+
+  it('never writes AK_BIND or AK_PORT into config.toml', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.server.port = 8443;
+    saveConfig(paths, cfg);
+    const saved = { bind: process.env.AK_BIND, port: process.env.AK_PORT };
+    try {
+      process.env.AK_BIND = '127.0.0.1';
+      process.env.AK_PORT = '9999';
+      const live = loadConfig(paths);
+      expect(live.server).toEqual({ bind: '127.0.0.1', port: 9999 });
+      live.repos.depth = 2; // a settings change made while running under the overrides
+      saveConfig(paths, live);
+    } finally {
+      for (const [k, v] of [['AK_BIND', saved.bind], ['AK_PORT', saved.port]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    const back = loadConfig(paths);
+    expect(back.server).toEqual({ bind: '0.0.0.0', port: 8443 });
+    expect(back.repos.depth).toBe(2);
   });
 
   it('finds the Meko web app for known MCP hosts only', () => {
@@ -118,8 +189,10 @@ describe('config and db', () => {
     add('s1', 'cleanup');
     add('s2', 'review');
     // Go back to schema 6, the six-stage release, and upgrade again (7 is Merge & Close; later
-    // migrations add tables, so drop them first).
-    db.exec('DROP TABLE pushes; PRAGMA user_version = 6');
+    // migrations add tables and columns, so drop them first).
+    db.exec('DROP TABLE pushes');
+    if (db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'pending_review'").get()) db.exec('ALTER TABLE sessions DROP COLUMN pending_review');
+    db.exec('PRAGMA user_version = 6');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -212,5 +285,72 @@ describe('setup link lifetime', () => {
     expect(setupTokenOutstanding(db)).toBe(true);
     consumeSetupToken(db, t);
     expect(setupTokenOutstanding(db)).toBe(false);
+  });
+});
+
+describe('Meko credentials', () => {
+  const keys = ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL', 'CLAUDE_CONFIG_DIR'] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+  const claudeSettings = (v: unknown) => {
+    const dir = mkdtempSync(join(tmpdir(), 'akl-claude-'));
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify(v));
+    process.env.CLAUDE_CONFIG_DIR = dir;
+  };
+  const clearEnv = () => {
+    for (const k of ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL'] as const) delete process.env[k];
+  };
+
+  it('treats an old config.toml that saved the default URL as unset', () => {
+    clearEnv();
+    claudeSettings({ env: { MEKO_MCP_URL: 'https://mcp.example.dev/mcp', MEKO_API_KEY: 'dev-key' } });
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    mkdirSync(paths.home, { recursive: true });
+    writeFileSync(paths.config, `[meko]\nurl = "${DEFAULT_MEKO_URL}"\napi_key = ""\n`);
+    const cfg = loadConfig(paths);
+    expect(cfg.meko.url).toBe('');
+    expect(resolveMeko(cfg)).toEqual({ url: 'https://mcp.example.dev/mcp', apiKey: 'dev-key' });
+    saveConfig(paths, cfg);
+    expect(readFileSync(paths.config, 'utf8')).not.toContain('url');
+  });
+
+  it('takes the URL that goes with the key', () => {
+    clearEnv();
+    claudeSettings({ env: { MEKO_MCP_URL: 'https://settings.example/mcp', MEKO_API_KEY: 'settings-key' } });
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    expect(resolveMeko(cfg)).toEqual({ url: 'https://settings.example/mcp', apiKey: 'settings-key' });
+    process.env.MEKO_API_KEY = 'env-key';
+    expect(resolveMeko(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'env-key' });
+    process.env.MEKO_MCP_URL = 'https://env.example/mcp';
+    expect(resolveMeko(cfg)).toEqual({ url: 'https://env.example/mcp', apiKey: 'env-key' });
+    cfg.meko.apiKey = 'config-key';
+    expect(resolveMeko(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key' });
+    cfg.meko.url = 'https://config.example/mcp';
+    expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'config-key' });
+    cfg.meko.apiKey = '';
+    expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key' });
+  });
+
+  it('takes a URL from a later source that has no key of its own', () => {
+    clearEnv();
+    claudeSettings({ env: { MEKO_MCP_URL: 'https://self-hosted.example/mcp' } });
+    process.env.MEKO_API_KEY = 'env-key';
+    expect(resolveMeko(structuredClone(DEFAULT_CONFIG))).toEqual({ url: 'https://self-hosted.example/mcp', apiKey: 'env-key' });
+  });
+
+  it("survives a Claude Code settings file whose env isn't an object", () => {
+    clearEnv();
+    for (const env of [null, ['x'], 'text']) {
+      claudeSettings({ env });
+      expect(readClaudeSettingsEnv()).toEqual({});
+      expect(resolveMekoWebUrl(structuredClone(DEFAULT_CONFIG))).toBe('https://cloud.mekodata.ai');
+    }
+    claudeSettings(null);
+    expect(readClaudeSettingsEnv()).toEqual({});
   });
 });

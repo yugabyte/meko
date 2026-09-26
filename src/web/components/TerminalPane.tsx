@@ -42,7 +42,16 @@ export function TerminalPane({ session }: { session: Session }) {
       <div className="term-wrap" onClick={() => (!touch || term.typing) && term.focus()}>
         <div className="term-host" ref={hostRef} />
         {status === 'starting' && <StartupPanel session={session} />}
-        {overlay && <div className="term-overlay">{overlay}</div>}
+        {overlay && (
+          <div className="term-overlay">
+            {overlay}
+            {term.failed && term.conn === 'ended' && (
+              <button className="btn small" onClick={() => term.reconnect()}>
+                Try again
+              </button>
+            )}
+          </div>
+        )}
         {term.notice && (
           <div className="term-toast" role="status">
             {term.notice}

@@ -115,3 +115,22 @@ export function usageTitle(u: TokenUsage): string {
   const f = (n: number) => n.toLocaleString();
   return `Tokens: ${f(totalTokens(u))} total · ${f(u.output)} output · ${f(u.input)} input · ${f(u.cacheWrite)} cache write · ${f(u.cacheRead)} cache read · ${u.messages} responses`;
 }
+
+/** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
+const DESIGN_READY = 'Design ready for your approval';
+
+/** Why Approve design can't be pressed right now, or null when it can. Mirrors the server's checks. */
+export function designApprovalBlocker(session: Session): string | null {
+  // A question or permission prompt from Claude isn't the design; the server refuses to approve over it.
+  // (Plan mode's approval dialog can carry Claude's own wording, so any mention of a plan is allowed.)
+  const otherPrompt =
+    session.status === 'needs_input' &&
+    !!session.statusDetail &&
+    session.statusDetail !== DESIGN_READY &&
+    !/plan/i.test(session.statusDetail);
+  if (!session.hasDesign) return 'Claude hasn’t proposed a design yet.';
+  if (session.status === 'working' || session.status === 'starting') return 'Wait for Claude to finish its turn.';
+  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (otherPrompt) return 'Claude is waiting on you in the terminal. Answer it first.';
+  return null;
+}

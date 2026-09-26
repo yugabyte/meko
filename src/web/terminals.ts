@@ -6,7 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import type { TermClientMessage, TermServerMessage } from '../shared/types';
-import { wsUrl } from './api';
+import { checkLogin, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52 } from './clipboard';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
@@ -67,6 +67,18 @@ const FLING_MIN = 0.3;
 const FLING_STOP = 0.05;
 /** Pause between a compose paste and the Enter that submits it, as the server does for prompts. */
 const SUBMIT_DELAY = 300;
+/**
+ * A connection that stays up this long resets the reconnect backoff. An open alone proves nothing:
+ * the server upgrades first, then may turn the socket away (a lost login, a failed attach).
+ */
+const STABLE_MS = 5000;
+/** On phones, a terminal taken off screen lets go of its tmux window after this long. */
+const DETACH_RELEASE_MS = 5000;
+
+/** Why the pty behind a terminal exited, in words. */
+const EXIT_REASONS: Record<string, string> = {
+  detached: 'The terminal was detached. Reconnecting…',
+};
 
 class SessionTerminal {
   readonly term: Terminal;
@@ -75,6 +87,11 @@ class SessionTerminal {
   private ws: WebSocket | null = null;
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** When the current socket opened (ms), or 0. */
+  private openedAt = 0;
+  /** Whether a connection was ever started; the first attach starts it, at the terminal's size. */
+  private started = false;
+  private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private resizeObs: ResizeObserver | null = null;
   private lastSize = { cols: 0, rows: 0 };
@@ -99,6 +116,8 @@ class SessionTerminal {
   ctrl = false;
   conn: TermConn = 'connecting';
   message: string | null = null;
+  /** The server said why it can't attach (in `message`): no reconnecting until reconnect(). */
+  failed = false;
   /** A short-lived note after copying ("Copied", or why it failed). */
   notice: string | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -172,7 +191,6 @@ class SessionTerminal {
       if (e.ctrlKey && e.key === 'Tab') return false;
       return true;
     });
-    this.connect();
   }
 
   subscribe(fn: () => void): () => void {
@@ -182,15 +200,23 @@ class SessionTerminal {
 
   private async copy(text: string) {
     const ok = await copyText(text);
-    this.notice = ok
-      ? 'Copied'
-      : `Couldn’t copy: the browser blocked the clipboard. Select with ${IS_MAC ? 'Option' : 'Shift'}-drag and press ${IS_MAC ? '⌘C' : 'Ctrl+C'}.`;
+    this.showNotice(
+      ok
+        ? 'Copied'
+        : `Couldn’t copy: the browser blocked the clipboard. Select with ${IS_MAC ? 'Option' : 'Shift'}-drag and press ${IS_MAC ? '⌘C' : 'Ctrl+C'}.`,
+      ok ? 1500 : 6000,
+    );
+  }
+
+  /** Shows a short note over the terminal for `ms`. */
+  showNotice(text: string, ms: number) {
+    this.notice = text;
     this.listeners.forEach((l) => l());
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => {
       this.notice = null;
       this.listeners.forEach((l) => l());
-    }, ok ? 1500 : 6000);
+    }, ms);
   }
 
   private setConn(c: TermConn, message: string | null = null) {
@@ -199,23 +225,42 @@ class SessionTerminal {
     this.listeners.forEach((l) => l());
   }
 
-  private send(msg: TermClientMessage) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+  /** Returns false (and drops the message) when not connected. */
+  private send(msg: TermClientMessage): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify(msg));
+    return true;
   }
 
   private connect() {
     if (this.disposed) return;
+    this.started = true;
     this.setConn('connecting');
-    const ws = new WebSocket(wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}`));
+    // Fit first when on screen, so the server starts the tmux client at this terminal's size.
+    if (this.el.isConnected && this.el.clientWidth) {
+      try {
+        this.fit.fit();
+      } catch {
+        /* not laid out yet: the size is reported on open */
+      }
+    }
+    const { cols, rows } = this.term;
+    const ws = new WebSocket(wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}?cols=${cols}&rows=${rows}`));
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.onopen = () => {
-      this.attempt = 0;
+      this.openedAt = Date.now();
       this.setConn('open');
       this.lastSize = { cols: 0, rows: 0 };
       this.refit();
+      // Off screen refit does nothing: report the size anyway, so tmux doesn't keep the start size.
+      if (!this.lastSize.cols) {
+        this.lastSize = { cols: this.term.cols, rows: this.term.rows };
+        this.send({ type: 'resize', ...this.lastSize });
+      }
     };
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return;
       if (typeof ev.data === 'string') {
         let msg: TermServerMessage;
         try {
@@ -223,30 +268,52 @@ class SessionTerminal {
         } catch {
           return;
         }
-        if (msg.type === 'exit') this.setConn('ended', msg.reason);
-        else if (msg.type === 'error') this.setConn('ended', msg.error);
+        if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting…');
+        else if (msg.type === 'error') {
+          // A missing or archived session is final (Try again); a failed attach may pass, so back off and retry.
+          this.failed = !msg.retry;
+          this.setConn('ended', msg.retry ? `${msg.error} Retrying…` : msg.error);
+        }
         return;
       }
       this.term.write(new Uint8Array(ev.data as ArrayBuffer));
     };
-    ws.onclose = () => {
-      if (this.ws === ws) this.ws = null;
+    ws.onclose = (ev) => {
+      if (this.ws !== ws) return;
+      this.ws = null;
       if (this.disposed) return;
+      if (this.openedAt && Date.now() - this.openedAt >= STABLE_MS) this.attempt = 0;
+      this.openedAt = 0;
       if (this.conn !== 'ended') this.setConn('closed');
-      if (this.paused) return;
-      const delay = Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
-      this.timer = setTimeout(() => this.connect(), delay);
+      // Logged out, password changed or login expired: the 401 handler shows the login screen.
+      if (ev.code === WS_UNAUTHORIZED) void checkLogin().then((ok) => ok && this.retry());
+      else this.retry();
     };
     ws.onerror = () => ws.close();
   }
 
-  /** Reconnect immediately (used after Resume). */
+  /** Reconnects after the backoff, unless paused, disposed or refused for good. */
+  private retry() {
+    if (this.disposed || this.paused || this.failed || this.ws) return;
+    if (this.timer) clearTimeout(this.timer);
+    const delay = Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.connect();
+    }, delay);
+  }
+
+  /** Reconnect immediately (after Resume, or Try again when the attach failed). */
   reconnect() {
     if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
     this.paused = false;
+    this.failed = false;
     this.attempt = 0;
-    this.ws?.close();
-    if (!this.ws) this.connect();
+    const old = this.ws;
+    this.ws = null;
+    old?.close();
+    this.connect();
   }
 
   /** Drops the connection until resume(), so this viewer stops holding the tmux window at its size. */
@@ -262,12 +329,12 @@ class SessionTerminal {
     if (!this.paused || this.disposed) return;
     this.paused = false;
     this.attempt = 0;
-    if (!this.ws) this.connect();
+    if (!this.ws && this.started && !this.failed) this.connect();
   }
 
-  /** Presses a key from the key bar. */
-  sendKey(key: BarKey) {
-    this.send({ type: 'input', data: keySequence(key, this.term.modes.applicationCursorKeysMode) });
+  /** Presses a key from the key bar. Returns false when not connected (nothing was sent). */
+  sendKey(key: BarKey): boolean {
+    return this.send({ type: 'input', data: keySequence(key, this.term.modes.applicationCursorKeysMode) });
   }
 
   /** Arms or cancels the sticky Ctrl. */
@@ -279,20 +346,20 @@ class SessionTerminal {
 
   /**
    * Sends Ctrl plus `ch` and releases the sticky Ctrl. Returns false (and sends nothing) when `ch`
-   * has no Ctrl form; Ctrl stays armed so the next character can use it.
+   * has no Ctrl form or the terminal isn't connected; Ctrl stays armed so the next character can use it.
    */
   typeCtrl(ch: string): boolean {
     const seq = ctrlSequence(ch);
-    if (!seq) return false;
-    this.send({ type: 'input', data: seq });
+    if (!seq || !this.send({ type: 'input', data: seq })) return false;
     this.setCtrl(false);
     return true;
   }
 
-  /** Types text from the compose box and submits it with Enter. */
-  submit(text: string) {
-    this.send({ type: 'input', data: pasteText(text, this.term.modes.bracketedPasteMode) });
+  /** Types text from the compose box and submits it with Enter. Returns false when not connected. */
+  submit(text: string): boolean {
+    if (!this.send({ type: 'input', data: pasteText(text, this.term.modes.bracketedPasteMode) })) return false;
     setTimeout(() => this.send({ type: 'input', data: '\r' }), SUBMIT_DELAY);
+    return true;
   }
 
   /**
@@ -474,6 +541,12 @@ class SessionTerminal {
 
   attach(container: HTMLElement) {
     if (this.el.parentElement !== container) container.appendChild(this.el);
+    if (this.releaseTimer) clearTimeout(this.releaseTimer);
+    this.releaseTimer = null;
+    if (!this.started) {
+      this.paused = false;
+      this.connect();
+    } else this.resume();
     this.enableWebgl();
     this.resizeObs?.disconnect();
     this.resizeObs = new ResizeObserver(() => this.scheduleRefit());
@@ -490,6 +563,14 @@ class SessionTerminal {
     this.resizeObs?.disconnect();
     this.resizeObs = null;
     this.el.remove();
+    // tmux sizes a window to its smallest viewer: on a phone, let go of sessions no longer shown.
+    if (matches(MOBILE_QUERY)) {
+      if (this.releaseTimer) clearTimeout(this.releaseTimer);
+      this.releaseTimer = setTimeout(() => {
+        this.releaseTimer = null;
+        if (!this.el.isConnected) this.pause();
+      }, DETACH_RELEASE_MS);
+    }
   }
 
   /** Refits at most once a frame; the on-screen keyboard resizes the page in many small steps. */
@@ -530,6 +611,7 @@ class SessionTerminal {
   dispose() {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.releaseTimer) clearTimeout(this.releaseTimer);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     if (this.refitFrame) cancelAnimationFrame(this.refitFrame);
     if (this.flushFrame) cancelAnimationFrame(this.flushFrame);
@@ -588,7 +670,8 @@ export function setTerminalFontSize(size: number) {
 
 /**
  * tmux draws a window at the size of its smallest viewer, so a phone left attached narrows the same
- * session on a desktop. On phones, let go of the terminals once the page has been hidden a while.
+ * session on a desktop. On phones, let go of the terminals once the page has been hidden a while
+ * (and of each terminal taken off screen: see detach()).
  */
 const HIDDEN_RELEASE_MS = 30_000;
 let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
@@ -602,7 +685,8 @@ if (typeof document !== 'undefined') {
         for (const t of cache.values()) t.pause();
       }, HIDDEN_RELEASE_MS);
     } else {
-      for (const t of cache.values()) t.resume();
+      // Only terminals on screen: ones taken off screen on a phone stay released until shown.
+      for (const t of cache.values()) if (t.el.isConnected) t.resume();
     }
   });
 }

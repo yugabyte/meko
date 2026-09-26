@@ -2,8 +2,9 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { openDb, run } from '../../src/server/db.js';
-import { ingestSessionUsage, parsePushLine, parseUsageLine, projectUsage, totalTokens, usageByProject, usageBySession, usageOverview } from '../../src/server/usage.js';
+import { all, openDb, run } from '../../src/server/db.js';
+import { pruneSessionEvents } from '../../src/server/store.js';
+import { ingestSessionUsage, parsePushLine, parseUsageLine, projectUsage, sessionUsage, totalTokens, usageByProject, usageBySession, usageOverview } from '../../src/server/usage.js';
 
 function line(id: string, usage: Record<string, number>, opts: { model?: string; at?: string; type?: string } = {}): string {
   return JSON.stringify({
@@ -49,6 +50,8 @@ describe('token usage from transcripts', () => {
     let s = usageBySession(db).get('s1')!;
     expect(s).toEqual({ input: 7, output: 109, cacheRead: 2000, cacheWrite: 400, messages: 3 });
     expect(ingestSessionUsage(db, 's1', main)).toBe(false); // nothing new
+    expect(sessionUsage(db, 's1')).toEqual(s);
+    expect(sessionUsage(db, 'nope')).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 });
 
     // A half-written line isn't counted until it is complete.
     const next = line('c', u);
@@ -171,6 +174,28 @@ describe('usage across projects', () => {
     expect(o.byModel).toEqual([{ model: 'm', usage: expect.objectContaining({ output: 530, messages: 3 }) }]);
     expect(o.daily).toHaveLength(14);
     expect(o.daily.at(-1)!.usage.output).toBe(530);
+  });
+});
+
+describe('merged PRs', () => {
+  it('still count after old events are pruned', () => {
+    const { db } = setup();
+    const now = Date.now();
+    const old = now - 60 * 24 * 3600 * 1000;
+    const ev = (sid: string, kind: string, at: number) =>
+      run(db, `INSERT INTO session_events(session_id, project_id, kind, text, at) VALUES (?, 'p', ?, 'x', ?)`, sid, kind, at);
+    ev('s1', 'merged', old);
+    ev('s1', 'stage', old);
+    ev('s2', 'stage', now);
+    // Merged before merge events were kept: Done with a PR, its event already pruned.
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, pr_number, created_at) VALUES ('s3', 'p', 's3', 'S3', 'c', 'b', 'main', '/w', 't3', 'tok-s3', 'archived', 'archived', 'done', 7, ?)`, old);
+    pruneSessionEvents(db, now);
+    const kinds = all<{ kind: string; at: number }>(db, 'SELECT kind, at FROM session_events ORDER BY id').map((e) => [e.kind, e.at]);
+    expect(kinds).toEqual([['merged', old], ['stage', now]]);
+    const o = usageOverview(db, 14, now);
+    expect(o.byProject[0].mergedPrs).toBe(2);
+    expect(o.mergedPrs).toBe(2);
   });
 });
 

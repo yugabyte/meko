@@ -15,6 +15,12 @@ function nameFromPath(p: string): string {
   return p.trim().replace(/\/+$/, '').split('/').pop() ?? '';
 }
 
+/** The last two folders above a repo, e.g. "…/work/client": tells same-named repos apart on a phone. */
+function parentFolder(p: string): string {
+  const parts = p.split('/').filter(Boolean).slice(0, -1);
+  return (parts.length > 2 ? '…/' : '/') + parts.slice(-2).join('/');
+}
+
 function projectList(r: RepoInfo): string {
   return r.projects.map((p) => `“${p.name}”`).join(', ');
 }
@@ -189,7 +195,10 @@ export function NewProjectDialog({
                   title={used ? `${r.path}\nIn ${projectList(r)}` : r.path}
                 >
                   <span className="radio" />
-                  <span className="nm">{r.name}</span>
+                  <span className="nm">
+                    {r.name}
+                    <span className="pf">{parentFolder(r.path)}</span>
+                  </span>
                   <span className="rm">{r.remote ?? 'no remote'}</span>
                   <span className="br">{r.branch ?? '—'}</span>
                   <span className="when">

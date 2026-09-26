@@ -9,8 +9,17 @@ export type Route =
   /** A session's design doc on its own page (opened in a new tab). */
   | { view: 'design'; projectId: string; sessionId: string };
 
+/** A path segment decoded, or as it is when it isn't valid percent-encoding (say `/p/foo%`). */
+function decode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function parseRoute(pathname: string): Route {
-  const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  const parts = pathname.split('/').filter(Boolean).map(decode);
   if (parts[0] === 'usage' && parts.length === 1) return { view: 'usage' };
   if (parts[0] === 'p' && parts[1]) {
     if (parts[2] === 's' && parts[3] && parts[4] === 'design') return { view: 'design', projectId: parts[1], sessionId: parts[3] };

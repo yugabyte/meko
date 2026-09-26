@@ -21,6 +21,8 @@
   --warn-soft: #fff1da;
   --bad: #b42318;
   --bad-soft: #fde7e4;
+  /* Text on a --bad fill (danger buttons). */
+  --bad-ink: #ffffff;
   --idle: #8a948f;
   --term: #101412;
   --term-ink: #d5dde8;
@@ -53,8 +55,9 @@
     --warn-soft: #3a2c14;
     --bad: #f07366;
     --bad-soft: #3d1c19;
+    --bad-ink: #1f0a07;
     --idle: #77827c;
-    --term: #0b0e0c;
+    --term: #101412;
     --rail: #151a17;
     --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
   }
@@ -80,8 +83,9 @@
   --warn-soft: #3a2c14;
   --bad: #f07366;
   --bad-soft: #3d1c19;
+  --bad-ink: #1f0a07;
   --idle: #77827c;
-  --term: #0b0e0c;
+  --term: #101412;
   --rail: #151a17;
   --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
 }
@@ -225,7 +229,7 @@ code,
 .btn.danger {
   background: var(--bad);
   border-color: var(--bad);
-  color: #fff;
+  color: var(--bad-ink);
   font-weight: 600;
 }
 .btn.ghost {
@@ -465,6 +469,9 @@ textarea.input {
 .proj.drop-target {
   box-shadow: inset 0 2px 0 var(--accent);
 }
+.proj.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 .proj-text {
   display: grid;
   min-width: 0;
@@ -523,6 +530,9 @@ textarea.input {
 }
 .usage-projects .link-btn.inline {
   text-align: left;
+}
+.usage-key {
+  margin: 8px 0 0;
 }
 /* Sortable column headers: the whole header is the button. */
 .usage-table th:has(.th-sort) {
@@ -912,9 +922,10 @@ textarea.input {
   font-size: 12px;
   pointer-events: none;
 }
-/* xterm's stylesheet paints the viewport black under the last partial row; match the theme. */
+/* xterm's stylesheet paints the viewport black under the last partial row; match the theme.
+   --term is the terminal theme's background in terminals.ts in both themes. */
 .xterm-host .xterm .xterm-viewport {
-  background-color: #101412;
+  background-color: var(--term);
 }
 .term-overlay {
   position: absolute;
@@ -930,6 +941,17 @@ textarea.input {
   pointer-events: none;
   max-width: 90%;
   text-align: center;
+}
+.term-overlay .btn {
+  pointer-events: auto;
+  margin-left: 10px;
+}
+/* On touch screens the toast sits at the top, clear of the overlay and the key bar. */
+@media (pointer: coarse) {
+  .term-toast {
+    top: 10px;
+    bottom: auto;
+  }
 }
 .foot {
   display: flex;
@@ -1218,6 +1240,9 @@ a.icon-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.repo .pf {
+  display: none;
 }
 .repo .rm,
 .repo .br {
@@ -1554,6 +1579,16 @@ a.icon-btn {
   .repo .rm,
   .repo .br {
     display: none;
+  }
+  /* With the remote hidden, the folder above tells same-named repos apart. */
+  .repo .pf {
+    display: block;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 
@@ -1943,6 +1978,9 @@ a.icon-btn {
   font-size: 12px;
   color: var(--warn);
 }
+.cmt-outdated-note.neutral {
+  color: var(--muted);
+}
 .cmt-excerpt {
   margin: 0 0 6px;
   padding: 4px 8px;
@@ -2105,7 +2143,6 @@ a.icon-btn {
 .chart-tip {
   position: absolute;
   top: 4px;
-  transform: translateX(12px);
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--rule);
@@ -2116,9 +2153,6 @@ a.icon-btn {
   pointer-events: none;
   z-index: 2;
   min-width: 180px;
-}
-.chart-tip.flip {
-  transform: translateX(calc(-100% - 12px));
 }
 .chart-tip-hd {
   color: var(--muted);
@@ -2228,6 +2262,18 @@ a.icon-btn {
   gap: 12px;
   font-family: var(--body);
   z-index: 3;
+}
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 .startup-title {
   font-family: var(--display);
@@ -2396,6 +2442,10 @@ a.icon-btn {
   flex-direction: column;
   gap: 10px;
 }
+/* The sheet takes focus on open (not its first button, which can be a gate). */
+.sheet:focus {
+  outline: none;
+}
 .sheet-grab {
   width: 36px;
   height: 4px;
@@ -2527,11 +2577,12 @@ a.icon-btn {
   background: var(--term);
   border-top: 1px solid #1f2622;
 }
-/* Keys share the width so the whole bar fits a phone; it scrolls sideways only if it can't. */
+/* Keys share the width so the whole bar fits a phone; it scrolls sideways only if it can't. The bar
+   only shows on touch screens, so keys are 40 px tall, the touch size for icon buttons like ⌨. */
 .key {
   flex: 1 0 auto;
   min-width: 28px;
-  height: 36px;
+  height: 40px;
   padding: 0 5px;
   border: 0;
   border-radius: 6px;
@@ -2582,8 +2633,8 @@ a.icon-btn {
 }
 .compose-send {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border: 0;
   border-radius: 50%;
   background: var(--accent);
@@ -2601,6 +2652,11 @@ a.icon-btn {
   .th-sort {
     min-height: 40px;
   }
+  .cmt-meta .link-btn,
+  .cmt-meta .confirm-inline .btn {
+    min-height: 36px;
+    padding: 0 10px;
+  }
   .btn.small {
     min-height: 36px;
     padding: 6px 12px;
@@ -2616,9 +2672,30 @@ a.icon-btn {
     display: inline-grid;
   }
   .gate {
-    min-height: 34px;
+    min-height: 36px;
     padding: 6px 14px;
     font-size: 13px;
+  }
+  .btn,
+  .dp-row {
+    min-height: 36px;
+  }
+  /* Link-style buttons get a finger-sized box; ones inside running text (.inline) stay text. */
+  button.link-btn:not(.inline),
+  a.link-btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+  }
+  /* The footer's diff button keeps the footer thin: a larger tap area without a larger box.
+     (The ⋯ sheet also has a full-size Changes row.) */
+  .foot-btn {
+    position: relative;
+  }
+  .foot-btn::after {
+    content: '';
+    position: absolute;
+    inset: -9px -6px;
   }
   .tab {
     padding: 10px 12px;
@@ -2633,6 +2710,7 @@ a.icon-btn {
     padding-bottom: 10px;
   }
   .seg button {
+    min-height: 36px;
     padding: 8px 12px;
   }
   /* Swipes scroll the terminal (terminals.ts), not the page. */
@@ -2645,10 +2723,17 @@ a.icon-btn {
     display: none;
   }
   .cmt-add {
+    position: relative;
     opacity: 1;
     width: 22px;
     height: 22px;
     font-size: 14px;
+  }
+  /* A 40px-wide tap area over the gutter and line numbers; only as tall as the row, so rows don't steal each other's taps. */
+  .cmt-add::before {
+    content: '';
+    position: absolute;
+    inset: 0 -14px 0 -4px;
   }
 }
 
@@ -2854,6 +2939,10 @@ a.icon-btn {
   .dialog-ft {
     flex-wrap: wrap;
     padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  /* A dialog without a footer (Settings) ends with its body, which clears the home indicator. */
+  .dialog-body:last-child {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   }
   .pal-list {
     max-height: 55dvh;

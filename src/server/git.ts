@@ -1,9 +1,15 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
+
+/**
+ * No password prompts. No optional locks: our reads (status, diff) must never take
+ * index.lock while Claude commits in the same worktree; locks git needs are still taken.
+ */
+const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
 
 export async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await gitRaw(cwd, ...args)).trim();
@@ -11,14 +17,14 @@ export async function git(cwd: string, ...args: string[]): Promise<string> {
 
 /** Like git(), but stdout is returned untrimmed (porcelain lines can start with a space). */
 export async function gitRaw(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+  const { stdout } = await exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, ...GIT_ENV } });
   return stdout;
 }
 
 /** Like gitRaw(), but stdout is returned as bytes (for binary blobs). */
 export async function gitBuffer(cwd: string, ...args: string[]): Promise<Buffer> {
   const { stdout } = await exec('git', args, {
-    cwd, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    cwd, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...GIT_ENV },
   });
   return stdout;
 }
@@ -133,12 +139,24 @@ export type SyncResult =
   | { kind: 'skipped'; reason: string };
 
 /**
+ * Throws unless <name> is a plain branch name git accepts. Names reach git as
+ * arguments, so one starting with "-" would be read as an option.
+ */
+export async function checkBranchName(repo: string, name: string): Promise<void> {
+  if (!name || name.startsWith('-') || (await tryGit(repo, 'check-ref-format', `refs/heads/${name}`)) === null) {
+    throw new Error(`"${name}" isn't a valid branch name.`);
+  }
+}
+
+/**
  * Creates a worktree. A new branch starts from the local <base>, fast-forwarded
  * to origin/<base> first (after a fetch) so new work starts from the latest
  * upstream. If <base> can't be fast-forwarded, the branch starts from
  * origin/<base> instead. Returns null when the branch already existed.
  */
 export async function addWorktree(repo: string, path: string, branch: string, base: string): Promise<SyncResult | null> {
+  await checkBranchName(repo, base);
+  await checkBranchName(repo, branch);
   await tryGit(repo, 'fetch', '--quiet', 'origin', base);
   if (await revParse(repo, `refs/heads/${branch}`)) {
     await git(repo, 'worktree', 'add', path, branch);
@@ -152,9 +170,12 @@ export async function addWorktree(repo: string, path: string, branch: string, ba
 
 /**
  * Fast-forwards the local <branch> to origin/<branch> (already fetched); never
- * forces. Where the branch is checked out (usually the main checkout) this is
- * `merge --ff-only`, which git refuses when it would overwrite local edits;
- * elsewhere it is a compare-and-swap of the ref.
+ * forces. Where the main checkout has the branch checked out this is
+ * `merge --ff-only`, which git refuses when it would overwrite local edits
+ * (autostash off, so edits are never stashed and re-applied). A branch checked
+ * out in another worktree (another session's) is left alone. Otherwise the ref
+ * moves by a non-forced local fetch: fast-forward only, a compare-and-swap, and
+ * git refuses a branch that is checked out, rebased or bisected anywhere.
  */
 export async function fastForward(repo: string, branch: string): Promise<SyncResult> {
   const remote = await revParse(repo, `refs/remotes/origin/${branch}`);
@@ -166,11 +187,20 @@ export async function fastForward(repo: string, branch: string): Promise<SyncRes
     return { kind: 'skipped', reason: `local ${branch} has commits that aren't on origin` };
   }
   const at = await checkedOutAt(repo, branch);
+  if (at && !samePath(at, repo)) return { kind: 'skipped', reason: `${branch} is checked out in another worktree (${at})` };
   const err = at
-    ? await gitError(at, 'merge', '--ff-only', '--quiet', remote)
-    : await gitError(repo, 'update-ref', `refs/heads/${branch}`, remote, local);
+    ? await gitError(at, '-c', 'merge.autoStash=false', 'merge', '--ff-only', '--quiet', remote)
+    : await gitError(repo, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '.', `refs/remotes/origin/${branch}:refs/heads/${branch}`);
   if (!err) return { kind: 'updated' };
-  return { kind: 'skipped', reason: at ? `git couldn't fast-forward it in ${at}: ${err}` : err };
+  return { kind: 'skipped', reason: at ? `git couldn't fast-forward it in ${at}: ${err}` : `git couldn't fast-forward it: ${err}` };
+}
+
+function samePath(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return a === b;
+  }
 }
 
 /** The worktree (main checkout included) that has <branch> checked out, if any. */
@@ -202,11 +232,25 @@ async function gitError(cwd: string, ...args: string[]): Promise<string | null> 
   }
 }
 
-/** Recreates a missing worktree from its (still existing) branch. */
-export async function restoreWorktree(repo: string, path: string, branch: string, base: string): Promise<void> {
+/** The session's branch is gone locally and on origin, so its worktree can't be restored. */
+export class BranchGoneError extends Error {}
+
+/**
+ * Recreates a missing worktree from its branch, or from origin/<branch> when only
+ * that is left. Never starts a new branch and never touches the main checkout.
+ * (The base is no longer needed; the parameter stays for existing callers.)
+ */
+export async function restoreWorktree(repo: string, path: string, branch: string, _base?: string): Promise<void> {
   if (existsSync(path)) return;
   await tryGit(repo, 'worktree', 'prune');
-  await addWorktree(repo, path, branch, base);
+  await checkBranchName(repo, branch);
+  if (await revParse(repo, `refs/heads/${branch}`)) {
+    await git(repo, 'worktree', 'add', path, branch);
+  } else if (await revParse(repo, `refs/remotes/origin/${branch}`)) {
+    await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, `origin/${branch}`);
+  } else {
+    throw new BranchGoneError(`Branch ${branch} is gone (locally and on origin), so the session's worktree can't be restored.`);
+  }
 }
 
 export async function worktreeClean(path: string): Promise<boolean> {
@@ -243,8 +287,7 @@ export async function deleteBranch(repo: string, branch: string): Promise<void> 
 }
 
 export async function cloneRepo(url: string, dest: string): Promise<void> {
-  const { stderr } = await exec('git', ['clone', '--quiet', url, dest], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
-  void stderr;
+  await exec('git', ['clone', '--quiet', '--', url, dest], { env: { ...process.env, ...GIT_ENV } });
 }
 
 export function repoNameFromUrl(url: string): string {

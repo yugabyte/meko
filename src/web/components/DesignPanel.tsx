@@ -5,8 +5,28 @@ import type { DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { designFrameDoc } from '../design-frame';
 import { routePath } from '../router';
-import { relativeTime } from '../util';
+import { designApprovalBlocker, relativeTime } from '../util';
 import { SidePanel } from './SidePanel';
+
+// Markdown designs render in the app's own page, so they get no forms or styles (an invisible
+// form button could post to the API with the user's cookie, and a <style> could restyle the
+// app), and their links open in a new tab instead of replacing the workbench.
+const PURIFY = {
+  FORBID_TAGS: ['form', 'button', 'select', 'textarea', 'style', 'link', 'meta', 'base'],
+  FORBID_ATTR: ['style', 'action', 'formaction'],
+};
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  // Task-list checkboxes (`- [x] done`) are the one kind of input kept: any input becomes a
+  // read-only tick, and with no forms or buttons it can't send anything.
+  if (node.tagName === 'INPUT') {
+    node.setAttribute('type', 'checkbox');
+    node.setAttribute('disabled', '');
+  }
+  if (node.tagName === 'A' && node.hasAttribute('href')) {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
 
 /** The app's explicit theme (`data-theme` on <html>), or null when it follows the system. */
 function useDataTheme(): string | null {
@@ -58,7 +78,7 @@ export function DesignPanel({
 
   const html = useMemo(() => {
     if (!doc?.markdown) return '';
-    return DOMPurify.sanitize(marked.parse(doc.markdown, { async: false }) as string);
+    return DOMPurify.sanitize(marked.parse(doc.markdown, { async: false }) as string, PURIFY);
   }, [doc?.markdown]);
   const frame = useMemo(() => (doc?.html ? designFrameDoc(doc.html, theme) : null), [doc?.html, theme]);
 
@@ -69,7 +89,12 @@ export function DesignPanel({
         {doc?.updatedAt && <span className="muted small">updated {relativeTime(doc.updatedAt)}</span>}
         <span className="sp" />
         {session.stage === 'design' && session.hasDesign && (
-          <button className="btn small primary" disabled={session.busy} onClick={onApprove}>
+          <button
+            className="btn small primary"
+            disabled={session.busy || !!designApprovalBlocker(session)}
+            title={designApprovalBlocker(session) ?? undefined}
+            onClick={onApprove}
+          >
             Approve design
           </button>
         )}
