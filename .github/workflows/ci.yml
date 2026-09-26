@@ -14,15 +14,24 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system packages
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends tmux git build-essential python3
+
+      - name: Install system packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
 
       - uses: actions/setup-node@v4
         with:

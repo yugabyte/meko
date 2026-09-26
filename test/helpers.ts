@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,8 +61,16 @@ export interface TestEnv {
 
 let seq = 0;
 
+/**
+ * A fresh temp dir by its real path. On macOS the temp dir is under /var, a symlink to
+ * /private/var, and git and `process.cwd()` report the resolved path.
+ */
+export function tempDir(prefix: string): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
 export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {}): Promise<TestEnv> {
-  const home = mkdtempSync(join(tmpdir(), 'akl-test-'));
+  const home = tempDir('akl-test-');
   const repo = gitRepo(join(home, 'code', 'demo-repo'));
   const fakeDir = join(home, 'fake-claude');
   process.env.MEKO_WATERMARK_DIR = join(home, 'meko-capture');
@@ -71,6 +79,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   process.env.CLAUDE_CONFIG_DIR = join(home, 'claude-config');
   const paths = getPaths(join(home, 'ak'));
   const socket = `akl-test-${process.pid}-${seq++}`;
+  // The Tmux below never uses this host's background services (it gets no service manager).
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
   cfg.server.bind = '127.0.0.1';
   cfg.repos.roots = [join(home, 'code')];
@@ -80,7 +89,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   cfg.meko.apiKey = 'test-key';
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
-  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE, tmux: new Tmux(socket, paths.tmuxConf), log: silentLogger, timers: false });
+  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE, tmux: new Tmux(socket, paths.tmuxConf, 'tmux', () => null), log: silentLogger, timers: false });
   if (opts.start !== false) await core.start();
   return {
     home, repo, core, meko, fakeDir, socket,

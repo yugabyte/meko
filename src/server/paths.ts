@@ -49,8 +49,9 @@ export function getPaths(home: string = akHome()): Paths {
 }
 
 /**
- * Unix socket paths are limited to ~108 bytes. When the home path is too long,
- * use a short socket in a private per-user directory under the temp dir.
+ * Unix socket paths are limited to 108 bytes on Linux and 104 on macOS; 100
+ * fits both. When the home path is too long, use a short socket in a private
+ * per-user directory under the temp dir.
  */
 function hookSockPath(home: string): string {
   const preferred = join(home, 'hook.sock');

@@ -1,15 +1,15 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { Paths } from './paths.js';
+import { hostServices, type ServiceManager } from './service.js';
 
 const exec = promisify(execFile);
 
 /** Name of the keepalive session that holds the tmux server open. Never shown in the UI. */
 export const KEEPALIVE = '_ak';
-export const TMUX_UNIT = 'agent-k-local-tmux.service';
+/** What the keepalive session runs: a long sleep any shell and any `sleep` understand (BSD sleep has no `infinity`). */
+export const KEEPALIVE_CMD = 'sleep 2147483647';
 
 // Works on tmux 2.7 (RHEL 8). Window options need set-window-option there.
 const TMUX_CONF = `# Written by agent-k-local. Changes are overwritten on start.
@@ -39,7 +39,12 @@ export interface PaneInfo {
 }
 
 export class Tmux {
-  constructor(private socket: string, private confPath: string, private bin = 'tmux') {}
+  constructor(
+    private socket: string,
+    private confPath: string,
+    private bin = 'tmux',
+    private services: () => ServiceManager | null = hostServices,
+  ) {}
 
   /** Args for a client attaching to a session (used by the terminal bridge). */
   attachArgs(name: string): string[] {
@@ -65,18 +70,23 @@ export class Tmux {
   }
 
   /**
-   * Makes sure the tmux server is up. Under systemd the dedicated unit owns it
-   * (so server restarts never kill sessions); otherwise start it directly.
+   * Makes sure the tmux server is up. When the tmux service is installed it owns
+   * the server (so server restarts never kill sessions); otherwise start it directly.
    */
   async ensureServer(): Promise<void> {
     if (await this.serverRunning()) return;
-    if (systemdUnitInstalled(TMUX_UNIT)) {
-      await exec('systemctl', ['--user', 'start', TMUX_UNIT]).catch(() => undefined);
-      for (let i = 0; i < 20 && !(await this.serverRunning()); i++) await sleep(100);
-      if (await this.serverRunning()) return;
+    const svc = this.services();
+    if (svc?.installed('tmux')) {
+      svc.start('tmux');
+      for (let i = 0; i < 20; i++) {
+        if (await this.serverRunning()) return;
+        // launchd runs tmux in the foreground with no sessions: add the keepalive to that server.
+        if (svc.tmuxForeground && (await this.addKeepalive())) return;
+        await sleep(100);
+      }
     }
     await new Promise<void>((resolve, reject) => {
-      const p = spawn(this.bin, ['-L', this.socket, '-f', this.confPath, 'new-session', '-d', '-s', KEEPALIVE, 'sleep infinity'], {
+      const p = spawn(this.bin, ['-L', this.socket, '-f', this.confPath, 'new-session', '-d', '-s', KEEPALIVE, KEEPALIVE_CMD], {
         detached: true,
         stdio: 'ignore',
       });
@@ -86,6 +96,16 @@ export class Tmux {
     });
     // Re-read the config in case the server predates this version of it.
     await this.run('source-file', this.confPath).catch(() => undefined);
+  }
+
+  /** Creates the keepalive session in a running server. -N (tmux 3.2+) never starts a server of its own. */
+  private async addKeepalive(): Promise<boolean> {
+    try {
+      await exec(this.bin, ['-N', '-L', this.socket, 'new-session', '-d', '-s', KEEPALIVE, KEEPALIVE_CMD]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async panes(): Promise<Map<string, PaneInfo>> {
@@ -146,11 +166,6 @@ export class Tmux {
   async capture(name: string): Promise<string> {
     return this.run('capture-pane', '-p', '-t', `=${name}:`);
   }
-}
-
-export function systemdUnitInstalled(unit: string): boolean {
-  const dir = process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, 'systemd', 'user') : join(homedir(), '.config', 'systemd', 'user');
-  return existsSync(join(dir, unit));
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

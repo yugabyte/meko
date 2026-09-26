@@ -208,7 +208,7 @@ export interface LaunchSpec {
 /**
  * Writes the per-session launcher. It runs Claude through the user's login
  * shell so PATH and tools match an interactive terminal, even when the tmux
- * server was started by systemd with a bare environment.
+ * server was started by systemd or launchd with a bare environment.
  */
 export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
   mkdirSync(paths.run, { recursive: true });

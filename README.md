@@ -4,8 +4,8 @@
 
 The agentic coder for ADLC. AgentK Local helps you work across many projects and
 [Claude Code](https://claude.com/claude-code) sessions at once, with [Meko](https://mekodata.ai)
-as its data layer. It's self-hosted, runs headless on your devserver, and you use it from a
-browser:
+as its data layer. It's self-hosted, runs on your devserver (headless) or your Mac, and you use it
+from a browser:
 
 - **Projects** in a left rail, each one a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
@@ -53,11 +53,13 @@ browser:
   </tr>
 </table>
 
-Design: [`docs/design.html`](docs/design.html).
+Design: [`docs/design.md`](docs/design.md).
 
 ## Requirements
 
-- Linux (x64 or arm64) with tmux ≥ 2.7, git, curl, the GitHub CLI (`gh`) and Claude Code
+- Linux (x64 or arm64) with tmux ≥ 2.7, or macOS 14 or newer on Apple Silicon with tmux ≥ 3.2
+  (`brew install tmux gh`)
+- git, curl, the GitHub CLI (`gh`) and Claude Code
 - A [Meko](https://mekodata.ai) account and the `meko-agent-skills` Claude Code plugin
 
 ## Install
@@ -69,9 +71,20 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 ```
 
 It asks for your repos folder, listen address and port, checks Meko, installs to
-`~/.agent-k-local`, starts two systemd user units (the web server, and the tmux server that owns
+`~/.agent-k-local`, starts two background services (the web server, and the tmux server that owns
 your sessions), waits until the server answers, and prints a one-time setup link with the
-certificate fingerprint to check in your browser.
+certificate fingerprint to check in your browser. The services are systemd user units on Linux and
+LaunchAgents on macOS.
+
+On a Mac:
+
+- Install while you're logged in to the desktop (in person or with Screen Sharing). Claude Code
+  keeps its login in your Keychain, which the services can only reach during a desktop login.
+- AgentK Local starts when you log in and stops when you log out. Sessions pause while the Mac
+  sleeps, and other devices can't reach it until it wakes.
+- With the macOS firewall on, allow incoming connections for
+  `~/.agent-k-local/app/current/node/bin/node` (System Settings > Network > Firewall > Options)
+  so your phone can connect.
 
 | Command | What it does |
 |---|---|

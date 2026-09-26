@@ -220,21 +220,23 @@ export function readBadVersions(paths: Paths): Set<string> {
   }
 }
 
-export function tarballName(version: string, arch: string = process.arch): string {
-  return `agent-k-local-${version}-linux-${arch}.tar.gz`;
+/** The release asset for a version on this platform and CPU: agent-k-local-<v>-<linux|darwin>-<x64|arm64>.tar.gz. */
+export function tarballName(version: string, arch: string = process.arch, platform: string = process.platform): string {
+  return `agent-k-local-${version}-${platform}-${arch}.tar.gz`;
 }
 
 /** Pick the newest eligible release, or null. */
 export function pickLatest(
   releases: Release[],
-  opts: { includePrerelease: boolean; bad: Set<string>; arch?: string },
+  opts: { includePrerelease: boolean; bad: Set<string>; arch?: string; platform?: string },
 ): Release | null {
   let best: Release | null = null;
   for (const r of releases) {
     if (r.draft || !parseSemver(r.version)) continue;
     if (r.prerelease && !opts.includePrerelease) continue;
     if (opts.bad.has(r.version)) continue;
-    if (!r.assets.includes(tarballName(r.version, opts.arch)) || !r.assets.includes('SHA256SUMS')) continue;
+    // Releases without a build for this platform (e.g. macOS before it was supported) are skipped.
+    if (!r.assets.includes(tarballName(r.version, opts.arch, opts.platform)) || !r.assets.includes('SHA256SUMS')) continue;
     if (!best || compareSemver(r.version, best.version) > 0) best = r;
   }
   return best;
@@ -271,6 +273,7 @@ export interface UpdaterDeps {
   /** Release source override (tests). */
   source?: ReleaseSource;
   arch?: string;
+  platform?: string;
 }
 
 interface PendingUpdate {
@@ -377,6 +380,7 @@ export class Updater {
         includePrerelease: cfg.update.channel === 'prerelease',
         bad: readBadVersions(this.deps.paths),
         arch: this.deps.arch,
+        platform: this.deps.platform,
       });
       this.latest = best?.version ?? null;
       this.releaseUrl = best?.url ?? null;
@@ -411,7 +415,7 @@ export class Updater {
     try {
       const src = await this.source();
       const tag = `v${target}`;
-      const asset = tarballName(target, this.deps.arch);
+      const asset = tarballName(target, this.deps.arch, this.deps.platform);
       const dl = join(paths.downloads, target);
       rmSync(dl, { recursive: true, force: true });
       this.deps.log(`Downloading ${asset}`);

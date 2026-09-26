@@ -3,8 +3,9 @@
 #
 #   scripts/package-release.sh <version> <arch> <node-dir> <out-dir>
 #
-# Expects `npm run build` and `npm prune --omit=dev` to have run in the repo root.
-# Produces <out-dir>/agent-k-local-<version>-linux-<arch>.tar.gz containing:
+# Expects `npm run build` and `npm prune --omit=dev` to have run in the repo root, on the
+# platform the tarball is for (node-pty is compiled natively). Produces
+# <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz containing:
 #
 #   agent-k-local-<version>/
 #     bin/agent-k-local        POSIX sh wrapper (packaging/agent-k-local)
@@ -13,7 +14,8 @@
 #     lib/package.json
 #     lib/dist/                compiled server + web assets
 #     lib/node_modules/        production dependencies only
-#     lib/packaging/systemd/   unit templates used by `agent-k-local install`
+#     lib/packaging/systemd/   service templates used by `agent-k-local install` (Linux)
+#     lib/packaging/launchd/   service templates used by `agent-k-local install` (macOS)
 #     VERSION
 set -eu
 
@@ -30,6 +32,12 @@ out_dir=$4
 case $arch in
   x64|arm64) ;;
   *) echo "unsupported arch: $arch" >&2; exit 2 ;;
+esac
+
+case $(uname -s) in
+  Linux) platform=linux ;;
+  Darwin) platform=darwin ;;
+  *) echo "unsupported platform: $(uname -s)" >&2; exit 2 ;;
 esac
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -53,10 +61,11 @@ cp "$repo/package.json" "$root/lib/package.json"
 cp -R "$repo/dist" "$root/lib/dist"
 cp -R "$repo/node_modules" "$root/lib/node_modules"
 cp -R "$repo/packaging/systemd" "$root/lib/packaging/systemd"
+cp -R "$repo/packaging/launchd" "$root/lib/packaging/launchd"
 cp "$repo/LICENSE" "$root/LICENSE"
 printf '%s\n' "$version" > "$root/VERSION"
 
-# node-pty ships prebuilds for other platforms; we compile for Linux ourselves.
+# node-pty ships prebuilds for some platforms; we compile it ourselves.
 rm -rf "$root/lib/node_modules/node-pty/prebuilds"
 # Build intermediates are not needed at runtime.
 if [ -d "$root/lib/node_modules/node-pty/build" ]; then
@@ -68,8 +77,16 @@ fi
   echo "node-pty native module missing from build" >&2
   exit 1
 }
+if [ "$platform" = darwin ]; then
+  # On macOS node-pty starts every process through spawn-helper; without the execute
+  # bit each spawn fails with "posix_spawnp failed".
+  helper="$root/lib/node_modules/node-pty/build/Release/spawn-helper"
+  [ -f "$helper" ] || { echo "node-pty spawn-helper missing from build" >&2; exit 1; }
+  chmod 755 "$helper"
+fi
 
 mkdir -p "$out_dir"
-tarball="$out_dir/$name-linux-$arch.tar.gz"
-tar -C "$stage" -czf "$tarball" "$name"
+tarball="$out_dir/$name-$platform-$arch.tar.gz"
+# COPYFILE_DISABLE keeps macOS tar from adding ._ metadata files.
+COPYFILE_DISABLE=1 tar -C "$stage" -czf "$tarball" "$name"
 echo "$tarball"

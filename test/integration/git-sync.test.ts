@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { gitRepo } from '../helpers.js';
+import { gitRepo, tempDir } from '../helpers.js';
 import { addWorktree } from '../../src/server/git.js';
 import { changedImage, changes, diffStat } from '../../src/server/changes.js';
 
@@ -20,7 +19,7 @@ describe('new sessions start from an up-to-date base (real git)', () => {
   let other: string; // someone else's clone, pushing to origin
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), 'akl-sync-'));
+    home = tempDir('akl-sync-');
     const seed = gitRepo(join(home, 'seed'));
     git(home, 'clone', '-q', '--bare', seed, 'origin.git');
     git(home, 'clone', '-q', 'origin.git', 'repo');
@@ -96,7 +95,7 @@ describe('changes vs. the base (real git)', () => {
   let wt: string;
 
   beforeEach(async () => {
-    home = mkdtempSync(join(tmpdir(), 'akl-changes-'));
+    home = tempDir('akl-changes-');
     repo = gitRepo(join(home, 'repo'));
     writeFileSync(join(repo, 'gone.txt'), 'bye\n');
     writeFileSync(join(repo, 'old name.txt'), 'one\ntwo\nthree\nfour\nfive\n');

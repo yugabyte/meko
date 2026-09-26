@@ -93,6 +93,26 @@ describe('pickLatest', () => {
   it('skips releases without an asset for this arch', () => {
     expect(pickLatest(releases, { includePrerelease: false, bad: new Set(), arch: 'arm64' })).toBeNull();
   });
+
+  it('skips releases without a build for this platform', () => {
+    const linuxOnly = rel('0.5.0', { assets: [tarballName('0.5.0', 'arm64', 'linux'), 'SHA256SUMS'] });
+    const both = rel('0.4.0', { assets: [tarballName('0.4.0', 'arm64', 'linux'), tarballName('0.4.0', 'arm64', 'darwin'), 'SHA256SUMS'] });
+    const opts = { includePrerelease: false, bad: new Set<string>(), arch: 'arm64' };
+    expect(pickLatest([linuxOnly, both], { ...opts, platform: 'linux' })?.version).toBe('0.5.0');
+    expect(pickLatest([linuxOnly, both], { ...opts, platform: 'darwin' })?.version).toBe('0.4.0');
+    expect(pickLatest([linuxOnly], { ...opts, platform: 'darwin' })).toBeNull();
+  });
+});
+
+describe('tarballName', () => {
+  it('names the platform and CPU', () => {
+    expect(tarballName('0.20260925.1', 'x64', 'linux')).toBe('agent-k-local-0.20260925.1-linux-x64.tar.gz');
+    expect(tarballName('0.20260925.1', 'arm64', 'darwin')).toBe('agent-k-local-0.20260925.1-darwin-arm64.tar.gz');
+  });
+
+  it('defaults to this host', () => {
+    expect(tarballName('1.0.0')).toBe(`agent-k-local-1.0.0-${process.platform}-${process.arch}.tar.gz`);
+  });
 });
 
 describe('sha256 verification', () => {
