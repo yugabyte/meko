@@ -15,7 +15,8 @@ a **major** finding.
 - [ ] Touch targets are at least 36 px tall (40 px for icon buttons) under `(pointer: coarse)`.
 - [ ] New text inputs are 16 px or larger in the phone section of `styles.css`.
 - [ ] Full-height views use `var(--app-h, 100dvh)` on phones, not `100vh`. Bars at the screen edges
-      respect `env(safe-area-inset-*)`.
+      respect `env(safe-area-inset-*)`. Full-screen fixed layers (overlays) sit at
+      `var(--app-top)` with `var(--app-h)`, not `inset: 0`, so the keyboard doesn't cover them.
 - [ ] Phone-only behavior uses `MOBILE_QUERY` / `TOUCH_QUERY` from `hooks/useMedia.ts` and the
       matching CSS media queries, not new ad-hoc breakpoints or user-agent sniffing.
 - [ ] The desktop layout is unchanged unless the change is meant for it.

@@ -888,6 +888,8 @@ textarea.input {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* A tall compose box with the keyboard up must not spill over the footer. */
+  overflow: hidden;
 }
 .term-wrap {
   flex: 1;
@@ -2617,7 +2619,8 @@ a.icon-btn {
 .compose-input {
   flex: 1;
   min-width: 0;
-  max-height: 132px;
+  /* At most about a fifth of the visible screen, so the terminal keeps room above the keyboard. */
+  max-height: min(132px, calc(var(--app-h, 100dvh) * 0.2));
   resize: none;
   overflow-y: auto;
   border: 1px solid var(--rule);
@@ -2915,10 +2918,25 @@ a.icon-btn {
     padding: 14px 14px 40px;
   }
 
-  /* Dialogs become sheets from the bottom; the palette stays at the top, above the keyboard. */
+  /* Dialogs become sheets from the bottom; the palette stays at the top, above the keyboard.
+     Overlays cover the visible viewport, like the app: iOS doesn't shrink the layout viewport for
+     the keyboard, so a sheet at the bottom of inset: 0 sits behind it. */
+  .overlay,
+  .sheet-overlay {
+    top: var(--app-top, 0px);
+    bottom: auto;
+    height: var(--app-h, 100dvh);
+  }
   .overlay {
     padding: 0;
     align-items: flex-end;
+  }
+  /* The keyboard covers the home indicator, so nothing needs to clear it. */
+  html.kb-open .dialog-ft {
+    padding-bottom: 12px;
+  }
+  html.kb-open .dialog-body:last-child {
+    padding-bottom: 14px;
   }
   .overlay.top {
     align-items: flex-start;

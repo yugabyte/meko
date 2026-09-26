@@ -221,12 +221,14 @@ app bar (the Back gesture closes it, and it holds **Search and commands** in pla
 app bar shows the session and project names (the session tab shows its status). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app is pinned to the visible viewport (its height and,
-where iOS pans the page for a focused field, its offset), so the on-screen keyboard shrinks it
-instead of covering the prompt; while you type, the terminal stays scrolled to its newest line. On
+you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, and
+the overlay behind a dialog or sheet, are pinned to the visible viewport (its height and, where iOS
+pans the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
+covering the prompt or a dialog's fields; while you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Esc, a sticky Ctrl, Shift+Tab, arrows, Ctrl+C, Enter;
 with Ctrl lit, the next letter typed in the compose box or in typing mode goes to Claude as Ctrl
-plus that letter, such as Ctrl+O or Ctrl+R) and a compose box whose text goes in as one bracketed
+plus that letter, such as Ctrl+O or Ctrl+R) and a compose box (it grows with its text to about a fifth
+of the visible screen, then scrolls) whose text goes in as one bracketed
 paste (with any Escape characters removed), then Enter; if the terminal isn't connected, the text
 stays in the box. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
 runs full screen and takes the mouse). The steps are sent together once a frame, a flick keeps

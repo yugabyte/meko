@@ -28,6 +28,8 @@ with a finger. Before you finish a UI change:
   already covers `.input`, `textarea` and `select`; add any new input class there.
 - **Heights follow the keyboard.** Size full-height views with `var(--app-h, 100dvh)` in the phone
   section, never a bare `100vh`, so the on-screen keyboard shrinks the view instead of covering it.
+  A fixed layer over the whole screen takes `top: var(--app-top, 0px)` and `height: var(--app-h, 100dvh)`
+  there, not `inset: 0`: iOS doesn't shrink the layout viewport, so its bottom is behind the keyboard.
   Things pinned to the top or bottom edge pad themselves with `env(safe-area-inset-*)`.
 - **Dialogs** use `Dialog` from `common.tsx`, which is already a bottom sheet on phones. New
   bottom menus use `Sheet` from `SessionSheet.tsx`.

@@ -206,8 +206,10 @@ export function ProjectView({
       </div>
 
       <div className="workarea">
+        {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
+            its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={session.id} session={session} />
+          <TerminalPane key={`term-${session.id}`} session={session} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>
@@ -221,9 +223,9 @@ export function ProjectView({
           </div>
         )}
         {session && panel === 'design' && (
-          <DesignPanel key={session.id} session={session} onClose={() => setPanel(null)} onApprove={() => act('approve-design')} />
+          <DesignPanel key={`design-${session.id}`} session={session} onClose={() => setPanel(null)} onApprove={() => act('approve-design')} />
         )}
-        {session && panel === 'changes' && <ChangesPanel key={session.id} session={session} onClose={() => setPanel(null)} />}
+        {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
       </div>
 
       {session && (
