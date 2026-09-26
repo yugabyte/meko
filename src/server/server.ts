@@ -316,7 +316,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const indexHtml = readFileSync(join(opts.webDir, 'index.html'), 'utf8');
     app.setNotFoundHandler((req, reply) => {
       const path = req.url.split('?')[0];
-      if (req.method !== 'GET' || path.startsWith('/api/') || path.startsWith('/ws/')) {
+      // A missing file (say /favicon.ico) is a 404, not the app: a browser would take the HTML for the file.
+      const missingFile = !path.startsWith('/p/') && /\.[a-z0-9]+$/i.test(path);
+      if (req.method !== 'GET' || path.startsWith('/api/') || path.startsWith('/ws/') || missingFile) {
         return reply.code(404).send({ error: 'Not found.' });
       }
       return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml);

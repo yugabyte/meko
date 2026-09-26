@@ -227,7 +227,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI and releases, date-based versions (<code>0.YYYYMMDD.N</code>), tarball releases, and an update check built into the server.</td></tr>
       <tr><td>Repo &amp; license</td><td>Internal at <code>github.com/yugabyte/agent-k-local</code> for now, to be made public later. Apache-2.0.</td></tr>
       <tr><td>Sharing</td><td>Everyone installs their own copy. One owner per install, with no shared instances.</td></tr>
-      <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon: the web app manifest (<code>manifest.webmanifest</code>) names it "AgentK" and supplies the logo as regular and maskable icons. A native Mac wrapper is deferred.</td></tr>
+      <tr><td>Client</td><td>Browser first. Chrome's "Install app" gives it a dock icon: the web app manifest (<code>manifest.webmanifest</code>) names it "AgentK" and supplies the logo as regular and maskable icons. <code>/favicon.ico</code> and <code>/apple-touch-icon.png</code> are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred.</td></tr>
     </tbody>
   </table></div>
 </section>

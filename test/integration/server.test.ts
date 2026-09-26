@@ -203,4 +203,28 @@ describe('web app: manifest and icons for the installed app', () => {
     }
     expect((await app.inject({ url: '/api/state' })).statusCode).toBe(401);
   });
+
+  it('serves the icons phones and browsers look for at the root', async () => {
+    const ico = await app.inject({ url: '/favicon.ico' });
+    expect(ico.statusCode).toBe(200);
+    expect(ico.rawPayload.subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0])); // an ICO header
+    for (const url of ['/apple-touch-icon.png', '/apple-touch-icon-precomposed.png']) {
+      const img = await app.inject({ url });
+      expect(img.statusCode, url).toBe(200);
+      expect(img.headers['content-type'], url).toBe('image/png');
+      expect(pngSize(img.rawPayload), url).toEqual({ png: true, w: 180, h: 180 });
+    }
+    expect((await app.inject({ url: '/' })).body).toContain('href="/favicon.ico"');
+  });
+
+  it('answers a missing file with 404, and app routes with the app', async () => {
+    const missing = await app.inject({ url: '/icons/nope.png' });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers['content-type']).not.toMatch(/html/);
+    for (const url of ['/p/demo', '/p/demo/s/s1/design', '/p/v1.2/home']) {
+      const res = await app.inject({ url });
+      expect(res.statusCode, url).toBe(200);
+      expect(res.headers['content-type'], url).toMatch(/^text\/html/);
+    }
+  });
 });
