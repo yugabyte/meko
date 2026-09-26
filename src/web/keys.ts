@@ -55,6 +55,43 @@ export function wheelReport(up: boolean, col: number, row: number, cols: number,
   return `\x1b[<${up ? 64 : 65};${clamp(col, cols)};${clamp(row, rows)}M`;
 }
 
+/** Where a finger was, and when (ms), for a swipe's release speed. */
+export interface TouchSample {
+  y: number;
+  t: number;
+}
+
+/** Only the last this-many ms of a swipe count toward its release speed. */
+export const FLING_WINDOW_MS = 100;
+/** Momentum keeps this share of its speed per 60 Hz frame. */
+export const FLING_DECAY = 0.95;
+/** Release speeds (px/ms) are capped, so a hard flick doesn't flood Claude with wheel steps. */
+export const FLING_MAX = 4;
+
+/**
+ * The finger's speed (px/ms, down is positive) over the last FLING_WINDOW_MS of its movement. Zero
+ * when it held still that long before letting go, so a slow, deliberate scroll doesn't coast.
+ */
+export function flingVelocity(samples: TouchSample[], now: number): number {
+  const b = samples[samples.length - 1];
+  if (!b || now - b.t > FLING_WINDOW_MS) return 0;
+  const a = samples.find((s) => b.t - s.t <= FLING_WINDOW_MS);
+  if (!a || b.t <= a.t) return 0;
+  const v = (b.y - a.y) / (b.t - a.t);
+  return Math.max(-FLING_MAX, Math.min(FLING_MAX, v));
+}
+
+/** Momentum speed after dt ms of friction. */
+export function decayVelocity(v: number, dt: number): number {
+  return v * Math.pow(FLING_DECAY, dt / (1000 / 60));
+}
+
+/** Whole wheel steps in a finger's travel (px, down is positive); the rest carries over. */
+export function wheelSteps(travel: number, step: number): { steps: number; rest: number } {
+  const steps = step > 0 ? Math.trunc(travel / step) : 0;
+  return { steps, rest: travel - steps * step };
+}
+
 /** Terminal font sizes the A−/A+ buttons step through. */
 export const FONT_MIN = 9;
 export const FONT_MAX = 16;

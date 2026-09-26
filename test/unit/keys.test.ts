@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BAR_KEYS, FONT_MAX, FONT_MIN, clampFont, keySequence, pasteText, wheelReport } from '../../src/web/keys.js';
+import {
+  BAR_KEYS, FLING_MAX, FONT_MAX, FONT_MIN, clampFont, decayVelocity, flingVelocity, keySequence, pasteText, wheelReport, wheelSteps,
+} from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
 describe('terminal key bar', () => {
@@ -70,5 +72,38 @@ describe('on-screen keyboard', () => {
   it('ignores pinch zoom', () => {
     expect(keyboardOpen(844, 422, 2)).toBe(false);
     expect(keyboardOpen(844, 240, 2)).toBe(true);
+  });
+});
+
+describe('swipe momentum', () => {
+  it('measures the release speed over the last 100 ms', () => {
+    const samples = [{ y: 0, t: 0 }, { y: 50, t: 150 }, { y: 100, t: 200 }, { y: 160, t: 250 }];
+    expect(flingVelocity(samples, 250)).toBeCloseTo(110 / 100); // from t=150 to t=250
+  });
+
+  it('still counts the last moves when the lift comes a moment later', () => {
+    expect(flingVelocity([{ y: 0, t: 0 }, { y: 50, t: 50 }, { y: 100, t: 100 }], 150)).toBeCloseTo(1);
+  });
+
+  it("doesn't coast when the finger held still before letting go", () => {
+    expect(flingVelocity([{ y: 0, t: 0 }, { y: 200, t: 100 }], 400)).toBe(0);
+    expect(flingVelocity([{ y: 10, t: 90 }], 100)).toBe(0);
+  });
+
+  it('caps a hard flick', () => {
+    expect(flingVelocity([{ y: 0, t: 0 }, { y: -5000, t: 50 }], 50)).toBe(-FLING_MAX);
+  });
+
+  it('slows down about 5% a frame', () => {
+    expect(decayVelocity(1, 1000 / 60)).toBeCloseTo(0.95);
+    expect(decayVelocity(1, 0)).toBe(1);
+    expect(decayVelocity(-2, 2000 / 60)).toBeCloseTo(-2 * 0.95 * 0.95);
+  });
+
+  it('turns finger travel into whole wheel steps and carries the rest', () => {
+    expect(wheelSteps(95, 30)).toEqual({ steps: 3, rest: 5 });
+    expect(wheelSteps(-95, 30)).toEqual({ steps: -3, rest: -5 });
+    expect(wheelSteps(20, 30)).toEqual({ steps: 0, rest: 20 });
+    expect(wheelSteps(20, 0)).toEqual({ steps: 0, rest: 20 });
   });
 });

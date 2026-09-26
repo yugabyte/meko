@@ -4,11 +4,15 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import type { WebglAddon } from '@xterm/addon-webgl';
 import type { TermClientMessage, TermServerMessage } from '../shared/types';
 import { wsUrl } from './api';
 import { copyText, decodeOsc52 } from './clipboard';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
-import { clampFont, keySequence, pasteText, wheelReport, type BarKey } from './keys';
+import {
+  clampFont, decayVelocity, flingVelocity, keySequence, pasteText, wheelReport, wheelSteps, FLING_WINDOW_MS,
+  type BarKey, type TouchSample,
+} from './keys';
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -53,8 +57,14 @@ function storedFont(): number | null {
   }
 }
 
-/** Finger travel, in rows, per mouse-wheel step (tmux scrolls 5 lines per step). */
+/**
+ * Finger travel, in rows, per mouse-wheel step. Claude Code runs full screen and takes the mouse,
+ * so tmux hands it the steps and Claude Code decides how far each one scrolls.
+ */
 const SWIPE_ROWS = 2.5;
+/** A swipe let go faster than this (px/ms) coasts; momentum stops below FLING_STOP. */
+const FLING_MIN = 0.3;
+const FLING_STOP = 0.05;
 /** Pause between a compose paste and the Enter that submits it, as the server does for prompts. */
 const SUBMIT_DELAY = 300;
 
@@ -72,6 +82,17 @@ class SessionTerminal {
   /** Disconnected on purpose while the page is hidden; reconnects when it's shown again. */
   private paused = false;
   private touch: { x: number; y: number; travel: number } | null = null;
+  /** Where the last swipe was, so momentum reports its wheel steps at the same cell. */
+  private point = { x: 0, y: 0 };
+  private samples: TouchSample[] = [];
+  /** Wheel steps waiting for the next frame (positive scrolls up, to older lines). */
+  private pendingSteps = 0;
+  private flushFrame = 0;
+  private flingFrame = 0;
+  /** GPU renderer for the terminal on screen (touch screens only); null uses the DOM renderer. */
+  private webgl: WebglAddon | null = null;
+  private webglFailed = false;
+  private webglLoading = false;
   /** On touch screens, whether focusing the terminal opens the on-screen keyboard. */
   typing = false;
   conn: TermConn = 'connecting';
@@ -109,7 +130,7 @@ class SessionTerminal {
     this.el.addEventListener('touchstart', this.touchStart, { capture: true, passive: true });
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: true });
-    this.el.addEventListener('touchcancel', this.touchEnd, { capture: true, passive: true });
+    this.el.addEventListener('touchcancel', this.touchCancel, { capture: true, passive: true });
     // xterm measures its cells when it opens. If the web font arrives later (a cold cache), the
     // cells were measured with a fallback font and the rows no longer fit: re-measure and refit.
     document.fonts?.load(`13px ${FONT}`).then(
@@ -276,8 +297,11 @@ class SessionTerminal {
   }
 
   private touchStart = (e: TouchEvent) => {
+    this.stopFling();
     const t = e.touches[0];
     this.touch = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY, travel: 0 } : null;
+    this.samples = t ? [{ y: t.clientY, t: e.timeStamp }] : [];
+    if (t) this.point = { x: t.clientX, y: t.clientY };
   };
 
   private touchMove = (e: TouchEvent) => {
@@ -287,33 +311,145 @@ class SessionTerminal {
     e.stopPropagation();
     this.touch.travel += t.clientY - this.touch.y;
     this.touch.y = t.clientY;
-    const step = Math.max(8, (this.el.clientHeight / Math.max(1, this.term.rows)) * SWIPE_ROWS);
-    while (Math.abs(this.touch.travel) >= step) {
-      // A finger moving down pulls older lines into view, like a wheel turned up.
-      const up = this.touch.travel > 0;
-      this.touch.travel += up ? -step : step;
-      this.wheel(up);
-    }
+    this.point = { x: t.clientX, y: t.clientY };
+    this.samples.push({ y: t.clientY, t: e.timeStamp });
+    // Keep a little more than the window: the lift may come a moment after the last move.
+    this.samples = this.samples.filter((s) => e.timeStamp - s.t <= 2 * FLING_WINDOW_MS);
+    const { steps, rest } = wheelSteps(this.touch.travel, this.swipeStep());
+    this.touch.travel = rest;
+    // A finger moving down pulls older lines into view, like a wheel turned up.
+    this.queueSteps(steps);
   };
 
-  private touchEnd = () => {
+  private touchEnd = (e: TouchEvent) => {
+    const wasSwiping = !!this.touch;
     this.touch = null;
+    const v = wasSwiping ? flingVelocity(this.samples, e.timeStamp) : 0;
+    this.samples = [];
+    if (Math.abs(v) >= FLING_MIN) this.startFling(v);
   };
 
-  private wheel(up: boolean) {
-    const { cols, rows } = this.term;
-    if (this.term.modes.mouseTrackingMode === 'none' || !this.touch) {
-      this.term.scrollLines(up ? -3 : 3);
+  private touchCancel = () => {
+    this.touch = null;
+    this.samples = [];
+  };
+
+  /** Finger travel (px) per wheel step. */
+  private swipeStep() {
+    return Math.max(8, (this.el.clientHeight / Math.max(1, this.term.rows)) * SWIPE_ROWS);
+  }
+
+  /** Keeps scrolling after a flick, slowing down, until it stops or a new touch lands. */
+  private startFling(velocity: number) {
+    this.stopFling();
+    let v = velocity;
+    let travel = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(64, Math.max(0, now - last));
+      last = now;
+      travel += v * dt;
+      v = decayVelocity(v, dt);
+      const { steps, rest } = wheelSteps(travel, this.swipeStep());
+      travel = rest;
+      this.queueSteps(steps);
+      this.flingFrame = Math.abs(v) > FLING_STOP ? requestAnimationFrame(tick) : 0;
+    };
+    this.flingFrame = requestAnimationFrame(tick);
+  }
+
+  private stopFling() {
+    if (this.flingFrame) cancelAnimationFrame(this.flingFrame);
+    this.flingFrame = 0;
+  }
+
+  /** Sends wheel steps at most once a frame, together, so Claude redraws once for several. */
+  private queueSteps(steps: number) {
+    if (!steps) return;
+    this.pendingSteps += steps;
+    if (!this.flushFrame) {
+      this.flushFrame = requestAnimationFrame(() => {
+        this.flushFrame = 0;
+        this.flushSteps();
+      });
+    }
+  }
+
+  private flushSteps() {
+    const n = this.pendingSteps;
+    this.pendingSteps = 0;
+    if (!n) return;
+    const up = n > 0;
+    const count = Math.abs(n);
+    if (this.term.modes.mouseTrackingMode === 'none') {
+      this.term.scrollLines((up ? -3 : 3) * count);
       return;
     }
+    const { cols, rows } = this.term;
     const r = this.el.getBoundingClientRect();
-    const col = ((this.touch.x - r.left) / Math.max(1, r.width)) * cols + 0.5;
-    const row = ((this.touch.y - r.top) / Math.max(1, r.height)) * rows + 0.5;
-    this.send({ type: 'input', data: wheelReport(up, col, row, cols, rows) });
+    const col = ((this.point.x - r.left) / Math.max(1, r.width)) * cols + 0.5;
+    const row = ((this.point.y - r.top) / Math.max(1, r.height)) * rows + 0.5;
+    this.send({ type: 'input', data: wheelReport(up, col, row, cols, rows).repeat(count) });
+  }
+
+  /**
+   * On touch screens the terminal on screen draws with WebGL: full-screen redraws are much cheaper.
+   * The renderer is its own chunk, fetched the first time, so desktops never download it.
+   */
+  private enableWebgl() {
+    if (this.webgl || this.webglFailed || this.webglLoading || !matches(TOUCH_QUERY)) return;
+    this.webglLoading = true;
+    import('@xterm/addon-webgl').then(
+      ({ WebglAddon }) => {
+        this.webglLoading = false;
+        // Detached or disposed while it loaded: the next attach tries again.
+        if (this.disposed || this.webgl || !this.el.isConnected) return;
+        try {
+          const gl = new WebglAddon();
+          gl.onContextLoss(() => {
+            gl.dispose();
+            if (this.webgl === gl) this.webgl = null;
+          });
+          this.term.loadAddon(gl);
+          this.webgl = gl;
+          // Two frames on, the canvas has been sized: check it before trusting it.
+          requestAnimationFrame(() => requestAnimationFrame(() => this.checkWebgl(gl)));
+        } catch {
+          // No WebGL2 here: the DOM renderer carries on.
+          this.webglFailed = true;
+        }
+      },
+      () => {
+        // The chunk didn't load (offline, or a new version replaced it): keep the DOM renderer.
+        this.webglLoading = false;
+      },
+    );
+  }
+
+  /**
+   * xterm sizes the WebGL canvas from the device-pixel box a ResizeObserver reports. Where that
+   * disagrees with devicePixelRatio (headless Chrome's device emulation does), the text is drawn
+   * doubled and blurry, so fall back to the DOM renderer for good.
+   */
+  private checkWebgl(gl: WebglAddon) {
+    if (this.webgl !== gl || !this.el.isConnected) return;
+    const canvas = this.term.element?.querySelector<HTMLCanvasElement>('.xterm-screen canvas:not(.xterm-link-layer)');
+    if (!canvas || !canvas.clientWidth) return;
+    if (Math.abs(canvas.width - canvas.clientWidth * window.devicePixelRatio) <= 2) return;
+    this.webglFailed = true;
+    this.disableWebgl();
+    this.refit();
+  }
+
+  /** Browsers cap WebGL contexts per page, so only the terminal on screen holds one. */
+  private disableWebgl() {
+    this.webgl?.dispose();
+    this.webgl = null;
   }
 
   attach(container: HTMLElement) {
     if (this.el.parentElement !== container) container.appendChild(this.el);
+    this.enableWebgl();
     this.resizeObs?.disconnect();
     this.resizeObs = new ResizeObserver(() => this.scheduleRefit());
     this.resizeObs.observe(container);
@@ -324,6 +460,8 @@ class SessionTerminal {
   }
 
   detach() {
+    this.stopFling();
+    this.disableWebgl();
     this.resizeObs?.disconnect();
     this.resizeObs = null;
     this.el.remove();
@@ -369,6 +507,9 @@ class SessionTerminal {
     if (this.timer) clearTimeout(this.timer);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     if (this.refitFrame) cancelAnimationFrame(this.refitFrame);
+    if (this.flushFrame) cancelAnimationFrame(this.flushFrame);
+    this.stopFling();
+    this.disableWebgl();
     this.resizeObs?.disconnect();
     this.ws?.close();
     this.term.dispose();
