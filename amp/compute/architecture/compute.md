@@ -427,10 +427,12 @@ LSNs using `max_replication_write_lag` and `max_replication_flush_lag`, and
 send-side WAL rate limiter (`WalRateLimiter`, GUCs `yb_amp.max_wal_mb_per_second`
 and `yb_amp.throttled_max_wal_bytes_per_second`) bounds broadcast throughput.
 
-Both GUCs default to `-1`, which disables backpressure. `yb_amp_local` sets
-`max_replication_write_lag = 15MB` and `max_replication_flush_lag = 10GB`; a
-**deployed** endpoint sets neither, so backpressure does nothing there yet — see
-[#651](https://github.com/yugabyte/meko/issues/651).
+Both GUCs default to `-1` in Postgres, which disables backpressure; the endpoint
+supervisor's compute spec sets `max_replication_write_lag = 500MB` and
+`max_replication_flush_lag = 10GB`, overridable per endpoint through
+`pg_settings`. `yb_amp_local` overrides the write lag to `15MB` so tests exercise
+the throttle. They do not depend on the rate limiter: with
+`yb_amp.max_wal_mb_per_second = -1` (the default) the lag check applies as is.
 
 The safekeeper connection GUCs (from `nwp_register_gucs`):
 

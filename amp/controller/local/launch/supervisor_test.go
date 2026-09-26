@@ -126,7 +126,7 @@ func TestSupervisorEnvCarriesWhatTheSupervisorRendersTheSpecFrom(t *testing.T) {
 	}
 	// The invariants are the supervisor's to render; a copy here would be the
 	// second list that drifted before (https://github.com/yugabyte/meko/issues/1050).
-	for _, name := range []string{"fsync", "full_page_writes", "wal_log_hints", "wal_level"} {
+	for _, name := range []string{"fsync", "full_page_writes", "wal_log_hints", "wal_level", "max_replication_flush_lag"} {
 		if _, ok := extra[name]; ok {
 			t.Errorf("%s must come from the supervisor's invariants, not from the launcher", name)
 		}

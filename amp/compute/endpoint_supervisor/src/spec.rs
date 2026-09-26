@@ -122,6 +122,13 @@ pub fn render_compute_spec(
     push("shared_buffers", "128MB".into(), "string");
     push("max_wal_senders", "10".into(), "integer");
     push("max_replication_slots", "10".into(), "integer");
+    // Backpressure. Both default to -1, which lets the compute run unboundedly
+    // ahead of the pageserver: every byte of that lag is replayed by the next
+    // start's basebackup, and pins `amp_storage.wals` above its watermark.
+    // Neon's production pair; a larger write lag lengthens the GetPage wait for
+    // a recently modified page, a smaller one throttles ordinary bursts.
+    push("max_replication_write_lag", "500MB".into(), "string");
+    push("max_replication_flush_lag", "10GB".into(), "string");
     // Governs what Postgres does with a PLAINTEXT password — a client's own
     // `ALTER ROLE ... PASSWORD 'x'`, and remote_auth when COMPUTE_PASSWORD
     // carries a plaintext rather than a verifier. It does NOT re-encode a
@@ -463,6 +470,29 @@ mod tests {
         let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &registry);
         assert_eq!(last_value(&spec, "full_page_writes").as_deref(), Some("on"));
         assert_eq!(last_value(&spec, "wal_log_hints").as_deref(), Some("on"));
+    }
+
+    /// Backpressure is armed by default, and stays a default: an endpoint that
+    /// wants more burst headroom raises it through `pg_settings`.
+    #[test]
+    fn backpressure_is_a_default_the_operator_can_override() {
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!(
+            last_value(&spec, "max_replication_write_lag").as_deref(),
+            Some("500MB")
+        );
+        assert_eq!(
+            last_value(&spec, "max_replication_flush_lag").as_deref(),
+            Some("10GB")
+        );
+
+        let registry =
+            BTreeMap::from([("max_replication_write_lag".to_string(), "1GB".to_string())]);
+        let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &registry);
+        assert_eq!(
+            last_value(&spec, "max_replication_write_lag").as_deref(),
+            Some("1GB")
+        );
     }
 
     /// `compute_ctl` gates its external routes on this, and an empty set rejects

@@ -61,10 +61,11 @@ func LocalComputeSettings(p PostgresqlConfParams) map[string]string {
 		// 5s rather than the 60s default so a wedged replication link fails a
 		// test fast. Only real walsenders read it; walproposer does not.
 		"wal_sender_timeout": "5s",
-		// Backpressure thresholds. A deployed endpoint has none — see
-		// https://github.com/yugabyte/meko/issues/1067.
+		// Tighter than a deployed endpoint's 500MB so any test writing more than
+		// this runs through the throttle, and a lagging pageserver shows up as a
+		// slow test. A perf run wanting deployed behaviour sets 500MB through
+		// the endpoint's pg_settings.
 		"max_replication_write_lag": "15MB",
-		"max_replication_flush_lag": "10GB",
 	}
 
 	// A local run has no pod reservation for the supervisor to size from, so

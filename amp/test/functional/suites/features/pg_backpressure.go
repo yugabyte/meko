@@ -1,6 +1,5 @@
-// meko#651: a deployed endpoint never throttles writers when the safekeeper
-// falls behind, because the walproposer lag thresholds and the WAL rate limiter
-// all default to -1 in the k8s spec while the local launcher sets them.
+// meko#651: the walproposer lag thresholds default to Postgres' -1, so a
+// deployed endpoint throttles only because the compute spec sets them.
 package features
 
 import (

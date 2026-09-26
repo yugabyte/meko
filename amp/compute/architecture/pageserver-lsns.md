@@ -450,9 +450,9 @@ stores them in shared memory (`record_pageserver_feedback`,
 throttles backends when the compute's own flush position exceeds
 `writePtr + max_replication_write_lag` or `flushPtr +
 max_replication_flush_lag`. This is what stops the compute from running
-unboundedly ahead of durable page state in YB. Both GUCs default to `-1`,
-which disables backpressure, and a deployed endpoint sets neither, so it does
-nothing there yet ([#651](https://github.com/yugabyte/meko/issues/651)).
+unboundedly ahead of durable page state in YB. Both GUCs default to `-1` in
+Postgres, which disables backpressure, so the compute spec sets them (`500MB` /
+`10GB`; `yb_amp_local` uses `15MB` for the write lag).
 
 ---
 

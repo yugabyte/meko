@@ -117,14 +117,14 @@ PGPASSWORD="$PGPASSWORD" $PSQL "$C" -c \
           backpressure_throttling_time() as throttle_us;"
 ```
 `compute_flush - received_lsn` is the write lag. Healthy is at or just above
-`max_replication_write_lag` (local default `15MB`); `throttle_us` is cumulative across all backends
-since postmaster start, so compare two samples rather than reading it absolutely.
+`max_replication_write_lag` (`500MB` deployed, `15MB` under `yb_amp_local`); `throttle_us` is
+cumulative across all backends since postmaster start, so compare two samples rather than reading it
+absolutely.
 
 **If `throttle_us` stays 0 while the lag is large, backpressure is off, not satisfied.** Check the
-`max_replication_write_lag` / `max_replication_flush_lag` GUCs: both default to `-1` (disabled),
-and only `yb_amp_local` sets them — a deployed endpoint sets neither, so backpressure does nothing
-there yet (#651). An unbounded lag is worse than a throttle: it is paid back later, synchronously,
-inside the next compute start's basebackup.
+`max_replication_write_lag` / `max_replication_flush_lag` GUCs: the compute spec sets `500MB` /
+`10GB`, so a `-1` there came from the endpoint's `pg_settings`. An unbounded lag is worse than a
+throttle: it is paid back later, synchronously, inside the next compute start's basebackup.
 
 **Levers:**
 - Raise pageserver ingest capacity — `scale_factor` (Step 3a) widens the write fan-out into YB too.
