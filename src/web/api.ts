@@ -12,6 +12,7 @@ import type {
   NewComment,
   Project,
   ProjectHome,
+  UsageOverview,
   ReposResponse,
   ReviewComment,
   SearchResult,
@@ -104,6 +105,7 @@ export const api = {
   detachDatapack: (id: string, dpId: string) =>
     request<Project>('DELETE', `/api/projects/${enc(id)}/datapacks/${enc(dpId)}`),
   home: (id: string) => get<ProjectHome>(`/api/projects/${enc(id)}/home`),
+  usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),

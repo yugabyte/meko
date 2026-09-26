@@ -18,6 +18,7 @@ import { ProjectView } from './ProjectView';
 import { Rail } from './Rail';
 import { SettingsDialog } from './SettingsDialog';
 import { TopBar } from './TopBar';
+import { UsageView } from './UsageView';
 
 type Modal =
   | { kind: 'none' }
@@ -92,7 +93,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }, [state]);
 
   const currentProject =
-    route.view === 'root' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
+    route.view === 'root' || route.view === 'usage' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
   const live = currentProject ? liveSessions(currentProject).sort((a, b) => a.createdAt - b.createdAt) : [];
   const currentSession =
     route.view === 'project' && currentProject
@@ -104,7 +105,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
   useEffect(() => {
-    if (!state) return;
+    if (!state || route.view === 'usage') return;
     if (route.view === 'root' || !currentProject) {
       const first = projects[0];
       if (first) {
@@ -242,6 +243,11 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       <Rail
         projects={projects}
         currentId={currentProject?.id ?? null}
+        usageOpen={route.view === 'usage'}
+        onUsage={() => {
+          navigate({ view: 'usage' }, { replace: isDrawerEntry() });
+          closeDrawer();
+        }}
         username={state.username || auth.username || ''}
         version={state.version}
         limits={state.limits ?? null}
@@ -260,7 +266,9 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       />
       <div className="main">
         <Banners state={state} conn={conn} onError={showToast} />
-        {currentProject && route.view === 'home' ? (
+        {route.view === 'usage' ? (
+          <UsageView onMenu={openDrawer} />
+        ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             project={currentProject}
             mekoWebUrl={state.meko.webUrl}

@@ -103,6 +103,36 @@ export interface ProjectUsage {
   daily: DailyUsage[];
 }
 
+export interface ProjectUsageSummary {
+  projectId: string;
+  name: string;
+  repoPath: string;
+  /** Deleted projects keep their sessions and usage. */
+  deleted: boolean;
+  usage: TokenUsage;
+  sessions: number;
+  /** Sessions whose PR was merged. */
+  mergedPrs: number;
+  /** Pushes a session made straight to the project's base branch, and the commits they carried. */
+  directPushes: number;
+  directCommits: number;
+  /** The newest model response in any of its sessions. */
+  lastActiveAt: number | null;
+}
+
+/** Usage across every project, deleted ones included. */
+export interface UsageOverview {
+  total: TokenUsage;
+  mergedPrs: number;
+  directPushes: number;
+  directCommits: number;
+  /** Current projects first, then deleted ones; each by total tokens, largest first. */
+  byProject: ProjectUsageSummary[];
+  byModel: ModelUsage[];
+  /** The last 14 days, oldest first, zero-filled. */
+  daily: DailyUsage[];
+}
+
 export interface ProjectSettings {
   /** Send a continue prompt to sessions that were mid-turn when the host went down. */
   autoContinue: boolean;
@@ -503,6 +533,7 @@ export type TermServerMessage =
 // POST   /api/projects/:id/datapacks AttachDatapackRequest → Project
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
+// GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)

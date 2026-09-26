@@ -4,9 +4,9 @@ import { join, resolve, sep } from 'node:path';
 import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
-import { get, run, tx } from './db.js';
+import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
-import { addWorktree, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult } from './git.js';
+import { addWorktree, git, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult } from './git.js';
 import type { GuardDecision, HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
@@ -510,6 +510,7 @@ export class SessionManager {
       this.ingestUsage(r.id);
       void this.captureTranscript(r.id); // catches up on turns from before this server version
     }
+    this.backfillUsage();
     await this.core.tmux.ensureServer();
     const panes = await this.core.tmux.panes();
     for (const row of sessionRows(this.db)) {
@@ -788,7 +789,7 @@ export class SessionManager {
     if (!r) return;
     this.usageReadAt.set(id, Date.now());
     try {
-      if (!ingestSessionUsage(this.db, id, sessionTranscript(r, transcriptPathFor))) return;
+      if (!ingestSessionUsage(this.db, id, sessionTranscript(r, transcriptPathFor), r.base_branch)) return;
     } catch (e) {
       this.core.log.warn(`reading token usage for ${id} failed`, errMsg(e));
       return;
@@ -796,6 +797,39 @@ export class SessionManager {
     const fresh = usageBySession(this.db).get(id);
     if (fresh) this.usage.set(id, fresh);
     this.core.changed();
+    void this.countPushedCommits(r);
+  }
+
+  /** Fills in how many commits each newly found push carried; -1 when git can't tell. */
+  private async countPushedCommits(r: SessionRow): Promise<void> {
+    const pending = all<{ range: string }>(this.db, 'SELECT range FROM pushes WHERE session_id = ? AND commits IS NULL', r.id);
+    if (!pending.length) return;
+    // Deleted projects keep their row, and their repo usually still has the commits.
+    const repo = get<{ repo_path: string }>(this.db, 'SELECT repo_path FROM projects WHERE id = ?', r.project_id)?.repo_path;
+    for (const { range } of pending) {
+      let n = -1;
+      if (repo) {
+        const out = await git(repo, 'rev-list', '--count', range).catch(() => '');
+        if (/^\d+$/.test(out)) n = Number(out);
+      }
+      run(this.db, 'UPDATE pushes SET commits = ? WHERE session_id = ? AND range = ? AND commits IS NULL', n, r.id, range);
+    }
+  }
+
+  /**
+   * Reads the transcripts of sessions no one has read yet, such as archived ones after a migration
+   * cleared the read offsets, one session per tick so the server stays responsive.
+   */
+  private backfillUsage(): void {
+    const ids = all<{ id: string }>(this.db,
+      'SELECT id FROM sessions s WHERE NOT EXISTS (SELECT 1 FROM usage_files f WHERE f.session_id = s.id)').map((x) => x.id);
+    const next = () => {
+      const id = ids.shift();
+      if (!id) return;
+      this.ingestUsage(id);
+      setTimeout(next, 0);
+    };
+    next();
   }
 
   private loadUsage(): void {

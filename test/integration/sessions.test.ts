@@ -426,6 +426,34 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
   });
 });
 
+describe('pushes straight to the base branch', () => {
+  let env: TestEnv;
+  beforeEach(async () => {
+    env = await makeEnv();
+  });
+  afterEach(async () => {
+    await env.cleanup();
+  });
+
+  it('finds a push in the transcript and counts its commits with git', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Direct', prompt: 'do it', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: env.repo, encoding: 'utf8' }).trim();
+    const from = git('rev-parse', '--short', 'HEAD');
+    git('commit', '--allow-empty', '-q', '-m', 'one');
+    git('commit', '--allow-empty', '-q', '-m', 'two');
+    const to = git('rev-parse', '--short', 'HEAD');
+    const result = { stdout: '', stderr: `To https://github.com/acme/demo.git\n   ${from}..${to}  HEAD -> main\n`, interrupted: false };
+    writeFileSync(join(env.fakeDir, `${s.claudeSessionId}.jsonl`), JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), toolUseResult: result }) + '\n', { flag: 'a' });
+    env.core.sessions.ingestUsage(s.id);
+    const row = await waitFor(
+      () => get<{ commits: number | null }>(env.core.db, 'SELECT commits FROM pushes WHERE session_id = ?', s.id),
+      (r) => r?.commits != null, 10000, 'commit count');
+    expect(row?.commits).toBe(2);
+  });
+});
+
 describe('with Meko transcript capture off', () => {
   let env: TestEnv;
   beforeEach(async () => {

@@ -8,6 +8,8 @@ import { StatusDot } from './common';
 export function Rail({
   projects,
   currentId,
+  usageOpen,
+  onUsage,
   username,
   version,
   limits,
@@ -23,6 +25,9 @@ export function Rail({
 }: {
   projects: ProjectWithSessions[];
   currentId: string | null;
+  /** The Usage page is showing. */
+  usageOpen: boolean;
+  onUsage: () => void;
   username: string;
   version: string;
   limits: PlanLimits | null;
@@ -97,6 +102,15 @@ export function Rail({
         })}
         <button className="rail-add" onClick={onNewProject}>
           + New project
+        </button>
+        <button
+          className={cx('rail-add', 'rail-usage', usageOpen && 'sel')}
+          onClick={onUsage}
+          aria-current={usageOpen ? 'page' : undefined}
+          title="Tokens, merged PRs and pushed commits across every project"
+        >
+          <Icon d="M4 20V10 M10 20V4 M16 20v-7 M22 20H2" />
+          Usage
         </button>
         {mobile && (
           <button className="rail-add" onClick={onPalette}>

@@ -500,6 +500,66 @@ textarea.input {
 .rail-add:hover {
   color: var(--accent);
 }
+.rail-usage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rail-usage.sel {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+/* Deleted projects on the Usage page. */
+.usage-projects tr.deleted td {
+  color: var(--muted);
+}
+.usage-when {
+  display: block;
+}
+/* The repo and "active …" each stay whole; a narrow screen breaks between them. */
+.usage-when > span {
+  white-space: nowrap;
+}
+.usage-projects .link-btn.inline {
+  text-align: left;
+}
+/* Sortable column headers: the whole header is the button. */
+.usage-table th:has(.th-sort) {
+  padding: 0;
+}
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.num .th-sort {
+  justify-content: flex-end;
+  text-align: right;
+}
+.th-sort:hover,
+.th-sort.on {
+  color: var(--ink);
+}
+/* Reserve the arrow's room so headers don't shift when the sort moves. */
+.th-arrow {
+  display: inline-block;
+  width: 1em;
+  font-size: 9px;
+  text-align: center;
+}
 .rail-foot {
   border-top: 1px solid var(--rule);
   padding: 8px 4px 0;
@@ -2537,6 +2597,9 @@ a.icon-btn {
 }
 
 @media (pointer: coarse) {
+  .th-sort {
+    min-height: 40px;
+  }
   .btn.small {
     min-height: 36px;
     padding: 6px 12px;
@@ -2796,6 +2859,18 @@ a.icon-btn {
   }
   .kv {
     grid-template-columns: 100px minmax(0, 1fr);
+  }
+  /* The Usage page's project table keeps the columns that matter on a phone. */
+  .usage-projects .opt {
+    display: none;
+  }
+  .usage-projects td:first-child {
+    min-width: 8.5em;
+  }
+  /* Header labels may take two lines, so the numbers keep their columns. */
+  .usage-projects .th-sort {
+    white-space: normal;
+    letter-spacing: 0.02em;
   }
   /* 16px or larger, or iOS zooms in on focus. */
   .input,

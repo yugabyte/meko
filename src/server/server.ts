@@ -21,6 +21,7 @@ import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
+import { usageOverview } from './usage.js';
 
 const ACTIONS: SessionAction[] = ['approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard'];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
@@ -203,6 +204,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Params: { id: string }; Body: AttachDatapackRequest }>('/api/projects/:id/datapacks', async (req) => core.projects.attachDatapack(req.params.id, req.body));
   app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
   app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));
+  app.get('/api/usage', async () => usageOverview(core.db));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 
   // ---- sessions ----

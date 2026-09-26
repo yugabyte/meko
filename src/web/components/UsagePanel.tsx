@@ -92,7 +92,7 @@ export function UsagePanel({ projectId, usage }: { projectId: string; usage: Pro
   );
 }
 
-function Stat({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
+export function Stat({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
   return (
     <div className="usage-stat" title={`${value.toLocaleString()} tokens`}>
       <span className={cx('usage-num', strong && 'strong')}>{formatTokens(value)}</span>
@@ -117,7 +117,7 @@ function dayLabel(day: string, style: 'short' | 'long'): string {
     : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function DailyChart({ daily }: { daily: DailyUsage[] }) {
+export function DailyChart({ daily }: { daily: DailyUsage[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const totals = daily.map((d) => totalTokens(d.usage));
   const max = niceMax(Math.max(...totals));
@@ -185,7 +185,7 @@ function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage;
   );
 }
 
-function DailyTable({ daily }: { daily: DailyUsage[] }) {
+export function DailyTable({ daily }: { daily: DailyUsage[] }) {
   return (
     <div className="table-scroll">
       <table className="usage-table">

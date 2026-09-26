@@ -176,6 +176,19 @@ const MIGRATIONS: string[] = [
   `DROP INDEX projects_repo;`,
   // 7: Merge and Cleanup became one stage, Merge & Close.
   `UPDATE sessions SET stage = 'merge' WHERE stage = 'cleanup';`,
+  // 8: pushes straight to a session's base branch, found in its transcripts. Clearing the read
+  // offsets makes every transcript be read once more (usage rows are upserts), to find old pushes.
+  `
+  CREATE TABLE pushes (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    range TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    commits INTEGER,
+    PRIMARY KEY (session_id, range)
+  );
+  DELETE FROM usage_files;
+  `,
 ];
 
 export function openDb(path: string): Db {

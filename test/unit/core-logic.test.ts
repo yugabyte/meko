@@ -117,8 +117,9 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', '/w', ?, 't', 'running', 'idle', ?, 0)`, id, id, id, id, id, stage);
     add('s1', 'cleanup');
     add('s2', 'review');
-    // Replay the last migration, as on a host upgrading from the six-stage release.
-    db.exec(`PRAGMA user_version = ${version - 1}`);
+    // Go back to schema 6, the six-stage release, and upgrade again (7 is Merge & Close; later
+    // migrations add tables, so drop them first).
+    db.exec('DROP TABLE pushes; PRAGMA user_version = 6');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);

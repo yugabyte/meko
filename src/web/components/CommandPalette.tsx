@@ -75,6 +75,7 @@ export function CommandPalette({
       }
     }
     out.push({ id: 'new-project', label: 'New project', hint: 'Action', keywords: 'new project repo add', run: onNewProject });
+    out.push({ id: 'usage', label: 'Usage', hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: 'Settings', hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
   }, [projects, currentProjectId, onNewProject, onNewSession, onSettings]);
