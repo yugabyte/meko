@@ -2,7 +2,7 @@
 
 What to check when reviewing a change to **AgentK Local**, whether you're a person or an agent
 (AgentK). Background and invariants are in [AGENTS.md](AGENTS.md); the design is in
-[docs/design.html](docs/design.html).
+[docs/design.md](docs/design.md).
 
 Order findings by severity: **blocker** (breaks an invariant, loses work, or opens a security
 hole), **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
@@ -75,7 +75,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 6. Tests, docs, release
 
 - [ ] `npm run typecheck`, `npm run lint` and `npm test` pass; new behavior has a test.
-- [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.html`,
+- [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.md`,
       `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.

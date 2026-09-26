@@ -53,7 +53,7 @@ browser:
   </tr>
 </table>
 
-Design: [`docs/design.html`](docs/design.html).
+Design: [`docs/design.md`](docs/design.md).
 
 ## Requirements
 

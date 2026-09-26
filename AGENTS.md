@@ -6,7 +6,7 @@ should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and
 AgentK Local is a self-hosted web workbench for Claude Code. Projects are git repos. Each task is a
 session with its own git worktree and a tmux-hosted Claude process, moving through
 Design → Code → PR → Review → Merge & Close. Meko datapacks hold project memory. The design
-is in [docs/design.html](docs/design.html).
+is in [docs/design.md](docs/design.md).
 
 **Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
 identifier `agent-k-local` stays in the repo name, the CLI command, `~/.agent-k-local`, the systemd
@@ -102,13 +102,13 @@ Docs are part of the change. Update them **in the same commit** as the code:
 
 | When you change… | Update |
 |---|---|
-| Behavior, architecture, lifecycle, security or data model | `docs/design.html` (and bump its version label) |
+| Behavior, architecture, lifecycle, security or data model | `docs/design.md` |
 | Features, requirements, install steps | `README.md` |
 | Dev setup, checks, release process | `CONTRIBUTING.md` |
 | Module layout, invariants, commands, conventions | `AGENTS.md` |
 | What reviewers should check | `REVIEW.md` |
 | An API route or message | `src/shared/types.ts` (the route list at the bottom) |
-| A config key | `DEFAULT_CONFIG` in `src/server/config.ts` and the `config.toml` excerpt in `docs/design.html` |
+| A config key | `DEFAULT_CONFIG` in `src/server/config.ts` and the `config.toml` excerpt in `docs/design.md` |
 
 Before you finish, re-read the docs you touched against the code; stale docs are treated as bugs in
 review.
