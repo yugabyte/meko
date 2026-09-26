@@ -4,9 +4,10 @@
 # Runs the bundled Node on the bundled server. For `serve`, it also handles
 # rollback after a bad self-update: the updater writes update-pending.json
 # before restarting into a new version, and the server deletes it once it has
-# been healthy for 30s. If the new version fails to come up three times in a
+# been healthy for 5 minutes. If the new version fails to come up three times in a
 # row, this wrapper switches app/current back to the previous version, records
-# the bad one, and starts the previous version instead.
+# the bad one, and starts the previous version instead. A clean stop (SIGTERM)
+# of the new version takes its start back off the count, so only crashes count.
 set -eu
 
 # Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<ver>).

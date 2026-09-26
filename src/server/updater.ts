@@ -64,23 +64,25 @@ export function releaseLane(v: string, prerelease = false): string {
   return pre || prerelease ? 'prerelease' : 'stable';
 }
 
-/** Installed versions to keep per lane under app/. */
-export const KEEP_PER_LANE = 5;
+/**
+ * How long a new version must stay up before it counts as good: until then a crash loop rolls it
+ * back (see packaging/agent-k-local); after it, the update is final and older versions are removed.
+ */
+export const HEALTHY_MS = 5 * 60_000;
 
-/** Version dirs to delete: all but the newest `keep` in each lane, never a protected one. */
-export function versionsToPrune(names: string[], keep: number, protect: Set<string>): string[] {
-  const lanes = new Map<string, string[]>();
-  for (const n of names) {
-    if (!parseSemver(n)) continue;
-    const lane = releaseLane(n);
-    lanes.set(lane, [...(lanes.get(lane) ?? []), n]);
-  }
-  const out: string[] = [];
-  for (const vs of lanes.values()) {
-    vs.sort((a, b) => compareSemver(b, a));
-    out.push(...vs.slice(keep).filter((v) => !protect.has(v)));
-  }
-  return out;
+/**
+ * Version dirs under app/ to delete once the running version is healthy: all of them except the
+ * running one and one to go back to by hand. That is the version it updated from, or else (after a
+ * manual switch) the newest one older than it, or else the newest other one.
+ */
+export function versionsToPrune(names: string[], running: Set<string>, from: string | null): string[] {
+  const others = names.filter((n) => parseSemver(n) && !running.has(n)).sort((a, b) => compareSemver(b, a));
+  const current = [...running].filter((v) => parseSemver(v)).sort((a, b) => compareSemver(b, a))[0];
+  const previous =
+    (from && others.includes(from) ? from : null) ??
+    (current ? others.find((v) => compareSemver(v, current) < 0) : undefined) ??
+    others[0];
+  return others.filter((v) => v !== previous);
 }
 
 // ---------------------------------------------------------------------------
@@ -314,8 +316,11 @@ export class Updater {
   }
 
   start(): void {
-    // "Updated to vX" is shown for one boot only; markHealthy() sets it again for this boot.
-    this.deps.kvSet(KV_JUST, '');
+    // "Updated to vX" is shown for the first boot of a new version, from the moment it's up.
+    const p = this.readPending();
+    const from = p && this.isRunning(p.to) && p.from && !this.isRunning(p.from) ? p.from : null;
+    this.justUpdatedFrom = from;
+    this.deps.kvSet(KV_JUST, from ?? '');
     if (!this.enabled) return;
     void this.check();
     this.schedule();
@@ -480,14 +485,36 @@ export class Updater {
     }
   }
 
-  /** Called by the server once it has been healthy for 30s after boot. */
+  /** Called by the server once it has been healthy for HEALTHY_MS after boot. */
   markHealthy(): void {
-    this.clearPending();
-    if (this.enabled) this.pruneVersions();
+    // An update is being installed, or has been switched to while this process shuts down: the
+    // pending file and the new version's directory belong to that update, so leave both alone.
+    if (this.applying) return;
+    const pending = this.readPending();
+    // A pending file for another version is stale (say, left by a manual switch): drop it too.
+    if (pending) this.clearPending(pending);
+    const from = pending && this.isRunning(pending.to) ? pending.from : null;
+    if (this.enabled) this.pruneVersions(from);
   }
 
-  /** Deletes installed versions beyond the newest few in each lane, keeping the running one. */
-  private pruneVersions(): void {
+  /**
+   * A deliberate stop (SIGTERM, as systemd sends for a restart) of the version being tried out takes
+   * its start back off the launcher's count, so restarting by hand during the HEALTHY_MS window
+   * can't look like a crash loop. The old version stopping for the update itself changes nothing.
+   */
+  stoppedCleanly(): void {
+    const file = this.deps.paths.updatePending;
+    const pending = this.readPending();
+    if (!pending || !this.isRunning(pending.to)) return;
+    try {
+      writeFileAtomic(file, JSON.stringify({ ...pending, attempts: Math.max(0, (Number(pending.attempts) || 0) - 1) }));
+    } catch {
+      // the launcher's count just stays as it was
+    }
+  }
+
+  /** Deletes installed versions except the running one and one previous version. */
+  private pruneVersions(from: string | null): void {
     const { app } = this.deps.paths;
     let names: string[];
     try {
@@ -495,7 +522,15 @@ export class Updater {
     } catch {
       return;
     }
-    for (const v of versionsToPrune(names, KEEP_PER_LANE, new Set([this.currentDirName(), this.deps.version]))) {
+    // Whatever app/current points at is what systemd starts next: never delete it.
+    const running = new Set([this.currentDirName(), this.deps.version]);
+    try {
+      running.add(basename(realpathSync(join(app, 'current'))));
+    } catch {
+      // no current link
+    }
+    const removed = versionsToPrune(names, running, from);
+    for (const v of removed) {
       try {
         rmSync(join(app, v), { recursive: true, force: true });
         this.deps.log(`Removed old version ${v}`);
@@ -503,25 +538,56 @@ export class Updater {
         this.deps.log(`Removing old version ${v} failed: ${(e as Error).message}`);
       }
     }
+    this.pruneSnapshots(names.filter((n) => parseSemver(n) && !removed.includes(n)));
   }
 
-  private clearPending(): void {
-    let pending: PendingUpdate;
+  /**
+   * Deletes the database snapshots (state.db.bak-<version>, taken before updating away from that
+   * version) of versions that are no longer installed; the ones for kept versions stay.
+   */
+  private pruneSnapshots(kept: string[]): void {
+    const dir = dirname(dbPath(this.deps.paths, this.deps.config()));
+    let files: string[];
     try {
-      pending = JSON.parse(readFileSync(this.deps.paths.updatePending, 'utf8')) as PendingUpdate;
+      files = readdirSync(dir);
     } catch {
       return;
     }
+    for (const f of files) {
+      const v = /^state\.db\.bak-(.+)$/.exec(f)?.[1];
+      if (!v || !parseSemver(v) || kept.includes(v)) continue;
+      try {
+        rmSync(join(dir, f), { force: true });
+        this.deps.log(`Removed old database snapshot ${f}`);
+      } catch (e) {
+        this.deps.log(`Removing old database snapshot ${f} failed: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  private readPending(): PendingUpdate | null {
+    try {
+      const p = JSON.parse(readFileSync(this.deps.paths.updatePending, 'utf8')) as PendingUpdate;
+      return p && typeof p === 'object' ? p : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Whether `v` names this running version (by its version or its directory). */
+  private isRunning(v: string | undefined): boolean {
+    return !!v && (v === this.deps.version || v === this.currentDirName());
+  }
+
+  /** Ends a pending update: removes the file the launcher's rollback reads. */
+  private clearPending(pending: PendingUpdate): void {
     try {
       unlinkSync(this.deps.paths.updatePending);
     } catch {
       // already gone
     }
-    if (pending?.from && pending.from !== this.deps.version) {
-      this.justUpdatedFrom = pending.from;
-      this.deps.kvSet(KV_JUST, pending.from);
+    if (this.isRunning(pending.to) && pending.from && !this.isRunning(pending.from)) {
       this.deps.log(`Updated from ${pending.from} to ${this.deps.version}`);
-      this.changed();
     }
   }
 }

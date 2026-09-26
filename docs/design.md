@@ -605,11 +605,18 @@ channel can be *stable*, *prerelease* or *off*. When a newer version appears, th
 3. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
    migrations on start, and points `app/current` at the new version;
 4. restarts only the web server unit. Sessions keep running;
-5. if `/healthz` fails within 30 seconds, points back to the previous version and marks the new one
-   as bad.
+5. if the new version fails to come up three times in a row (the service manager restarts it) before
+   it has been healthy for 5 minutes, points back to the previous version and marks the new one as
+   bad. A deliberate stop (SIGTERM, as for a service restart) takes its start back off the count,
+   so restarting by hand in that window isn't mistaken for a crash loop.
 
-Once a version has been healthy for 30 seconds, the server deletes installed versions under `app/`
-beyond the newest 5 in each lane, never the running one.
+Once a version has been healthy for 5 minutes, the server deletes every installed version under
+`app/` except the running one and one to roll back to by hand: the version it updated from, or
+(after a manual switch) the newest older one. It also deletes the database snapshots of the versions
+it removes. Nothing is removed while an update is being installed or switched to, and never the
+version `app/current` points at. Each version is about 180 MB, most of it the bundled Node runtime.
+The "Updated to" notice shows from the new version's first boot, without waiting for the healthy
+check.
 
 The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance
 window, because they never touch tmux.

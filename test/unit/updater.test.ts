@@ -68,10 +68,30 @@ describe('release lanes', () => {
     expect(releaseLane('1.0.0-1')).toBe('prerelease');
   });
 
-  it('keeps the newest few in each lane and never a protected version', () => {
-    const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.2.0-beta.1', '0.2.0-beta.2', '0.2.0-rc.1'];
-    expect(versionsToPrune(names, 2, new Set()).sort()).toEqual(['0.1.0', '0.1.1', '0.1.2']);
-    expect(versionsToPrune(names, 1, new Set(['0.1.0'])).sort()).toEqual(['0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']);
+});
+
+describe('removing old versions', () => {
+  const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.1.11-ctrl', '0.2.0-beta.1'];
+  const prune = (running: string[], from: string | null) => versionsToPrune(names, new Set(running), from).sort();
+
+  it('keeps the running version and the one it updated from', () => {
+    expect(prune(['0.1.10'], '0.1.3')).toEqual(['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']);
+  });
+
+  it('keeps the newest older version when there was no update (a manual switch)', () => {
+    expect(prune(['0.1.11-ctrl'], null)).toEqual(['0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']);
+    // The version it came from is gone: fall back the same way.
+    expect(prune(['0.1.10'], '0.0.9')).toEqual(['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']);
+  });
+
+  it('keeps the newest other version when nothing is older, and never touches non-versions', () => {
+    expect(prune(['0.1.0'], null)).toEqual(['0.1.1', '0.1.10', '0.1.11-ctrl', '0.1.2', '0.1.3']);
+    expect(versionsToPrune(['current', '.staging-x', '0.1.0'], new Set(['0.1.0']), null)).toEqual([]);
+  });
+
+  it('never removes the running version under either of its names', () => {
+    expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.11-ctrl');
+    expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.10');
   });
 });
 
@@ -159,11 +179,11 @@ interface Fixture {
 }
 
 /** Build a fake release tarball for `version` whose `selftest` exits with `code`. */
-function buildRelease(releaseDir: string, version: string, code = 0, corrupt = false): void {
+function buildRelease(releaseDir: string, version: string, code = 0, corrupt = false, selftestSecs = 0): void {
   const stage = mkdtempSync(join(tmpdir(), 'ak-rel-'));
   const top = join(stage, `agent-k-local-${version}`);
   mkdirSync(join(top, 'bin'), { recursive: true });
-  writeFileSync(join(top, 'bin', 'agent-k-local'), `#!/bin/sh\n[ "$1" = selftest ] && exit ${code}\nexit 0\n`);
+  writeFileSync(join(top, 'bin', 'agent-k-local'), `#!/bin/sh\n[ "$1" = selftest ] && { sleep ${selftestSecs}; exit ${code}; }\nexit 0\n`);
   chmodSync(join(top, 'bin', 'agent-k-local'), 0o755);
   writeFileSync(join(top, 'VERSION'), version + '\n');
   const name = tarballName(version, 'x64');
@@ -306,20 +326,100 @@ describe('Updater', () => {
     expect(fx.restart).not.toHaveBeenCalled();
   });
 
-  it('markHealthy clears the pending update and reports the previous version', () => {
+  it('reports the previous version from boot, and markHealthy then clears the pending update', () => {
     writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.9', to: '0.1.0', attempts: 1, at: 1 }));
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
-    u.markHealthy();
-    expect(existsSync(fx.paths.updatePending)).toBe(false);
+    u.start();
+    u.stop();
+    // The "Updated to" banner doesn't wait for the healthy check; the rollback stays armed until it.
     expect(u.status().justUpdatedFrom).toBe('0.0.9');
     expect(fx.kv.get('update.justUpdatedFrom')).toBe('0.0.9');
+    expect(existsSync(fx.paths.updatePending)).toBe(true);
+    u.markHealthy();
+    expect(existsSync(fx.paths.updatePending)).toBe(false);
   });
 
-  it('markHealthy removes installed versions beyond five per lane', () => {
-    for (const v of ['0.0.1', '0.0.2', '0.0.3', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.0.1-beta.1']) mkdirSync(join(fx.paths.app, v));
+  it('shows no banner on a boot that was not an update', () => {
+    fx.kv.set('update.justUpdatedFrom', '0.0.9');
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
+    u.start();
+    u.stop();
+    expect(u.status().justUpdatedFrom).toBeNull();
+    expect(fx.kv.get('update.justUpdatedFrom')).toBe('');
+  });
+
+  it('markHealthy leaves an update alone while it installs and after the switch', async () => {
+    for (const v of ['0.0.1', '0.0.9']) mkdirSync(join(fx.paths.app, v));
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.9', to: '0.1.0', attempts: 1, at: 1 }));
+    buildRelease(fx.releaseDir, '0.2.0', 0, false, 1);
+    const u = fx.makeUpdater(fakeSource(fx.releaseDir, [rel('0.2.0')]));
+    const applying = u.apply();
+    // The healthy timer fires during the new version's self-test.
+    for (let i = 0; i < 100 && !existsSync(join(fx.paths.app, '0.2.0')); i++) await new Promise((r) => setTimeout(r, 20));
     u.markHealthy();
-    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.1-beta.1', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.1.0', 'current']);
+    await applying;
+    expect(existsSync(join(fx.paths.app, '0.2.0', 'bin', 'agent-k-local'))).toBe(true);
+    expect(readlinkSync(join(fx.paths.app, 'current'))).toBe('0.2.0');
+    // Or it fires in the old version while it shuts down for the restart.
+    u.markHealthy();
+    expect(JSON.parse(readFileSync(fx.paths.updatePending, 'utf8'))).toMatchObject({ from: '0.1.0', to: '0.2.0' });
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.1', '0.0.9', '0.1.0', '0.2.0', 'current']);
+  });
+
+  it('markHealthy drops a stale pending file and never deletes what current points at', () => {
+    for (const v of ['0.0.3', '0.0.7', '0.0.9']) mkdirSync(join(fx.paths.app, v));
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to: '0.0.7', attempts: 2, at: 1 }));
+    // Someone pointed current at 0.0.3 by hand without restarting.
+    rmSync(join(fx.paths.app, 'current'));
+    symlinkSync('0.0.3', join(fx.paths.app, 'current'));
+    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
+    expect(existsSync(fx.paths.updatePending)).toBe(false);
+    // Running 0.1.0 and current's 0.0.3 stay, plus the newest other older one, 0.0.9.
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.3', '0.0.9', '0.1.0', 'current']);
+  });
+
+  it('markHealthy removes the database snapshots of removed versions', () => {
+    for (const v of ['0.0.1', '0.0.3']) mkdirSync(join(fx.paths.app, v));
+    for (const f of ['state.db', 'state.db.bak-0.0.1', 'state.db.bak-0.0.3', 'state.db.bak-0.0.2', 'state.db.bak-mine', 'notes.txt']) {
+      writeFileSync(join(fx.paths.home, f), '');
+    }
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to: '0.1.0', attempts: 1, at: 1 }));
+    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
+    const left = readdirSync(fx.paths.home).filter((f) => f.startsWith('state.db') || f === 'notes.txt').sort();
+    // 0.0.3 is the kept previous version; 0.0.1 was removed, 0.0.2 wasn't installed; other files stay.
+    expect(left).toEqual(['notes.txt', 'state.db', 'state.db.bak-0.0.3', 'state.db.bak-mine']);
+  });
+
+  it('markHealthy keeps only the running version and the one it updated from', () => {
+    for (const v of ['0.0.1', '0.0.2', '0.0.3', '0.0.7', '0.0.1-beta.1', '0.1.1-ctrl']) mkdirSync(join(fx.paths.app, v));
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to: '0.1.0', attempts: 1, at: Date.now() }));
+    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.3', '0.1.0', 'current']);
+  });
+
+  it('a clean stop of the version being tried out takes its start back off the count', () => {
+    const pending = (attempts: number, to: string) =>
+      writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to, attempts, at: 1 }));
+    const attempts = () => JSON.parse(readFileSync(fx.paths.updatePending, 'utf8')).attempts;
+    const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
+    pending(2, '0.1.0');
+    u.stoppedCleanly();
+    expect(attempts()).toBe(1);
+    pending(0, '0.1.0');
+    u.stoppedCleanly();
+    expect(attempts()).toBe(0); // never below zero
+    // The old version stopping so the new one can start changes nothing.
+    pending(0, '0.2.0');
+    u.stoppedCleanly();
+    expect(attempts()).toBe(0);
+    rmSync(fx.paths.updatePending);
+    expect(() => u.stoppedCleanly()).not.toThrow(); // no update pending
+  });
+
+  it('markHealthy after a manual switch keeps the newest older version', () => {
+    for (const v of ['0.0.1', '0.0.7', '0.0.1-beta.1', '0.1.1-ctrl']) mkdirSync(join(fx.paths.app, v));
+    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
+    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.7', '0.1.0', 'current']);
   });
 });
 

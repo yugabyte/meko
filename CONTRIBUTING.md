@@ -64,8 +64,9 @@ sorts higher.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
    Tags are kept, so release notes and version numbering are unaffected.
 5. Running installs pick the release up on their next update check (every 6 hours) and update
-   themselves without interrupting sessions. Once a version has been healthy for 30s, the server
-   deletes installed versions under `~/.agent-k-local/app/` beyond the newest 5 in each lane.
+   themselves without interrupting sessions. Once a version has been healthy for 5 minutes, the
+   server deletes every installed version under `~/.agent-k-local/app/` except the running one and
+   one previous version (the one it updated from) to roll back to by hand.
 
 Run the Release workflow by hand with **force** to release without feat/fix/perf commits, or with
 a **tag** to rebuild the assets of an existing release (a tag from before macOS support gets its
