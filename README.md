@@ -2,8 +2,9 @@
 
 # AgentK Local
 
-A self-hosted workbench for [Claude Code](https://claude.com/claude-code). It runs headless on
-your devserver, and you use it from a browser:
+The agentic coder for ADLC. AgentK Local is self-hosted and runs
+[Claude Code](https://claude.com/claude-code) headless on your devserver, one session per task,
+and you use it from a browser:
 
 - **Projects** in a left rail, each one a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
