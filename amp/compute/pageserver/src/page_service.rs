@@ -2095,7 +2095,7 @@ impl PageServerHandler {
                 // only have one batch's reads outstanding even when more were already queued.
                 // Depth 1 reproduces the serial behavior.
                 let pipeline_depth: usize = pipeline_depth.get();
-                let mut inflight = FuturesOrdered::new();
+                let mut inflight = InflightBatches::new();
                 let mut sender_gone = false;
                 loop {
                     let can_accept = inflight.len() < pipeline_depth && !sender_gone;
@@ -2140,10 +2140,7 @@ impl PageServerHandler {
                                             req.batch_wait_ctx.take();
                                         }
                                     }
-                                    inflight.push_back(Self::execute_batch(
-                                        batch,
-                                        ctx.attached_child(),
-                                    ));
+                                    inflight.push(Self::execute_batch(batch, ctx.attached_child()));
                                     crate::metrics::PAGE_SERVICE_PIPELINE_INFLIGHT_BATCHES
                                         .observe(inflight.len() as f64);
                                 }
@@ -4152,6 +4149,64 @@ impl From<WaitedForLsn> for Lsn {
     }
 }
 
+/// Getpage batches in flight on one pagestream connection.
+///
+/// Each batch runs as its own task, so its YB read and walredo progress while the executor
+/// writes an earlier batch's responses (#1533). Results come back in submission order. Dropping
+/// this aborts every unfinished batch, so a stalled read and the YB and timeline resources it
+/// holds don't outlive the connection. (The socket is released by the executor returning; batch
+/// tasks never own it.)
+struct InflightBatches<T> {
+    batches: FuturesOrdered<AbortOnDrop<T>>,
+}
+
+impl<T: Send + 'static> InflightBatches<T> {
+    fn new() -> Self {
+        Self {
+            batches: FuturesOrdered::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.batches.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.batches.is_empty()
+    }
+
+    fn push(&mut self, batch: impl Future<Output = T> + Send + 'static) {
+        self.batches
+            .push_back(AbortOnDrop(tokio::spawn(batch.in_current_span())));
+    }
+
+    /// The oldest batch's result, once it has finished. A batch's panic re-panics here, in the
+    /// connection task, as it did before batches were spawned.
+    async fn next(&mut self) -> Option<T> {
+        Some(self.batches.next().await?.expect("getpage batch task panicked"))
+    }
+}
+
+/// A task handle that aborts the task when dropped; a plain `JoinHandle` detaches it.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Future for AbortOnDrop<T> {
+    type Output = Result<T, tokio::task::JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if !self.0.is_finished() {
+            crate::metrics::PAGE_SERVICE_BATCH_TASKS_ABORTED.inc();
+        }
+        self.0.abort();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4319,4 +4374,58 @@ mod tests {
         let (_, has_error) = parse_options(" -c yb_amp.compute_mode");
         assert!(has_error);
     }
+
+    #[tokio::test]
+    async fn inflight_batches_progress_without_being_polled() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let done = Arc::new(AtomicUsize::new(0));
+        let mut inflight = InflightBatches::new();
+        for _ in 0..3 {
+            let done = Arc::clone(&done);
+            inflight.push(async move {
+                tokio::task::yield_now().await;
+                done.fetch_add(1, SeqCst);
+            });
+        }
+        // The executor is busy writing an earlier response and not polling `inflight`.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(done.load(SeqCst), 3);
+        assert_eq!(inflight.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn inflight_batches_return_in_submission_order() {
+        let mut inflight = InflightBatches::new();
+        inflight.push(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            1
+        });
+        inflight.push(async { 2 });
+        assert_eq!(inflight.next().await.unwrap(), 1);
+        assert_eq!(inflight.next().await.unwrap(), 2);
+        assert!(inflight.is_empty());
+        assert!(inflight.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn inflight_batches_drop_aborts_unfinished_batches() {
+        let aborted_before = crate::metrics::PAGE_SERVICE_BATCH_TASKS_ABORTED.get();
+        let token = Arc::new(());
+        let mut inflight = InflightBatches::new();
+        let held = Arc::clone(&token);
+        inflight.push(async move {
+            let _held = held;
+            std::future::pending::<()>().await;
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        drop(inflight);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(
+            Arc::strong_count(&token),
+            1,
+            "a stalled batch must not outlive its connection"
+        );
+        assert!(crate::metrics::PAGE_SERVICE_BATCH_TASKS_ABORTED.get() > aborted_before);
+    }
+
 }

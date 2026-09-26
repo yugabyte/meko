@@ -13,6 +13,10 @@
 //! *finishes* the page_service connection promptly — well under the stall.
 //! With the fix the connection is released ~instantly (abort); without it the
 //! connection lingers until the stalled read drains (~STALL_MS).
+//!
+//! Batches run as their own tasks and don't own the socket, so the connection
+//! finishing no longer proves the stalled batch stopped; the test also asserts
+//! `pageserver_page_service_batch_tasks_aborted_total` advances (#1533).
 
 use std::time::{Duration, Instant};
 
@@ -95,6 +99,7 @@ async fn run_inner(c: &Cluster, conninfo: &str, original: &str) -> anyhow::Resul
 
     let before = ps_page_service_finished(c).await?;
     tee_println!("  page_service finished counter before kill = {before}");
+    let aborted_before = ps_counter(c, "pageserver_page_service_batch_tasks_aborted_total").await?;
 
     step("kill the throwaway backend mid-stall (immediate disconnect at the PS)");
     let killed = std::process::Command::new("kill")
@@ -130,7 +135,7 @@ async fn run_inner(c: &Cluster, conninfo: &str, original: &str) -> anyhow::Resul
                 e.as_secs_f64(),
                 RELEASE_CEILING.as_secs_f64()
             );
-            tee_println!("  ok — aborted in-flight and released the fd promptly");
+            tee_println!("  ok — released the fd promptly");
         }
         None => bail!(
             "page_service `finished` counter never advanced after killing the backend \
@@ -138,7 +143,37 @@ async fn run_inner(c: &Cluster, conninfo: &str, original: &str) -> anyhow::Resul
             (STALL_MS + 8_000) / 1000
         ),
     }
+
+    step("assert the stalled batch task was aborted, not left running");
+    let deadline = Instant::now() + RELEASE_CEILING;
+    let mut aborted = aborted_before;
+    while Instant::now() < deadline {
+        aborted = ps_counter(c, "pageserver_page_service_batch_tasks_aborted_total").await?;
+        if aborted > aborted_before {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    ensure!(
+        aborted > aborted_before,
+        "no getpage batch task was aborted after the compute disconnected mid-stall \
+         (aborted counter stayed at {aborted_before}) — the stalled read outlived its connection"
+    );
+    tee_println!("  ok — aborted {} in-flight batch task(s)", aborted - aborted_before);
     Ok(())
+}
+
+/// Value of an unlabelled pageserver counter.
+async fn ps_counter(c: &Cluster, name: &str) -> anyhow::Result<i64> {
+    let body = reqwest::get(format!("http://127.0.0.1:{}/metrics", c.ps_http_port()))
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    Ok(body
+        .lines()
+        .find_map(|l| l.strip_prefix(name)?.strip_prefix(' ')?.trim().parse::<f64>().ok())
+        .unwrap_or(0.0) as i64)
 }
 
 /// Live `pageserver_live_connections_finished{...="page_service"}` count.

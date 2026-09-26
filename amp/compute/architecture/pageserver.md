@@ -1006,13 +1006,16 @@ Computes fetch pages over two equivalent surfaces
 Exists / Nblocks / DbSize / GetSlruSegment / GetPage / Test messages),
 `basebackup`, `fullbackup`, `lease lsn`, `set`. The pipelined executor
 (`page_service_pipelining`, defaults: `max_batch_size` 32,
-`pipeline_depth` 16) batches GetPage requests and runs them through a
-`FuturesOrdered`; on
-client disconnect (read EOF/reset) it **aborts** in-flight reads by
-dropping the pipeline rather than draining responses to a gone peer —
-without that, a getpage read stalled on a slow YB round trip pins the
-socket fd in `CLOSE-WAIT`, and under a stall storm the accept loop dies
-with `EMFILE`. As defense in depth against peers that vanish without a
+`pipeline_depth` 16) batches GetPage requests and runs each batch as its
+own task, so a batch's YB read and walredo keep going while the executor
+writes an earlier batch's responses; responses are still written in request
+order. On client disconnect (read EOF/reset) the executor **returns** rather
+than draining responses to a gone peer, which releases the socket — without
+that, a getpage read stalled on a slow YB round trip pins the socket fd in
+`CLOSE-WAIT`, and under a stall storm the accept loop dies with `EMFILE`.
+Returning also aborts the in-flight batch tasks, so a stalled read doesn't
+outlive its connection (`pageserver_page_service_batch_tasks_aborted_total`).
+As defense in depth against peers that vanish without a
 FIN (host death, partition), every page-service socket gets TCP
 keepalive (30 s idle + 3 × 10 s probes).
 

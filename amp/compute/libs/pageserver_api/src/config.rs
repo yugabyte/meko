@@ -599,6 +599,8 @@ fn default_pipeline_depth() -> NonZeroUsize {
     NonZeroUsize::new(16).unwrap()
 }
 
+/// Whether the batcher runs in the connection's task or its own. Batch execution is spawned
+/// per batch under either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PageServiceProtocolPipelinedExecutionStrategy {

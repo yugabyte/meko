@@ -1866,6 +1866,14 @@ pub(crate) static PAGE_SERVICE_PIPELINE_INFLIGHT_BATCHES: Lazy<Histogram> = Lazy
     .expect("failed to define a metric")
 });
 
+pub(crate) static PAGE_SERVICE_BATCH_TASKS_ABORTED: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_page_service_batch_tasks_aborted_total",
+        "Getpage batch tasks aborted before finishing because their connection ended (#1533)."
+    )
+    .expect("failed to define a metric")
+});
+
 fn set_page_service_config_max_batch_size(conf: &PageServicePipeliningConfig) {
     PAGE_SERVICE_CONFIG_MAX_BATCH_SIZE.reset();
     let (label_values, value) = match conf {
