@@ -788,6 +788,10 @@ textarea.input {
 }
 .tab.new {
   color: var(--accent);
+  font-size: 18px;
+  line-height: 1;
+  min-width: 40px;
+  justify-content: center;
 }
 .tab-name {
   overflow: hidden;
@@ -2294,13 +2298,6 @@ a.icon-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.topbar-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  flex: none;
 }
 .topbar-more {
   position: relative;

@@ -10,8 +10,8 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, duration, formatTokens, totalTokens, usageTitle } from '../util';
-import { Check, ConfirmButton, DatapackName, Dots, StatusDot } from './common';
+import { STATUS_TEXT, cx, formatTokens, totalTokens, usageTitle } from '../util';
+import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
@@ -58,12 +58,7 @@ export function ProjectView({
   const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
   const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
   const [sheet, setSheet] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const tabsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 15000);
-    return () => clearInterval(t);
-  }, []);
   useEffect(() => {
     setPanel(null);
     setSheet(false);
@@ -116,16 +111,6 @@ export function ProjectView({
     <div className="project-view">
       {mobile ? (
         <TopBar onMenu={onMenu} sub={session ? project.name : undefined} title={session?.name ?? project.name}>
-          {session && (
-            <span className="topbar-status">
-              <StatusDot status={session.status} />
-              <span className="muted small">
-                {STATUS_TEXT[session.status]}
-                {session.status === 'starting' && <Dots />}
-                {session.status === 'working' && session.lastEventAt ? ` ${duration(session.lastEventAt, now)}` : ''}
-              </span>
-            </span>
-          )}
           {session?.status === 'exited' && (
             <button className="btn small primary" onClick={() => act('resume')}>
               Resume
@@ -206,8 +191,8 @@ export function ProjectView({
             <span className="stchip">{STAGE_LABELS[s.stage]}</span>
           </button>
         ))}
-        <button className="tab new" onClick={onNewSession}>
-          + New session
+        <button className="tab new" onClick={onNewSession} title="New session" aria-label="New session">
+          +
         </button>
       </div>
 
