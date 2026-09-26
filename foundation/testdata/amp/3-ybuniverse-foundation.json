@@ -9,11 +9,9 @@
     "namespace": "amp"
   },
   "spec": {
-    "enableClientToNodeEncrypt": false,
+    "enableClientToNodeEncrypt": true,
     "enableLoadBalancer": true,
-    "enableNodeToNodeEncrypt": false,
-    "enableYCQL": false,
-    "enableYSQL": true,
+    "enableNodeToNodeEncrypt": true,
     "enableYSQLAuth": false,
     "gFlags": {
       "masterGFlags": {
@@ -37,7 +35,14 @@
           "scope": "Namespaced",
           "type": "ClusterIP"
         }
-      ]
+      ],
+      "tls": {
+        "extraSANs": {
+          "dnsNames": [
+            "{{ include \"yugabyte.servicename\" (dict \"root\" . \"endpoint\" (dict \"name\" \"yb-tserver-conn\") \"scope\" \"Namespaced\") }}.{{ .Release.Namespace }}.svc.{{ .Values.domainName }}"
+          ]
+        }
+      }
     },
     "numNodes": 3,
     "placementInfo": {
@@ -55,10 +60,11 @@
     },
     "providerName": "foundation",
     "replicationFactor": 3,
+    "rootCA": "amp-ca",
     "tserverVolume": {
       "volumeSize": 100
     },
     "universeName": "foundation",
-    "ybSoftwareVersion": "2026.1.2.0-b137"
+    "ybSoftwareVersion": "2026.1.3.0-b21"
   }
 }

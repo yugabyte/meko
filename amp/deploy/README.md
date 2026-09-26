@@ -230,7 +230,16 @@ tens of minutes to install, so the operator path soaks in its own nightly
 
 `TLS=1 deploy/up-gke.sh` (and `up.sh`) replaces the yugabyted StatefulSet with the
 upstream `yugabyte` chart on cert-manager certificates, behind a cluster-wide trust
-root:
+root. With `FOUNDATION=operator` the same trust root is used but TLS is **not an
+input**: both encryption flags are create-time only in the CRD, so the foundation
+spec decides and this script reads the shape back from `foundation validate --json`
+(an explicit `TLS=0` against an encrypted spec is refused rather than obeyed). The
+universe's own certificates come from YBA under its cert-manager type: the CA is
+copied from the trust bundle into Secret `YB_CA_SECRET` (default
+`amp-ca-bundle-tls`), which the spec's `YBCertificate` must name. `TLS_ISSUER_KIND`
+has to stay `ClusterIssuer` — YBA deploys the universe into its own namespace and
+cannot reach a namespaced `Issuer`. See
+[`../../foundation/examples/amp.yaml`](../../foundation/examples/amp.yaml).
 
 - [`tls/trust-root.sh`](tls/trust-root.sh) installs cert-manager and trust-manager
   when absent (never touching an existing install), bootstraps a root CA and the
@@ -244,7 +253,10 @@ root:
   `YB_STORAGE_CLASS`) with TLS on YSQL and on the tserver RPC port, client
   certificates required on RPC, and an HBA that logs the storage role
   (`YB_STORAGE_ROLE`, default `amp_storage`) in by certificate CN; then creates
-  `yb_storage` and that role.
+  `yb_storage`.
+- [`tls/yb-storage-role.sh`](tls/yb-storage-role.sh) creates that role, from either
+  lane — the operator one gets its database from the foundation spec and would
+  otherwise have no role at all.
 
 The controller then gets a cert-manager certificate of its own (chart values
 `tls.*`) and logs in with it, and renders one into every endpoint

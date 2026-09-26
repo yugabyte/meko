@@ -342,8 +342,9 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
 
   Running `redeploy.sh` standalone with the default DB URL against any of the others is the
   usual way to hit this. Pass the real `DB_URL`/`YB_HOST_PORTS`, or re-run the bring-up that
-  set them — and re-run it with the same `FOUNDATION` and `TLS` values, since those are what
-  decide which shape you get. Confirm with:
+  set them — with the same `FOUNDATION`, and for `FOUNDATION=yugabyted` the same `TLS`.
+  On the operator lane `TLS` is not an input: the foundation spec decides and `up-gke.sh`
+  reads it back from `foundation validate --json`. Confirm with:
   `kubectl -n "$NS" get pod <pod> -o jsonpath='{..env[?(@.name=="AMP_DATABASE_URL")].value}'`.
 
   Deleting the foundation out from under a running controller produces the same symptom:
@@ -354,14 +355,39 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
 
 - **`FOUNDATION=operator`: the controller crash-loops on `no pg_hba.conf entry ... no
   encryption`.** The universe requires TLS for client connections while the DSN says
-  `sslmode=disable`. `enableClientToNodeEncrypt` defaults to **true** in the CRD, so a
-  foundation spec that does not set it explicitly gets TLS — and the field is create-time
-  only, so the universe has to be rebuilt rather than edited. The checked-in spec sets both
-  encryption flags false; if you are looking at a universe that predates that, rebuild it,
-  and note the deployer derives `sslmode` from the field, so a TLS universe gets a
-  `require` DSN once the compute side can supply certs for the 9100 lane
-  ([#1241](https://github.com/yugabyte/meko/issues/1241), behind
-  [#1114](https://github.com/yugabyte/meko/issues/1114)).
+  `sslmode=disable`. Both encryption flags are create-time only, so the universe has to be
+  rebuilt rather than edited. The checked-in spec is **encrypted** and its DSN is
+  `verify-full`, so this means you are looking at a universe built from an older spec (or
+  from one that turned the flags off): rebuild it. The deployer derives `sslmode` from the
+  spec, so the two cannot disagree once they are rebuilt together.
+
+- **`FOUNDATION=operator`: a client fails with `server certificate for "..." does not match
+  host name`.** The node certificates do not carry the endpoint Service's name, which is the
+  only address the foundation hands out and is in none of the SANs the chart computes for
+  itself. The spec asks for it through `kubernetesOverrides.tls.extraSANs`, which needs chart
+  2026.1.3 or later. Check what landed:
+  `kubectl -n "$UNIVERSE_NS" get certificate -o jsonpath='{.items[*].spec.dnsNames}'`.
+  `foundation up` warns about this in its "verify the tserver Service" step, before the
+  databases step fails on it.
+
+- **`FOUNDATION=operator`: `foundation validate` refuses the spec.** The deployer applies
+  only what the spec says and fills nothing in, so a spec has to carry the address
+  contract itself — `enableLoadBalancer: true` and a `serviceEndpoints` entry named
+  `yb-tserver-conn` with `scope: Namespaced`, both ports (5433 **and** 9100) and
+  `app: yb-tserver`. Every problem is reported at once; copy the block from
+  `foundation/examples/amp.yaml`.
+
+  **On an EXISTING universe you must also write both encryption flags explicitly.** The
+  old deployer wrote them `false`, so a universe built from a silent spec is plaintext
+  with `false` in its CR; leave them out now and an absent flag reads as the CRD's `true`,
+  which means the reported DSN claims TLS against a plaintext database and the apply is
+  rejected by `self == oldSelf`. `foundation up` refuses this by comparing the spec
+  against the live CR, naming the flag and the value to write.
+
+  Both of those are why the order matters: server-side apply removes fields the deployer
+  previously set and now omits, so converging a not-yet-migrated spec would delete the
+  Service its pods are using. **Fix the spec first, apply it with the old deployer, then
+  upgrade.**
 
 - **`FOUNDATION=operator`: the CRs sit with an EMPTY status and no DB pods appear.** The
   operator needs YBA to have exactly one customer and throws before it can write a status,

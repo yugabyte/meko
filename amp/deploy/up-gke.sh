@@ -123,6 +123,12 @@ YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
 #     rule): the transition shape controller/architecture/ac-endpoint-tls.md
 #     describes, for a deployment whose endpoints have not all been re-rendered.
 #     TLS_PERMISSIVE=0 refuses plaintext.
+#   - FOUNDATION=operator takes TLS from the foundation SPEC instead of from
+#     here, because both encryption flags are create-time only: the universe
+#     either is encrypted or is a different universe. Setting TLS=0 against an
+#     encrypted spec is refused rather than quietly obeyed.
+# Recorded before the default so an explicit 0 can be told from an unset one.
+TLS_EXPLICIT="${TLS+1}"
 TLS="${TLS:-0}"
 TLS_PERMISSIVE="${TLS_PERMISSIVE:-1}"
 TLS_ISSUER_KIND="${TLS_ISSUER_KIND:-ClusterIssuer}"
@@ -154,6 +160,11 @@ YB_STORAGE_CLASS="${YB_STORAGE_CLASS:-standard-rwo}"
 YB_RELEASE="yugabyte"
 # The storage role endpoints log in as, by certificate CN.
 YB_STORAGE_ROLE="${YB_STORAGE_ROLE:-amp_storage}"
+# The Secret YBA reads the CA from on the operator lane. trust-manager syncs the
+# CA into each namespace as a ConfigMap, which a CR cannot reference, so this is
+# copied from it before the universe is created. It must equal the
+# YBCertificate's certificateSecretRef.name in the foundation spec.
+YB_CA_SECRET="${YB_CA_SECRET:-amp-ca-bundle-tls}"
 if [ "${TLS}" = "1" ]; then
   # The chart's per-pod certificates carry the pod FQDNs (oldNamingStyle), so
   # clients that verify the server name connect to the pod, not the Service.
@@ -223,6 +234,37 @@ case "${FOUNDATION}" in
     # a relative path would resolve there instead of here — passing preflight
     # and then failing with a confusing "not found".
     FOUNDATION_SPEC="$(cd "$(dirname "${FOUNDATION_SPEC}")" && pwd)/$(basename "${FOUNDATION_SPEC}")"
+    # TLS is not an input on this lane, it is a PROPERTY OF THE SPEC. Both
+    # encryption flags are create-time only, so the universe either is encrypted
+    # or is a different universe — and a TLS= that disagreed with the file would
+    # produce a DSN the database refuses, in whichever direction it disagreed.
+    # `validate` is offline and runs before anything reaches the cluster, which
+    # is what lets the trust root be stood up first.
+    _fnd_tls="$(cd "${REPO_ROOT}/../foundation" \
+      && go run ./cmd/foundation validate -c "${FOUNDATION_SPEC}" --namespace "${NS}" --json)" \
+      || die "foundation validate failed for ${FOUNDATION_SPEC}"
+    _spec_tls="$(printf '%s' "${_fnd_tls}" | sed -n 's/.*"clientToNode":[[:space:]]*\([a-z]*\).*/\1/p')"
+    _spec_n2n="$(printf '%s' "${_fnd_tls}" | sed -n 's/.*"nodeToNode":[[:space:]]*\([a-z]*\).*/\1/p')"
+    _spec_mode="$(printf '%s' "${_fnd_tls}" | sed -n 's/.*"sslMode":[[:space:]]*"\([a-z-]*\)".*/\1/p')"
+    _spec_tls_flag=0
+    [ "${_spec_tls}" = "true" ] && _spec_tls_flag=1
+    # This lane serves one shape, so refuse the others rather than deriving a
+    # single bit and hoping. Node-to-node without client TLS gives endpoints no
+    # certificates for an RPC port that demands them; client TLS without a
+    # rootCA is sslmode=require, while the controller and endpoints are wired
+    # for verify-full against amp-ca.
+    if [ "${_spec_n2n}" = "true" ] && [ "${_spec_tls}" != "true" ]; then
+      die "${FOUNDATION_SPEC} has enableNodeToNodeEncrypt without enableClientToNodeEncrypt: this lane gives the endpoints certificates only in TLS mode, and they would dial an encrypted tserver RPC port with none"
+    fi
+    if [ "${_spec_tls}" = "true" ] && [ "${_spec_mode}" != "verify-full" ]; then
+      die "${FOUNDATION_SPEC} has client TLS but sslMode=${_spec_mode}: this lane wires the controller and endpoints for verify-full against the amp-ca bundle, which needs the universe to name a rootCA YBA did not invent"
+    fi
+    # Either direction of a disagreement is a DSN the database refuses, so both
+    # are refused here rather than one being quietly obeyed.
+    if [ -n "${TLS_EXPLICIT}" ] && [ "${TLS}" != "${_spec_tls_flag}" ]; then
+      die "TLS=${TLS} was asked for but ${FOUNDATION_SPEC} has enableClientToNodeEncrypt=${_spec_tls}: the universe and the DSNs would disagree. The spec decides on this lane"
+    fi
+    TLS="${_spec_tls_flag}"
     ;;
   *) die "invalid FOUNDATION=${FOUNDATION} (want yugabyted|operator)" ;;
 esac
@@ -235,10 +277,13 @@ case "${COMPUTE_TLS}" in
   *) die "COMPUTE_TLS must be disable, issue or existing-secret, got '${COMPUTE_TLS}'" ;;
 esac
 case "${COMPUTE_TLS_SERVICE_DNS}" in 0|1) ;; *) die "COMPUTE_TLS_SERVICE_DNS must be 0 or 1, got '${COMPUTE_TLS_SERVICE_DNS}'" ;; esac
-if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" != "yugabyted" ]; then
-  # deploy/tls/ replaces the yugabyted StatefulSet with the upstream chart; the
-  # operator-managed universe carries its own certificate configuration.
-  die "TLS=1 needs FOUNDATION=yugabyted, got '${FOUNDATION}'"
+# Both lanes can do TLS now — the yugabyted one by swapping in the upstream
+# chart, the operator one through the foundation spec's own rootCA and zone
+# issuer — so the only thing left to refuse is an issuer the operator lane
+# cannot reach. YBA installs the universe chart into the universe's namespace,
+# and a namespaced Issuer in cert-manager's namespace is invisible from there.
+if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" = "operator" ] && [ "${TLS_ISSUER_KIND}" != "ClusterIssuer" ]; then
+  die "FOUNDATION=operator with TLS needs TLS_ISSUER_KIND=ClusterIssuer, got '${TLS_ISSUER_KIND}': YBA deploys the universe into its own namespace and cannot reach a namespaced Issuer"
 fi
 if [ "${BUILD}" = "1" ] && [ -z "${TAG}" ]; then TAG="$(date +%Y%m%d-%H%M%S)"; fi
 TAG="${TAG:-latest}"
@@ -248,7 +293,9 @@ echo "   registry     : ${REGISTRY}   (host ${REG_HOST})"
 echo "   tag          : ${TAG}   (build=${BUILD})"
 echo "   expose       : ${CONTROLLER_EXPOSE}   endpoints=${ENDPOINT_SERVICE_TYPE}"
 echo "   foundation   : ${FOUNDATION}"
-if [ "${TLS}" = "1" ]; then
+if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" = "operator" ]; then
+  echo "   tls          : on, from the spec (permissive=${TLS_PERMISSIVE}, issuer=${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
+elif [ "${TLS}" = "1" ]; then
   echo "   tls          : on (permissive=${TLS_PERMISSIVE}, issuer=${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca}, chart yugabyte ${YB_CHART_VERSION})"
 else
   echo "   tls          : off"
@@ -329,6 +376,42 @@ if [ "${FOUNDATION}" = "operator" ]; then
   # the yugaware chart with the Kubernetes operator enabled, a YBUniverse CR,
   # the tserver Service and yb_storage. It takes the namespace this script
   # already created, so the amp pods stay co-located with the DB.
+  CONNSTR_ARGS=()
+  if [ "${TLS}" = "1" ]; then
+    # BEFORE the universe: YBA references the ClusterIssuer when it creates it,
+    # and the YBCertificate CR reads the CA Secret as it is applied. Standing
+    # the trust root up afterwards would leave the universe signed by nothing.
+    say "certificate trust root (${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
+    TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" \
+    TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" TLS_TRUST_NAMESPACES="${NS}" \
+      "${SCRIPT_DIR}/tls/trust-root.sh"
+    TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}"
+
+    # trust-manager publishes the CA as a ConfigMap, and a CR can only name a
+    # Secret, so copy it. One hop, here rather than in the spec, because the CA
+    # belongs to the cluster and not to this universe.
+    say "CA for YBA (Secret ${YB_CA_SECRET} in ${NS})"
+    _ca_pem="$(kubectl -n "${NS}" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')"
+    [ -n "${_ca_pem}" ] || die "ConfigMap amp-ca-bundle in ${NS} has no ca.crt; trust-root.sh did not label this namespace"
+    # Through a FILE, and with the trailing newline put back. Command
+    # substitution strips it, and YBA rejects a PEM without one — "Failed to
+    # process certificate: Certificate must end with a newline", written to the
+    # YBCertificate's status where nothing else would have looked.
+    _ca_file="$(mktemp)"
+    printf '%s\n' "${_ca_pem}" > "${_ca_file}"
+    kubectl -n "${NS}" create secret generic "${YB_CA_SECRET}" \
+      --from-file=ca.crt="${_ca_file}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    rm -f "${_ca_file}"
+
+    # The consumer's own files, which is why they are flags and not spec
+    # fields: these paths exist inside the controller and endpoint pods, from
+    # the chart's tls block, and no other consumer need agree with them.
+    CONNSTR_ARGS=(--sslrootcert /etc/amp/tls/ca/ca.crt
+                  --sslcert /etc/amp/tls/client/tls.crt
+                  --sslkey /etc/amp/tls/client/tls.key)
+  fi
+
   say "YugabyteDB (operator-managed universe via foundation/)"
   FOUNDATION_ARGS=(-c "${FOUNDATION_SPEC}" --namespace "${NS}")
   [ -n "${CLUSTER}" ] && FOUNDATION_ARGS+=(--kube-context "${CLUSTER}")
@@ -340,13 +423,28 @@ if [ "${FOUNDATION}" = "operator" ]; then
   # swallowed by the command substitution.
   say "resolving foundation connection details"
   _foundation_conn="$(cd "${REPO_ROOT}/../foundation" \
-    && go run ./cmd/foundation connstr "${FOUNDATION_ARGS[@]}" --shell)" \
+    && go run ./cmd/foundation connstr "${FOUNDATION_ARGS[@]}" \
+      ${CONNSTR_ARGS[@]+"${CONNSTR_ARGS[@]}"} --shell)" \
     || die "foundation connstr failed; the universe may not be Ready"
   eval "${_foundation_conn}"
   [ -n "${YB_HOST_PORTS:-}" ] || die "foundation connstr produced no YB_HOST_PORTS"
   [ -n "${DB_URL:-}" ] || die "foundation connstr produced no DB_URL"
+
   echo "   YB_HOST_PORTS : ${YB_HOST_PORTS}"
   echo "   DB_URL        : ${DB_URL}"
+
+  # The role endpoints log in as, by certificate CN. yb_storage itself came from
+  # the spec's `databases:`; the role did not, because it is amp's and not the
+  # universe's. Same script the yugabyted TLS lane uses, so there is one copy of
+  # the recipe.
+  if [ "${TLS}" = "1" ]; then
+    # connstr exports the namespace the DB pods are in, which differs from ours
+    # whenever a provider zone names its own kubeNamespace.
+    _univ_ns="${YB_UNIVERSE_NAMESPACE:-${NS}}"
+    NS="${NS}" UNIVERSE_NS="${_univ_ns}" YB_HOST_PORTS="${YB_HOST_PORTS}" \
+    YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_DATABASE="yb_storage" \
+      "${SCRIPT_DIR}/tls/yb-storage-role.sh"
+  fi
 elif [ "${TLS}" = "1" ]; then
   # TLS: the trust root, then the upstream chart with cert-manager certificates,
   # then yb_storage and the storage role — all in deploy/tls/yugabyte-tls.sh, so

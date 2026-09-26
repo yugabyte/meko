@@ -12,8 +12,6 @@
     "enableClientToNodeEncrypt": false,
     "enableLoadBalancer": true,
     "enableNodeToNodeEncrypt": false,
-    "enableYCQL": false,
-    "enableYSQL": true,
     "kubernetesOverrides": {
       "serviceEndpoints": [
         {

@@ -204,6 +204,12 @@ func cmdValidate(args []string) error {
 			"chartVersion":      spec.ChartVersion,
 			"kinds":             kinds,
 			"storageClasses":    spec.StorageClasses(),
+			// The universe's TLS shape, so a deploy script can decide what it
+			// has to stand up FIRST — a cert-manager universe needs its issuer
+			// to exist before YBA creates the universe, and that is knowable
+			// from the spec alone. It keeps TLS from becoming a second input
+			// that can disagree with this file.
+			"tls": spec.TLS(),
 		})
 	}
 	fmt.Printf("ok: %s in namespace %s, chart %s — renders %s\n",
@@ -293,14 +299,52 @@ func cmdConnstr(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("connstr", flag.ContinueOnError)
 	c := commonFlags(fs)
 	shell := fs.Bool("shell", false, "emit shell exports for `eval` instead of JSON")
+	// The consumer's own libpq parameters. Flags rather than spec fields: these
+	// are paths inside the CALLER's container, which the universe knows nothing
+	// about and two consumers need not agree on. See foundation.DSNOptions.
+	sslMode := fs.String("sslmode", "",
+		"override the sslmode the universe implies (disable | require | verify-ca | verify-full)")
+	sslRootCert := fs.String("sslrootcert", "", "CA bundle path, in the CONSUMER's filesystem")
+	sslCert := fs.String("sslcert", "", "client certificate path, in the CONSUMER's filesystem")
+	sslKey := fs.String("sslkey", "", "client key path, in the CONSUMER's filesystem")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	// A certificate is a pair. Half of one is a DSN that parses and fails at
+	// the first connection, which is the kind of thing this command exists to
+	// keep out of a deploy script.
+	if (*sslCert == "") != (*sslKey == "") {
+		return fmt.Errorf("--sslcert and --sslkey go together: a client certificate without its key " +
+			"authenticates nothing")
 	}
 	spec, err := c.load()
 	if err != nil {
 		return err
 	}
-	info, err := deployer(spec).Connect(ctx)
+	d := deployer(spec).WithDSNOptions(foundation.DSNOptions{
+		SSLMode:     *sslMode,
+		SSLRootCert: *sslRootCert,
+		SSLCert:     *sslCert,
+		SSLKey:      *sslKey,
+	})
+	// The caller and the spec have to agree about TLS, in both directions.
+	// Either mismatch yields a DSN that fails at the first connection, with
+	// nothing in the message to say which half was wrong.
+	switch mode := d.SSLMode(); {
+	case *sslRootCert != "" && mode == "disable":
+		return fmt.Errorf("--sslrootcert was given but this universe has enableClientToNodeEncrypt "+
+			"false, so the DSN would be sslmode=disable: the certificate paths would be ignored "+
+			"and the connection would be plaintext. Turn client TLS on in %s, or drop the flags",
+			*c.specPath)
+	case *sslRootCert == "" && mode == "verify-full":
+		// libpq would fall back to ~/.postgresql/root.crt, which is not a file
+		// any consumer of this DSN has.
+		return fmt.Errorf("this universe names a rootCA, so its DSN is sslmode=verify-full and the " +
+			"client must verify the server against that CA — but no --sslrootcert was given, and " +
+			"libpq would look for ~/.postgresql/root.crt. Pass the CA path as the consumer sees " +
+			"it, or --sslmode require to encrypt without verifying")
+	}
+	info, err := d.Connect(ctx)
 	if err != nil {
 		return err
 	}

@@ -19,6 +19,9 @@
         "zones": [
           {
             "cloudInfo": {
+              "certManagerIssuerGroup": "cert-manager.io",
+              "certManagerIssuerKind": "ClusterIssuer",
+              "certManagerIssuerName": "amp-ca",
               "kubeNamespace": "amp",
               "kubernetesStorageClass": "yb-standard"
             },

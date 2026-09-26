@@ -136,10 +136,64 @@ universe on the cluster with them.
 `kubernetesOverrides.serviceEndpoints` entry and the chart renders the Service
 from it, selector included — which removes a whole bug class, because the chart
 selects on the app label *plus* `release=<helm release>` and the release label is
-what scopes it to one universe. Consequences worth knowing:
+what scopes it to one universe.
 
-- `enableLoadBalancer` is forced true because the chart gates that entire
-  template on it. It is **not** a request for public exposure: overriding the
+**The spec is what asks for it, and the deployer adds nothing.** The entry was
+once filled in at parse time when the key was absent, which failed twice over: a
+helm list override *replaces*, so a spec declaring `serviceEndpoints` for any
+other reason silently lost `yb-tserver-conn`, and the contract every consumer
+depends on was invisible in the file. Now nothing about the universe is written
+on the spec's behalf, so what you read is what is applied.
+
+The CRD's defaults then decide everything omitted, and two of them are not
+benign: `enableLoadBalancer` defaults **false**, so no endpoints render at all,
+and both encryption flags default **true**. All are create-time only, so
+inheriting the wrong one costs a rebuild.
+
+`Validate` refuses a spec that leaves the address contract out, and reports every
+such problem in one error rather than one per run — a spec written before the
+deployer stopped defaulting is missing all of it at once. Errors and not advice
+because the deployer cannot finish without that Service either: `connstr`
+resolves nothing and the databases step fails.
+
+It has no opinion at all about encryption: whether a universe is encrypted is the
+operator's call, and a spec that says nothing about either flag is accepted.
+
+What the deployer does owe is an accurate DSN, and that cannot come from the
+spec alone — `SSLMode` has to answer for the universe that WILL exist. So
+`CRDEncryptionDefault` mirrors the CRD's `true`, and an absent flag reads as on.
+`Preflight` says so on every `up` and `apply`, naming the flag and the sslmode it
+produced, because inheriting encryption is a decision the file does not record
+and the flags are create-time only — that log line is the last cheap moment to
+change it.
+It is the one CRD default this module copies, which is a real cost: a mirror goes
+stale, so a chart bump re-checks it (above). The alternative was requiring every
+spec to state a field it may not care about, to protect the deployer from its own
+reading — worse, because it charges the operator for our problem.
+
+**Upgrading past this change is spec-first, and it is not only the endpoint.**
+`applyCRs` uses `kubectl apply --server-side --force-conflicts`, and SSA removes
+fields its own manager previously set and now omits — so a deployer that has
+stopped emitting a field strips it from a foundation built by one that did.
+
+Two things have to move into the spec before the binary does:
+
+- the **address contract**, or the Service is deleted under the running pods;
+- **both encryption flags, written explicitly**. The old deployer wrote them
+  `false`, so a universe built from a silent spec is plaintext with `false` in
+  its CR. Leave them out now and an absent flag reads as the CRD's `true`: the
+  reported DSN claims TLS against a plaintext database, and the apply is rejected
+  by `self == oldSelf` when the CRD defaults the dropped field back to `true`.
+
+Add both, apply with the old deployer — a no-op, since it never overwrote a
+declared key — then upgrade. `Validate` refuses the wrong order for the endpoint,
+and `Preflight` refuses it for encryption by comparing the spec against the live
+CR.
+
+Consequences worth knowing:
+
+- `enableLoadBalancer` must be true because the chart gates that entire
+  template on it. It is **not** a request for public exposure: declaring the
   endpoint list *replaces* the chart's three LoadBalancer defaults.
 - `scope: Namespaced` needs `oldNamingStyle` off, which is YBA's choice and
   absent from the CRD's `kubernetesOverrides` schema, so `checkTServerService`
@@ -156,8 +210,8 @@ under the key declares several objects of one kind. `YBProvider` and
 `YBUniverse` are two such keys: no Go struct and no field list, so any kind in
 the bundle is reachable the day its CRD ships. They are not *entirely*
 unprivileged, and the exceptions are worth knowing — `Render` fills the
-provider's `kubeNamespace`, `universeDefaults` defaults the universe body,
-`Validate` requires one universe and puts any provider above it, and
+provider's `kubeNamespace`, `Validate` requires the universe's address contract,
+requires one universe and puts any provider and certificate above it, and
 `applyCRs` waits on the provider and runs the release check before the
 universe. Each of those exists because the deployer has to *do* something
 about that object — wait, connect, create databases — not because the kind is
@@ -224,10 +278,11 @@ written back to the CR:
 
 ### The Spec is the rendered body
 
-Every universe default this deployer owns is applied at **parse time**
-(`Spec.universeDefaults`), so the `YBUniverse` entry's `Spec` and the rendered
-`YBUniverse` spec body are the same map. Anything reading the Spec — `sslMode`, the storage-class preflight,
-`Validate` — sees exactly what the cluster gets.
+The deployer writes nothing into the universe, so the `YBUniverse` entry's `Spec`
+and the rendered `YBUniverse` spec body are the same map. Anything reading the
+Spec — the storage-class preflight, `Validate` — sees exactly what is applied.
+`SSLMode` is the one reader that has to look past it, because the CRD fills in
+what the spec omits (see `CRDEncryptionDefault`).
 
 This is load-bearing rather than tidy. When those defaults were applied at render
 time into a copy, the Spec's own copy was authoritative for some fields and
@@ -287,6 +342,15 @@ failure stopped.
    come from the same version and `crdPath` is unnecessary; set it when the
    build is untagged, or the cluster has no egress.
 
+   **A chart bump can move a CRD default this module mirrors.** There is exactly
+   one — `CRDEncryptionDefault`, the `true` that `enableClientToNodeEncrypt` and
+   `enableNodeToNodeEncrypt` take when a spec omits them — and `SSLMode` reads it
+   to answer for the universe that will exist rather than for the fields the file
+   mentions. Re-check it on a bump:
+   `kubectl explain ybuniverse.spec.enableClientToNodeEncrypt`. A stale copy is a
+   plaintext DSN against an encrypted universe, which is the
+   `no pg_hba.conf entry ... no encryption` crash-loop.
+
    **A chart bump can move images the pull secret does not cover.** 2026.1.2
    switched postgres and prometheus from Docker Hub to
    `quay.io/yugabyte/hardened-*`, which the itest robot cannot pull — the
@@ -321,10 +385,13 @@ failure stopped.
    hardened one does not, so moving only the registry resolves to a tag that
    does not exist.
 
-   This is what `examples/amp.yaml` deploys: `2026.1.2.0-b137`, for the
-   15-kind bundle — `KMSConfig`, `TelemetryProvider` and `UniverseKeyRotation`
-   are not in 2026.1.1's 12, and installing their CRDs is not enough on its
-   own, since reconciling one needs a yugaware whose operator knows the kind.
+   This is what `examples/amp.yaml` deploys: `2026.1.3.0-b21`, for the
+   15-kind bundle — `KMSConfig`, `TelemetryProvider`, `UniverseKeyRotation` and
+   `YBCertificate` are not in 2026.1.1's 12, and installing their CRDs is not
+   enough on its own, since reconciling one needs a yugaware whose operator
+   knows the kind — and for the universe chart's `tls.extraSANs`, new in
+   2026.1.3, without which an encrypted universe has no SAN for the address it
+   hands out.
    A full build is also **immutable**, unlike a published line, which is what
    `checkDBRelease` exists to catch drifting.
 
@@ -517,10 +584,10 @@ per namespace, each fronting a subset of the universe.
 
 **Cross-cluster: the ClusterIP is the wrong shape, and MCS is the right one.** A
 ClusterIP is a virtual address existing only as kube-proxy rules on its own
-nodes, so no amount of VPC peering routes to it. Two ways out, neither wired up
-here:
+nodes, so no amount of VPC peering routes to it. Two ways out, both a spec edit
+and neither turned on here:
 
-- **An internal LoadBalancer** — the same `serviceEndpoints` override with
+- **An internal LoadBalancer** — the same `serviceEndpoints` entry with
   `type: LoadBalancer` plus the cloud's internal-LB annotations. No code change,
   no chart change.
 - **An MCS clusterset name** (`<svc>.<ns>.svc.clusterset.local`), which unions
@@ -530,16 +597,17 @@ here:
   `namespaced-`/`<part-of>-` prefixing is derived from the universe, not from the
   release or the zone, so every cluster's copy lands on the same name.
 
-  What was missing was the export. `multicluster.createServiceExports` only
-  exports the headless `yb-masters`/`yb-tservers` Services, so `serviceEndpoints`
-  Services stayed cluster-local and were not resolvable from peer clusters —
-  clusterset DNS would resolve the name and reach a subset of the pods.
+  The export used to be the missing piece. `multicluster.createServiceExports`
+  only exports the headless `yb-masters`/`yb-tservers` Services, so
+  `serviceEndpoints` Services stayed cluster-local and were not resolvable from
+  peer clusters — clusterset DNS would resolve the name and reach a subset of
+  the pods.
   [yugabyte/charts#228](https://github.com/yugabyte/charts/commit/54de0159e6f1b3af21d5a87cdedf7a1d701d108c)
-  closes that with a per-endpoint `exportService: false` flag that emits a
+  closed it with a per-endpoint `exportService` flag that emits a
   `ServiceExport` beside the endpoint's Service, same name and labels, under
-  `multicluster.mcsApiVersion`. It is **not in the pinned 2026.1.1**, so reaching
-  it here needs a `chartVersion` carrying it; once there it is a passthrough
-  field on the CR's existing `serviceEndpoints` entry and needs no code change.
+  `multicluster.mcsApiVersion`. It arrived in **2026.1.3**, which is what this
+  spec pins, so it is a passthrough field on the spec's own `serviceEndpoints`
+  entry and needs no code change — `examples/amp.yaml` carries it commented out.
 
   Two caveats survive it. MCS is a spec needing an implementation (GKE MCS, AWS
   Cloud Map, Submariner, Cilium ClusterMesh), and it supplies **discovery, not
@@ -681,13 +749,53 @@ Changing a storage class or volume *count* is a "full move" rather than an
 expand.
 
 Both encryption flags default to **`true`** in the CRD, so a spec that says
-nothing gets a universe it cannot be talked out of. `universeDefaults` writes both
-as `false`: client-to-node off keeps the address contract identical to the
-yugabyted path, and node-to-node off is a hard requirement, because it encrypts
-the tserver RPC port and the compute hot path speaks pggate to 9100 directly with
-no route for cert material. Encrypted-universe support is
-[#1241](https://github.com/yugabyte/meko/issues/1241), behind the compute-side
-cert work in [#1114](https://github.com/yugabyte/meko/issues/1114).
+nothing gets a universe it cannot be talked out of — and the deployer no longer
+writes a `false` over that, which it once did. `examples/amp.yaml` sets both true,
+which is what the amp lane deploys and what CI soaks.
+
+Turning them on takes four things besides the flags:
+
+- **`kubernetesOverrides.tls.extraSANs`** naming the endpoint Service. The DSN is
+  `verify-full` against that name, and the chart's own SANs are the per-pod names
+  and a wildcard over the HEADLESS Service — this Service is neither. The name
+  cannot be written down (YBA generates its prefix), so the spec carries a `tpl`
+  expression the chart evaluates. Chart 2026.1.3 or later.
+- **A `YBCertificate` and a zone issuer.** `rootCA` names the certificate; the
+  provider zones' `certManagerIssuerKind`/`Name`/`Group` say who signs. Pointing
+  both at the cluster's existing `amp-ca` root is what lets the amp side work
+  unchanged. Without `rootCA` YBA invents its own CA, nothing can verify it, and
+  `sslMode` answers `require` instead. `Validate` rejects a `rootCA` with both
+  encryption flags off, and — when the spec declares a provider — one with no
+  zone naming an issuer. It does not check the reverse, an issuer with no
+  `rootCA`, which is merely unused.
+- **NOT `node_to_node_encryption_use_client_certificates`**, although
+  `ac-endpoint-tls.md` asks for it and the yugabyted TLS lane sets it. It makes
+  the RPC port demand a client certificate, and on a YBA-managed universe YBA is
+  itself an RPC client: `WaitForServer` probes tserver 9100 during
+  `CreateKubernetesUniverse` and presents none, so the universe never finishes
+  creating. The RPC hop is therefore encrypted but not mutually authenticated
+  here — a real difference from the chart lane, and one that needs a way for
+  YBA's own client to authenticate before it can be closed.
+And two things it deliberately does NOT take, both about authenticating
+*clients*: `node_to_node_encryption_use_client_certificates` and any
+`ysql_hba_conf_csv`. YBA is a client of the universe it manages — `WaitForServer`
+probes tserver 9100 and health-checks postgres as `yugabyte`, with no certificate
+for either — so both leave the universe stuck in `Error Creating`. Beyond that,
+login policy is the consumer's, not the foundation's.
+
+So the universe is encrypted on both hops and the server is authenticated;
+clients are not, and with `enableYSQLAuth` off YugabyteDB's defaults admit them.
+
+One consequence for anything that execs into a tserver: a YBA-managed pod does
+not expose `/root/.yugabytedb` to that exec, though the chart lane's pods do. So
+`createDatabase` and `deploy/tls/yb-storage-role.sh` both fall back from
+presenting the node certificate to plain `require`. They keep `verify-full` when
+the CA IS readable, which is what makes `up` the first thing to notice a
+certificate that does not name the endpoint Service.
+
+The compute half — cert material for the daemons that speak pggate to 9100
+directly — landed in [#1114](https://github.com/yugabyte/meko/issues/1114), which
+is what made node-to-node possible at all.
 
 ## What is not here
 

@@ -33,6 +33,22 @@ type Deployer struct {
 	// the wait acts on it. Zero uses ybuniverse.FailureSettleWindow; only tests
 	// set it.
 	failureWindow time.Duration
+	// dsnOpts are the consumer's own libpq parameters, supplied by connstr
+	// flags. Empty is the common case and means "whatever the universe
+	// implies".
+	dsnOpts DSNOptions
+}
+
+// certificateTimeout bounds waitCertificate. Registering a CA with YBA is a
+// metadata operation — seconds, or it is not going to happen — so it does not
+// get the universe's tens-of-minutes budget.
+const certificateTimeout = 5 * time.Minute
+
+// WithDSNOptions supplies the libpq parameters the consumer owns — its sslmode
+// and its own certificate paths — for the DSN Connect reports. See DSNOptions.
+func (d *Deployer) WithDSNOptions(o DSNOptions) *Deployer {
+	d.dsnOpts = o
+	return d
 }
 
 // New builds a Deployer for spec. A nil runner uses the real binaries.
@@ -130,10 +146,29 @@ func (d *Deployer) helm(ctx context.Context, args ...string) (Result, error) {
 // names the fix, because the alternative is a helm timeout forty minutes later
 // with a pod-scheduling error buried in it.
 func (d *Deployer) Preflight(ctx context.Context) error {
+	// Before anything reaches the cluster, because both flags are create-time
+	// only: a universe that turns out encrypted by default cannot be edited out
+	// of it, and this is the last moment the answer is still cheap.
+	for _, f := range d.spec.InheritedEncryption() {
+		switch f {
+		case "enableClientToNodeEncrypt":
+			d.log("warning: universe.%s is not set, so the CRD's default applies and CLIENT "+
+				"connections will be encrypted. The DSN this reports is sslmode=%s to match. "+
+				"Set it explicitly to choose; it is create-time only, so changing it later "+
+				"rebuilds the universe", f, d.spec.SSLMode())
+		default:
+			d.log("warning: universe.%s is not set, so the CRD's default applies and the tserver "+
+				"RPC port will be encrypted. Set it explicitly to choose; it is create-time "+
+				"only, so changing it later rebuilds the universe", f)
+		}
+	}
 	for _, bin := range []string{"kubectl", "helm"} {
 		if _, err := d.run(ctx, nil, []string{bin, "version", "--client"}); err != nil {
 			return fmt.Errorf("%s not usable on PATH: %w", bin, err)
 		}
+	}
+	if err := d.checkEncryptionMatchesTheUniverse(ctx); err != nil {
+		return err
 	}
 	res, err := d.kubectlCluster(ctx, nil, "get", "namespace", "-o", "name")
 	if err != nil {
@@ -362,4 +397,54 @@ func (d *Deployer) ensureNamespace(ctx context.Context) error {
 	_, err = d.kubectlCluster(ctx, nil, "label", "namespace", d.spec.Namespace,
 		ManagedByLabel+"="+ManagedByValue, "--overwrite")
 	return err
+}
+
+// checkEncryptionMatchesTheUniverse refuses a spec whose encryption disagrees
+// with the universe it would converge.
+//
+// Both flags are create-time only, so a disagreement is not something a converge
+// can settle: the CRD's `self == oldSelf` rejects the apply, and before that
+// this deployer would report a DSN for a universe that does not exist — the
+// `no pg_hba.conf entry` crash-loop, or its mirror image, `require` against a
+// plaintext database.
+//
+// The way in is an UPGRADE. A deployer that defaulted both flags to false built
+// plaintext universes from specs that said nothing, and wrote the false into the
+// CR. This one reads an absent flag as the CRD's true, so the same spec now
+// means the opposite. The fix is one line per flag in the spec, and this is what
+// says so instead of letting the apply fail forty minutes later.
+func (d *Deployer) checkEncryptionMatchesTheUniverse(ctx context.Context) error {
+	res, err := d.kubectl(ctx, nil, "get", "ybuniverse", d.spec.UniverseName(),
+		"-o", "jsonpath={.spec.enableClientToNodeEncrypt} {.spec.enableNodeToNodeEncrypt}")
+	if err != nil || res.ExitCode != 0 {
+		// No universe yet, or no cluster to ask: nothing to disagree with.
+		return nil
+	}
+	// Strictly two booleans or nothing: a jsonpath that matched no field, or a
+	// CR shape this does not recognise, is not evidence of a disagreement.
+	live := strings.Fields(res.Stdout)
+	if len(live) != 2 {
+		return nil
+	}
+	for _, v := range live {
+		if v != "true" && v != "false" {
+			return nil
+		}
+	}
+	for i, f := range []string{"enableClientToNodeEncrypt", "enableNodeToNodeEncrypt"} {
+		on := live[i] == "true"
+		if on == d.spec.encryptionOn(f) {
+			continue
+		}
+		stated := "says nothing, so the CRD's default (true) applies"
+		if _, set := d.spec.universe()[f]; set {
+			stated = fmt.Sprintf("says %v", d.spec.universe()[f])
+		}
+		return fmt.Errorf("universe %s has %s=%v and the spec %s: the field is create-time only, "+
+			"so converging this would be rejected by the CRD and every DSN reported meanwhile "+
+			"describes the wrong universe. Write %s: %v in the spec to match what is there, or "+
+			"build a new universe",
+			d.spec.UniverseName(), f, on, stated, f, on)
+	}
+	return nil
 }

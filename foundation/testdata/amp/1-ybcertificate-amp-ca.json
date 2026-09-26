@@ -1,0 +1,17 @@
+{
+  "apiVersion": "operator.yugabyte.io/v1alpha1",
+  "kind": "YBCertificate",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "meko-foundation"
+    },
+    "name": "amp-ca",
+    "namespace": "amp"
+  },
+  "spec": {
+    "certType": "K8S_CERT_MANAGER",
+    "certificateSecretRef": {
+      "name": "amp-ca-bundle-tls"
+    }
+  }
+}

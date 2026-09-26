@@ -207,6 +207,7 @@ func TestPruneRunsAfterTheUniverseSettles(t *testing.T) {
 	spec := loadExample(t, "amp.yaml")
 	d, rec := pruneDeployer(t, spec, []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 		// Still editing on the first poll, settled on the second.
 		{Match: "get ybuniverse", Once: true, Result: Result{Stdout: statusWithAction(
 			"Editing", "EditUniverse", "running", "disabling encryption at rest")}},

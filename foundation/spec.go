@@ -53,6 +53,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -99,6 +100,11 @@ const (
 	// with no 9100. A distinct name makes the Service's presence proof that our
 	// override took.
 	TServerEndpointName = "yb-tserver-conn"
+
+	// TServerAppLabel is the chart Service the endpoint attaches to. The
+	// template renders an entry only where $service.label == $endpoint.app, so
+	// a typo here produces no Service and no complaint.
+	TServerAppLabel = "yb-tserver"
 
 	// KindRelease is the one kind name this package knows beyond the two it is
 	// built around, and only because checkDBRelease has to ask whether the
@@ -414,7 +420,6 @@ func (s *Spec) withDefaults() {
 	if provider != nil {
 		setDefault(universe.Spec, "providerName", provider.Name)
 	}
-	s.universeDefaults()
 }
 
 // expandPaths expands a leading ~ in the two fields that name something on
@@ -448,82 +453,21 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-// universeDefaults fills in the universe fields this deployer decides, so that
-// the YBUniverse entry's Spec IS the body that gets rendered. It is a no-op
-// when the spec declares no universe; Validate is what reports that.
+// Nothing else about the universe is filled in here. The deployer applies only
+// what the spec says, so the CRD's own defaults decide anything it omits — and
+// they are not all benign: enableLoadBalancer defaults FALSE, which renders no
+// serviceEndpoints at all, and both encryption flags default TRUE, which is an
+// encrypted universe nobody asked for. All of them are create-time only, so the
+// cost of inheriting the wrong one is a rebuild.
 //
-// It lives here rather than in Render because a reader has to be able to answer
-// "what will the universe have" from the Spec alone. When these were applied at
-// render time instead, the Spec's own copy silently disagreed with the CR and
-// Deployer.sslMode read the wrong one: it saw no enableClientToNodeEncrypt,
-// fell back to the CRD's default of true, and emitted sslmode=require against a
-// universe rendered with TLS off.
+// So this stays a parse step with no opinions, and validateAddressContract does
+// the talking: what a spec leaves out is named at parse time, before anything is
+// applied, rather than papered over with a value the file never mentions.
 //
-// Every value here depends on nothing outside the spec, which is what makes
-// parse time the right moment. The provider's kubeNamespace is the exception
-// and is deliberately NOT here: it defaults from s.Namespace, which --namespace
-// overrides after Load, so providerSpec fills it in at render time. That is the
-// same reason the check on it could not live in Validate.
-func (s *Spec) universeDefaults() {
-	u := s.universe()
-	if u == nil {
-		return
-	}
-	// YSQL on, YCQL off: every consumer in this repo speaks the Postgres wire
-	// protocol, and an interface nothing uses is a listener to secure for no
-	// benefit.
-	setDefault(u, "enableYSQL", true)
-	setDefault(u, "enableYCQL", false)
-
-	// TLS off, written rather than left to the CRD, which defaults BOTH to
-	// true. Two reasons, one of which is a hard blocker:
-	//
-	//   - Client-to-node on means the DSN needs sslmode=require. Connect
-	//     derives that from this field, so this half is a choice — but it is
-	//     the choice that keeps the address contract identical to the yugabyted
-	//     path every other consumer is built against.
-	//   - Node-to-node on encrypts the tserver RPC port too, and the compute
-	//     hot path speaks pggate to 9100 directly. Nothing in the deploy path
-	//     can hand those daemons cert material — endpoint_supervisor writes
-	//     sslrootcert for the YSQL lane only — so the hot path would fail at
-	//     startup with no way to fix it from here.
-	//
-	// Both are `self == oldSelf` in the CRD: create-time only, so turning
-	// either on later REBUILDS the universe rather than editing it. A spec that
-	// wants TLS has to say so from the start and solve the RPC cert problem
-	// above — tracked in github.com/yugabyte/meko/issues/1241.
-	setDefault(u, "enableNodeToNodeEncrypt", false)
-	setDefault(u, "enableClientToNodeEncrypt", false)
-
-	// Always on, and NOT a request for public exposure: the chart gates its
-	// whole serviceEndpoints template on this value, so without it the
-	// tserver-conn endpoint below is never created. Public exposure would take
-	// a LoadBalancer-type endpoint, and this declares none — and because
-	// overriding the endpoint list REPLACES it, the chart's three default
-	// LoadBalancer endpoints are dropped too.
-	setDefault(u, "enableLoadBalancer", true)
-
-	overrides, ok := u["kubernetesOverrides"].(map[string]any)
-	if !ok {
-		overrides = map[string]any{}
-		u["kubernetesOverrides"] = overrides
-	}
-	// Only when the spec declares none: overriding the list replaces it, so a
-	// spec carrying its own serviceEndpoints has taken responsibility for the
-	// tserver-conn endpoint too.
-	setDefault(overrides, "serviceEndpoints", []any{map[string]any{
-		"name":  TServerEndpointName,
-		"type":  "ClusterIP",
-		"scope": "Namespaced",
-		"app":   "yb-tserver",
-		// Both client ports on one Service, so one address serves both compute
-		// lanes — see TServerEndpointName.
-		"ports": map[string]any{
-			"tcp-ysql-port": fmt.Sprint(DefaultYSQLPort),
-			"tcp-rpc-port":  fmt.Sprint(TServerRPCPort),
-		},
-	}})
-}
+// The two that remain above are not universe policy: universeName and
+// providerName are filled from the entry's own metadata.name, which IS in the
+// spec — YBA reads the body field and kubectl addresses the object, so they have
+// to agree or the object is created under one name and known by another.
 
 // setDefault fills a key only when the operator left it out, so a passthrough
 // value always wins over a default.
@@ -615,7 +559,263 @@ func (s *Spec) Validate() error {
 	if err := s.validatePlacement(); err != nil {
 		return err
 	}
+	if err := s.validateRootCA(); err != nil {
+		return err
+	}
+	if err := s.validateAddressContract(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateRootCA checks the two halves of a cert-manager universe against each
+// other. Both are things the CRD accepts and YBA only complains about later,
+// from inside a task, which is this function's whole remit.
+//
+// rootCA names a YBCertificate for YBA to sign node certificates from. Empty
+// means YBA invents its own CA, which is a working universe — just not one
+// anybody can verify, which is why sslMode answers `require` for it.
+func (s *Spec) validateRootCA() error {
+	u := s.universe()
+	ca, _ := u["rootCA"].(string)
+	if ca == "" {
+		return nil
+	}
+	n2n := s.encryptionOn("enableNodeToNodeEncrypt")
+	c2n := s.encryptionOn("enableClientToNodeEncrypt")
+	if !n2n && !c2n {
+		return fmt.Errorf("universe.rootCA is %q but both encryption flags are false: YBA ignores "+
+			"the certificate and builds a plaintext universe, so the CA is a statement of intent "+
+			"that nothing acts on. Set enableClientToNodeEncrypt (and enableNodeToNodeEncrypt for "+
+			"the tserver RPC port), or drop rootCA", ca)
+	}
+	// The CA says what to trust; the issuer is what actually signs. YBA reads
+	// it off the zone, so a spec with one and not the other builds a universe
+	// whose node certificates never appear.
+	if s.provider() != nil && !s.anyZoneNamesAnIssuer() {
+		return fmt.Errorf("universe.rootCA is %q but no provider zone sets "+
+			"cloudInfo.certManagerIssuerName: YBA has a CA to trust and nothing to sign node "+
+			"certificates with. Add certManagerIssuerName (with certManagerIssuerKind, which the "+
+			"CRD requires alongside it) to the zone", ca)
+	}
+	return nil
+}
+
+// anyZoneNamesAnIssuer reports whether some provider zone points YBA at a
+// cert-manager issuer. Per zone, not per region: that is where the CRD puts the
+// three certManagerIssuer* fields.
+func (s *Spec) anyZoneNamesAnIssuer() bool {
+	for _, r := range asList(s.provider()["regions"]) {
+		region, _ := r.(map[string]any)
+		for _, z := range asList(region["zones"]) {
+			zone, _ := z.(map[string]any)
+			ci, _ := zone["cloudInfo"].(map[string]any)
+			if name, _ := ci["certManagerIssuerName"].(string); name != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TLSInfo is the universe's transport security, as a deploy script needs it:
+// enough to decide what has to exist BEFORE the universe is created. A
+// cert-manager universe needs its issuer and its CA in place first, and that is
+// knowable from the spec alone — which is what keeps TLS from becoming a second
+// input that can disagree with this file.
+type TLSInfo struct {
+	ClientToNode bool   `json:"clientToNode"`
+	NodeToNode   bool   `json:"nodeToNode"`
+	RootCA       string `json:"rootCA,omitempty"`
+	SSLMode      string `json:"sslMode"`
+}
+
+// TLS reports that shape.
+func (s *Spec) TLS() TLSInfo {
+	ca, _ := s.universe()["rootCA"].(string)
+	return TLSInfo{
+		ClientToNode: s.encryptionOn("enableClientToNodeEncrypt"),
+		NodeToNode:   s.encryptionOn("enableNodeToNodeEncrypt"),
+		RootCA:       ca,
+		SSLMode:      s.SSLMode(),
+	}
+}
+
+// CRDEncryptionDefault is what the YBUniverse CRD gives
+// enableClientToNodeEncrypt and enableNodeToNodeEncrypt when a spec omits them.
+//
+// Mirrored here — the one place this module copies a CRD default — because the
+// DSN has to answer for the universe that WILL exist, not for the fields the
+// file happens to mention. Reading an absent flag as false gave a plaintext DSN
+// against an encrypted universe, which is the
+// `no pg_hba.conf entry ... no encryption` crash-loop.
+//
+// Being a mirror it can go stale, so it is checked on a chart bump like the
+// other things a bump moves (see ARCHITECTURE.md):
+//
+//	kubectl explain ybuniverse.spec.enableClientToNodeEncrypt
+const CRDEncryptionDefault = true
+
+// encryptionOn reports what the universe will actually have, spec or CRD.
+func (s *Spec) encryptionOn(field string) bool {
+	if v, ok := s.universe()[field].(bool); ok {
+		return v
+	}
+	return CRDEncryptionDefault
+}
+
+// InheritedEncryption names the encryption flags the spec did not state, in the
+// order a reader would want them.
+//
+// Absent is a decision, just not one the file records: the CRD turns both on and
+// both are create-time only, so a spec that meant plaintext has exactly one
+// chance to notice before the universe is built. Preflight is where it is said.
+func (s *Spec) InheritedEncryption() []string {
+	var inherited []string
+	for _, f := range []string{"enableClientToNodeEncrypt", "enableNodeToNodeEncrypt"} {
+		if _, set := s.universe()[f]; !set {
+			inherited = append(inherited, f)
+		}
+	}
+	return inherited
+}
+
+// SSLMode is the sslmode this universe implies. See Deployer.SSLMode, which is
+// where the reasoning lives and where a consumer's override is applied.
+func (s *Spec) SSLMode() string {
+	if !s.encryptionOn("enableClientToNodeEncrypt") {
+		return "disable"
+	}
+	if ca, _ := s.universe()["rootCA"].(string); ca != "" {
+		return "verify-full"
+	}
+	return "require"
+}
+
+// validateAddressContract requires the spec to say what every consumer depends
+// on, because the deployer no longer says it for them.
+//
+// All of this is something the CRD accepts and the chart then quietly declines
+// to render, so the universe comes up healthy and serves no address: nothing
+// carries TServerServiceLabels, connstr resolves nothing, and `foundation up`
+// reaches its databases step before failing — tens of minutes in, pointing at
+// the cluster rather than at the file. There is no version of that worth
+// letting through, which is why these are errors and not advice: this deployer
+// cannot itself work without the Service.
+//
+// Reported together rather than one at a time. A spec arriving from before the
+// deployer stopped defaulting is missing the entry AND the flag that gates it,
+// and finding that out one run at a time helps nobody.
+//
+// Deliberately NOT checked: the endpoint's `type`, because ClusterIP and an
+// internal LoadBalancer are both real choices; `exportService`, which is inert
+// rather than wrong on a cluster with no multi-cluster services; any other
+// entry, which is the author's business; and field names, types and enums,
+// which the API server rejects on apply.
+func (s *Spec) validateAddressContract() error {
+	u := s.universe()
+	if u == nil {
+		return nil
+	}
+	var bad []string
+
+	overrides, _ := u["kubernetesOverrides"].(map[string]any)
+	var entry map[string]any
+	matches := 0
+	for _, e := range asList(overrides["serviceEndpoints"]) {
+		ep, _ := e.(map[string]any)
+		if name, _ := ep["name"].(string); name == TServerEndpointName {
+			matches++
+			if entry == nil {
+				entry = ep
+			}
+		}
+	}
+	if entry == nil {
+		bad = append(bad, fmt.Sprintf("universe.kubernetesOverrides.serviceEndpoints declares no %q "+
+			"entry: it is the single address this foundation hands consumers, carrying YSQL on "+
+			"%d and the tserver RPC the compute hot path derives on %d. Without it the chart "+
+			"creates no Service carrying %s and there is no address at all",
+			TServerEndpointName, DefaultYSQLPort, TServerRPCPort, TServerServiceLabels))
+		// enableLoadBalancer does not depend on the entry, and a spec from
+		// before this deployer stopped defaulting is missing both — so it is
+		// reported now rather than on the next run.
+		return joinProblems(append(bad, missingLoadBalancer(u)...))
+	}
+	if matches > 1 {
+		bad = append(bad, fmt.Sprintf("serviceEndpoints declares %d entries named %q: a "+
+			"Namespaced-scope endpoint is one Service shared by every release in the namespace, so "+
+			"the duplicates fight over it and the address becomes a coin flip", matches,
+			TServerEndpointName))
+	}
+	bad = append(bad, missingLoadBalancer(u)...)
+	if scope, _ := entry["scope"].(string); scope != "Namespaced" {
+		bad = append(bad, fmt.Sprintf("serviceEndpoints %q has scope %q, want Namespaced: an "+
+			"AZ-scope endpoint is one Service per zone release under another name, so %s matches "+
+			"nothing and the address stops surviving a full move", TServerEndpointName, scope,
+			TServerServiceLabels))
+	}
+	if app, _ := entry["app"].(string); app != TServerAppLabel {
+		bad = append(bad, fmt.Sprintf("serviceEndpoints %q has app %q, want %q: the chart renders an "+
+			"endpoint only for the Service whose label matches, so nothing is created and nothing "+
+			"says why", TServerEndpointName, app, TServerAppLabel))
+	}
+	ports, _ := entry["ports"].(map[string]any)
+	for _, p := range []struct {
+		key  string
+		want int
+	}{{"tcp-ysql-port", DefaultYSQLPort}, {"tcp-rpc-port", TServerRPCPort}} {
+		if got, ok := portValue(ports[p.key]); !ok || got != p.want {
+			bad = append(bad, fmt.Sprintf("serviceEndpoints %q sets %s to %v, want %d. Both client "+
+				"ports belong on this one Service: the YSQL pool dials the host as given and the "+
+				"direct-RPC lane DERIVES its address by appending %d to the same host, which "+
+				"nothing in the deploy path can configure otherwise. A missing or moved port "+
+				"passes every other check and then compute fails to open its table handles at "+
+				"startup", TServerEndpointName, p.key, ports[p.key], p.want, TServerRPCPort))
+		}
+	}
+	return joinProblems(bad)
+}
+
+// missingLoadBalancer is the gate the whole serviceEndpoints template hangs on.
+func missingLoadBalancer(u map[string]any) []string {
+	if on, _ := u["enableLoadBalancer"].(bool); on {
+		return nil
+	}
+	return []string{fmt.Sprintf("universe.enableLoadBalancer is not true (the CRD defaults it "+
+		"FALSE), so the chart renders no serviceEndpoints at all and the %q entry is never "+
+		"applied. It is not a request for public exposure — the chart gates the whole template "+
+		"on it", TServerEndpointName)}
+}
+
+// joinProblems renders several findings as one error, numbered when there is
+// more than one so a reader can see how many there are before reading them.
+func joinProblems(bad []string) error {
+	switch len(bad) {
+	case 0:
+		return nil
+	case 1:
+		return errors.New(bad[0])
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d problems with this spec:", len(bad))
+	for i, p := range bad {
+		fmt.Fprintf(&b, "\n  %d. %s", i+1, p)
+	}
+	return errors.New(b.String())
+}
+
+// portValue reads a port written either as a YAML number or as a string. The
+// chart takes both, so a spec that quotes it is not wrong and must not warn.
+func portValue(v any) (int, bool) {
+	switch p := v.(type) {
+	case int:
+		return p, true
+	case string:
+		n, err := strconv.Atoi(p)
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // validateResources checks the shape of the declared CR set — what the API
@@ -649,6 +849,15 @@ func (s *Spec) validateResources() error {
 		return fmt.Errorf("%s must be declared above %s: keys are applied top to bottom, and YBA "+
 			"rejects a universe whose provider has not registered",
 			ybuniverse.KindProvider, ybuniverse.KindUniverse)
+	}
+	// Same reason for the CA the universe's rootCA names: the reference is
+	// resolved asynchronously, so a certificate below the universe is a failed
+	// action rather than a parse error.
+	if s.count(ybuniverse.KindCertificate) == 1 &&
+		s.indexOf(ybuniverse.KindCertificate) > s.indexOf(ybuniverse.KindUniverse) {
+		return fmt.Errorf("%s must be declared above %s: keys are applied top to bottom, and the "+
+			"universe's rootCA names a certificate YBA has to know about first",
+			ybuniverse.KindCertificate, ybuniverse.KindUniverse)
 	}
 
 	// metadata.name and the body's own name field are different fields, and

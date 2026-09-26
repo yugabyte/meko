@@ -52,13 +52,95 @@ func (d *Deployer) applyCRs(ctx context.Context) error {
 		// resolves the reference when it reconciles — asynchronously, with the
 		// rejection arriving as a failed action tens of minutes later, or for
 		// telemetry as nothing at all. Ordering alone is not enough; the wait is.
-		if m.Kind == ybuniverse.KindProvider || m.Kind == ybuniverse.KindTelemetryProvider {
+		switch m.Kind {
+		case ybuniverse.KindProvider, ybuniverse.KindTelemetryProvider:
 			if err := d.waitRegistered(ctx, m.Kind, m.ObjectName); err != nil {
+				return err
+			}
+		case ybuniverse.KindCertificate:
+			if err := d.waitCertificate(ctx, m.ObjectName); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// waitCertificate blocks until YBA has taken the CA.
+//
+// Its own wait rather than waitRegistered's, because the status shape differs:
+// YBCertificate reports {success, message, resourceUUID} with no `state`, so the
+// Ready/Error switch over there never fires and the poll would run out the
+// universe timeout on a certificate that registered in seconds.
+//
+// Two things this learned from a real run, both the hard way.
+//
+// YBA DOES say why it refused: `Failed to process certificate: Certificate must
+// end with a newline` — a PEM through a shell command substitution, which strips
+// the trailing newline. So a message beginning "Failed" is treated as final
+// rather than progress. It is a heuristic on prose, which is why the deadline
+// below is still the backstop and the message is quoted verbatim either way.
+//
+// And it does not get the universe's timeout. Registering a certificate is
+// metadata, not a bring-up: it takes seconds or it is not going to happen, and
+// the run that found the newline bug spent 45 minutes re-reading the same
+// sentence before saying it.
+func (d *Deployer) waitCertificate(ctx context.Context, name string) error {
+	timeout := certificateTimeout
+	if d.universeTimeout < timeout {
+		timeout = d.universeTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(d.pollInterval)
+	defer ticker.Stop()
+
+	var last string
+	for {
+		res, err := d.kubectl(ctx, nil, "get", "ybcertificate", name, "-o", "json")
+		if err != nil {
+			return err
+		}
+		if res.ExitCode == 0 {
+			var doc struct {
+				Status struct {
+					Success      bool   `json:"success"`
+					Message      string `json:"message"`
+					ResourceUUID string `json:"resourceUUID"`
+				} `json:"status"`
+			}
+			if err := json.Unmarshal([]byte(res.Stdout), &doc); err != nil {
+				return fmt.Errorf("parse ybcertificate %s: %w", name, err)
+			}
+			if doc.Status.Success {
+				d.log("YBCertificate %s is registered (%s)", name, doc.Status.ResourceUUID)
+				return nil
+			}
+			if strings.HasPrefix(strings.TrimSpace(doc.Status.Message), "Failed") {
+				return fmt.Errorf("YBCertificate %s was rejected: %s. The universe's rootCA names "+
+					"it, so nothing can sign node certificates until it is accepted — the content "+
+					"comes from the Secret its certificateSecretRef names",
+					name, strings.TrimSpace(doc.Status.Message))
+			}
+			if doc.Status.Message != last {
+				d.log("waiting for YBCertificate %s: %s", name, strings.TrimSpace(doc.Status.Message))
+				last = doc.Status.Message
+			}
+		} else if last != "absent" {
+			d.log("waiting for YBCertificate %s to appear", name)
+			last = "absent"
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("YBCertificate %s did not register within %s (last: %s). The universe's "+
+				"rootCA names it, so YBA cannot sign node certificates until it does; check its "+
+				"status.message and that the Secret it references exists",
+				name, timeout, strings.TrimSpace(last))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // waitProvider blocks until the provider has registered with YBA.
@@ -136,12 +218,13 @@ func (d *Deployer) waitRegistered(ctx context.Context, kind, name string) error 
 // checkTServerService confirms the chart created the Service both compute lanes
 // go through.
 //
-// Nothing here creates it: it is declared as a serviceEndpoints entry in the CR
-// (see Spec.universeDefaults), and the chart renders it with its own selector. This
-// only verifies the result, because two chart values have to line up for that
-// endpoint to render at all and neither is ours to set:
+// Nothing here creates it: it is declared as a serviceEndpoints entry in the
+// spec, and the chart renders it with its own selector. This only verifies the
+// result, because two chart values have to line up for that endpoint to render
+// at all and only one of them is in the spec:
 //
-//   - enableLoadBalancer must be on. The CR sets it, so this should hold.
+//   - enableLoadBalancer must be on. The spec sets it and Validate refuses one
+//     that does not, so this should hold.
 //   - oldNamingStyle must be off, or a Namespaced-scope endpoint is skipped.
 //     That is YBA's choice and is NOT in the CRD's kubernetesOverrides schema,
 //     so it cannot be forced. Real YBA universes have hash-prefixed Service
@@ -212,7 +295,50 @@ func (d *Deployer) checkTServerService(ctx context.Context) error {
 		d.log("Service %s: %d endpoint(s) on port %d, selector %v",
 			name, n, TServerRPCPort, svc.Spec.Selector)
 	}
+	d.checkTServerCertSANs(ctx, d.qualify(name))
 	return nil
+}
+
+// checkTServerCertSANs confirms the node certificates name the address
+// consumers are given. It is the FIRST thing to notice a missing SAN — this
+// step runs before the databases one, whose ysqlsh would otherwise be the one
+// to fail the handshake.
+//
+// It is the one thing about a cert-manager universe that cannot be checked
+// offline. The spec asks for the Service FQDN through
+// kubernetesOverrides.tls.extraSANs, but YBA writes the universe chart's whole
+// tls block itself, and whether our override survives that is YBA's business.
+// If it does not, everything looks healthy: the Service exists, the endpoints
+// are there, the universe is Ready — and every verify-full consumer fails the
+// hostname check against a name that is in no certificate.
+//
+// The default SAN set is why the override is needed at all: the chart puts the
+// per-pod names and a wildcard over the HEADLESS Service in the certificate,
+// and this endpoint Service is neither.
+//
+// A warning, like everything else here, and only for a universe that names a
+// rootCA — with YBA's own CA the DSN is `require`, which never checks a name.
+func (d *Deployer) checkTServerCertSANs(ctx context.Context, fqdn string) {
+	if d.spec.SSLMode() != "verify-full" {
+		return
+	}
+	res, err := d.kubectlUniverse(ctx, nil, "get", "certificate",
+		"-o", "jsonpath={.items[*].spec.dnsNames}")
+	// No cert-manager Certificates is not itself wrong: YBA can hand the chart
+	// a CA and let it sign the node certificates in-template, which takes the
+	// same extraSANs. That case exits 0 with EMPTY stdout, so it has to be
+	// caught here rather than falling through to the warning below.
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Stdout) == "" {
+		return
+	}
+	if strings.Contains(res.Stdout, fqdn) {
+		d.log("node certificates name %s", fqdn)
+		return
+	}
+	d.log("warning: no node certificate names %s, but the DSN this foundation reports is "+
+		"sslmode=verify-full against exactly that name, so every consumer will fail the hostname "+
+		"check. The spec asks for it through kubernetesOverrides.tls.extraSANs; YBA may not have "+
+		"passed it through. Certificate dnsNames: %s", fqdn, strings.TrimSpace(res.Stdout))
 }
 
 // getUniverseStatus reads the CR's status. A missing CR reports absent rather

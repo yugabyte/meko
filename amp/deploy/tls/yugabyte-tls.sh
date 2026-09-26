@@ -275,12 +275,11 @@ YAML
 fi
 
 # The chart mounts a CN=yugabyte client certificate into the tserver pod, so
-# admin work logs in by certificate. The storage role is a member of yugabyte
-# until the controller provisions explicit grants at startup.
-say "database yb_storage and role ${YB_STORAGE_ROLE}"
-kubectl -n "${NS}" exec -i yb-tserver-0 -- bash -s -- "${YB_FQDN}" "${YB_STORAGE_ROLE}" <<'REMOTE'
+# admin work logs in by certificate.
+say "database yb_storage"
+kubectl -n "${NS}" exec -i yb-tserver-0 -- bash -s -- "${YB_FQDN}" <<'REMOTE'
 set -euo pipefail
-H="$1"; ROLE="$2"
+H="$1"
 # The chart image keeps the binaries under /home/yugabyte/tserver/bin, on PATH.
 YSQLSH="$(command -v ysqlsh || echo /home/yugabyte/tserver/bin/ysqlsh)"
 CONN="host=$H port=5433 user=yugabyte dbname=yugabyte sslmode=verify-full sslrootcert=/root/.yugabytedb/root.crt sslcert=/root/.yugabytedb/yugabytedb.crt sslkey=/root/.yugabytedb/yugabytedb.key"
@@ -295,15 +294,14 @@ else
   printf '   CREATE DATABASE yb_storage failed: %s\n' "$out" >&2
   exit 1
 fi
-has_role="$("$YSQLSH" "$CONN" -tAc "SELECT 1 FROM pg_roles WHERE rolname='$ROLE'")"
-if [ "$has_role" = "1" ]; then
-  echo "   role $ROLE already exists"
-else
-  "$YSQLSH" "$CONN" -c "CREATE ROLE \"$ROLE\" LOGIN" >/dev/null
-  "$YSQLSH" "$CONN" -c "GRANT yugabyte TO \"$ROLE\"" >/dev/null
-  echo "   created role $ROLE (member of yugabyte)"
-fi
 REMOTE
+
+# The role, from the script the operator lane uses too — that lane gets its
+# database from the foundation spec and would otherwise have no role at all.
+_ns="${NS}"
+UNIVERSE_NS="${_ns}" NS="${_ns}" YB_HOST_PORTS="${YB_FQDN}:5433" \
+YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_DATABASE="yb_storage" YB_EXEC_POD="yb-tserver-0" \
+  "$(dirname "${BASH_SOURCE[0]}")/yb-storage-role.sh"
 
 echo
 if [ "${TLS_PERMISSIVE}" = "1" ]; then

@@ -16,7 +16,8 @@ with its own section: [§Server TLS on the compute's listener](#server-tls-on-th
 | ConfigMap `amp-ca-roots` (every trusted root, PEM) | `cert-manager` | `trust-root.sh`; the file to edit for a CA rotation |
 | Bundle `amp-ca-bundle` → ConfigMap `amp-ca-bundle` key `ca.crt` | every namespace labelled `amp.yugabyte.com/trust=true` | trust-manager |
 | YugabyteDB with per-pod certificates, TLS on 5433 and 9100, client certificates required on RPC | the amp namespace | [`deploy/tls/yugabyte-tls.sh`](../deploy/tls/yugabyte-tls.sh) via the `yugabyte` chart |
-| Role `amp_storage` (member of `yugabyte`), HBA `hostssl yb_storage amp_storage all cert` | YugabyteDB | `yugabyte-tls.sh` |
+| Role `amp_storage` (member of `yugabyte`, `CONNECT` on `yb_storage`) | YugabyteDB | [`deploy/tls/yb-storage-role.sh`](../deploy/tls/yb-storage-role.sh), called by both DB lanes |
+| HBA `hostssl yb_storage amp_storage all cert` | YugabyteDB | `yugabyte-tls.sh` — **yugabyted lane only**. The operator lane sets no hba rules: YBA health-checks postgres as `yugabyte` with no certificate, so a cert rule for it stops the universe ever finishing creation, and login policy is not the foundation's to set. There, clients are encrypted and verify the server but are not certificate-authenticated. |
 | `Certificate <controller>-db` (CN `yugabyte`) → Secret `<controller>-db-tls`, mounted at `/etc/amp/tls/client`; `amp-ca-bundle` at `/etc/amp/tls/ca` | the controller pod | controller chart, `tls.enabled=true` |
 | `Certificate yb-ep-<id>-yb-client` (CN `amp_storage`) → Secret `yb-ep-<id>-yb-client-tls`, same mounts | every endpoint pod | the controller, from `controller.endpoint.ybTlsMode` |
 
@@ -28,6 +29,19 @@ image it runs, so it must be one that carries `ThinClientService` — 2026.1.2 o
 later), `YB_STORAGE_CLASS`, `YB_STORAGE_ROLE`. The controller's DSN
 then carries `sslmode=verify-full` and the three file paths, and endpoints get the
 same four values through their chart (`yugabyte.sslmode` … `yugabyte.sslkey`).
+
+**On an operator-managed universe (`FOUNDATION=operator`) TLS is not a knob.** Both
+encryption flags are create-time only in the CRD, so the foundation spec decides and
+`up-gke.sh` reads the shape back from `foundation validate --json`; `TLS=0` against an
+encrypted spec is refused. The rows above still hold, with three differences: the
+universe's certificates are issued by YBA under its cert-manager type rather than by
+`yugabyte-tls.sh` (the CA reaches it as a `YBCertificate` naming Secret
+`amp-ca-bundle-tls`, which `up-gke.sh` copies from the trust bundle), `TLS_ISSUER_KIND`
+must be `ClusterIssuer` because YBA deploys into its own namespace, and the node
+certificates carry the endpoint Service's name through
+`kubernetesOverrides.tls.extraSANs` — without it the Service is in no SAN and every
+`verify-full` client fails the hostname check. See
+[`foundation/examples/amp.yaml`](../../foundation/examples/amp.yaml).
 
 ## Permissive versus strict
 

@@ -34,6 +34,12 @@ const (
 	// renders or validates it specially — like every other kind the bundle
 	// ships, it passes through verbatim.
 	KindTelemetryProvider = "TelemetryProvider"
+
+	// KindCertificate is the CA a universe's rootCA names. Like the provider
+	// and the telemetry provider it is referenced BY NAME from the universe and
+	// resolved asynchronously, so applyCRs waits for it to register rather than
+	// relying on apply order.
+	KindCertificate = "YBCertificate"
 )
 
 // Universe states. The CRD's description lists these four as examples ("e.g.")

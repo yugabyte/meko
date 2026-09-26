@@ -29,16 +29,22 @@ namespace: amp             # yugaware + operator + CRs + DB pods + amp pods
 
 # Doubles as the release-bucket key and as the git ref for the CRD bundle, so
 # it must resolve as both. A full build resolves as both when the build was
-# tagged in yugabyte/charts, which is what lets this be an unpublished one:
-# 2026.1.2 carries KMSConfig, TelemetryProvider and UniverseKeyRotation, which
-# 2026.1.1's 12-kind bundle does not.
-chartVersion: "2026.1.2.0-b137"
+# tagged in yugabyte/charts, which is what lets this be an unpublished one.
+#
+# 2026.1.3.0-b21 for TLS. The CRD bundle is byte-identical to 2026.1.2's — the
+# same 15 kinds, KMSConfig, TelemetryProvider, UniverseKeyRotation and
+# YBCertificate included — so nothing below depends on the bump except the
+# universe chart, which gains tls.extraSANs. That is the field that lets the
+# node certificates name the endpoint Service, and without it a verify-full
+# consumer cannot connect to the only address this foundation hands out. See
+# kubernetesOverrides.tls below.
+chartVersion: "2026.1.3.0-b21"
 
 # Where the yugaware chart comes from, and what yba.chart means for each:
 #
 #   repo   yba.chart is a chart NAME in charts.yugabyte.com ("yugabytedb/yugaware").
 #          chartVersion is REQUIRED — it is the published version helm resolves,
-#          and only RELEASED lines are there (2026.1.1 is the newest).
+#          and only RELEASED lines are there (2026.1.2 is the newest).
 #   path   yba.chart is anything helm takes: a packaged .tgz, an unpacked chart
 #          directory (the one holding Chart.yaml, under any name), or an http(s)
 #          URL. chartVersion is then only the CRD git ref, and crdPath overrides
@@ -76,7 +82,7 @@ yba:
   # there is nothing to download first and no credentials involved. A released
   # line would instead be chartSource: repo with chart: yugabytedb/yugaware,
   # which is the default.
-  chart: https://releases.yugabyte.com/2026.1.2.0-b137/helm/yugaware-2026.1.2.tgz
+  chart: https://releases.yugabyte.com/2026.1.3.0-b21/helm/yugaware-2026.1.3.tgz
   # yugaware chart values verbatim — the whole chart surface is available here.
   # Three settings are NOT: the deployer appends
   # yugaware.kubernetesOperatorEnabled, yugaware.kubernetesOperatorNamespace and
@@ -203,6 +209,30 @@ yba:
 # DB image from a registry, not a release tarball), its pull secret, and the
 # per-zone storage class, which takes PRECEDENCE over any storageClass on the
 # universe's volumes.
+# The CA YBA signs this universe's node certificates from, named by
+# YBUniverse.rootCA below — and only by it; the provider zones name the
+# ClusterIssuer that signs, which is a different object. Above both because keys
+# apply top to bottom and Validate requires it above the universe.
+#
+# certType K8S_CERT_MANAGER means YBA does not hold a key: it trusts this CA and
+# lets cert-manager issue, which is how the universe ends up chaining to the
+# same root the amp endpoints and the controller already use
+# (amp/deploy/tls/trust-root.sh). The alternative, SELF_SIGNED, would have YBA
+# invent a CA nobody else trusts, and the DSN could then only ever be
+# sslmode=require.
+#
+# The Secret carries ca.crt and nothing else. trust-manager syncs that CA into
+# every namespace it labels as a ConfigMap, which a CR cannot reference, so
+# up-gke.sh copies it into this Secret before `foundation up`. Creating it is
+# the deploy script's job because the CA belongs to the cluster, not to this
+# universe.
+YBCertificate:
+  name: amp-ca
+  spec:
+    certType: K8S_CERT_MANAGER
+    certificateSecretRef:
+      name: amp-ca-bundle-tls
+
 YBProvider:
   name: foundation
   spec:
@@ -222,6 +252,17 @@ YBProvider:
               # itest-dev's class, and the one that actually decides — a
               # storageClass on the universe's volumes loses to this.
               kubernetesStorageClass: yb-standard
+              # Who SIGNS the node certificates. Per zone, because that is where
+              # the CRD puts these three; the CRD also requires the name
+              # whenever the kind is set.
+              #
+              # A ClusterIssuer, not an Issuer: YBA installs the universe chart
+              # into the universe's namespace, and a namespaced Issuer living in
+              # cert-manager's namespace would be unreachable from there.
+              # amp-ca is what trust-root.sh bootstraps.
+              certManagerIssuerKind: ClusterIssuer
+              certManagerIssuerName: amp-ca
+              certManagerIssuerGroup: cert-manager.io
 
 # No telemetry here, deliberately — metrics export is turned on AFTER this
 # universe is up, not with it (meko#1405).
@@ -281,7 +322,7 @@ YBUniverse:
     # Package path not found for release: 2026.1.1.1-b2". A full build like the
     # one above is immutable and cannot drift, but the check stays because
     # chartVersion can go back to a published line at any time.
-    ybSoftwareVersion: "2026.1.2.0-b137"
+    ybSoftwareVersion: "2026.1.3.0-b21"
 
     # RF3 over three nodes in one zone, which is what itest-dev has — the cluster
     # is single-zone, so spreading across three would place nodes nowhere.
@@ -302,27 +343,32 @@ YBUniverse:
 
     enableYSQLAuth: false      # keeps the existing passwordless yugabyte DSNs working
 
-    # TLS off, spelled out because the CRD defaults BOTH to true and both are
-    # create-time only (self == oldSelf) — turning either on later rebuilds the
-    # universe rather than editing it.
+    # TLS on both hops. The CRD defaults both to true, so this block is saying
+    # out loud what would happen anyway — worth it because both are create-time
+    # only (self == oldSelf): turning either on or off later REBUILDS the
+    # universe rather than editing it, so it is a property of the universe's
+    # identity and not a setting.
     #
-    # Client-to-node off keeps the DSN's sslmode=disable, matching what every
-    # consumer is built against; the deployer derives sslmode from this field, so
-    # flipping it to true does produce a working `require` DSN.
-    #
-    # Node-to-node is the one that cannot simply be turned on: it encrypts the
-    # tserver RPC port, and the compute hot path speaks pggate to 9100 directly
-    # with no way for the deploy path to hand it cert material
-    # (endpoint_supervisor writes sslrootcert for the YSQL lane only). Left on,
-    # the first run failed with
-    #   FATAL: no pg_hba.conf entry for host "...", user "yugabyte",
-    #          database "yb_storage", no encryption
-    #
-    # Encrypted-universe support is tracked in
-    # https://github.com/yugabyte/meko/issues/1241, behind the compute-side cert
-    # work in https://github.com/yugabyte/meko/issues/1114.
-    enableNodeToNodeEncrypt: false
-    enableClientToNodeEncrypt: false
+    # Client-to-node encrypts YSQL on 5433, and with rootCA below the deployer
+    # reports sslmode=verify-full — the server is authenticated, not merely
+    # encrypted. Node-to-node encrypts the tserver RPC port, which the compute
+    # hot path speaks pggate to directly; that is the half that used to be
+    # impossible, because nothing could hand those daemons cert material. It can
+    # now: the endpoint chart issues each pod a client certificate from the same
+    # CA (meko#1114).
+    enableNodeToNodeEncrypt: true
+    enableClientToNodeEncrypt: true
+
+    # The CA to sign node certificates from — the YBCertificate above, by its
+    # metadata.name. Empty would mean YBA invents its own, which nothing else
+    # trusts, and the best DSN available would be sslmode=require.
+    rootCA: amp-ca
+
+    # NOT public exposure. The chart wraps its entire serviceEndpoints template
+    # in this flag, so without it the Service below is never created; and since
+    # declaring the endpoint list REPLACES it, the chart's three default
+    # LoadBalancer endpoints are dropped by that same declaration.
+    enableLoadBalancer: true
 
     # No Image.pullSecretName here on purpose, though the DB registry above is
     # private. YBA derives the DB pull secret from its OWN (yba.values.image
@@ -334,9 +380,65 @@ YBUniverse:
     # The robot behind that yugaware secret therefore needs pull access to the DB
     # image repo as well as the YBA one.
     #
-    # kubernetesOverrides is otherwise free: it is helm values for the universe's
-    # own chart, and the deployer only injects serviceEndpoints when none is
-    # declared.
+    # kubernetesOverrides is otherwise free: helm values for the universe's own
+    # chart, passed through verbatim.
+    kubernetesOverrides:
+      # THE ADDRESS CONTRACT: this one Service is everything consumers get, and
+      # every spec needs it — the deployer applies only what is written here and
+      # adds nothing, so a spec without this block gets no Service at all (the
+      # CRD defaults enableLoadBalancer to false). `foundation validate` refuses
+      # one that leaves it out.
+      #
+      # Both client ports on ONE Service: the YSQL pool dials the host as given,
+      # and the direct-RPC lane cannot be addressed at all — it DERIVES its
+      # address by appending 9100 to the same host, because nothing in the
+      # deploy path can set tserver_rpc_addrs. A Service with only 5433 passes
+      # every other check and then compute fails to open its table handles.
+      #
+      # scope Namespaced makes it one Service shared by every release in the
+      # namespace, so the name survives a full move. The name is deliberately
+      # not the chart's own yb-tserver-service: this list replaces the chart's
+      # defaults, and had the override ever failed to apply, a default endpoint
+      # of that name would sit there as a LoadBalancer with no 9100.
+      #
+      # YBA prefixes the rendered name with the universe name it generated, so
+      # the Service is found by label (serviceName=, scope=), never by name.
+      serviceEndpoints:
+        - name: yb-tserver-conn
+          type: ClusterIP
+          scope: Namespaced
+          app: yb-tserver
+          ports:
+            tcp-ysql-port: "5433"
+            tcp-rpc-port: "9100"
+          # Reachable from another cluster: emit a ServiceExport (KEP-1645) so
+          # the ClusterSet's DNS resolves this name to the pods in every member
+          # cluster. Off because it needs a multi-cluster services
+          # implementation (GKE MCS, Submariner, Cilium ClusterMesh) — with
+          # none, the object is inert.
+          #
+          # It supplies DISCOVERY, not connectivity: pod-level reachability
+          # between the clusters has to already exist. And the YSQL smart driver
+          # uses the configured name only to bootstrap, then addresses tservers
+          # by the per-pod hostnames yb_servers() reports, so that lane also
+          # needs multicluster.createServiceExports. The direct-RPC lane never
+          # leaves the configured address. The other route to the same place is
+          # an internal LoadBalancer: type: LoadBalancer here plus the cloud's
+          # internal-LB annotations.
+          # exportService: true
+
+      # The endpoint Service, by name, in the node certificates. Required: the
+      # DSN this foundation reports is sslmode=verify-full against exactly that
+      # name, and the name is in none of the SANs the chart computes on its own
+      # — those are the per-pod names and a wildcard over the HEADLESS Service.
+      #
+      # A template because the name cannot be written down: YBA generates the
+      # prefix, and the chart renders this with tpl, so it computes the name it
+      # created. Chart 2026.1.3 or later.
+      tls:
+        extraSANs:
+          dnsNames:
+            - '{{ include "yugabyte.servicename" (dict "root" . "endpoint" (dict "name" "yb-tserver-conn") "scope" "Namespaced") }}.{{ .Release.Namespace }}.svc.{{ .Values.domainName }}'
 
     # MAGE is seeded at CREATE because it is a start-time gflag on both processes:
     # the extension will not install without it, and turning it on later is a
@@ -345,6 +447,27 @@ YBUniverse:
     # itself an ordinary gflag, and it must list EVERY preview flag in use, so
     # adding a second one means rewriting the value to carry both rather than
     # adding a key. YBA is what enforces this; nothing in the deployer does.
+    #
+    # No ysql_hba_conf_csv, and no node_to_node_encryption_use_client_certificates.
+    # ac-endpoint-tls.md asks for both and deploy/tls/yugabyte-tls.sh sets them,
+    # which is right on the yugabyted lane because amp is the only client there.
+    # On a YBA-MANAGED universe YBA is a client too — its WaitForServer subtask
+    # probes tserver RPC on 9100 and health-checks postgres as `yugabyte`, with
+    # no certificate for either — so each of them leaves the universe stuck in
+    # Error Creating: `WaitForServer ... completed 3 out of 3 tasks failed`, at
+    # positions 5 and 14 of CreateKubernetesUniverse respectively (meko#1241).
+    #
+    # Beyond that, login policy is not this file's to set. The universe is the
+    # universe; who connects and how they prove it is the consumer's, and a
+    # foundation that legislates it breaks the one thing that has to manage it.
+    # A deployment that wants certificate logins adds the rules itself, having
+    # first worked out how YBA authenticates.
+    #
+    # What this leaves: both hops encrypted, the server authenticated
+    # (sslmode=verify-full, which is what tls.extraSANs above is for), and
+    # clients not authenticated by certificate. enableYSQLAuth is off, so
+    # YugabyteDB's own default rules admit them.
+
     gFlags:
       masterGFlags:
         allowed_preview_flags_csv: ysql_yb_enable_mage

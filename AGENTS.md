@@ -95,8 +95,8 @@ why — the object graph, the ordering constraints, the address contract, what i
 deliberately absent — is [`foundation/ARCHITECTURE.md`](foundation/ARCHITECTURE.md). The
 bullets below are the things a reader would otherwise re-derive the hard way.
 
-`examples/amp.yaml` deploys the **unpublished build `2026.1.2.0-b137`**, for the 15-kind
-CRD bundle. There is no special chart source for that: `releases.yugabyte.com` is public
+`examples/amp.yaml` deploys the **unpublished build `2026.1.3.0-b21`**, for the 15-kind
+CRD bundle and for `tls.extraSANs` (see the TLS note below). There is no special chart source for that: `releases.yugabyte.com` is public
 for reads and helm fetches a chart from a URL, so it is `chartSource: path` with the
 tarball's URL in `yba.chart` — nothing to download first, no credentials. The defaults
 stay on the newest published line under `repo`, the only pairing that works with nothing
@@ -222,12 +222,13 @@ Things a reader will otherwise re-derive the hard way:
   tserver-RPC ClusterIP are unreachable from another cluster — a ClusterIP is a virtual
   address existing only as kube-proxy rules on its own nodes, so no amount of VPC peering
   routes to it. A cross-cluster foundation needs an internal LoadBalancer (the same
-  `serviceEndpoints` override with `type: LoadBalancer` plus the cloud's internal-LB
-  annotations — no code change) or an MCS clusterset name, which supplies discovery only
-  and still needs flat pod-level connectivity. A clusterset name additionally needs
+  `serviceEndpoints` entry with `type: LoadBalancer` plus the cloud's internal-LB
+  annotations) or an MCS clusterset name, which supplies discovery only and still needs
+  flat pod-level connectivity. A clusterset name additionally needs
   `multicluster.createServiceExports`, which rewrites node broadcast addresses so the smart
   driver's per-pod stage resolves cross-cluster, and a `ServiceExport` for the Service —
-  which the YugabyteDB chart cannot create for a `serviceEndpoints` entry yet. Either way
+  which is `exportService: true` on the entry, from chart 2026.1.3. Both routes are a spec
+  edit and no code change; `examples/amp.yaml` carries the export commented out. Either way
   the address goes wherever the consumer is configured, not in this spec.
 - **The spec carries no address knob at all.** The address is the Service the chart created
   in the namespace just deployed into, which `checkTServerService` verified. Which address
@@ -253,9 +254,22 @@ Things a reader will otherwise re-derive the hard way:
   `kubernetesOverrides.Image.pullSecretName` (naming one risks naming something absent
   beside the DB pods), preflight checks only yugaware's own, and the robot behind that
   secret needs pull access to the DB image repo as well as the YBA one.
-- **The tserver Service is created by the CHART, not by us** — a
-  `kubernetesOverrides.serviceEndpoints` entry in the CR (`type: ClusterIP`,
-  `scope: Namespaced`, ports `tcp-ysql-port: 5433` and `tcp-rpc-port: 9100`). The chart
+- **The tserver Service is created by the CHART, and the SPEC is what asks for it** — a
+  `kubernetesOverrides.serviceEndpoints` entry (`type: ClusterIP`, `scope: Namespaced`,
+  ports `tcp-ysql-port: 5433` and `tcp-rpc-port: 9100`) plus `enableLoadBalancer: true`.
+  **The deployer applies only what the spec says**; nothing about the universe is filled
+  in on its behalf, so the CRD's own defaults decide anything omitted — and
+  `enableLoadBalancer` defaults FALSE, which renders no endpoints at all. `Validate`
+  therefore REFUSES a spec that leaves the contract out, reporting every problem at once:
+  without that Service the deployer cannot finish either, so there is nothing to warn
+  about. It has no opinion on encryption — a spec may say nothing about either flag — but
+  `SSLMode` has to answer for the universe that WILL exist, so `CRDEncryptionDefault`
+  mirrors the CRD's `true` and an absent flag reads as on. That is the one CRD default
+  this module copies, and a chart bump re-checks it. `up` and `apply` warn when a spec
+  inherited it rather than said it, and REFUSE when it disagrees with a universe that
+  already exists — the old deployer wrote both flags `false`, so a migrating spec has to
+  write them explicitly or claim TLS against a plaintext database.
+  **Migrating is spec-first: add the block, apply with the old deployer, then upgrade.** The chart
   supplies the selector, so there is nothing to guess. Its NAME, though, is not ours to
   predict: a Namespaced endpoint is called
   `<commonLabels."app.kubernetes.io/part-of" | "namespaced">-<endpoint name>`, and YBA
@@ -282,6 +296,14 @@ not an oversight — YBA is far too heavy for kind, so the operator path soaks i
 place first: `/ci amp_deploy_gke_foundation` and its nightly
 (`.github/workflows/amp-foundation-gke.yml`), which deploys `up-gke.sh` with
 `FOUNDATION=operator` and runs the agent-driven reconcile smoke against the universe.
+
+That universe is **encrypted**, and on this lane TLS is not an input: both encryption
+flags are create-time only, so the spec decides and `up-gke.sh` reads the shape back from
+`foundation validate --json` rather than being told. It needs chart **2026.1.3** — the
+node certificates have to name the endpoint Service, which is the only address consumers
+get and is in none of the SANs the chart computes for itself, and
+`kubernetesOverrides.tls.extraSANs` is what adds it. The CA is a `YBCertificate` pointing
+at the same `amp-ca` root the amp endpoints already use, so nothing new is trusted.
 
 ## Repo-wide conventions
 
@@ -380,7 +402,7 @@ nothing.
 | `amp_generate_image` | controller container image build |
 | `amp_extensions_local` | local-deploy extension regression test (`amp/test/integration/compute/extensions.sh --regress`): builds the real extension image and runs each externalized extension's own upstream regression suite against a throwaway `yb_amp_local` cluster. Also automatic when the diff touches `amp/deploy/extensions/`, and nightly on `main`. The lighter twin of `amp_deploy_gke` for extension-pipeline changes |
 | `amp_deploy_gke` | build + push four images to Quay, deploy to the itest-dev GKE cluster, smoke test. Also nightly on `main` |
-| `amp_deploy_gke_foundation` | the only suite that runs the **operator-managed foundation**: deploys with `FOUNDATION=operator` so `up-gke.sh` calls the `foundation/` deployer instead of its yugabyted StatefulSet, runs the agent-driven reconcile smoke against that universe, then tears it down and asserts no cluster-scoped RBAC leaked. Its own workflow and cron (03:17 UTC). Also nightly on `main` |
+| `amp_deploy_gke_foundation` | the only suite that runs the **operator-managed foundation**, and the only one that runs an **encrypted** universe end to end: deploys with `FOUNDATION=operator` so `up-gke.sh` calls the `foundation/` deployer instead of its yugabyted StatefulSet, asserts the node certificates name the endpoint Service and that the session really is TLS, runs the agent-driven reconcile smoke against that universe, then tears it down and asserts no cluster-scoped RBAC leaked. Its own workflow and cron (03:17 UTC). Also nightly on `main` |
 
 They are all `amp_`-prefixed because they belong to AMP; there is nothing equivalent for
 meko yet. Full contract (including `amp_deploy_gke_extensions` and what makes a change

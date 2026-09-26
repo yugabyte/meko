@@ -73,3 +73,4 @@ c9036f9fb6fe545aa20e333743c661810966288cda9922ac89f4d82d9ee6e99b  https://github
 # yugaware Helm charts a foundation deploy may name — the amp-foundation-gke
 # workflow's chart_version input.
 5f00fd033f37510236a199886f32e3e21fdf38f6ccce2c0b6bb4bdc894ce0335  https://releases.yugabyte.com/2026.1.2.0-b137/helm/yugaware-2026.1.2.tgz
+441c180af760e112e5eb68720c38367ccfdb158a0fd667d61354fdbd9e3aa137  https://releases.yugabyte.com/2026.1.3.0-b21/helm/yugaware-2026.1.3.tgz

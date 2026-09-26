@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -32,6 +33,25 @@ type Info struct {
 	// enumerate per-pod endpoints, and a per-pod list is exactly what a full
 	// move invalidates.
 	SQLEndpoints []string `json:"sql_endpoints,omitempty"`
+	// UniverseNamespace is where the DB pods actually are — the provider zones'
+	// kubeNamespace, which need not be the foundation's. Exported because a
+	// caller that has to exec into a tserver (deploy/tls/yb-storage-role.sh)
+	// would otherwise have to re-derive it by splitting the host.
+	UniverseNamespace string `json:"universe_namespace"`
+}
+
+// DSNOptions are libpq parameters the CONSUMER supplies. They are paths inside
+// the consumer's own container, so the spec cannot know them and deliberately
+// does not carry them: which address and which files a consumer uses are
+// properties of its topology, not of the universe. They arrive as connstr
+// flags and land here, because Info.DBURL is the one place that knows what a
+// DSN for this foundation looks like — assembling it a second time in bash is
+// how the two drift.
+type DSNOptions struct {
+	SSLMode     string
+	SSLRootCert string
+	SSLCert     string
+	SSLKey      string
 }
 
 // ShellExports renders Info as shell assignments for `eval`, which is how the
@@ -45,6 +65,9 @@ func (i *Info) ShellExports() string {
 	fmt.Fprintf(&b, "export YB_HOST_PORTS=%q\n", i.YSQLHostPorts)
 	if i.DBURL != "" {
 		fmt.Fprintf(&b, "export DB_URL=%q\n", i.DBURL)
+	}
+	if i.UniverseNamespace != "" {
+		fmt.Fprintf(&b, "export YB_UNIVERSE_NAMESPACE=%q\n", i.UniverseNamespace)
 	}
 	return b.String()
 }
@@ -74,10 +97,11 @@ func (d *Deployer) Connect(ctx context.Context) (*Info, error) {
 		YSQLHostPorts: fmt.Sprintf("%s:%d", host, DefaultYSQLPort),
 		RPCHostPorts:  fmt.Sprintf("%s:%d", host, TServerRPCPort),
 		SQLEndpoints:  status.SQLEndpoints,
+
+		UniverseNamespace: d.spec.UniverseNamespace(),
 	}
 	if len(d.spec.Databases) > 0 {
-		info.DBURL = fmt.Sprintf("postgres://yugabyte@%s/%s?sslmode=%s",
-			info.YSQLHostPorts, d.spec.Databases[0], d.sslMode())
+		info.DBURL = d.dsn(info.YSQLHostPorts, d.spec.Databases[0])
 	}
 	return info, nil
 }
@@ -253,13 +277,46 @@ func selectorArg(selector map[string]string) string {
 // ysqlsh is looked up rather than assumed on PATH: on a YBA-managed universe it
 // lives under the tserver's own Postgres install
 // (amp/deploy/meko-dev/amp-redeploy.sh does the same).
+//
+// On an encrypted universe it presents the node's own client certificate, which
+// the chart puts in every tserver pod — accepted by a `cert` hba rule, ignored
+// by a `trust` one, so it works without having to know which is in force.
+//
+// The chart provisions that directory as a projected volume — ca.crt renamed to
+// root.crt, tls.crt/tls.key to yugabytedb.crt/.key — at mode 0400 under /root.
+// On a YBA-managed universe an exec could not read it (libpq reported "does not
+// exist", which it also says for a stat it is not allowed to make), so this
+// degrades: the CA alone, then plain `require`.
+//
+// That degradation is safe only because no spec here legislates login policy. A
+// deployment that adds `hostssl ... yugabyte ... cert` makes yugabyte a
+// certificate login, and pg_hba being first-match-wins the degraded connection
+// is refused rather than falling through to a trust rule.
+//
+// It also means this is NOT a reliable detector of a certificate that fails to
+// name the endpoint Service: verify-full needs the CA, and where the CA is
+// unreadable this drops to `require`, which verifies nothing. The workflow
+// checks the SAN directly instead, reading the Certificate and then dialling the
+// name with the CA from the amp-ca-bundle ConfigMap.
 func (d *Deployer) createDatabase(ctx context.Context, pod, host, db string) error {
 	script := fmt.Sprintf(`set -euo pipefail
 Y=$(ls /home/yugabyte/tserver/postgres/bin/ysqlsh 2>/dev/null || command -v ysqlsh || echo ysqlsh)
-exists=$("$Y" -h %[1]q -p %[2]d -U yugabyte -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname='%[3]s'")
+SSLMODE=%[4]s
+CONN="host=%[1]s port=%[2]d user=yugabyte dbname=yugabyte"
+if [ "$SSLMODE" != "disable" ]; then
+  if [ -r /root/.yugabytedb/root.crt ]; then
+    CONN="$CONN sslmode=$SSLMODE sslrootcert=/root/.yugabytedb/root.crt"
+    if [ -r /root/.yugabytedb/yugabytedb.key ]; then
+      CONN="$CONN sslcert=/root/.yugabytedb/yugabytedb.crt sslkey=/root/.yugabytedb/yugabytedb.key"
+    fi
+  else
+    CONN="$CONN sslmode=require"
+  fi
+fi
+exists=$("$Y" "$CONN" -tAc "SELECT 1 FROM pg_database WHERE datname='%[3]s'")
 if [ "$exists" = "1" ]; then
   echo "exists"
-elif out=$("$Y" -h %[1]q -p %[2]d -U yugabyte -d yugabyte -c "CREATE DATABASE %[3]s" 2>&1); then
+elif out=$("$Y" "$CONN" -c "CREATE DATABASE %[3]s" 2>&1); then
   echo "created"
 elif printf '%%s' "$out" | grep -q "already exists"; then
   echo "exists"
@@ -267,7 +324,7 @@ else
   printf 'CREATE DATABASE %[3]s failed: %%s\n' "$out" >&2
   exit 1
 fi
-`, host, DefaultYSQLPort, db)
+`, host, DefaultYSQLPort, db, d.sslMode())
 
 	res, err := d.kubectlUniverse(ctx, []byte(script), "exec", "-i", pod, "-c", "yb-tserver",
 		"--", "bash", "-s")
@@ -283,12 +340,12 @@ fi
 
 // sslMode is the DSN's sslmode, read off the universe body.
 //
-// There is only one body to read: universeDefaults fills enableClientToNodeEncrypt
-// in at PARSE time, so the YBUniverse entry's Spec is the map that was applied.
-// It was not always so — the defaults were once applied into a copy at render
-// time, and this read the raw one, answering for a universe that was never
-// applied. Both directions of that mismatch are a DSN the database
-// refuses — `disable` against a TLS universe gives
+// There is only one body to read: the YBUniverse entry's Spec is applied
+// verbatim, so what this reads is what the universe got. It was not always so —
+// defaults were once written into a copy at render time, and this read the raw
+// one, answering for a universe that was never applied. Both directions of that
+// mismatch are a DSN the database refuses — `disable` against a TLS universe
+// gives
 //
 //	FATAL: no pg_hba.conf entry for host "...", user "yugabyte",
 //	       database "yb_storage", no encryption (SQLSTATE 28000)
@@ -296,13 +353,56 @@ fi
 // and `require` against a plaintext one fails just as hard. One source for both
 // the CR and the DSN is the only way they cannot disagree.
 //
-// `require`, not `verify-full`: YBA issues its own CA by default and nothing in
-// the deploy path distributes it, so demanding verification would swap one
-// broken DSN for another. Encryption without authentication of the server is
-// what is actually available here.
-func (d *Deployer) sslMode() string {
-	if tls, _ := d.spec.universe()["enableClientToNodeEncrypt"].(bool); tls {
-		return "require"
+// Which TLS mode depends on whose CA signed the node certificates, because
+// that is what decides whether anything can be verified:
+//
+//   - no rootCA — YBA invents its own CA and nothing in the deploy path
+//     distributes it, so `verify-full` would swap one broken DSN for another.
+//     `require` is encryption without authentication of the server, which is
+//     what is actually available.
+//
+//   - rootCA set — the universe is signed by a CA the spec named rather than
+//     one YBA invented, so the server can be authenticated and `verify-full` is
+//     the honest answer. It also checks the HOSTNAME, which is why the spec's
+//     tls.extraSANs has to name the endpoint Service: that name is the only
+//     address consumers get, and it is not one the chart puts in the
+//     certificate on its own.
+//
+//     Naming a CA is taken as the intent that consumers have it — the usual
+//     case being deploy/tls/trust-root.sh, which puts it in every namespace it
+//     labels. NOTHING CHECKS THAT, and nothing here can: whether a consumer
+//     holds the CA is a fact about the consumer. A rootCA pointing at a
+//     SELF_SIGNED YBCertificate reports verify-full against a CA nobody has,
+//     and the failure is a handshake error at first connect. Checking it would
+//     mean Validate reading the named YBCertificate's certType.
+//
+// A caller may override it — `connstr --sslmode` — for a consumer that has the
+// CA somewhere this deployer cannot see.
+func (d *Deployer) SSLMode() string {
+	if d.dsnOpts.SSLMode != "" {
+		return d.dsnOpts.SSLMode
 	}
-	return "disable"
+	return d.spec.SSLMode()
+}
+
+func (d *Deployer) sslMode() string { return d.SSLMode() }
+
+// dsn renders the DSN for one database: the universe's own sslmode, plus
+// whatever certificate paths the consumer supplied.
+//
+// The parameter order is fixed rather than map-ranged, because the DSN reaches
+// the amp controller as a Helm value and a re-ordered one would make every
+// converge look like a change.
+func (d *Deployer) dsn(hostPorts, db string) string {
+	params := []string{"sslmode=" + url.QueryEscape(d.sslMode())}
+	for _, p := range []struct{ key, value string }{
+		{"sslrootcert", d.dsnOpts.SSLRootCert},
+		{"sslcert", d.dsnOpts.SSLCert},
+		{"sslkey", d.dsnOpts.SSLKey},
+	} {
+		if p.value != "" {
+			params = append(params, p.key+"="+url.QueryEscape(p.value))
+		}
+	}
+	return fmt.Sprintf("postgres://yugabyte@%s/%s?%s", hostPorts, db, strings.Join(params, "&"))
 }

@@ -28,15 +28,29 @@ func TestLoadExampleAmp(t *testing.T) {
 	if got := spec.Databases; len(got) != 1 || got[0] != "yb_storage" {
 		t.Errorf("databases = %v, want [yb_storage]", got)
 	}
-	// The controller's DSN is passwordless and sslmode=disable today, so both of
-	// these staying off is what keeps the example working against it.
+	// The controller's DSN is passwordless, and enableYSQLAuth is create-time
+	// only, so this staying off is what keeps the example working against it.
+	// It is also what leaves YugabyteDB's trailing trust rule in place after
+	// the hba rules below, which is why an encrypted universe does not yet
+	// refuse a plaintext client.
 	if spec.universe()["enableYSQLAuth"] == true {
 		t.Error("enableYSQLAuth is on; the existing controller DSN is passwordless")
 	}
-	// TLS cannot be changed after creation, and the existing DSNs are
-	// sslmode=disable.
-	if spec.universe()["enableNodeToNodeEncrypt"] == true || spec.universe()["enableClientToNodeEncrypt"] == true {
-		t.Error("TLS is on; the existing DSNs are sslmode=disable")
+	// TLS on both hops, and a CA that is not YBA's own — the three together are
+	// what make the reported DSN verify-full. All three are create-time only,
+	// so a spec that lost one would need the universe rebuilt to put it back.
+	if spec.universe()["enableNodeToNodeEncrypt"] != true {
+		t.Error("enableNodeToNodeEncrypt is off; the compute hot path's RPC lane would be plaintext")
+	}
+	if spec.universe()["enableClientToNodeEncrypt"] != true {
+		t.Error("enableClientToNodeEncrypt is off; the YSQL lane would be plaintext")
+	}
+	if ca, _ := spec.universe()["rootCA"].(string); ca == "" {
+		t.Error("no rootCA: YBA would invent its own CA, which nothing else trusts, and the best " +
+			"DSN available would be sslmode=require")
+	}
+	if got := spec.SSLMode(); got != "verify-full" {
+		t.Errorf("SSLMode = %q, want verify-full", got)
 	}
 	// The provider is what carries the DB image registry, its pull secret and
 	// the per-zone storage class — none of which the operator's auto-provider
@@ -60,18 +74,51 @@ func TestLoadExampleAmp(t *testing.T) {
 
 // TestLoadRejectsUnknownFields: a typo in a spec key would otherwise be
 // ignored and the foundation would come up with a default nobody asked for —
-// testVersion is the universe line every terse fixture needs: an empty or
-// absent ybSoftwareVersion is a hard error, because YBA parses it and rejects
-// the universe with no reason attached.
-const testVersion = "    ybSoftwareVersion: 2026.1.1.1-b2\n"
+// testVersion is the minimum a universe body needs to pass Validate, so that a
+// terse fixture can be about the one thing it is testing.
+//
+// ybSoftwareVersion because an empty or absent one is a hard error — YBA parses
+// it and rejects the universe with no reason attached — and the rest because
+// the deployer fills nothing in: a spec has to state the address contract and
+// say what it wants about encryption, or it is refused. endpointBody is the
+// same block without the encryption flags, for tables that set those.
+const testVersion = versionLine + contractBody
 
-// minimalSpec is the smallest complete spec: both required kinds, in order,
-// with the universe body the caller cares about. Every terse fixture goes
-// through it so a test says only what it is actually about.
+// versionLine alone, for the few fixtures that state the contract themselves.
+const versionLine = "    ybSoftwareVersion: 2026.1.1.1-b2\n"
+
+// minimalSpec is the smallest valid spec: both required kinds in order, plus
+// the universe body the caller cares about.
 func minimalSpec(universeBody string) string {
+	return bareSpec(contractBody + universeBody)
+}
+
+// contractBody is what every spec has to say for itself now: a stated answer on
+// encryption, plus endpointBody.
+const contractBody = `    enableClientToNodeEncrypt: false
+    enableNodeToNodeEncrypt: false` + endpointBody
+
+// endpointBody is the address contract alone, for tables that state the
+// encryption flags themselves.
+const endpointBody = `
+    enableLoadBalancer: true
+    kubernetesOverrides:
+      serviceEndpoints:
+        - name: yb-tserver-conn
+          type: ClusterIP
+          scope: Namespaced
+          app: yb-tserver
+          ports:
+            tcp-ysql-port: "5433"
+            tcp-rpc-port: "9100"
+`
+
+// bareSpec builds a spec whose universe body is EXACTLY what is passed, with no
+// testVersion in front — for the tests about Validate's own rules.
+func bareSpec(universeBody string) string {
 	return "namespace: amp\n" +
 		"YBProvider:\n  name: p\n  spec: {}\n" +
-		"YBUniverse:\n  name: foundation\n  spec:\n" + testVersion + universeBody
+		"YBUniverse:\n  name: foundation\n  spec:\n" + versionLine + universeBody
 }
 
 // the worst kind of failure, because it looks like success.

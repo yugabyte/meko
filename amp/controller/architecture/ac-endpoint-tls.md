@@ -208,6 +208,35 @@ framework's universe request learning the TLS fields (`enableNodeToNodeEncrypt`,
 stacks can run encrypted. YBA on Kubernetes supports hot certificate reload from
 2025.2, so rotation on this path is a YBA action rather than a chart workaround.
 
+**This is what `foundation/examples/amp.yaml` now deploys**, and it is the shape
+`/ci amp_deploy_gke_foundation` soaks: a `YBCertificate` carrying the `amp-ca` bundle,
+`certManagerIssuer*` on the provider zones, both encryption flags, and `ysql_hba_conf_csv`.
+
+**The two client-authentication rows of the table above do not apply on this path, and
+the foundation spec sets neither.**
+
+`node_to_node_encryption_use_client_certificates` makes tserver 9100 demand a client
+certificate, and `hostssl ... yugabyte ... cert` makes `yugabyte` a certificate login on
+YSQL. YBA is a client of the universe it manages on both ports — its `WaitForServer`
+subtask probes 9100 and health-checks postgres as `yugabyte`, presenting no certificate
+for either — so each leaves the universe stuck in `Error Creating`
+(`WaitForServer ... completed 3 out of 3 tasks failed`, at positions 5 and 14 of
+`CreateKubernetesUniverse`). Both are safe on the yugabyted lane, where amp is the only
+client.
+
+Beyond that specific breakage, login policy is not the foundation's to set: the universe
+is the universe, and who connects and how they prove it belongs where the consumer is
+configured. So `examples/amp.yaml` sets no hba rules at all. What the operator lane gives
+you is both hops **encrypted** and the server **authenticated** (`sslmode=verify-full`,
+which is what its `tls.extraSANs` is for); clients are not authenticated by certificate,
+and with `enableYSQLAuth` off YugabyteDB's own defaults admit them. A deployment that
+wants certificate logins adds the rules itself, having first worked out how YBA
+authenticates. One addition to the SAN row: the certificate template covers the pod FQDNs and
+the headless Service, but a foundation hands consumers a `serviceEndpoints` Service
+whose name is in neither, so that spec also sets
+`kubernetesOverrides.tls.extraSANs.dnsNames` — available from chart 2026.1.3 — or every
+`verify-full` client fails the hostname check against the only address it was given.
+
 ## 3. AMP deploy and controller
 
 ### Installer

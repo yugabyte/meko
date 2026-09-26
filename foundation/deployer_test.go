@@ -191,6 +191,7 @@ func TestInstallYBAOmitsVersionForALocalChart(t *testing.T) {
 func TestApplyCRsForcesConflicts(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"p1"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 	}}
 	d, _ := testDeployer(t, rec)
 	if err := d.applyCRs(context.Background()); err != nil {
@@ -210,10 +211,11 @@ func TestApplyCRsForcesConflicts(t *testing.T) {
 	if err := json.Unmarshal([]byte(call.Stdin), &doc); err != nil {
 		t.Fatalf("stdin is not the rendered CR: %v", err)
 	}
-	// The provider goes first: YBA cannot place a universe against a provider
-	// that does not exist yet.
-	if doc["kind"] != "YBProvider" {
-		t.Errorf("first applied kind = %v, want YBProvider", doc["kind"])
+	// Spec order, which is what the file promises: the certificate the other two
+	// reference, then the provider — YBA cannot place a universe against a
+	// provider that does not exist yet — then the universe.
+	if doc["kind"] != "YBCertificate" {
+		t.Errorf("first applied kind = %v, want YBCertificate", doc["kind"])
 	}
 	var kinds []string
 	for _, c := range rec.Calls {
@@ -223,8 +225,8 @@ func TestApplyCRsForcesConflicts(t *testing.T) {
 		}
 		kinds = append(kinds, fmt.Sprint(d["kind"]))
 	}
-	if len(kinds) != 2 || kinds[0] != "YBProvider" || kinds[1] != "YBUniverse" {
-		t.Errorf("applied %v, want [YBProvider YBUniverse]", kinds)
+	if want := []string{"YBCertificate", "YBProvider", "YBUniverse"}; !slices.Equal(kinds, want) {
+		t.Errorf("applied %v, want %v", kinds, want)
 	}
 	// And the provider is waited on before the universe is applied, because YBA
 	// rejects a universe naming a provider that has not finished registering.
@@ -508,8 +510,8 @@ func TestConnectBuildsTheConsumerContract(t *testing.T) {
 	if want := ybaServiceName + ".amp.svc.cluster.local:9100"; info.RPCHostPorts != want {
 		t.Errorf("RPCHostPorts = %q, want %q", info.RPCHostPorts, want)
 	}
-	if !strings.HasSuffix(info.DBURL, "/yb_storage?sslmode=disable") {
-		t.Errorf("DBURL = %q, want the first database and sslmode=disable", info.DBURL)
+	if !strings.HasSuffix(info.DBURL, "/yb_storage?sslmode=verify-full") {
+		t.Errorf("DBURL = %q, want the first database and the example's sslmode", info.DBURL)
 	}
 	// status.sqlEndpoints is carried for diagnostics but must NOT become
 	// YB_HOST_PORTS: it may enumerate per-pod endpoints.
@@ -629,7 +631,9 @@ func TestDownOrderAndClusterScopedCleanup(t *testing.T) {
 	//
 	// Neither position is coded: teardown walks the spec backwards, and the
 	// spec requires YBProvider above YBUniverse.
-	if got, want := deletedObjects(t, rec), []string{"YBUniverse/foundation", "YBProvider/foundation"}; !reflect.DeepEqual(got, want) {
+	if got, want := deletedObjects(t, rec), []string{
+		"YBUniverse/foundation", "YBProvider/foundation", "YBCertificate/amp-ca",
+	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("deleted %v, want %v", got, want)
 	}
 	if del, uninstall := idx("delete -f -"), idx("uninstall"); del < 0 || uninstall < 0 || del > uninstall {
@@ -884,8 +888,8 @@ func TestDownDeletesADeclaredProvider(t *testing.T) {
 		t.Fatalf("Down: %v", err)
 	}
 	if got := deletedObjects(t, rec); !reflect.DeepEqual(got,
-		[]string{"YBUniverse/foundation", "YBProvider/foundation"}) {
-		t.Errorf("deleted %v, want the universe then the provider", got)
+		[]string{"YBUniverse/foundation", "YBProvider/foundation", "YBCertificate/amp-ca"}) {
+		t.Errorf("deleted %v, want the spec walked backwards", got)
 	}
 }
 
@@ -1066,17 +1070,30 @@ func TestCustomerCheckFailsWhenItCannotRun(t *testing.T) {
 // rendered a plaintext universe and a require DSN.
 func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		tls  any
+		name   string
+		tls    any
+		rootCA string
+		want   string
 	}{
-		{"off, as the spec sets it", false},
-		{"on", true},
-		{"absent, so universeDefaults decides", nil},
+		{name: "plaintext", tls: false, want: "sslmode=disable"},
+		// Client TLS with YBA's own CA: encrypted, but there is nothing to
+		// verify the server against, so claiming to verify would be a lie.
+		{name: "TLS, YBA's own CA", tls: true, want: "sslmode=require"},
+		// A CA the consumer already trusts, so the server can be authenticated
+		// and the hostname checked.
+		{name: "TLS, a named CA", tls: true, rootCA: "amp-ca", want: "sslmode=verify-full"},
+		// Validate rejects this pairing only when BOTH flags are off, and the
+		// example leaves node-to-node on, so a stray rootCA can reach here.
+		// The DSN must still follow the client flag alone.
+		{name: "plaintext with a stray rootCA", tls: false, rootCA: "amp-ca", want: "sslmode=disable"},
+		// Absent is not false: the CRD makes it true, so the DSN has to say so.
+		{name: "absent, so the CRD decides", tls: nil, want: "sslmode=require"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &Recorder{Responses: []Response{
 				{Match: "get ybuniverse", Result: Result{Stdout: readyStatus()}},
 				{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
+				{Match: "get certificate", Result: Result{}},
 			}}
 			d, spec := testDeployer(t, rec)
 			if tc.tls == nil {
@@ -1084,53 +1101,53 @@ func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 			} else {
 				spec.universe()["enableClientToNodeEncrypt"] = tc.tls
 			}
+			if tc.rootCA == "" {
+				delete(spec.universe(), "rootCA")
+			} else {
+				spec.universe()["rootCA"] = tc.rootCA
+			}
 			info, err := d.Connect(context.Background())
 			if err != nil {
 				t.Fatalf("Connect: %v", err)
 			}
-			// The assertion is the agreement, not a fixed string: whatever the
-			// CR ends up carrying is what the DSN has to say.
-			rendered, _ := spec.universe()["enableClientToNodeEncrypt"].(bool)
-			want := "sslmode=disable"
-			if rendered {
-				want = "sslmode=require"
-			}
-			if !strings.Contains(info.DBURL, want) {
-				t.Errorf("the CR renders enableClientToNodeEncrypt=%v but the DSN is %q, want %s",
-					rendered, info.DBURL, want)
+			// The table is the contract: these five inputs are every shape
+			// the two fields can take, and each names the one sslmode the
+			// database will accept for it. Both directions of a mismatch are
+			// a DSN it refuses.
+			if !strings.Contains(info.DBURL, tc.want) {
+				t.Errorf("universe renders enableClientToNodeEncrypt=%v rootCA=%q but the DSN is "+
+					"%q, want %s", spec.universe()["enableClientToNodeEncrypt"], tc.rootCA,
+					info.DBURL, tc.want)
 			}
 		})
 	}
 }
 
-// TestTLSIsOffByDefaultOnALoadedSpec: both flags are create-time only in the
-// CRD and default to TRUE there, so a spec that omits them must still come out
-// with TLS off — otherwise the universe has to be rebuilt to undo it, and
-// node-to-node in particular breaks the compute hot path, which speaks pggate
-// to tserver 9100 with no cert material available.
+// TestTheSpecIsWhatIsApplied: nothing about the universe is written on the
+// spec's behalf, so the YBUniverse entry's Spec is the body that gets applied
+// with no defaulting step in between to keep in step.
 //
-// Loaded rather than poked, because the defaults are applied at parse time now:
-// the universe body is the rendered body, which is what stops a reader of the Spec
-// disagreeing with the CR.
-func TestTLSIsOffByDefaultOnALoadedSpec(t *testing.T) {
+// Checked against a valid spec, because Validate refuses one that leaves the
+// contract out — enableYSQL and enableYCQL are the two the deployer used to add
+// and nobody declares, so their absence is the assertion.
+func TestTheSpecIsWhatIsApplied(t *testing.T) {
 	spec, err := Load([]byte(minimalSpec("")))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	for _, key := range []string{"enableNodeToNodeEncrypt", "enableClientToNodeEncrypt"} {
-		if spec.universe()[key] != false {
-			t.Errorf("%s = %v, want false written explicitly (the CRD defaults it true)",
-				key, spec.universe()[key])
+	for _, f := range []string{"enableYSQL", "enableYCQL", "rootCA", "enableYSQLAuth"} {
+		if v, set := spec.universe()[f]; set {
+			t.Errorf("universe.%s = %v, but the spec never mentioned it", f, v)
 		}
 	}
-	// A spec that asks for TLS keeps it.
-	withTLS, err := Load([]byte(minimalSpec("    enableClientToNodeEncrypt: true\n")))
+	// And a spec that DOES say so keeps what it said.
+	spec, err = Load([]byte(bareSpec(strings.Replace(contractBody,
+		"enableClientToNodeEncrypt: false", "enableClientToNodeEncrypt: true", 1))))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if withTLS.universe()["enableClientToNodeEncrypt"] != true {
-		t.Errorf("enableClientToNodeEncrypt = %v, want the spec's own true",
-			withTLS.universe()["enableClientToNodeEncrypt"])
+	if spec.universe()["enableClientToNodeEncrypt"] != true {
+		t.Error("a spec that asks for client TLS did not keep it")
 	}
 }
 
@@ -1155,7 +1172,7 @@ func TestInstallYBAFailsWhenYBALacksTheDBRelease(t *testing.T) {
 		t.Fatal("the check passed against a YBA without the spec's DB release")
 	}
 	// Both versions and the cause, or the reader cannot tell drift from a typo.
-	for _, want := range []string{"2026.1.1.9-b99", "2026.1.2.0-b137", "MUTABLE"} {
+	for _, want := range []string{"2026.1.1.9-b99", "2026.1.3.0-b21", "MUTABLE"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing %q", err, want)
 		}
@@ -1171,6 +1188,7 @@ func TestDBReleaseCheckRunsBeforeTheUniverseApply(t *testing.T) {
 	spec := loadExample(t, "resources.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 		{Match: "get telemetryprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"t1"}}`}},
 		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
 		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.2-b9\n"}},
@@ -1282,6 +1300,7 @@ func TestApplyAppliesEveryDeclaredKindInOrder(t *testing.T) {
 	spec := loadExample(t, "resources.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 		{Match: "get telemetryprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"t1"}}`}},
 	}}
 	d := New(spec, rec.Runner()).
@@ -1427,6 +1446,7 @@ func TestDownReclaimsALabelledStrayTheSpecDropped(t *testing.T) {
 	want := []string{
 		"YBUniverse/foundation",
 		"YBProvider/foundation",
+		"YBCertificate/amp-ca",
 		"KMSConfig/dropped", // the stray, after everything the spec declares
 	}
 	if got := deletedObjects(t, rec); !reflect.DeepEqual(got, want) {
@@ -1450,7 +1470,7 @@ func TestDownDeletesEachRenderedObjectOnce(t *testing.T) {
 	if err := d.Down(context.Background(), DownOptions{}); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
-	if got := deletedObjects(t, rec); len(got) != 2 {
+	if got := deletedObjects(t, rec); len(got) != 3 {
 		t.Errorf("deleted %v, want each object once", got)
 	}
 }
@@ -1586,8 +1606,9 @@ func TestUpNamesTheStepsItSkipped(t *testing.T) {
 		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
 		{Match: "get storageclass", Result: Result{Stdout: "WaitForFirstConsumer"}},
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
-		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.2.0-b137\n"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.3.0-b21\n"}},
 		// The universe wait is where it dies.
 		{Match: "get ybuniverse", Result: Result{
 			Stdout: statusWithAction("Error Creating", "CreateKubernetesUniverse", "failed", "rejected")}},
@@ -1671,6 +1692,7 @@ func TestTelemetryProviderIsWaitedForBeforeTheUniverse(t *testing.T) {
 	spec := loadExample(t, "resources.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 		{Match: "get telemetryprovider", Result: Result{Stdout: `{"status":{"state":"Ready","resourceUUID":"t1"}}`}},
 		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
 		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.1.2-b9\n"}},
@@ -1712,6 +1734,7 @@ func TestApplyStopsOnATelemetryProviderYBARefused(t *testing.T) {
 	spec := loadExample(t, "resources.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
 		{Match: "get telemetryprovider", Result: Result{
 			Stdout: `{"status":{"state":"Error","message":"secret byoc-metrics-auth has no key password"}}`}},
 	}}

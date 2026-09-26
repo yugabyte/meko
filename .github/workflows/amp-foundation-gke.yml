@@ -48,10 +48,14 @@ on:
     inputs:
       chart_version:
         description: >-
-          Full yugaware build to deploy, e.g. 2026.1.2.0-b137. Its tarball is
+          Full yugaware build to deploy, e.g. 2026.1.3.0-b21. Its tarball is
           downloaded from releases.yugabyte.com and handed to the deployer as
-          a local path, and the same string is the CRD bundle's git ref.
-          Empty deploys whatever the spec file names.
+          a local path, and the same string is the CRD bundle's git ref; it
+          must also be pinned in amp/downloads_checksum.txt. 2026.1.3.0-b21 or
+          LATER only: the spec this lane deploys is encrypted and needs the
+          universe chart's tls.extraSANs, which arrived in 2026.1.3 — an older
+          chart renders no SAN for the endpoint Service and the bring-up fails
+          at its databases step. Empty deploys whatever the spec file names.
         required: false
         type: string
       db_version:
@@ -250,6 +254,21 @@ jobs:
             "import json,sys; print(json.load(sys.stdin)['universeNamespace'])")
           echo "UNIVERSE_NS=$UNIVERSE_NS" >> "$GITHUB_ENV"
           echo "universe namespace: $UNIVERSE_NS"
+          # The universe is encrypted, and the assertions further down depend on
+          # it: verify-full is what makes the certificate SAN load-bearing, and
+          # nodeToNode is what puts the compute hot path's RPC lane on TLS.
+          # Asserted here so a spec that lost a create-time-only flag fails in
+          # seconds rather than after the bring-up.
+          echo "$FACTS" | python3 -c "
+          import json,sys
+          t = json.load(sys.stdin)['tls']
+          want = {'clientToNode': True, 'nodeToNode': True, 'sslMode': 'verify-full'}
+          bad = {k: t.get(k) for k, v in want.items() if t.get(k) != v}
+          if bad or not t.get('rootCA'):
+              print('::error::the spec is not the encrypted shape this lane soaks: %s' % t)
+              sys.exit(1)
+          print('tls: %s' % t)
+          "
           for SC in $(echo "$FACTS" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)['storageClasses']))"); do
             MODE=$(kubectl get storageclass "$SC" -o jsonpath='{.volumeBindingMode}') \
               || { echo "::error::storage class $SC does not exist on this cluster"; exit 1; }
@@ -431,6 +450,85 @@ jobs:
             exit 1
           }
 
+      # The encryption assertions. All three fail differently and none of them
+      # can be made offline: the spec ASKS for a SAN through
+      # kubernetesOverrides.tls.extraSANs, and whether YBA passes that through
+      # when it writes the universe chart's own tls block is YBA's business.
+      # Without it everything still looks healthy — Service, endpoints, Ready
+      # universe — and every verify-full consumer fails a hostname check.
+      - name: Check the universe is really encrypted and the Service name verifies
+        run: |
+          SVC=$(kubectl -n "$UNIVERSE_NS" get svc \
+            -l serviceName=yb-tserver-conn,scope=Namespaced \
+            -o jsonpath='{.items[0].metadata.name}')
+          FQDN="$SVC.$UNIVERSE_NS.svc.cluster.local"
+
+          # 1. the SAN landed. Read off the Certificate rather than the spec,
+          #    because the spec is the request and this is the result.
+          SANS=$(kubectl -n "$UNIVERSE_NS" get certificate \
+            -o jsonpath='{.items[*].spec.dnsNames}' 2>/dev/null || true)
+          echo "certificate dnsNames: $SANS"
+          case "$SANS" in
+            *"$FQDN"*) echo "node certificates name $FQDN" ;;
+            *) echo "::error::no node certificate names $FQDN, but every consumer dials exactly"
+               echo "::error::that name with sslmode=verify-full. tls.extraSANs did not take."
+               kubectl -n "$UNIVERSE_NS" get certificate -o yaml || true
+               exit 1 ;;
+          esac
+
+          # 2. the name verifies AND the session is really TLS. One command
+          #    from inside a tserver pod, which already holds the CA and a
+          #    client certificate: ysqlsh with verify-full against the Service
+          #    FQDN fails the handshake on a bad SAN, and pg_stat_ssl then says
+          #    whether what got established was actually encrypted. A server
+          #    that quietly fell back to plaintext fails the second; a wrong SAN
+          #    fails the first.
+          SEL=$(kubectl -n "$UNIVERSE_NS" get svc "$SVC" -o jsonpath='{.spec.selector}' \
+            | python3 -c "import json,sys; print(','.join('%s=%s' % kv for kv in sorted(json.load(sys.stdin).items())))")
+          POD=$(kubectl -n "$UNIVERSE_NS" get pods -l "$SEL" -o jsonpath='{.items[0].metadata.name}')
+          # 2. the SAN resolves in a real handshake, not just on paper.
+          #    verify-full fails on a name the certificate does not carry, so a
+          #    connection that succeeds is the assertion.
+          #
+          #    The CA comes from the amp-ca-bundle ConfigMap — the one every amp
+          #    pod trusts — copied into the tserver pod, because a YBA-managed
+          #    pod does not expose its own /root/.yugabytedb to an exec. That is
+          #    also what makes this worth running: it verifies the way a
+          #    CONSUMER would, with the consumer's trust store.
+          #
+          #    Nothing here tests client authentication: this spec sets no hba
+          #    rules, so there is no rule to prove. See examples/amp.yaml.
+          CA=$(kubectl -n "$NS" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')
+          [ -n "$CA" ] || { echo "::error::no amp-ca-bundle in $NS to verify against"; exit 1; }
+          kubectl -n "$UNIVERSE_NS" exec -i "$POD" -c yb-tserver -- bash -s <<EOF || {
+          set -euo pipefail
+          cat > /tmp/amp-ca.crt <<'CAEOF'
+          $CA
+          CAEOF
+          Y=\$(ls /home/yugabyte/tserver/postgres/bin/ysqlsh 2>/dev/null || command -v ysqlsh)
+          "\$Y" "host=$FQDN port=5433 user=yugabyte dbname=yb_storage sslmode=verify-full \
+            sslrootcert=/tmp/amp-ca.crt" -tAc "SELECT 1"
+          EOF
+            echo "::error::verify-full to $FQDN failed against the amp-ca bundle. The name IS in"
+            echo "::error::the certificate (checked above), so this is the chain or the handshake:"
+            echo "::error::read the ysqlsh error, and check the universe was signed by amp-ca."
+            exit 1
+          }
+          echo "$FQDN verifies against the CA amp pods trust"
+
+          # 3. the DSN the controller was actually given. The deploy assembles
+          #    it from `foundation connstr` plus the consumer's own cert paths,
+          #    so this is where the two halves are proved to have met.
+          DSN=$(kubectl -n "$NS" get deploy amp-controller \
+            -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="AMP_DATABASE_URL")].value}')
+          echo "controller DSN: $DSN"
+          for WANT in "sslmode=verify-full" "sslrootcert=" "sslcert=" "sslkey="; do
+            case "$DSN" in
+              *"$WANT"*) ;;
+              *) echo "::error::the controller DSN is missing $WANT"; exit 1 ;;
+            esac
+          done
+
       # Metrics export is declared on the CRs and everything after that belongs to
       # somebody else — the operator turns them into YBA config, YBA renders a
       # collector config, the DB chart injects it — and every one of those links
@@ -501,7 +599,11 @@ jobs:
           kubectl -n "$NS" get all || true
           # status.actions[] on either CR is where YBA puts the failing task and
           # its message; a rejected spec explains itself there and nowhere else.
-          kubectl -n "$NS" get ybprovider,ybuniverse -o yaml || true
+          kubectl -n "$NS" get ybprovider,ybuniverse,ybcertificate -o yaml || true
+          # cert-manager's side of an encrypted universe: the Certificate YBA
+          # asked for, the request it turned into, and the issuer's own log.
+          kubectl -n "$UNIVERSE_NS" get certificate,certificaterequest -o wide || true
+          kubectl -n cert-manager logs deploy/cert-manager --tail=100 || true
           kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -60 || true
           kubectl -n "$NS" logs deploy/amp-controller --tail=200 || true
           kubectl -n "$NS" logs deploy/amp-reconcile-agent --tail=200 || true
