@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
@@ -12,7 +13,7 @@ import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
 import { errMsg, fileLogger } from './log.js';
 import { probeLocal } from './health.js';
 import { MekoClient } from './meko.js';
-import { getPaths } from './paths.js';
+import { getPaths, withLocalBin } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
 import { hostServices } from './service.js';
@@ -32,7 +33,8 @@ function version(): string {
 
 /**
  * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
- * so git, gh, tmux and claude resolve the way they do in a terminal.
+ * so git, gh, tmux and claude resolve the way they do in a terminal. ~/.local/bin is added
+ * when it's missing: the installer puts `agent-k-local` (and gh, when it installs it) there.
  */
 function adoptLoginPath(): void {
   try {
@@ -41,6 +43,7 @@ function adoptLoginPath(): void {
   } catch {
     /* keep the inherited PATH */
   }
+  process.env.PATH = withLocalBin(process.env.PATH ?? '', homedir());
 }
 
 function baseUrl(cfg: ReturnType<typeof loadConfig>, tls: boolean): string {
@@ -216,7 +219,8 @@ function help(): void {
 Usage: agent-k-local <command>
 
   serve         Run the server (the background service runs this for you)
-  install       Configure this host, install the background services (systemd or launchd), print the setup link
+  install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
+                to skip asking), install the background services (systemd or launchd), print the setup link
   uninstall     Stop and remove the background services (--purge also deletes ~/.agent-k-local except its
                 session worktrees and designs; add --delete-worktrees to delete those too)
   setup-link    Print a one-time link to create (or reset) your login

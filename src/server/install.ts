@@ -1,15 +1,15 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
-import { mekoPluginInstalls } from './capture.js';
 import { claudeUserDir } from './claude.js';
-import { DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, saveConfig, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { openDb } from './db.js';
 import { checkMeko } from './meko.js';
+import { MEKO_SETUP_PACKAGE, claudeHasMekoMcp, latestMekoSetup, mekoClaudeGaps, runMekoSetup } from './mekosetup.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
 import { hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { writeTmuxConf } from './tmux.js';
@@ -60,21 +60,6 @@ function makePrompter(interactive: boolean): { ask: Prompter; close: () => void 
 
 // ---------------------------------------------------------------------------
 // Steps
-
-/** True when the meko-agent-skills plugin is installed and enabled for Claude Code. */
-export function mekoPluginEnabled(claudeDir: string = claudeUserDir()): { installed: boolean; enabled: boolean } {
-  const isMeko = (k: string) => k.startsWith('meko-agent-skills@');
-  const installed = (mekoPluginInstalls(claudeDir)?.length ?? 0) > 0;
-  let enabled = false;
-  try {
-    const s = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf8'));
-    const ep = (s?.enabledPlugins ?? {}) as Record<string, unknown>;
-    enabled = Object.entries(ep).some(([k, v]) => isMeko(k) && v === true);
-  } catch {
-    // no settings
-  }
-  return { installed, enabled };
-}
 
 /** The mount point in `df -P <dir>` output (the text after the capacity column). */
 export function parseDfMountPoint(df: string): string | null {
@@ -205,6 +190,8 @@ export async function runInstall(args: string[]): Promise<void> {
       bind: { type: 'string' },
       port: { type: 'string' },
       'no-service': { type: 'boolean', default: false },
+      'install-deps': { type: 'boolean', default: false },
+      'no-install-deps': { type: 'boolean', default: false },
     },
     strict: true,
   });
@@ -241,8 +228,10 @@ export async function runInstall(args: string[]): Promise<void> {
       meko = { ...meko, apiKey: values['meko-key'] };
       storeKey = true;
     } else if (!meko.apiKey) {
+      const web = resolveMekoWebUrl(cfg);
+      if (interactive && process.stdin.isTTY) ui.note(`AgentK Local needs a Meko API key. No account or key yet? Create them at ${web}.`);
       const k = await ask('Meko API key', '');
-      if (!k) throw new InstallError('A Meko API key is required. Pass --meko-key or set MEKO_API_KEY.');
+      if (!k) throw new InstallError(`A Meko API key is required: create one at ${web}, then pass --meko-key or set MEKO_API_KEY.`);
       meko = { ...meko, apiKey: k };
       storeKey = true;
     }
@@ -250,24 +239,47 @@ export async function runInstall(args: string[]): Promise<void> {
     ui.section('Checks');
     const check = await checkMeko(meko.url, meko.apiKey);
     if (!check.ok) throw new InstallError(`Meko check failed (${meko.url}): ${check.error}`);
+    ui.ok('Meko', meko.url.replace(/^https?:\/\//, ''));
+
+    // 3. Meko in Claude Code: the plugin, its MCP server, and the key where its hooks read it.
+    //    Anything missing is set up by Meko's own installer, after asking.
+    const gaps = mekoClaudeGaps({ claudeDir: claudeUserDir(), mcpRegistered: claudeHasMekoMcp });
+    if (gaps.length) {
+      const manual = `npx ${MEKO_SETUP_PACKAGE} --client claude-code`;
+      ui.warn('Meko in Claude', `missing: ${gaps.join(', ')}`);
+      if (values['no-install-deps']) throw new InstallError(`Meko isn't set up for Claude Code. Run: ${manual}`);
+      const pkg = await latestMekoSetup().catch((e: unknown) => {
+        throw new InstallError(`Couldn't look up Meko's setup on npm (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
+      });
+      say(
+        `    To set it up, the installer will run Meko's own setup (${MEKO_SETUP_PACKAGE} ${pkg.version}, from npm, checksum-verified):\n` +
+          `      ${MEKO_SETUP_PACKAGE} --client claude-code --url ${meko.url} --yes\n` +
+          "    It registers the Meko MCP server with Claude Code, writes MEKO_MCP_URL and MEKO_API_KEY to\n" +
+          "    Claude Code's settings.json (for the Meko hooks), installs the meko-agent-skills plugin, sets\n" +
+          "    Meko's status line, and allows Meko's tools in Claude Code's permissions.",
+      );
+      if (!values['install-deps']) {
+        if (!(interactive && process.stdin.isTTY)) {
+          throw new InstallError(`Meko isn't set up for Claude Code. Rerun with --install-deps to set it up, or run: ${manual}`);
+        }
+        if (/^n/i.test(await ask('Set it up now? (Y/n)', 'y'))) throw new InstallError(`Meko isn't set up for Claude Code. Run: ${manual}`);
+      }
+      const code = await runMekoSetup(pkg, { url: meko.url, apiKey: meko.apiKey }).catch((e: unknown) => {
+        throw new InstallError(`Meko's setup couldn't run (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
+      });
+      const left = mekoClaudeGaps({ claudeDir: claudeUserDir(), mcpRegistered: claudeHasMekoMcp });
+      if (code !== 0 || left.length) {
+        throw new InstallError(`Meko's setup didn't finish${left.length ? ` (still missing: ${left.join(', ')})` : ''}. See its output above, or run it yourself: ${manual}`);
+      }
+    }
+    // Keep the key in config.toml only when Claude Code's settings or the environment don't have it.
     const fromEnv = process.env.MEKO_API_KEY === meko.apiKey || readClaudeSettingsEnv().MEKO_API_KEY === meko.apiKey;
     if (storeKey && !fromEnv) {
       cfg.meko.apiKey = meko.apiKey;
       // The URL goes with the key: resolveMeko doesn't pair a key in config with a URL from elsewhere.
       if (meko.url !== DEFAULT_MEKO_URL) cfg.meko.url = meko.url;
     }
-    ui.ok('Meko', `${meko.url.replace(/^https?:\/\//, '')}${fromEnv ? ' (key from Claude Code settings)' : ''}`);
-
-    // 3. Meko Claude Code plugin
-    const plugin = mekoPluginEnabled();
-    if (!plugin.installed || !plugin.enabled) {
-      throw new InstallError(
-        `The meko-agent-skills Claude Code plugin is ${plugin.installed ? 'installed but not enabled' : 'not installed'}. Install it with:\n` +
-          '  claude plugin marketplace add yugabyte/meko-mcp-server\n' +
-          '  claude plugin install meko-agent-skills --scope user',
-      );
-    }
-    ui.ok('Meko plugin', 'meko-agent-skills enabled');
+    ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
     if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
     else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
 

@@ -99,6 +99,12 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
   | sh -s -- --version 0.2.0 --non-interactive --repos-root ~/code
 ```
 
+Before anything else, the installer checks for tmux, git, curl, gh and Claude Code and offers to
+install the missing ones (and `agent-k-local install` offers Meko's own setup for Claude Code),
+showing the commands and asking first (`--install-deps` to skip the question,
+`--no-install-deps` to never install, `--deps-only` to stop after that step). Its tests
+(`test/unit/install-script.test.ts`) run the real script against stub tools.
+
 The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current` at it, links
 `~/.local/bin/agent-k-local`, and runs `agent-k-local install`, which writes `config.toml`,
 checks Meko, installs the two background services (the `agent-k-local` and `agent-k-local-tmux`

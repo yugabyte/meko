@@ -25,6 +25,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
       user's own status line with the same input, and never prints anything of its own.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).
+- [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
+      will run and asking (or `--install-deps`), verifies every download by checksum or integrity
+      hash, and checks the result rather than trusting the package manager.
 - [ ] Shell commands and scripts work with macOS's BSD tools as well as GNU ones (no `mv -T`,
       `stat -c`, `sha256sum`-only, `sleep infinity`, `sed -i` without a suffix, `readlink -f`).
 

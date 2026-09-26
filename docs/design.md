@@ -446,9 +446,15 @@ knows to pass the right `datapack_id` when it searches them.
 > track of its work, so there is no mode without them.
 >
 > - **At install:** the installer needs a Meko API key. It reuses `MEKO_API_KEY` from
->   `~/.claude/settings.json` if one is there, and asks for one otherwise. It also checks that the
->   `meko-agent-skills` plugin is installed and enabled. The install stops if the key doesn't work
->   or the plugin is missing.
+>   `~/.claude/settings.json` if one is there, and asks for one otherwise (pointing to the Meko web
+>   app to create an account or key). The install stops if the key doesn't work. It then checks
+>   that Meko is set up for Claude Code: the `meko-agent-skills` plugin installed and enabled,
+>   `MEKO_API_KEY` in Claude Code's settings (or the environment) for the Meko hooks, and the
+>   `meko` MCP server registered. If anything is missing it offers, after showing what will
+>   change, to run Meko's own setup (`@yugabytedb/meko-mcp --client claude-code`), fetched from
+>   npm, checked against the registry's integrity hash and run with the bundled Node, with the key
+>   passed in the environment. It stops if you decline (or, non-interactively, without
+>   `--install-deps`) and prints the command to run yourself.
 > - **At project creation:** a dedicated datapack is mandatory. **Create project** stays disabled
 >   until one is chosen or created.
 > - **At session start:** every session gets the Meko environment. The server refuses to start a
@@ -644,11 +650,17 @@ comes back. **Auto-continue is on by default**, with guards:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git and claude
+#  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, curl, gh and Claude Code; offers to
+#     install whatever is missing (it shows the commands and asks first): brew on macOS, the
+#     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
+#     from its GitHub release (checksum-verified) into ~/.local/bin, and Claude Code with
+#     Anthropic's installer (claude.ai/install.sh) into ~/.local/bin; then offers `gh auth login`
+#     and `claude auth login` for whichever isn't signed in. --install-deps installs without asking,
+#     --no-install-deps never installs, --deps-only stops after this step
 #  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
 #  3. asks for your repos folder (default ~/code), listen address and port
 #  4. verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks) and
-#     checks the meko-agent-skills plugin
+#     offers to run Meko's setup for Claude Code if its plugin, MCP server or key is missing
 #  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
 #     sets up TLS
 #  6. installs both background services: systemd user units with linger if allowed,
