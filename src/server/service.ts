@@ -73,6 +73,7 @@ function onPath(run: Runner, bin: string): boolean {
   return r.ok && !!r.out;
 }
 
+/** Runs a command that has to work. Callers add what to check next (install.ts `serviceFailure`). */
 function must(run: Runner, cmd: string, args: string[]): string {
   const r = run(cmd, args);
   if (!r.ok) throw new ServiceError(`${cmd} ${args.join(' ')} failed: ${r.err || 'no error message'}`);

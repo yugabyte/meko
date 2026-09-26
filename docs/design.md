@@ -2,8 +2,8 @@
 
 The agentic coder for ADLC. AgentK Local helps you work across many projects and
 [Claude Code](https://claude.com/claude-code) sessions at once, with [Meko](https://mekodata.ai)
-as its data layer. It's self-hosted, runs headless on your devserver, and you use it from a
-browser.
+as its data layer. It's self-hosted, runs on your devserver (headless) or your Mac, and you use it
+from a browser.
 
 **Contents:** [Decisions](#decisions-so-far) · [Architecture](#architecture) · [The app](#the-app) ·
 [Projects & sessions](#projects-worktrees-and-sessions) · [Task lifecycle](#task-lifecycle) ·
@@ -48,7 +48,7 @@ flowchart LR
   subgraph Mac["Your laptop"]
     B["Browser or installed web app"]
   end
-  subgraph Host["Devserver, headless"]
+  subgraph Host["Devserver (headless) or your Mac"]
     S["AgentK Local server<br/>HTTPS :7777"]
     H["hook.sock<br/>unix socket"]
     T["tmux server<br/>own service (systemd or launchd)"]
@@ -572,8 +572,10 @@ comes back. **Auto-continue is on by default**, with guards:
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
-  The installer and the updater pick the tarball for their platform, and a Mac skips releases from
-  before macOS support. Each release also includes `SHA256SUMS`, a build provenance attestation
+  The installer and the updater pick the tarball for their platform. The updater skips releases
+  with no build for its platform; the installer takes the latest release (or `--version`) and stops
+  with a clear message if it has none. Releases since macOS support always include the macOS
+  build: publishing waits for it, and only a rebuild of an older tag goes without. Each release also includes `SHA256SUMS`, a build provenance attestation
   and `install.sh`. Afterwards, releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`) are deleted; their tags stay.
 
@@ -619,7 +621,7 @@ window, because they never touch tmux.
 | Server | Node 22 + TypeScript, Fastify, `ws`, `node-pty` | node-pty builds on the target host. Using one language across server and web keeps it simple. |
 | Web | Vite + React, xterm.js with the fit and web-links addons | xterm.js is the standard browser terminal. React handles the rail, tabs and dialogs. |
 | State | SQLite via the built-in `node:sqlite`, WAL, `user_version` migrations | A synchronous API suits a single-writer server, and it needs no native module. |
-| Processes | tmux on a private socket, in its own systemd user unit | tmux keeps sessions alive when the server restarts, and you can still attach from iTerm. |
+| Processes | tmux on a private socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS) | tmux keeps sessions alive when the server restarts, and you can still attach from iTerm. |
 | Integrations | Meko MCP over HTTP (required), Claude Code hooks, git worktrees | Meko is a core dependency. The hooks and git are thin adapters. |
 | Release | GitHub Actions, date-based versions, artifact attestations | Versioning and supply-chain checks with no extra tooling. |
 

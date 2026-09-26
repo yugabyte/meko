@@ -10,7 +10,7 @@ import { dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, sav
 import { openDb } from './db.js';
 import { checkMeko } from './meko.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
-import { hostServices, renderServiceFiles, ServiceError, SERVICES } from './service.js';
+import { hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { writeTmuxConf } from './tmux.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
@@ -121,6 +121,15 @@ function localDbLocation(): string {
   return join(dir, 'state.db');
 }
 
+/** A failed service command, with what to check next and how to go without the services. */
+export function serviceFailure(svc: ServiceManager, message: string, logsDir: string): string {
+  const where = svc.kind === 'launchd' ? ` and ${tildify(join(logsDir, 'launchd*.log'))}` : '';
+  return (
+    `${message}\nCheck: ${svc.statusHint('server')}${where}.\n` +
+    'Or rerun with --no-service to skip the service setup, and start the server with: agent-k-local serve'
+  );
+}
+
 /** Installs and (re)starts both background services. Returns false when skipped. */
 function installServices(paths: Paths): boolean {
   const tmux = which('tmux');
@@ -133,7 +142,12 @@ function installServices(paths: Paths): boolean {
     return false;
   }
   mkdirSync(paths.logs, { recursive: true }); // launchd opens its log files before starting a job
-  svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, TMUX: tmux }));
+  try {
+    svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, TMUX: tmux }));
+  } catch (e) {
+    if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
+    throw e;
+  }
   for (const s of SERVICES) {
     const st = svc.state(s);
     if (st.running) ui.ok(svc.id(s), 'running');

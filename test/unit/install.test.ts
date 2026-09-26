@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseDfMountPoint, parseMountType } from '../../src/server/install.js';
+import { parseDfMountPoint, parseMountType, serviceFailure } from '../../src/server/install.js';
+import { LaunchdServices, SystemdServices } from '../../src/server/service.js';
 
 // Output of `df -P` and `mount` on macOS, used to find the filesystem type there.
 const DF = `Filesystem     512-blocks      Used Available Capacity  Mounted on
@@ -31,5 +32,20 @@ describe('macOS filesystem type', () => {
     expect(parseMountType(MOUNT, '/Volumes/Team Share')).toBe('smbfs');
     expect(parseMountType(MOUNT, '/Volumes/home')).toBe('nfs');
     expect(parseMountType(MOUNT, '/Volumes/missing')).toBeNull();
+  });
+});
+
+describe('service failures', () => {
+  const ok = () => ({ ok: true, out: '', err: '' });
+
+  it('say what to check and how to skip the services', () => {
+    const mac = serviceFailure(new LaunchdServices(ok, '/Users/me', 501), 'launchctl bootstrap … failed: Bootstrap failed: 5', '/Users/me/.agent-k-local/logs');
+    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.agent-k-local and ');
+    expect(mac).toMatch(/logs\/launchd\*\.log\./);
+    expect(mac).toContain('--no-service');
+
+    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart agent-k-local.service failed', '/home/me/.agent-k-local/logs');
+    expect(linux).toContain('Check: systemctl --user status agent-k-local.service.\n');
+    expect(linux).not.toContain('launchd');
   });
 });

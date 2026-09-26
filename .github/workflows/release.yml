@@ -174,10 +174,19 @@ jobs:
           ref: ${{ needs.plan.outputs.ref }}
 
       - name: Check the ref supports macOS
-        # Rebuilding an older tag: its scripts would name a macOS tarball linux-arm64.
-        run: test -d packaging/launchd || { echo "::error::${{ needs.plan.outputs.ref }} predates macOS support; no darwin build"; exit 1; }
+        id: check
+        # Rebuilding a tag from before macOS support: its scripts would name a macOS tarball
+        # linux-arm64, so build nothing and let publish go ahead with the Linux tarballs.
+        run: |
+          if [ -d packaging/launchd ]; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::${{ needs.plan.outputs.ref }} predates macOS support; no darwin build"
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download Node ${{ env.NODE_VERSION }}
+        if: steps.check.outputs.supported == 'true'
         run: |
           set -eu
           dist="node-v${NODE_VERSION}-darwin-${ARCH}"
@@ -190,6 +199,7 @@ jobs:
           echo "$RUNNER_TEMP/${dist}/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (node-pty built from source)
+        if: steps.check.outputs.supported == 'true'
         env:
           # node-pty ships a prebuilt macOS binary; build our own like on Linux.
           npm_config_build_from_source: 'true'
@@ -198,20 +208,25 @@ jobs:
           npm ci
 
       - name: Stamp version
+        if: steps.check.outputs.supported == 'true'
         run: npm pkg set version="${{ needs.plan.outputs.version }}"
 
       - name: Build
+        if: steps.check.outputs.supported == 'true'
         run: npm run build
 
       - name: Prune dev dependencies
+        if: steps.check.outputs.supported == 'true'
         run: npm prune --omit=dev
 
       - name: Package
+        if: steps.check.outputs.supported == 'true'
         run: |
           sh scripts/package-release.sh "${{ needs.plan.outputs.version }}" "$ARCH" "$NODE_DIR" out
           ls out/*-darwin-"$ARCH".tar.gz
 
       - name: Smoke-test the tarball
+        if: steps.check.outputs.supported == 'true'
         run: |
           set -eu
           smoke="$RUNNER_TEMP/smoke"
@@ -222,6 +237,7 @@ jobs:
           "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v4
+        if: steps.check.outputs.supported == 'true'
         with:
           name: tarball-darwin-arm64
           path: out/*.tar.gz
@@ -229,8 +245,9 @@ jobs:
 
   publish:
     needs: [plan, build, build-macos]
-    # A rebuild of a tag from before macOS support publishes the Linux tarballs alone.
-    if: always() && needs.build.result == 'success' && (needs.build-macos.result == 'success' || needs.plan.outputs.rebuild == 'true')
+    # build-macos succeeds without a tarball for a tag from before macOS support; any other
+    # failure stops the release, so SHA256SUMS never loses an existing darwin tarball.
+    if: always() && needs.build.result == 'success' && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

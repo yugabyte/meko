@@ -4,8 +4,8 @@
 
 The agentic coder for ADLC. AgentK Local helps you work across many projects and
 [Claude Code](https://claude.com/claude-code) sessions at once, with [Meko](https://mekodata.ai)
-as its data layer. It's self-hosted, runs headless on your devserver, and you use it from a
-browser:
+as its data layer. It's self-hosted, runs on your devserver (headless) or your Mac, and you use it
+from a browser:
 
 - **Projects** in a left rail, each one a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
