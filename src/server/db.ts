@@ -174,6 +174,8 @@ const MIGRATIONS: string[] = [
   `,
   // 6: several projects may share a repo.
   `DROP INDEX projects_repo;`,
+  // 7: Merge and Cleanup became one stage, Merge & Close.
+  `UPDATE sessions SET stage = 'merge' WHERE stage = 'cleanup';`,
 ];
 
 export function openDb(path: string): Db {

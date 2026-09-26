@@ -197,7 +197,7 @@ pre.mermaid{margin:0;background:transparent}
 
 <main>
 <header class="top">
-  <span class="label">Design · v0.16 (implemented)</span>
+  <span class="label">Design · v0.17 (implemented)</span>
   <h1>AgentK Local</h1>
   <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>25 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
@@ -222,7 +222,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Existing tmux sessions</td><td>Not adopted. Only sessions created by AgentK Local are shown.</td></tr>
       <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
       <tr><td>Token usage</td><td>Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents.</td></tr>
-      <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge → Cleanup, with three human gates. More ADLC stages plug in later.</td></tr>
+      <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge &amp; Close, with three human gates. More ADLC stages plug in later.</td></tr>
       <tr><td>Host OS</td><td>Linux devservers only for now. macOS is deferred.</td></tr>
       <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI and releases, date-based versions (<code>0.YYYYMMDD.N</code>), tarball releases, and an update check built into the server.</td></tr>
       <tr><td>Repo &amp; license</td><td>Internal at <code>github.com/yugabyte/agent-k-local</code> for now, to be made public later. Apache-2.0.</td></tr>
@@ -291,7 +291,7 @@ flowchart LR
         </div>
         <div class="mainpane">
           <div class="crumb"><span style="color:var(--muted)">billing-api</span><span style="color:var(--muted)">/</span><b>fix retry backoff</b><span class="dot working"></span><span style="color:var(--muted);font-size:12px">working · 4m</span><span class="sp"></span><span class="btn">Project home</span><span class="btn">Design doc</span></div>
-          <div class="stages"><span class="stg done"><span class="n">✓</span>Design</span><span class="stg-sep"></span><span class="stg cur"><span class="n">2</span>Code</span><span class="stg-sep"></span><span class="stg"><span class="n">3</span>PR</span><span class="stg-sep"></span><span class="stg"><span class="n">4</span>Review</span><span class="stg-sep"></span><span class="stg"><span class="n">5</span>Merge</span><span class="stg-sep"></span><span class="stg"><span class="n">6</span>Cleanup</span><span class="gate">Open PR</span></div>
+          <div class="stages"><span class="stg done"><span class="n">✓</span>Design</span><span class="stg-sep"></span><span class="stg cur"><span class="n">2</span>Code</span><span class="stg-sep"></span><span class="stg"><span class="n">3</span>PR</span><span class="stg-sep"></span><span class="stg"><span class="n">4</span>Review</span><span class="stg-sep"></span><span class="stg"><span class="n">5</span>Merge &amp; Close</span><span class="gate">Open PR</span></div>
           <div class="tabs">
             <div class="tab sel"><span class="dot working"></span>fix retry backoff <span class="stchip">code</span></div>
             <div class="tab"><span class="dot needs"></span>rate limit headers <span class="stchip">review</span></div>
@@ -436,7 +436,7 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
   claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
   desired TEXT CHECK (desired IN ('running','archived')),   <span class="c">-- what recovery restores</span>
   status TEXT,                    <span class="c">-- working | needs_input | idle | exited | recovered</span>
-  stage TEXT,                     <span class="c">-- design | code | pr | review | merge | cleanup | done</span>
+  stage TEXT,                     <span class="c">-- design | code | pr | review | merge (Merge &amp; Close) | done</span>
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   plan_mode INTEGER,               <span class="c">-- 1: designs in Claude's plan mode (sessions from before v0.13)</span>
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
@@ -471,14 +471,15 @@ clone_into = "~/code"     <span class="c"># where "Clone from URL" puts new repo
 <pre class="mermaid">
 stateDiagram-v2
   direction LR
+  state "Merge & Close" as MergeClose
   [*] --> Design
   Design --> Code : you approve the design
   Code --> PR : you click Open PR
   PR --> Review : PR is open
   Review --> Review : findings fixed, new round requested
-  Review --> Merge : you click Merge
-  Merge --> Cleanup : PR merged
-  Cleanup --> [*]
+  Review --> MergeClose : you click Merge & Close
+  Review --> MergeClose : PR merged on GitHub
+  MergeClose --> [*] : merged and cleaned up
 </pre>
   </div>
   <div class="tablewrap"><table>
@@ -487,9 +488,8 @@ stateDiagram-v2
       <tr><td>1 · Design</td><td>Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to <code>~/.agent-k-local/designs/&lt;session&gt;/design.md</code>. It doesn't touch the repo.</td><td>Blocks file edits inside the worktree and main checkout (a <code>PreToolUse</code> guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's <code>PostToolUse</code> hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack, marks the session <em>Design ready</em>, and opens the design panel by itself.</td><td>You click <b>Approve design</b>, and the server sends the Code prompt ("The design is approved…"). Small tasks can skip this stage at creation. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog.</td></tr>
       <tr><td>2 · Code</td><td>Implements the design and runs the repo's tests and checks.</td><td>Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude.</td><td>You click <b>Open PR</b>. The button is disabled while Claude is mid-turn.</td></tr>
       <tr><td>3 · PR</td><td>Commits with the repo's own commit conventions, pushes the branch, and runs <code>gh pr create</code> with a summary taken from the design.</td><td>Records the PR number and URL and links them next to the stages.</td><td>Automatically, once the PR exists.</td></tr>
-      <tr><td>4 · Review</td><td>When a review arrives, runs <code>/akr</code>: verifies each finding, fixes it, replies on every thread, votes, and pushes.</td><td>Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends <code>/akr</code> into the session.</td><td>You click <b>Merge</b>. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in.</td></tr>
-      <tr><td>5 · Merge</td><td>Nothing.</td><td>Runs <code>gh pr merge</code> using the repo's merge method (or <code>gh stack</code> for a stacked PR) and deletes the remote branch.</td><td>Automatically, once GitHub reports the PR as merged.</td></tr>
-      <tr><td>6 · Cleanup</td><td>Nothing.</td><td>Writes a summary of what shipped (PR title, link and description) to the dedicated datapack. Ends the tmux session, removes the worktree, deletes the local branch, runs <code>git fetch --prune</code> in your main checkout, and archives the session.</td><td>Done. The session record and its history stay.</td></tr>
+      <tr><td>4 · Review</td><td>When a review arrives, runs <code>/akr</code>: verifies each finding, fixes it, replies on every thread, votes, and pushes.</td><td>Polls GitHub every 60 seconds for the AgentK review, CI checks and approvals. This runs on the server, so waiting costs no tokens. On a new AgentK review, it sends <code>/akr</code> into the session.</td><td>You click <b>Merge &amp; Close</b>. It is enabled once CI is green, no AgentK findings are left unaddressed, and the required approvals are in.</td></tr>
+      <tr><td>5 · Merge &amp; Close</td><td>Nothing.</td><td>Runs <code>gh pr merge</code> using the repo's merge method (or <code>gh stack</code> for a stacked PR). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, removes the worktree, deletes the local and remote branch, runs <code>git fetch --prune</code> in your main checkout, and archives the session. If the server restarts partway, the next poll finishes the job.</td><td>Done. The session record and its history stay.</td></tr>
     </tbody>
   </table></div>
   <div class="grid2">

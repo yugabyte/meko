@@ -350,19 +350,16 @@ function StageBar({
           <button
             className="gate"
             disabled={blocked || !session.canMerge}
-            title={session.canMerge ? 'Merge the pull request' : session.mergeBlockers.join('\n')}
+            title={session.canMerge ? 'Merge the pull request, then remove the worktree and branch' : session.mergeBlockers.join('\n')}
             onClick={() => onAct('merge')}
           >
-            Merge
+            Merge &amp; Close
           </button>
         </span>
       );
       break;
     case 'merge':
-      gate = <span className="gate-pill">Merging…</span>;
-      break;
-    case 'cleanup':
-      gate = <span className="gate-pill">Cleaning up…</span>;
+      gate = <span className="gate-pill">Merging and closing…</span>;
       break;
     case 'done':
       gate = <span className="gate-pill done">Done</span>;

@@ -29,6 +29,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
 });
 
 const { makeEnv, waitFor } = await import('../helpers.js');
+const { all } = await import('../../src/server/db.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 function status(over: Partial<PrStatus> = {}): PrStatus {
@@ -39,7 +40,7 @@ function status(over: Partial<PrStatus> = {}): PrStatus {
   };
 }
 
-describe('lifecycle: PR → AgentK review → merge → cleanup', () => {
+describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   let env: TestEnv;
   beforeEach(async () => {
     gh.pr = null;
@@ -85,7 +86,7 @@ describe('lifecycle: PR → AgentK review → merge → cleanup', () => {
     expect(gh.comments).toEqual(['/agentk review']);
     expect(get().reviewState).toBe('waiting');
 
-    // The next review is clean: merge becomes available, merge, then cleanup.
+    // The next review is clean: Merge & Close becomes available, merges, then cleans up.
     gh.status = status({
       reviews: [
         ...gh.status.reviews,
@@ -107,6 +108,51 @@ describe('lifecycle: PR → AgentK review → merge → cleanup', () => {
     expect(branches.trim()).toBe(''); // cleanup deletes the local branch
     const memory = env.meko.calls.find((c) => c.name === 'addMemory');
     expect(String(memory?.args[0])).toMatch(/Shipped in Demo: "Fix the thing" \(PR #7/);
+    expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
+  });
+
+  /** A session in Review with PR #7 open and approved. */
+  async function inReview(name: string) {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name, prompt: 'do it', skipDesign: true });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
+    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+    gh.status = status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review' && x.reviewState === 'approved', 10000, 'review stage');
+    return s;
+  }
+
+  const stages = (id: string) => all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => r.stage);
+  const shipped = () => env.meko.calls.filter((c) => c.name === 'addMemory').length;
+
+  it('closes a session whose PR was merged on GitHub', async () => {
+    const s = await inReview('Merged elsewhere');
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
+    expect(shipped()).toBe(1);
+  });
+
+  it('cleans up once when polls overlap', async () => {
+    const s = await inReview('Overlap');
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    const row = env.core.sessions.row(s.id);
+    await Promise.all([env.core.lifecycle.pollReview(row), env.core.lifecycle.pollReview(row)]);
+    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    expect(shipped()).toBe(1);
+    expect(stages(s.id).filter((x) => x === 'merge')).toHaveLength(1);
+  });
+
+  it('finishes closing a session left in Merge & Close', async () => {
+    // As after a restart between the merge and the cleanup.
+    const s = await inReview('Interrupted');
+    env.core.sessions.setStage(s.id, 'merge', 'you');
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    expect(shipped()).toBe(1);
   });
 
   it('surfaces an AgentK refusal and allows forcing a review', async () => {

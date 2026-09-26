@@ -27,6 +27,8 @@ export class Lifecycle {
   private warned = new Map<string, number>();
   /** Sessions whose design changed during the current turn. */
   private designChanged = new Set<string>();
+  /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
+  private closing = new Set<string>();
 
   constructor(private core: Core) {}
 
@@ -350,11 +352,17 @@ export class Lifecycle {
     await this.pollReview(this.sessions.row(row.id));
   }
 
+  /** The PR is merged (here, or on GitHub): finish Merge & Close. Safe to call again after a restart. */
   private async merged(row: SessionRow, st: github.PrStatus): Promise<void> {
-    if (row.stage === 'cleanup' || row.stage === 'done') return;
-    this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
-    this.sessions.setStage(row.id, 'cleanup', 'auto');
-    await this.cleanup(this.sessions.row(row.id), st);
+    if (row.stage === 'done' || this.closing.has(row.id)) return;
+    this.closing.add(row.id);
+    try {
+      this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
+      if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
+      await this.cleanup(this.sessions.row(row.id), st);
+    } finally {
+      this.closing.delete(row.id);
+    }
   }
 
   /** Records what shipped in the datapack, then removes the worktree and branches. */

@@ -15,6 +15,7 @@ import { render } from '../../src/server/prompts.js';
 import { slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
+import { STAGES, STAGE_LABELS } from '../../src/shared/types.js';
 
 describe('auth', () => {
   it('hashes and verifies passwords with scrypt', () => {
@@ -94,6 +95,33 @@ describe('config and db', () => {
       run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES (?, ?, '/code/api', 'main', 0)`, id, id);
     add('api');
     expect(() => add('api-tools')).not.toThrow();
+  });
+
+  it('moves sessions left in the old Cleanup stage to Merge & Close', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    const add = (id: string, stage: string) =>
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+        VALUES (?, 'api', ?, ?, ?, 'b', 'main', '/w', ?, 't', 'running', 'idle', ?, 0)`, id, id, id, id, id, stage);
+    add('s1', 'cleanup');
+    add('s2', 'review');
+    // Replay the last migration, as on a host upgrading from the six-stage release.
+    db.exec(`PRAGMA user_version = ${version - 1}`);
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    const stages = db.prepare('SELECT id, stage FROM sessions ORDER BY id').all();
+    expect(stages).toEqual([{ id: 's1', stage: 'merge' }, { id: 's2', stage: 'review' }]);
+    db.close();
+  });
+});
+
+describe('stages', () => {
+  it('ends with one Merge & Close step', () => {
+    expect(STAGES).toEqual(['design', 'code', 'pr', 'review', 'merge']);
+    expect(STAGE_LABELS.merge).toBe('Merge & Close');
   });
 });
 

@@ -18,9 +18,10 @@ your devserver, and you use it from a browser:
   Ctrl+C) and a compose box for the terminal, swipe to scroll back, and the stage gates in reach.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
-- **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge → Cleanup. Complex designs are
+- **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
-  markdown. You approve the design, opening the PR and merging. The server waits for reviews and CI and hands AgentK
+  markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and
+  cleans up the worktree and branches. The server waits for reviews and CI and hands AgentK
   findings to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits

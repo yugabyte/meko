@@ -32,18 +32,18 @@ export interface StartupState {
   hasPrompt: boolean;
 }
 
-export type Stage = 'design' | 'code' | 'pr' | 'review' | 'merge' | 'cleanup' | 'done';
+/** `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup. */
+export type Stage = 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done';
 
 /** The stages shown in the stage bar, in order. `done` is terminal and not shown. */
-export const STAGES: Exclude<Stage, 'done'>[] = ['design', 'code', 'pr', 'review', 'merge', 'cleanup'];
+export const STAGES: Exclude<Stage, 'done'>[] = ['design', 'code', 'pr', 'review', 'merge'];
 
 export const STAGE_LABELS: Record<Stage, string> = {
   design: 'Design',
   code: 'Code',
   pr: 'PR',
   review: 'Review',
-  merge: 'Merge',
-  cleanup: 'Cleanup',
+  merge: 'Merge & Close',
   done: 'Done',
 };
 

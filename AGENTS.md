@@ -5,7 +5,7 @@ should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and
 
 AgentK Local is a self-hosted web workbench for Claude Code. Projects are git repos. Each task is a
 session with its own git worktree and a tmux-hosted Claude process, moving through
-Design → Code → PR → Review → Merge → Cleanup. Meko datapacks hold project memory. The design
+Design → Code → PR → Review → Merge & Close. Meko datapacks hold project memory. The design
 is in [docs/design.html](docs/design.html).
 
 **Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
@@ -32,7 +32,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/core.ts` | Wires config, db, tmux, Meko and the services; timers; `state()` snapshot for the UI. |
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
 | `src/server/sessions.ts` | Session lifecycle in tmux: create, launch, hook-driven status, recovery and auto-continue, archive. |
-| `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the AgentK review loop, merge, cleanup. |
+| `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the AgentK review loop, Merge & Close (merge, then cleanup). |
 | `src/server/projects.ts` | Projects, repo scan, datapacks (create, attach, pin), project home and search. |
 | `src/server/prompts.ts` | Instructions sent to Claude at each stage (overridable per repo in `.agent-k/stages/`). |
 | `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script, and the status line relay (reports plan limits, then runs the user's own status line). |

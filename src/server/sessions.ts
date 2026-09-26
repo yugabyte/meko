@@ -298,7 +298,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). Stages: Design → Code → PR → Review → Merge → Cleanup; the user approves the design, opening the PR, and merging from the AgentK Local UI.`,
+      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). Stages: Design → Code → PR → Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.`,
     ];
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${projectAgentId(row.project_id)}" on Meko calls that write.`);
