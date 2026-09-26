@@ -129,16 +129,21 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 // included) can ever crowd the summary out again. The -P progress lines ride
 // stderr and survive the filter; a torn one is a lost point, not a lost run.
 //
-// Both go to files first so the filter cannot swallow pgbench's exit code, and
-// real errors on stderr still come back inside the bounded tail.
+// Both go to files first so the filter cannot swallow pgbench's exit code.
+// Real errors come back through their own grep, ahead of the bounded tail.
 func quietTrace(cmd string) string {
 	return "out=$(mktemp); errf=$(mktemp); " + cmd + " >\"$out\" 2>\"$errf\"; rc=$?; " +
 		"cat \"$out\"; " +
 		// Progress lines FIRST and unbounded: they are the time series, they are
 		// small (one per -P second), and they must not compete with the trace for
-		// room. The rest of stderr follows as a bounded tail so real errors still
-		// arrive without a flood being able to push the series out.
+		// room. The rest of stderr follows as a bounded tail, which a flood can
+		// fill, so the errors are grepped out ahead of it.
 		"{ grep -aE '^progress: ' \"$errf\"; " +
+		// Error lines next, bounded but never behind the trace: torn trace
+		// fragments slip the prefix filter and filled the 64KiB tail, so a
+		// "Run was aborted" arrived with the client error that caused it gone
+		// (perf/pgbench_uncached, run 59276376).
+		"grep -aiE 'aborted|error|fatal|could not|server closed|terminat' \"$errf\" | grep -av '^progress: ' | tail -n 50; " +
 		"grep -avE '^progress: |^ysql_bench: client [0-9]+ ' \"$errf\" | tail -c 65536; } >&2; " +
 		"rm -f \"$out\" \"$errf\"; exit $rc"
 }
