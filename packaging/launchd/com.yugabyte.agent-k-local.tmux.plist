@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- AgentK Local tmux server (hosts every Claude session). Written by `agent-k-local install`. -->
+<!-- -D keeps tmux in the foreground, as launchd needs, and keeps it running with no sessions
+     (tmux 3.2 or newer). The server adds the _ak keepalive session once it is up. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yugabyte.agent-k-local.tmux</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@TMUX@</string>
+    <string>-D</string>
+    <string>-L</string>
+    <string>agentk</string>
+    <string>-f</string>
+    <string>@AK_HOME@/tmux.conf</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AK_HOME</key>
+    <string>@AK_HOME@</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>@AK_HOME@/logs/launchd-tmux.log</string>
+</dict>
+</plist>

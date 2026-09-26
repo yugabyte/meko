@@ -7,7 +7,7 @@ StartLimitIntervalSec=0
 Type=forking
 Environment=AK_HOME=@AK_HOME@
 # A keepalive session keeps the tmux server running even with no Claude sessions.
-ExecStart=@TMUX@ -L agentk -f @AK_HOME@/tmux.conf new-session -d -s _ak "sleep infinity"
+ExecStart=@TMUX@ -L agentk -f @AK_HOME@/tmux.conf new-session -d -s _ak "sleep 2147483647"
 ExecStop=@TMUX@ -L agentk kill-server
 Restart=always
 RestartSec=2

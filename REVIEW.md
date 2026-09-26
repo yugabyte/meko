@@ -9,7 +9,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 1. Sessions and recovery
 
-- [ ] Nothing makes tmux or Claude a child of the server process or its systemd unit.
+- [ ] Nothing makes tmux or Claude a child of the server process or its service (systemd unit or
+      launchd job). Code that manages the services goes through `src/server/service.ts`.
 - [ ] Server restarts and updates leave running sessions untouched.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
@@ -19,6 +20,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
       user's own status line with the same input, and never prints anything of its own.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).
+- [ ] Shell commands and scripts work with macOS's BSD tools as well as GNU ones (no `mv -T`,
+      `stat -c`, `sha256sum`-only, `sleep infinity`, `sed -i` without a suffix, `readlink -f`).
 
 ## 2. Security
 

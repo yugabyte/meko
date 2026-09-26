@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
 import { mekoPluginInstalls } from './capture.js';
@@ -11,14 +10,14 @@ import { dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, sav
 import { openDb } from './db.js';
 import { checkMeko } from './meko.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
+import { hostServices, renderServiceFiles, ServiceError, SERVICES } from './service.js';
 import { writeTmuxConf } from './tmux.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
 
-const SERVER_UNIT = 'agent-k-local.service';
-const TMUX_UNIT = 'agent-k-local-tmux.service';
-const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs']);
+// Linux names from `stat -f -c %T`; macOS names from `mount`.
+const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs', 'afpfs', 'webdav', 'macfuse', 'osxfuse']);
 
 class InstallError extends Error {}
 
@@ -76,9 +75,32 @@ export function mekoPluginEnabled(claudeDir: string = join(homedir(), '.claude')
   return { installed, enabled };
 }
 
+/** The mount point in `df -P <dir>` output (the text after the capacity column). */
+export function parseDfMountPoint(df: string): string | null {
+  const last = df.trim().split('\n').at(-1) ?? '';
+  return /\s\d+%\s+(.+)$/.exec(last)?.[1] ?? null;
+}
+
+/** The filesystem type of `mountPoint` in macOS `mount` output ("<dev> on <dir> (<type>, …)"). */
+export function parseMountType(mount: string, mountPoint: string): string | null {
+  const marker = ` on ${mountPoint} (`;
+  for (const line of mount.split('\n')) {
+    const i = line.lastIndexOf(marker);
+    if (i >= 0) return /^[^,)]+/.exec(line.slice(i + marker.length))?.[0].trim() ?? null;
+  }
+  return null;
+}
+
 export function fsType(dir: string): string | null {
-  const r = trySh('stat', ['-f', '-c', '%T', dir]);
-  return r.ok ? r.out : null;
+  if (process.platform !== 'darwin') {
+    const r = trySh('stat', ['-f', '-c', '%T', dir]);
+    return r.ok ? r.out : null;
+  }
+  // BSD stat has no -c: find the mount with df, then read its type from mount.
+  const df = trySh('df', ['-P', dir]);
+  const mp = df.ok ? parseDfMountPoint(df.out) : null;
+  const mount = mp ? trySh('mount', []) : null;
+  return mp && mount?.ok ? parseMountType(mount.out, mp) : null;
 }
 
 export function isNetworkFs(dir: string): boolean {
@@ -99,69 +121,36 @@ function localDbLocation(): string {
   return join(dir, 'state.db');
 }
 
-function templatesDir(): string {
-  const candidates = [
-    process.env.AK_APP_DIR ? join(process.env.AK_APP_DIR, 'lib', 'packaging', 'systemd') : '',
-    // dev checkout: src/server/install.ts or dist/server/install.js → repo root
-    resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'packaging', 'systemd'),
-  ].filter(Boolean);
-  const found = candidates.find((d) => existsSync(join(d, SERVER_UNIT)));
-  if (!found) throw new InstallError(`systemd unit templates not found (looked in ${candidates.join(', ')})`);
-  return found;
-}
-
-function renderUnit(template: string, vars: { AK_HOME: string; TMUX: string }): string {
-  return template.replaceAll('@AK_HOME@', vars.AK_HOME).replaceAll('@TMUX@', vars.TMUX);
-}
-
-function userUnitDir(): string {
-  const base = process.env.XDG_CONFIG_HOME || join(homedir(), '.config');
-  return join(base, 'systemd', 'user');
-}
-
-/** Installs and (re)starts both user units. Returns false when skipped. */
+/** Installs and (re)starts both background services. Returns false when skipped. */
 function installServices(paths: Paths): boolean {
   const tmux = which('tmux');
   if (!tmux) throw new InstallError('tmux was not found on PATH.');
-  if (!which('systemctl')) throw new InstallError('systemctl was not found; rerun with --no-service to skip the service setup.');
+  const svc = hostServices();
+  if (!svc) throw new InstallError(`background services aren't supported on ${process.platform}; rerun with --no-service to skip the service setup.`);
+  svc.preflight();
   if (!existsSync(join(paths.app, 'current', 'bin', 'agent-k-local'))) {
     ui.warn('Services', 'skipped: not a release install (running from a source checkout?)');
     return false;
   }
-  const dir = userUnitDir();
-  mkdirSync(dir, { recursive: true });
-  const tpl = templatesDir();
-  for (const unit of [TMUX_UNIT, SERVER_UNIT]) {
-    const text = renderUnit(readFileSync(join(tpl, unit), 'utf8'), { AK_HOME: paths.home, TMUX: tmux });
-    writeFileSync(join(dir, unit), text);
+  mkdirSync(paths.logs, { recursive: true }); // launchd opens its log files before starting a job
+  svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, TMUX: tmux }));
+  for (const s of SERVICES) {
+    const st = svc.state(s);
+    if (st.running) ui.ok(svc.id(s), 'running');
+    else ui.warn(svc.id(s), `${st.text}. Check: ${svc.statusHint(s)}`);
   }
-  sh('systemctl', ['--user', 'daemon-reload']);
-  // tmux first; `enable --now` never restarts a running tmux, so sessions survive reinstalls.
-  sh('systemctl', ['--user', 'enable', '--now', TMUX_UNIT]);
-  sh('systemctl', ['--user', 'enable', SERVER_UNIT]);
-  // Restart (not just start) the server so a reinstall or upgrade runs the new version.
-  sh('systemctl', ['--user', 'restart', SERVER_UNIT]);
-  for (const unit of [TMUX_UNIT, SERVER_UNIT]) {
-    const st = trySh('systemctl', ['--user', 'is-active', unit]);
-    const state = st.ok ? st.out : 'not running';
-    if (state === 'active') ui.ok(unit, 'running');
-    else ui.warn(unit, `${state}. Check: systemctl --user status ${unit}`);
-  }
-
-  const user = userInfo().username;
-  const linger = trySh('loginctl', ['show-user', user, '-p', 'Linger', '--value']);
-  if (linger.ok && linger.out === 'yes') {
-    ui.ok('Starts at boot', 'lingering is on for your account');
-    return true;
-  }
-  const en = trySh('loginctl', ['enable-linger', user]);
-  if (en.ok) {
-    ui.ok('Starts at boot', 'lingering enabled for your account');
-  } else {
-    ui.warn('Starts at boot', `no: couldn't enable lingering (${en.err || 'permission denied'}).`);
-    ui.note(`Without it, AgentK Local only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`);
-  }
+  const boot = svc.bootCheck();
+  if (boot.ok) ui.ok(boot.label, boot.detail);
+  else ui.warn(boot.label, boot.detail);
+  if (boot.note) ui.note(boot.note);
   return true;
+}
+
+/** True when the macOS application firewall is on (it asks before `node` may accept connections). */
+function macFirewallOn(): boolean {
+  if (process.platform !== 'darwin') return false;
+  const r = trySh('/usr/libexec/ApplicationFirewall/socketfilterfw', ['--getglobalstate']);
+  return r.ok && /enabled/i.test(r.out);
 }
 
 function publicHost(): string {
@@ -267,6 +256,10 @@ export async function runInstall(args: string[]): Promise<void> {
 
     // 6. Services
     ui.section('Services');
+    if (!isLoopback(cfg.server.bind) && macFirewallOn()) {
+      ui.note('The macOS firewall is on. If other devices (like your phone) can\'t connect, allow incoming connections for');
+      ui.note(`${tildify(join(paths.app, 'current', 'node', 'bin', 'node'))} in System Settings > Network > Firewall > Options.`);
+    }
     let running = false;
     if (values['no-service']) {
       ui.warn('Services', 'skipped (--no-service). Start the server with: agent-k-local serve');
@@ -309,7 +302,7 @@ export async function runInstall(args: string[]): Promise<void> {
       handle.close();
     }
   } catch (e) {
-    if (e instanceof InstallError) {
+    if (e instanceof InstallError || e instanceof ServiceError) {
       process.stderr.write('\n');
       ui.fail('Install failed', e.message);
       process.exitCode = 1;
@@ -343,14 +336,9 @@ export async function runUninstall(args: string[]): Promise<void> {
       say('Cancelled.');
       return;
     }
-    const dir = userUnitDir();
-    if (which('systemctl')) {
-      for (const unit of [SERVER_UNIT, TMUX_UNIT]) {
-        trySh('systemctl', ['--user', 'disable', '--now', unit]);
-        const f = join(dir, unit);
-        if (existsSync(f)) unlinkSync(f);
-      }
-      trySh('systemctl', ['--user', 'daemon-reload']);
+    const svc = hostServices();
+    if (svc && (svc.kind === 'launchd' || which('systemctl'))) {
+      svc.remove();
       say('Services removed.');
     }
     const link = join(homedir(), '.local', 'bin', 'agent-k-local');

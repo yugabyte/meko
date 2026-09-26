@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- AgentK Local web server. Written by `agent-k-local install`; changes are overwritten. -->
+<!-- tmux runs in its own job (com.yugabyte.agent-k-local.tmux) so restarting or updating
+     this one never ends a session. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yugabyte.agent-k-local</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@AK_HOME@/app/current/bin/agent-k-local</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AK_HOME</key>
+    <string>@AK_HOME@</string>
+    <!-- launchd sets no locale; tmux clients need a UTF-8 one to draw Claude's UI. -->
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+  <!-- Stopping the server never takes down a tmux it had to start itself. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>ExitTimeOut</key>
+  <integer>15</integer>
+  <!-- The server writes its own log (logs/server.log); keep only errors here. -->
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>@AK_HOME@/logs/launchd.log</string>
+</dict>
+</plist>

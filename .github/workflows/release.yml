@@ -156,13 +156,81 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tarball-${{ matrix.arch }}
+          name: tarball-linux-${{ matrix.arch }}
+          path: out/*.tar.gz
+          if-no-files-found: error
+
+  # macOS on Apple Silicon. No container: the runner's Xcode clang builds node-pty.
+  build-macos:
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.release == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      ARCH: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+
+      - name: Check the ref supports macOS
+        # Rebuilding an older tag: its scripts would name a macOS tarball linux-arm64.
+        run: test -d packaging/launchd || { echo "::error::${{ needs.plan.outputs.ref }} predates macOS support; no darwin build"; exit 1; }
+
+      - name: Download Node ${{ env.NODE_VERSION }}
+        run: |
+          set -eu
+          dist="node-v${NODE_VERSION}-darwin-${ARCH}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.gz"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+          grep " ${dist}.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -
+          tar -xzf "${dist}.tar.gz"
+          echo "NODE_DIR=$RUNNER_TEMP/${dist}" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/${dist}/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies (node-pty built from source)
+        env:
+          # node-pty ships a prebuilt macOS binary; build our own like on Linux.
+          npm_config_build_from_source: 'true'
+        run: |
+          node --version
+          npm ci
+
+      - name: Stamp version
+        run: npm pkg set version="${{ needs.plan.outputs.version }}"
+
+      - name: Build
+        run: npm run build
+
+      - name: Prune dev dependencies
+        run: npm prune --omit=dev
+
+      - name: Package
+        run: |
+          sh scripts/package-release.sh "${{ needs.plan.outputs.version }}" "$ARCH" "$NODE_DIR" out
+          ls out/*-darwin-"$ARCH".tar.gz
+
+      - name: Smoke-test the tarball
+        run: |
+          set -eu
+          smoke="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke"
+          tar -xzf out/*.tar.gz -C "$smoke"
+          v=$("$smoke"/agent-k-local-*/bin/agent-k-local version)
+          test "$v" = "${{ needs.plan.outputs.version }}"
+          "$smoke"/agent-k-local-*/bin/agent-k-local selftest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-darwin-arm64
           path: out/*.tar.gz
           if-no-files-found: error
 
   publish:
-    needs: [plan, build]
-    if: always() && needs.build.result == 'success'
+    needs: [plan, build, build-macos]
+    # A rebuild of a tag from before macOS support publishes the Linux tarballs alone.
+    if: always() && needs.build.result == 'success' && (needs.build-macos.result == 'success' || needs.plan.outputs.rebuild == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -50,7 +50,9 @@ if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
     if [ "$attempts" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
       echo "agent-k-local: version $to failed to start $attempts times; rolling back to $from" >&2
       ln -sfn "$from" "$ak_home/app/current.rollback"
-      mv -Tf "$ak_home/app/current.rollback" "$ak_home/app/current"
+      # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
+      "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' \
+        "$ak_home/app/current.rollback" "$ak_home/app/current"
       [ -n "$to" ] && printf '%s\n' "$to" >> "$ak_home/bad-versions"
       rm -f "$ak_home/update-pending.json"
       exec "$ak_home/app/$from/bin/agent-k-local" "$@"

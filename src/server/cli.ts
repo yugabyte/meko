@@ -15,7 +15,8 @@ import { MekoClient } from './meko.js';
 import { getPaths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
-import { Tmux, systemdUnitInstalled } from './tmux.js';
+import { hostServices } from './service.js';
+import { Tmux } from './tmux.js';
 import { Updater } from './updater.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,7 @@ function version(): string {
 }
 
 /**
- * Under systemd the environment is bare. Take PATH from the user's login shell
+ * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
  * so git, gh, tmux and claude resolve the way they do in a terminal.
  */
 function adoptLoginPath(): void {
@@ -165,6 +166,16 @@ async function selftest(): Promise<void> {
   new DatabaseSync(':memory:').prepare('SELECT 1').get();
   const pty = await import('node-pty');
   if (typeof pty.spawn !== 'function') throw new Error('node-pty failed to load');
+  // Spawn a real process: node-pty can load and still fail here (e.g. spawn-helper not executable on macOS).
+  await new Promise<void>((resolve, reject) => {
+    const p = pty.spawn('/bin/sh', ['-c', 'exit 7'], { name: 'xterm', cols: 80, rows: 24, cwd: '/', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } });
+    const timer = setTimeout(() => reject(new Error('node-pty: the test process did not exit')), 10_000);
+    p.onExit(({ exitCode }) => {
+      clearTimeout(timer);
+      if (exitCode === 7) resolve();
+      else reject(new Error(`node-pty: the test process exited with ${exitCode}, expected 7`));
+    });
+  });
   if (!findWebDir(here)) throw new Error('web assets are missing');
   console.log(`AgentK Local ${version()} selftest ok`);
 }
@@ -179,18 +190,9 @@ async function status(): Promise<void> {
   console.log(`database: ${dbPath(paths, cfg)}`);
   console.log(`url:      ${url}`);
   if (tls) console.log(`tls:      ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
-  for (const unit of ['agent-k-local.service', 'agent-k-local-tmux.service']) {
-    if (!systemdUnitInstalled(unit)) {
-      console.log(`${unit.padEnd(28)} not installed`);
-      continue;
-    }
-    let state: string;
-    try {
-      state = execFileSync('systemctl', ['--user', 'is-active', unit], { encoding: 'utf8' }).trim();
-    } catch (e) {
-      state = String((e as { stdout?: string }).stdout ?? 'inactive').trim() || 'inactive';
-    }
-    console.log(`${unit.padEnd(28)} ${state}`);
+  const svc = hostServices();
+  if (svc) {
+    for (const s of ['server', 'tmux'] as const) console.log(`${svc.id(s).padEnd(32)} ${svc.installed(s) ? svc.state(s).text : 'not installed'}`);
   }
   const panes = await new Tmux(cfg.tmux.socket, paths.tmuxConf).panes();
   console.log(`tmux sessions: ${panes.size} (${[...panes.values()].filter((p) => !p.dead).length} running)`);
@@ -204,9 +206,9 @@ function help(): void {
 
 Usage: agent-k-local <command>
 
-  serve         Run the server (systemd runs this for you)
-  install       Configure this host, install the systemd user units, print the setup link
-  uninstall     Stop and remove the systemd user units (--purge also deletes ~/.agent-k-local)
+  serve         Run the server (the background service runs this for you)
+  install       Configure this host, install the background services (systemd or launchd), print the setup link
+  uninstall     Stop and remove the background services (--purge also deletes ~/.agent-k-local)
   setup-link    Print a one-time link to create (or reset) your login
   status        Show services, URL, certificate fingerprint and sessions
   logs [-f]     Print the server log (-f to follow, -n <lines>)

@@ -199,7 +199,7 @@ pre.mermaid{margin:0;background:transparent}
 <header class="top">
   <span class="label">Design · v0.21 (implemented)</span>
   <h1>AgentK Local</h1>
-  <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver, and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
+  <p class="lede">A self-hosted workbench for Claude Code. It runs headless on your devserver (or on your Mac), and you reach it from a browser on the corp network. Projects sit in a rail on the left. Every task gets its own git worktree and its own Claude session, and each task moves from design to a merged PR in one place. Each project records its work in Meko datapacks.</p>
   <div class="meta"><span class="pill">Draft for review</span><span>25 Sep 2026</span><span>github.com/yugabyte/agent-k-local (internal for now) · Apache-2.0</span></div>
 </header>
 
@@ -209,7 +209,7 @@ pre.mermaid{margin:0;background:transparent}
     <thead><tr><th>Topic</th><th>Decision</th></tr></thead>
     <tbody>
       <tr><td>Session UI</td><td>Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface.</td></tr>
-      <tr><td>Process host</td><td>tmux on a dedicated socket, in its own systemd unit, so the server can restart or update without touching sessions.</td></tr>
+      <tr><td>Process host</td><td>tmux on a dedicated socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions.</td></tr>
       <tr><td>New project</td><td>Pick a repo from a list of the git repos under <code>~/code</code>. The folder is configurable, and you can clone a repo into it from a URL.</td></tr>
       <tr><td>Local state</td><td>SQLite (<code>~/.agent-k-local/state.db</code>), WAL mode, schema versioned with <code>PRAGMA user_version</code>.</td></tr>
       <tr><td>Working copy</td><td>Each session gets its own git worktree on its own branch.</td></tr>
@@ -223,7 +223,7 @@ pre.mermaid{margin:0;background:transparent}
       <tr><td>Crash behaviour</td><td>After a host reboot, the server automatically brings back every open project and session with <code>claude --resume</code>. Sessions that were mid-turn are told to continue.</td></tr>
       <tr><td>Token usage</td><td>Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents.</td></tr>
       <tr><td>Task lifecycle</td><td>Design → Code → PR → Review (AgentK) → Merge &amp; Close, with three human gates. More ADLC stages plug in later.</td></tr>
-      <tr><td>Host OS</td><td>Linux devservers only for now. macOS is deferred.</td></tr>
+      <tr><td>Host OS</td><td>Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported.</td></tr>
       <tr><td>Distribution</td><td>Public GitHub repo. GitHub Actions for CI and releases, date-based versions (<code>0.YYYYMMDD.N</code>), tarball releases, and an update check built into the server.</td></tr>
       <tr><td>Repo &amp; license</td><td>Internal at <code>github.com/yugabyte/agent-k-local</code> for now, to be made public later. Apache-2.0.</td></tr>
       <tr><td>Sharing</td><td>Everyone installs their own copy. One owner per install, with no shared instances.</td></tr>
@@ -244,7 +244,7 @@ flowchart LR
   subgraph Host["Devserver, headless"]
     S["AgentK Local server<br/>HTTPS :7777"]
     H["hook.sock<br/>unix socket"]
-    T["tmux server<br/>own systemd unit"]
+    T["tmux server<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
     C2["claude in worktree B"]
     ST[("~/.agent-k-local<br/>state, certs, app versions")]
@@ -577,13 +577,15 @@ stateDiagram-v2
       <li><code>agent-k-local.service</code> is the web server, with <code>Restart=always</code>. Updates restart only this unit.</li>
     </ul>
     <p>Keeping tmux in its own unit is the key point. If tmux were a child of the server's unit, systemd would kill every Claude session on each update.</p>
+    <p><b>On macOS</b> the same two services are LaunchAgents in your <code>gui/&lt;uid&gt;</code> domain (<code>~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist</code> and <code>….tmux.plist</code>), with <code>RunAtLoad</code> and <code>KeepAlive</code>. They start when you log in, not at boot: Claude Code keeps its login in the Keychain, which is only unlocked during a desktop login, so the installer refuses to run without one. launchd wants a job's main process to stay in the foreground, so the tmux job runs <code>tmux -D</code> (tmux 3.2 or newer), which also keeps running with no sessions; the server adds the <code>_ak</code> keepalive session with <code>tmux -N</code>, which never starts a second server. The server job sets <code>AbandonProcessGroup</code>, so stopping it never takes a tmux down with it. Both jobs set <code>LANG=en_US.UTF-8</code>, because launchd sets no locale and tmux clients need a UTF-8 one. Updates restart the server with <code>launchctl kickstart -k</code>, or by exiting and letting <code>KeepAlive</code> bring it back; reinstalling never reloads a loaded tmux job.</p>
+    <p>All of this sits behind one interface in <code>src/server/service.ts</code> (install, start, state, remove, boot check), with a systemd and a launchd implementation picked by platform.</p>
   </div>
   <div class="tablewrap"><table>
     <thead><tr><th>Event</th><th>What survives</th><th>What happens</th></tr></thead>
     <tbody>
-      <tr><td>Server crash or update</td><td>Everything</td><td>systemd restarts the server. It matches <code>state.db</code> against the running tmux sessions, and browsers reconnect automatically.</td></tr>
+      <tr><td>Server crash or update</td><td>Everything</td><td>systemd (or launchd) restarts the server. It matches <code>state.db</code> against the running tmux sessions, and browsers reconnect automatically.</td></tr>
       <tr><td>tmux crash</td><td>Worktrees, transcripts, state</td><td>The unit restarts tmux, and the server relaunches every session with <code>desired: running</code> using <code>claude --resume</code>.</td></tr>
-      <tr><td>Host reboot or crash</td><td>Worktrees, transcripts, state</td><td>Both units start at boot and the same recovery runs. Sessions show as <em>recovered</em> until you interact.</td></tr>
+      <tr><td>Host reboot or crash</td><td>Worktrees, transcripts, state</td><td>Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as <em>recovered</em> until you interact.</td></tr>
     </tbody>
   </table></div>
   <div class="diagram">
@@ -621,9 +623,9 @@ sequenceDiagram
 <section id="releases">
   <h2>Releases and auto-update</h2>
   <div class="grid2">
-    <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
+    <div class="card"><span class="label">On every PR</span><h3>CI</h3><p>Typecheck, lint and unit tests, on Linux and macOS. Integration tests run against real tmux and git, with a stub <code>claude</code> binary that fakes the TUI and fires the hooks.</p></div>
     <div class="card"><span class="label">On push to main</span><h3>Versioning</h3><p>Versions are <code>0.YYYYMMDD.N</code>: the UTC date, and <code>N</code> counting from 0 for each release that day. A push with any <code>feat</code>, <code>fix</code> or <code>perf</code> commit since the last release runs the tests and cuts the next version; its Conventional Commit subjects become the release notes.</p></div>
-    <div class="card"><span class="label">After the tests</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>. Each bundles the Node 22 runtime, node-pty (built with gcc-toolset-13) and the web assets. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>. Afterwards, releases beyond the newest 5 in each lane (<code>stable</code>, or the prerelease identifier such as <code>beta</code>) are deleted; their tags stay.</p></div>
+    <div class="card"><span class="label">After the tests</span><h3>Build matrix</h3><p>Self-contained tarballs are built for <code>linux-x64</code> and <code>linux-arm64</code>, and on a <code>macos-15</code> runner for <code>darwin-arm64</code>. Each bundles the Node 22 runtime, node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets. The installer and the updater pick the tarball for their platform, and a Mac skips releases from before macOS support. Each release also includes <code>SHA256SUMS</code>, a build provenance attestation and <code>install.sh</code>. Afterwards, releases beyond the newest 5 in each lane (<code>stable</code>, or the prerelease identifier such as <code>beta</code>) are deleted; their tags stay.</p></div>
   </div>
   <div class="callout">
     <span class="label">glibc</span>
@@ -633,10 +635,11 @@ sequenceDiagram
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 <span class="c"># what it does</span>
-<span class="c">#  1. checks for tmux ≥ 2.7, git, claude, and the meko-agent-skills plugin</span>
+<span class="c">#  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, claude, and the meko-agent-skills plugin</span>
 <span class="c">#     verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks)</span>
 <span class="c">#  2. unpacks to ~/.agent-k-local/app/&lt;ver&gt;, points app/current at it</span>
-<span class="c">#  3. installs both systemd user units and enables linger if allowed</span>
+<span class="c">#  3. installs both background services: systemd user units with linger if allowed,</span>
+<span class="c">#     or LaunchAgents on macOS (needs a desktop login)</span>
 <span class="c">#  4. asks for your repos folder (default ~/code) and writes config.toml</span>
 <span class="c">#  5. prints the one-time setup link</span></pre>
   <div class="prose">

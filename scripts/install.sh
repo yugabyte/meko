@@ -43,27 +43,54 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- platform ----
-[ "$(uname -s)" = Linux ] || die "only Linux is supported for now (found $(uname -s))"
-case $(uname -m) in
-  x86_64|amd64) arch=x64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  *) die "unsupported CPU architecture: $(uname -m)" ;;
+case $(uname -s) in
+  Linux)
+    platform=linux
+    case $(uname -m) in
+      x86_64|amd64) arch=x64 ;;
+      aarch64|arm64) arch=arm64 ;;
+      *) die "unsupported CPU architecture: $(uname -m)" ;;
+    esac
+    tmux_min="2 7"
+    pkg_hint="e.g. 'sudo dnf install tmux'"
+    missing_hint=""
+    ;;
+  Darwin)
+    platform=darwin
+    # uname -m says x86_64 in a shell running under Rosetta; ask the hardware.
+    [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || die "only Apple Silicon Macs are supported (this Mac has an Intel CPU)"
+    arch=arm64
+    # The launchd service runs tmux in the foreground (tmux -D), which needs 3.2.
+    tmux_min="3 2"
+    pkg_hint="e.g. 'brew install tmux'"
+    missing_hint=" Releases from before macOS support have no macOS build."
+    ;;
+  *) die "only Linux and macOS are supported (found $(uname -s))" ;;
 esac
 
 # ---- prerequisites ----
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but was not found on PATH. $2"; }
-need tmux "Install tmux 2.7 or newer (e.g. 'sudo dnf install tmux')."
+# shellcheck disable=SC2086 # intentional split into major/minor
+set -- $tmux_min
+min_major=$1 min_minor=$2
+need tmux "Install tmux $min_major.$min_minor or newer ($pkg_hint)."
 need git "Install git."
 need claude "Install Claude Code: https://claude.com/claude-code"
 need tar ""
-need sha256sum "It is part of coreutils."
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_check() { sha256sum -c -; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_check() { shasum -a 256 -c -; }
+else
+  die "sha256sum (coreutils) or shasum is required but neither was found on PATH."
+fi
 
 tmux_ver=$(tmux -V | sed -n 's/^tmux [^0-9]*\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p')
 [ -n "$tmux_ver" ] || die "could not parse the tmux version from '$(tmux -V)'"
 # shellcheck disable=SC2086 # intentional split into major/minor
 set -- $tmux_ver
-if [ "$1" -lt 2 ] || { [ "$1" -eq 2 ] && [ "$2" -lt 7 ]; }; then
-  die "tmux 2.7 or newer is required (found $1.$2)"
+if [ "$1" -lt "$min_major" ] || { [ "$1" -eq "$min_major" ] && [ "$2" -lt "$min_minor" ]; }; then
+  die "tmux $min_major.$min_minor or newer is required (found $1.$2). Upgrade it ($pkg_hint)."
 fi
 
 have_gh=false
@@ -89,7 +116,7 @@ if [ -z "$version" ]; then
   version=${tag#v}
 fi
 tag="v$version"
-tarball="agent-k-local-$version-linux-$arch.tar.gz"
+tarball="agent-k-local-$version-$platform-$arch.tar.gz"
 
 # ---- download + verify ----
 tmp=$(mktemp -d)
@@ -97,7 +124,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 if $have_gh; then
   gh release download "$tag" --repo "$repo" --pattern "$tarball" --pattern SHA256SUMS --dir "$tmp" ||
-    die "download of $tarball from $repo failed"
+    die "download of $tarball from $repo failed.$missing_hint"
 else
   base="https://github.com/$repo/releases/download/$tag"
   auth=""
@@ -108,9 +135,9 @@ else
   done
 fi
 
-(cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256sum -c - >/dev/null) ||
+(cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) ||
   die "checksum verification failed for $tarball"
-ok "Release" "$version (linux-$arch), checksum verified"
+ok "Release" "$version ($platform-$arch), checksum verified"
 
 # ---- unpack into app/<version> ----
 mkdir -p "$ak_home/app"
@@ -129,7 +156,9 @@ mv "$staging/agent-k-local-$version" "$dest"
 rm -rf "$staging" "$dest.old"
 
 ln -sfn "$version" "$ak_home/app/current.tmp"
-mv -Tf "$ak_home/app/current.tmp" "$ak_home/app/current"
+# Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
+"$dest/node/bin/node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' \
+  "$ak_home/app/current.tmp" "$ak_home/app/current"
 
 # A manual (re)install supersedes any pending self-update rollback.
 rm -f "$ak_home/update-pending.json"

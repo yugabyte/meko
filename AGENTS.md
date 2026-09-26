@@ -10,13 +10,13 @@ is in [docs/design.html](docs/design.html).
 
 **Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
 identifier `agent-k-local` stays in the repo name, the CLI command, `~/.agent-k-local`, the systemd
-units, tarball names and the npm package.
+units and launchd labels, tarball names and the npm package.
 
 ## Commands
 
 ```sh
 nvm use 22
-export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++  # RHEL 8, for node-pty
+export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++  # RHEL 8, for node-pty (not on macOS)
 npm ci
 npm run typecheck && npm run lint && npm test   # run all three before every commit
 npm run build                                   # dist/server + dist/web
@@ -46,7 +46,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents), which also finds pushes to the base branch, and per session/project/model/day totals plus the all-projects overview (`GET /api/usage`). |
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping. |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
-| `src/server/updater.ts`, `install.ts` | Self-update with rollback; host install and systemd units. |
+| `src/server/updater.ts`, `install.ts` | Self-update with rollback (tarball per platform and CPU); host install. |
+| `src/server/service.ts` | The two background services (server, tmux) behind one `ServiceManager`: systemd user units on Linux, LaunchAgents on macOS. Install, start, state, remove, boot check. |
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
@@ -54,14 +55,15 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/notifyLeader.ts` | Which open page shows browser notifications: the one used last, through a Web Lock it steals on focus. |
 | `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input and releasing hidden phone terminals. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
 | `src/web/hooks/useMedia.ts`, `components/TopBar.tsx`, `SessionSheet.tsx`, `TermKeys.tsx` | The phone layout: breakpoint hooks and `--app-h`/`--app-top` (pin the app to the visible viewport, above the on-screen keyboard), the app bar, the ⋯ session sheet (which also holds the stage bar), and the terminal key bar and compose box. `src/web/keys.ts` holds the key sequences, bracketed paste and wheel reports they send. |
-| `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd templates, install and release scripts, CI and releases. |
+| `packaging/`, `scripts/`, `.github/workflows/` | Launcher wrapper, systemd and launchd templates, install and release scripts, CI and releases (Linux and macOS). |
 | `test/` | Unit tests, and integration tests against real tmux and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 
 ## Invariants (don't break these)
 
-1. **Sessions survive the server.** tmux runs in its own systemd unit (`agent-k-local-tmux.service`).
-   Never start tmux or Claude as children of the server's unit or process group. Server restarts and
-   updates must never stop a session.
+1. **Sessions survive the server.** tmux runs in its own service (`agent-k-local-tmux.service` on
+   Linux, the `com.yugabyte.agent-k-local.tmux` LaunchAgent on macOS). Never start tmux or Claude as
+   children of the server's service or process group. Server restarts and updates must never stop a
+   session. Manage the services only through `service.ts`.
 2. **Recovery is idempotent.** `recover()` and `reconcile()` may run at any time. A session with a live
    pane is left alone, and so is one still being created or launched (it has no pane yet); a missing
    pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes, parked
@@ -73,7 +75,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
    shell text we generate is the launcher script, and every value in it goes through `shq()`.
 5. **Migrations are append-only.** Add a new entry to `MIGRATIONS` in `db.ts`; never edit a shipped one.
 6. **tmux 2.7 compatibility** (RHEL 8): no `new-session -e`, window options via `set-window-option`,
-   exact targets as `=name:`.
+   exact targets as `=name:`. macOS needs tmux 3.2 (the launchd job runs `tmux -D`), so 3.2-only
+   flags are allowed only on the macOS path.
 7. **Meko is required.** Projects can't exist without a dedicated datapack; sessions always get
    `MEKO_AGENT_ID=claude_code:<project>`, and the project's datapack is pinned for that agent id.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
@@ -81,6 +84,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 
 ## Conventions
 
+- Shell commands and scripts run on Linux and macOS: stick to POSIX flags that GNU and BSD tools
+  share (no `mv -T`, `stat -c`, `readlink -f`, `sleep infinity`; `sha256sum` or `shasum -a 256`).
 - TypeScript strict, ES modules, Node 22. Keep modules small and single-purpose, and match the style
   around you.
 - User-facing text: plain, direct, active voice; errors say what went wrong and how to fix it.
