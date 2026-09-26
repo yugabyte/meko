@@ -10,7 +10,7 @@ function AuthFrame({ title, sub, children }: { title: string; sub: string; child
           <img src="/logo.png" alt="" width={56} height={56} />
           <div>
             <div className="brand-name">AgentK Local</div>
-            <div className="muted small">Claude Code workbench</div>
+            <div className="muted small">Agentic coder</div>
           </div>
         </div>
         <h1>{title}</h1>
