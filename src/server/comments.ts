@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { CommentSide, CommentState, NewComment, ReviewComment, SendCommentsResult } from '../shared/types.js';
+import type { CommentSide, CommentState, NewComment, ReviewComment, SendCommentsResult, Stage } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { errMsg } from './log.js';
@@ -16,6 +16,8 @@ const EXCERPT_CHARS = 4000;
 /** Longer excerpt lines are cut to this many characters plus '…'. */
 export const EXCERPT_LINE_CHARS = 1000;
 const PATH_MAX = 4096;
+/** Stages in which Claude works on the diff, so queued comments can go to it. */
+const COMMENT_STAGES: Stage[] = ['explore', 'code', 'review'];
 
 interface CommentRow {
   id: string;
@@ -134,7 +136,7 @@ export class CommentService {
 
   private draft(sessionId: string, id: string): CommentRow {
     const r = this.one(sessionId, id);
-    if (r.state !== 'draft') throw new HttpError(409, 'This comment was already sent to Claude, so it can no longer be changed.');
+    if (r.state !== 'draft') throw new HttpError(409, 'This comment was already sent to AgentK, so it can no longer be changed.');
     return r;
   }
 
@@ -147,7 +149,7 @@ export class CommentService {
     this.running(sessionId);
     const c = checkNewComment(body);
     if (commentCounts(this.db, sessionId).drafts >= BATCH_MAX) {
-      throw new HttpError(409, `You already have ${BATCH_MAX} draft comments, the most that can go to Claude at once. Send them first.`);
+      throw new HttpError(409, `You already have ${BATCH_MAX} draft comments, the most that can go to AgentK at once. Send them first.`);
     }
     const id = randomUUID();
     const now = Date.now();
@@ -190,14 +192,14 @@ export class CommentService {
   }
 
   /**
-   * Pastes queued comments into Claude when it's waiting at its prompt in the Code or Review
-   * stage (never while it shows a permission or question prompt). Returns how many went out.
+   * Pastes queued comments into Claude when it's waiting at its prompt in the Explore, Code or
+   * Review stage (never while it shows a permission or question prompt). Returns how many went out.
    */
   async deliver(sessionId: string): Promise<number> {
     if (this.delivering.has(sessionId)) return 0;
     const row = this.core.sessions.row(sessionId);
     if (row.desired !== 'running' || (row.status !== 'idle' && row.status !== 'recovered')) return 0;
-    if ((row.stage !== 'code' && row.stage !== 'review') || this.core.sessions.runtime(sessionId).busy) return 0;
+    if (!COMMENT_STAGES.includes(row.stage) || this.core.sessions.runtime(sessionId).busy) return 0;
     const queued = all<CommentRow>(this.db,
       `SELECT * FROM review_comments WHERE session_id = ? AND state = 'queued' ORDER BY created_at, id LIMIT ?`, sessionId, BATCH_MAX).map(toComment);
     if (!queued.length) return 0;
@@ -209,7 +211,7 @@ export class CommentService {
       tx(this.db, () => {
         for (const c of queued) run(this.db, `UPDATE review_comments SET state = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);
       });
-      this.core.sessions.event(sessionId, 'comments', `Sent ${count} to Claude`);
+      this.core.sessions.event(sessionId, 'comments', `Sent ${count} to AgentK`);
       this.core.changed();
       return queued.length;
     } finally {

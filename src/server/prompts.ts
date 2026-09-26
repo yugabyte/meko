@@ -10,9 +10,17 @@ import { get, type Db } from './db.js';
  * {{comments}}, and `ci` gets {{sha}} and {{checks}}.
  */
 export type PromptName =
-  | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments';
+  | 'explore' | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
+  explore: `You are in an AgentK Local Exploration session.
+
+Task: {{task}}
+
+Investigate: read the code, answer questions, and build POCs or run experiments in this worktree (branch {{branch}}) when they help. You can commit and push experimental branches. There is no design approval in this session, and AgentK Local doesn't run a PR, review or merge stage for it.
+
+Finish with a short summary of what you found and what you'd recommend next. Save durable findings to Meko.`,
+
   design: `You are in the Design stage of an AgentK Local task.
 
 Task: {{task}}

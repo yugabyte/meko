@@ -15,7 +15,7 @@ import { render } from '../../src/server/prompts.js';
 import { parseSettings, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
-import { STAGES, STAGE_LABELS } from '../../src/shared/types.js';
+import { KIND_STAGES, STAGE_LABELS } from '../../src/shared/types.js';
 
 describe('auth', () => {
   it('hashes and verifies passwords with scrypt', () => {
@@ -191,7 +191,7 @@ describe('config and db', () => {
     // Go back to schema 6, the six-stage release, and upgrade again (7 is Merge & Close; later
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
-    dropSessionColumns(db, 'pending_review', ...V10_COLUMNS);
+    dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
     db.exec('PRAGMA user_version = 6');
     db.close();
     db = openDb(file);
@@ -217,7 +217,7 @@ describe('config and db', () => {
     add('s2', 'sent');
     add('s3', null);
     // Back to schema 9, before the prompt queue.
-    dropSessionColumns(db, ...V10_COLUMNS);
+    dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
     db.exec('PRAGMA user_version = 9');
     db.close();
     db = openDb(file);
@@ -235,6 +235,30 @@ describe('config and db', () => {
     db.close();
   });
 
+  it('marks sessions that never entered Design as Quick Code', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    const add = (id: string, stages: string[]) => {
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+        VALUES (?, 'api', ?, ?, ?, 'b', 'main', '/w', ?, 't', 'running', 'idle', ?, 0)`, id, id, id, id, id, stages[stages.length - 1]);
+      stages.forEach((st, i) => run(db, 'INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, ?)', id, st, i, 'you'));
+    };
+    add('planned', ['design', 'code', 'pr']);
+    add('skipped', ['code', 'pr', 'review']);
+    // Back to schema 10, before session kinds.
+    dropSessionColumns(db, ...V11_COLUMNS);
+    db.exec('PRAGMA user_version = 10');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(db.prepare('SELECT id, kind FROM sessions ORDER BY id').all()).toEqual([
+      { id: 'planned', kind: 'plan' }, { id: 'skipped', kind: 'quick' },
+    ]);
+    db.close();
+  });
+
   it('reads an old or unknown reviewer mode as the default', () => {
     expect(parseSettings(JSON.stringify({ reviewer: 'agentk' })).reviewer).toBe('agentk-people');
     expect(parseSettings(JSON.stringify({ reviewer: 'all' })).reviewer).toBe('all');
@@ -243,6 +267,7 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+const V11_COLUMNS = ['kind'];
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
   for (const c of cols) {
@@ -252,8 +277,13 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 
 describe('stages', () => {
   it('ends with one Merge & Close step', () => {
-    expect(STAGES).toEqual(['design', 'code', 'pr', 'review', 'merge']);
+    expect(KIND_STAGES.plan).toEqual(['design', 'code', 'pr', 'review', 'merge']);
     expect(STAGE_LABELS.merge).toBe('Merge & Close');
+  });
+
+  it('skips Design in Quick Code and has only Explore in Exploration', () => {
+    expect(KIND_STAGES.quick).toEqual(['code', 'pr', 'review', 'merge']);
+    expect(KIND_STAGES.explore).toEqual(['explore']);
   });
 });
 

@@ -343,7 +343,7 @@ function ProjectSettingsForm({
             className="input"
             value={s.reviewer}
             onChange={(e) => set('reviewer', e.target.value as ReviewerMode)}
-            title="Whose reviews Claude addresses. Merge waits for AgentK once it's active on the PR."
+            title="Whose reviews AgentK addresses. Merge waits for the AgentK reviewer once it's active on the PR."
           >
             {(Object.keys(REVIEWER_LABELS) as ReviewerMode[]).map((m) => (
               <option key={m} value={m}>{REVIEWER_LABELS[m]}</option>

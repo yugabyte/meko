@@ -256,7 +256,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     setNote(null);
     try {
       const r = await api.sendComments(session.id);
-      if (r.sent) setNote(`Sent ${plural(r.sent, 'comment')} to Claude.`);
+      if (r.sent) setNote(`Sent ${plural(r.sent, 'comment')} to AgentK.`);
       setComments(await api.comments(session.id));
     } catch (e) {
       setNote(errorMessage(e));
@@ -313,7 +313,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <button
             className="btn small primary"
             disabled={sending || exited}
-            title="Send your draft comments to Claude"
+            title="Send your draft comments to AgentK"
             onClick={send}
           >
             {sending ? 'Sending…' : `Send ${plural(drafts, 'comment')}`}
@@ -332,8 +332,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           {exited && drafts > 0 && <span>Claude has exited. Resume the session to send your comments.</span>}
           {queued > 0 && (
             <span>
-              {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to Claude when it finishes its turn
-              {session.stage !== 'code' && session.stage !== 'review' ? ' in the Code or Review stage' : ''}.
+              {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to AgentK when it finishes its turn
+              {session.stage !== 'explore' && session.stage !== 'code' && session.stage !== 'review' ? ' in the Code or Review stage' : ''}.
             </span>
           )}
           {note && <span>{note}</span>}

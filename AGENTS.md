@@ -4,8 +4,9 @@ Guide for coding agents (Claude Code, Codex, Cursor, and others) working on **Ag
 should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and the rules.
 
 AgentK Local is a self-hosted web workbench for Claude Code. Projects are git repos. Each task is a
-session with its own git worktree and a tmux-hosted Claude process, moving through
-Design → Code → PR → Review → Merge & Close. Meko datapacks hold project memory. The design
+session with its own git worktree and a tmux-hosted Claude process. Its type decides the stages:
+Plan & Implement goes Design → Code → PR → Review → Merge & Close, Quick Code skips Design, and
+Exploration stays in one Explore stage. Meko datapacks hold project memory. The design
 is in [docs/design.md](docs/design.md).
 
 **Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
@@ -96,6 +97,9 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
   `exhaustive-deps`) for `src/web/`. Keep modules small and single-purpose, and match the style
   around you.
 - User-facing text: plain, direct, active voice; errors say what went wrong and how to fix it.
+  AgentK runs the workflow, so text about the work (designing, coding, reviews, turns) names
+  **AgentK**; **Claude** is only for the Claude Code process and its terminal (starting, exits,
+  Resume, typing into it). Prompts sent to Claude still address Claude.
 - The server is the source of truth; the UI renders `AppState` pushed over `/ws/events`.
 - Tests: new behavior gets a test. Integration tests use real tmux and git; GitHub is mocked with
   `vi.mock('../../src/server/github.js')`. Tests must never touch the real `~/.claude.json` or Meko

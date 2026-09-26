@@ -32,13 +32,39 @@ export interface StartupState {
   hasPrompt: boolean;
 }
 
-/** `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup. */
-export type Stage = 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done';
+/**
+ * `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup.
+ * `explore` is an Exploration session's only stage: no gates, it ends when the user archives it.
+ */
+export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done';
 
-/** The stages shown in the stage bar, in order. `done` is terminal and not shown. */
-export const STAGES: Exclude<Stage, 'done'>[] = ['design', 'code', 'pr', 'review', 'merge'];
+/** What a session is for, picked when it's created. It decides the stages it goes through. */
+export type SessionKind = 'explore' | 'plan' | 'quick';
+
+export const SESSION_KINDS: SessionKind[] = ['explore', 'plan', 'quick'];
+
+export const KIND_LABELS: Record<SessionKind, string> = {
+  explore: 'Exploration',
+  plan: 'Plan & Implement',
+  quick: 'Quick Code',
+};
+
+/** One line on what each kind is for, shown under the choice in the New session dialog. */
+export const KIND_HINTS: Record<SessionKind, string> = {
+  explore: 'Investigate, answer questions, build POCs and run experiments. No design, PR or merge.',
+  plan: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
+  quick: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
+};
+
+/** The stages shown in the stage bar for each kind, in order. `done` is terminal and not shown. */
+export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done'>[]> = {
+  explore: ['explore'],
+  plan: ['design', 'code', 'pr', 'review', 'merge'],
+  quick: ['code', 'pr', 'review', 'merge'],
+};
 
 export const STAGE_LABELS: Record<Stage, string> = {
+  explore: 'Explore',
   design: 'Design',
   code: 'Code',
   pr: 'PR',
@@ -186,6 +212,7 @@ export interface Session {
   status: SessionStatus;
   /** Human-readable detail for the status, e.g. the Notification message. */
   statusDetail: string | null;
+  kind: SessionKind;
   stage: Stage;
   prNumber: number | null;
   prUrl: string | null;
@@ -484,7 +511,9 @@ export interface CreateSessionRequest {
   name: string;
   prompt?: string;
   baseBranch?: string;
-  /** Start in the Code stage instead of Design. */
+  /** Defaults to `plan`. */
+  kind?: SessionKind;
+  /** Deprecated: use `kind: 'quick'`. True starts a Quick Code session when `kind` is unset. */
   skipDesign?: boolean;
 }
 
@@ -558,7 +587,7 @@ export type TermServerMessage =
 // GET    /api/projects/:id/home                → ProjectHome
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
 // GET    /api/sessions/:id/design              → DesignDoc
 // GET    /api/sessions/:id/discard-check       → DiscardCheck

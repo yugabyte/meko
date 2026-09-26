@@ -3,7 +3,7 @@ import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
-  CiState, DatapackRef, Project, ProjectSettings, ReviewState, Session, SessionStatus, Stage,
+  CiState, DatapackRef, Project, ProjectSettings, ReviewState, Session, SessionKind, SessionStatus, Stage,
 } from '../shared/types.js';
 import { REVIEWER_LABELS } from '../shared/types.js';
 
@@ -43,6 +43,7 @@ export interface SessionRow {
   desired: 'running' | 'archived';
   status: SessionStatus;
   status_detail: string | null;
+  kind: SessionKind;
   stage: Stage;
   pr_number: number | null;
   pr_url: string | null;
@@ -147,6 +148,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     desired: r.desired,
     status: r.status,
     statusDetail: r.status_detail,
+    kind: r.kind,
     stage: r.stage,
     prNumber: r.pr_number,
     prUrl: r.pr_url,

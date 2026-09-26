@@ -30,7 +30,7 @@ from a browser.
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents. |
-| Task lifecycle | Design → Code → PR → Review (AgentK) → Merge & Close, with three human gates. More ADLC stages plug in later. |
+| Task lifecycle | Design → Code → PR → Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration sessions have none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
 | Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
@@ -130,8 +130,19 @@ or switch to an existing datapack, before creating the project.
 
 ### New session
 
-You give it a name and, optionally, a first prompt and a base branch (the default is the project's
-default branch). The server fetches the base from `origin` and fast-forwards your local base
+You give it a name, a session type and, optionally, a first prompt and a base branch (the default
+is the project's default branch). The three types sit side by side, with a line under them saying
+what the selected one is for:
+
+| Type | For | Stages |
+|---|---|---|
+| **Exploration** (`explore`) | Investigating, answering questions, POCs and experiments | Explore only: no gates; you end it with Archive or Discard |
+| **Plan & Implement** (`plan`, the default) | Normal tasks | Design → Code → PR → Review → Merge & Close |
+| **Quick Code** (`quick`) | Small tasks | Code → PR → Review → Merge & Close |
+
+The type is stored as `sessions.kind` and decides the first stage, the stages the stage bar shows,
+the first prompt (`explore`, `design` or `code`) and the workflow line of the system prompt Claude
+gets. `CreateSessionRequest.skipDesign: true` still works and means Quick Code. The server fetches the base from `origin` and fast-forwards your local base
 branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside
 it, and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
 local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
@@ -307,7 +318,8 @@ CREATE TABLE sessions (
   claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
   status TEXT,                    -- starting | working | needs_input | idle | exited | recovered | archived
-  stage TEXT,                     -- design | code | pr | review | merge (Merge & Close) | done
+  kind TEXT,                      -- explore | plan | quick (the session type)
+  stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
   pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'ci' to
@@ -363,7 +375,15 @@ defined as data, so later stages such as test, deploy and monitor can be added w
 sessions.
 
 There are three **gates** that only you can pass: approving the design, opening the PR, and
-merging. Everything between the gates runs on its own.
+merging. Everything between the gates runs on its own. A Quick Code session starts at Code, so it
+has only the last two gates. An Exploration session never enters this pipeline: it stays in the
+Explore stage, where Claude gets the `explore` prompt (investigate, build POCs, run experiments,
+push experimental branches if useful), edits aren't guarded, and review comments from the Changes panel still
+reach Claude. It ends when you archive or discard it.
+
+In the UI, the one doing the work in these stages is **AgentK** ("AgentK writes a design…",
+"Wait for AgentK to finish its turn"). "Claude" is kept for the Claude Code process and its
+terminal: starting it, exits, Resume, and the compose box.
 
 ```mermaid
 stateDiagram-v2
@@ -381,7 +401,7 @@ stateDiagram-v2
 
 | Stage | Claude | AgentK Local | Moves on when |
 |---|---|---|---|
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack, marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"). Small tasks can skip this stage at creation. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack, marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"). Quick Code sessions skip this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a summary taken from the design. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 4 · Review | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt, reviews before CI. A queued CI prompt is dropped if the head moves or CI stops failing. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, and Claude is neither working nor waiting on you in the terminal. |
@@ -406,7 +426,7 @@ stateDiagram-v2
   Claude's own replies, which post as you. A person's review goes to Claude when it requests
   changes or comments with a body.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
-  built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `approved`,
+  built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `review`, `review-people`, `ci`, `continue`, `comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),

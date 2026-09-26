@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  STAGES,
+  KIND_STAGES,
   STAGE_LABELS,
   type ProjectWithSessions,
   type Session,
@@ -220,8 +220,8 @@ export function ProjectView({
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>
             <p className="muted">
-              Start a session for a task. It gets its own branch and worktree, and Claude starts by writing a design
-              unless you skip that step.
+              Start a session for a task. It gets its own branch and worktree. Pick what it's for: exploring, planning
+              then implementing, or coding straight away.
             </p>
             <button className="btn primary" onClick={onNewSession}>
               New session
@@ -307,7 +307,8 @@ function StageBar({
       </div>
     );
   }
-  const idx = session.stage === 'done' ? STAGES.length : STAGES.indexOf(session.stage);
+  const stages = KIND_STAGES[session.kind];
+  const idx = session.stage === 'done' ? stages.length : stages.indexOf(session.stage);
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -330,7 +331,7 @@ function StageBar({
       break;
     }
     case 'code':
-      reason = midTurn ? 'Wait for Claude to finish its turn.' : null;
+      reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
       gate = (
         <button
           className="gate"
@@ -391,7 +392,7 @@ function StageBar({
     <div className="stages-wrap">
       <div className="stages-row">
         <div className="stages" aria-label="Stages">
-          {STAGES.map((st, i) => (
+          {stages.map((st, i) => (
             <span key={st} className="stg-item">
               {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
               <span className={cx('stg', i < idx && 'done', i === idx && 'cur')} aria-current={i === idx ? 'step' : undefined}>
@@ -403,7 +404,7 @@ function StageBar({
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>{STAGE_LABELS[session.stage]}</b>
-            {session.stage !== 'done' && <span className="muted"> {idx + 1} of {STAGES.length}</span>}
+            {session.stage !== 'done' && stages.length > 1 && <span className="muted"> {idx + 1} of {stages.length}</span>}
           </span>
           <span className="stages-gate">{gate}</span>
         </div>

@@ -160,7 +160,7 @@ export class Lifecycle {
     if (row.stage !== 'design') throw new HttpError(409, 'This session is past the Design stage.');
     if (row.plan_mode) {
       if (!this.sessions.planPending.has(row.id)) {
-        throw new HttpError(409, "Claude hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
+        throw new HttpError(409, "AgentK hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
       }
       // Claude's plan dialog has "Yes" selected by default.
       await this.core.tmux.sendKeys(row.tmux_name, 'Enter');
@@ -169,13 +169,13 @@ export class Lifecycle {
       return;
     }
     if (!get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
-      throw new HttpError(409, "Claude hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
+      throw new HttpError(409, "AgentK hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
     }
-    if (row.status === 'working' || row.status === 'starting') throw new HttpError(409, 'Claude is still working. Wait for the turn to finish.');
+    if (row.status === 'working' || row.status === 'starting') throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
     // Any other question (a permission prompt) would take the approval as its answer.
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
-      throw new HttpError(409, 'Claude is waiting on you in the terminal. Answer it first.');
+      throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     }
     this.designApproved(row.id, 'you');
     try {
@@ -197,9 +197,9 @@ export class Lifecycle {
   async openPr(row: SessionRow): Promise<void> {
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
     if (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy) {
-      throw new HttpError(409, 'Claude is still working. Wait for the turn to finish.');
+      throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     }
-    if (row.status === 'needs_input') throw new HttpError(409, 'Claude is waiting on you in the terminal. Answer it first.');
+    if (row.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
     // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', 'you');
@@ -490,7 +490,7 @@ export class Lifecycle {
     this.enqueue(id, 'ci', { sha: head, checks });
     const next = this.queue(id);
     const afterReview = !!(next.review || next['review-people']);
-    this.sessions.notifyUser(id, 'CI failed', `${names}. ${afterReview ? 'Claude will fix it after the review.' : 'Claude is fixing it.'}`);
+    this.sessions.notifyUser(id, 'CI failed', `${names}. ${afterReview ? 'AgentK will fix it after the review.' : 'AgentK is fixing it.'}`);
   }
 
   /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
@@ -538,8 +538,8 @@ export class Lifecycle {
   mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false): { canMerge: boolean; blockers: string[] } {
     const b: string[] = [];
     if (st.state !== 'OPEN') b.push('The PR is not open.');
-    if (row.status === 'working' || this.sessions.runtime(row.id).busy) b.push('Claude is still working.');
-    else if (row.status === 'needs_input') b.push('Claude is waiting on you in the terminal.');
+    if (row.status === 'working' || this.sessions.runtime(row.id).busy) b.push('AgentK is still working.');
+    else if (row.status === 'needs_input') b.push('AgentK is waiting on you in the terminal.');
     if (unpushed) b.push("The branch has commits that aren't pushed to the PR.");
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') b.push('CI is failing.');
@@ -548,7 +548,7 @@ export class Lifecycle {
     if (reviewer !== 'people' && row.agentk_seen && (row.review_state === 'waiting' || row.review_state === 'in_review')) {
       b.push('Waiting for the AgentK review.');
     }
-    if (row.review_state === 'addressing') b.push('Claude is addressing review findings.');
+    if (row.review_state === 'addressing') b.push('AgentK is addressing review findings.');
     if (st.reviewDecision === 'CHANGES_REQUESTED') b.push('Changes were requested.');
     if (st.reviewDecision === 'REVIEW_REQUIRED') b.push('Required approvals are missing.');
     if (st.mergeable === 'CONFLICTING') b.push('The branch has merge conflicts.');
@@ -614,7 +614,7 @@ export class Lifecycle {
       row.project_id, row.id);
     if (row.desired === 'running' && (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy)) {
       // Stopping Claude mid-turn could lose its work: onTurnEnd closes the session when the turn ends.
-      if (!announced) this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when Claude finishes`, { url: st.url });
+      if (!announced) this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when AgentK finishes`, { url: st.url });
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
       return;
     }

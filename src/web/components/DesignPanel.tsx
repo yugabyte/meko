@@ -148,7 +148,7 @@ export function DesignPanel({
             </p>
           ) : (
             <p className="muted">
-              No design yet. Claude is reading the code; the design shows up here as soon as it’s written, and is
+              No design yet. AgentK is reading the code; the design shows up here as soon as it’s written, and is
               saved to the project’s datapack.
             </p>
           )}

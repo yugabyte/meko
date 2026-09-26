@@ -22,6 +22,9 @@ from a browser:
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
+- **Three session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
+  merge), *Plan & Implement* (the default) for the full lifecycle below, and *Quick Code* for small
+  tasks that go straight to code.
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and

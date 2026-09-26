@@ -59,6 +59,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 3. Lifecycle and GitHub
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
+- [ ] Each session kind keeps to its stages (`KIND_STAGES`): an Exploration session never leaves
+      Explore, and a Quick Code session never enters Design. Code that switches on `stage` handles
+      `explore`.
 - [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is
       idle, never into a permission or question prompt; otherwise they're queued (the review prompt
       in `state.db`, so it survives a restart). Prompts to one session go one at a time.
@@ -89,7 +92,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The UI only calls routes in `src/shared/types.ts`, and types match on both sides.
 - [ ] Both light and dark themes work; state is shown with shape as well as color.
 - [ ] Copy is plain and specific; errors say how to fix the problem.
-- [ ] The product is called **AgentK Local** in visible text.
+- [ ] The product is called **AgentK Local** in visible text. Text about the work names **AgentK**;
+      **Claude** is only for the Claude Code process and its terminal.
 - [ ] The change works on a phone: see [src/web/REVIEW.md](src/web/REVIEW.md) for the phone and touch checks.
 
 ## 6. Tests, docs, release

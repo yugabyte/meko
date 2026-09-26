@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
-import { STAGE_LABELS } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
@@ -20,6 +20,13 @@ import {
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
+
+/** What the appended system prompt says about the session's workflow, per kind. */
+const WORKFLOW: Record<SessionKind, string> = {
+  explore: 'This is an Exploration session: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK Local runs no design, PR, review or merge stages for it; the user ends the session from the AgentK Local UI.',
+  plan: 'Stages: Design → Code → PR → Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.',
+  quick: 'Stages: Code → PR → Review → Merge & Close; the user approves opening the PR and merging from the AgentK Local UI.',
+};
 
 /** Longest setInterval delay Node honours, in whole seconds (2^31-1 ms). */
 export const MAX_TIMER_SECS = Math.floor((2 ** 31 - 1) / 1000);
@@ -203,7 +210,9 @@ export class SessionManager {
     const settings = parseSettings(p.settings_json);
     const base = (req.baseBranch ?? '').trim() || p.default_branch;
     const task = (req.prompt ?? '').trim();
-    const stage: Stage = req.skipDesign ? 'code' : 'design';
+    const kind: SessionKind = req.kind ?? (req.skipDesign ? 'quick' : 'plan');
+    if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
+    const stage: Stage = KIND_STAGES[kind][0];
 
     const slug = await this.uniqueSlug(projectId, p.repo_path, settings.branchPrefix, slugify(name));
     const branch = `${settings.branchPrefix}${slug}`;
@@ -213,10 +222,10 @@ export class SessionManager {
     // The row goes in first so the tab (and its "Starting…" view) shows up right away.
     tx(this.db, () => {
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path,
-                      tmux_name, hook_token, desired, status, stage, initial_prompt, created_at, last_event_at, plan_mode)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, 0)`,
+                      tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0)`,
         id, projectId, slug, name, randomUUID(), branch, base, worktree, tmuxName(projectId, slug),
-        randomBytes(24).toString('base64url'), stage, task || null, now, now);
+        randomBytes(24).toString('base64url'), kind, stage, task || null, now, now);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
     });
     // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
@@ -274,6 +283,7 @@ export class SessionManager {
 
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
+    if (row.stage === 'explore') return 'explore';
     if (row.stage !== 'design') return 'code';
     return row.plan_mode ? 'design-plan' : 'design';
   }
@@ -321,7 +331,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). Stages: Design → Code → PR → Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.`,
+      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
     ];
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${projectAgentId(row.project_id)}" on Meko calls that write.`);
@@ -435,7 +445,7 @@ export class SessionManager {
     const next = (prev ?? Promise.resolve()).then(async () => {
       const r = this.row(id);
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-      if (prev && r.status === 'working') throw new HttpError(409, 'Claude is working on another prompt. Try again when the turn ends.');
+      if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
       await this.core.tmux.submit(r.tmux_name, text);
       this.setStatus(id, 'working');
     });

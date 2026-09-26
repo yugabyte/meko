@@ -67,7 +67,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it('walks a session through every stage', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', skipDesign: true });
+    const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', kind: 'quick' });
     const get = () => env.core.sessions.get(s.id);
     await waitFor(get, (x) => x.status === 'idle', 10000, 'first turn');
 
@@ -127,7 +127,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   async function inReview(name: string, reviewer?: ReviewerMode) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     if (reviewer) env.core.projects.update(p.id, { settings: { reviewer } });
-    const s = await env.core.sessions.create(p.id, { name, prompt: 'do it', skipDesign: true });
+    const s = await env.core.sessions.create(p.id, { name, prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
     gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
     gh.status = status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
@@ -170,7 +170,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it('surfaces an AgentK refusal and allows forcing a review', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Big change', prompt: 'do it', skipDesign: true });
+    const s = await env.core.sessions.create(p.id, { name: 'Big change', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'idle');
     gh.pr = { number: 8, url: 'https://github.com/acme/demo/pull/8', state: 'OPEN' };
     gh.status = status({ number: 8, comments: [{ id: 'c1', author: { login: 'yb-agentk-dev' }, body: 'No review: this PR changes 4000 lines.', createdAt: new Date().toISOString() }] });
@@ -195,7 +195,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     };
     expect(await blockersFor({})).toEqual([]);
     // Claude also gets the CI prompt, so it's working on the failure.
-    expect(await blockersFor({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })).toEqual(['Claude is still working.', 'CI is failing.']);
+    expect(await blockersFor({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] })).toEqual(['AgentK is still working.', 'CI is failing.']);
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'CI prompt done');
     expect(await blockersFor({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] })).toEqual(['CI is still running.']);
     expect(await blockersFor({ reviewDecision: 'CHANGES_REQUESTED' })).toEqual(['Changes were requested.']);
@@ -212,7 +212,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
     // A question in the terminal mid-turn.
     env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
-    expect(await blockersFor({})).toEqual(['Claude is waiting on you in the terminal.']);
+    expect(await blockersFor({})).toEqual(['AgentK is waiting on you in the terminal.']);
     env.core.sessions.setStatus(s.id, 'idle');
 
     gh.status = { ...approved, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
@@ -250,7 +250,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'merge', desired: 'running' });
-    expect(lastEvent(s.id, 'merged')).toBe('PR #7 merged; closing when Claude finishes');
+    expect(lastEvent(s.id, 'merged')).toBe('PR #7 merged; closing when AgentK finishes');
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id)); // announced once
     await waitFor(() => env.core.sessions.row(s.id), (r) => r.stage === 'done', 10000, 'closed at turn end');
     expect(all(env.core.db, `SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'merged'`, s.id)).toHaveLength(1);
@@ -331,13 +331,13 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Design', prompt: 'DESIGN_MD it' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
     env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
-    await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409, message: 'Claude is waiting on you in the terminal. Answer it first.' });
+    await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
     expect(env.core.sessions.row(s.id).stage).toBe('design');
   });
 
   it('stays in Code when the PR prompt could not be typed', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Flaky tmux', prompt: 'do it', skipDesign: true });
+    const s = await env.core.sessions.create(p.id, { name: 'Flaky tmux', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
     vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 502 });
@@ -403,7 +403,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   it('waits for AgentK only once it is active on the PR', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     expect(p.settings.reviewer).toBe('agentk-people');
-    const s = await env.core.sessions.create(p.id, { name: 'Unwatched repo', prompt: 'do it', skipDesign: true });
+    const s = await env.core.sessions.create(p.id, { name: 'Unwatched repo', prompt: 'do it', kind: 'quick' });
     await idle(s.id, 'first turn');
     gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
     gh.status = status();
@@ -510,7 +510,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     mkdirSync(env.fakeDir, { recursive: true });
     writeFileSync(join(env.fakeDir, 'turn-ms'), '3000');
-    const s = await env.core.sessions.create(p.id, { name: 'Busy', prompt: 'slow', skipDesign: true });
+    const s = await env.core.sessions.create(p.id, { name: 'Busy', prompt: 'slow', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/still working/);
   });

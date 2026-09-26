@@ -337,6 +337,46 @@ textarea.input {
   color: var(--accent);
   font-weight: 600;
 }
+/* Session types in the New session dialog: boxes side by side, on phones too. */
+.kinds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.kind {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1.5px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kind:hover {
+  border-color: var(--muted);
+}
+.kind:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.kind.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.kind b {
+  font-size: 13px;
+  line-height: 1.25;
+}
+.kind-stages {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .filter-row {
   display: flex;
   gap: 8px;

@@ -109,9 +109,12 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(attach.json().datapacks.map((d: { role: string }) => d.role)).toEqual(['dedicated', 'shared']);
     const detachDedicated = await app.inject({ method: 'DELETE', url: `/api/projects/${pid}/datapacks/dp-1`, headers: { cookie } });
     expect(detachDedicated.statusCode).toBe(400);
-    const s = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'API session', skipDesign: true } });
+    const s = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'API session', kind: 'quick' } });
     expect(s.statusCode).toBe(200);
-    expect(s.json().stage).toBe('code');
+    expect(s.json()).toMatchObject({ kind: 'quick', stage: 'code' });
+    const badKind = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Odd', kind: 'yolo' } });
+    expect(badKind.statusCode).toBe(400);
+    expect(badKind.json().error).toMatch(/Pick a session type/);
     const home = (await app.inject({ url: `/api/projects/${pid}/home`, headers: { cookie } })).json();
     expect(home.datapacks[0].memoryCount).toBe(3);
     expect(home.activity.length).toBeGreaterThan(0);

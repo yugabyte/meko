@@ -208,6 +208,12 @@ const MIGRATIONS: string[] = [
   UPDATE projects SET settings_json = json_set(CASE WHEN json_valid(settings_json) THEN settings_json ELSE '{}' END,
     '$.reviewer', 'agentk-people');
   `,
+  // 11: session kinds (explore, plan, quick). A Plan & Implement session always entered Design
+  // first, so one that never did was started with "Skip design", which is now Quick Code.
+  `
+  ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'plan';
+  UPDATE sessions SET kind = 'quick' WHERE id NOT IN (SELECT session_id FROM session_stages WHERE stage = 'design');
+  `,
 ];
 
 export function openDb(path: string): Db {

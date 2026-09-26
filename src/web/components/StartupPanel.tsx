@@ -5,9 +5,10 @@ import { cx } from '../util';
 import { Check, Dots } from './common';
 
 const STAGE_HINT: Partial<Record<Session['stage'], string>> = {
-  design: 'Claude reads the code and writes a design for you to approve before anything changes.',
-  code: 'Claude works on the task directly in this worktree.',
-  review: 'Claude picks up review feedback on the open PR.',
+  explore: 'AgentK investigates and experiments in this worktree. Nothing is merged; end the session when you are done.',
+  design: 'AgentK reads the code and writes a design for you to approve before anything changes.',
+  code: 'AgentK works on the task directly in this worktree.',
+  review: 'AgentK picks up review feedback on the open PR.',
 };
 
 function secs(ms: number): string {

@@ -128,9 +128,9 @@ export function designApprovalBlocker(session: Session): string | null {
     !!session.statusDetail &&
     session.statusDetail !== DESIGN_READY &&
     !/plan/i.test(session.statusDetail);
-  if (!session.hasDesign) return 'Claude hasn’t proposed a design yet.';
-  if (session.status === 'working' || session.status === 'starting') return 'Wait for Claude to finish its turn.';
+  if (!session.hasDesign) return 'AgentK hasn’t proposed a design yet.';
+  if (session.status === 'working' || session.status === 'starting') return 'Wait for AgentK to finish its turn.';
   if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
-  if (otherPrompt) return 'Claude is waiting on you in the terminal. Answer it first.';
+  if (otherPrompt) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
 }
