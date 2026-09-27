@@ -477,6 +477,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     commitIn(env.core.sessions.row(s.id).worktree_path);
     gh.status = { ...gh.status!, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.reviewState === 'addressed' && x.status === 'idle', 10000, 'addressed');
+    // The turn end marks the review addressed before its PR poll drops the stale CI prompt.
+    await waitFor(() => queued(s.id), (q) => !q.ci, 10000, 'CI prompt dropped');
     expect(queued(s.id)).toEqual({});
     expect(transcript(s.id)).not.toContain('CI failed on PR');
   });
