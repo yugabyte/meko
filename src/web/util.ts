@@ -86,6 +86,12 @@ export function mekoDatapackUrl(webUrl: string | null, datapackId: string): stri
   return webUrl ? `${webUrl}/datapacks/${encodeURIComponent(datapackId)}` : null;
 }
 
+/** The datapack's Share page in the Meko web app (how sharing works in link mode). */
+export function mekoDatapackShareUrl(webUrl: string | null, datapackId: string): string | null {
+  const u = mekoDatapackUrl(webUrl, datapackId);
+  return u ? `${u}/share` : null;
+}
+
 export function isMac(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 }

@@ -43,6 +43,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] No user input reaches a shell. `execFile`/`spawn` take argument arrays; launcher values go
       through `shq()`.
 - [ ] Secrets never land in logs, `config.toml` (unless the user typed them), the database, or the repo.
+      The Meko key never goes to the browser (Settings shows only its last four characters), a
+      Meko URL or key change is checked against Meko before it's saved, and a typed API URL is
+      checked without the key. Remote URLs lose their credentials before they go into a datapack
+      description (`withoutCredentials`).
 - [ ] Login limits hold (per address or IPv6 /64, and site-wide), and nothing sent to a browser can
       queue in memory without limit (terminal output pauses the pty; state snapshots are skipped).
 - [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
@@ -83,7 +87,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Several projects can share a repo: per-project state (worktrees, tmux names, pins, lookups) is
       keyed by project id, not repo path, and git work on the repo only touches the session's own branch.
 - [ ] Meko failures degrade gracefully (banner, logged warning) and never kill running sessions.
-- [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub.
+- [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
+      `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
+- [ ] Share invites: a project created from an invite accepts it in Meko before writing anything
+      locally, the first invite sync doesn't notify about shares that already existed, and each
+      share notifies once. Sharing features work in both API and link mode.
 - [ ] Token usage stays incremental (byte offsets) and deduplicated by message id; subagent
       transcripts are included; archived sessions still count toward their project.
 

@@ -34,7 +34,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
 | `src/server/sessions.ts` | Session lifecycle in tmux: create, launch, hook-driven status, recovery and auto-continue, archive. |
 | `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the review watchers (by reviewer mode) and CI-fix watcher with their prompt queue, Merge & Close (merge, then cleanup). |
-| `src/server/projects.ts` | Projects, repo scan, datapacks (create, attach, pin), project home and search. |
+| `src/server/projects.ts` | Projects, repo scan, datapacks (create with the repo remote in the description, attach, pin; an invite is accepted in Meko before its project is created), project home and search. |
 | `src/server/prompts.ts` | Instructions sent to Claude at each stage (overridable per repo in `.agent-k/stages/`). |
 | `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script, and the status line relay (reports plan limits, then runs the user's own status line, minus Meko's datapack suffix). |
 | `src/server/limits.ts` | Plan usage limits (5-hour and weekly) from status line reports: parsing, expiry, and the latest reading kept in `kv`. |
@@ -44,6 +44,10 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/changes.ts` | What a session changed vs. its base (committed, uncommitted, untracked): footer diff size and the Changes panel's per-file patches, with size caps, and both sides of changed images for previews. |
 | `src/server/comments.ts` | Review comments on a session's diff: drafts, validation, formatting them for Claude, and delivery (now if Claude is at its prompt, else at the next turn end). |
 | `src/server/meko.ts` | Meko MCP client. |
+| `src/server/mekoapi.ts` | Meko REST client for sharing (share, members, invites, accept or decline) and the API-or-link mode check. |
+| `src/server/invites.ts` | Project datapacks shared with us: synced from Meko into `datapack_invites`, the first-sync baseline, accept, decline, later. |
+| `src/server/mekosettings.ts` | The Meko tab in Settings: what it shows (never the key), checking a change against Meko before it's saved, and running Meko's setup for Claude Code. |
+| `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents), which also finds pushes to the base branch, and per session/project/model/day totals plus the all-projects overview (`GET /api/usage`). |
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping. |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
@@ -54,6 +58,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
+| `src/web/components/NewProjectDialog.tsx`, `ShareDialog.tsx`, `Banners.tsx` | New project (the dedicated datapack first, invites and shares listed first, the repo and name filled in from the datapack), the Share dialog (API mode), and the banners, share invites included. |
 | `src/web/components/UsagePanel.tsx`, `UsageView.tsx` | Token usage: the project home's panel (headline numbers, 14-day chart with table view, per-session and per-model tables) and the all-projects Usage page at `/usage` (adds merged PRs, pushed commits and a per-project table; both its tables sort on any column through `src/web/sort.ts`). |
 | `src/web/notifyLeader.ts` | Which open page shows browser notifications: the one used last, through a Web Lock it steals on focus. |
 | `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input, reconnecting (backoff, and the login screen on a 4401 close via `checkLogin()` in `api.ts`) and releasing phone terminals that are hidden or off screen. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |

@@ -8,7 +8,8 @@ import { REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
-import { cloneRepo, defaultBranch, isMainRepo, listBranches, repoNameFromUrl, scanRepos } from './git.js';
+import { projectDatapackDescription } from '../shared/datapacks.js';
+import { cloneRepo, defaultBranch, isMainRepo, listBranches, repoNameFromUrl, scanRepos, tryGit } from './git.js';
 import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
 import { expandHome } from './paths.js';
@@ -100,8 +101,17 @@ export class ProjectService {
       } catch (e) {
         throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
       }
+      // The repo's remote in the description lets whoever it's shared with find the repo. Best
+      // effort, so it doesn't hold up the project: a failure is only logged.
+      const remote = (await tryGit(repoPath, 'config', '--get', 'remote.origin.url'))?.trim() || null;
+      const created = dp;
+      void this.core.meko.setDatapackDescription(created.id, projectDatapackDescription(name, remote)).catch((e) =>
+        this.core.log.warn(`couldn't set the description of datapack ${created.name}`, errMsg(e)));
     } else {
+      if (!req.datapack.id || !req.datapack.name) throw new HttpError(400, 'Choose a datapack.');
       dp = { id: req.datapack.id, name: req.datapack.name };
+      // An invite waiting in Meko is accepted first: if Meko refuses, nothing is written here.
+      if (req.datapack.inviteId) await this.core.invites.acceptForProject(dp.id, req.datapack.inviteId);
     }
 
     // The first project on a repo is named after it; later ones add their own name.
@@ -116,6 +126,7 @@ export class ProjectService {
       run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
     });
     this.writePin(id, dp);
+    this.core.invites.markUsed(dp.id);
     // Trust the repo in Claude Code now, before any session of it starts.
     await this.core.sessions.trustRepo(repoPath);
     this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
@@ -176,6 +187,7 @@ export class ProjectService {
     if (!req.id || !req.name) throw new HttpError(400, 'Choose a datapack to attach.');
     if (projectDatapacks(this.db, id).some((d) => d.id === req.id)) throw new HttpError(409, 'That datapack is already attached.');
     run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'shared')`, id, req.id, req.name);
+    this.core.invites.markUsed(req.id);
     this.core.changed();
     return this.get(id);
   }
@@ -203,7 +215,7 @@ export class ProjectService {
           if (!mekoOk) throw new Error('Meko is unreachable');
           return { ...d, ...(await this.core.meko.describeDatapack(d.id, DESCRIBE_TIMEOUT_MS)) };
         } catch {
-          return { ...d, memoryCount: null, knowledgeCount: null };
+          return { ...d, memoryCount: null, knowledgeCount: null, grant: null };
         }
       }),
     );

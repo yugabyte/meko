@@ -11,6 +11,11 @@ export interface MekoCreds {
 
 export class MekoError extends Error {}
 
+/** A datapack_list row: what the UI gets, plus the owner's Meko account id (ours on the rows we own). */
+export interface MekoDatapackRow extends MekoDatapack {
+  ownerUserId: string | null;
+}
+
 /** Agent id used for a project's Meko memory bucket and datapack pin. */
 export function projectAgentId(projectId: string): string {
   return `claude_code:${projectId}`;
@@ -59,6 +64,8 @@ function notDelivered(e: unknown): boolean {
 export class MekoClient {
   private client: Client | null = null;
   private connecting: Promise<Client> | null = null;
+  /** Bumped by reset(): a connection opened with the credentials from before it is dropped. */
+  private gen = 0;
   /** Conversation used for server-originated calls (describe, list). */
   private serviceConversation: string | null = null;
 
@@ -67,7 +74,8 @@ export class MekoClient {
   private async connect(): Promise<Client> {
     if (this.client) return this.client;
     if (!this.connecting) {
-      this.connecting = (async () => {
+      const gen = this.gen;
+      const p: Promise<Client> = (async () => {
         const { url, apiKey } = this.creds();
         if (!apiKey) throw new MekoError('No Meko API key is configured.');
         const transport = new StreamableHTTPClientTransport(new URL(url), {
@@ -75,14 +83,20 @@ export class MekoClient {
         });
         const c = new Client({ name: 'agent-k-local', version: this.version });
         await c.connect(transport, { timeout: CONNECT_TIMEOUT_MS });
+        if (gen !== this.gen) {
+          // The URL or key changed while this was connecting: connect again with the new ones.
+          void c.close().catch(() => undefined);
+          return this.connect();
+        }
         c.onclose = () => {
           if (this.client === c) this.client = null;
         };
         this.client = c;
         return c;
       })().finally(() => {
-        this.connecting = null;
+        if (this.connecting === p) this.connecting = null;
       });
+      this.connecting = p;
     }
     return this.connecting;
   }
@@ -91,6 +105,17 @@ export class MekoClient {
     const c = this.client;
     this.client = null;
     await c?.close().catch(() => undefined);
+  }
+
+  /**
+   * Forgets the connection and the service conversation, for when the Meko URL or key changes. A
+   * connection still being opened with the old ones is dropped when it's up (see connect).
+   */
+  async reset(): Promise<void> {
+    this.gen++;
+    this.connecting = null;
+    this.serviceConversation = null;
+    await this.close();
   }
 
   /** Drops a broken client, unless another call already replaced it. */
@@ -163,13 +188,17 @@ export class MekoClient {
    */
   private async serviceConv(timeoutMs?: number): Promise<string> {
     if (this.serviceConversation) return this.serviceConversation;
+    const gen = this.gen;
+    let id: string;
     try {
-      this.serviceConversation = await this.ensureConversation('agent-k-local', null, SERVICE_KEY, 'AgentK Local service', timeoutMs);
+      id = await this.ensureConversation('agent-k-local', null, SERVICE_KEY, 'AgentK Local service', timeoutMs);
     } catch (e) {
       if (!(e instanceof MekoError)) throw e; // Meko unreachable: try again next time
-      this.serviceConversation = createHash('sha256').update(SERVICE_KEY).digest('hex').slice(0, 32);
+      id = createHash('sha256').update(SERVICE_KEY).digest('hex').slice(0, 32);
     }
-    return this.serviceConversation;
+    // Kept only if the Meko URL and key are still the ones it was made with.
+    if (gen === this.gen) this.serviceConversation = id;
+    return id;
   }
 
   /** Cheap authenticated round trip to Meko, used for the health banner. */
@@ -177,7 +206,7 @@ export class MekoClient {
     await this.request(true, (c) => c.ping({ timeout: CHECK_TIMEOUT_MS }));
   }
 
-  async listDatapacks(): Promise<MekoDatapack[]> {
+  async listDatapacks(): Promise<MekoDatapackRow[]> {
     const r = await this.call('datapack_list', { conversation_id: await this.serviceConv() }, 60000);
     const arr = Array.isArray(r) ? r : Array.isArray((r as Json)?.datapacks) ? ((r as Json).datapacks as Json[]) : [];
     return (arr as Json[])
@@ -186,6 +215,10 @@ export class MekoClient {
         name: String(d.datapack_name ?? d.name ?? ''),
         grant: d.grant == null ? null : String(d.grant),
         createdAt: d.created_at == null ? null : String(d.created_at),
+        ownerName: strOrNull(d.datapack_owner_name),
+        ownerEmail: strOrNull(d.datapack_owner_email_id),
+        description: strOrNull(d.description),
+        ownerUserId: strOrNull(d.user_id),
       }))
       .filter((d) => d.id && d.name)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -199,10 +232,14 @@ export class MekoClient {
     return { id, name: String(d.datapack_name ?? d.name ?? name) };
   }
 
-  async describeDatapack(id: string, timeoutMs = 30000): Promise<{ memoryCount: number | null; knowledgeCount: number | null }> {
+  async setDatapackDescription(id: string, description: string): Promise<void> {
+    await this.call('datapack_update', { datapack_id: id, description, conversation_id: await this.serviceConv() }, 60000);
+  }
+
+  async describeDatapack(id: string, timeoutMs = 30000): Promise<{ memoryCount: number | null; knowledgeCount: number | null; grant: string | null }> {
     const r = (await this.call('datapack_describe', { datapack_id: id, conversation_id: await this.serviceConv(timeoutMs) }, timeoutMs)) as Json;
     const num = (v: unknown) => (typeof v === 'number' ? v : null);
-    return { memoryCount: num(r.memory_count), knowledgeCount: num(r.knowledge_chunk_count ?? r.knowledge_count) };
+    return { memoryCount: num(r.memory_count), knowledgeCount: num(r.knowledge_chunk_count ?? r.knowledge_count), grant: strOrNull(r.grant) };
   }
 
   async search(query: string, datapack: { id: string; name: string }, agentId: string, conversationId: string): Promise<SearchResult[]> {
@@ -249,6 +286,11 @@ export class MekoClient {
       conversation_id: conversationId,
     }, 60000);
   }
+}
+
+/** A non-blank string as it is, else null. */
+export function strOrNull(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v : null;
 }
 
 function pickText(it: Json): string {

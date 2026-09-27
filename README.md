@@ -54,6 +54,9 @@ your phone can connect.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
   shared ones. Designs, session transcripts and a summary of each merged PR are saved there, so
   the whole team, and its agents, start from the same context.
+- **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
+  with you shows a banner and a notification, and opens as a new project with the repo and name
+  filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
   can still attach from iTerm: `tmux -L agentk attach -t ak-<project>--<session>` (sessions created

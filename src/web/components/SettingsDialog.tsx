@@ -1,18 +1,22 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AuthStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
+import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { cx, relativeTime } from '../util';
 import { Dialog, ErrorText, Field } from './common';
 
-type Tab = 'general' | 'account' | 'updates';
+type Tab = 'general' | 'meko' | 'account' | 'updates';
+
+const TAB_LABEL: Record<Tab, string> = { general: 'General', meko: 'Meko', account: 'Account', updates: 'Updates' };
 
 export function SettingsDialog({
   auth,
   update,
+  meko,
   onClose,
 }: {
   auth: AuthStatus;
   update: UpdateStatus;
+  meko: MekoStatus;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('general');
@@ -23,15 +27,16 @@ export function SettingsDialog({
       onClose={onClose}
       aside={
         <div className="seg" role="tablist">
-          {(['general', 'account', 'updates'] as Tab[]).map((t) => (
+          {(['general', 'meko', 'account', 'updates'] as Tab[]).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={cx(tab === t && 'on')} onClick={() => setTab(t)}>
-              {t === 'general' ? 'General' : t === 'account' ? 'Account' : 'Updates'}
+              {TAB_LABEL[t]}
             </button>
           ))}
         </div>
       }
     >
       {tab === 'general' && <GeneralTab />}
+      {tab === 'meko' && <MekoTab status={meko} />}
       {tab === 'account' && <AccountTab auth={auth} />}
       {tab === 'updates' && <UpdatesTab initial={update} />}
     </Dialog>
@@ -146,6 +151,198 @@ function GeneralTab() {
       <div className="settings-actions">
         <button className="btn primary" disabled={busy}>
           {busy ? 'Saving…' : 'Save'}
+        </button>
+        {saved && <span className="muted small">Saved</span>}
+      </div>
+    </form>
+  );
+}
+
+const KEY_SOURCE: Record<MekoKeySource, string> = {
+  config: 'from config.toml',
+  env: 'from the MEKO_API_KEY environment variable',
+  claude: 'from Claude Code’s settings',
+};
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** The Meko server and key AgentK uses, its links, and whether Claude Code's sessions use the same. */
+function MekoTab({ status }: { status: MekoStatus }) {
+  const [s, setS] = useState<Settings | null>(null);
+  const [url, setUrl] = useState('');
+  const [key, setKey] = useState('');
+  const [webUrl, setWebUrl] = useState('');
+  const [apiUrl, setApiUrl] = useState('');
+  const [confirmHost, setConfirmHost] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState<'save' | 'claude' | null>(null);
+  const [claudeDone, setClaudeDone] = useState(false);
+
+  const show = (x: Settings) => {
+    setS(x);
+    setUrl(x.meko.url);
+    setWebUrl(x.meko.webUrl);
+    setApiUrl(x.meko.apiUrl);
+    setKey('');
+  };
+
+  useEffect(() => {
+    api
+      .settings()
+      .then(show)
+      .catch((e) => setError(errorMessage(e)));
+  }, []);
+
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
+  const m = s.meko;
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    const next: MekoSettingsUpdate = {};
+    if (url.trim() !== m.url) next.url = url.trim();
+    if (key.trim()) next.apiKey = key.trim();
+    if (webUrl.trim() !== m.webUrl) next.webUrl = webUrl.trim();
+    if (apiUrl.trim() !== m.apiUrl) next.apiUrl = apiUrl.trim();
+    if (!Object.keys(next).length) return;
+    // Datapacks live on one Meko: moving to another server leaves existing projects' behind.
+    const newHost = hostOf(url.trim() || m.defaultUrl);
+    if (next.url !== undefined && newHost && newHost !== hostOf(m.effectiveUrl) && confirmHost !== newHost) {
+      setConfirmHost(newHost);
+      return;
+    }
+    setBusy('save');
+    setError(null);
+    try {
+      show(await api.saveSettings({ meko: next }));
+      setConfirmHost(null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setUpClaude = async () => {
+    setBusy('claude');
+    setError(null);
+    setClaudeDone(false);
+    try {
+      show(await api.mekoClaudeSetup());
+      setClaudeDone(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const claudeMatches = m.claudeKeyMatches && (m.claudeUrl ?? m.defaultUrl) === m.effectiveUrl;
+
+  return (
+    <form className="stack" onSubmit={save}>
+      <Field label="MCP server URL" hint={`Empty means Meko Cloud (${m.defaultUrl}), unless the environment or Claude Code’s settings name one. Now using ${m.effectiveUrl}.`}>
+        <input
+          id="set-meko-url"
+          className="input mono"
+          placeholder={m.defaultUrl}
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setConfirmHost(null);
+          }}
+        />
+      </Field>
+      <Field
+        label="API key"
+        hint={
+          m.keyHint === null
+            ? 'No key is set. Paste the key from your Meko account.'
+            : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
+        }
+      >
+        <input
+          id="set-meko-key"
+          className="input mono"
+          type="password"
+          autoComplete="off"
+          placeholder={m.keyHint ? `••••••••${m.keyHint}` : 'mko_tkn_…'}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        />
+      </Field>
+      <div className="fields">
+        <Field label="Web app URL" hint="For links to datapacks, and sharing in link mode.">
+          <input
+            id="set-meko-web"
+            className="input mono"
+            placeholder={m.effectiveWebUrl ?? 'https://meko.example.com'}
+            value={webUrl}
+            onChange={(e) => setWebUrl(e.target.value)}
+          />
+        </Field>
+        <Field label="API URL" hint="Meko’s REST API, for sharing.">
+          <input
+            id="set-meko-api"
+            className="input mono"
+            placeholder={m.effectiveApiUrl ?? 'https://meko.example.com/api/v1'}
+            value={apiUrl}
+            onChange={(e) => setApiUrl(e.target.value)}
+          />
+        </Field>
+      </div>
+      <p className="hint">Leave the web app and API URLs empty for Meko Cloud and mekodev: they’re worked out from the MCP URL. Fill them in for your own Meko.</p>
+
+      <div className="meko-status">
+        <div className="meko-status-row">
+          <span>Connection</span>
+          {status.ok ? <span className="tag">connected</span> : <span className="tag bad">unreachable</span>}
+          {!status.ok && status.error && <span className="hint">{status.error}</span>}
+        </div>
+        <div className="meko-status-row">
+          <span>Sharing</span>
+          <span className={cx('tag', status.sharing !== 'api' && 'shared')}>
+            {status.sharing === 'api' ? 'in AgentK' : status.sharing === 'link' ? 'link mode' : 'not checked yet'}
+          </span>
+          {status.sharing === 'link' && (
+            <span className="hint">This Meko doesn’t accept API keys for sharing yet, so sharing happens in Meko’s web app.</span>
+          )}
+        </div>
+        <div className="meko-status-row">
+          <span>Claude Code</span>
+          <span className={cx('tag', !claudeMatches && 'shared')}>{claudeMatches ? 'matches' : 'differs'}</span>
+          <span className="hint">
+            {claudeMatches
+              ? `Sessions use ${m.effectiveUrl} with the same key.`
+              : `Sessions use ${m.claudeUrl ?? 'the Meko server Claude Code has registered'}${m.claudeKeyMatches ? ' with the same key' : ' with a different key (or none)'}. New sessions pick up a change; running ones keep theirs.`}
+          </span>
+          {!claudeMatches && (
+            <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
+              {busy === 'claude' ? 'Setting up…' : 'Set up Claude Code with this Meko'}
+            </button>
+          )}
+          {claudeDone && <span className="ok-text">Claude Code now uses this Meko.</span>}
+        </div>
+      </div>
+
+      {confirmHost && (
+        <p className="confirm-warn" role="alert">
+          Existing projects’ datapacks live on {hostOf(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
+          won’t work after the switch. Save again to switch anyway.
+        </p>
+      )}
+      <ErrorText error={error} />
+      <div className="settings-actions">
+        <button className="btn primary" disabled={busy !== null}>
+          {busy === 'save' ? 'Checking…' : confirmHost ? 'Switch Meko' : 'Save'}
         </button>
         {saved && <span className="muted small">Saved</span>}
       </div>

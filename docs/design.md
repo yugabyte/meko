@@ -24,7 +24,8 @@ from a browser.
 | Datapacks | Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets). |
 | Meko | Required. Every install needs a working Meko key and the Meko plugin, and every project needs a dedicated datapack. |
 | Meko wiring | Sessions get `MEKO_AGENT_ID=claude_code:<project>`, and the project's datapack is pinned for that agent id. The Meko hooks already honour both, so no plugin change is needed. |
-| Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. |
+| Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
+| Project sharing | A project is shared by sharing its dedicated datapack in Meko. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
 | Network | Reachable directly on the corp network over HTTPS, behind a login. |
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
@@ -124,9 +125,27 @@ the repo.
 - **Clone from URL.** Paste a git URL and the server clones it into `~/code/<name>` using your
   existing git credentials, then selects it. "Other folder" takes any repo path on the host.
 
-You type the project name; it isn't filled in from the repo. The dialog suggests a new dedicated
-datapack named `adlc/proj/<repo>/<project>` from the repo and the name you type. You can rename it,
-or switch to an existing datapack, before creating the project.
+The dialog starts with the **dedicated datapack**, and defaults to **Use an existing one**. The
+list shows invites waiting for you first, then datapacks shared with you, then yours, each with its
+access and, for shares, its owner. It holds project datapacks (`adlc/proj/…`) unless you tap **Show
+all datapacks**. A datapack a project here already uses is tagged with that project and listed
+last. A viewer-only datapack is listed but can't be chosen, because sessions write to the dedicated
+datapack. **Refresh** lists them again and checks Meko for new shares. Choosing a datapack collapses
+the list to that one row (**Change** brings it back) and fills in the rest from its name
+`adlc/proj/<repo>/<project>`:
+
+- **Project name:** the `<project>` part (everything after the repo part). You can still change it.
+- **Repo:** the repo whose `origin` is the remote in the datapack's description (AgentK writes it
+  there when it creates a datapack; SSH and HTTPS forms compare equal). Otherwise the repo whose
+  folder name, or remote name, matches `<repo>`. With several matches, the most recently touched,
+  and the hint says so. With none, the remote (if known) is filled in under Clone from URL, or the
+  hint says no repo by that name was found.
+
+The name and repo matching live in `src/shared/datapacks.ts`, so the server and the dialog use the
+same rules. **Create a new one** suggests a datapack named `adlc/proj/<repo>/<project>` from the
+repo and the name you type, as before; a name without the prefix gets a hint that people you share
+it with won't be offered it as a project. Choosing an invite changes the button to **Accept and
+create project**: the server accepts the invite in Meko first, and creates nothing if Meko refuses.
 
 ### New session
 
@@ -225,6 +244,10 @@ in a forgotten background tab. Phones where a page can't show notifications itse
 minimal service worker (`/sw.js`); tapping one opens its session in an open AgentK window, or a new
 one. The service worker caches nothing and handles no requests.
 
+A project datapack shared with you also sends one notification (an `invite` event, once per
+datapack); clicking it opens the New project dialog for it. Tapped through the service worker, it
+opens the dialog in an open window, or opens `/`, where the share's banner is waiting.
+
 ### On a phone
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
@@ -256,6 +279,10 @@ adjustable in the ⋯ sheet and remembered per browser.
 
 Recent activity shows the project's last 50 events, newest first, and scrolls inside its box so it
 never pushes the rest of the page down.
+
+The dedicated datapack's row has **Share** when you own or maintain it (`datapack_describe` gives
+the grant), or when Meko didn't say; attached datapacks have **Detach** instead. In API mode it opens the Share dialog; in link mode it is **Share in Meko ↗**, which
+opens the datapack's Share page in the Meko web app. See [Sharing a project](#sharing-a-project).
 
 ## Projects, worktrees and sessions
 
@@ -289,6 +316,9 @@ clone_into = "~/code"     # where "Clone from URL" puts new repos
 
 [meko]
 # url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
+# api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
+# web_url = "…"              # Meko web app, for links; unset is worked out from the MCP URL (Cloud, mekodev)
+# api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
 capture_transcripts = false  # send session transcripts to Meko conversations (off for now)
 ```
 
@@ -502,6 +532,79 @@ knows to pass the right `datapack_id` when it searches them.
 > - **If Meko goes down:** running sessions keep going, and the rail shows a "Meko unreachable"
 >   banner. The Meko hooks capture from the transcript on disk, so they catch up once the service
 >   is back (when transcript capture is on). New projects can't be created until then.
+> - **In Settings:** the **Meko** tab sets the MCP server URL (empty means Meko Cloud, unless the
+>   environment or Claude Code's settings name one), the API key, and the web app and API URLs
+>   (worked out from the MCP URL for Meko Cloud and mekodev; fill them in for your own Meko). The
+>   key never goes to the browser: the tab shows its last four characters and where it came from.
+>   A new URL or key is checked with a Meko ping before anything is saved; then the MCP connection
+>   is dropped (one still being opened with the old ones is dropped once it's up) so the next call
+>   reconnects, and Meko and the sharing mode are checked again. An API URL that comes from a typed
+>   API or web app URL is checked too, without the key (it must answer with Meko's JSON envelope,
+>   `{ data }` or `{ error: { code, message } }`),
+>   so a mistyped host never gets the key; a changed API URL also re-checks the sharing mode.
+>   Switching to another Meko host asks you to confirm, because existing projects' datapacks stay
+>   on the old one. The tab also says whether Claude Code's settings (which sessions use) name the
+>   same server and key, and when they don't, **Set up Claude Code with this Meko** runs Meko's
+>   setup package as the installer does (without blocking the server; its output goes to the log).
+>   New sessions pick that up; running ones keep what they started with.
+
+### Sharing a project
+
+A project is shared by sharing its dedicated datapack. Meko shares a datapack as an **invite**: the
+owner (or a maintainer) invites an email address with a role, Meko emails them, and they accept or
+decline it. Roles are `contributor` (runs sessions and writes their own memories; the default),
+`maintainer` (can also promote memories and invite others) and `viewer` (read only). Memories are
+per user in Meko, so a member sees their own memories plus the datapack's shared knowledge
+(promoted memories and knowledge-base files), not the owner's raw memories.
+
+Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET …/outgoing-shares`,
+`POST …/invite/:id/resend`, `DELETE …/invite/:id`, `GET /datapacks/incoming-shares`,
+`POST /datapacks/invite-action`) are REST, not MCP. `src/server/mekoapi.ts` calls them with the
+same API key, at `[meko] api_url` (by default the web app URL plus `/api/v1`). Today Meko accepts
+only a web login on those routes, not an API key, so AgentK works in two modes. It calls
+`GET /datapacks/incoming-shares` at startup, every hour, and after a change to the Meko URL, key or
+API URL: an answer means **API mode**; a refusal (401, 403, 404 or 405), or no API URL at all,
+means **link mode**. `AppState.meko.sharing` carries the result. Meko's own refusals of a share
+call (a bad email, an invite already pending, no permission) come back with their status and
+message; a 401 there also switches to link mode; anything else is a 502.
+
+| | API mode | Link mode (today) |
+|---|---|---|
+| Share | The Share dialog: email, role, the people with access and pending invites (Resend, Revoke). Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). | **Share in Meko ↗** opens `<web app>/datapacks/<id>/share`. |
+| An invite for you | A banner (and a notification) from `incoming-shares`: **Open as project** (creating the project accepts it), **Decline**, **Later**. A viewer invite gets **Accept** instead of Open as project. | Meko emails you and shows it in its notification bell; you accept it there. |
+| A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). | Same. |
+
+When AgentK creates a datapack for a new project, it sets the datapack's description (MCP
+`datapack_update`) to `AgentK Local project "<name>" · repo <origin url>`, so whoever it's shared
+with can find the repo. Only a network remote goes in: a local path (`/home/me/src/x.git`, `../x`)
+is left out, and credentials in the URL (`https://user:token@…`) are removed, again when a
+description is read. The update runs in the background, so it never holds up the project; a
+failure is logged. Meko shows the
+description only once an invite is accepted, so a pending invite is matched to a repo by name.
+
+`InviteService` (`src/server/invites.ts`) keeps the shares in the `datapack_invites` table, one row
+per datapack, synced at startup, every 5 minutes, and whenever the New project dialog opens or you
+tap **Refresh**. The dialog makes one call, `POST /api/invites/check`, which lists the datapacks
+once and syncs with that same list. Only project datapacks count, and only ones no live project
+here uses. States: `invited` (waiting in Meko), `shared` (accepted, not yet a project), `later`
+(hidden here; an invite stays in Meko), `used` (a project here has used it; never offered again,
+even after that project is deleted, unless it's invited again), and `baseline`. The first sync
+records the shares that already exist as `baseline`, without banners or notifications, so an
+upgrade doesn't bring a burst of them; they can still be picked in the dialog. Invites always show.
+An invite that disappears from Meko (revoked, or answered elsewhere) is removed; one accepted
+elsewhere becomes `shared` without another notification. `AppState.invites` carries the `invited`
+and `shared` ones. When accepting, AgentK sends its own Meko account id when it knows it (the
+`user_id` on the datapacks it owns); Meko otherwise uses the caller's account.
+
+One sync runs at a time; a sync asked for meanwhile waits for it. A sync reads Meko, then writes
+the table in one transaction; when Accept, Decline, Later, a new project or a Meko account change
+changed things in between, that read is stale, so it reads again rather than undo the change (a
+list handed in by `/api/invites/check` carries a stamp taken before it was read, for the same
+check). Our Meko account id is only taken from a read that wasn't stale. An invite that was
+already accepted (by an earlier try whose project then failed, or in Meko) isn't accepted again,
+so **Accept and create project** can be retried. A change to the Meko URL or key may mean another
+account: the rows other than `used` and the first-sync flag are dropped, so the new account's
+existing shares are recorded quietly.
 
 ## Token usage
 
@@ -587,7 +690,8 @@ their own copy.
   IPv6, since a client usually holds a whole one), and 50 across all clients, after which everyone
   waits (`agent-k-local setup-link` on the host still gets you in). A wrong username takes as long
   to refuse as a wrong password. A TOTP code works once. There is an
-  audit log of logins, failed logins and account changes. Hooks use the local unix socket with a per-session
+  audit log of logins, failed logins, account changes and Meko settings changes. The Meko key is
+  write-only from the browser's side: no response carries it. Hooks use the local unix socket with a per-session
   token, never the network port. The Design-stage edit guard asks the server over the same socket;
   if it gets no answer it lets the edit go ahead, so Claude is never stuck.
 

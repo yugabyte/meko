@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
+import { remoteRepoName, shortRemote } from '../shared/datapacks.js';
 
 const exec = promisify(execFile);
 
@@ -106,10 +107,7 @@ function lastTouched(repo: string): number {
 
 /** git@github.com:acme/x.git → github.com/acme/x */
 export function prettyRemote(url: string): string {
-  return url
-    .replace(/^git@([^:]+):/, '$1/')
-    .replace(/^[a-z+]+:\/\/(?:[^@/]+@)?/, '')
-    .replace(/\.git$/, '');
+  return shortRemote(url);
 }
 
 /** owner/name for github.com remotes, else null. */
@@ -291,5 +289,5 @@ export async function cloneRepo(url: string, dest: string): Promise<void> {
 }
 
 export function repoNameFromUrl(url: string): string {
-  return basename(prettyRemote(url)).replace(/\.git$/, '') || 'repo';
+  return remoteRepoName(url) || 'repo';
 }

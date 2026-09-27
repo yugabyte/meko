@@ -11,16 +11,28 @@ export interface NotifyEvent {
   body: string;
 }
 
+/** A project datapack was shared with us. */
+export interface InviteEvent {
+  datapackId: string;
+  title: string;
+  body: string;
+}
+
 /**
  * Live AppState from /ws/events. Reconnects with exponential backoff and
  * falls back to GET /api/state for the first paint. A close for a lost login
  * (4401) goes to the login screen instead of retrying.
  */
-export function useEvents(onNotify: (n: NotifyEvent) => void): { state: AppState | null; conn: Conn } {
+export function useEvents(
+  onNotify: (n: NotifyEvent) => void,
+  onInvite: (n: InviteEvent) => void,
+): { state: AppState | null; conn: Conn } {
   const [state, setState] = useState<AppState | null>(null);
   const [conn, setConn] = useState<Conn>('connecting');
   const notifyRef = useRef(onNotify);
   notifyRef.current = onNotify;
+  const inviteRef = useRef(onInvite);
+  inviteRef.current = onInvite;
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -55,6 +67,7 @@ export function useEvents(onNotify: (n: NotifyEvent) => void): { state: AppState
           attempt = 0;
           setState(msg.state);
         } else if (msg.type === 'notify') notifyRef.current(msg);
+        else if (msg.type === 'invite') inviteRef.current(msg);
       };
       ws.onclose = (ev) => {
         ws = null;

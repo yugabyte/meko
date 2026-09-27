@@ -8,6 +8,8 @@ import { Core } from '../src/server/core.js';
 import { openDb } from '../src/server/db.js';
 import { silentLogger } from '../src/server/log.js';
 import type { MekoClient } from '../src/server/meko.js';
+import { MekoApi } from '../src/server/mekoapi.js';
+import type { MekoTools } from '../src/server/mekosettings.js';
 import { getPaths } from '../src/server/paths.js';
 import { Tmux } from '../src/server/tmux.js';
 
@@ -37,9 +39,13 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
     calls,
     check: rec('check', undefined),
     close: rec('close', undefined),
-    listDatapacks: rec('listDatapacks', [{ id: 'dp-shared', name: 'team/kb', grant: 'owner', createdAt: null }]),
+    reset: rec('reset', undefined),
+    listDatapacks: rec('listDatapacks', [
+      { id: 'dp-shared', name: 'team/kb', grant: 'owner', createdAt: null, ownerName: 'Test', ownerEmail: 'test@example.com', description: null, ownerUserId: 'u-self' },
+    ]),
     createDatapack: rec('createDatapack', (name: unknown) => ({ id: `dp-${String(name).replace(/\W+/g, '-')}`, name })),
-    describeDatapack: rec('describeDatapack', { memoryCount: 3, knowledgeCount: 7 }),
+    setDatapackDescription: rec('setDatapackDescription', undefined),
+    describeDatapack: rec('describeDatapack', { memoryCount: 3, knowledgeCount: 7, grant: 'owner' }),
     search: rec('search', []),
     addMemory: rec('addMemory', undefined),
     putArtifact: rec('putArtifact', undefined),
@@ -49,11 +55,76 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
   return base as unknown as MekoClient & { calls: typeof calls };
 }
 
+/** A request the fake Meko REST API got. */
+export interface ApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+  auth: string | null;
+}
+
+export type ApiHandler = (call: ApiCall) => { status?: number; body?: unknown } | undefined;
+
+/**
+ * Meko's REST API, faked through `fetch`. Without a handler (or when it returns undefined) every
+ * route answers 401, as Meko does today for API keys on its share routes (link mode).
+ */
+export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
+  const calls: ApiCall[] = [];
+  const state: { handler: ApiHandler | null } = { handler: null };
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const call: ApiCall = {
+      method: init?.method ?? 'GET',
+      path: url.startsWith(baseUrl) ? url.slice(baseUrl.length) : url,
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      auth: headers.Authorization ?? null,
+    };
+    calls.push(call);
+    const r = state.handler?.(call) ?? { status: 401, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } };
+    return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const api = new MekoApi(() => ({ baseUrl, apiKey: 'test-key' }), fetchImpl);
+  return {
+    api,
+    calls,
+    /** Answers requests from now on (undefined falls back to 401). */
+    handle(h: ApiHandler | null) {
+      state.handler = h;
+    },
+  };
+}
+
+/** The Meko tab's checks and Claude Code setup, recorded instead of run. */
+export function stubMekoTools() {
+  const calls: { name: string; args: unknown[] }[] = [];
+  const state: { checkError: string | null; apiError: string | null; setupError: string | null } = { checkError: null, apiError: null, setupError: null };
+  const tools: MekoTools = {
+    async check(url, apiKey) {
+      calls.push({ name: 'check', args: [url, apiKey] });
+      return state.checkError ? { ok: false, error: state.checkError } : { ok: true };
+    },
+    async checkApi(apiUrl) {
+      calls.push({ name: 'checkApi', args: [apiUrl] });
+      return state.apiError ? { ok: false, error: state.apiError } : { ok: true };
+    },
+    async setUpClaude(url, apiKey, log) {
+      calls.push({ name: 'setUpClaude', args: [url, apiKey] });
+      log('setting up');
+      if (state.setupError) throw new Error(state.setupError);
+    },
+  };
+  return { tools, calls, state };
+}
+
 export interface TestEnv {
   home: string;
   repo: string;
   core: Core;
   meko: ReturnType<typeof stubMeko>;
+  mekoApi: ReturnType<typeof fakeMekoApi>;
+  mekoTools: ReturnType<typeof stubMekoTools>;
   fakeDir: string;
   socket: string;
   cleanup(): Promise<void>;
@@ -89,10 +160,15 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   cfg.meko.apiKey = 'test-key';
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
-  const core = new Core({ paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE, tmux: new Tmux(socket, paths.tmuxConf, 'tmux', () => null), log: silentLogger, timers: false });
+  const mekoApi = fakeMekoApi();
+  const mekoTools = stubMekoTools();
+  const core = new Core({
+    paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
+    tmux: new Tmux(socket, paths.tmuxConf, 'tmux', () => null), log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
+  });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, fakeDir, socket,
+    home, repo, core, meko, mekoApi, mekoTools, fakeDir, socket,
     async cleanup() {
       await core.stop().catch(() => undefined);
       try {

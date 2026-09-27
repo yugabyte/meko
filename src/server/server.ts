@@ -7,9 +7,11 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DesignDoc, DiscardCheck, LoginRequest, ReviewComment, SendCommentsResult, ServerEvent,
-  SessionChanges, SessionAction, Settings, SetupRequest, UpdateProjectRequest,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
+  MekoDatapack, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetupRequest,
+  ShareDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
+import { SHARE_GRANTS } from '../shared/types.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
   deleteAuthSession, getOwner, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, totpAccept, validateAuthSession, validatePassword,
@@ -18,6 +20,8 @@ import {
 import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
+import type { MekoDatapackRow } from './meko.js';
+import { mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
 import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
@@ -207,12 +211,76 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- state, repos, datapacks ----
   app.get('/api/state', async () => core.state());
   app.get('/api/repos', async () => core.projects.repos());
-  app.get('/api/meko/datapacks', async () => {
+  /** A datapack_list row for the browser: without the owner's account id. */
+  const toDatapack = ({ ownerUserId: _, ...d }: MekoDatapackRow): MekoDatapack => d;
+  app.get('/api/meko/datapacks', async (): Promise<MekoDatapack[]> => {
+    let rows;
     try {
-      return await core.meko.listDatapacks();
+      rows = await core.meko.listDatapacks();
     } catch (e) {
       throw new HttpError(502, `Couldn't list datapacks from Meko: ${errMsg(e)}`);
     }
+    return rows.map(toDatapack);
+  });
+
+  // ---- sharing (Meko's share API; link mode shares in Meko's web app instead) ----
+  /** Runs a share API call for a datapack one of our projects uses; Meko's errors become HTTP errors (see apiFailure). */
+  const sharing = async <T>(datapackId: string, fn: () => Promise<T>): Promise<T> => {
+    const inUse = get(db, `SELECT 1 AS x FROM project_datapacks d JOIN projects p ON p.id = d.project_id
+                           WHERE d.datapack_id = ? AND p.deleted_at IS NULL`, datapackId);
+    if (!inUse) throw new HttpError(404, "That datapack isn't in any of your projects.");
+    if (core.mekoStatus.sharing !== 'api') throw new HttpError(409, "This Meko doesn't let AgentK share datapacks yet. Share it in Meko.");
+    try {
+      return await fn();
+    } catch (e) {
+      throw core.invites.apiFailure(e, 'Meko');
+    }
+  };
+  /** The lists after a change that went through; a failure to read them doesn't make the change look failed. */
+  const peopleAfter = (id: string): Promise<DatapackPeople> =>
+    core.invites.api.people(id).catch((e) => ({ members: [], invites: [], refreshError: `Couldn't read the list again: ${errMsg(e)}` }));
+  app.get<{ Params: { id: string } }>('/api/meko/datapacks/:id/people', async (req): Promise<DatapackPeople> =>
+    sharing(req.params.id, () => core.invites.api.people(req.params.id)));
+  app.post<{ Params: { id: string }; Body: ShareDatapackRequest }>('/api/meko/datapacks/:id/people', async (req): Promise<DatapackPeople> => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const grant = req.body?.grant;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter the email address of the person to share with.');
+    if (!SHARE_GRANTS.includes(grant)) throw new HttpError(400, 'Access must be contributor, maintainer or viewer.');
+    await sharing(req.params.id, () => core.invites.api.share(req.params.id, email, grant));
+    core.log.info(`invited ${email} to datapack ${req.params.id} as ${grant}`);
+    return peopleAfter(req.params.id);
+  });
+  app.post<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId/resend', async (req): Promise<DatapackPeople> =>
+    sharing(req.params.id, () => core.invites.api.resend(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
+  app.delete<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId', async (req): Promise<DatapackPeople> =>
+    sharing(req.params.id, () => core.invites.api.revoke(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
+
+  // ---- datapacks shared with us ----
+  app.post('/api/invites/check', async (): Promise<InviteCheck> => {
+    if (!core.mekoStatus.ok) throw new HttpError(503, `Meko is unreachable, so shares can't be checked right now. (${core.mekoStatus.error})`);
+    if (core.mekoStatus.sharing === null) await core.invites.checkMode();
+    let rows: MekoDatapackRow[];
+    try {
+      // One datapack_list serves both the dialog's list and the sync; the stamp catches a change here in between.
+      const stamp = core.invites.stamp();
+      rows = await core.meko.listDatapacks();
+      await core.invites.sync({ rows, stamp });
+    } catch (e) {
+      throw new HttpError(502, `Couldn't check Meko for datapacks and shares: ${errMsg(e)}`);
+    }
+    return { datapacks: rows.map(toDatapack), invites: core.invites.open() };
+  });
+  app.post<{ Params: { id: string } }>('/api/invites/:id/accept', async (req, reply) => {
+    await core.invites.accept(req.params.id);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>('/api/invites/:id/decline', async (req, reply) => {
+    await core.invites.decline(req.params.id);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>('/api/invites/:id/later', async (req, reply) => {
+    core.invites.later(req.params.id);
+    return reply.code(204).send();
   });
 
   // ---- projects ----
@@ -273,9 +341,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     updateChannel: core.config.update.channel,
     bind: core.config.server.bind,
     port: core.config.server.port,
+    meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => settings());
-  app.put<{ Body: Partial<Settings> }>('/api/settings', async (req) => {
+  app.put<{ Body: SettingsUpdate }>('/api/settings', async (req) => {
     const b = req.body ?? {};
     if (b.reposRoots !== undefined && (!Array.isArray(b.reposRoots) || !b.reposRoots.length || b.reposRoots.some((r) => typeof r !== 'string' || !r.trim()))) {
       throw new HttpError(400, 'List at least one repos folder.');
@@ -283,12 +352,27 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.reposDepth !== undefined && (!Number.isInteger(b.reposDepth) || b.reposDepth < 1 || b.reposDepth > 4)) throw new HttpError(400, 'Scan depth must be between 1 and 4.');
     if (b.updateChannel !== undefined && !['stable', 'prerelease', 'off'].includes(b.updateChannel)) throw new HttpError(400, 'Unknown update channel.');
     if (b.cloneInto !== undefined && typeof b.cloneInto !== 'string') throw new HttpError(400, 'The clone folder must be a path.');
+    if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
+    // Checked against Meko before anything is saved.
+    const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
     core.updateConfig((c) => {
       if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
       if (b.reposDepth) c.repos.depth = b.reposDepth;
       if (b.cloneInto?.trim()) c.repos.cloneInto = b.cloneInto.trim();
       if (b.updateChannel) c.update.channel = b.updateChannel;
+      if (meko) c.meko = meko.next.meko;
     });
+    if (meko) {
+      audit(db, 'meko_settings_changed', { url: mekoSettings(core.config).effectiveUrl });
+      core.log.info(`Meko settings changed (${mekoSettings(core.config).effectiveUrl})`);
+      if (meko.reconnect) await core.mekoChanged();
+      else if (meko.recheck) core.sharingChanged();
+    }
+    return settings();
+  });
+  app.post('/api/settings/meko/claude-setup', async (): Promise<Settings> => {
+    await setUpClaudeMeko(core, core.mekoTools);
+    audit(db, 'meko_claude_setup', { url: mekoSettings(core.config).effectiveUrl });
     return settings();
   });
 

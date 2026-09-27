@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
-import { DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig } from '../../src/server/config.js';
+import {
+  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
+  resolveMekoWithSource, saveConfig,
+} from '../../src/server/config.js';
 import { openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
@@ -14,7 +17,7 @@ import { getPaths } from '../../src/server/paths.js';
 import { render } from '../../src/server/prompts.js';
 import { parseSettings, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
-import { mekoDatapackUrl } from '../../src/web/util.js';
+import { mekoDatapackShareUrl, mekoDatapackUrl } from '../../src/web/util.js';
 import { KIND_STAGES, STAGE_LABELS } from '../../src/shared/types.js';
 
 describe('auth', () => {
@@ -163,6 +166,8 @@ describe('config and db', () => {
       'https://cloud.mekodata.ai/datapacks/eb5ba952-643a-4610-a662-a54a39c82a90',
     );
     expect(mekoDatapackUrl(null, 'eb5ba952')).toBeNull();
+    expect(mekoDatapackShareUrl('https://cloud.mekodata.ai', 'eb5ba952')).toBe('https://cloud.mekodata.ai/datapacks/eb5ba952/share');
+    expect(mekoDatapackShareUrl(null, 'eb5ba952')).toBeNull();
   });
 
   it('migrates a fresh database', () => {
@@ -192,6 +197,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV12(db);
     db.exec('PRAGMA user_version = 6');
     db.close();
     db = openDb(file);
@@ -218,6 +224,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV12(db);
     db.exec('PRAGMA user_version = 9');
     db.close();
     db = openDb(file);
@@ -249,6 +256,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV12(db);
     db.exec('PRAGMA user_version = 10');
     db.close();
     db = openDb(file);
@@ -256,6 +264,20 @@ describe('config and db', () => {
     expect(db.prepare('SELECT id, kind FROM sessions ORDER BY id').all()).toEqual([
       { id: 'planned', kind: 'plan' }, { id: 'skipped', kind: 'quick' },
     ]);
+    db.close();
+  });
+
+  it('adds the datapack invites table to a schema 11 database', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    dropV12(db);
+    db.exec('PRAGMA user_version = 11');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    run(db, `INSERT INTO datapack_invites(datapack_id, name, state, first_seen_at) VALUES ('d1', 'adlc/proj/a/b', 'invited', 1)`);
+    expect(db.prepare('SELECT datapack_id, invite_id, state FROM datapack_invites').all()).toEqual([{ datapack_id: 'd1', invite_id: null, state: 'invited' }]);
     db.close();
   });
 
@@ -267,6 +289,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 12 (the datapack invites table), for tests that rewind the schema. */
+function dropV12(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE IF EXISTS datapack_invites');
+}
 const V11_COLUMNS = ['kind'];
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -383,7 +410,7 @@ describe('setup link lifetime', () => {
 });
 
 describe('Meko credentials', () => {
-  const keys = ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL', 'CLAUDE_CONFIG_DIR'] as const;
+  const keys = ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL', 'MEKO_API_URL', 'CLAUDE_CONFIG_DIR'] as const;
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   afterEach(() => {
     for (const k of keys) {
@@ -428,6 +455,40 @@ describe('Meko credentials', () => {
     expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'config-key' });
     cfg.meko.apiKey = '';
     expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key' });
+  });
+
+  it('says where the key came from', () => {
+    clearEnv();
+    claudeSettings({ env: { MEKO_API_KEY: 'settings-key' } });
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    expect(resolveMekoWithSource(cfg).keySource).toBe('claude');
+    process.env.MEKO_API_KEY = 'env-key';
+    expect(resolveMekoWithSource(cfg).keySource).toBe('env');
+    cfg.meko.apiKey = 'config-key';
+    expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key', keySource: 'config' });
+    claudeSettings({});
+    clearEnv();
+    cfg.meko.apiKey = '';
+    expect(resolveMekoWithSource(cfg).keySource).toBeNull();
+  });
+
+  it("finds Meko's API: config, then MEKO_API_URL, then the web app plus /api/v1", () => {
+    clearEnv();
+    delete process.env.MEKO_API_URL;
+    claudeSettings({});
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    expect(resolveMekoApiUrl(cfg)).toBe('https://cloud.mekodata.ai/api/v1');
+    cfg.meko.url = 'https://mcp.mekodev.com/mcp';
+    expect(resolveMekoApiUrl(cfg)).toBe('https://app.mekodev.com/api/v1');
+    cfg.meko.url = 'http://localhost:8000/mcp';
+    expect(resolveMekoApiUrl(cfg)).toBeNull();
+    cfg.meko.webUrl = 'https://meko.example.com';
+    expect(resolveMekoApiUrl(cfg)).toBe('https://meko.example.com/api/v1');
+    process.env.MEKO_API_URL = 'https://api.example.com/v1/';
+    expect(resolveMekoApiUrl(cfg)).toBe('https://api.example.com/v1');
+    cfg.meko.apiUrl = 'https://config-api.example.com/api/v1';
+    expect(resolveMekoApiUrl(cfg)).toBe('https://config-api.example.com/api/v1');
+    delete process.env.MEKO_API_URL;
   });
 
   it('takes a URL from a later source that has no key of its own', () => {

@@ -86,8 +86,35 @@ describe('Meko client', () => {
     meko.tools.conversation_create = () => ({ error: 'datapack_id_required' });
     meko.tools.datapack_list = (a) => (/^[0-9a-f]{32}$/.test(String(a.conversation_id)) ? { datapacks: [{ datapack_id: 'd1', datapack_name: 'mine' }] } : { error: 'conversation_id_required' });
     meko.tools.datapack_create = (a) => (a.conversation_id ? { datapack_id: 'd2', datapack_name: a.name } : { error: 'conversation_id_required' });
-    expect(await client.listDatapacks()).toEqual([{ id: 'd1', name: 'mine', grant: null, createdAt: null }]);
+    expect(await client.listDatapacks()).toEqual([
+      { id: 'd1', name: 'mine', grant: null, createdAt: null, ownerName: null, ownerEmail: null, description: null, ownerUserId: null },
+    ]);
     expect(await client.createDatapack('new')).toEqual({ id: 'd2', name: 'new' });
+  });
+
+  it("keeps the owner, the description and the owner's account id", async () => {
+    meko.tools.conversation_create = () => ({ id: 'conv-1' });
+    meko.tools.datapack_list = () => [{
+      datapack_id: 'd1', datapack_name: 'adlc/proj/a/b', grant: 'contributor', user_id: 'u-alice', datapack_owner_name: 'Alice Ng',
+      datapack_owner_email_id: 'alice@example.com', description: 'AgentK Local project "b" · repo git@github.com:corp/a.git',
+    }];
+    expect(await client.listDatapacks()).toEqual([{
+      id: 'd1', name: 'adlc/proj/a/b', grant: 'contributor', createdAt: null, ownerName: 'Alice Ng', ownerEmail: 'alice@example.com',
+      description: 'AgentK Local project "b" · repo git@github.com:corp/a.git', ownerUserId: 'u-alice',
+    }]);
+  });
+
+  it('sets a description, reads the grant, and starts a new service conversation after a reset', async () => {
+    let convs = 0;
+    meko.tools.conversation_create = () => ({ id: `conv-${++convs}` });
+    meko.tools.datapack_update = () => ({ status: 'updated' });
+    meko.tools.datapack_describe = () => ({ memory_count: 2, knowledge_chunk_count: 5, grant: 'maintainer' });
+    await client.setDatapackDescription('d1', 'hello');
+    expect(meko.calls.find((c) => c.name === 'datapack_update')?.args).toEqual({ datapack_id: 'd1', description: 'hello', conversation_id: 'conv-1' });
+    expect(await client.describeDatapack('d1')).toEqual({ memoryCount: 2, knowledgeCount: 5, grant: 'maintainer' });
+    await client.reset();
+    await client.describeDatapack('d1');
+    expect(meko.calls.filter((c) => c.name === 'datapack_describe').map((c) => c.args.conversation_id)).toEqual(['conv-1', 'conv-2']);
   });
 
   it('uses the service conversation when Meko creates one', async () => {
@@ -107,6 +134,29 @@ describe('Meko client', () => {
     meko.drop.add('context_search');
     await expect(client.search('q', { id: 'd1', name: 'dp' }, 'agent', 'conv')).rejects.toThrow();
     expect(meko.calls.filter((c) => c.name === 'context_search')).toHaveLength(2);
+  });
+
+  it('drops a connection opened with the old URL when it is reset while connecting', async () => {
+    const other = new FakeMeko();
+    await other.start();
+    try {
+      let url = meko.url;
+      const c = new MekoClient(() => ({ url, apiKey: 'k' }));
+      meko.tools.conversation_create = () => ({ id: 'conv-old' });
+      other.tools.conversation_create = () => ({ id: 'conv-new' });
+      other.tools.datapack_list = () => [];
+      meko.tools.datapack_list = () => [];
+      const checking = c.check(); // starts connecting to the old server
+      await c.reset();
+      url = other.url;
+      await checking;
+      await c.listDatapacks();
+      expect(meko.calls.filter((x) => x.name === 'datapack_list')).toHaveLength(0);
+      expect(other.calls.filter((x) => x.name === 'datapack_list')).toHaveLength(1);
+      await c.close();
+    } finally {
+      await other.stop();
+    }
   });
 
   it('does not retry a call that timed out', async () => {

@@ -7,13 +7,16 @@ import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
 import { CommentService } from './comments.js';
-import { resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
+import { resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
+import { InviteService } from './invites.js';
 import { MekoClient } from './meko.js';
+import { MekoApi } from './mekoapi.js';
+import { defaultMekoTools, type MekoTools } from './mekosettings.js';
 import type { Paths } from './paths.js';
 import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
@@ -34,9 +37,18 @@ export interface CoreOptions {
   timers?: boolean;
   /** The Meko plugin's capture script (see findMekoCaptureScript); null turns transcript capture off. */
   mekoCaptureScript?: string | null;
+  /** Meko's REST API client (sharing); by default one on the configured Meko. */
+  mekoApi?: MekoApi;
+  /** Checking Meko credentials and setting up Claude Code, for the Meko tab in Settings. */
+  mekoTools?: MekoTools;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
+type InviteEvent = Extract<ServerEvent, { type: 'invite' }>;
+
+/** How often invites and shares are synced from Meko, and how often the share API is re-checked. */
+const INVITE_SYNC_MS = 5 * 60 * 1000;
+const SHARING_CHECK_MS = 60 * 60 * 1000;
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -52,6 +64,8 @@ export class Core extends EventEmitter {
   readonly lifecycle: Lifecycle;
   readonly comments: CommentService;
   readonly limits: PlanLimitsStore;
+  readonly invites: InviteService;
+  readonly mekoTools: MekoTools;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -66,7 +80,7 @@ export class Core extends EventEmitter {
     this.version = o.version;
     this.cfg = o.config;
     this.meko = o.meko;
-    this.mekoStatus = { ok: true, error: null, checkedAt: null, webUrl: resolveMekoWebUrl(o.config) };
+    this.mekoStatus = { ok: true, error: null, checkedAt: null, webUrl: resolveMekoWebUrl(o.config), sharing: null };
     this.log = o.log ?? consoleLogger;
     this.capture = new TranscriptCapture(o.mekoCaptureScript ?? null, () => {
       const m = resolveMeko(this.cfg);
@@ -84,6 +98,8 @@ export class Core extends EventEmitter {
     this.lifecycle = new Lifecycle(this);
     this.comments = new CommentService(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
+    this.mekoTools = o.mekoTools ?? defaultMekoTools;
+    this.invites = new InviteService(this, o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey })));
   }
 
   get config(): Config {
@@ -109,6 +125,36 @@ export class Core extends EventEmitter {
     this.emit('notify', { type: 'notify', ...n } satisfies NotifyEvent);
   }
 
+  notifyInvite(n: Omit<InviteEvent, 'type'>): void {
+    this.emit('notify', { type: 'invite', ...n } satisfies InviteEvent);
+  }
+
+  /** Re-checks the share API, then syncs invites. Never throws. */
+  async refreshSharing(): Promise<void> {
+    if (!this.mekoStatus.ok) return;
+    await this.invites.checkMode();
+    await this.invites.sync().catch((e) => this.log.warn('datapack invite sync failed', errMsg(e)));
+  }
+
+  /**
+   * The Meko URL or key changed: reconnect, forget the old account's shares, and check Meko now,
+   * then sharing in the background.
+   */
+  async mekoChanged(): Promise<void> {
+    await this.meko.reset();
+    this.invites.forgetAccount();
+    this.mekoStatus = { ...this.mekoStatus, sharing: null };
+    await this.checkMeko();
+    this.sharingChanged();
+  }
+
+  /** Meko's API URL changed (or the account did): check the sharing mode again, in the background. */
+  sharingChanged(): void {
+    this.mekoStatus = { ...this.mekoStatus, sharing: null };
+    this.changed();
+    void this.refreshSharing();
+  }
+
   state(): AppState {
     return {
       projects: (() => {
@@ -127,6 +173,7 @@ export class Core extends EventEmitter {
       // The login name shown in the UI; the Unix account only as a fallback.
       username: getOwner(this.db)?.username ?? this.username,
       limits: this.limits.current(),
+      invites: this.invites.pending(),
     };
   }
 
@@ -158,6 +205,10 @@ export class Core extends EventEmitter {
       this.every(5000, () => this.sessions.reconcile());
       this.every(60000, () => this.checkMeko());
       this.every(60000, () => this.sessions.refreshDiffStats());
+      this.every(INVITE_SYNC_MS, () => this.invites.sync());
+      this.every(SHARING_CHECK_MS, () => this.invites.checkMode());
+      // Not awaited: startup doesn't wait on Meko's API.
+      void this.refreshSharing();
       this.lifecycle.start();
     }
   }
@@ -198,6 +249,8 @@ export class Core extends EventEmitter {
       if (before) this.log.warn('Meko unreachable', this.mekoStatus.error);
     }
     if (before !== this.mekoStatus.ok) this.changed();
+    // Back from being unreachable before sharing was ever checked: check it now, not in an hour.
+    if (this.timersOn && !before && this.mekoStatus.ok && this.mekoStatus.sharing === null) void this.refreshSharing();
   }
 }
 

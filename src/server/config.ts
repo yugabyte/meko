@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { claudeUserDir } from './claude.js';
+import type { MekoKeySource } from '../shared/types.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -11,8 +12,11 @@ export interface Config {
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
   update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
-  /** captureTranscripts: send session transcripts to Meko conversations (off while Meko can't take the load). */
-  meko: { url: string; apiKey: string; webUrl: string; captureTranscripts: boolean };
+  /**
+   * captureTranscripts: send session transcripts to Meko conversations (off while Meko can't take the load).
+   * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
+   */
+  meko: { url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
   state: { dbPath: string };
   tmux: { socket: string };
   claude: { command: string };
@@ -26,7 +30,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { url: '', apiKey: '', webUrl: '', captureTranscripts: false },
+  meko: { url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },
@@ -140,6 +144,12 @@ export function isLoopback(bind: string): boolean {
  * to that other key. With no URL, Meko Cloud.
  */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
+  const { url, apiKey } = resolveMekoWithSource(cfg);
+  return { url, apiKey };
+}
+
+/** resolveMeko, plus where the key came from (null when there is none). */
+export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: string; keySource: MekoKeySource | null } {
   const sources = [
     () => ({ url: cfg.meko.url, apiKey: cfg.meko.apiKey }),
     () => ({ url: process.env.MEKO_MCP_URL, apiKey: process.env.MEKO_API_KEY }),
@@ -154,7 +164,8 @@ export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
   const keyAt = sources.findIndex((s) => s.apiKey);
   const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
   const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url;
-  return { url: url || DEFAULT_MEKO_URL, apiKey };
+  const keySource = keyAt < 0 ? null : (['config', 'env', 'claude'] as const)[keyAt];
+  return { url: url || DEFAULT_MEKO_URL, apiKey, keySource };
 }
 
 /** Meko Cloud web app for each known Meko MCP host. */
@@ -181,6 +192,17 @@ export function resolveMekoWebUrl(cfg: Config): string | null {
   const fromClaude = readClaudeSettingsEnv().MEKO_WEB_URL;
   const override = cfg.meko.webUrl || process.env.MEKO_WEB_URL || (typeof fromClaude === 'string' ? fromClaude : '');
   return mekoWebUrl(resolveMeko(cfg).url, override);
+}
+
+/**
+ * Meko's REST API base (used for sharing): config first, then MEKO_API_URL, then the web app URL
+ * plus /api/v1 (the Meko web app serves its API on the same origin). Null when neither is known.
+ */
+export function resolveMekoApiUrl(cfg: Config): string | null {
+  const override = cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '';
+  if (override) return override.replace(/\/+$/, '');
+  const web = resolveMekoWebUrl(cfg);
+  return web ? `${web}/api/v1` : null;
 }
 
 /** The `env` block of Claude Code's user settings.json; empty when there's none. Values may be any JSON type. */

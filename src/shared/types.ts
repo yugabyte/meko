@@ -267,7 +267,14 @@ export interface MekoStatus {
   checkedAt: number | null;
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
+  /**
+   * How datapacks are shared: `api` through Meko's share API with our key, `link` in Meko's web
+   * app (this Meko doesn't take API keys for sharing yet), null before it has been checked.
+   */
+  sharing: SharingMode | null;
 }
+
+export type SharingMode = 'api' | 'link';
 
 export interface AppState {
   projects: ProjectWithSessions[];
@@ -277,6 +284,8 @@ export interface AppState {
   username: string;
   /** The account's plan usage limits, or null when no session has reported them (API-key accounts never do). */
   limits: PlanLimits | null;
+  /** Project datapacks shared with you that aren't a project here yet (not the ones put off with Later). */
+  invites: DatapackInvite[];
 }
 
 /** One plan usage window, as Claude Code reports it to its status line (Pro and Max plans). */
@@ -315,6 +324,67 @@ export interface MekoDatapack {
   name: string;
   grant: string | null;
   createdAt: string | null;
+  ownerName: string | null;
+  ownerEmail: string | null;
+  description: string | null;
+}
+
+/** Access to a shared datapack, as Meko names it. */
+export type ShareGrant = 'viewer' | 'contributor' | 'maintainer';
+
+export const SHARE_GRANTS: ShareGrant[] = ['contributor', 'maintainer', 'viewer'];
+
+/**
+ * A project datapack (named `adlc/proj/…`) shared with you. `invited`: an invite waiting in Meko
+ * (`inviteId` set); `shared`: already accepted, not yet a project here; `later`: put off with Later.
+ */
+export interface DatapackInvite {
+  datapackId: string;
+  name: string;
+  inviteId: string | null;
+  grant: ShareGrant | null;
+  ownerName: string | null;
+  ownerEmail: string | null;
+  /** The repo's remote, from the datapack's description once Meko lets us read it. */
+  repoRemote: string | null;
+  state: 'invited' | 'shared' | 'later';
+  firstSeenAt: number;
+}
+
+/** POST /api/invites/check: the datapack list it read, and the shares after syncing with it. */
+export interface InviteCheck {
+  datapacks: MekoDatapack[];
+  /** Open ones, the ones put off with Later included. */
+  invites: DatapackInvite[];
+}
+
+/** Someone with access to a datapack (the owner included). */
+export interface DatapackMember {
+  name: string;
+  email: string;
+  grant: ShareGrant | 'owner';
+}
+
+/** An invite to a datapack that hasn't been accepted yet. */
+export interface DatapackPendingInvite {
+  inviteId: string;
+  email: string;
+  grant: ShareGrant;
+}
+
+export interface DatapackPeople {
+  members: DatapackMember[];
+  invites: DatapackPendingInvite[];
+  /**
+   * Set when a change (invite, resend, revoke) went through but reading the lists again failed:
+   * the lists are then empty and not to be shown; the change still happened.
+   */
+  refreshError?: string;
+}
+
+export interface ShareDatapackRequest {
+  email: string;
+  grant: ShareGrant;
 }
 
 export interface ActivityItem {
@@ -328,6 +398,8 @@ export interface ActivityItem {
 export interface DatapackWithCounts extends DatapackRef {
   memoryCount: number | null;
   knowledgeCount: number | null;
+  /** Our access to it (`owner`, or a share grant); null when Meko didn't say. */
+  grant: string | null;
 }
 
 export interface ProjectHome {
@@ -358,7 +430,44 @@ export interface Settings {
   updateChannel: 'stable' | 'prerelease' | 'off';
   bind: string;
   port: number;
+  meko: MekoSettings;
 }
+
+/** Where AgentK's Meko key comes from: config.toml, the environment, or Claude Code's settings.json. */
+export type MekoKeySource = 'config' | 'env' | 'claude';
+
+/** The Meko part of Settings. The key itself never leaves the server. */
+export interface MekoSettings {
+  /** The MCP server URL as set in config.toml; empty means the environment, Claude Code or Meko Cloud decides. */
+  url: string;
+  /** The MCP server AgentK uses now. */
+  effectiveUrl: string;
+  /** Meko Cloud's MCP server, used when nothing else names one. */
+  defaultUrl: string;
+  /** Web app and API URLs as set; empty means worked out from the MCP URL. */
+  webUrl: string;
+  apiUrl: string;
+  /** What they work out to now; null when they can't be (your own Meko with no URL set). */
+  effectiveWebUrl: string | null;
+  effectiveApiUrl: string | null;
+  /** The key's last four characters, or null when there's no key. */
+  keyHint: string | null;
+  keySource: MekoKeySource | null;
+  /** The MCP URL Claude Code's settings give its sessions (MEKO_MCP_URL), or null when unset. */
+  claudeUrl: string | null;
+  /** Claude Code's settings have the same key AgentK uses. */
+  claudeKeyMatches: boolean;
+}
+
+/** PUT /api/settings `meko`: a field left out is unchanged; `apiKey: ''` keeps the current key. */
+export interface MekoSettingsUpdate {
+  url?: string;
+  apiKey?: string;
+  webUrl?: string;
+  apiUrl?: string;
+}
+
+export type SettingsUpdate = Partial<Omit<Settings, 'meko'>> & { meko?: MekoSettingsUpdate };
 
 /** What Discard would throw away. */
 export interface DiscardCheck {
@@ -486,7 +595,8 @@ export interface LoginError {
 
 export type DatapackChoice =
   | { mode: 'create'; name: string }
-  | { mode: 'existing'; id: string; name: string };
+  /** `inviteId`: an invite to accept in Meko before the project is created. */
+  | { mode: 'existing'; id: string; name: string; inviteId?: string };
 
 export interface CreateProjectRequest {
   /** Exactly one of repoPath / cloneUrl. */
@@ -549,7 +659,9 @@ export interface TotpEnrollResponse {
 
 export type ServerEvent =
   | { type: 'state'; state: AppState }
-  | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string };
+  | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
+  /** A project datapack was shared with you: sent once per datapack. */
+  | { type: 'invite'; datapackId: string; title: string; body: string };
 
 export type TermClientMessage =
   | { type: 'input'; data: string }
@@ -578,6 +690,15 @@ export type TermServerMessage =
 // GET    /api/state                            → AppState
 // GET    /api/repos                            → ReposResponse
 // GET    /api/meko/datapacks                   → MekoDatapack[]
+// GET    /api/meko/datapacks/:id/people        → DatapackPeople   (the datapack must be in a project here)
+// POST   /api/meko/datapacks/:id/people ShareDatapackRequest → DatapackPeople   (invites by email; Meko emails them)
+// POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
+// DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
+//        The four above answer 409 in link mode (AppState.meko.sharing 'link').
+// POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the New project dialog's one read of Meko)
+// POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by creating the project)
+// POST   /api/invites/:datapackId/decline      → 204
+// POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
 // POST   /api/projects        CreateProjectRequest → Project
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project
 // DELETE /api/projects/:id                     → 204
@@ -599,7 +720,9 @@ export type TermServerMessage =
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/settings                         → Settings
-// PUT    /api/settings        Partial<Settings>→ Settings   (bind and port are read-only: set them in config.toml)
+// PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
+//                                                           a `meko` change is checked against Meko before it's saved)
+// POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus
 // POST   /api/update/apply                     → UpdateStatus

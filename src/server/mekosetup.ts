@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -84,11 +84,12 @@ export function matchesIntegrity(data: Buffer, integrity: string): boolean {
 /**
  * Downloads, verifies and runs Meko's setup for Claude Code. The API key goes in the
  * environment (the package reads MEKO_API_KEY), never on the command line where `ps` shows it.
- * Returns the exit code; its own output goes straight to the terminal.
+ * Returns the exit code. Its own output goes straight to the terminal, or line by line to `log`
+ * when given (the server has no terminal).
  */
 export async function runMekoSetup(
   pkg: MekoSetupPackage,
-  opts: { url: string; apiKey: string; fetchImpl?: Fetch; node?: string },
+  opts: { url: string; apiKey: string; fetchImpl?: Fetch; node?: string; log?: (line: string) => void },
 ): Promise<number> {
   const res = await (opts.fetchImpl ?? fetch)(pkg.tarball, { signal: AbortSignal.timeout(120_000) });
   if (!res.ok) throw new Error(`downloading ${MEKO_SETUP_PACKAGE} ${pkg.version} failed (${res.status})`);
@@ -99,12 +100,28 @@ export async function runMekoSetup(
     writeFileSync(join(dir, 'package.tgz'), data);
     const untar = spawnSync('tar', ['-xzf', 'package.tgz'], { cwd: dir, stdio: 'ignore' });
     if (untar.status !== 0) throw new Error(`couldn't unpack ${MEKO_SETUP_PACKAGE} ${pkg.version}`);
-    const r = spawnSync(opts.node ?? process.execPath, [join(dir, 'package', 'bin', 'create-meko-setup.mjs'), '--client', 'claude-code', '--url', opts.url, '--yes'], {
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: { ...process.env, MEKO_API_KEY: opts.apiKey },
-      timeout: 10 * 60_000,
+    return await new Promise<number>((resolve, reject) => {
+      const log = opts.log;
+      const child = spawn(opts.node ?? process.execPath, [join(dir, 'package', 'bin', 'create-meko-setup.mjs'), '--client', 'claude-code', '--url', opts.url, '--yes'], {
+        stdio: ['ignore', log ? 'pipe' : 'inherit', log ? 'pipe' : 'inherit'],
+        env: { ...process.env, MEKO_API_KEY: opts.apiKey },
+        timeout: 10 * 60_000,
+      });
+      if (log) {
+        for (const out of [child.stdout, child.stderr]) {
+          let rest = '';
+          out?.setEncoding('utf8');
+          out?.on('data', (chunk: string) => {
+            const lines = (rest + chunk).split('\n');
+            rest = lines.pop() ?? '';
+            for (const l of lines) if (l.trim()) log(l);
+          });
+          out?.on('end', () => rest.trim() && log(rest));
+        }
+      }
+      child.on('error', reject);
+      child.on('close', (code) => resolve(code ?? 1));
     });
-    return r.status ?? 1;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

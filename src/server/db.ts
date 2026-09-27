@@ -214,6 +214,22 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'plan';
   UPDATE sessions SET kind = 'quick' WHERE id NOT IN (SELECT session_id FROM session_stages WHERE stage = 'design');
   `,
+  // 12: project datapacks shared with us (invites waiting in Meko, and shares not yet a project).
+  // state: invited | shared | later | used | baseline (already shared when this was first synced).
+  `
+  CREATE TABLE datapack_invites (
+    datapack_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    invite_id TEXT,
+    grant_role TEXT,
+    owner_name TEXT,
+    owner_email TEXT,
+    repo_remote TEXT,
+    state TEXT NOT NULL,
+    first_seen_at INTEGER NOT NULL,
+    resolved_at INTEGER
+  );
+  `,
 ];
 
 export function openDb(path: string): Db {

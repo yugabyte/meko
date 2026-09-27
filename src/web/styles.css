@@ -412,6 +412,10 @@ textarea.input {
   background: var(--sunk);
   color: var(--muted);
 }
+.tag.bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
 
 /* ---------- Status dots (same shapes as the design legend) ---------- */
 .dot {
@@ -720,6 +724,17 @@ textarea.input {
 .banner.inline {
   border: 0;
   border-radius: 8px;
+}
+/* A share banner: its text, then its buttons (which wrap under the text on a phone). */
+.banner-text {
+  flex: 1 1 280px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.banner-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .empty-main {
   flex: 1;
@@ -1314,8 +1329,9 @@ a.icon-btn {
 }
 .dp-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
   width: 100%;
   padding: 7px 12px;
   border: 0;
@@ -1339,6 +1355,147 @@ a.icon-btn {
 }
 .dp-row.sel {
   background: var(--accent-soft);
+}
+.dp-row:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+.dp-row:disabled:hover {
+  background: transparent;
+}
+.dp-row:disabled .radio {
+  opacity: 0.4;
+}
+/* Why a row can't be chosen, on its own line (touch screens don't show tooltips). */
+.dp-row-note {
+  flex-basis: 100%;
+  padding-left: 24px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: normal;
+}
+.dp-group-hd {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--sunk);
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+}
+
+/* New project dialog: the datapack section, then the repo section */
+.np-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.np-dp-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.np-dp-chosen {
+  cursor: default;
+}
+.np-dp-chosen:hover {
+  background: var(--accent-soft);
+}
+.np-dp-chosen .btn {
+  flex: none;
+}
+.np-hint-ok {
+  color: var(--ok);
+}
+.np-dp-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+
+/* Share dialog */
+.share-dp {
+  overflow-wrap: anywhere;
+}
+.share-grants {
+  max-height: none;
+}
+.share-grants .dp-row {
+  align-items: flex-start;
+}
+.share-grants .radio {
+  margin-top: 2px;
+}
+.share-grant-text {
+  flex: 1;
+  min-width: 0;
+}
+.share-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.share-people {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+.share-person {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.share-person:last-child {
+  border-bottom: 0;
+}
+.share-who {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.share-person-btns {
+  display: flex;
+  gap: 6px;
+}
+
+/* Settings, Meko tab: connection, sharing and Claude Code status */
+.meko-status {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+.meko-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.meko-status-row:last-child {
+  border-bottom: 0;
+}
+.meko-status-row > span:first-child {
+  min-width: 7em;
+  font-weight: 600;
+}
+.meko-status-row .hint {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* palette */
@@ -3066,6 +3223,19 @@ a.icon-btn {
   }
   .dp .tag {
     justify-self: start;
+  }
+  /* Datapack names are long and differ at the end: on a phone they wrap, with the tags below. */
+  .dp-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .dp-row > .mono {
+    flex: 1 1 calc(100% - 30px);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .dp-row > .mono + .tag {
+    margin-left: 24px;
   }
   .auth-card {
     padding: 22px;

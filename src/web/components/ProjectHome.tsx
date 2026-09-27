@@ -8,13 +8,18 @@ import {
   type ProjectWithSessions,
   type ReviewerMode,
   type SearchResult,
+  type SharingMode,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
-import { cx, shortTime } from '../util';
+import { cx, mekoDatapackShareUrl, shortTime } from '../util';
 import { ConfirmButton, DatapackName, ErrorText, Field } from './common';
+import { ShareDialog } from './ShareDialog';
 import { TopBar } from './TopBar';
+
+/** Owners and maintainers can share a datapack; an unknown grant (Meko didn't say) gets the chance. */
+const canShare = (grant: string | null) => !grant || grant === 'owner' || grant === 'maintainer';
 
 const SOURCE_LABEL: Record<SearchResult['source'], string> = {
   memory: 'memory',
@@ -27,6 +32,7 @@ export function ProjectHomeView({
   order,
   onMove,
   mekoWebUrl,
+  sharing,
   onMenu,
   onBack,
   onError,
@@ -37,6 +43,8 @@ export function ProjectHomeView({
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
   mekoWebUrl: string | null;
+  /** How datapacks are shared: in AgentK (api) or in Meko's web app (link). */
+  sharing: SharingMode | null;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
@@ -45,6 +53,8 @@ export function ProjectHomeView({
   const mobile = useIsMobile();
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sharingDp, setSharingDp] = useState<{ id: string; name: string } | null>(null);
+  const datapacks = home?.datapacks ?? project.datapacks.map((d) => ({ ...d, memoryCount: null, knowledgeCount: null, grant: null }));
 
   const load = useCallback(() => {
     api
@@ -87,7 +97,7 @@ export function ProjectHomeView({
         <div className="home-grid">
           <section className="box">
             <span className="label">Datapacks</span>
-            {(home?.datapacks ?? project.datapacks.map((d) => ({ ...d, memoryCount: null, knowledgeCount: null }))).map(
+            {datapacks.map(
               (d) => (
                 <div className="dp" key={d.id}>
                   <DatapackName className="mono dp-name" id={d.id} name={d.name} mekoWebUrl={mekoWebUrl} />
@@ -111,11 +121,34 @@ export function ProjectHomeView({
                         }
                       }}
                     />
+                  ) : !canShare(d.grant) ? (
+                    <span />
+                  ) : sharing === 'api' ? (
+                    <button className="link-btn" onClick={() => setSharingDp(d)}>
+                      Share
+                    </button>
+                  ) : mekoDatapackShareUrl(mekoWebUrl, d.id) ? (
+                    <a
+                      className="link-btn"
+                      href={mekoDatapackShareUrl(mekoWebUrl, d.id)!}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="This Meko doesn’t accept AgentK’s API key for sharing yet, so sharing happens in Meko."
+                    >
+                      Share in Meko ↗
+                    </a>
                   ) : (
                     <span />
                   )}
                 </div>
               ),
+            )}
+            {sharing !== 'api' && datapacks.some((d) => d.role === 'dedicated' && canShare(d.grant)) && (
+              <p className="hint">
+                {mekoWebUrl
+                  ? 'Share opens this datapack’s Share page in Meko. Meko emails the person you invite.'
+                  : 'To share this project, set Meko’s web app URL on the Meko tab in Settings.'}
+              </p>
             )}
             <AttachDatapack
               attached={new Set(project.datapacks.map((d) => d.id))}
@@ -159,6 +192,9 @@ export function ProjectHomeView({
         {home && <UsagePanel projectId={project.id} usage={home.usage} />}
         <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
       </div>
+      {sharingDp && (
+        <ShareDialog projectName={project.name} datapack={{ ...sharingDp, role: 'dedicated' }} onClose={() => setSharingDp(null)} />
+      )}
     </div>
   );
 }

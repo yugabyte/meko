@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppState, AuthStatus, ProjectWithSessions } from '../../shared/types';
+import type { AppState, AuthStatus, DatapackInvite, ProjectWithSessions } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { useEvents, type NotifyEvent } from '../hooks/useEvents';
+import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
@@ -22,7 +22,8 @@ import { UsageView } from './UsageView';
 
 type Modal =
   | { kind: 'none' }
-  | { kind: 'new-project' }
+  /** `invite`: a share to open as the project (chosen as its datapack). */
+  | { kind: 'new-project'; invite?: DatapackInvite }
   | { kind: 'new-session'; projectId: string }
   | { kind: 'settings' }
   | { kind: 'palette' };
@@ -34,8 +35,17 @@ const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.
 const canNotify = typeof Notification !== 'undefined';
 let pageNotifications = canNotify;
 
-async function showNotification(n: NotifyEvent, onClick: () => void): Promise<void> {
-  const options = { body: n.body, icon: '/logo.png', tag: `ak-${n.sessionId}` };
+/**
+ * Shows a notification. `tag` replaces an earlier one with the same tag; `data` is what the
+ * service worker gets when it's tapped there instead (see sw.js).
+ */
+async function showNotification(
+  n: { title: string; body: string },
+  tag: string,
+  data: Record<string, string>,
+  onClick: () => void,
+): Promise<void> {
+  const options = { body: n.body, icon: '/logo.png', tag };
   if (pageNotifications) {
     try {
       const note = new Notification(n.title, options);
@@ -49,7 +59,7 @@ async function showNotification(n: NotifyEvent, onClick: () => void): Promise<vo
     }
   }
   const reg = await navigator.serviceWorker?.getRegistration();
-  await reg?.showNotification(n.title, { ...options, data: { projectId: n.projectId, sessionId: n.sessionId } });
+  await reg?.showNotification(n.title, { ...options, data });
 }
 
 if (typeof navigator !== 'undefined') {
@@ -92,15 +102,43 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     if (!document.hidden && focused.sessionId === n.sessionId) return;
     const project = stateRef.current?.projects.find((p) => p.id === n.projectId);
     if (project && !project.settings.notify) return;
-    void showNotification(n, () => {
+    void showNotification(n, `ak-${n.sessionId}`, { projectId: n.projectId, sessionId: n.sessionId }, () => {
       window.focus();
       navigate({ view: 'project', projectId: n.projectId, sessionId: n.sessionId });
     }).catch(() => undefined);
   }, []);
 
-  const { state, conn } = useEvents(onNotify);
+  /** Opens the New project dialog for a share, found by its datapack in the latest state. */
+  const openInvite = useCallback((datapackId: string) => {
+    const invite = stateRef.current?.invites.find((i) => i.datapackId === datapackId);
+    setModal({ kind: 'new-project', invite });
+  }, []);
+
+  const onInvite = useCallback(
+    (n: InviteEvent) => {
+      if (!canNotify || Notification.permission !== 'granted' || !notifier.leader) return;
+      void showNotification(n, `ak-invite-${n.datapackId}`, { datapackId: n.datapackId }, () => {
+        window.focus();
+        openInvite(n.datapackId);
+      }).catch(() => undefined);
+    },
+    [openInvite],
+  );
+
+  const { state, conn } = useEvents(onNotify, onInvite);
   const stateRef = useRef<AppState | null>(null);
   stateRef.current = state;
+
+  // A share's notification tapped through the service worker (Android): open it here.
+  useEffect(() => {
+    const sw = navigator.serviceWorker;
+    if (!sw) return;
+    const onMessage = (ev: MessageEvent<{ type?: string; datapackId?: string }>) => {
+      if (ev.data?.type === 'ak-invite' && ev.data.datapackId) openInvite(ev.data.datapackId);
+    };
+    sw.addEventListener('message', onMessage);
+    return () => sw.removeEventListener('message', onMessage);
+  }, [openInvite]);
 
   const projects = useMemo(() => sortedProjects(state), [state]);
 
@@ -313,7 +351,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         open={drawer}
       />
       <div className="main">
-        <Banners state={state} conn={conn} onError={showToast} />
+        <Banners state={state} conn={conn} onError={showToast} onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })} />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} />
         ) : currentProject && route.view === 'home' ? (
@@ -323,6 +361,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             order={{ index: projects.indexOf(currentProject), count: projects.length }}
             onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
+            sharing={state.meko.sharing}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
             onError={showToast}
@@ -357,6 +396,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {modal.kind === 'new-project' && (
         <NewProjectDialog
           mekoOk={state.meko.ok}
+          mekoWebUrl={state.meko.webUrl}
+          sharing={state.meko.sharing}
+          projects={projects}
+          initialInvite={modal.invite ?? null}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(p) => {
             setModal({ kind: 'none' });
@@ -376,7 +419,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         />
       )}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} onClose={() => setModal({ kind: 'none' })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} onClose={() => setModal({ kind: 'none' })} />
       )}
       {modal.kind === 'palette' && (
         <CommandPalette
