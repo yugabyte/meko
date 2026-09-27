@@ -41,7 +41,7 @@ from a browser:
 - **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback
   if a new version won't start.
 
-![AgentK Local: a session in the Code stage, with the live Claude Code terminal, the Changes panel with a draft review comment, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
+![AgentK Local: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
 
 <table>
   <tr>
