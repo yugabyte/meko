@@ -346,7 +346,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
-        onLogout={fromDrawer(logout)}
+        onLogout={auth.localAccess ? undefined : fromDrawer(logout)}
         onReorder={moveProject}
         open={drawer}
       />
@@ -383,7 +383,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
               <img src="/logo.png" alt="" width={96} height={96} />
               <h2>No projects yet</h2>
               <p className="muted">
-                A project is one of your git repos. Each task you start in it gets its own worktree and Claude session.
+                A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
               </p>
               <button className="btn primary" onClick={() => setModal({ kind: 'new-project' })}>
                 New project

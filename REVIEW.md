@@ -34,7 +34,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 2. Security
 
-- [ ] New `/api/*` routes require login unless they're one of the three public auth routes. Access
+- [ ] New `/api/*` routes require login unless they're one of the three public auth routes, or the
+      request has local access (`localAccess()`: loopback bind, loopback peer, localhost `Host`).
+      Nothing widens local access to a network bind, another `Host`, or a forwarded address. Access
       checks key on the matched route, never the raw URL (the router decodes `/%61pi/`).
 - [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).

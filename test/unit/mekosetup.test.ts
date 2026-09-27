@@ -95,22 +95,29 @@ describe('the install step for Meko in Claude Code', () => {
     expect(unattended.calls).not.toContain('run');
   });
 
-  it('shows what it will run and stops when the answer is no', async () => {
+  it('asks with the package it will run, and stops when the answer is no', async () => {
     const { promise, calls } = step({ canAsk: true }, { answer: 'n' });
     await expect(promise).rejects.toBeInstanceOf(MekoSetupError);
-    expect(calls[0]).toBe('latest');
-    expect(calls[1]).toMatch(/^say .*@yugabytedb\/meko-mcp 9\.9\.9/);
-    expect(calls).toContain('ask Set it up now? (Y/n)');
-    expect(calls).not.toContain('run');
+    expect(calls).toEqual(['latest', "ask Run Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)? (Y/n)"]);
   });
 
-  it('runs the setup on yes, or with --install-deps without asking', async () => {
+  it('says only "missing", not the list of gaps', async () => {
+    const warned: string[] = [];
+    await ensureMekoInClaude(
+      { url: 'u', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true },
+      { gaps: () => ['the meko-agent-skills plugin'], latest: async () => PKG, run: async () => 0, ask: async () => 'y', say: () => undefined, warn: (l, t) => warned.push(`${l}: ${t}`) },
+    ).catch(() => undefined);
+    expect(warned).toEqual(['Meko in Claude: missing']);
+  });
+
+  it('runs the setup on yes, or with --install-deps without asking but saying what it runs', async () => {
     const yes = step({ canAsk: true });
     expect(await yes.promise).toBe('set-up');
     expect(yes.calls).toContain('run');
     const unattended = step({ installDeps: true });
     expect(await unattended.promise).toBe('set-up');
     expect(unattended.calls.some((c) => c.startsWith('ask'))).toBe(false);
+    expect(unattended.calls).toContain("say     Running Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)");
   });
 
   it('fails when the setup exits non-zero or leaves something missing', async () => {

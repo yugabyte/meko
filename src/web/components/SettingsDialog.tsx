@@ -37,7 +37,7 @@ export function SettingsDialog({
     >
       {tab === 'general' && <GeneralTab />}
       {tab === 'meko' && <MekoTab status={meko} />}
-      {tab === 'account' && <AccountTab auth={auth} />}
+      {tab === 'account' && (auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />)}
       {tab === 'updates' && <UpdatesTab initial={update} />}
     </Dialog>
   );
@@ -347,6 +347,18 @@ function MekoTab({ status }: { status: MekoStatus }) {
         {saved && <span className="muted small">Saved</span>}
       </div>
     </form>
+  );
+}
+
+function LocalAccessNote() {
+  return (
+    <div className="stack">
+      <h3>No sign-in needed</h3>
+      <p className="muted">
+        AgentK Local only listens on this computer, so it opens without a username and password. To reach it from other
+        devices, rerun <code>agent-k-local install</code> and choose remote access: that turns on HTTPS and a login.
+      </p>
+    </div>
   );
 }
 

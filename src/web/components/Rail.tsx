@@ -36,7 +36,8 @@ export function Rail({
   onSelect: (p: ProjectWithSessions) => void;
   onNewProject: () => void;
   onSettings: () => void;
-  onLogout: () => void;
+  /** Signs out; left out when there's no login (local access). */
+  onLogout?: () => void;
   /** Moves a project to this index in the list. Touch screens use Move up/down on the project home. */
   onReorder: (id: string, index: number) => void;
   onPalette: () => void;
@@ -144,12 +145,14 @@ export function Rail({
               <Icon d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 3v18" />
             )}
           </button>
-          <button className="icon-btn" onClick={onLogout} title="Sign out" aria-label="Sign out">
-            <Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9" />
-          </button>
+          {onLogout && (
+            <button className="icon-btn" onClick={onLogout} title="Sign out" aria-label="Sign out">
+              <Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9" />
+            </button>
+          )}
         </div>
         <div className="me">
-          <span title={`Signed in as ${username}`}>{username}</span>
+          <span title={onLogout ? `Signed in as ${username}` : username}>{username}</span>
           <span className="mono">v{version}</span>
         </div>
       </div>

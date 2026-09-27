@@ -191,11 +191,9 @@ export function SessionSheet({
   session,
   stage,
   canDesign,
-  pendingComments,
   acting,
   info,
   onDesign,
-  onChanges,
   onHome,
   onAct,
   onClose,
@@ -204,13 +202,11 @@ export function SessionSheet({
   /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
-  pendingComments: number;
   /** A session action is in flight: Resume and Archive wait for it. */
   acting: boolean;
   /** Branch, tokens, Meko and review lines from the desktop footer. */
   info: ReactNode;
   onDesign: () => void;
-  onChanges: () => void;
   onHome: () => void;
   onAct: (a: SessionAction) => Promise<void>;
   onClose: () => void;
@@ -231,15 +227,6 @@ export function SessionSheet({
         {canDesign && (
           <SheetItem hint="›" onClick={then(onDesign)}>
             Design doc
-          </SheetItem>
-        )}
-        {session.diffStat && (
-          <SheetItem hint="›" onClick={then(onChanges)}>
-            Changes{' '}
-            <span className="sheet-item-note mono">
-              <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>
-              {pendingComments > 0 && ` · ${plural(pendingComments, 'comment')}`}
-            </span>
           </SheetItem>
         )}
         {session.prUrl && (

@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { homedir, hostname, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -172,6 +173,33 @@ function macFirewallOn(): boolean {
   return r.ok && /enabled/i.test(r.out);
 }
 
+/**
+ * True when nobody is at a desktop here: an SSH login, or Linux with no display. The browser is
+ * then on another device, so the install defaults to remote access.
+ */
+export function isHeadless(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
+  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return true;
+  return platform !== 'darwin' && !env.DISPLAY && !env.WAYLAND_DISPLAY;
+}
+
+/** The answer the Access question starts with for a listen address. */
+export function accessDefault(bind: string): string {
+  if (isLoopback(bind)) return 'local';
+  return bind === '0.0.0.0' || bind === '::' ? 'remote' : bind;
+}
+
+/**
+ * The listen address for an answer to the Access question: local, remote, an IP address, or the
+ * address it listens on now (which may be a host name).
+ */
+export function accessBind(answer: string, current = ''): string {
+  const a = answer.trim();
+  if (/^l(ocal)?$/i.test(a)) return '127.0.0.1';
+  if (/^r(emote)?$/i.test(a)) return '0.0.0.0';
+  if (isIP(a) || a === 'localhost' || (a && a === current)) return a;
+  throw new InstallError(`Answer local or remote (or an address to listen on), not "${a}".`);
+}
+
 function publicHost(): string {
   const r = trySh('hostname', ['-f']);
   return r.ok && r.out ? r.out : hostname();
@@ -211,14 +239,32 @@ export async function runInstall(args: string[]): Promise<void> {
     const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];
     if (fresh) cfg.repos.cloneInto = reposRoot;
-    cfg.server.bind = values.bind ?? (await ask('Listen address', cfg.server.bind));
+    if (values.bind) {
+      cfg.server.bind = values.bind;
+    } else {
+      // A fresh install on a desktop is for this computer only; over SSH or with no display,
+      // the browser is somewhere else.
+      const def = fresh && !process.env.AK_BIND ? (isHeadless() ? 'remote' : 'local') : accessDefault(cfg.server.bind);
+      if (interactive && process.stdin.isTTY) {
+        ui.note('Local: only this computer, no login. Remote: other devices too (like your phone), over HTTPS with a login.');
+      }
+      for (;;) {
+        try {
+          cfg.server.bind = accessBind(await ask('Access', def), cfg.server.bind);
+          break;
+        } catch (e) {
+          if (!(e instanceof InstallError && interactive && process.stdin.isTTY)) throw e;
+          ui.warn('Access', e.message);
+        }
+      }
+    }
     const portStr = values.port ?? (await ask('Port', String(cfg.server.port)));
     const port = Number(portStr);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new InstallError(`invalid port: ${portStr}`);
     cfg.server.port = port;
     if (!(interactive && process.stdin.isTTY)) {
       ui.row('Repos folder', reposRoot);
-      ui.row('Listen on', `${cfg.server.bind}:${cfg.server.port}`);
+      ui.row('Access', `${isLoopback(cfg.server.bind) ? 'local' : 'remote'}, on ${cfg.server.bind}:${cfg.server.port}`);
     }
 
     // 2. Meko (required)
@@ -280,7 +326,7 @@ export async function runInstall(args: string[]): Promise<void> {
 
     saveConfig(paths, cfg);
     ui.ok('Config', tildify(paths.config));
-    // Create the certificate now (the server reuses it) so its fingerprint can be shown below.
+    // Create the certificate now (the server reuses it), so a problem with it shows up here.
     const tls = await loadTls(paths, cfg);
     if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
 
@@ -312,8 +358,10 @@ export async function runInstall(args: string[]): Promise<void> {
       const scheme = tls ? 'https' : 'http';
       const host = isLoopback(cfg.server.bind) ? '127.0.0.1' : publicHost();
       const base = `${scheme}://${host}:${cfg.server.port}`;
+      const local = isLoopback(cfg.server.bind);
       ui.blank();
-      if (getOwner(handle)) {
+      // Local access needs no login (see localAccess in auth.ts), so there's no setup link to open.
+      if (local || getOwner(handle)) {
         ui.text(style.bold(running ? 'Done. AgentK Local is running:' : 'Done. AgentK Local will be at:'));
         ui.blank();
         ui.text(`    ${style.cyan(`${base}/`)}`);
@@ -323,11 +371,9 @@ export async function runInstall(args: string[]): Promise<void> {
         ui.text(`    ${style.cyan(`${base}/setup?token=${issueSetupToken(handle)}`)}`);
       }
       ui.blank();
-      if (tls?.selfSigned) {
-        ui.row('Certificate', 'self-signed, so your browser warns once. Check the SHA-256 fingerprint:');
-        ui.row('', tls.fingerprint);
-      }
-      ui.row('New link', 'agent-k-local setup-link');
+      if (local) ui.row('Sign-in', 'none: it only listens on this computer');
+      if (tls?.selfSigned) ui.row('Certificate', 'self-signed, so your browser warns once');
+      if (!local) ui.row('New link', 'agent-k-local setup-link');
       ui.row('Status', 'agent-k-local status');
       ui.row('Logs', 'agent-k-local logs -f');
       ui.blank();

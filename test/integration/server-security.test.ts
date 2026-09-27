@@ -151,3 +151,86 @@ describe('HTTP API: access control', () => {
 
   });
 });
+
+describe('HTTP API: local access (listening on loopback only)', () => {
+  let env: TestEnv;
+  let app: FastifyInstance;
+  beforeEach(async () => {
+    env = await makeEnv();
+    env.core.config.server.bind = '127.0.0.1';
+    app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
+  });
+  afterEach(async () => {
+    await app.close();
+    await env.cleanup();
+  });
+
+  it('needs no login from this computer, and says so', async () => {
+    const st = await app.inject({ url: '/api/auth/status', headers: { host: '127.0.0.1:7777' } });
+    expect(st.json()).toMatchObject({ setupRequired: false, loggedIn: true, localAccess: true });
+    for (const host of ['localhost:7777', '127.0.0.1:7777', '[::1]:7777']) {
+      expect((await app.inject({ url: '/api/state', headers: { host } })).statusCode, host).toBe(200);
+    }
+    const write = await app.inject({ method: 'PUT', url: '/api/settings', headers: { host: 'localhost:7777', origin: 'http://localhost:7777' }, payload: { reposDepth: 2 } });
+    expect(write.statusCode).toBe(200);
+  });
+
+  it('still asks for a login from another host name, another address, or through a proxy', async () => {
+    const refused = [
+      { headers: { host: 'rebound.example:7777' } },
+      { headers: { host: 'localhost:7777' }, remoteAddress: '10.1.2.3' },
+      { headers: { host: 'localhost:7777', 'x-forwarded-for': '10.1.2.3' } },
+      { headers: { host: '127.0.0.1:7777', forwarded: 'for=10.1.2.3' } },
+      { headers: { host: '127.0.0.1:7777', 'x-real-ip': '10.1.2.3' } },
+    ];
+    for (const r of refused) {
+      const res = await app.inject({ url: '/api/state', ...r });
+      expect(res.statusCode, JSON.stringify(r)).toBe(401);
+    }
+    const st = await app.inject({ url: '/api/auth/status', headers: { host: 'rebound.example:7777' } });
+    expect(st.json()).toMatchObject({ setupRequired: true, loggedIn: false, localAccess: false });
+  });
+
+  it('keeps the origin check on writes', async () => {
+    const res = await app.inject({ method: 'PUT', url: '/api/settings', headers: { host: 'localhost:7777', origin: 'https://evil.example' }, payload: {} });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('asks for a login from localhost when the server listens on the network', async () => {
+    env.core.config.server.bind = '0.0.0.0';
+    const networked = await buildServer(env.core, { tls: null, webDir: null, updater: null });
+    try {
+      expect((await networked.inject({ url: '/api/state', headers: { host: 'localhost:7777' } })).statusCode).toBe(401);
+      expect((await networked.inject({ url: '/api/auth/status', headers: { host: 'localhost:7777' } })).json()).toMatchObject({ localAccess: false });
+    } finally {
+      await networked.close();
+    }
+  });
+
+  it('answers the account routes with 409 while no login is set up', async () => {
+    const enroll = await app.inject({ method: 'POST', url: '/api/auth/totp/enroll', headers: { host: 'localhost:7777' } });
+    expect(enroll.statusCode).toBe(409);
+    const pw = await app.inject({ method: 'POST', url: '/api/auth/password', headers: { host: 'localhost:7777' }, payload: { current: 'x', next: 'y' } });
+    expect(pw.statusCode).toBe(409);
+  });
+
+  it('opens sockets without a cookie, and keeps them open when a login is signed out', async () => {
+    await app.ready();
+    // injectWS's request has no socket of its own; give it a loopback peer.
+    const peer = { socket: { remoteAddress: '127.0.0.1' } } as object;
+    let onFirst: (m: string) => void = () => undefined;
+    const first = new Promise<string>((resolve) => (onFirst = resolve));
+    const ws = await app.injectWS('/ws/events', { ...peer, headers: { host: 'localhost:7777' } }, {
+      onInit: (w) => w.once('message', (m) => onFirst(String(m))),
+    });
+    expect(JSON.parse(await first).type).toBe('state');
+    let code: number | null = null;
+    ws.on('close', (c) => (code = c));
+    await app.inject({ method: 'POST', url: '/api/auth/logout', headers: { host: 'localhost:7777' } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(code).toBeNull();
+    ws.terminate();
+    const foreign = await app.injectWS('/ws/events', { ...peer, headers: { host: 'rebound.example:7777' } });
+    expect(await new Promise<number>((resolve) => foreign.on('close', (c) => resolve(c)))).toBe(4401);
+  });
+});

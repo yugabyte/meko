@@ -19,7 +19,8 @@ npm ci                          # also makes node-pty's macOS spawn-helper execu
 npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0.1:5173
 ```
 
-Open http://127.0.0.1:5173. A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
+Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
+access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
 use another folder), so it never opens an installed AgentK Local's database or hook socket. It
 still uses the default tmux socket (`agentk`) unless you set `[tmux] socket` in
 `.dev-home/config.toml`, and port 7777 is taken if an installed server is running there.
@@ -109,4 +110,4 @@ The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current
 `~/.local/bin/agent-k-local`, and runs `agent-k-local install`, which writes `config.toml`,
 checks Meko, installs the two background services (the `agent-k-local` and `agent-k-local-tmux`
 systemd user units on Linux; the `com.yugabyte.agent-k-local` and `com.yugabyte.agent-k-local.tmux`
-LaunchAgents on macOS), and prints the one-time setup link.
+LaunchAgents on macOS), and prints the address, or for remote access the one-time setup link.

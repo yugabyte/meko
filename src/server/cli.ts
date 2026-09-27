@@ -105,7 +105,9 @@ async function serve(): Promise<void> {
   const url = baseUrl(cfg, !!tls);
   log.info(`AgentK Local ${v} listening on ${url}`);
   if (tls) log.info(`TLS certificate SHA-256 fingerprint: ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
-  if (!getOwner(db)) {
+  if (isLoopback(cfg.server.bind)) {
+    log.info('local access: browsers on this computer need no login');
+  } else if (!getOwner(db)) {
     // Don't replace a link the installer (or `setup-link`) already printed.
     if (setupTokenOutstanding(db)) log.info('waiting for first-time setup: open the link the installer printed, or run `agent-k-local setup-link` for a new one');
     else log.info(`first-time setup: ${url}/setup?token=${issueSetupToken(db)}`);
@@ -133,6 +135,7 @@ async function setupLink(): Promise<void> {
   console.log(reset
     ? 'This one-time link resets the username, password and authenticator for this install. It expires in 7 days.'
     : 'Open this one-time link to create your login. It expires in 7 days.');
+  if (isLoopback(cfg.server.bind)) console.log('No login is needed while AgentK Local only listens on this computer; the login applies once it listens on the network.');
   db.close();
 }
 

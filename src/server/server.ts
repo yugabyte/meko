@@ -14,7 +14,7 @@ import type {
 import { SHARE_GRANTS } from '../shared/types.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
-  deleteAuthSession, getOwner, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, totpAccept, validateAuthSession, validatePassword,
+  deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
 import type { Core } from './core.js';
@@ -55,8 +55,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // JSON) can't post to it, even from our own origin.
   app.removeContentTypeParser('text/plain');
 
+  // The address the server listens on (cli.ts listens on the same config), fixed for its lifetime.
+  const bind = core.config.server.bind;
+  /** No login needed: the server listens only on this computer and the request is local. */
+  // `req.ip` is the peer's address: no trustProxy, so a forwarding header can't change it.
+  const local = (req: FastifyRequest) => localAccess(bind, req.ip, req.headers);
   // Only the onRequest hook renews a login, since only it can re-issue the cookie with it.
-  const authed = (req: FastifyRequest) => authSessionLive(db, req.cookies[COOKIE_NAME]);
+  const authed = (req: FastifyRequest) => local(req) || authSessionLive(db, req.cookies[COOKIE_NAME]);
   /**
    * The route a request matched (`/api/sessions/:id`), or undefined when none did. Access checks
    * key on this, never the raw URL: the router decodes `/%61pi/...` to `/api/...`, and an
@@ -88,7 +93,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const route = routeOf(req);
     if (!route?.startsWith('/api/')) return;
     if (req.method !== 'GET' && !sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
-    if (PUBLIC_API.has(route)) return;
+    if (PUBLIC_API.has(route) || local(req)) return;
     const auth = validateAuthSession(db, req.cookies[COOKIE_NAME]);
     if (!auth.valid) return reply.code(401).send({ error: 'Sign in first.' });
     // The database slides the expiry as the app is used; keep the browser's cookie in step.
@@ -110,14 +115,23 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get('/healthz', async () => ({ ok: true, version: core.version }));
 
   // ---- auth ----
+  /** The owner, for the account routes; a local-access install may not have one yet. */
+  const ownerOr409 = () => {
+    const owner = getOwner(db);
+    if (!owner) throw new HttpError(409, 'No login is set up. Run `agent-k-local setup-link` on the host to create one.');
+    return owner;
+  };
+
   app.get('/api/auth/status', async (req): Promise<AuthStatus> => {
     const owner = getOwner(db);
     const tokenOutstanding = setupTokenOutstanding(db);
+    const isLocal = local(req);
     return {
-      setupRequired: !owner || (tokenOutstanding && !authed(req)),
+      setupRequired: !isLocal && (!owner || (tokenOutstanding && !authed(req))),
       loggedIn: authed(req),
       username: owner && authed(req) ? owner.username : null,
       totpEnabled: !!owner?.totp_secret,
+      localAccess: isLocal,
     };
   });
 
@@ -174,6 +188,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   app.post<{ Body: { current: string; next: string } }>('/api/auth/password', async (req, reply) => {
+    ownerOr409();
     const err = changePassword(db, req.body?.current ?? '', req.body?.next ?? '', req.cookies[COOKIE_NAME]);
     if (err) return reply.code(400).send({ error: err });
     closeRevokedSockets();
@@ -181,7 +196,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   app.post('/api/auth/totp/enroll', async () => {
-    const owner = getOwner(db)!;
+    const owner = ownerOr409();
     const secret = newTotpSecret();
     run(db, 'UPDATE owner SET totp_pending = ? WHERE id = 1', secret);
     const url = otpauthUrl(secret, owner.username);
@@ -189,7 +204,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   app.post<{ Body: { code: string } }>('/api/auth/totp/confirm', async (req, reply) => {
-    const owner = getOwner(db)!;
+    const owner = ownerOr409();
     if (!owner.totp_pending || !totpAccept(db, owner.totp_pending, req.body?.code)) {
       return reply.code(400).send({ error: 'That code doesn\'t match. Check the time on your phone and try again.' });
     }
@@ -199,7 +214,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   app.post<{ Body: { code: string } }>('/api/auth/totp/disable', async (req, reply) => {
-    const owner = getOwner(db)!;
+    const owner = ownerOr409();
     if (!owner.totp_secret || !totpAccept(db, owner.totp_secret, req.body?.code)) {
       return reply.code(400).send({ error: 'That code is wrong or expired.' });
     }
@@ -386,11 +401,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- websockets ----
   const clients = new Set<WebSocket>();
-  /** Every open socket (events and terminals) with the login cookie it was opened with. */
-  const sockets = new Map<WebSocket, { token: string; alive: boolean }>();
+  /** Every open socket (events and terminals) with the login cookie it was opened with (none for local access). */
+  const sockets = new Map<WebSocket, { token: string | null; alive: boolean }>();
   /** Closes sockets whose login is gone (logout, password change or reset, expiry). */
   function closeRevokedSockets() {
-    for (const [ws, s] of sockets) if (!authSessionLive(db, s.token)) ws.close(4401, 'unauthorized');
+    for (const [ws, s] of sockets) if (s.token !== null && !authSessionLive(db, s.token)) ws.close(4401, 'unauthorized');
   }
   // Heartbeat: a phone that drops off the network sends no close, and its `tmux attach` would
   // otherwise stay attached (holding the window at its size) until the server restarts.
@@ -453,7 +468,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       socket.close(4401, 'unauthorized');
       return false;
     }
-    const entry = { token: req.cookies[COOKIE_NAME]!, alive: true };
+    const entry = { token: local(req) ? null : req.cookies[COOKIE_NAME]!, alive: true };
     sockets.set(socket, entry);
     socket.on('pong', () => (entry.alive = true));
     socket.on('close', () => sockets.delete(socket));

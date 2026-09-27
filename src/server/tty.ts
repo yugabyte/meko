@@ -26,6 +26,8 @@ const MARK = {
 };
 
 const LABEL_WIDTH = 14;
+/** A label padded to `width`, with at least one space after it when it's that long or longer. */
+export const pad = (label: string, width = LABEL_WIDTH) => (label.length >= width ? `${label} ` : label.padEnd(width));
 const out = (s = '') => process.stdout.write(s + '\n');
 
 export const ui = {
@@ -39,13 +41,13 @@ export const ui = {
     out(style.bold(s));
   },
   /** "  ✓ Label         detail" */
-  ok: (label: string, detail = '') => out(`  ${MARK.ok()} ${detail ? label.padEnd(LABEL_WIDTH) + style.dim(detail) : label}`),
-  warn: (label: string, detail = '') => out(`  ${MARK.warn()} ${detail ? label.padEnd(LABEL_WIDTH) + detail : label}`),
-  fail: (label: string, detail = '') => process.stderr.write(`  ${MARK.fail()} ${detail ? label.padEnd(LABEL_WIDTH) + detail : label}\n`),
+  ok: (label: string, detail = '') => out(`  ${MARK.ok()} ${detail ? pad(label) + style.dim(detail) : label}`),
+  warn: (label: string, detail = '') => out(`  ${MARK.warn()} ${detail ? pad(label) + detail : label}`),
+  fail: (label: string, detail = '') => process.stderr.write(`  ${MARK.fail()} ${detail ? pad(label) + detail : label}\n`),
   /** "    Label         value" (no mark) */
-  row: (label: string, value: string) => out(`    ${style.dim(label.padEnd(LABEL_WIDTH))}${value}`),
+  row: (label: string, value: string) => out(`    ${style.dim(pad(label))}${value}`),
   note: (s: string) => out(`    ${style.dim(s)}`),
   text: (s: string) => out(s),
   /** Prompt text for readline: "  Label         [default] › " */
-  prompt: (label: string, def: string) => `  ${label.padEnd(LABEL_WIDTH + 2)}${def ? style.dim(`[${def}] `) : ''}› `,
+  prompt: (label: string, def: string) => `  ${pad(label, LABEL_WIDTH + 2)}${def ? style.dim(`[${def}] `) : ''}› `,
 };

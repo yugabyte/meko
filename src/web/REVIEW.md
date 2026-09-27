@@ -9,7 +9,8 @@ a **major** finding.
 - [ ] The change works at 390 px wide: nothing is cut off, overlaps, or makes the page scroll
       sideways (code, diffs and wide tables scroll inside their own box).
 - [ ] New controls are reachable on a phone. Session header or footer additions also appear in the
-      ⋯ sheet (`SessionSheet.tsx`); project-level actions appear in the drawer.
+      ⋯ sheet (`SessionSheet.tsx`) unless the phone footer shows them (like the diff size, which
+      opens Changes); project-level actions appear in the drawer.
 - [ ] Nothing needs hover, right-click, modifier-click, drag and drop, or a keyboard shortcut
       without a tap equivalent. Needed information isn't only in a `title` tooltip.
 - [ ] Touch targets are at least 36 px tall (40 px for icon buttons) under `(pointer: coarse)`.

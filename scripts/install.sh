@@ -43,8 +43,8 @@ case "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" in
   *) ok_mark='ok'; warn_mark='!!'; fail_mark='xx' ;;
 esac
 say() { printf '%s\n' "$*" >&2; }
-ok() { printf '  %s%s%s %-14s%s%s%s\n' "$g" "$ok_mark" "$n" "$1" "$d" "${2:-}" "$n" >&2; }
-warn() { printf '  %s%s%s %-14s%s\n' "$y" "$warn_mark" "$n" "$1" "${2:-}" >&2; }
+ok() { printf '  %s%s%s %-13s %s%s%s\n' "$g" "$ok_mark" "$n" "$1" "$d" "${2:-}" "$n" >&2; }
+warn() { printf '  %s%s%s %-13s %s\n' "$y" "$warn_mark" "$n" "$1" "${2:-}" >&2; }
 die() { printf '\n  %s%s%s %s\n' "$r" "$fail_mark" "$n" "$*" >&2; exit 1; }
 
 # ---- arguments ----

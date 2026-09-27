@@ -37,7 +37,11 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 ```
 
 It offers to install anything that's missing (tmux, git, gh, Claude Code) and to set up Meko for
-Claude Code, asking first, then prints a one-time setup link to open in your browser.
+Claude Code, asking first. It asks for **local** access (this computer only, no login) or
+**remote** access (other devices too, like your phone, over HTTPS with a login); remote is the
+default over SSH or on a machine with no display. Then it prints the address, or for remote
+access a one-time setup link that creates your login. Local access trusts everyone who can log
+in to the computer, so pick remote on a shared host.
 
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
 Code keeps its login in your Keychain, so AgentK Local runs while you're logged in. For a Mac mini
@@ -47,7 +51,8 @@ your phone can connect.
 
 ## Features
 
-- **Projects** in a left rail, each one a git repo picked from your repos folder (`~/code` by default).
+- **Projects** in a left rail: each is an effort to build or improve a feature, product or service,
+  worked on in a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
   New sessions start from the base branch after it's fast-forwarded to `origin`.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of

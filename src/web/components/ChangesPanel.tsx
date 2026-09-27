@@ -656,7 +656,7 @@ function CommentEditor({
   return (
     <div className="cmt editing">
       <div className="cmt-meta">
-        <span className="cmt-state draft">{editor.id ? 'editing' : 'new'}</span>
+        {editor.id && <span className="cmt-state draft">editing</span>}
         <span>{label}</span>
       </div>
       <textarea

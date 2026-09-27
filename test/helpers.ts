@@ -152,7 +152,8 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   const socket = `akl-test-${process.pid}-${seq++}`;
   // The Tmux below never uses this host's background services (it gets no service manager).
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
-  cfg.server.bind = '127.0.0.1';
+  // A network bind, as on a remote-access install: a loopback one skips the login (localAccess).
+  cfg.server.bind = '0.0.0.0';
   cfg.repos.roots = [join(home, 'code')];
   cfg.repos.cloneInto = join(home, 'code');
   cfg.tmux.socket = socket;

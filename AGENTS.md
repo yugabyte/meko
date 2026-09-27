@@ -3,8 +3,9 @@
 Guide for coding agents (Claude Code, Codex, Cursor, and others) working on **AgentK Local**. Humans
 should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and the rules.
 
-AgentK Local is a self-hosted web workbench for Claude Code. Projects are git repos. Each task is a
-session with its own git worktree and a tmux-hosted Claude process. Its type decides the stages:
+AgentK Local is a self-hosted web workbench for Claude Code. A project is an effort on a feature
+or product, worked on in a git repo. Each task is a session with its own git worktree and a
+tmux-hosted Claude process. Its type decides the stages:
 Plan & Implement goes Design → Code → PR → Review → Merge & Close, Quick Code skips Design, and
 Exploration stays in one Explore stage. Meko datapacks hold project memory. The design
 is in [docs/design.md](docs/design.md).
@@ -79,7 +80,10 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
    auto-continues in an hour the next one is parked). Archive and project delete wait for a session
    that is still starting; `launch()` never replaces a live pane.
 3. **Everything behind login.** Every `/api/*` route except `auth/status|setup|login` requires the
-   session cookie, and every WebSocket checks the cookie and refuses a cross-origin `Origin`. Access
+   session cookie, and every WebSocket checks the cookie and refuses a cross-origin `Origin`. The
+   one exception is local access (`localAccess()` in `auth.ts`): with the server listening only on
+   loopback, a loopback request whose `Host` is localhost needs no cookie. A network bind always
+   requires the login, even from localhost. Access
    checks key on the matched route (`req.routeOptions.url`), never the raw URL, which can be
    percent-encoded. Hooks use the unix socket with a
    per-session token, never the network port.

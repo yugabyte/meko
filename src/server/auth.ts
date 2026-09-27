@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { isIPv6 } from 'node:net';
+import { isLoopback } from './config.js';
 import { audit, get, kvDelete, kvGet, kvSet, run, type Db } from './db.js';
 
 const SESSION_TTL_MS = 14 * 24 * 3600 * 1000;
@@ -8,6 +9,32 @@ const SETUP_TOKEN_TTL_MS = 7 * 24 * 3600 * 1000;
 export const COOKIE_NAME = 'ak_session';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+
+// ---- local access ----
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+/** Headers a reverse proxy adds: the request really came from somewhere else. */
+const FORWARDED = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip'];
+
+/**
+ * True when a request needs no login: the server listens only on loopback (`bind`), the
+ * connection comes from loopback, the Host header names this computer, and no proxy says it
+ * forwarded the request. The Host check keeps a DNS-rebound page (Host: attacker.example) out. A
+ * server listening on the network always asks for a login, even from localhost, so an SSH tunnel
+ * or a reverse proxy on the host can't skip it.
+ */
+export function localAccess(bind: string, remoteAddress: string | undefined, headers: Record<string, string | string[] | undefined>): boolean {
+  const host = headers.host;
+  if (!isLoopback(bind) || !remoteAddress || typeof host !== 'string') return false;
+  if (FORWARDED.some((h) => headers[h] !== undefined)) return false;
+  const addr = remoteAddress.replace(/^::ffff:/i, '');
+  if (!(addr === '::1' || /^127\.\d+\.\d+\.\d+$/.test(addr))) return false;
+  try {
+    return LOCAL_HOSTS.has(new URL(`http://${host}`).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 // ---- passwords (scrypt) ----
 

@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ensurePrivateDir, parseDfMountPoint, parseMountType, purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { accessBind, accessDefault, ensurePrivateDir, isHeadless, parseDfMountPoint, parseMountType, purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { pad } from '../../src/server/tty.js';
 import { getPaths } from '../../src/server/paths.js';
 import { LaunchdServices, SystemdServices } from '../../src/server/service.js';
 
@@ -169,5 +170,44 @@ describe('server PATH', () => {
     expect(withLocalBin('/usr/bin:/bin', '/home/me')).toBe('/usr/bin:/bin:/home/me/.local/bin');
     expect(withLocalBin('/home/me/.local/bin:/usr/bin', '/home/me')).toBe('/home/me/.local/bin:/usr/bin');
     expect(withLocalBin('', '/home/me')).toBe('/home/me/.local/bin');
+  });
+});
+
+describe('the Access question', () => {
+  it('defaults to remote over SSH or on Linux with no display, and to local at a desktop', () => {
+    expect(isHeadless({ SSH_CONNECTION: '10.0.0.2 5000 10.0.0.1 22' }, 'darwin')).toBe(true);
+    expect(isHeadless({ SSH_TTY: '/dev/pts/1', DISPLAY: ':0' }, 'linux')).toBe(true);
+    expect(isHeadless({}, 'linux')).toBe(true);
+    expect(isHeadless({ DISPLAY: ':0' }, 'linux')).toBe(false);
+    expect(isHeadless({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux')).toBe(false);
+    expect(isHeadless({}, 'darwin')).toBe(false);
+  });
+
+  it('turns answers into listen addresses', () => {
+    expect(accessBind('local')).toBe('127.0.0.1');
+    expect(accessBind(' L ')).toBe('127.0.0.1');
+    expect(accessBind('remote')).toBe('0.0.0.0');
+    expect(accessBind('R')).toBe('0.0.0.0');
+    expect(accessBind('10.1.2.3')).toBe('10.1.2.3');
+    expect(accessBind('::1')).toBe('::1');
+    // The address it listens on now is kept, even a host name.
+    expect(accessBind('devbox.lan', 'devbox.lan')).toBe('devbox.lan');
+    expect(() => accessBind('remtoe')).toThrow(/local or remote/);
+    expect(() => accessBind('')).toThrow(/local or remote/);
+  });
+
+  it('starts a reinstall from the current listen address', () => {
+    expect(accessDefault('127.0.0.1')).toBe('local');
+    expect(accessDefault('::1')).toBe('local');
+    expect(accessDefault('0.0.0.0')).toBe('remote');
+    expect(accessDefault('10.1.2.3')).toBe('10.1.2.3');
+  });
+});
+
+describe('CLI labels', () => {
+  it('always leave a space before the detail, even when the label is long', () => {
+    expect(pad('Meko')).toBe('Meko'.padEnd(14));
+    expect(pad('Meko in Claude')).toBe('Meko in Claude ');
+    expect(pad('com.yugabyte.agent-k-local.tmux')).toBe('com.yugabyte.agent-k-local.tmux ');
   });
 });

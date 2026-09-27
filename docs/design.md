@@ -27,7 +27,7 @@ from a browser.
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
-| Network | Reachable directly on the corp network over HTTPS, behind a login. |
+| Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents. |
@@ -295,8 +295,9 @@ opens the datapack's Share page in the Meko web app. See [Sharing a project](#sh
 
 ## Projects, worktrees and sessions
 
-A **project** is a git repository on the host, picked from your repos folder (`~/code`) or cloned
-into it at creation. The project only points at the repo. The one change it makes there: when a
+A **project** is an effort to build or improve a feature, product or service. It works in a git
+repository on the host, picked from your repos folder (`~/code`) or cloned into it at creation.
+The project only points at the repo. The one change it makes there: when a
 session starts, it fast-forwards the local base branch to `origin`. That's a `merge --ff-only`
 with autostash off when your main checkout has the branch checked out (git refuses if it would
 overwrite local edits), or a non-forced local fetch (`git fetch . origin/<base>:<base>`) when no
@@ -683,22 +684,33 @@ The terminal is a shell running as your Unix user, so the web login protects the
 your SSH key. Each install serves exactly one owner. Sharing the app means other people install
 their own copy.
 
-- **First run.** The installer prints a one-time setup link: `https://host:7777/setup?token=…`.
-  You open it, choose a username and password, and can optionally enrol TOTP. The token stops
-  working after it is used.
+- **Local or remote access.** The installer asks which you want. *Local* listens on 127.0.0.1
+  only, over plain HTTP with no login: a request needs no cookie when the server listens only on
+  loopback, the connection comes from loopback, and its `Host` header is `localhost`, `127.0.0.1`
+  or `[::1]` (so a DNS-rebound page, which sends its own host name, gets nothing), with no
+  `Forwarded`/`X-Forwarded-*`/`X-Real-IP` header from a proxy. *Remote*
+  listens on every address (`0.0.0.0`), over HTTPS with a login, and then the login is required
+  even from localhost, so an SSH tunnel or a reverse proxy on the host can't skip it. The default
+  is remote over SSH or on Linux with no display, and local otherwise. Local access trusts
+  everything that can connect to 127.0.0.1, every user of the computer and any reverse proxy on it
+  included: on a shared host, or behind a proxy, choose remote.
+- **First run.** With remote access, the installer prints a one-time setup link:
+  `https://host:7777/setup?token=…`. You open it, choose a username and password, and can
+  optionally enrol TOTP. The token stops working after it is used. With local access it prints
+  the address instead; `agent-k-local setup-link` still makes a login for a later switch to remote.
 - **Sessions.** Passwords are hashed with scrypt. After login you get an `HttpOnly`,
   `SameSite=Strict` cookie (`Secure` over HTTPS) that lasts 14 days, renewed as you use the app.
   Changing the password signs out every other browser. Access checks key on the route a request
   matched, so an encoded path (`/%61pi/…`) gets the same checks as `/api/…`. The API only takes
-  JSON bodies, so a plain HTML form can't post to it. Every WebSocket upgrade checks the cookie and
-  refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
+  JSON bodies, so a plain HTML form can't post to it. Every WebSocket upgrade checks the cookie (or
+  local access) and refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
   out, and the server pings them every 30 seconds to drop ones whose network went away. A browser
   that falls behind doesn't make the server buffer without limit: its terminal stops reading from
   `tmux attach` until it catches up (tmux copes with a slow client), and it skips state snapshots
   until it has drained, then gets the current one.
 - **TLS is mandatory.** Any address other than localhost requires HTTPS. You can point it at your
-  own certificate from the corp CA, or let it generate a self-signed pair and show the fingerprint
-  so you can trust it once on your laptop. The self-signed pair lasts 825 days and is made again
+  own certificate from the corp CA, or let it generate a self-signed pair; `agent-k-local status`
+  shows its fingerprint so you can trust it once on your laptop. The self-signed pair lasts 825 days and is made again
   at startup once it's within 30 days of expiring (trust the new fingerprint then). No HSTS header
   is sent: it would apply to every port of the host, including your other dev servers.
 - **Guard rails.** Failed logins are rate-limited: 5 per 15 minutes from one address (one /64 for
@@ -822,14 +834,15 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #     signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
 #  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
-#  3. asks for your repos folder (default ~/code), listen address and port
+#  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
+#     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
 #  4. verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks) and
 #     offers to run Meko's setup for Claude Code if its plugin, MCP server or key is missing
 #  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
 #     sets up TLS
 #  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  7. prints the one-time setup link
+#  7. prints the one-time setup link (remote access), or the address (local access)
 ```
 
 **Update loop.** The server checks the GitHub Releases API at startup and every 6 hours

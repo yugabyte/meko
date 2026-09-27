@@ -259,7 +259,6 @@ export function ProjectView({
           session={session}
           stage={<StageBar session={session} project={project} onAct={act} acting={acting} actions={null} reasons />}
           canDesign={canDesign}
-          pendingComments={pending}
           acting={acting}
           info={
             <>
@@ -270,7 +269,6 @@ export function ProjectView({
             </>
           }
           onDesign={() => setPanel('design')}
-          onChanges={() => setPanel('changes')}
           onHome={goHome}
           onAct={act}
           onClose={() => setSheet(false)}
