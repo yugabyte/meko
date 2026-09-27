@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/AgentK.png" width="120" alt="AgentK logo"></p>
+<p align="center"><img src="assets/AgentK-nobg.png" width="120" alt="AgentK logo"></p>
 
 # AgentK Local
 
