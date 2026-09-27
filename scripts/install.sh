@@ -104,12 +104,14 @@ need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but was not foun
 user_path=$PATH
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac
 need tar ""
-if command -v sha256sum >/dev/null 2>&1; then
+# Try each tool rather than trusting PATH: a leftover Intel sha256sum on an Apple Silicon Mac
+# without Rosetta is found but can't run ("Bad CPU type").
+if printf '' | sha256sum >/dev/null 2>&1; then
   sha256_check() { sha256sum -c -; }
-elif command -v shasum >/dev/null 2>&1; then
+elif printf '' | shasum -a 256 >/dev/null 2>&1; then
   sha256_check() { shasum -a 256 -c -; }
 else
-  die "sha256sum (coreutils) or shasum is required but neither was found on PATH."
+  die "sha256sum (coreutils) or shasum is required but neither runs. Install one that works on this machine and try again."
 fi
 
 # shellcheck disable=SC2086 # intentional split into major/minor

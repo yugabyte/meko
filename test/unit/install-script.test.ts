@@ -24,6 +24,10 @@ function stub(dir: string, name: string, body: string) {
   chmodSync(join(dir, name), 0o755);
 }
 
+/** The host's working checksum tool (a sha256sum that is on PATH may still fail to run). */
+const SUM = spawnSync('sh', ['-c', "printf '' | sha256sum"]).status === 0 ? 'sha256sum' : 'shasum';
+const realSum = () => execFileSync('sh', ['-c', `command -v ${SUM}`], { encoding: 'utf8' }).trim();
+
 /** A tool as a package manager would install it: copied from the "repo" into bin. */
 const installs = (from: string, to: string) => `for p in "$@"; do [ -f "${from}/$p" ] && cp "${from}/$p" "${to}/$p"; done; exit 0`;
 
@@ -35,8 +39,7 @@ beforeEach(() => {
   log = join(root, 'calls.log');
   for (const d of [bin, repo, home]) mkdirSync(d, { recursive: true });
   for (const r of REAL) symlinkSync(execFileSync('sh', ['-c', `command -v ${r}`], { encoding: 'utf8' }).trim(), join(bin, r));
-  const sum = spawnSync('sh', ['-c', 'command -v sha256sum']).status === 0 ? 'sha256sum' : 'shasum';
-  symlinkSync(execFileSync('sh', ['-c', `command -v ${sum}`], { encoding: 'utf8' }).trim(), join(bin, sum));
+  symlinkSync(realSum(), join(bin, SUM));
 
   stub(bin, 'uname', 'case $1 in -s) echo "${FAKE_OS:-Linux}" ;; -m) echo "${FAKE_ARCH:-x86_64}" ;; esac');
   stub(bin, 'id', 'echo "${FAKE_UID:-1000}"');
@@ -127,6 +130,17 @@ describe('install.sh: installing missing tools', () => {
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/couldn't install gh/);
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(false);
+  });
+
+  it('falls back to shasum when sha256sum is on PATH but cannot run', () => {
+    have('tmux', 'git', 'curl');
+    rmSync(join(bin, SUM));
+    stub(bin, 'sha256sum', 'echo "Bad CPU type in executable" >&2; exit 126');
+    // shasum, or the host's sha256sum dressed up as one.
+    stub(bin, 'shasum', SUM === 'shasum' ? `exec "${realSum()}" "$@"` : `[ "$1" = -a ] && shift 2; exec "${realSum()}" "$@"`);
+    const r = run(['--non-interactive', '--install-deps']);
+    expect(r.code).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
   });
 
   it('says so when the installed tmux is still too old', () => {
