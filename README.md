@@ -2,10 +2,9 @@
 
 # AgentK Local
 
-The agentic coder for ADLC. AgentK Local runs many
-[Claude Code](https://claude.com/claude-code) sessions across your projects at once, and
-[Meko](https://mekodata.ai) is the shared context layer: designs, session transcripts and what
-shipped go to datapacks your teammates and their agents work from too.
+The agentic coder for ADLC. AgentK Local lets you manage many projects and [Claude Code](https://claude.com/claude-code) sessions at 
+once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and shipped work flow into 
+datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
 your phone.
