@@ -15,18 +15,36 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 /** Headers a reverse proxy adds: the request really came from somewhere else. */
 const FORWARDED = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip'];
+/** `Sec-Fetch-Site` values for a request the user made on this origin (or typed in the address bar). */
+const OWN_FETCH = new Set(['same-origin', 'none']);
 
 /**
  * True when a request needs no login: the server listens only on loopback (`bind`), the
- * connection comes from loopback, the Host header names this computer, and no proxy says it
- * forwarded the request. The Host check keeps a DNS-rebound page (Host: attacker.example) out. A
- * server listening on the network always asks for a login, even from localhost, so an SSH tunnel
- * or a reverse proxy on the host can't skip it.
+ * connection comes from loopback, the Host header names this computer, no proxy says it
+ * forwarded the request, and the browser doesn't say another site sent it. The Host check keeps
+ * a DNS-rebound page (Host: attacker.example) out. The site checks stand in for the SameSite=Strict
+ * cookie: without them, an `<img>` or `<script>` on any page could make logged-in GETs and learn
+ * from whether they load. A server listening on the network always asks for a login, even from
+ * localhost. A loopback one trusts anything that reaches 127.0.0.1 without those headers: other
+ * users of the computer, and tunnels or proxies that forward to it.
  */
+/** The host (and port) of an `Origin` header, or null when it isn't a URL (`null`, say). */
+function originHost(origin: string): string | null {
+  try {
+    return new URL(origin).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 export function localAccess(bind: string, remoteAddress: string | undefined, headers: Record<string, string | string[] | undefined>): boolean {
   const host = headers.host;
   if (!isLoopback(bind) || !remoteAddress || typeof host !== 'string') return false;
   if (FORWARDED.some((h) => headers[h] !== undefined)) return false;
+  const site = headers['sec-fetch-site'];
+  if (site !== undefined && !(typeof site === 'string' && OWN_FETCH.has(site))) return false;
+  const origin = headers.origin;
+  if (origin !== undefined && !(typeof origin === 'string' && originHost(origin) === host.toLowerCase())) return false;
   const addr = remoteAddress.replace(/^::ffff:/i, '');
   if (!(addr === '::1' || /^127\.\d+\.\d+\.\d+$/.test(addr))) return false;
   try {

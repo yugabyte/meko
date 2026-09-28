@@ -82,7 +82,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 3. **Everything behind login.** Every `/api/*` route except `auth/status|setup|login` requires the
    session cookie, and every WebSocket checks the cookie and refuses a cross-origin `Origin`. The
    one exception is local access (`localAccess()` in `auth.ts`): with the server listening only on
-   loopback, a loopback request whose `Host` is localhost needs no cookie. A network bind always
+   loopback, a same-site loopback request whose `Host` is localhost needs no cookie. A network bind always
    requires the login, even from localhost. Access
    checks key on the matched route (`req.routeOptions.url`), never the raw URL, which can be
    percent-encoded. Hooks use the unix socket with a

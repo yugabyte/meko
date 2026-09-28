@@ -190,12 +190,13 @@ export function accessDefault(bind: string): string {
 
 /**
  * The listen address for an answer to the Access question: local, remote, an IP address, or the
- * address it listens on now (which may be a host name).
+ * address it listens on now (which may be a host name). Local and remote keep the current address
+ * when it already is one (`::1`, or `::` for IPv6 as well as IPv4).
  */
 export function accessBind(answer: string, current = ''): string {
   const a = answer.trim();
-  if (/^l(ocal)?$/i.test(a)) return '127.0.0.1';
-  if (/^r(emote)?$/i.test(a)) return '0.0.0.0';
+  if (/^l(ocal)?$/i.test(a)) return isLoopback(current) ? current : '127.0.0.1';
+  if (/^r(emote)?$/i.test(a)) return current === '0.0.0.0' || current === '::' ? current : '0.0.0.0';
   if (isIP(a) || a === 'localhost' || (a && a === current)) return a;
   throw new InstallError(`Answer local or remote (or an address to listen on), not "${a}".`);
 }
@@ -371,7 +372,11 @@ export async function runInstall(args: string[]): Promise<void> {
         ui.text(`    ${style.cyan(`${base}/setup?token=${issueSetupToken(handle)}`)}`);
       }
       ui.blank();
-      if (local) ui.row('Sign-in', 'none: it only listens on this computer');
+      if (local) {
+        ui.row('Sign-in', getOwner(handle)
+          ? `none on this computer; the login for ${getOwner(handle)!.username} is kept for remote access`
+          : 'none: it only listens on this computer');
+      }
       if (tls?.selfSigned) ui.row('Certificate', 'self-signed, so your browser warns once');
       if (!local) ui.row('New link', 'agent-k-local setup-link');
       ui.row('Status', 'agent-k-local status');

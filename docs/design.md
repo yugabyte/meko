@@ -688,7 +688,11 @@ their own copy.
   only, over plain HTTP with no login: a request needs no cookie when the server listens only on
   loopback, the connection comes from loopback, and its `Host` header is `localhost`, `127.0.0.1`
   or `[::1]` (so a DNS-rebound page, which sends its own host name, gets nothing), with no
-  `Forwarded`/`X-Forwarded-*`/`X-Real-IP` header from a proxy. *Remote*
+  `Forwarded`/`X-Forwarded-*`/`X-Real-IP` header from a proxy, and the browser doesn't mark it as
+  sent by another site (`Sec-Fetch-Site` other than `same-origin` or `none`, or an `Origin` that
+  isn't this one). That last check does the SameSite=Strict cookie's job: an `<img>` on another
+  site gets a 401, not an answer it could time. An existing login is kept for a later switch to
+  remote; the server's startup log says it isn't needed meanwhile. *Remote*
   listens on every address (`0.0.0.0`), over HTTPS with a login, and then the login is required
   even from localhost, so an SSH tunnel or a reverse proxy on the host can't skip it. The default
   is remote over SSH or on Linux with no display, and local otherwise. Local access trusts

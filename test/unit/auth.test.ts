@@ -9,6 +9,18 @@ describe('local access', () => {
     expect(localAccess('::1', '::1', { host: '[::1]:7777' })).toBe(true);
     expect(localAccess('localhost', '::ffff:127.0.0.1', { host: '127.0.0.1:7777' })).toBe(true);
     expect(localAccess('127.0.0.1', '127.0.0.1', { host: 'LOCALHOST' })).toBe(true);
+    // The app's own requests, and a link typed in the address bar.
+    expect(localAccess('127.0.0.1', '127.0.0.1', { ...local, 'sec-fetch-site': 'same-origin', origin: 'http://localhost:7777' })).toBe(true);
+    expect(localAccess('127.0.0.1', '127.0.0.1', { ...local, 'sec-fetch-site': 'none' })).toBe(true);
+  });
+
+  it('never applies to a request another site sent', () => {
+    for (const site of ['cross-site', 'same-site']) {
+      expect(localAccess('127.0.0.1', '127.0.0.1', { ...local, 'sec-fetch-site': site }), site).toBe(false);
+    }
+    expect(localAccess('127.0.0.1', '127.0.0.1', { ...local, origin: 'https://evil.example' })).toBe(false);
+    expect(localAccess('127.0.0.1', '127.0.0.1', { ...local, origin: 'http://localhost:5173' })).toBe(false);
+    expect(localAccess('127.0.0.1', '127.0.0.1', { ...local, origin: 'null' })).toBe(false);
   });
 
   it('never applies to a network bind, another peer, another Host or a forwarded request', () => {

@@ -192,6 +192,12 @@ describe('the Access question', () => {
     expect(accessBind('::1')).toBe('::1');
     // The address it listens on now is kept, even a host name.
     expect(accessBind('devbox.lan', 'devbox.lan')).toBe('devbox.lan');
+    // Local and remote keep the address when it already is one: IPv6 stays IPv6.
+    expect(accessBind('remote', '::')).toBe('::');
+    expect(accessBind('remote', '0.0.0.0')).toBe('0.0.0.0');
+    expect(accessBind('remote', '127.0.0.1')).toBe('0.0.0.0');
+    expect(accessBind('local', '::1')).toBe('::1');
+    expect(accessBind('local', '::')).toBe('127.0.0.1');
     expect(() => accessBind('remtoe')).toThrow(/local or remote/);
     expect(() => accessBind('')).toThrow(/local or remote/);
   });

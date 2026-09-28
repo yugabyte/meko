@@ -182,6 +182,9 @@ describe('HTTP API: local access (listening on loopback only)', () => {
       { headers: { host: 'localhost:7777', 'x-forwarded-for': '10.1.2.3' } },
       { headers: { host: '127.0.0.1:7777', forwarded: 'for=10.1.2.3' } },
       { headers: { host: '127.0.0.1:7777', 'x-real-ip': '10.1.2.3' } },
+      // An <img> or <script> on another site: the cookie's SameSite=Strict would have kept these out.
+      { headers: { host: 'localhost:7777', 'sec-fetch-site': 'cross-site' } },
+      { headers: { host: 'localhost:7777', origin: 'https://evil.example' } },
     ];
     for (const r of refused) {
       const res = await app.inject({ url: '/api/state', ...r });

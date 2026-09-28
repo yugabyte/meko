@@ -126,10 +126,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const owner = getOwner(db);
     const tokenOutstanding = setupTokenOutstanding(db);
     const isLocal = local(req);
+    const loggedIn = isLocal || authed(req);
     return {
-      setupRequired: !isLocal && (!owner || (tokenOutstanding && !authed(req))),
-      loggedIn: authed(req),
-      username: owner && authed(req) ? owner.username : null,
+      setupRequired: !isLocal && (!owner || (tokenOutstanding && !loggedIn)),
+      loggedIn,
+      username: owner && loggedIn ? owner.username : null,
       totpEnabled: !!owner?.totp_secret,
       localAccess: isLocal,
     };

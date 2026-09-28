@@ -2928,22 +2928,28 @@ a.icon-btn {
   .hide-touch {
     display: none;
   }
-  /* Always shown on touch, so kept small and quiet: a faint + that fills in on the picked lines. */
+  /* Always shown on touch, so kept small and quiet: a faint 16px + that fills in on the picked
+     lines. The button stays 22px (the padding isn't painted), so rows keep their height for taps. */
   .cmt-add {
     position: relative;
     opacity: 1;
+    width: 22px;
+    height: 22px;
+    padding: 3px;
+    border-radius: 7px;
     background: var(--accent-soft);
+    background-clip: content-box;
     color: var(--accent);
   }
   .diff tr.picked .cmt-add {
-    background: var(--accent);
+    background-color: var(--accent);
     color: var(--accent-ink);
   }
   /* A 40px-wide tap area over the gutter and line numbers; only as tall as the row, so rows don't steal each other's taps. */
   .cmt-add::before {
     content: '';
     position: absolute;
-    inset: 0 -18px 0 -6px;
+    inset: 0 -14px 0 -4px;
   }
 }
 
