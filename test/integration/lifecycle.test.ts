@@ -77,7 +77,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.sessions.action(s.id, 'open-pr');
     // Under load the stub's short turn may already have ended and moved the session on.
     expect(['pr', 'review']).toContain(get().stage);
-    await waitFor(get, (x) => x.stage === 'review', 10000, 'review stage');
+    // The stage changes before the first review poll reads the PR, so wait for that poll's result too.
+    await waitFor(get, (x) => x.stage === 'review' && x.reviewState !== 'waiting', 10000, 'review stage');
     expect(get().prNumber).toBe(7);
     expect(get().reviewState).toBe('in_review');
     expect(get().canMerge).toBe(false);
@@ -90,8 +91,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(get, (x) => x.status === 'idle', 10000, 'idle before poll');
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     expect(get().reviewState).toBe('addressing');
-    await waitFor(get, (x) => x.reviewState === 'addressed' && x.status === 'idle', 10000, 'findings addressed');
-    expect(get().canMerge).toBe(true);
+    // The turn end marks the findings addressed, then polls the PR again, which updates canMerge.
+    await waitFor(get, (x) => x.reviewState === 'addressed' && x.status === 'idle' && x.canMerge, 10000, 'findings addressed and mergeable');
 
     // Request another round posts the command.
     await env.core.sessions.action(s.id, 'request-review');
