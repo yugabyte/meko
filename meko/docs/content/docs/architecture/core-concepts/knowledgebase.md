@@ -28,8 +28,9 @@ Currently, Meko accepts PDF, TXT, TEXT, MD, CSV, JSON, XML, HTML, and HTM files 
 > Free accounts are limited to **100 MB** of total storage across all datapacks for
 > knowledge-base files and [artifacts](../../../guides/working-with-artifacts/) combined,
 > with individual files capped at **5 MB**. Standard accounts get **5 GB** of total
-> storage and **50 MB** per file. See [Meko pricing](https://mekodata.ai/pricing/) for
-> plan details.
+> storage and **50 MB** per file.
+
+To upgrade, go to **Settings > Pricing**, choose **AWS Marketplace** under Standard ($25 / month), then **Continue to AWS Marketplace**. After you subscribe, click **Set up your account**, or the plan stays on Free. Stripe is marked coming soon. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
 
 Documents can be uploaded to your datapacks via the Meko portal.
 

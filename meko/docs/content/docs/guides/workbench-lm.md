@@ -10,7 +10,9 @@ type: docs
 
 > [!NOTE] Free tier
 >
-> Free accounts are limited to **1,000 conversations** and **10M WorkbenchLM tokens**. When a cap is reached, the chat composer is disabled. See [Meko pricing](https://mekodata.ai/pricing/) for plan details and upgrade options.
+> Free accounts are limited to **1,000 conversations** and **10M WorkbenchLM tokens**. When a cap is reached, the chat composer is disabled.
+
+To upgrade, go to **Settings > Pricing**, choose **AWS Marketplace** under Standard ($25 / month), then **Continue to AWS Marketplace**. After you subscribe, click **Set up your account**, or the plan stays on Free. Stripe is marked coming soon. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
 
 ## When to use WorkbenchLM
 
@@ -35,7 +37,7 @@ If it is not your first time signing in, do the following:
 
 - Pick a datapack: Choose any datapack you own or that was shared with you as maintainer or contributor (viewer-only shares cannot use chat).
 - Knowledge: Upload or manage knowledge-base documents in the left panel. Chat is available after a document has finished indexing.
-- Chat: Send messages in the center panel. Meko routes requests through the inference gateway and MCP tools on your behalf.
+- Chat: Send messages in the center panel. WorkbenchLM can call Meko tools while it answers. A read runs immediately. Saving a memory does too. Deleting a memory, promoting a memory, or updating the datapack waits until you choose **Allow**. **Deny** leaves it unchanged.
 - Live observation: The right panel shows memories, shared knowledge, and conversations, updated as you chat.
 - Traces: Expand **Decision trace** above each reply, or click **View execution trace** under it to view decision traces. See [Observability](../observability/).
 

@@ -22,7 +22,7 @@ When a quota is exceeded, further calls are blocked until you upgrade. Datapack 
 
 ## Tools
 
-The Meko MCP Server provides 23 tools by default. Experimental conversation-search tools are hidden unless a deployment explicitly enables them.
+The Meko MCP Server provides 24 tools by default. Experimental conversation-search tools are hidden unless a deployment explicitly enables them.
 
 Authorization comes from the authenticated user and their datapack grants.
 
@@ -59,7 +59,7 @@ Authorization comes from the authenticated user and their datapack grants.
 | Tool | Description |
 | :--- | :---------- |
 | `memory_add` | Store durable facts, preferences, decisions, or useful outcomes.<br>Use this for direct "remember this" requests, facts found only in assistant/tool output, and corrections. Saved conversation turns are extracted automatically.<br>Typical inputs: `text, conversation_id, agent_id, run_id, metadata, messages, datapack_id` |
-| `memory_search` | Search the current user's memories across agent namespaces with semantic, keyword, and entity-aware ranking.<br>Results are ordered by `score`. `raw_similarity_score` is the vector store's cosine similarity and does not determine the order by itself.<br>`agent_id` is used for trace attribution, not result filtering; don't fan out one search per agent.<br>`limit` sets the maximum number of returned results (default: `10`). Keep the result set small enough for the model context.<br>A response with `error` or an error-shaped `detail` means the search failed. Only a successful response with an empty `results` array means no matching memories were found.<br>Typical inputs: `query, conversation_id, agent_id, limit, datapack_id, run_id`|
+| `memory_search` | Search the current user's memories across agent namespaces with semantic, keyword, and entity-aware ranking.<br>Results include memories you promoted, along with your private memories.<br>Results are ordered by `score`. `raw_similarity_score` is the vector store's cosine similarity and does not determine the order by itself.<br>`agent_id` is used for trace attribution, not result filtering; don't fan out one search per agent.<br>`limit` sets the maximum number of returned results (default: `10`). Keep the result set small enough for the model context.<br>A response with `error` or an error-shaped `detail` means the search failed. Only a successful response with an empty `results` array means no matching memories were found.<br>Typical inputs: `query, conversation_id, agent_id, limit, datapack_id, run_id`|
 | `memory_get_all` | Return a recent window of roughly 20 memories plus the total count across the current user's agent namespaces.<br>This is not a complete list or export and doesn't accept pagination arguments. Use `memory_search` for older memories or `memory_get_by_id` when you know the ID.<br>`agent_id` is used for trace attribution, not result filtering.<br>Typical inputs: `conversation_id, agent_id, datapack_id, promoted` |
 | `memory_get_by_id` | Retrieve a single memory by ID.<br>Use this to inspect a memory.<br>Typical inputs: `memory_id, conversation_id, agent_id, datapack_id` |
 | `memory_update` | Replace the text of an existing memory.<br>Use this to correct a remembered fact; `agent_id` must match the writer.<br>Typical inputs: `memory_id, text, conversation_id, agent_id, datapack_id` |
@@ -72,6 +72,7 @@ Authorization comes from the authenticated user and their datapack grants.
 | Tool | Description |
 | :--- | :---------- |
 | `knowledgebase_search` | Perform hybrid semantic and keyword search over a datapack's knowledge base.<br>Use this to search uploaded and shared documents.<br>Typical inputs: `query, conversation_id, datapack_id, agent_id, limit` |
+| `knowledgebase_delete_document` | Permanently delete one uploaded file and its chunks.<br>Use this only after the user confirms. The datapack owner, a maintainer, or the file's uploader can delete it. Take `document_id` from a `knowledgebase_search` hit. Hits don't include the file name. You can't delete a file until it finishes indexing.<br>Typical inputs: `document_id, conversation_id, datapack_id` |
 
 <!--
 ### Database tools

@@ -51,7 +51,9 @@ Currently, Meko accepts PDF, TXT, TEXT, MD, CSV, JSON, XML, HTML, and HTM files 
 > Free accounts are limited to **100 MB** of total storage across all datapacks for
 > knowledge-base files and [artifacts](../working-with-artifacts/) combined, with
 > individual files capped at **5 MB**. Standard accounts get **5 GB** of total storage
-> and **50 MB** per file. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+> and **50 MB** per file.
+
+To upgrade, go to **Settings > Pricing**, choose **AWS Marketplace** under Standard ($25 / month), then **Continue to AWS Marketplace**. After you subscribe, click **Set up your account**, or the plan stays on Free. Stripe is marked coming soon. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
 
 <!--
 | Source | Example URL |
@@ -74,6 +76,18 @@ Search the knowledge base for information about deployment procedures
 ```
 
 The MCP server embeds your query, performs similarity search against the indexed chunks, and returns the most relevant results.
+
+## Remove a file
+
+Files can be removed by the datapack owner, a maintainer, or the person who uploaded the file. To remove a file from the datapack:
+
+1. In your datapack, under **Knowledge**, click **View all**.
+1. On the **Files** tab under **Knowledge Base**, select the file and click **Remove from KB**.
+1. Click **Remove** to confirm.
+
+You can't undo a removal. **Remove from KB** is not available until the file finishes indexing.
+
+To have an agent remove the file, use [`knowledgebase_delete_document`](../../reference/mcp-server/#knowledgebase-tools).
 
 
 <!-- TODO: Add documentation for trigger_knowledge_base_build and check_index_status MCP tools -->

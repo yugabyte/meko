@@ -12,9 +12,9 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
 
 {{< card-group variant="half" >}}
   {{< card
-    href="changelog/meko/v0.9.6/"
-    title="Meko v0.9.6 — August 13, 2026"
-    desc="Token Burn savings, live usage, artifacts, and knowledge-base status."
+    href="changelog/meko/v1.0.1/"
+    title="Meko v1.0.1 — September 25, 2026"
+    desc="Labs, datapack Analytics, WorkbenchLM tool use, and Standard on AWS Marketplace."
     cta="View release notes &rarr;"
   >}}
   {{< card
@@ -25,14 +25,13 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
   >}}
 {{< /card-group >}}
 
-## Meko portal and platform — v0.9.5–v0.9.6
+## Meko portal and platform — v1.0.1
 
-- **Track usage against your plan** — a dedicated Usage page shows live consumed versus plan limits for datapacks, conversations, workbench tokens, knowledge-base storage, and MCP memory and search activity.
-- **Find generated files and follow indexing progress** — each datapack now has an Artifacts page, while knowledge-base files show their progress from queued through ready.
-- **See what a datapack holds and what retrieval costs** — each datapack detail page opens with Total Context, Context Efficiency, and Context Quality. The Analytics tab breaks those into stored context, query volume, tokens saved per query, and match quality (High, Mid, and Low).
-- **Conversation-embedding quotas** — conversation search and embedding usage is governed by plan-tier quotas as the conversation-search rollout continues.
-- **Claude Desktop recall works on plain questions** — the Meko skill now activates for simple recall prompts, and adding messages to a conversation from Claude Desktop no longer errors.
-- **AMP cluster tools, opt-in** — cluster, branch, and compute management tools are available behind an early-access flag, prefixed with `amp_`.
+- **Try Meko in Labs** — open **Labs** and launch **Review a PR with AgentK**. You build datapack context, watch the review, and choose which memories to keep.
+- **See more on a datapack's Analytics tab** — Analytics now show context size, a memory breakdown, and recent search activity. **Your datapacks** no longer shows an account-wide efficiency tile, or a context badge of 0 on every card.
+- **Let WorkbenchLM call your datapack** — Reads run immediately, as does saving a memory. Deleting a memory, promoting a memory, or updating the datapack waits until you choose **Allow**.
+- **Upgrade to Standard on AWS Marketplace** — Choose **Settings > Pricing** to upgrade a Free account to Standard using AWS Marketplace ($25/month). Finish account setup in Meko after you subscribe, or the plan stays on Free.
+- **Long conversations accept new messages** — Add or delete messages after a conversation's stored history exceeds its size limit. Reading or updating that conversation can still fail while the history is over the limit.
 
 ## Installer and public skills — v2.2.0
 

@@ -100,7 +100,7 @@ Don't call `memory_get_all` repeatedly or add pagination arguments. The tool ret
 
 ## Promote memories to shared knowledge
 
-Datapack owners and maintainers can use `memory_promote` to move private memories into the datapack's shared knowledge base and Collective Memory. Promotion removes the selected records from private memory and can't be reversed through the MCP tool.
+Datapack owners and maintainers can use `memory_promote` to move private memories into the datapack's shared knowledge base and Collective Memory. Promotion removes the selected records from private memory and can't be reversed through the MCP tool. `memory_search` still returns memories you promoted, along with your private memories.
 
 Before promoting, your agent should:
 
