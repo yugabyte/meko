@@ -1,6 +1,6 @@
 import { symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, type TestEnv } from '../helpers.js';
 
 describe('projects', () => {
@@ -25,18 +25,43 @@ describe('projects', () => {
     expect(env.core.projects.update(a.id, { name: 'ALPHA' }).name).toBe('ALPHA');
   });
 
-  it('puts several projects on one repo folder, however each reaches it', async () => {
+  it('puts several projects on one repo folder, stored by its real path however each reaches it', async () => {
     const link = join(env.home, 'elsewhere');
     symlinkSync(env.repo, link);
-    const a = await create('Alpha');
-    const b = await create('Beta', link);
-    expect(a.id).toBe('demo-repo');
-    // The second project on the repo adds its own name to the id, even through the symlink.
-    expect(b.id).toBe('demo-repo-beta');
+    // The first one through the symlink is still named after the repo's own folder.
+    const a = await create('Alpha', link);
+    expect(a).toMatchObject({ id: 'demo-repo', repoPath: env.repo });
+    const b = await create('Beta');
+    expect(b).toMatchObject({ id: 'demo-repo-beta', repoPath: env.repo });
     await expect(create('ALPHA', link)).rejects.toThrow(/already has a project named "Alpha"/);
     expect(() => env.core.projects.update(a.id, { name: 'beta' })).toThrow(/already has a project named "Beta"/);
     const listed = (await env.core.projects.repos()).repos.find((r) => r.path === env.repo);
     expect(listed?.projects.map((p) => p.name).sort()).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('holds a name while its project is being created, so a second create or a rename to it is refused', async () => {
+    const link = join(env.home, 'elsewhere');
+    symlinkSync(env.repo, link);
+    const other = await create('Other');
+    // Meko is slow to answer for the first create's datapack.
+    let answer!: () => void;
+    const meko = env.meko as { describeDatapack: unknown };
+    const describe = meko.describeDatapack;
+    meko.describeDatapack = () => new Promise((res) => (answer = () => res({ grant: 'owner' })));
+    const first = create('Alpha');
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    meko.describeDatapack = describe;
+    await expect(create(' alpha ', link)).rejects.toThrow(/"alpha" is being created on that repo/);
+    expect(() => env.core.projects.update(other.id, { name: 'ALPHA' })).toThrow(/is being created on that repo/);
+    // A different name goes ahead meanwhile, and the slow one still gets its id once it's written.
+    const beta = await create('Beta');
+    answer();
+    const alpha = await first;
+    expect([beta.id, alpha.id]).toEqual(['demo-repo-beta', 'demo-repo-alpha']);
+    const listed = (await env.core.projects.repos()).repos.find((r) => r.path === env.repo);
+    expect(listed?.projects.map((p) => p.name).sort()).toEqual(['Alpha', 'Beta', 'Other']);
+    // Once written, the name is held by the project itself.
+    await expect(create('Alpha')).rejects.toThrow(/already has a project named "Alpha"/);
   });
 
   it('shows the project home without datapack counts when Meko fails, and asks it with a short timeout', async () => {

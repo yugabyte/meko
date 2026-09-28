@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Core } from './core.js';
 import { all, get, run } from './db.js';
 import { detachWorktree, isIdleWorktree, listWorktrees, removeWorktree } from './git.js';
 import { errMsg } from './log.js';
+import { repoKey } from './paths.js';
 import { slugify, type SessionRow } from './store.js';
 
 /** The most idle worktrees a repo may keep, whatever config.toml says. */
@@ -19,15 +20,6 @@ interface WorktreeRow {
   session_id: string | null;
   released_at: number | null;
   stale: number;
-}
-
-/** The pool key of a repo: its real path, so projects that reach it by other paths share one pool. */
-export function repoKey(repo: string): string {
-  try {
-    return realpathSync(repo);
-  } catch {
-    return repo;
-  }
 }
 
 /**

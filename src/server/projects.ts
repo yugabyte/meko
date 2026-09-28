@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type {
   ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, Project, ProjectHome, ReposResponse, SearchResult,
   UpdateProjectRequest,
@@ -12,9 +12,8 @@ import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks
 import { canonicalRemote, cloneRepo, defaultBranch, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos } from './git.js';
 import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
-import { expandHome } from './paths.js';
+import { expandHome, repoKey } from './paths.js';
 import { repoRoots } from './config.js';
-import { repoKey } from './worktrees.js';
 import { projectUsage } from './usage.js';
 import {
   DEFAULT_SETTINGS, dedicatedDatapack, projectDatapacks, projectRow, projectRows, slugify, toProject, type ProjectRow,
@@ -39,9 +38,16 @@ function isDatapackLimit(e: unknown): boolean {
   return /TIER_DATAPACK_LIMIT|tier datapack limit reached|Upgrade to \w+ to create a new datapack/i.test(errMsg(e));
 }
 
+/** A project name on a repo, as names are compared there (trimmed, any case). */
+function nameKey(repo: string, name: string): string {
+  return `${repo}\0${name.trim().toLowerCase()}`;
+}
+
 export class ProjectService {
   /** Projects getting a dedicated datapack right now (setDedicatedDatapack). */
   private addingDatapack = new Set<string>();
+  /** Names of projects being created right now, per repo (nameKey): taken until their row is written. */
+  private creatingNames = new Set<string>();
 
   constructor(private core: Core) {}
 
@@ -65,11 +71,10 @@ export class ProjectService {
     const cfg = this.core.config;
     const roots = repoRoots(cfg);
     const scanned = await scanRepos(roots, cfg.repos.depth);
-    // Keyed by real path, so a repo is marked with its projects however each of them reached it.
+    // Projects store their repo's real path, so a scanned repo is matched by its own.
     const used = new Map<string, { id: string; name: string }[]>();
     for (const p of projectRows(this.db)) {
-      const key = repoKey(p.repo_path);
-      used.set(key, [...(used.get(key) ?? []), { id: p.id, name: p.name }]);
+      used.set(p.repo_path, [...(used.get(p.repo_path) ?? []), { id: p.id, name: p.name }]);
     }
     return {
       roots: cfg.repos.roots,
@@ -110,23 +115,34 @@ export class ProjectService {
       repoPath = resolve(expandHome(req.repoPath!));
     }
     if (!isMainRepo(repoPath)) throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree).`);
-    const siblings = this.siblings(repoPath);
-    this.checkNameFree(siblings, name);
-
-    // Datapack first: if Meko refuses, nothing is written locally.
-    const dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
-
-    // The first project on a repo is named after it (its real folder); later ones add their own name.
-    const repoSlug = slugify(repoKey(repoPath).split('/').pop() ?? name);
-    const id = this.uniqueId(siblings.length ? slugify(`${repoSlug}-${slugify(name)}`, 60) : repoSlug);
-    const settings = { ...DEFAULT_SETTINGS };
-    const branch = await defaultBranch(repoPath);
-    const pos = (get<{ m: number | null }>(this.db, 'SELECT MAX(position) AS m FROM projects WHERE deleted_at IS NULL')?.m ?? -1) + 1;
-    tx(this.db, () => {
-      run(this.db, `INSERT INTO projects(id, name, repo_path, default_branch, position, settings_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)`, id, name, repoPath, branch, pos, JSON.stringify(settings), Date.now());
-      if (dp) run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
-    });
+    // Stored as its real path, so every path to the repo (a symlink, say) names the same one.
+    repoPath = repoKey(repoPath);
+    // The name is taken from here until the row is written, so a second create of it (or a rename
+    // to it) while Meko answers is refused.
+    this.checkNameFree(repoPath, name);
+    const claim = nameKey(repoPath, name);
+    this.creatingNames.add(claim);
+    let id: string;
+    let dp: { id: string; name: string } | null;
+    try {
+      // Datapack first: if Meko refuses, nothing is written locally.
+      dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
+      const branch = await defaultBranch(repoPath);
+      const settings = { ...DEFAULT_SETTINGS };
+      id = tx(this.db, () => {
+        // The id and position are worked out in the write, so projects created meanwhile count. The
+        // first project on a repo is named after it; later ones add their own name.
+        const repoSlug = slugify(basename(repoPath) || name);
+        const pid = this.uniqueId(this.siblings(repoPath).length ? slugify(`${repoSlug}-${slugify(name)}`, 60) : repoSlug);
+        const pos = (get<{ m: number | null }>(this.db, 'SELECT MAX(position) AS m FROM projects WHERE deleted_at IS NULL')?.m ?? -1) + 1;
+        run(this.db, `INSERT INTO projects(id, name, repo_path, default_branch, position, settings_json, created_at)
+                      VALUES (?, ?, ?, ?, ?, ?, ?)`, pid, name, repoPath, branch, pos, JSON.stringify(settings), Date.now());
+        if (dp) run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, pid, dp.id, dp.name);
+        return pid;
+      });
+    } finally {
+      this.creatingNames.delete(claim);
+    }
     if (dp) {
       this.writePin(id, dp);
       this.core.invites.markUsed(dp.id);
@@ -224,16 +240,18 @@ export class ProjectService {
     return this.get(id);
   }
 
-  /** The projects on a repo, matched by real path (as the worktree pool does), so a symlink or another path to it counts. */
+  /** The projects on a repo, by its stored (real) path. */
   private siblings(repo: string): ProjectRow[] {
-    const key = repoKey(repo);
-    return projectRows(this.db).filter((p) => repoKey(p.repo_path) === key);
+    return projectRows(this.db).filter((p) => p.repo_path === repo);
   }
 
-  /** A repo can back several projects, but not two with the same name. */
-  private checkNameFree(siblings: ProjectRow[], name: string): void {
-    const clash = siblings.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
+  /** A repo can back several projects, but not two with the same name (counting ones being created). */
+  private checkNameFree(repo: string, name: string, exceptId?: string): void {
+    const clash = this.siblings(repo).find((p) => p.id !== exceptId && nameKey(repo, p.name) === nameKey(repo, name));
     if (clash) throw new HttpError(409, `That repo already has a project named "${clash.name}". Pick another name.`);
+    if (this.creatingNames.has(nameKey(repo, name))) {
+      throw new HttpError(409, `A project named "${name.trim()}" is being created on that repo. Pick another name.`);
+    }
   }
 
   private uniqueId(base: string): string {
@@ -247,7 +265,7 @@ export class ProjectService {
     if (req.name !== undefined) {
       const n = req.name.trim();
       if (!n) throw new HttpError(400, 'The name can\'t be empty.');
-      this.checkNameFree(this.siblings(r.repo_path).filter((p) => p.id !== id), n);
+      this.checkNameFree(r.repo_path, n, id);
       run(this.db, 'UPDATE projects SET name = ? WHERE id = ?', n, id);
     }
     if (req.settings) {

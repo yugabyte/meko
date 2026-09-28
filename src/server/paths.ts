@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -65,6 +66,18 @@ export function expandHome(p: string): string {
   if (p === '~') return homedir();
   if (p.startsWith('~/')) return join(homedir(), p.slice(2));
   return p;
+}
+
+/**
+ * A repo's key: its real path, so a symlink or another path to it names the same repo. Projects
+ * store it, and the worktree pool keys on it. A path that can't be resolved is its own key.
+ */
+export function repoKey(repo: string): string {
+  try {
+    return realpathSync(repo);
+  } catch {
+    return repo;
+  }
 }
 
 /** Inverse of expandHome, for display. */

@@ -108,9 +108,11 @@ Session states, shown with a dot in the rail and on each tab:
 A new project starts from a repo you already have. The dialog lists every git repo directly under
 your repos folder (`~/code` by default), with the most recently touched first. A repo can back
 several projects: one that already has a project is marked with its name (*In "infra"*, or *In 2
-projects*) and can still be picked. A repo is matched by its real path, so one reached through a
-symlink or another folder is the same repo. Each project on a repo gets its own datapack, Meko agent id,
-settings, sessions and worktrees; project names must differ within a repo. Their session branches
+projects*) and can still be picked. A project stores its repo's real path, so one reached through a
+symlink or another folder is the same repo (and its id comes from the real folder's name). Each
+project on a repo gets its own datapack, Meko agent id, settings, sessions and worktrees; project
+names must differ within a repo, and a name is taken from the moment its create starts, so two
+creates of the same name at once can't both succeed. Their session branches
 share the repo, so a branch name that another project already uses gets a number added
 (`ak/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
 the repo.
@@ -363,7 +365,7 @@ capture_transcripts = false  # send session transcripts to Meko conversations (o
 -- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,            -- slug of the repo, e.g. billing-api; later projects on it add their name: billing-api-release-tooling
-  name TEXT NOT NULL, repo_path TEXT NOT NULL, default_branch TEXT NOT NULL,   -- several projects may share a repo
+  name TEXT NOT NULL, repo_path TEXT NOT NULL, default_branch TEXT NOT NULL,   -- the repo's real path; several projects may share a repo
   position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER);
 CREATE TABLE project_datapacks (
   project_id TEXT REFERENCES projects, datapack_id TEXT, name TEXT,

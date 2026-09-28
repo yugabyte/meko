@@ -92,7 +92,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       touches the session's own branch. The one exception is idle worktrees, which belong to the repo
       (keyed by its real path) and are shared by all its projects: a claim is one SQLite write, so
       two sessions never get the same worktree, and deleting a project leaves idle worktrees another
-      project on the repo can use.
+      project on the repo can use. A project's `repo_path` is the repo's real path (`repoKey()`), so
+      repo matches are plain equality on it; no new code compares repos by the path as typed.
 - [ ] Worktree reuse never hands over a worktree with uncommitted changes or untracked files (it's
       checked when the worktree goes idle and again when it's claimed), never touches a worktree
       that is another session's (check `ownsWorktree()` before reading or removing an archived
