@@ -377,24 +377,7 @@ export function NewProjectDialog({
               : 'Meko is off, so the project starts without a datapack. Add a Meko key on the Meko tab in Settings to give projects one.'}
           </p>
         ) : dpMode === 'create' ? (
-          <Field
-            label="New datapack name"
-            hint={
-              isProjectDatapack(dpName.trim())
-                ? 'Datapack names are unique across Meko.'
-                : 'Datapack names are unique across Meko. Without the adlc/proj/ prefix, people you share it with aren’t offered it as a project.'
-            }
-          >
-            <input
-              id="np-dp-name"
-              className="input mono"
-              value={dpName}
-              onChange={(e) => {
-                setDpName(e.target.value);
-                setDpNameTouched(true);
-              }}
-            />
-          </Field>
+          <p className="hint">Its name is under the project name, at the bottom.</p>
         ) : dpChosen ? (
           <>
             <div className="dp-list">
@@ -574,6 +557,26 @@ export function NewProjectDialog({
       <Field label="Project name">
         <input id="np-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
+      {dpMode === 'create' && (
+        <Field
+          label="New datapack name"
+          hint={
+            isProjectDatapack(dpName.trim())
+              ? undefined
+              : 'Without the adlc/proj/ prefix, people you share it with aren’t offered it as a project.'
+          }
+        >
+          <input
+            id="np-dp-name"
+            className="input mono"
+            value={dpName}
+            onChange={(e) => {
+              setDpName(e.target.value);
+              setDpNameTouched(true);
+            }}
+          />
+        </Field>
+      )}
       <ErrorText error={error} />
       {atLimit && (
         <div className="np-limit">

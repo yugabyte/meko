@@ -160,14 +160,15 @@ the list to that one row (**Change** brings it back) and fills in the rest from 
   hint says no repo by that name was found.
 
 The name and repo matching live in `src/shared/datapacks.ts`, so the server and the dialog use the
-same rules. **Create a new one** suggests a datapack named `adlc/proj/<repo>/<project>` from the
-repo and the name you type, where `<repo>` is the upstream repo's name for a fork, else the
-origin's, else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the repo was picked
-from the list or typed under Other folder; a name without the prefix gets a hint that people you share
-it with won't be offered it as a project. Choosing an invite changes the button to **Accept and
-create project**: the server accepts the invite in Meko first, and creates nothing if Meko refuses.
-The server refuses a viewer-only datapack as a project's own too (from the shares table's grant,
-else `datapack_describe`), not only the dialog.
+same rules. **Create a new one** puts its **New datapack name** field at the bottom, under
+**Project name**, since it's filled in from both: it suggests `adlc/proj/<repo>/<project>` from the
+repo and the name you type (until you edit it), where `<repo>` is the upstream repo's name for a
+fork, else the origin's, else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the
+repo was picked from the list or typed under Other folder; a name without the prefix gets a hint
+that people you share it with won't be offered it as a project. Choosing an invite changes the
+button to **Accept and create project**: the server accepts the invite in Meko first, and creates
+nothing if Meko refuses. The server refuses a viewer-only datapack as a project's own too (from the
+shares table's grant, else `datapack_describe`), not only the dialog.
 
 ### New session
 
