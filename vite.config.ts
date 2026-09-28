@@ -12,10 +12,11 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
+    // Only the API's own paths: a bare '/api' prefix would also catch the UI's src/web/api.ts.
     proxy: {
-      '/api': api,
+      '^/api/': api,
       '/healthz': api,
-      '/ws': { target: api.replace(/^http/, 'ws'), ws: true },
+      '^/ws/': { target: api.replace(/^http/, 'ws'), ws: true },
     },
   },
 });
