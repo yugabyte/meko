@@ -18,6 +18,15 @@ export function parseProjectDatapack(name: string): { repo: string; project: str
   return { repo: parts[0], project: parts.slice(1).join('/') };
 }
 
+/**
+ * The default name for a project's new datapack: `adlc/proj/<repo>/<project>`, where `<repo>` is the
+ * repo's canonical name (canonicalRepoName) or its folder's.
+ */
+export function defaultProjectDatapackName(repoName: string, projectName: string): string {
+  const part = (s: string, fallback: string) => slugPart(s).slice(0, 60).replace(/-+$/, '') || fallback;
+  return `${PROJECT_DATAPACK_PREFIX}${part(repoName, 'repo')}/${part(projectName, 'project')}`;
+}
+
 /** Lowercase, [a-z0-9-] only, dashes collapsed: how repo folder names compare with the datapack's repo part. */
 export function slugPart(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');

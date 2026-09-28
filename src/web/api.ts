@@ -5,6 +5,7 @@ import type {
   ChangeSide,
   CreateProjectRequest,
   CreateSessionRequest,
+  DatapackChoice,
   DatapackPeople,
   DesignDoc,
   DiscardCheck,
@@ -116,6 +117,7 @@ export const api = {
   deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
   branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
   attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
+  setDedicatedDatapack: (id: string, b: DatapackChoice) => post<Project>(`/api/projects/${enc(id)}/dedicated-datapack`, b),
   detachDatapack: (id: string, dpId: string) =>
     request<Project>('DELETE', `/api/projects/${enc(id)}/datapacks/${enc(dpId)}`),
   home: (id: string) => get<ProjectHome>(`/api/projects/${enc(id)}/home`),
@@ -144,6 +146,11 @@ export const api = {
   checkUpdate: () => post<UpdateStatus>('/api/update/check'),
   applyUpdate: () => post<UpdateStatus>('/api/update/apply'),
 };
+
+/** The machine-readable `code` of an API error (DATAPACK_LIMIT, MEKO_OFF, …), if it has one. */
+export function errorCode(e: unknown): string | null {
+  return e instanceof ApiError && typeof e.body.code === 'string' ? e.body.code : null;
+}
 
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) return e.message;

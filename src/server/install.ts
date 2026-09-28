@@ -209,6 +209,98 @@ function publicHost(): string {
 // ---------------------------------------------------------------------------
 // install
 
+export interface InstallMekoDeps {
+  ask: Prompter;
+  /** A person is there to answer. */
+  canAsk: boolean;
+  check: (url: string, apiKey: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Sets up Meko for Claude Code; throws MekoSetupError when that's declined or doesn't finish. */
+  ensureInClaude: (url: string, apiKey: string) => Promise<void>;
+  ui: Pick<typeof ui, 'ok' | 'warn' | 'note' | 'section'>;
+}
+
+/**
+ * The installer's Meko step. Meko is optional: without a key (skipped at the prompt, none given
+ * non-interactively, or --no-meko) AgentK works without datapacks, and a key can be added later
+ * on the Meko tab in Settings. A key that's given must work, unless someone is there to choose to
+ * go on without Meko. Declining Meko's setup for Claude Code is a warning, not a stop. Updates
+ * `cfg.meko`; returns whether Meko is on.
+ */
+export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
+  const later = 'Projects work without datapacks; add a Meko key any time on the Meko tab in Settings.';
+  if (o.noMeko) {
+    cfg.meko.enabled = false;
+    d.ui.section('Checks');
+    d.ui.warn('Meko', `off (--no-meko). ${later}`);
+    return false;
+  }
+  let meko = resolveMeko(cfg);
+  let storeKey = false;
+  if (!cfg.meko.enabled && !o.keyArg) {
+    // Turned off (on the Meko tab in Settings): it stays off unless a key is given now.
+    const k = d.canAsk ? (await d.ask('Meko is turned off. API key to turn it on (Enter to keep it off)', '')).trim() : '';
+    if (!k) {
+      d.ui.section('Checks');
+      d.ui.warn('Meko', 'off (turned off in Settings). Turn it on any time on the Meko tab.');
+      return false;
+    }
+    meko = { ...meko, apiKey: k };
+    storeKey = true;
+  }
+  cfg.meko.enabled = true;
+  if (o.keyArg) {
+    meko = { ...meko, apiKey: o.keyArg };
+    storeKey = true;
+  } else if (!meko.apiKey) {
+    const web = resolveMekoWebUrl(cfg);
+    if (d.canAsk) d.ui.note(`Meko gives projects shared memory (optional).${web ? ` No account or key yet? Create them at ${web}.` : ''}`);
+    const k = (await d.ask('Meko API key (Enter to skip)', '')).trim();
+    if (!k) {
+      d.ui.section('Checks');
+      d.ui.warn('Meko', `off: no API key. ${later}`);
+      return false;
+    }
+    meko = { ...meko, apiKey: k };
+    storeKey = true;
+  }
+
+  d.ui.section('Checks');
+  const check = await d.check(meko.url, meko.apiKey);
+  if (!check.ok) {
+    const why = `Meko check failed (${meko.url}): ${check.error}`;
+    if (!d.canAsk) throw new InstallError(`${why}. Fix the key, or pass --no-meko to install without Meko.`);
+    d.ui.warn('Meko', why);
+    if (!/^y/i.test(await d.ask('Continue without Meko? (y/N)', 'n'))) {
+      throw new InstallError(`${why}. Run the installer again with the right key, or with --no-meko.`);
+    }
+    // Off, so a key that doesn't work (from the environment or Claude Code's settings) isn't used.
+    cfg.meko.enabled = false;
+    d.ui.warn('Meko', `off. ${later}`);
+    return false;
+  }
+  d.ui.ok('Meko', meko.url.replace(/^https?:\/\//, ''));
+
+  let inClaude = true;
+  try {
+    await d.ensureInClaude(meko.url, meko.apiKey);
+  } catch (e) {
+    if (!(e instanceof MekoSetupError)) throw e;
+    inClaude = false;
+    d.ui.warn('Meko in Claude', `${e.message} AgentK uses Meko; Claude Code sessions do once it's set up (the Meko tab in Settings can do it).`);
+  }
+  const settingsEnv = readClaudeSettingsEnv();
+  const keep = mekoKeyForConfig({
+    apiKey: meko.apiKey, url: meko.url, typed: storeKey, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
+    envKey: process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
+  });
+  if (keep !== 'unchanged') {
+    cfg.meko.apiKey = keep.apiKey;
+    cfg.meko.url = keep.url;
+  }
+  if (inClaude) d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
+  return true;
+}
+
 export async function runInstall(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -216,6 +308,7 @@ export async function runInstall(args: string[]): Promise<void> {
       'non-interactive': { type: 'boolean', default: false },
       'repos-root': { type: 'string' },
       'meko-key': { type: 'string' },
+      'no-meko': { type: 'boolean', default: false },
       bind: { type: 'string' },
       port: { type: 'string' },
       'no-service': { type: 'boolean', default: false },
@@ -268,48 +361,23 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.row('Access', `${isLoopback(cfg.server.bind) ? 'local' : 'remote'}, on ${cfg.server.bind}:${cfg.server.port}`);
     }
 
-    // 2. Meko (required)
-    let meko = resolveMeko(cfg);
-    let storeKey = false;
-    if (values['meko-key']) {
-      meko = { ...meko, apiKey: values['meko-key'] };
-      storeKey = true;
-    } else if (!meko.apiKey) {
-      const web = resolveMekoWebUrl(cfg);
-      const where = web ? ` Create them at ${web}.` : '';
-      if (interactive && process.stdin.isTTY) ui.note(`AgentK Local needs a Meko API key.${web ? ` No account or key yet?${where}` : ''}`);
-      const k = await ask('Meko API key', '');
-      if (!k) throw new InstallError(`A Meko API key is required.${where} Pass --meko-key or set MEKO_API_KEY.`);
-      meko = { ...meko, apiKey: k };
-      storeKey = true;
-    }
-
-    ui.section('Checks');
-    const check = await checkMeko(meko.url, meko.apiKey);
-    if (!check.ok) throw new InstallError(`Meko check failed (${meko.url}): ${check.error}`);
-    ui.ok('Meko', meko.url.replace(/^https?:\/\//, ''));
-
-    // 3. Meko in Claude Code: the plugin, its MCP server, and the key where its hooks read it.
-    //    Anything missing is set up by Meko's own installer, after asking.
-    const gaps = () => mekoClaudeGaps({ claudeDir: claudeUserDir(), mcpRegistered: claudeHasMekoMcp, apiKey: meko.apiKey });
-    try {
-      await ensureMekoInClaude(
-        { url: meko.url, apiKey: meko.apiKey, canAsk: interactive && !!process.stdin.isTTY, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] },
-        { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url: meko.url, apiKey: meko.apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
-      );
-    } catch (e) {
-      throw e instanceof MekoSetupError ? new InstallError(e.message) : e;
-    }
-    const settingsEnv = readClaudeSettingsEnv();
-    const keep = mekoKeyForConfig({
-      apiKey: meko.apiKey, url: meko.url, typed: storeKey, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
-      envKey: process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
+    // 2. Meko (optional) and 3. Meko in Claude Code
+    const canAsk = interactive && !!process.stdin.isTTY;
+    await installMeko(cfg, { keyArg: values['meko-key'], noMeko: values['no-meko'] }, {
+      ask,
+      canAsk,
+      check: checkMeko,
+      ensureInClaude: async (url, apiKey) => {
+        // The plugin, its MCP server, and the key where its hooks read it. Anything missing is set
+        // up by Meko's own installer, after asking.
+        const gaps = () => mekoClaudeGaps({ claudeDir: claudeUserDir(), mcpRegistered: claudeHasMekoMcp, apiKey });
+        await ensureMekoInClaude(
+          { url, apiKey, canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] },
+          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
+        );
+      },
+      ui,
     });
-    if (keep !== 'unchanged') {
-      cfg.meko.apiKey = keep.apiKey;
-      cfg.meko.url = keep.url;
-    }
-    ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
     if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
     else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
 

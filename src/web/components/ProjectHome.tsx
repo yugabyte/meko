@@ -15,11 +15,10 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, mekoDatapackShareUrl, shortTime } from '../util';
 import { ConfirmButton, DatapackName, ErrorText, Field } from './common';
+import { AddDatapackDialog } from './AddDatapackDialog';
+import { MekoKeyDialog } from './MekoKeyDialog';
 import { ShareDialog } from './ShareDialog';
 import { TopBar } from './TopBar';
-
-/** Owners and maintainers can share a datapack; an unknown grant (Meko didn't say) gets the chance. */
-const canShare = (grant: string | null) => !grant || grant === 'owner' || grant === 'maintainer';
 
 const SOURCE_LABEL: Record<SearchResult['source'], string> = {
   memory: 'memory',
@@ -32,6 +31,7 @@ export function ProjectHomeView({
   order,
   onMove,
   mekoWebUrl,
+  mekoConfigured,
   sharing,
   onMenu,
   onBack,
@@ -43,6 +43,8 @@ export function ProjectHomeView({
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
   mekoWebUrl: string | null;
+  /** Meko is on (a key is set). */
+  mekoConfigured: boolean;
   /** How datapacks are shared: in AgentK (api) or in Meko's web app (link). */
   sharing: SharingMode | null;
   /** Opens the projects drawer (phone layout). */
@@ -53,8 +55,40 @@ export function ProjectHomeView({
   const mobile = useIsMobile();
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [sharingDp, setSharingDp] = useState<{ id: string; name: string } | null>(null);
+  /** The open dialog: sharing, adding a Meko key, or adding a dedicated datapack (with why it's asked for). */
+  const [dialog, setDialog] = useState<{ kind: 'share' | 'key' | 'datapack'; reason?: string } | null>(null);
   const datapacks = home?.datapacks ?? project.datapacks.map((d) => ({ ...d, memoryCount: null, knowledgeCount: null, grant: null }));
+  // Which datapack is dedicated comes from the live project (another tab may have just added one);
+  // its counts, grant and owner from the home page's read.
+  const dedicatedRef = project.datapacks.find((d) => d.role === 'dedicated') ?? null;
+  const dedicated = dedicatedRef
+    ? (datapacks.find((d) => d.id === dedicatedRef.id) ?? { ...dedicatedRef, memoryCount: null, knowledgeCount: null, grant: null, ownerName: null, ownerEmail: null })
+    : null;
+  // A contributor or viewer can't share it: Share says who can instead.
+  const cantShare = !!dedicated?.grant && dedicated.grant !== 'owner' && dedicated.grant !== 'maintainer';
+  /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
+  const [sharers, setSharers] = useState<string[] | null>(null);
+  // Sharing the project is sharing its dedicated datapack: in link mode that happens on Meko's Share page.
+  const shareUrl = dedicated && mekoConfigured && sharing !== 'api' && !cantShare ? mekoDatapackShareUrl(mekoWebUrl, dedicated.id) : null;
+  const share = () => {
+    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add your Meko API key to turn it on.' });
+    else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
+    else if (cantShare) {
+      const owner = dedicated.ownerName ?? dedicated.ownerEmail;
+      const person = (name: string | null, email: string | null) => (name && email ? `${name} (${email})` : (name ?? email ?? ''));
+      setSharers(owner ? [`its owner, ${person(dedicated.ownerName, dedicated.ownerEmail)}`] : []);
+      // Meko lists the maintainers when it lets AgentK use its share API.
+      if (sharing === 'api') {
+        api
+          .datapackPeople(dedicated.id)
+          .then((p) => {
+            const maintainers = p.members.filter((m) => m.grant === 'maintainer').map((m) => person(m.name || null, m.email || null));
+            if (maintainers.length) setSharers((cur) => [...(cur ?? []), `a maintainer: ${maintainers.join(', ')}`]);
+          })
+          .catch(() => undefined);
+      }
+    } else setDialog({ kind: 'share' });
+  };
 
   const load = useCallback(() => {
     api
@@ -68,7 +102,7 @@ export function ProjectHomeView({
 
   // Reload when the project changes shape (datapacks, sessions, activity).
   const sessionsKey = project.sessions.map((s) => `${s.id}:${s.status}:${s.stage}`).join(',');
-  const dpKey = project.datapacks.map((d) => d.id).join(',');
+  const dpKey = project.datapacks.map((d) => `${d.id}:${d.role}`).join(',');
   useEffect(load, [load, sessionsKey, dpKey]);
 
   return (
@@ -87,12 +121,45 @@ export function ProjectHomeView({
           </button>
         )}
         <h1>{project.name}</h1>
-        <span className="mono muted small">
+        <span className="mono muted small home-repo">
           {project.repoPath} · {project.defaultBranch}
         </span>
+        {shareUrl ? (
+          <a className="btn small home-share" href={shareUrl} target="_blank" rel="noreferrer">
+            Share in Meko ↗
+          </a>
+        ) : (
+          <button
+            className="btn small home-share"
+            // Only when Meko's Share page can't be linked (no web app URL); the note below says why.
+            disabled={!!dedicated && mekoConfigured && sharing !== 'api' && !cantShare}
+            onClick={share}
+          >
+            Share
+          </button>
+        )}
       </header>
+      {sharers && dedicated && (
+        <div className="banner info home-share-banner" role="status">
+          <span className="banner-text">
+            You’re a {dedicated.grant} on <span className="mono">{dedicated.name}</span>, so only its owner or a maintainer can
+            share the project.{' '}
+            {sharers.length ? `Ask ${sharers.join(', or ')}.` : 'Ask its owner or a maintainer to share it.'}
+          </span>
+          <button className="btn small" onClick={() => setSharers(null)}>
+            OK
+          </button>
+        </div>
+      )}
+      {dedicated && mekoConfigured && sharing !== 'api' && !cantShare && (
+        <p className="hint home-share-note">
+          {mekoWebUrl
+            ? 'Sharing opens the project datapack’s Share page in Meko, which emails the person you invite.'
+            : 'To share this project, set Meko’s web app URL on the Meko tab in Settings.'}
+        </p>
+      )}
       <div className="home-scroll">
-        <SearchBox projectId={project.id} />
+        {mekoConfigured && project.datapacks.length > 0 && <SearchBox projectId={project.id} />}
         {loadError && <p className="error-text">{loadError}</p>}
         <div className="home-grid">
           <section className="box">
@@ -121,36 +188,27 @@ export function ProjectHomeView({
                         }
                       }}
                     />
-                  ) : !canShare(d.grant) ? (
-                    <span />
-                  ) : sharing === 'api' ? (
-                    <button className="link-btn" onClick={() => setSharingDp(d)}>
-                      Share
-                    </button>
-                  ) : mekoDatapackShareUrl(mekoWebUrl, d.id) ? (
-                    <a
-                      className="link-btn"
-                      href={mekoDatapackShareUrl(mekoWebUrl, d.id)!}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="This Meko doesn’t accept AgentK’s API key for sharing yet, so sharing happens in Meko."
-                    >
-                      Share in Meko ↗
-                    </a>
                   ) : (
                     <span />
                   )}
                 </div>
               ),
             )}
-            {sharing !== 'api' && datapacks.some((d) => d.role === 'dedicated' && canShare(d.grant)) && (
-              <p className="hint">
-                {mekoWebUrl
-                  ? 'Share opens this datapack’s Share page in Meko. Meko emails the person you invite.'
-                  : 'To share this project, set Meko’s web app URL on the Meko tab in Settings.'}
-              </p>
+            {!dedicated && (
+              <div className="dp-none">
+                <span className="muted">No dedicated datapack.</span>
+                {mekoConfigured ? (
+                  <button className="btn small" onClick={() => setDialog({ kind: 'datapack' })}>
+                    Add a dedicated datapack
+                  </button>
+                ) : (
+                  <button className="btn small" onClick={() => setDialog({ kind: 'key' })}>
+                    Add a Meko API key
+                  </button>
+                )}
+              </div>
             )}
-            <AttachDatapack
+            {mekoConfigured && <AttachDatapack
               attached={new Set(project.datapacks.map((d) => d.id))}
               onAttach={async (d) => {
                 try {
@@ -160,7 +218,7 @@ export function ProjectHomeView({
                   onError(errorMessage(e));
                 }
               }}
-            />
+            />}
           </section>
           <section className="box">
             <span className="label">Recent activity</span>
@@ -192,8 +250,12 @@ export function ProjectHomeView({
         {home && <UsagePanel projectId={project.id} usage={home.usage} />}
         <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
       </div>
-      {sharingDp && (
-        <ShareDialog projectName={project.name} datapack={{ ...sharingDp, role: 'dedicated' }} onClose={() => setSharingDp(null)} />
+      {dialog?.kind === 'share' && dedicated && (
+        <ShareDialog projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.kind === 'key' && <MekoKeyDialog reason={dialog.reason} mekoWebUrl={mekoWebUrl} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'datapack' && (
+        <AddDatapackDialog project={project} reason={dialog.reason} onClose={() => setDialog(null)} onAdded={() => load()} />
       )}
     </div>
   );

@@ -22,7 +22,7 @@ from a browser.
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. |
 | Datapacks | Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets). |
-| Meko | Required. Every install needs a working Meko key and the Meko plugin, and every project needs a dedicated datapack. |
+| Meko | Optional. With a key, projects get a dedicated datapack (or start without one, when Meko is down or the plan's datapack limit is reached, and get one later). Without a key, or turned off in Settings, AgentK works without datapacks. |
 | Meko wiring | Sessions get `MEKO_AGENT_ID=claude_code:<project>`, and the project's datapack is pinned for that agent id. The Meko hooks already honour both, so no plugin change is needed. |
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
@@ -126,8 +126,9 @@ the repo.
 - **Clone from URL.** Paste a git URL and the server clones it into `~/code/<name>` using your
   existing git credentials, then selects it. "Other folder" takes any repo path on the host.
 
-The dialog starts with the **dedicated datapack**, and defaults to **Use an existing one**. The
-list shows invites waiting for you first, then datapacks shared with you, then yours, each with its
+The dialog starts with the **dedicated datapack**: **Create a new one** (the first option and the
+default), **Use an existing one** (the default when it's opened for a share, from its banner) or
+**No datapack** (the default while Meko is off). The existing list shows invites waiting for you first, then datapacks shared with you, then yours, each with its
 access and, for shares, its owner. It holds project datapacks (`adlc/proj/…`) unless you tap **Show
 all datapacks**. A datapack a project here already uses is tagged with that project and listed
 last. A viewer-only datapack is listed but can't be chosen, because sessions write to the dedicated
@@ -289,9 +290,18 @@ adjustable in the ⋯ sheet and remembered per browser.
 Recent activity shows the project's last 50 events, newest first, and scrolls inside its box so it
 never pushes the rest of the page down.
 
-The dedicated datapack's row has **Share** when you own or maintain it (`datapack_describe` gives
-the grant), or when Meko didn't say; attached datapacks have **Detach** instead. In API mode it opens the Share dialog; in link mode it is **Share in Meko ↗**, which
-opens the datapack's Share page in the Meko web app. See [Sharing a project](#sharing-a-project).
+**Share** sits in the project's header: it shares the whole project, through its dedicated
+datapack. In API mode it opens the Share dialog; in link mode it is **Share in Meko ↗**, which
+opens the datapack's Share page in the Meko web app. With Meko off it asks for a Meko API key
+first (**Add a Meko API key**), and for a project without a dedicated datapack it offers **Add a
+dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
+maintainer. See [Sharing a project](#sharing-a-project).
+
+A project without a dedicated datapack says so in its Datapacks box, with **Add a dedicated
+datapack** (a new one, or one of yours; `POST /api/projects/:id/dedicated-datapack`), or **Add a
+Meko API key** while Meko is off. A shared datapack already attached can become the dedicated one.
+The datapack is pinned then, and new sessions use it. Search is hidden for a project with no
+datapacks.
 
 ## Projects, worktrees and sessions
 
@@ -325,6 +335,7 @@ depth = 1                 # 1 = only direct children
 clone_into = "~/code"     # where "Clone from URL" puts new repos
 
 [meko]
+# enabled = false            # turn Meko off (projects work without datapacks); on by default
 # url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
 # api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
 # web_url = "…"              # Meko web app, for links; unset is worked out from the MCP URL (Cloud, mekodev)
@@ -520,29 +531,46 @@ knows to pass the right `datapack_id` when it searches them.
 > fresh entry when they start, so it re-checks after a moment). If the prompt still appears (for a
 > new, resumed or recovered session), the session shows *needs you* with an explanation.
 
-> **Meko is required.** AgentK Local doesn't run without Meko. Datapacks are how a project keeps
-> track of its work, so there is no mode without them.
+> **Meko is optional.** Datapacks are how a project keeps track of its work, and sharing a project
+> goes through its datapack, but AgentK works without them. Meko is *on* when there's a key and
+> `[meko] enabled` isn't false (`MekoStatus.configured`). Off, AgentK doesn't talk to Meko: projects
+> get no datapack, and sessions get no datapack, pin or Meko lines in
+> their prompt (even a project that has a datapack). Claude Code's own Meko setup, in its settings,
+> is the user's and isn't changed.
 >
-> - **At install:** the installer needs a Meko API key. It reuses `MEKO_API_KEY` from
->   `~/.claude/settings.json` if one is there, and asks for one otherwise (pointing to the Meko web
->   app to create an account or key). The install stops if the key doesn't work. It then checks
->   that Meko is set up for Claude Code: the `meko-agent-skills` plugin installed and enabled,
->   the verified `MEKO_API_KEY` in Claude Code's settings (sessions don't inherit the installer's
->   environment, and a different key there would keep the hooks on it), and the `meko` MCP server
->   registered. If anything is missing it offers, after showing what will
->   change, to run Meko's own setup (`@yugabytedb/meko-mcp --client claude-code`), fetched from
->   npm, checked against the registry's integrity hash and run with the bundled Node, with the key
->   passed in the environment. It stops if you decline (or, non-interactively, without
->   `--install-deps`) and prints the command to run yourself. Once Claude Code's settings hold the
->   key, `config.toml` keeps none, so an older key there can't shadow it.
-> - **At project creation:** a dedicated datapack is mandatory. **Create project** stays disabled
->   until one is chosen or created.
-> - **At session start:** every session gets the Meko environment. The server refuses to start a
->   session for a project whose dedicated datapack it can't resolve.
-> - **If Meko goes down:** running sessions keep going, and the rail shows a "Meko unreachable"
->   banner. The Meko hooks capture from the transcript on disk, so they catch up once the service
->   is back (when transcript capture is on). New projects can't be created until then.
-> - **In Settings:** the **Meko** tab sets the MCP server URL (empty means Meko Cloud, unless the
+> - **At install:** the installer reuses `MEKO_API_KEY` from `~/.claude/settings.json` if one is
+>   there, and otherwise asks for one, with **Enter to skip** (pointing to the Meko web app to
+>   create an account or key). With no key, or `--no-meko` (which also turns Meko off), it goes on
+>   with a warning, non-interactively too. A key it's given must work: without anyone to ask it
+>   stops, and interactively it asks whether to go on without Meko (and turns it off, so a bad key
+>   from the environment isn't used). With a key, it checks that Meko is set up for Claude Code:
+>   the `meko-agent-skills` plugin installed and enabled, the verified `MEKO_API_KEY` in Claude
+>   Code's settings (sessions don't inherit the installer's environment, and a different key there
+>   would keep the hooks on it), and the `meko` MCP server registered. If anything is missing it
+>   offers, after showing what will change, to run Meko's own setup (`@yugabytedb/meko-mcp
+>   --client claude-code`), fetched from npm, checked against the registry's integrity hash and run
+>   with the bundled Node, with the key passed in the environment. Declining it (or, without
+>   `--install-deps`, not being asked) is a warning with the command to run yourself; the Meko tab
+>   in Settings can run it later. Once Claude Code's settings hold the key, `config.toml` keeps
+>   none, so an older key there can't shadow it.
+> - **At project creation:** the dedicated datapack is an existing one, a new one, or **No
+>   datapack** (`DatapackChoice` `{ mode: 'none' }`), the default while Meko is off.
+>   When Meko refuses a new datapack because the plan's datapack limit is reached (HTTP 402,
+>   `FREE_TIER_DATAPACK_LIMIT` / `STANDARD_TIER_DATAPACK_LIMIT`), the server answers 402 with code
+>   `DATAPACK_LIMIT` and the dialog offers **Create without a datapack**. One can be added later
+>   from the project's home.
+> - **At session start:** every session gets `MEKO_AGENT_ID`, and `MEKO_DATAPACK_ID` when the
+>   project has a dedicated datapack. A project without one starts sessions like any other; design
+>   saves, the shipped summary and search skip Meko for it, and while Meko is off, for every project.
+> - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare. An
+>   action that needs Meko (creating a datapack, sharing, answering an invite, adding a key) shows
+>   Meko's error, the project home shows no datapack counts, and background syncs log a warning and
+>   try again later. Running sessions keep going; the Meko hooks capture from the transcript on
+>   disk, so they catch up once it's back (when transcript capture is on). A project can still be
+>   created with **No datapack** and get one later.
+> - **In Settings:** the **Meko** tab turns Meko off (`[meko] enabled = false`; the key is kept, so
+>   a key from the environment or Claude Code's settings is ignored too) and back on (checked with
+>   Meko first; a new key turns it on as well). It sets the MCP server URL (empty means Meko Cloud, unless the
 >   environment or Claude Code's settings name one), the API key, and the web app and API URLs
 >   (worked out from the MCP URL for Meko Cloud and mekodev; fill them in for your own Meko). The
 >   key never goes to the browser: the tab shows its last four characters and where it came from.
@@ -840,8 +868,9 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
 #  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
 #     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
-#  4. verifies the Meko API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or asks) and
-#     offers to run Meko's setup for Claude Code if its plugin, MCP server or key is missing
+#  4. Meko (optional): verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or
+#     asks; Enter or --no-meko skips it) and offers to run Meko's setup for Claude Code if its
+#     plugin, MCP server or key is missing (declining is a warning)
 #  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
 #     sets up TLS
 #  6. installs both background services: systemd user units with linger if allowed,
@@ -884,7 +913,7 @@ window, because they never touch tmux.
 | Web | Vite + React, xterm.js with the fit and web-links addons | xterm.js is the standard browser terminal. React handles the rail, tabs and dialogs. |
 | State | SQLite via the built-in `node:sqlite`, WAL, `user_version` migrations | A synchronous API suits a single-writer server, and it needs no native module. |
 | Processes | tmux on a private socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS) | tmux keeps sessions alive when the server restarts, and you can still attach from iTerm. |
-| Integrations | Meko MCP over HTTP (required), Claude Code hooks, git worktrees | Meko is a core dependency. The hooks and git are thin adapters. |
+| Integrations | Meko MCP over HTTP (optional) and its REST API for sharing, Claude Code hooks, git worktrees | Meko holds projects' datapacks when it's on. The hooks and git are thin adapters. |
 | Release | GitHub Actions, date-based versions, artifact attestations | Versioning and supply-chain checks with no extra tooling. |
 
 *Escape hatch:* `ssh host -t tmux -L agentk attach -t ak-billing-api--fix-retry-backoff` attaches
@@ -899,8 +928,9 @@ to any session from iTerm.
   Meko env vars, and the browser terminal, rail and tabs. Folder trust for worktrees is handled
   automatically.
 - **M2 · Status and durability.** Hooks drive the badges and notifications. The two systemd units,
-  recovery on boot with guarded auto-continue, resume for exited sessions, and the "Meko
-  unreachable" banner.
+  recovery on boot with guarded auto-continue, and resume for exited sessions. (A "Meko
+  unreachable" banner, fed by a Meko check every minute, was dropped later: an action that needs
+  Meko says so when it fails.)
 - **M3 · Task lifecycle.** Stages and gates, the design panel, opening the PR, the AgentK review
   loop, merge, and cleanup of worktrees and branches.
 - **M4 · Shared datapacks.** Attaching shared datapacks, `MEKO_DATAPACK_IDS` and the system-prompt

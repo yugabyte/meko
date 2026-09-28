@@ -201,7 +201,7 @@ export class MekoClient {
     return id;
   }
 
-  /** Cheap authenticated round trip to Meko, used for the health banner. */
+  /** Cheap authenticated round trip to Meko: checks a URL and key (the installer, the Meko tab). */
   async check(): Promise<void> {
     await this.request(true, (c) => c.ping({ timeout: CHECK_TIMEOUT_MS }));
   }
@@ -238,10 +238,18 @@ export class MekoClient {
     await this.call('datapack_update', { datapack_id: id, description, conversation_id: await this.serviceConv() }, 60000);
   }
 
-  async describeDatapack(id: string, timeoutMs = 30000): Promise<{ memoryCount: number | null; knowledgeCount: number | null; grant: string | null }> {
+  async describeDatapack(id: string, timeoutMs = 30000): Promise<{
+    memoryCount: number | null; knowledgeCount: number | null; grant: string | null; ownerName: string | null; ownerEmail: string | null;
+  }> {
     const r = (await this.call('datapack_describe', { datapack_id: id, conversation_id: await this.serviceConv(timeoutMs) }, timeoutMs)) as Json;
     const num = (v: unknown) => (typeof v === 'number' ? v : null);
-    return { memoryCount: num(r.memory_count), knowledgeCount: num(r.knowledge_chunk_count ?? r.knowledge_count), grant: strOrNull(r.grant) };
+    return {
+      memoryCount: num(r.memory_count),
+      knowledgeCount: num(r.knowledge_chunk_count ?? r.knowledge_count),
+      grant: strOrNull(r.grant),
+      ownerName: strOrNull(r.datapack_owner_name),
+      ownerEmail: strOrNull(r.datapack_owner_email_id),
+    };
   }
 
   async search(query: string, datapack: { id: string; name: string }, agentId: string, conversationId: string): Promise<SearchResult[]> {

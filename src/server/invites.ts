@@ -71,6 +71,7 @@ export class InviteService {
 
   /** Checks whether Meko takes our key for sharing. Leaves the mode as it was when Meko can't be reached. */
   async checkMode(): Promise<void> {
+    if (!this.core.mekoStatus.configured) return;
     let mode: SharingMode;
     try {
       mode = await this.api.sharingMode();
@@ -170,7 +171,7 @@ export class InviteService {
 
   /** One read of Meko and one write of the table; false when a change here made the read stale. */
   private async syncOnce(listed?: { rows: MekoDatapackRow[]; stamp: number }): Promise<boolean> {
-    if (!this.core.mekoStatus.ok) return true;
+    if (!this.core.mekoStatus.configured) return true;
     const gen = this.gen;
     const list = listed && listed.stamp === gen ? listed.rows : await this.core.meko.listDatapacks();
     const self = list.find((d) => d.grant === 'owner' && d.ownerUserId)?.ownerUserId ?? null;

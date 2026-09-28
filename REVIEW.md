@@ -89,7 +89,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Every project still has exactly one dedicated datapack; sessions get `MEKO_AGENT_ID` and the pin.
 - [ ] Several projects can share a repo: per-project state (worktrees, tmux names, pins, lookups) is
       keyed by project id, not repo path, and git work on the repo only touches the session's own branch.
-- [ ] Meko failures degrade gracefully (banner, logged warning) and never kill running sessions.
+- [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
+      logged warning for background work) and never kills a running session or blocks work that
+      doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
+      false) means no Meko calls at all.
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project created from an invite accepts it in Meko before writing anything

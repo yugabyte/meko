@@ -116,13 +116,6 @@ export function Banners({
       {conn === 'closed' && (
         <div className="banner warn">Lost the connection to the server. Reconnecting… Your sessions keep running.</div>
       )}
-      {!state.meko.ok && (
-        <div className="banner warn">
-          <b>Meko unreachable.</b> Running sessions keep going and will catch up once it’s back. New projects can’t be
-          created until then.
-          {state.meko.error && <span className="muted"> ({state.meko.error})</span>}
-        </div>
-      )}
       {updatedKey && dismissed !== updatedKey && (
         <div className="banner info">
           Updated to v{u.current} (from v{u.justUpdatedFrom}).

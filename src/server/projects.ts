@@ -1,14 +1,14 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type {
-  ActivityItem, AttachDatapackRequest, CreateProjectRequest, Project, ProjectHome, ReposResponse, SearchResult,
+  ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, Project, ProjectHome, ReposResponse, SearchResult,
   UpdateProjectRequest,
 } from '../shared/types.js';
 import { REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
-import { projectDatapackDescription } from '../shared/datapacks.js';
+import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks.js';
 import { canonicalRemote, cloneRepo, defaultBranch, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos } from './git.js';
 import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
@@ -23,12 +23,25 @@ import {
 const DESCRIBE_TIMEOUT_MS = 5000;
 
 export class HttpError extends Error {
-  constructor(public status: number, message: string) {
+  /** `code`: a machine-readable reason the UI can act on (sent as `code` next to `error`). */
+  constructor(public status: number, message: string, public code?: string) {
     super(message);
   }
 }
 
+/**
+ * Meko refused to create a datapack because the account is at its plan's datapack limit: its code
+ * (FREE_TIER_DATAPACK_LIMIT, STANDARD_TIER_DATAPACK_LIMIT), its reason, or its upgrade message
+ * ("Upgrade to Standard to create a new datapack."), not just any refusal that mentions datapacks.
+ */
+function isDatapackLimit(e: unknown): boolean {
+  return /TIER_DATAPACK_LIMIT|tier datapack limit reached|Upgrade to \w+ to create a new datapack/i.test(errMsg(e));
+}
+
 export class ProjectService {
+  /** Projects getting a dedicated datapack right now (setDedicatedDatapack). */
+  private addingDatapack = new Set<string>();
+
   constructor(private core: Core) {}
 
   private get db() {
@@ -67,21 +80,28 @@ export class ProjectService {
   async create(req: CreateProjectRequest): Promise<Project> {
     const name = (req.name ?? '').trim();
     if (!name) throw new HttpError(400, 'Give the project a name.');
-    if (!req.datapack) throw new HttpError(400, 'Choose a dedicated datapack.');
+    if (!req.datapack) throw new HttpError(400, 'Choose a dedicated datapack, or no datapack.');
     if (!!req.repoPath === !!req.cloneUrl) throw new HttpError(400, 'Pick a repo or give a URL to clone.');
-    if (!this.core.mekoStatus.ok) {
-      await this.core.checkMeko();
-      if (!this.core.mekoStatus.ok) throw new HttpError(503, `Meko is unreachable, so a project can't be created right now. (${this.core.mekoStatus.error})`);
-    }
+    if (req.datapack.mode !== 'none') this.needMeko('the project can only be created without a datapack');
 
     let repoPath: string;
     if (req.cloneUrl) {
       const dest = join(expandHome(this.core.config.repos.cloneInto), repoNameFromUrl(req.cloneUrl));
-      if (existsSync(dest)) throw new HttpError(409, `${dest} already exists. Pick it from the list instead.`);
-      try {
-        await cloneRepo(req.cloneUrl, dest);
-      } catch (e) {
-        throw new HttpError(400, `Clone failed: ${errMsg(e)}`);
+      if (existsSync(dest)) {
+        // A clone of this same URL (one an earlier try made before Meko refused its datapack) is
+        // used as it is; anything else there is left alone.
+        const origin = isMainRepo(dest) ? (await readRemotes(dest)).origin : null;
+        const want = normaliseRemote(req.cloneUrl);
+        const same = !!origin && (origin === req.cloneUrl.trim() || (!!want && normaliseRemote(origin) === want));
+        if (!same) {
+          throw new HttpError(409, `${dest} already exists. Pick it from the list instead.`);
+        }
+      } else {
+        try {
+          await cloneRepo(req.cloneUrl, dest);
+        } catch (e) {
+          throw new HttpError(400, `Clone failed: ${errMsg(e)}`);
+        }
       }
       repoPath = dest;
     } else {
@@ -92,35 +112,7 @@ export class ProjectService {
     this.checkNameFree(siblings, name);
 
     // Datapack first: if Meko refuses, nothing is written locally.
-    let dp: { id: string; name: string };
-    if (req.datapack.mode === 'create') {
-      const dpName = req.datapack.name.trim();
-      if (!dpName) throw new HttpError(400, 'Give the new datapack a name.');
-      try {
-        dp = await this.core.meko.createDatapack(dpName);
-      } catch (e) {
-        throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
-      }
-      // The repo's remote in the description lets whoever it's shared with find the repo: the
-      // upstream repo of a fork, not the fork. Best effort, so it doesn't hold up the project: a
-      // failure is only logged.
-      const remote = canonicalRemote(await readRemotes(repoPath));
-      const created = dp;
-      void this.core.meko.setDatapackDescription(created.id, projectDatapackDescription(name, remote)).catch((e) =>
-        this.core.log.warn(`couldn't set the description of datapack ${created.name}`, errMsg(e)));
-    } else {
-      if (!req.datapack.id || !req.datapack.name) throw new HttpError(400, 'Choose a datapack.');
-      dp = { id: req.datapack.id, name: req.datapack.name };
-      // Sessions write to the dedicated datapack, so a read-only one can't be it. The shares table
-      // knows the grant of a share; otherwise Meko is asked (a failure there doesn't block).
-      const grant = this.core.invites.grantOf(dp.id)
-        ?? (await this.core.meko.describeDatapack(dp.id, DESCRIBE_TIMEOUT_MS).then((d) => d.grant, () => null));
-      if (grant === 'viewer') {
-        throw new HttpError(400, `You can only read ${dp.name} (viewer), so sessions couldn't write to it. Pick another datapack for the project, and attach this one from the project's home.`);
-      }
-      // An invite waiting in Meko is accepted first: if Meko refuses, nothing is written here.
-      if (req.datapack.inviteId) await this.core.invites.acceptForProject(dp.id, req.datapack.inviteId);
-    }
+    const dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
 
     // The first project on a repo is named after it; later ones add their own name.
     const repoSlug = slugify(repoPath.split('/').pop() ?? name);
@@ -131,14 +123,101 @@ export class ProjectService {
     tx(this.db, () => {
       run(this.db, `INSERT INTO projects(id, name, repo_path, default_branch, position, settings_json, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)`, id, name, repoPath, branch, pos, JSON.stringify(settings), Date.now());
-      run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
+      if (dp) run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
     });
-    this.writePin(id, dp);
-    this.core.invites.markUsed(dp.id);
+    if (dp) {
+      this.writePin(id, dp);
+      this.core.invites.markUsed(dp.id);
+    }
     // Trust the repo in Claude Code now, before any session of it starts.
     await this.core.sessions.trustRepo(repoPath);
+    if (dp) this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
+    this.core.log.info(`project created: ${id} (${repoPath}) ${dp ? `datapack ${dp.name}` : 'without a datapack'}`);
+    this.core.changed();
+    return this.get(id);
+  }
+
+  /**
+   * Meko must be on for what's asked; `otherwise` says what can still be done. Whether it answers
+   * shows when it's asked: its error is passed on.
+   */
+  private needMeko(otherwise: string): void {
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko is off, so ${otherwise}. Add a Meko API key on the Meko tab in Settings.`, 'MEKO_OFF');
+  }
+
+  /**
+   * The dedicated datapack a choice names: a new one created in Meko (with the repo's remote in
+   * its description), or an existing one we can write to (an invite to it accepted first).
+   */
+  private async resolveDatapack(choice: Exclude<DatapackChoice, { mode: 'none' }>, repoPath: string, projectName: string): Promise<{ id: string; name: string }> {
+    if (choice.mode === 'create') {
+      const dpName = choice.name.trim();
+      if (!dpName) throw new HttpError(400, 'Give the new datapack a name.');
+      let dp: { id: string; name: string };
+      try {
+        dp = await this.core.meko.createDatapack(dpName);
+      } catch (e) {
+        // At the plan's limit: the UI offers to go on without a datapack.
+        if (isDatapackLimit(e)) {
+          throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). Create the project without one, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
+        }
+        throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
+      }
+      // The repo's remote in the description lets whoever it's shared with find the repo: the
+      // upstream repo of a fork, not the fork. Best effort, so it doesn't hold up the project: a
+      // failure is only logged.
+      const remote = canonicalRemote(await readRemotes(repoPath));
+      void this.core.meko.setDatapackDescription(dp.id, projectDatapackDescription(projectName, remote)).catch((e) =>
+        this.core.log.warn(`couldn't set the description of datapack ${dp.name}`, errMsg(e)));
+      return dp;
+    }
+    if (!choice.id || !choice.name) throw new HttpError(400, 'Choose a datapack.');
+    const dp = { id: choice.id, name: choice.name };
+    // Sessions write to the dedicated datapack, so a read-only one can't be it. The shares table
+    // knows the grant of a share; otherwise Meko is asked (a failure there doesn't block).
+    const grant = this.core.invites.grantOf(dp.id)
+      ?? (await this.core.meko.describeDatapack(dp.id, DESCRIBE_TIMEOUT_MS).then((d) => d.grant, () => null));
+    if (grant === 'viewer') {
+      throw new HttpError(400, `You can only read ${dp.name} (viewer), so sessions couldn't write to it. Pick another datapack for the project, and attach this one from the project's home.`);
+    }
+    // An invite waiting in Meko is accepted first: if Meko refuses, nothing is written here.
+    if (choice.inviteId) await this.core.invites.acceptForProject(dp.id, choice.inviteId);
+    return dp;
+  }
+
+  /**
+   * Gives a project without one its dedicated datapack (for a project created without Meko, or at
+   * the plan's datapack limit). A datapack already attached as shared becomes the dedicated one.
+   * New sessions use it; running ones keep what they started with.
+   */
+  async setDedicatedDatapack(id: string, choice: DatapackChoice): Promise<Project> {
+    const r = this.row(id);
+    const has = () => {
+      if (dedicatedDatapack(this.db, id)) throw new HttpError(409, 'This project already has a dedicated datapack.');
+    };
+    has();
+    if (!choice || choice.mode === 'none') throw new HttpError(400, 'Choose a datapack, or give a name for a new one.');
+    // One at a time per project: two tabs adding at once would make two datapacks in Meko.
+    if (this.addingDatapack.has(id)) throw new HttpError(409, 'A datapack is already being added to this project.');
+    this.addingDatapack.add(id);
+    let dp: { id: string; name: string };
+    try {
+      this.needMeko('a datapack can\'t be added');
+      dp = await this.resolveDatapack(choice, r.repo_path, r.name);
+      tx(this.db, () => {
+        has();
+        run(this.db, 'DELETE FROM project_datapacks WHERE project_id = ? AND datapack_id = ?', id, dp.id);
+        run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
+        // Its server-side conversation was made without this datapack (for a search): make a new one.
+        run(this.db, 'UPDATE projects SET meko_conversation_id = NULL WHERE id = ?', id);
+      });
+    } finally {
+      this.addingDatapack.delete(id);
+    }
+    this.writePin(id, dp);
+    this.core.invites.markUsed(dp.id);
     this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
-    this.core.log.info(`project created: ${id} (${repoPath}) datapack ${dp.name}`);
+    this.core.log.info(`project ${id} now has datapack ${dp.name}`);
     this.core.changed();
     return this.get(id);
   }
@@ -215,15 +294,15 @@ export class ProjectService {
 
   async home(id: string): Promise<ProjectHome> {
     const project = this.get(id);
-    // Counts are extras: with Meko down, or slow, the page shows without them.
-    const mekoOk = this.core.mekoStatus.ok;
+    // Counts are extras: with Meko off, down or slow (a short timeout), the page shows without them.
+    const on = this.core.mekoStatus.configured;
     const datapacks = await Promise.all(
       project.datapacks.map(async (d) => {
         try {
-          if (!mekoOk) throw new Error('Meko is unreachable');
+          if (!on) throw new Error('Meko is off');
           return { ...d, ...(await this.core.meko.describeDatapack(d.id, DESCRIBE_TIMEOUT_MS)) };
         } catch {
-          return { ...d, memoryCount: null, knowledgeCount: null, grant: null };
+          return { ...d, memoryCount: null, knowledgeCount: null, grant: null, ownerName: null, ownerEmail: null };
         }
       }),
     );
@@ -241,6 +320,8 @@ export class ProjectService {
     const q = (query ?? '').trim();
     if (!q) return [];
     const project = this.get(id);
+    // Nothing to search: no datapacks, or Meko is off.
+    if (!project.datapacks.length || !this.core.mekoStatus.configured) return [];
     const conv = await this.ensureConversation(id);
     const agentId = projectAgentId(id);
     const results = await Promise.all(

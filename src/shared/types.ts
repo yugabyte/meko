@@ -262,9 +262,11 @@ export interface UpdateStatus {
 }
 
 export interface MekoStatus {
-  ok: boolean;
-  error: string | null;
-  checkedAt: number | null;
+  /**
+   * Meko is on (a key is set and Meko isn't turned off); when false projects work without
+   * datapacks. Meko isn't polled: an action that needs it and fails says why.
+   */
+  configured: boolean;
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
@@ -402,6 +404,9 @@ export interface DatapackWithCounts extends DatapackRef {
   knowledgeCount: number | null;
   /** Our access to it (`owner`, or a share grant); null when Meko didn't say. */
   grant: string | null;
+  /** Its owner, when Meko says (who to ask to share it). */
+  ownerName: string | null;
+  ownerEmail: string | null;
 }
 
 export interface ProjectHome {
@@ -445,6 +450,8 @@ export type MekoKeySource = 'config' | 'env' | 'claude';
 
 /** The Meko part of Settings. The key itself never leaves the server. */
 export interface MekoSettings {
+  /** False when Meko is turned off (`[meko] enabled = false`): AgentK then works without datapacks. */
+  enabled: boolean;
   /** The MCP server URL as set in config.toml; empty means the environment, Claude Code or Meko Cloud decides. */
   url: string;
   /** The MCP server AgentK uses now. */
@@ -466,8 +473,12 @@ export interface MekoSettings {
   claudeKeyMatches: boolean;
 }
 
-/** PUT /api/settings `meko`: a field left out is unchanged; `apiKey: ''` keeps the current key. */
+/**
+ * PUT /api/settings `meko`: a field left out is unchanged; `apiKey: ''` keeps the current key. A new
+ * key turns Meko on; `enabled: false` turns it off (the key is kept).
+ */
 export interface MekoSettingsUpdate {
+  enabled?: boolean;
   url?: string;
   apiKey?: string;
   webUrl?: string;
@@ -601,6 +612,8 @@ export interface LoginError {
 }
 
 export type DatapackChoice =
+  /** No dedicated datapack (Meko is off, or the plan's datapack limit is reached); one can be added later. */
+  | { mode: 'none' }
   | { mode: 'create'; name: string }
   /** `inviteId`: an invite to accept in Meko before the project is created. */
   | { mode: 'existing'; id: string; name: string; inviteId?: string };
@@ -682,6 +695,8 @@ export type TermServerMessage =
 // ---- REST routes (all JSON; errors are { error: string } with a 4xx/5xx) ----
 //
 // Request bodies must be JSON (`Content-Type: application/json`); other body types get 415.
+// Some errors add a machine-readable `code` next to `error`: DATAPACK_LIMIT (402, the Meko plan's
+// datapack limit), MEKO_OFF (409).
 // Every /api route except the three marked "no auth" answers 401 without a login cookie, and the
 // cookie is re-issued (fresh Max-Age) as its expiry slides forward. The exception is local access
 // (AuthStatus.localAccess): when the server listens only on loopback, requests from this computer
@@ -713,6 +728,8 @@ export type TermServerMessage =
 // DELETE /api/projects/:id                     → 204
 // GET    /api/projects/:id/branches            → string[]
 // POST   /api/projects/:id/datapacks AttachDatapackRequest → Project
+// POST   /api/projects/:id/dedicated-datapack DatapackChoice → Project   (a project without one gets its
+//        dedicated datapack; 409 if it has one or Meko is off, 402 with code DATAPACK_LIMIT at the plan's limit)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
 // GET    /api/usage                            → UsageOverview

@@ -1,8 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
-import { canonicalRepoName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName } from '../../shared/datapacks';
-import { api, errorMessage } from '../api';
-import { cx, relativeTime, slugify } from '../util';
+import {
+  canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
+} from '../../shared/datapacks';
+import { api, errorCode, errorMessage } from '../api';
+import { cx, relativeTime } from '../util';
 import { Dialog, ErrorText, Field } from './common';
 
 type Source = 'list' | 'clone' | 'folder';
@@ -48,7 +50,7 @@ function tagFor(o: DpOption): string | null {
 }
 
 export function NewProjectDialog({
-  mekoOk,
+  mekoConfigured,
   mekoWebUrl,
   sharing,
   projects,
@@ -56,7 +58,8 @@ export function NewProjectDialog({
   onClose,
   onCreated,
 }: {
-  mekoOk: boolean;
+  /** Meko is on (a key is set). Off, a project is created without a datapack. */
+  mekoConfigured: boolean;
   mekoWebUrl: string | null;
   sharing: SharingMode | null;
   projects: Project[];
@@ -80,7 +83,19 @@ export function NewProjectDialog({
   const [invites, setInvites] = useState<DatapackInvite[]>(initialInvite ? [initialInvite] : []);
   const [dpError, setDpError] = useState<string | null>(null);
   const [dpLoading, setDpLoading] = useState(false);
-  const [dpMode, setDpMode] = useState<'create' | 'existing'>('existing');
+  // With Meko off a datapack can't be had: the project starts without one.
+  const mekoUsable = mekoConfigured;
+  // A new datapack by default; opened for a share (its banner), that datapack.
+  const [dpMode, setDpMode] = useState<'create' | 'existing' | 'none'>(initialInvite ? 'existing' : mekoUsable ? 'create' : 'none');
+  /** Meko refused a new datapack: the plan's datapack limit is reached. */
+  const [atLimit, setAtLimit] = useState(false);
+  /** The mode was picked by hand, so it no longer follows Meko coming and going. */
+  const [dpModeTouched, setDpModeTouched] = useState(false);
+  const datapacksLoaded = useRef(false);
+  const pickMode = (m: 'create' | 'existing' | 'none') => {
+    setDpModeTouched(true);
+    setDpMode(m);
+  };
   const [dpName, setDpName] = useState('');
   const [dpNameTouched, setDpNameTouched] = useState(false);
   const [dpChosen, setDpChosen] = useState<DpOption | null>(null);
@@ -116,8 +131,20 @@ export function NewProjectDialog({
         setRoots(r.roots);
       })
       .catch((e) => setReposError(errorMessage(e)));
-    loadDatapacks();
-  }, [loadDatapacks]);
+  }, []);
+
+  // Datapacks load once Meko can be used (it may come back while the dialog is open).
+  useEffect(() => {
+    if (mekoUsable && !datapacksLoaded.current) {
+      datapacksLoaded.current = true;
+      loadDatapacks();
+    }
+  }, [loadDatapacks, mekoUsable]);
+
+  // Until a mode is picked, it follows Meko: No datapack while it can't be used, else a new one.
+  useEffect(() => {
+    if (!dpModeTouched) setDpMode(initialInvite ? 'existing' : mekoUsable ? 'create' : 'none');
+  }, [mekoUsable, dpModeTouched, initialInvite]);
 
   // The project name is typed, or filled in from a chosen project datapack. The default name for a
   // new datapack follows the chosen repo and the name until edited: adlc/proj/<repo>/<project_name>,
@@ -134,7 +161,7 @@ export function NewProjectDialog({
         : folderRepo
           ? canonicalRepoName(folderRepo)
           : nameFromPath(folder);
-  const defaultDp = `adlc/proj/${slugify(repoName) || 'repo'}/${slugify(name) || 'project'}`;
+  const defaultDp = defaultProjectDatapackName(repoName, name);
   useEffect(() => {
     if (!dpNameTouched) setDpName(defaultDp);
   }, [defaultDp, dpNameTouched]);
@@ -241,17 +268,20 @@ export function NewProjectDialog({
 
   const repoChosen =
     source === 'list' ? !!selected : source === 'clone' ? cloneUrl.trim().length > 0 : folder.trim().length > 0;
-  const dpReady = dpMode === 'create' ? dpName.trim().length > 0 : !!dpChosen;
-  const canCreate = repoChosen && dpReady && name.trim().length > 0 && mekoOk && !busy;
+  const dpReady = dpMode === 'none' ? true : dpMode === 'create' ? dpName.trim().length > 0 : !!dpChosen;
+  const canCreate = repoChosen && dpReady && name.trim().length > 0 && (dpMode === 'none' || mekoUsable) && !busy;
   const accepting = dpMode === 'existing' && !!dpChosen?.inviteId;
 
-  const create = async () => {
+  const create = async (mode = dpMode) => {
     setError(null);
+    setAtLimit(false);
     setBusy(true);
     const datapack: DatapackChoice =
-      dpMode === 'create'
-        ? { mode: 'create', name: dpName.trim() }
-        : { mode: 'existing', id: dpChosen!.id, name: dpChosen!.name, ...(dpChosen!.inviteId ? { inviteId: dpChosen!.inviteId } : {}) };
+      mode === 'none'
+        ? { mode: 'none' }
+        : mode === 'create'
+          ? { mode: 'create', name: dpName.trim() }
+          : { mode: 'existing', id: dpChosen!.id, name: dpChosen!.name, ...(dpChosen!.inviteId ? { inviteId: dpChosen!.inviteId } : {}) };
     try {
       const p = await api.createProject({
         repoPath: source === 'list' ? selected!.path : source === 'folder' ? folder.trim() : undefined,
@@ -262,6 +292,7 @@ export function NewProjectDialog({
       onCreated(p);
     } catch (e) {
       setError(errorMessage(e));
+      if (errorCode(e) === 'DATAPACK_LIMIT') setAtLimit(true);
     } finally {
       setBusy(false);
     }
@@ -299,7 +330,7 @@ export function NewProjectDialog({
               </button>
             )}
           </div>
-          <button className="btn primary" disabled={!canCreate} onClick={create}>
+          <button className="btn primary" disabled={!canCreate} onClick={() => void create()}>
             {busy
               ? accepting
                 ? 'Accepting…'
@@ -313,23 +344,39 @@ export function NewProjectDialog({
         </>
       }
     >
-      {!mekoOk && (
-        <div className="banner warn inline">Meko is unreachable, so new projects can’t be created right now.</div>
-      )}
 
       <div className="np-section">
         <div className="np-dp-hd">
           <span className="label">Dedicated datapack</span>
           <div className="seg" role="group" aria-label="Dedicated datapack">
-            <button className={cx(dpMode === 'existing' && 'on')} aria-pressed={dpMode === 'existing'} onClick={() => setDpMode('existing')}>
+            <button
+              className={cx(dpMode === 'create' && 'on')}
+              aria-pressed={dpMode === 'create'}
+              disabled={!mekoUsable}
+              onClick={() => pickMode('create')}
+            >
+              Create a new one
+            </button>
+            <button
+              className={cx(dpMode === 'existing' && 'on')}
+              aria-pressed={dpMode === 'existing'}
+              disabled={!mekoUsable}
+              onClick={() => pickMode('existing')}
+            >
               Use an existing one
             </button>
-            <button className={cx(dpMode === 'create' && 'on')} aria-pressed={dpMode === 'create'} onClick={() => setDpMode('create')}>
-              Create a new one
+            <button className={cx(dpMode === 'none' && 'on')} aria-pressed={dpMode === 'none'} onClick={() => pickMode('none')}>
+              No datapack
             </button>
           </div>
         </div>
-        {dpMode === 'create' ? (
+        {dpMode === 'none' ? (
+          <p className="hint">
+            {mekoConfigured
+              ? 'The project starts without a datapack. You can add one later from its home.'
+              : 'Meko is off, so the project starts without a datapack. Add a Meko key on the Meko tab in Settings to give projects one.'}
+          </p>
+        ) : dpMode === 'create' ? (
           <Field
             label="New datapack name"
             hint={
@@ -528,6 +575,16 @@ export function NewProjectDialog({
         <input id="np-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
       <ErrorText error={error} />
+      {atLimit && (
+        <div className="np-limit">
+          <button className="btn" disabled={busy} onClick={() => {
+            pickMode('none');
+            void create('none');
+          }}>
+            Create without a datapack
+          </button>
+        </div>
+      )}
     </Dialog>
   );
 }

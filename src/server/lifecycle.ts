@@ -110,7 +110,8 @@ export class Lifecycle {
     this.core.changed();
     const row = sessionRow(this.db, id);
     const dp = row && dedicatedDatapack(this.db, row.project_id);
-    if (!row || !dp) return;
+    // No datapack, or Meko is off: the design stays here only.
+    if (!row || !dp || !this.core.mekoStatus.configured) return;
     const files: [string, string, string][] = [];
     if (d.markdown !== undefined) files.push([`design-${row.slug}.md`, d.markdown, 'text/markdown']);
     if (d.html !== undefined) files.push([`design-${row.slug}.html`, d.html, 'text/html']);
@@ -638,7 +639,7 @@ export class Lifecycle {
     // Once per session: a cleanup a restart cut short, or one that waited for Claude's turn while
     // the user archived by hand, may run again.
     const shipped = !!get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'shipped'", row.id);
-    if (p && dp && !shipped) {
+    if (p && dp && !shipped && this.core.mekoStatus.configured) {
       try {
         const conv = await this.core.projects.ensureConversation(row.project_id);
         const body = st.body.trim().slice(0, 4000);

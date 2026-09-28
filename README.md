@@ -28,9 +28,11 @@ your phone.
 
 ## Install
 
-You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a
-[Meko](https://mekodata.ai) account and API key. The repo is internal for now, so the installer is
-fetched with `gh`:
+You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon. A
+[Meko](https://mekodata.ai) account and API key are optional: they give projects datapacks
+(shared memory) and let you share projects. Without one, press Enter at the key prompt (or pass
+`--no-meko`) and add a key later on the Meko tab in Settings. The repo is internal for now, so the
+installer is fetched with `gh`:
 
 ```sh
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh

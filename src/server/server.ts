@@ -7,7 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackChoice, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   MekoDatapack, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
@@ -101,7 +101,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   app.setErrorHandler((err: unknown, req, reply) => {
-    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
+    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message, ...(err.code ? { code: err.code } : {}) });
     const e = err as { statusCode?: number; message?: string };
     if (e.statusCode && e.statusCode < 500) return reply.code(e.statusCode).send({ error: e.message ?? 'Bad request.' });
     core.log.error(`${req.method} ${req.url} failed`, err);
@@ -230,6 +230,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   /** A datapack_list row for the browser: without the owner's account id. */
   const toDatapack = ({ ownerUserId: _, ...d }: MekoDatapackRow): MekoDatapack => d;
   app.get('/api/meko/datapacks', async (): Promise<MekoDatapack[]> => {
+    if (!core.mekoStatus.configured) return [];
     let rows;
     try {
       rows = await core.meko.listDatapacks();
@@ -273,7 +274,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- datapacks shared with us ----
   app.post('/api/invites/check', async (): Promise<InviteCheck> => {
-    if (!core.mekoStatus.ok) throw new HttpError(503, `Meko is unreachable, so shares can't be checked right now. (${core.mekoStatus.error})`);
+    if (!core.mekoStatus.configured) return { datapacks: [], invites: [] };
     if (core.mekoStatus.sharing === null) await core.invites.checkMode();
     let rows: MekoDatapackRow[];
     try {
@@ -308,6 +309,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/branches', async (req) => core.projects.branches(req.params.id));
   app.post<{ Params: { id: string }; Body: AttachDatapackRequest }>('/api/projects/:id/datapacks', async (req) => core.projects.attachDatapack(req.params.id, req.body));
+  app.post<{ Params: { id: string }; Body: DatapackChoice }>('/api/projects/:id/dedicated-datapack', async (req) =>
+    core.projects.setDedicatedDatapack(req.params.id, req.body));
   app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
   app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));
   app.get('/api/usage', async () => usageOverview(core.db));

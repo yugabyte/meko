@@ -12,7 +12,8 @@
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   anything else       forwarded to `agent-k-local install`
-#                       (--non-interactive, --repos-root, --meko-key, --bind, --port, --no-service)
+#                       (--non-interactive, --repos-root, --meko-key, --no-meko, --bind, --port,
+#                       --no-service); Meko is optional: without a key the install goes on without it
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
 # (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and

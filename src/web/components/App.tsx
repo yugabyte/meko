@@ -361,6 +361,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             order={{ index: projects.indexOf(currentProject), count: projects.length }}
             onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
+            mekoConfigured={state.meko.configured}
             sharing={state.meko.sharing}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
@@ -395,7 +396,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
       {modal.kind === 'new-project' && (
         <NewProjectDialog
-          mekoOk={state.meko.ok}
+          mekoConfigured={state.meko.configured}
           mekoWebUrl={state.meko.webUrl}
           sharing={state.meko.sharing}
           projects={projects}

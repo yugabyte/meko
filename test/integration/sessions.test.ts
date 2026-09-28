@@ -79,12 +79,12 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect((await env.core.projects.repos()).repos[0].projects).toEqual([{ id: 'demo-repo-release-tooling', name: 'Release tooling' }]);
   });
 
-  it('refuses to create a project when Meko is down', async () => {
-    env.meko.check = async () => {
-      throw new Error('boom');
+  it("passes on Meko's error when it can't create the project's datapack, and creates nothing", async () => {
+    (env.meko as { createDatapack: unknown }).createDatapack = async () => {
+      throw new Error('connect ECONNREFUSED');
     };
-    env.core.mekoStatus = { ...env.core.mekoStatus, ok: false, error: 'boom', checkedAt: Date.now() };
-    await expect(newProject()).rejects.toThrow(/Meko is unreachable/);
+    await expect(newProject()).rejects.toThrow(/Meko couldn't create the datapack "agent-k-local\/test\/demo": connect ECONNREFUSED/);
+    expect(env.core.state().projects).toEqual([]);
   });
 
   it('runs a session in a worktree, tracks status from hooks, and archives it', async () => {

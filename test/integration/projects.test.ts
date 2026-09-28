@@ -23,16 +23,25 @@ describe('projects', () => {
     expect(env.core.projects.update(a.id, { name: 'ALPHA' }).name).toBe('ALPHA');
   });
 
-  it("shows the project home without datapack counts while Meko is down, without waiting on it", async () => {
+  it('shows the project home without datapack counts when Meko fails, and asks it with a short timeout', async () => {
     const p = await create('Alpha');
-    env.core.mekoStatus = { ...env.core.mekoStatus, ok: false, error: 'down' };
-    const before = env.meko.calls.length;
-    const home = await env.core.projects.home(p.id);
-    expect(home.datapacks[0]).toMatchObject({ id: 'dp-Alpha', memoryCount: null, knowledgeCount: null });
-    expect(env.meko.calls.slice(before).some((c) => c.name === 'describeDatapack')).toBe(false);
-
-    env.core.mekoStatus = { ...env.core.mekoStatus, ok: true, error: null };
-    expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: 3, knowledgeCount: 7 });
+    expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: 3, knowledgeCount: 7, ownerName: 'Test' });
     expect(env.meko.calls.find((c) => c.name === 'describeDatapack')?.args).toEqual(['dp-Alpha', 5000]);
+
+    (env.meko as { describeDatapack: unknown }).describeDatapack = async () => {
+      throw new Error('Meko is down');
+    };
+    const home = await env.core.projects.home(p.id);
+    expect(home.datapacks[0]).toMatchObject({ id: 'dp-Alpha', memoryCount: null, knowledgeCount: null, grant: null });
+  });
+
+  it("doesn't ask Meko for counts while it's off", async () => {
+    const p = await create('Alpha');
+    env.core.updateConfig((c) => {
+      c.meko.enabled = false;
+    });
+    const before = env.meko.calls.length;
+    expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: null });
+    expect(env.meko.calls.slice(before).some((c) => c.name === 'describeDatapack')).toBe(false);
   });
 });

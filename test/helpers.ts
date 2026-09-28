@@ -45,7 +45,7 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
     ]),
     createDatapack: rec('createDatapack', (name: unknown) => ({ id: `dp-${String(name).replace(/\W+/g, '-')}`, name })),
     setDatapackDescription: rec('setDatapackDescription', undefined),
-    describeDatapack: rec('describeDatapack', { memoryCount: 3, knowledgeCount: 7, grant: 'owner' }),
+    describeDatapack: rec('describeDatapack', { memoryCount: 3, knowledgeCount: 7, grant: 'owner', ownerName: 'Test', ownerEmail: 'test@example.com' }),
     search: rec('search', []),
     addMemory: rec('addMemory', undefined),
     putArtifact: rec('putArtifact', undefined),

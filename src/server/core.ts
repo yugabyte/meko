@@ -7,7 +7,7 @@ import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
 import { CommentService } from './comments.js';
-import { resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
+import { mekoConfigured, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
@@ -33,7 +33,7 @@ export interface CoreOptions {
   meko: MekoClient;
   tmux?: Tmux;
   log?: Logger;
-  /** Timers for reconcile, GitHub polling and Meko checks. Tests turn these off. */
+  /** Timers for reconcile, GitHub polling and the share syncs. Tests turn these off. */
   timers?: boolean;
   /** The Meko plugin's capture script (see findMekoCaptureScript); null turns transcript capture off. */
   mekoCaptureScript?: string | null;
@@ -80,7 +80,8 @@ export class Core extends EventEmitter {
     this.version = o.version;
     this.cfg = o.config;
     this.meko = o.meko;
-    this.mekoStatus = { ok: true, error: null, checkedAt: null, webUrl: resolveMekoWebUrl(o.config), sharing: null };
+    const configured = mekoConfigured(o.config);
+    this.mekoStatus = { configured, webUrl: resolveMekoWebUrl(o.config), sharing: null };
     this.log = o.log ?? consoleLogger;
     this.capture = new TranscriptCapture(o.mekoCaptureScript ?? null, () => {
       const m = resolveMeko(this.cfg);
@@ -111,7 +112,8 @@ export class Core extends EventEmitter {
     fn(next);
     saveConfig(this.paths, next);
     this.cfg = next;
-    this.mekoStatus = { ...this.mekoStatus, webUrl: resolveMekoWebUrl(next) };
+    const configured = mekoConfigured(next);
+    this.mekoStatus = { ...this.mekoStatus, webUrl: resolveMekoWebUrl(next), configured, ...(configured ? {} : { sharing: null }) };
     this.changed();
     return next;
   }
@@ -131,20 +133,18 @@ export class Core extends EventEmitter {
 
   /** Re-checks the share API, then syncs invites. Never throws. */
   async refreshSharing(): Promise<void> {
-    if (!this.mekoStatus.ok) return;
+    if (!this.mekoStatus.configured) return;
     await this.invites.checkMode();
     await this.invites.sync().catch((e) => this.log.warn('datapack invite sync failed', errMsg(e)));
   }
 
   /**
-   * The Meko URL or key changed: reconnect, forget the old account's shares, and check Meko now,
-   * then sharing in the background.
+   * The Meko URL or key changed (or Meko was turned on or off): reconnect, forget the old
+   * account's shares, and check sharing again in the background.
    */
   async mekoChanged(): Promise<void> {
     await this.meko.reset();
     this.invites.forgetAccount();
-    this.mekoStatus = { ...this.mekoStatus, sharing: null };
-    await this.checkMeko();
     this.sharingChanged();
   }
 
@@ -197,13 +197,11 @@ export class Core extends EventEmitter {
     // A tmux service that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs tmux) retries on every reconcile tick.
     await this.tmux.ensureServer().catch((e) => this.log.error('tmux is not available', e));
-    await this.checkMeko();
     await this.sessions.recover();
     void this.sessions.refreshDiffStats().catch(() => undefined);
     pruneSessionEvents(this.db);
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
-      this.every(60000, () => this.checkMeko());
       this.every(60000, () => this.sessions.refreshDiffStats());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(SHARING_CHECK_MS, () => this.invites.checkMode());
@@ -239,19 +237,6 @@ export class Core extends EventEmitter {
     );
   }
 
-  async checkMeko(): Promise<void> {
-    const before = this.mekoStatus.ok;
-    try {
-      await this.meko.check();
-      this.mekoStatus = { ...this.mekoStatus, ok: true, error: null, checkedAt: Date.now() };
-    } catch (e) {
-      this.mekoStatus = { ...this.mekoStatus, ok: false, error: errMsg(e), checkedAt: Date.now() };
-      if (before) this.log.warn('Meko unreachable', this.mekoStatus.error);
-    }
-    if (before !== this.mekoStatus.ok) this.changed();
-    // Back from being unreachable before sharing was ever checked: check it now, not in an hour.
-    if (this.timersOn && !before && this.mekoStatus.ok && this.mekoStatus.sharing === null) void this.refreshSharing();
-  }
 }
 
 function safeUsername(): string {

@@ -15,8 +15,10 @@ export interface Config {
   /**
    * captureTranscripts: send session transcripts to Meko conversations (off while Meko can't take the load).
    * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
+   * enabled: false turns Meko off even when a key is set (here, in the environment or in Claude
+   * Code's settings); AgentK then works without datapacks.
    */
-  meko: { url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
+  meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
   state: { dbPath: string };
   tmux: { socket: string };
   claude: { command: string };
@@ -30,7 +32,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
+  meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },
@@ -145,7 +147,13 @@ export function isLoopback(bind: string): boolean {
  */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
   const { url, apiKey } = resolveMekoWithSource(cfg);
-  return { url, apiKey };
+  // Turned off: no key, so nothing talks to Meko.
+  return { url, apiKey: cfg.meko.enabled ? apiKey : '' };
+}
+
+/** Meko is on: not turned off, and there's a key. Without it AgentK works without datapacks. */
+export function mekoConfigured(cfg: Config): boolean {
+  return !!resolveMeko(cfg).apiKey;
 }
 
 /** resolveMeko, plus where the key came from (null when there is none). */

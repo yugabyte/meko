@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canonicalRepoName, isProjectDatapack, matchRepo, normaliseRemote, parseProjectDatapack, projectDatapackDescription, remoteFromDescription, remoteRepoName,
+  canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, normaliseRemote, parseProjectDatapack, projectDatapackDescription, remoteFromDescription, remoteRepoName,
   shortRemote, withoutCredentials,
 } from '../../src/shared/datapacks.js';
 
@@ -107,6 +107,11 @@ describe('matchRepo', () => {
     expect(matchRepo([oldFork, repos[0]], 'adlc/proj/yugabyte-db/vector', null).repo?.name).toBe('yugabyte-db');
     // Without a fork, the clone of the remote itself.
     expect(matchRepo(repos.slice(0, 2), 'adlc/proj/yugabyte-db/vector', 'git@github.com:yugabyte/yugabyte-db.git')).toMatchObject({ by: 'remote', count: 2 });
+  });
+
+  it('makes the default name for a project datapack', () => {
+    expect(defaultProjectDatapackName('yugabyte-db', 'Vector tenant id')).toBe('adlc/proj/yugabyte-db/vector-tenant-id');
+    expect(defaultProjectDatapackName('', '')).toBe('adlc/proj/repo/project');
   });
 
   it('names the repo part after the upstream repo, then the origin, then the folder', () => {

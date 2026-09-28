@@ -117,7 +117,7 @@ describe('Meko client', () => {
     meko.tools.datapack_describe = () => ({ memory_count: 2, knowledge_chunk_count: 5, grant: 'maintainer' });
     await client.setDatapackDescription('d1', 'hello');
     expect(meko.calls.find((c) => c.name === 'datapack_update')?.args).toEqual({ datapack_id: 'd1', description: 'hello', conversation_id: 'conv-1' });
-    expect(await client.describeDatapack('d1')).toEqual({ memoryCount: 2, knowledgeCount: 5, grant: 'maintainer' });
+    expect(await client.describeDatapack('d1')).toEqual({ memoryCount: 2, knowledgeCount: 5, grant: 'maintainer', ownerName: null, ownerEmail: null });
     await client.reset();
     await client.describeDatapack('d1');
     expect(meko.calls.filter((c) => c.name === 'datapack_describe').map((c) => c.args.conversation_id)).toEqual(['conv-1', 'conv-2']);

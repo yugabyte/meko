@@ -37,6 +37,7 @@ export function mekoSettings(cfg: Config): MekoSettings {
   const eff = resolveMekoWithSource(cfg);
   const claude = readClaudeSettingsEnv();
   return {
+    enabled: cfg.meko.enabled,
     url: cfg.meko.url,
     effectiveUrl: eff.url,
     defaultUrl: DEFAULT_MEKO_URL,
@@ -63,8 +64,9 @@ function checkUrl(v: string, what: string): void {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new HttpError(400, `The ${what} must start with https:// or http://.`);
 }
 
-/** The Meko settings the tab can change. */
-const MEKO_KEYS = ['url', 'apiKey', 'webUrl', 'apiUrl'] as const;
+/** The Meko settings the tab can change; all but `enabled` are strings. */
+const TEXT_KEYS = ['url', 'apiKey', 'webUrl', 'apiUrl'] as const;
+const MEKO_KEYS = ['enabled', ...TEXT_KEYS] as const;
 type MekoKey = (typeof MEKO_KEYS)[number];
 
 /**
@@ -72,7 +74,7 @@ type MekoKey = (typeof MEKO_KEYS)[number];
  * another change (Claude Code's setup clearing the key) may have landed meanwhile.
  */
 export function applyMekoChange(c: Config, next: Config, changed: MekoKey[]): void {
-  for (const k of changed) c.meko[k] = next.meko[k];
+  for (const k of changed) (c.meko as Record<MekoKey, unknown>)[k] = next.meko[k];
 }
 
 /**
@@ -86,9 +88,10 @@ export async function nextMekoConfig(
   tools: MekoTools,
   m: MekoSettingsUpdate,
 ): Promise<{ next: Config; changed: MekoKey[]; reconnect: boolean; recheck: boolean } | null> {
-  for (const k of MEKO_KEYS) {
+  for (const k of TEXT_KEYS) {
     if (m[k] !== undefined && typeof m[k] !== 'string') throw new HttpError(400, `meko.${k} must be a string.`);
   }
+  if (m.enabled !== undefined && typeof m.enabled !== 'boolean') throw new HttpError(400, 'meko.enabled must be true or false.');
   // One snapshot throughout: the checks below take a while, and another change may land meanwhile.
   const base = core.config;
   const next = structuredClone(base);
@@ -110,14 +113,17 @@ export async function nextMekoConfig(
   if (m.apiKey?.trim()) {
     if (/\s/.test(m.apiKey.trim())) throw new HttpError(400, "A Meko API key has no spaces in it. Paste it again.");
     next.meko.apiKey = m.apiKey.trim();
+    // Adding a key turns Meko on.
+    next.meko.enabled = true;
   }
+  if (m.enabled !== undefined) next.meko.enabled = m.enabled;
   // What this save changes, against the config as it was when it began.
   const changed = MEKO_KEYS.filter((k) => next.meko[k] !== base.meko[k]);
   if (!changed.length) return null;
   const before = resolveMeko(base);
   const after = resolveMeko(next);
   const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
-  if (reconnect) {
+  if (reconnect && next.meko.enabled) {
     if (!after.apiKey) throw new HttpError(400, 'Enter a Meko API key.');
     const r = await tools.check(after.url, after.apiKey);
     if (!r.ok) throw new HttpError(400, `Meko at ${after.url} didn't accept that key: ${r.error}. Nothing was saved.`);

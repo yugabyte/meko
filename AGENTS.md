@@ -7,7 +7,7 @@ AgentK Local is a self-hosted web workbench for Claude Code. A project is an eff
 or product, worked on in a git repo. Each task is a session with its own git worktree and a
 tmux-hosted Claude process. Its type decides the stages:
 Plan & Implement goes Design → Code → PR → Review → Merge & Close, Quick Code skips Design, and
-Exploration stays in one Explore stage. Meko datapacks hold project memory. The design
+Exploration stays in one Explore stage. Meko datapacks hold project memory (Meko is optional). The design
 is in [docs/design.md](docs/design.md).
 
 **Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
@@ -59,7 +59,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage. |
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
-| `src/web/components/NewProjectDialog.tsx`, `ShareDialog.tsx`, `Banners.tsx` | New project (the dedicated datapack first, invites and shares listed first, the repo and name filled in from the datapack), the Share dialog (API mode), and the banners, share invites included. |
+| `src/web/components/NewProjectDialog.tsx`, `ShareDialog.tsx`, `Banners.tsx` | New project (the dedicated datapack first, or No datapack; invites and shares listed first, the repo and name filled in from the datapack), the Share dialog (API mode), and the banners, share invites included. |
+| `src/web/components/MekoKeyDialog.tsx`, `AddDatapackDialog.tsx` | Turning Meko on with an API key, and giving a project without one its dedicated datapack (both reached from the project home's Share and Datapacks box). |
 | `src/web/components/UsagePanel.tsx`, `UsageView.tsx` | Token usage: the project home's panel (headline numbers, 14-day chart with table view, per-session and per-model tables) and the all-projects Usage page at `/usage` (adds merged PRs, pushed commits and a per-project table; both its tables sort on any column through `src/web/sort.ts`). |
 | `src/web/notifyLeader.ts` | Which open page shows browser notifications: the one used last, through a Web Lock it steals on focus. |
 | `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52 and ⌘C/Ctrl+C, via `clipboard.ts`), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input, reconnecting (backoff, and the login screen on a 4401 close via `checkLogin()` in `api.ts`) and releasing phone terminals that are hidden or off screen. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
@@ -93,8 +94,12 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 6. **tmux 2.7 compatibility** (RHEL 8): no `new-session -e`, window options via `set-window-option`,
    exact targets as `=name:`. macOS needs tmux 3.2 (the launchd job runs `tmux -D`), so 3.2-only
    flags are allowed only on the macOS path.
-7. **Meko is required.** Projects can't exist without a dedicated datapack; sessions always get
-   `MEKO_AGENT_ID=claude_code:<project>`, and the project's datapack is pinned for that agent id.
+7. **Meko is optional; a project has at most one dedicated datapack.** Without a key (or with
+   `[meko] enabled = false`) AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
+   lines in their prompt, and nothing is saved there. A project with a dedicated datapack has it
+   pinned for `MEKO_AGENT_ID=claude_code:<project>`, which every session gets. (Claude Code's own
+   Meko setup is the user's and isn't changed.) Nothing that needs Meko may stop the install, a project or a session when Meko is off or
+   down: it's skipped or offered later.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
    keys in code, docs, tests or commit messages.
 

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { cx, relativeTime } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { ConfirmButton, Dialog, ErrorText, Field } from './common';
 
 type Tab = 'general' | 'meko' | 'account' | 'updates';
 
@@ -247,8 +247,45 @@ function MekoTab({ status }: { status: MekoStatus }) {
 
   const claudeMatches = m.claudeKeyMatches && (m.claudeUrl ?? m.defaultUrl) === m.effectiveUrl;
 
+  /** Turns Meko off (the key is kept) or back on (checked with Meko first). */
+  const setEnabled = async (enabled: boolean) => {
+    setBusy('save');
+    setError(null);
+    try {
+      show(await api.saveSettings({ meko: { enabled } }));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <form className="stack" onSubmit={save}>
+      <div className="meko-onoff">
+        {m.enabled ? (
+          <>
+            <span className="muted">Meko gives projects datapacks: shared memory, and what a project is shared through.</span>
+            <ConfirmButton
+              className="btn small"
+              label="Turn off Meko"
+              confirmLabel="Turn off"
+              danger
+              prompt="AgentK stops using Meko: new sessions get no datapack, and designs and summaries aren't saved there. Projects keep their datapacks for when you turn it back on. Claude Code's own Meko setup isn't changed."
+              onConfirm={() => setEnabled(false)}
+            />
+          </>
+        ) : (
+          <>
+            <span>
+              <b>Meko is off.</b> <span className="muted">Projects work without datapacks.</span>
+            </span>
+            <button type="button" className="btn small primary" disabled={busy !== null || m.keyHint === null} onClick={() => void setEnabled(true)}>
+              Turn on Meko
+            </button>
+          </>
+        )}
+      </div>
       <Field label="MCP server URL" hint={`Empty means Meko Cloud (${m.defaultUrl}), unless the environment or Claude Code’s settings name one. Now using ${m.effectiveUrl}.`}>
         <input
           id="set-meko-url"
@@ -303,14 +340,14 @@ function MekoTab({ status }: { status: MekoStatus }) {
 
       <div className="meko-status">
         <div className="meko-status-row">
-          <span>Connection</span>
-          {status.ok ? <span className="tag">connected</span> : <span className="tag bad">unreachable</span>}
-          {!status.ok && status.error && <span className="hint">{status.error}</span>}
+          <span>Meko</span>
+          {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
+          {status.configured && <span className="hint">A new URL or key is checked with Meko when you save it.</span>}
         </div>
         <div className="meko-status-row">
           <span>Sharing</span>
           <span className={cx('tag', status.sharing !== 'api' && 'shared')}>
-            {status.sharing === 'api' ? 'in AgentK' : status.sharing === 'link' ? 'link mode' : 'not checked yet'}
+            {!status.configured ? 'off' : status.sharing === 'api' ? 'in AgentK' : status.sharing === 'link' ? 'link mode' : 'not checked yet'}
           </span>
           {status.sharing === 'link' && (
             <span className="hint">This Meko doesn’t accept API keys for sharing yet, so sharing happens in Meko’s web app.</span>

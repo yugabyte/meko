@@ -1570,6 +1570,39 @@ a.icon-btn {
   border-bottom: 1px solid var(--rule);
   flex-wrap: wrap;
 }
+/* Share sits at the right of the project's header (it shares the whole project). */
+.home-share {
+  margin-left: auto;
+  align-self: center;
+}
+.home-share-banner {
+  border-bottom: 1px solid var(--rule);
+}
+.home-share-note {
+  margin: 0;
+  padding: 6px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+/* A project without a dedicated datapack: what to do about it. */
+.dp-none {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px 0;
+}
+.np-limit {
+  display: flex;
+  justify-content: flex-end;
+}
+/* Settings, Meko tab: on or off */
+.meko-onoff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
 .home-scroll {
   overflow-y: auto;
   padding: 18px 20px 40px;
@@ -3211,6 +3244,9 @@ a.icon-btn {
   }
   .home-hd h1 {
     font-size: 1.3rem;
+  }
+  .home-share-note {
+    padding: 6px 12px;
   }
   .home-scroll {
     padding: 12px 12px 32px;

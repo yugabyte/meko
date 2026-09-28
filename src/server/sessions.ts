@@ -206,7 +206,6 @@ export class SessionManager {
     if (!p) throw new HttpError(404, 'That project no longer exists.');
     const name = (req.name ?? '').trim();
     if (!name) throw new HttpError(400, 'Give the session a name.');
-    if (!dedicatedDatapack(this.db, projectId)) throw new HttpError(409, 'This project has no dedicated datapack.');
     const settings = parseSettings(p.settings_json);
     const base = (req.baseBranch ?? '').trim() || p.default_branch;
     const task = (req.prompt ?? '').trim();
@@ -304,8 +303,13 @@ export class SessionManager {
     });
   }
 
+  /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */
+  private sessionDatapacks(projectId: string) {
+    return this.core.mekoStatus.configured ? projectDatapacks(this.db, projectId) : [];
+  }
+
   private env(row: SessionRow): Record<string, string> {
-    const dps = projectDatapacks(this.db, row.project_id);
+    const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
     // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
     // Set even when empty: empty means the user has none, unset means a session from before this.
@@ -327,7 +331,7 @@ export class SessionManager {
 
   private systemPrompt(row: SessionRow): string {
     const p = projectRow(this.db, row.project_id);
-    const dps = projectDatapacks(this.db, row.project_id);
+    const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
@@ -370,7 +374,8 @@ export class SessionManager {
   /** Pins the project's dedicated datapack for its Meko agent id again (it may have been changed or removed). */
   private pinDatapack(projectId: string): void {
     const dp = dedicatedDatapack(this.db, projectId);
-    if (!dp) return;
+    // Meko off: AgentK pins nothing. Claude Code's own Meko setup, if any, is left as it is.
+    if (!dp || !this.core.mekoStatus.configured) return;
     try {
       this.core.projects.writePin(projectId, dp);
     } catch (e) {
@@ -914,7 +919,7 @@ export class SessionManager {
   /** Sends the session's new turns to its Meko conversation. Never throws. */
   captureTranscript(id: string): Promise<void> {
     const r = sessionRow(this.db, id);
-    if (!r) return Promise.resolve();
+    if (!r || !this.core.mekoStatus.configured) return Promise.resolve();
     return this.core.capture.capture(id, sessionTranscript(r, transcriptPathFor));
   }
 
@@ -928,7 +933,7 @@ export class SessionManager {
    */
   private async nameConversation(r: SessionRow): Promise<void> {
     const dp = dedicatedDatapack(this.db, r.project_id);
-    if (!dp || !this.core.capture.enabled) return;
+    if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
     const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
     try {
       await this.core.meko.ensureConversation(projectAgentId(r.project_id), dp.id, r.claude_session_id, title);
