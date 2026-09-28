@@ -91,7 +91,11 @@ The left rail holds projects, each with its repo's folder name in small type und
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
 screen, use **Move up** / **Move down** in the project home's settings. The top tabs hold that project's sessions. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
-diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage.
+diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. The foot of the rail
+shows the user and the server (`hari@dev-box`) with the version, so windows on different machines
+are easy to tell apart. The server name is `[server] name` (set in Settings), else the machine's
+host name up to its first dot; the tooltip adds the full host name. When space is short, the
+version moves below it first, then the user name is cut off before the server name.
 
 ![The AgentK Local window: the project rail, session tabs, the stage bar and a live Claude terminal](screenshots/workbench.png)
 
@@ -333,6 +337,9 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
 
 # config.toml (excerpt)
+[server]
+# name = "work laptop"    # shown in the rail next to your user name; unset uses the machine's host name
+
 [repos]
 roots = ["~/code"]        # folders the New project dialog lists
 depth = 1                 # 1 = only direct children
@@ -420,11 +427,11 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
   installer stops rather than put the database (password hash, TOTP secret) somewhere another user
   controls.
 
-`config.toml` holds host settings: the listen address and port, TLS paths, repo folders, the update
+`config.toml` holds host settings: the listen address and port, the server's name, TLS paths, repo folders, the update
 channel, the Meko URL and key (only when typed at install), transcript capture, the tmux socket, the
 `claude` command, the database path and how many idle worktrees each repo keeps. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
-keep an unused one, update channel) there too. Per-project settings, sessions and everything else live in `state.db`. Only values that
+keep an unused one, update channel, server name) there too. Per-project settings, sessions and everything else live in `state.db`. Only values that
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
 `AK_PORT` override `[server]` for one run (`npm run dev`) and are never written to the file. The Meko
 URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude

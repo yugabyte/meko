@@ -9,6 +9,7 @@ import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
+import { shortHost } from '../../src/server/core.js';
 import { openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
@@ -126,6 +127,28 @@ describe('config and db', () => {
     expect(warnings.join('\n')).toContain('server.port should be a number');
   });
 
+  it('reads [server] name, falls back to empty for a non-string, and leaves it out when empty', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.server.name = 'work laptop';
+    saveConfig(paths, cfg);
+    expect(readFileSync(paths.config, 'utf8')).toContain('name = "work laptop"');
+    expect(loadConfig(paths).server.name).toBe('work laptop');
+    saveConfig(paths, structuredClone(DEFAULT_CONFIG));
+    expect(readFileSync(paths.config, 'utf8')).not.toContain('name =');
+    writeFileSync(paths.config, '[server]\nname = 5\n');
+    const warnings: string[] = [];
+    expect(loadConfig(paths, (m) => warnings.push(m)).server.name).toBe('');
+    expect(warnings.join('\n')).toContain('server.name should be a string');
+  });
+
+  it('shortens a host name to its first label', () => {
+    expect(shortHost('dev-box.example.com')).toBe('dev-box');
+    expect(shortHost('mac.local')).toBe('mac');
+    expect(shortHost('plain')).toBe('plain');
+    expect(shortHost('.weird')).toBe('.weird');
+  });
+
   it('never writes AK_BIND or AK_PORT into config.toml', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
@@ -136,7 +159,7 @@ describe('config and db', () => {
       process.env.AK_BIND = '127.0.0.1';
       process.env.AK_PORT = '9999';
       const live = loadConfig(paths);
-      expect(live.server).toEqual({ bind: '127.0.0.1', port: 9999 });
+      expect(live.server).toEqual({ bind: '127.0.0.1', port: 9999, name: '' });
       live.repos.depth = 2; // a settings change made while running under the overrides
       saveConfig(paths, live);
     } finally {
@@ -146,7 +169,7 @@ describe('config and db', () => {
       }
     }
     const back = loadConfig(paths);
-    expect(back.server).toEqual({ bind: '0.0.0.0', port: 8443 });
+    expect(back.server).toEqual({ bind: '0.0.0.0', port: 8443, name: '' });
     expect(back.repos.depth).toBe(2);
   });
 

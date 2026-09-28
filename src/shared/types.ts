@@ -284,6 +284,10 @@ export interface AppState {
   update: UpdateStatus;
   version: string;
   username: string;
+  /** The name shown next to the user name: `[server] name` from config.toml, else the machine's short host name. */
+  serverName: string;
+  /** The machine's full host name as the OS reports it, for the tooltip when it differs from `serverName`. */
+  serverHost: string;
   /** The account's plan usage limits, or null when no session has reported them (API-key accounts never do). */
   limits: PlanLimits | null;
   /** Project datapacks shared with you that aren't a project here yet (not the ones put off with Later). */
@@ -442,6 +446,10 @@ export interface Settings {
   updateChannel: 'stable' | 'prerelease' | 'off';
   bind: string;
   port: number;
+  /** `[server] name`: shown in the rail next to the user name; '' uses the machine's host name. */
+  serverName: string;
+  /** The machine's short host name, what an empty `serverName` shows. Read-only. */
+  hostName: string;
   /** Idle worktrees each repo keeps for its next session, build outputs and all (0 to 20; 0 removes them). */
   idleWorktreesPerRepo: number;
   /** Days an idle worktree may go unused before it's removed (0 to 365; 0 keeps it until the cap trims it). */
@@ -489,7 +497,7 @@ export interface MekoSettingsUpdate {
   apiUrl?: string;
 }
 
-export type SettingsUpdate = Partial<Omit<Settings, 'meko'>> & { meko?: MekoSettingsUpdate };
+export type SettingsUpdate = Partial<Omit<Settings, 'meko' | 'hostName'>> & { meko?: MekoSettingsUpdate };
 
 /** What Discard would throw away. */
 export interface DiscardCheck {
@@ -753,7 +761,9 @@ export type TermServerMessage =
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
 //                                                           a `meko` change is checked against Meko before it's saved;
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
-//                                                           the idle worktrees now beyond it)
+//                                                           the idle worktrees now beyond it; serverName is trimmed,
+//                                                           at most 64 characters with no control characters, and
+//                                                           '' goes back to the host name)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus

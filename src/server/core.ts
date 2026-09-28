@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
 import { ensureWorkspaceTrust } from './trust.js';
-import { userInfo } from 'node:os';
+import { hostname, userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
@@ -58,6 +58,8 @@ export class Core extends EventEmitter {
   readonly db: Db;
   readonly version: string;
   readonly username: string;
+  /** The machine's host name as the OS reports it, read once at startup. */
+  readonly hostFull: string;
   readonly meko: MekoClient;
   readonly capture: TranscriptCapture;
   readonly tmux: Tmux;
@@ -94,6 +96,7 @@ export class Core extends EventEmitter {
     this.tmux = o.tmux ?? new Tmux(o.config.tmux.socket, o.paths.tmuxConf);
     this.timersOn = o.timers ?? true;
     this.username = safeUsername();
+    this.hostFull = hostname();
     this.updateStatus = () => ({
       current: this.version, channel: this.cfg.update.channel, latest: null, available: false, applying: false,
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
@@ -121,6 +124,16 @@ export class Core extends EventEmitter {
     this.mekoStatus = { ...this.mekoStatus, webUrl: resolveMekoWebUrl(next), configured, ...(configured ? {} : { sharing: null }) };
     this.changed();
     return next;
+  }
+
+  /** The machine's short host name: what the rail shows when `[server] name` is unset. */
+  hostName(): string {
+    return shortHost(this.hostFull);
+  }
+
+  /** The name shown next to the user name in the rail. */
+  serverName(): string {
+    return this.cfg.server.name.trim() || this.hostName();
   }
 
   /** Something visible changed; the server debounces and broadcasts state. */
@@ -177,6 +190,8 @@ export class Core extends EventEmitter {
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
       username: getOwner(this.db)?.username ?? this.username,
+      serverName: this.serverName(),
+      serverHost: this.hostFull,
       limits: this.limits.current(),
       invites: this.invites.pending(),
     };
@@ -246,6 +261,11 @@ export class Core extends EventEmitter {
     );
   }
 
+}
+
+/** A host name up to its first dot (`dev-box.example.com` → `dev-box`), or all of it when that leaves nothing. */
+export function shortHost(name: string): string {
+  return name.split('.')[0] || name;
 }
 
 function safeUsername(): string {

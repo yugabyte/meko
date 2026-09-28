@@ -88,6 +88,7 @@ function GeneralTab() {
         reposRoots: roots.map((r) => r.trim()).filter(Boolean),
         reposDepth: clampDepth(),
         cloneInto: s.cloneInto.trim(),
+        serverName: s.serverName.trim(),
         idleWorktreesPerRepo: clampIdle(),
         idleWorktreeDays: clampIdleDays(),
       });
@@ -186,6 +187,16 @@ function GeneralTab() {
           </Field>
         </div>
       </div>
+      <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
+        <input
+          id="set-server-name"
+          className="input"
+          value={s.serverName}
+          placeholder={s.hostName}
+          maxLength={64}
+          onChange={(e) => setS({ ...s, serverName: e.target.value })}
+        />
+      </Field>
       <div className="fields">
         <Field label="Listen address">
           <input id="set-bind" className="input mono" value={s.bind} readOnly disabled />

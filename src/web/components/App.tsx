@@ -337,6 +337,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           closeDrawer();
         }}
         username={state.username || auth.username || ''}
+        serverName={state.serverName ?? ''}
+        serverHost={state.serverHost ?? ''}
         version={state.version}
         limits={state.limits ?? null}
         theme={theme}

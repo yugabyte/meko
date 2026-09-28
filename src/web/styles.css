@@ -682,15 +682,38 @@ textarea.input {
 }
 .me {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
+  gap: 2px 8px;
   color: var(--muted);
   font-size: 12px;
   padding: 0 4px;
 }
-.me span:first-child {
+/* user@server, whole where it fits. The version wraps below it before either name is cut; then the
+   user name gives way first and the server name keeps up to 75% of the row. */
+.me-who {
+  display: flex;
+  min-width: 0;
+}
+.me-user,
+.me-host {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.me-user {
+  flex: 0 1000 auto;
+}
+.me-host {
+  flex: 0 1 auto;
+  max-width: 75%;
+  color: var(--ink);
+  font-weight: 500;
+}
+.me .mono {
+  flex: none;
+  margin-left: auto;
 }
 .main {
   display: flex;

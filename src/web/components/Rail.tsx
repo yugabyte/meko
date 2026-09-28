@@ -11,6 +11,8 @@ export function Rail({
   usageOpen,
   onUsage,
   username,
+  serverName,
+  serverHost,
   version,
   limits,
   theme,
@@ -29,6 +31,10 @@ export function Rail({
   usageOpen: boolean;
   onUsage: () => void;
   username: string;
+  /** Shown after the user name (`hari@dev-box`); empty from a server too old to send it. */
+  serverName: string;
+  /** The machine's full host name, added to the tooltip when it isn't what `serverName` shows. */
+  serverHost: string;
   version: string;
   limits: PlanLimits | null;
   theme: ThemePref;
@@ -49,6 +55,13 @@ export function Rail({
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const mod = isMac() ? '⌘' : 'Ctrl+';
+  const who = [
+    onLogout ? `Signed in as ${username}` : username,
+    serverName && ` on ${serverName}`,
+    serverName && serverHost && serverHost !== serverName && ` (${serverHost})`,
+  ]
+    .filter(Boolean)
+    .join('');
 
   // The dragged project takes the target's place: before it when moving up, after it when moving down.
   const drop = (targetId: string) => {
@@ -152,7 +165,10 @@ export function Rail({
           )}
         </div>
         <div className="me">
-          <span title={onLogout ? `Signed in as ${username}` : username}>{username}</span>
+          <span className="me-who" title={who}>
+            <span className="me-user">{username}</span>
+            {serverName && <span className="me-host">@{serverName}</span>}
+          </span>
           <span className="mono">v{version}</span>
         </div>
       </div>

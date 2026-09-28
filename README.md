@@ -57,6 +57,8 @@ your phone can connect.
   worked on in a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
   New sessions start from the base branch after it's fast-forwarded to `origin`.
+  The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
+  on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
   shared ones. Designs, session transcripts and a summary of each merged PR are saved there, so
   the whole team, and its agents, start from the same context.

@@ -1,11 +1,12 @@
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeEnv, type TestEnv } from '../helpers.js';
 import { buildServer, stampVersion } from '../../src/server/server.js';
+import { shortHost } from '../../src/server/core.js';
 import { issueSetupToken, totpCode } from '../../src/server/auth.js';
 
 describe('HTTP API: auth, origin checks, projects', () => {
@@ -83,6 +84,30 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(withCode.statusCode).toBe(204);
     const replay = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery', totp: next } });
     expect(replay.statusCode).toBe(401);
+  });
+
+  it('shows the host name as the server name until Settings sets one', async () => {
+    const cookie = await setup();
+    const state = async () => (await app.inject({ url: '/api/state', headers: { cookie } })).json();
+    const put = (serverName: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { serverName } });
+    expect(await state()).toMatchObject({ serverName: shortHost(hostname()), serverHost: hostname() });
+    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json()).toMatchObject({ serverName: '', hostName: shortHost(hostname()) });
+
+    const saved = await put('  work laptop  ');
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().serverName).toBe('work laptop');
+    expect((await state()).serverName).toBe('work laptop');
+    expect(env.core.config.server.name).toBe('work laptop');
+
+    for (const bad of ['x'.repeat(65), 'two\nlines', 5]) {
+      const res = await put(bad);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Server name must be 64 characters or fewer/);
+    }
+    expect((await state()).serverName).toBe('work laptop');
+
+    expect((await put('')).json().serverName).toBe('');
+    expect((await state()).serverName).toBe(shortHost(hostname()));
   });
 
   it('refuses cross-origin writes', async () => {

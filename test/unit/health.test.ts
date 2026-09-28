@@ -30,7 +30,7 @@ describe('health probe', () => {
     const port = await serveOn('::1');
     if (!port) return ctx.skip();
     const cfg: Config = structuredClone(DEFAULT_CONFIG);
-    cfg.server = { bind: '::1', port };
+    cfg.server = { ...cfg.server, bind: '::1', port };
     expect(await probeLocal(cfg)).toEqual({ ok: true, version: '1.2.3' });
   });
 });

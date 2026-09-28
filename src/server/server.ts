@@ -361,6 +361,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     updateChannel: core.config.update.channel,
     bind: core.config.server.bind,
     port: core.config.server.port,
+    serverName: core.config.server.name,
+    hostName: core.hostName(),
     idleWorktreesPerRepo: core.worktrees.cap(),
     idleWorktreeDays: core.worktrees.idleDays(),
     meko: mekoSettings(core.config),
@@ -380,6 +382,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.idleWorktreeDays !== undefined && (!Number.isInteger(b.idleWorktreeDays) || b.idleWorktreeDays < 0 || b.idleWorktreeDays > MAX_IDLE_DAYS)) {
       throw new HttpError(400, `Days to keep an unused idle worktree must be a whole number from 0 to ${MAX_IDLE_DAYS}.`);
     }
+    // eslint-disable-next-line no-control-regex
+    if (b.serverName !== undefined && (typeof b.serverName !== 'string' || b.serverName.trim().length > 64 || /[\u0000-\u001f\u007f]/.test(b.serverName))) {
+      throw new HttpError(400, 'Server name must be 64 characters or fewer, with no line breaks.');
+    }
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -389,6 +395,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.reposDepth) c.repos.depth = b.reposDepth;
       if (b.cloneInto?.trim()) c.repos.cloneInto = b.cloneInto.trim();
       if (b.updateChannel) c.update.channel = b.updateChannel;
+      if (b.serverName !== undefined) c.server.name = b.serverName.trim();
       if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
       if (meko) applyMekoChange(c, meko.next, meko.changed);

@@ -8,7 +8,8 @@ import { expandHome, type Paths } from './paths.js';
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
 
 export interface Config {
-  server: { bind: string; port: number };
+  /** name: shown in the rail next to the user name; empty uses the machine's short host name. */
+  server: { bind: string; port: number; name: string };
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
   update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
@@ -33,7 +34,7 @@ export interface Config {
 export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 
 export const DEFAULT_CONFIG: Config = {
-  server: { bind: '0.0.0.0', port: 7777 },
+  server: { bind: '0.0.0.0', port: 7777, name: '' },
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
