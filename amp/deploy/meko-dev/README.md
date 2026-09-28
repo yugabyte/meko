@@ -4,6 +4,11 @@ Scripts for the **meko-dev** amp deployment (kube context `meko-dev-eks`, namesp
 `amp-dev`). Both are parameterized via env vars; the defaults target meko-dev
 against the `amp2-db` YugabyteDB universe (in namespace `yb-dev-amp2-db`).
 
+The universe must run YugabyteDB **2026.1.2 or later**: amp's thin client speaks
+`yb.tserver.ThinClientService`, which first shipped in 2026.1.2. On an older
+universe every endpoint's safekeeper exits at startup with `Service
+yb.tserver.ThinClientService not registered on TabletServer`.
+
 ## `amp-redeploy.sh` — clean redeploy of the control plane
 
 Points the `amp-dev` control plane at a given image `TAG` and an external,
@@ -17,7 +22,7 @@ CONFIRM=yes TAG=tot-<shortsha> ./amp-redeploy.sh     # full redeploy
 
 Steps: re-mint the ECR pull secret → `CREATE DATABASE yb_storage` on the universe
 (the controller does **not** auto-create it) → uninstall the old per-endpoint
-`yb-ep-*` releases → `helm upgrade` the control plane (with `--force-conflicts`,
+`yb-ep-*` releases → `helm upgrade` the control plane (with `--server-side=true --force-conflicts`,
 since `controller`/`ui` images are often `kubectl set image`'d, creating a
 server-side-apply field-manager conflict) → wait for rollout → delete the old
 in-namespace `yugabyted` backend → verify the tailnet hostnames + OTel CRs

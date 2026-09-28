@@ -21,6 +21,9 @@ PG_VERSION=${PG_VERSION:-18}
 EP_CPU=${EP_CPU:-2}
 EP_MEM=${EP_MEM:-$((EP_CPU * 8))Gi}
 AUTH=${AMP_AUTH:-admin:admin}
+# Not overridable: every workload, checker and amp-time manifest hardcodes this as
+# cloud_admin's password, so a different value here would lock them all out.
+EP_PASSWORD=cloud_admin
 PORT=${PORT:-18083}
 HERE=$(cd "$(dirname "$0")" && pwd)
 
@@ -79,7 +82,7 @@ echo "cluster $CLUSTER $CLUSTER_ID branch main $BRANCH_ID"
 EP_BASE="/storage-pools/$POOL_ID/clusters/$CLUSTER_ID/branches/$BRANCH_ID/endpoints"
 EP_ID=$(api "$EP_BASE" | jqf 'print(next((e["id"] for e in d.get("endpoints",[]) if e["role"]=="read_write"), ""))')
 if [ -z "$EP_ID" ]; then
-  RESP=$(api "$EP_BASE" -X POST -d "{\"role\":\"read_write\",\"resources\":{\"cpu\":\"$EP_CPU\",\"memory\":\"$EP_MEM\"}}")
+  RESP=$(api "$EP_BASE" -X POST -d "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\",\"resources\":{\"cpu\":\"$EP_CPU\",\"memory\":\"$EP_MEM\"}}")
   TASK=$(task_id "$RESP")
   wait_task "$TASK"
   EP_ID=$(api "$EP_BASE" | jqf 'print(next(e["id"] for e in d["endpoints"] if e["role"]=="read_write"))')
@@ -100,7 +103,9 @@ ENDPOINT_PORT=55433
 ENV
 echo "wrote $HERE/lru.env"
 
-k apply -k "$HERE/../monitoring"
+# monitoring/up.sh, not a bare apply -k: it also creates the grafana-admin Secret
+# and the cross-namespace RBAC Prometheus needs to scrape the endpoint pods.
+KUBE_CONTEXT="$KUBE_CONTEXT" LRU_NS="$LRU_NS" "$HERE/../monitoring/up.sh"
 k apply -k "$HERE"
 # Stable in-namespace alias for the endpoint so the manifests carry no endpoint id.
 # Deliberately not a kustomize resource: a bare `kubectl apply -k .` would put a

@@ -59,6 +59,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | PS exits at startup: `pageserver.toml must set branch_id` | single-branch identity missing — launcher hasn't assigned one (run `cluster create` / `branch create`, or write the identity into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no branch_state row` | the controller never provisioned the branch (wiped YB DB, or the pageserver started without `branch create`) | — |
 | SK exits at startup: `YB-WAL mode requires --branch-id (single-branch-per-process)` | single-branch identity missing from `safekeeper.toml` — the SK serves one branch and scopes its load to it. Provisioned SKs get `branch_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set it alongside `yb_storage_conn` | — |
+| SK exits at startup: `thin-client hot path init` … `Service yb.tserver.ThinClientService not registered on TabletServer` | the backing YugabyteDB universe is older than 2026.1.2, the first release with the thin-client RPC service amp's shim speaks. Every endpoint on it crash-loops. Upgrade the universe to 2026.1.2 or later | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_amp_local port collision, or a postmaster orphaned by an earlier compute_ctl | **H** |

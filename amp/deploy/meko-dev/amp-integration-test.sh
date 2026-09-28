@@ -13,6 +13,8 @@ KCTX="${KCTX:-meko-dev-eks}"
 PGBIN="${PGBIN:-$(command -v psql || echo /opt/homebrew/opt/postgresql@16/bin/psql)}"
 K="kubectl --context $KCTX -n $NS"
 API_PF_PORT="${API_PF_PORT:-18080}"
+PG_PF_PORT="${PG_PF_PORT:-15433}"
+EP_PASSWORD="${EP_PASSWORD:-cloud_admin}"   # set on the endpoint at create; the controller requires one for read_write
 API="http://127.0.0.1:${API_PF_PORT}/api/v1"
 RUN="itest-$(date +%s)"
 PF_PIDS=()
@@ -69,7 +71,7 @@ ok "cluster $PROJ  branch $BR  (branch pg_version=$PGV)"
 
 # --- create a read_write endpoint (async: task's target_ref is the endpoint id) ---
 RESP=$(curl -s -X POST "$API/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints" \
-  -H 'Content-Type: application/json' -d '{"role":"read_write"}')
+  -H 'Content-Type: application/json' -d "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
 EP=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("target_ref",""))')
 [ -n "$EP" ] || { err "createEndpoint produced no endpoint: $RESP"; exit 1; }
 ok "endpoint $EP (provisioning)"
@@ -89,10 +91,10 @@ done
 [ -n "$EP_POD" ] || { err "endpoint pod never appeared"; exit 1; }
 
 # --- connect to the compute via port-forward and assert PG18 + write/read ---
-$K port-forward "pod/$EP_POD" 15433:55433 >/tmp/itest-pg-pf.log 2>&1 &
+$K port-forward "pod/$EP_POD" "$PG_PF_PORT":55433 >/tmp/itest-pg-pf.log 2>&1 &
 PF_PIDS+=($!); sleep 4
-export PGPASSWORD=cloud_admin
-CONN="host=127.0.0.1 port=15433 user=cloud_admin dbname=postgres sslmode=prefer connect_timeout=15"
+export PGPASSWORD="$EP_PASSWORD"
+CONN="host=127.0.0.1 port=$PG_PF_PORT user=cloud_admin dbname=postgres sslmode=prefer connect_timeout=15"
 VER=$($PGBIN "$CONN" -tAc "show server_version" 2>/tmp/itest-pg.err)
 if echo "$VER" | grep -q '^18'; then ok "server_version = $VER (PG18)"; else err "expected PG18, got '$VER' ($(cat /tmp/itest-pg.err))"; fi
 TBL="itest_${RUN//-/_}"

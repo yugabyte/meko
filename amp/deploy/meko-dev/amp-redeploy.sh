@@ -61,7 +61,9 @@ open(f,'w').write(s); print("values overridden")
 PY
   # --force-conflicts: controller/ui images may have been `kubectl set image`'d
   # (field-manager "kubectl-set") -> server-side-apply conflict without it.
-  helm --kube-context "$KCTX" -n "$NS" upgrade "$REL" "$CHART" -f /tmp/amp-vals.yaml --force-conflicts
+  # Helm 4 rejects --force-conflicts unless server-side apply is on, and it
+  # inherits client-side apply from a release first installed by Helm 3.
+  helm --kube-context "$KCTX" -n "$NS" upgrade "$REL" "$CHART" -f /tmp/amp-vals.yaml --server-side=true --force-conflicts
 fi
 
 # The Traefik CRDs an ingress shard's proxy watches. Applied rather than left to

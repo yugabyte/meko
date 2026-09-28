@@ -162,12 +162,7 @@ data:
     if [ -f /work/needs-init ]; then
       echo "=== one-time init and seed"
       /work/bin/ledger_bench -schema "$LEDGER_SCHEMA" -init -run=false $SEED_FLAGS
-      # pg_stat_statements records no search_path, so amp-time cannot EXPLAIN a
-    # statement written against this schema without one on the connection. The
-    # database default is the only place every client picks it up.
-    admin -c "ALTER DATABASE $LEDGER_DB SET search_path = $LEDGER_SCHEMA, public"
-
-    rm -f /work/needs-init
+      rm -f /work/needs-init
     fi
 
     while true; do
