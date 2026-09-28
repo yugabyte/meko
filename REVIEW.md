@@ -74,7 +74,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       in `state.db`, so it survives a restart). Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
-      user's main checkout or repo.
+      user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only change made in the user's main checkout is fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
       `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), never a reset or force.
@@ -87,8 +87,18 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
 - [ ] Every project still has exactly one dedicated datapack; sessions get `MEKO_AGENT_ID` and the pin.
-- [ ] Several projects can share a repo: per-project state (worktrees, tmux names, pins, lookups) is
-      keyed by project id, not repo path, and git work on the repo only touches the session's own branch.
+- [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
+      (tmux names, pins, lookups) is keyed by project id, not repo path, and git work on the repo only
+      touches the session's own branch. The one exception is idle worktrees, which belong to the repo
+      (keyed by its real path) and are shared by all its projects: a claim is one SQLite write, so
+      two sessions never get the same worktree, and deleting a project leaves idle worktrees another
+      project on the repo can use.
+- [ ] Worktree reuse never hands over a worktree with uncommitted changes or untracked files (it's
+      checked when the worktree goes idle and again when it's claimed), never touches a worktree
+      that is another session's (check `ownsWorktree()` before reading or removing an archived
+      session's worktree), and a failed reuse falls back to a new worktree instead of failing the start.
+      Anything that removes idle worktrees forgets the row with a write conditional on it still being
+      idle (`session_id IS NULL`) before running git, so it can't remove one a session just claimed.
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`

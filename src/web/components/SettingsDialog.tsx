@@ -48,6 +48,9 @@ function GeneralTab() {
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
+  // Idle worktrees per repo and days to keep them, as typed; clamped on blur and on save.
+  const [idle, setIdle] = useState('');
+  const [idleDays, setIdleDays] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -59,6 +62,8 @@ function GeneralTab() {
         setS(x);
         setRoots(x.reposRoots);
         setDepth(String(x.reposDepth));
+        setIdle(String(x.idleWorktreesPerRepo));
+        setIdleDays(String(x.idleWorktreeDays));
       })
       .catch((e) => setError(errorMessage(e)));
   }, []);
@@ -66,6 +71,13 @@ function GeneralTab() {
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
 
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
+  // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
+  const clampOr = (typed: string, max: number, saved: number) => {
+    const n = Math.round(Number(typed));
+    return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
+  };
+  const clampIdle = () => clampOr(idle, 20, s.idleWorktreesPerRepo);
+  const clampIdleDays = () => clampOr(idleDays, 365, s.idleWorktreeDays);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -76,10 +88,14 @@ function GeneralTab() {
         reposRoots: roots.map((r) => r.trim()).filter(Boolean),
         reposDepth: clampDepth(),
         cloneInto: s.cloneInto.trim(),
+        idleWorktreesPerRepo: clampIdle(),
+        idleWorktreeDays: clampIdleDays(),
       });
       setS(next);
       setRoots(next.reposRoots);
       setDepth(String(next.reposDepth));
+      setIdle(String(next.idleWorktreesPerRepo));
+      setIdleDays(String(next.idleWorktreeDays));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
@@ -137,6 +153,38 @@ function GeneralTab() {
             onChange={(e) => setS({ ...s, cloneInto: e.target.value })}
           />
         </Field>
+      </div>
+      <div className="field">
+        <span className="hint">
+          When a session ends, its worktree waits for the next session on the same repo, from any project, with its build
+          outputs intact. Each idle worktree keeps those outputs on disk.
+        </span>
+        <div className="fields">
+          <Field label="Idle worktrees per repo" hint="0 removes worktrees when sessions end.">
+            <input
+              id="set-idle-worktrees"
+              className="input"
+              type="number"
+              min={0}
+              max={20}
+              value={idle}
+              onChange={(e) => setIdle(e.target.value)}
+              onBlur={() => setIdle(String(clampIdle()))}
+            />
+          </Field>
+          <Field label="Remove unused after (days)" hint="An idle worktree no session has used for this long is removed. 0 keeps it.">
+            <input
+              id="set-idle-worktree-days"
+              className="input"
+              type="number"
+              min={0}
+              max={365}
+              value={idleDays}
+              onChange={(e) => setIdleDays(e.target.value)}
+              onBlur={() => setIdleDays(String(clampIdleDays()))}
+            />
+          </Field>
+        </div>
       </div>
       <div className="fields">
         <Field label="Listen address">

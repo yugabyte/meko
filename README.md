@@ -67,6 +67,11 @@ your phone can connect.
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
   can still attach from iTerm: `tmux -L agentk attach -t ak-<project>--<session>` (sessions created
   before this naming keep `ak-<project>-<session>`).
+- **Builds carry over between sessions.** When a session ends, its worktree waits for the next
+  session on the same repo (from any project on it) with its ignored build outputs intact, so
+  repos that take long to build start incremental. Each repo keeps up to 3 idle worktrees, and one
+  no session has used for 14 days is removed; change both in Settings (0 idle worktrees removes
+  worktrees when sessions end).
 - **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
@@ -81,7 +86,7 @@ your phone can connect.
 - **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and
-  cleans up the worktree and branches. The server watches the PR and hands reviews (AgentK's and
+  cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
   people's by default, or every reviewer's, or only people's) and CI failures to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included. **Usage** in the left panel adds it up across every project, deleted ones

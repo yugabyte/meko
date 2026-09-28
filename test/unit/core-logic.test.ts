@@ -17,6 +17,7 @@ import { getPaths } from '../../src/server/paths.js';
 import { render } from '../../src/server/prompts.js';
 import { parseSettings, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
+import { repoFolder } from '../../src/server/worktrees.js';
 import { mekoDatapackShareUrl, mekoDatapackUrl } from '../../src/web/util.js';
 import { KIND_STAGES, STAGE_LABELS } from '../../src/shared/types.js';
 
@@ -197,6 +198,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 6');
     db.close();
@@ -224,6 +226,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 9');
     db.close();
@@ -256,6 +259,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 10');
     db.close();
@@ -271,6 +275,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 11');
     db.close();
@@ -281,6 +286,35 @@ describe('config and db', () => {
     db.close();
   });
 
+  it('records the worktrees of running sessions when upgrading a schema 12 database', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    const add = (id: string, desired: string) =>
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+        VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
+    add('live', 'running');
+    add('old', 'archived');
+    dropV13(db);
+    db.exec('PRAGMA user_version = 12');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(db.prepare('SELECT path, repo, session_id, released_at, stale, created_at FROM worktrees').all()).toEqual([
+      { path: '/wt/live', repo: '/code/api', session_id: 'live', released_at: null, stale: 0, created_at: 5 },
+    ]);
+    expect(db.prepare('SELECT DISTINCT worktree_released FROM sessions').all()).toEqual([{ worktree_released: 0 }]);
+    db.close();
+  });
+
+  it('names a repo\'s worktree folder after the repo, apart from project folders', () => {
+    const a = repoFolder('/ak/worktrees', '/home/u/code/Yugabyte-DB');
+    expect(a).toMatch(/^\/ak\/worktrees\/yugabyte-db\.[0-9a-f]{8}$/);
+    expect(repoFolder('/ak/worktrees', '/data/Yugabyte-DB')).not.toBe(a);
+    expect(repoFolder('/ak/worktrees', '/home/u/code/Yugabyte-DB')).toBe(a);
+  });
+
   it('reads an old or unknown reviewer mode as the default', () => {
     expect(parseSettings(JSON.stringify({ reviewer: 'agentk' })).reviewer).toBe('agentk-people');
     expect(parseSettings(JSON.stringify({ reviewer: 'all' })).reviewer).toBe('all');
@@ -289,6 +323,12 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 13 (the worktrees table), for tests that rewind the schema. */
+function dropV13(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE IF EXISTS worktrees');
+  dropSessionColumns(db, 'worktree_released');
+}
 
 /** Undoes migration 12 (the datapack invites table), for tests that rewind the schema. */
 function dropV12(db: ReturnType<typeof openDb>) {

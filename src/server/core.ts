@@ -24,6 +24,7 @@ import { Lifecycle } from './lifecycle.js';
 import { projectRows, pruneSessionEvents, toProject } from './store.js';
 import { Tmux, writeTmuxConf } from './tmux.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
+import { WorktreePool } from './worktrees.js';
 
 export interface CoreOptions {
   paths: Paths;
@@ -49,6 +50,8 @@ type InviteEvent = Extract<ServerEvent, { type: 'invite' }>;
 /** How often invites and shares are synced from Meko, and how often the share API is re-checked. */
 const INVITE_SYNC_MS = 5 * 60 * 1000;
 const SHARING_CHECK_MS = 60 * 60 * 1000;
+/** How often idle worktrees unused for too long are removed. */
+const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -60,6 +63,7 @@ export class Core extends EventEmitter {
   readonly tmux: Tmux;
   readonly log: Logger;
   readonly projects: ProjectService;
+  readonly worktrees: WorktreePool;
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
   readonly comments: CommentService;
@@ -95,6 +99,7 @@ export class Core extends EventEmitter {
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
     });
     this.projects = new ProjectService(this);
+    this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
     this.lifecycle = new Lifecycle(this);
     this.comments = new CommentService(this);
@@ -186,6 +191,9 @@ export class Core extends EventEmitter {
     } catch (e) {
       this.log.warn('could not update Claude Code folder trust', errMsg(e));
     }
+    // In the background: it may remove large build trees, and every change it makes to an idle
+    // worktree is skipped once a session has claimed it.
+    void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
     this.hookServer = await startHookServer(
       this.paths.hookSock,
       (token, payload) => {
@@ -203,6 +211,7 @@ export class Core extends EventEmitter {
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
       this.every(60000, () => this.sessions.refreshDiffStats());
+      this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(SHARING_CHECK_MS, () => this.invites.checkMode());
       // Not awaited: startup doesn't wait on Meko's API.

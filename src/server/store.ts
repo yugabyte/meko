@@ -38,6 +38,8 @@ export interface SessionRow {
   branch: string;
   base_branch: string;
   worktree_path: string;
+  /** 1 once the session let go of its worktree (idle, another session's, or removed). */
+  worktree_released: number;
   tmux_name: string;
   hook_token: string;
   desired: 'running' | 'archived';

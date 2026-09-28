@@ -27,6 +27,7 @@ import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 import { usageOverview } from './usage.js';
+import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 
 /** A browser with this much unsent data skips state snapshots until it catches up. */
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
@@ -360,6 +361,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     updateChannel: core.config.update.channel,
     bind: core.config.server.bind,
     port: core.config.server.port,
+    idleWorktreesPerRepo: core.worktrees.cap(),
+    idleWorktreeDays: core.worktrees.idleDays(),
     meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => settings());
@@ -371,16 +374,30 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.reposDepth !== undefined && (!Number.isInteger(b.reposDepth) || b.reposDepth < 1 || b.reposDepth > 4)) throw new HttpError(400, 'Scan depth must be between 1 and 4.');
     if (b.updateChannel !== undefined && !['stable', 'prerelease', 'off'].includes(b.updateChannel)) throw new HttpError(400, 'Unknown update channel.');
     if (b.cloneInto !== undefined && typeof b.cloneInto !== 'string') throw new HttpError(400, 'The clone folder must be a path.');
+    if (b.idleWorktreesPerRepo !== undefined && (!Number.isInteger(b.idleWorktreesPerRepo) || b.idleWorktreesPerRepo < 0 || b.idleWorktreesPerRepo > MAX_IDLE_PER_REPO)) {
+      throw new HttpError(400, `Idle worktrees per repo must be a whole number from 0 to ${MAX_IDLE_PER_REPO}.`);
+    }
+    if (b.idleWorktreeDays !== undefined && (!Number.isInteger(b.idleWorktreeDays) || b.idleWorktreeDays < 0 || b.idleWorktreeDays > MAX_IDLE_DAYS)) {
+      throw new HttpError(400, `Days to keep an unused idle worktree must be a whole number from 0 to ${MAX_IDLE_DAYS}.`);
+    }
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
+    const before = { cap: core.worktrees.cap(), days: core.worktrees.idleDays() };
     core.updateConfig((c) => {
       if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
       if (b.reposDepth) c.repos.depth = b.reposDepth;
       if (b.cloneInto?.trim()) c.repos.cloneInto = b.cloneInto.trim();
       if (b.updateChannel) c.update.channel = b.updateChannel;
+      if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
+      if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
+    // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
+    const cleanup = (what: string, fn: () => Promise<void>) => void fn().catch((e) => core.log.warn(`${what} failed`, errMsg(e)));
+    if (core.worktrees.cap() < before.cap) cleanup('trimming idle worktrees', () => core.worktrees.trimAll());
+    const days = core.worktrees.idleDays();
+    if (days && (!before.days || days < before.days)) cleanup('removing unused idle worktrees', () => core.worktrees.expire());
     if (meko) {
       audit(db, 'meko_settings_changed', { url: mekoSettings(core.config).effectiveUrl });
       core.log.info(`Meko settings changed (${mekoSettings(core.config).effectiveUrl})`);

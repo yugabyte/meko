@@ -12,6 +12,16 @@ function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[
   return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
 }
 
+/** HEAD isn't on a branch (an idle worktree). */
+function detached(dir: string): boolean {
+  try {
+    execFileSync('git', ['symbolic-ref', '-q', 'HEAD'], { cwd: dir, stdio: 'ignore' });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function captureLog(env: TestEnv): { args: string[]; input: { transcript_path: string }; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'capture.jsonl');
   return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
@@ -69,9 +79,11 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(argvLog(env).find((l) => l.env.MEKO_AGENT_ID === 'claude_code:demo-repo-release-tooling')?.env.MEKO_DATAPACK_ID)
       .toBe('dp-agent-k-local-test-release');
 
-    // Deleting one project leaves the other's session, worktree and branch alone.
+    // Deleting one project leaves the other's session, worktree and branch alone. The deleted
+    // project's worktree goes idle: the repo's other project may reuse it.
     await env.core.projects.delete(first.id);
-    expect(existsSync(a.worktreePath)).toBe(false);
+    expect(existsSync(a.worktreePath)).toBe(true);
+    expect(env.core.sessions.ownsWorktree(env.core.sessions.row(a.id))).toBe(false);
     expect(existsSync(b.worktreePath)).toBe(true);
     expect((await env.core.tmux.panes()).has(b.tmuxName)).toBe(true);
     expect(env.core.sessions.get(b.id).status).toBe('idle');
@@ -129,7 +141,10 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(captureLog(env).length).toBeGreaterThan(capturedBeforeArchive); // final capture before Claude is stopped
     const panes = await env.core.tmux.panes();
     expect(panes.has(s.tmuxName)).toBe(false);
-    expect(existsSync(s.worktreePath)).toBe(false);
+    // The clean worktree waits for the next session, detached so the branch is free.
+    expect(existsSync(s.worktreePath)).toBe(true);
+    expect(detached(s.worktreePath)).toBe(true);
+    expect(env.core.sessions.ownsWorktree(env.core.sessions.row(s.id))).toBe(false);
     const branches = execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' });
     expect(branches).toContain('ak/fix-the-thing'); // archive keeps the branch
     expect(env.core.state().projects[0].sessions).toHaveLength(0);
@@ -193,7 +208,10 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     await env.core.sessions.action(s.id, 'discard');
     expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
-    expect(existsSync(s.worktreePath)).toBe(false);
+    // The changes are gone; the worktree itself waits, clean and detached, for the next session.
+    expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(false);
+    expect(detached(s.worktreePath)).toBe(true);
+    expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: false, uncommittedFiles: 0, unpushedCommits: 0 });
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).not.toContain('ak/throw-away');
     expect(env.core.state().projects[0].sessions).toHaveLength(0);
     expect(env.core.state().projects[0].usage.messages).toBeGreaterThan(0); // discarded sessions still count
@@ -407,7 +425,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Late', prompt: 'hi', kind: 'quick' });
     await discarding;
     expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
-    expect(existsSync(s.worktreePath)).toBe(false);
+    expect(env.core.sessions.ownsWorktree(env.core.sessions.row(s.id))).toBe(false);
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).not.toContain('ak/late');
     expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'archived', status: 'archived' });
 

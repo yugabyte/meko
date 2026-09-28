@@ -115,7 +115,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const row = env.core.sessions.row(s.id);
     expect(row.stage).toBe('done');
     expect(row.desired).toBe('archived');
-    expect(existsSync(worktree)).toBe(false);
+    expect(existsSync(worktree)).toBe(true); // idle, for the next session on the repo
+    expect(env.core.sessions.ownsWorktree(row)).toBe(false);
+    expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak/fix-the-thing removed; worktree kept for the next session');
     const branches = execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' });
     expect(branches.trim()).toBe(''); // cleanup deletes the local branch
     const memory = env.meko.calls.find((c) => c.name === 'addMemory');
@@ -237,7 +239,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, state: 'MERGED', headRefOid: pushed };
     await env.core.lifecycle.pollReview(row);
     expect(env.core.sessions.row(s.id).stage).toBe('done');
-    expect(existsSync(row.worktree_path)).toBe(false);
+    expect(env.core.sessions.ownsWorktree(env.core.sessions.row(s.id))).toBe(false);
     expect(execFileSync('git', ['branch', '--list', row.branch], { cwd: env.repo, encoding: 'utf8' }).trim()).not.toBe('');
     expect(lastEvent(s.id, 'cleanup')).toMatch(/branch .* kept because it has commits PR #7 doesn't have/);
   });

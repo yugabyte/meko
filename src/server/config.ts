@@ -22,6 +22,11 @@ export interface Config {
   state: { dbPath: string };
   tmux: { socket: string };
   claude: { command: string };
+  /**
+   * idlePerRepo: worktrees each repo keeps for the next session, build outputs and all (0 to 20; 0 removes them).
+   * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
+   */
+  worktrees: { idlePerRepo: number; idleDays: number };
 }
 
 /** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
@@ -36,6 +41,7 @@ export const DEFAULT_CONFIG: Config = {
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },
+  worktrees: { idlePerRepo: 3, idleDays: 14 },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

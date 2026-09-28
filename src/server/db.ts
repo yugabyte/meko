@@ -230,6 +230,26 @@ const MIGRATIONS: string[] = [
     resolved_at INTEGER
   );
   `,
+  // 13: session worktrees, kept idle between sessions so build outputs carry over. repo is the
+  // repo's real path (the server re-keys rows at startup); session_id NULL means idle; stale 1 means
+  // idle but not reusable (files git doesn't ignore, so it won't remove it either). A session's
+  // worktree_released is 1 once it let go of its worktree (idle, another session's, or removed).
+  `
+  CREATE TABLE worktrees (
+    path TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    session_id TEXT,
+    released_at INTEGER,
+    stale INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX worktrees_idle ON worktrees(repo, released_at) WHERE session_id IS NULL;
+  ALTER TABLE sessions ADD COLUMN worktree_released INTEGER NOT NULL DEFAULT 0;
+  INSERT OR IGNORE INTO worktrees(path, repo, session_id, created_at)
+    SELECT s.worktree_path, p.repo_path, s.id, s.created_at
+    FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE s.desired = 'running';
+  `,
 ];
 
 export function openDb(path: string): Db {

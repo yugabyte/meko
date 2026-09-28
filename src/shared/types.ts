@@ -14,7 +14,7 @@ export type SessionStatus =
 export type StartupStep = 'worktree' | 'launch' | 'loading' | 'prompt';
 
 export const STARTUP_STEPS: { step: StartupStep; label: string }[] = [
-  { step: 'worktree', label: 'Updating the base branch and creating the worktree' },
+  { step: 'worktree', label: 'Updating the base branch and preparing the worktree' },
   { step: 'launch', label: 'Starting Claude Code' },
   { step: 'loading', label: 'Loading plugins, MCP servers and hooks' },
   { step: 'prompt', label: 'Sending your task' },
@@ -442,6 +442,10 @@ export interface Settings {
   updateChannel: 'stable' | 'prerelease' | 'off';
   bind: string;
   port: number;
+  /** Idle worktrees each repo keeps for its next session, build outputs and all (0 to 20; 0 removes them). */
+  idleWorktreesPerRepo: number;
+  /** Days an idle worktree may go unused before it's removed (0 to 365; 0 keeps it until the cap trims it). */
+  idleWorktreeDays: number;
   meko: MekoSettings;
 }
 
@@ -747,7 +751,9 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
-//                                                           a `meko` change is checked against Meko before it's saved)
+//                                                           a `meko` change is checked against Meko before it's saved;
+//                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
+//                                                           the idle worktrees now beyond it)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus

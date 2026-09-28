@@ -1,12 +1,15 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
-import { BranchGoneError, addWorktree, git, removeWorktree, restoreWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult } from './git.js';
+import {
+  BranchGoneError, addWorktree, discardChanges, git, isIdleWorktree, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount,
+  unpushedCount, worktreeClean, type SyncResult,
+} from './git.js';
 import type { GuardDecision, HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
@@ -64,6 +67,14 @@ function realpath(p: string): string {
     return p;
   }
 }
+
+/**
+ * What happened to a session's worktree when it ended: idle (kept for the next session), removed,
+ * earlier (let go of before), uncommitted (kept, still the session's), or stuck (git refused).
+ */
+export type WorktreeFate = 'idle' | 'removed' | 'earlier' | 'uncommitted' | 'stuck';
+/** Fates after which the session's branch is no longer checked out in its worktree. */
+const FREED: WorktreeFate[] = ['idle', 'removed', 'earlier'];
 
 const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms).unref())]);
 
@@ -215,33 +226,30 @@ export class SessionManager {
 
     const slug = await this.uniqueSlug(projectId, p.repo_path, settings.branchPrefix, slugify(name));
     const branch = `${settings.branchPrefix}${slug}`;
-    const worktree = join(this.core.paths.worktrees, projectId, slug);
     const id = `${projectId}--${slug}`;
     const now = Date.now();
-    // The row goes in first so the tab (and its "Starting…" view) shows up right away.
-    tx(this.db, () => {
+    const pool = this.core.worktrees;
+    // The row goes in first so the tab (and its "Starting…" view) shows up right away. The
+    // repo's most recently idled worktree is claimed in the same write, so two sessions starting
+    // at once (in any projects on the repo) never get the same one.
+    const { worktree, reused } = tx(this.db, () => {
+      const claimed = pool.claim(p.repo_path, id);
+      const path = claimed ?? pool.add(p.repo_path, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path,
                       tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0)`,
-        id, projectId, slug, name, randomUUID(), branch, base, worktree, tmuxName(projectId, slug),
+        id, projectId, slug, name, randomUUID(), branch, base, path, tmuxName(projectId, slug),
         randomBytes(24).toString('base64url'), kind, stage, task || null, now, now);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
+      return { worktree: path, reused: !!claimed };
     });
     // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
     this.creating.add(id);
     try {
       this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
       const naming = this.nameConversation(this.row(id));
-      let sync: SyncResult | null;
-      try {
-        sync = await addWorktree(p.repo_path, worktree, branch, base);
-      } catch (e) {
-        this.startup.delete(id);
-        run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
-        this.core.changed();
-        throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
-      }
-      this.event(id, 'created', startedText(branch, base, sync));
+      const made = await this.makeWorktree(id, p.repo_path, worktree, reused, branch, base);
+      this.event(id, 'created', startedText(branch, base, made.sync) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''));
 
       const row = this.row(id);
       const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
@@ -264,13 +272,47 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Puts the new session's branch in its worktree: the idle one it claimed (build outputs kept)
+   * or a new one. A claimed worktree that can't be reused is dropped from the pool and the
+   * session gets a new one, so reuse never makes a start fail. On failure the session is deleted.
+   */
+  private async makeWorktree(id: string, repo: string, path: string, claimed: boolean, branch: string, base: string): Promise<{ sync: SyncResult | null; reused: boolean }> {
+    const pool = this.core.worktrees;
+    let current = path;
+    try {
+      if (claimed) {
+        try {
+          return { sync: await reuseWorktree(repo, path, branch, base), reused: true };
+        } catch (e) {
+          if (await isIdleWorktree(repo, path)) {
+            // The worktree is fine; what failed was the branch or base. It goes back to the pool,
+            // and a new worktree reports the error if it's the same.
+            pool.unclaim(path, id);
+          } else {
+            this.core.log.warn(`couldn't reuse the worktree at ${path} for ${id}; creating a new one`, errMsg(e));
+            await pool.discard(path, id);
+          }
+          current = pool.add(repo, id);
+          this.update(id, { worktree_path: current });
+        }
+      }
+      return { sync: await addWorktree(repo, current, branch, base), reused: false };
+    } catch (e) {
+      this.startup.delete(id);
+      pool.drop(current);
+      run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
+      this.core.changed();
+      throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
+    }
+  }
+
   private async uniqueSlug(projectId: string, repo: string, prefix: string, base: string): Promise<string> {
     for (let i = 1; ; i++) {
       const slug = i === 1 ? base : `${base}-${i}`;
       const taken =
         get(this.db, 'SELECT 1 AS x FROM sessions WHERE (project_id = ? AND slug = ?) OR tmux_name = ?', projectId, slug, tmuxName(projectId, slug)) ||
-        (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${prefix}${slug}`)) ||
-        existsSync(join(this.core.paths.worktrees, projectId, slug));
+        (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${prefix}${slug}`));
       if (!taken) return slug;
     }
   }
@@ -792,7 +834,7 @@ export class SessionManager {
   /** Every file changed on the session's branch vs. its base, committed or not. */
   async changes(id: string): Promise<SessionChanges> {
     const row = this.row(id);
-    if (!existsSync(row.worktree_path)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
+    if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     const c = await changes(row.worktree_path, row.base_branch);
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
     return c;
@@ -801,7 +843,7 @@ export class SessionManager {
   /** One side of a changed image, for the Changes panel's preview. */
   async changedImage(id: string, path: string, side: ChangeSide): Promise<{ type: string; data: Buffer }> {
     const row = this.row(id);
-    if (!existsSync(row.worktree_path)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
+    if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     let img: { type: string; data: Buffer } | null;
     try {
       img = await changedImage(row.worktree_path, row.base_branch, path, side);
@@ -815,18 +857,19 @@ export class SessionManager {
   async discardCheck(id: string): Promise<DiscardCheck> {
     const row = this.row(id);
     const p = projectRow(this.db, row.project_id);
+    const owned = this.ownsWorktree(row);
     const [uncommittedFiles, unpushedCommits] = await Promise.all([
-      uncommittedCount(row.worktree_path),
+      owned ? uncommittedCount(row.worktree_path) : 0,
       p ? unpushedCount(p.repo_path, row.branch, row.base_branch) : 0,
     ]);
-    return { worktreeExists: existsSync(row.worktree_path), uncommittedFiles, unpushedCommits };
+    return { worktreeExists: owned && existsSync(row.worktree_path), uncommittedFiles, unpushedCommits };
   }
 
   /**
-   * Stops Claude and removes the worktree if it's clean. The branch is kept unless asked.
-   * With force (Discard), the worktree is removed even with uncommitted changes.
+   * Stops Claude and lets go of the worktree if it's clean (see freeWorktree). The branch is kept
+   * unless asked. With force (Discard), uncommitted changes are thrown away first.
    */
-  async archive(row: SessionRow, opts: { keepBranch: boolean; force?: boolean; stage?: Stage }): Promise<{ worktreeRemoved: boolean }> {
+  async archive(row: SessionRow, opts: { keepBranch: boolean; force?: boolean; stage?: Stage }): Promise<{ worktreeFreed: boolean; worktree: WorktreeFate }> {
     // A session still starting would bring its worktree back, or start Claude after the kill.
     await this.settle(row.id);
     row = this.row(row.id);
@@ -840,13 +883,9 @@ export class SessionManager {
       await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
       await this.core.tmux.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
-      let worktreeRemoved = false;
-      if (p) {
-        if (opts.force || !existsSync(row.worktree_path) || (await worktreeClean(row.worktree_path))) {
-          worktreeRemoved = await removeWorktree(p.repo_path, row.worktree_path, opts.force);
-        }
-        if (worktreeRemoved && !opts.keepBranch) await tryGit(p.repo_path, 'branch', '-D', row.branch);
-      }
+      const worktree: WorktreeFate = p ? await this.freeWorktree(row, p.repo_path, !!opts.force) : 'stuck';
+      const worktreeFreed = FREED.includes(worktree);
+      if (p && worktreeFreed && !opts.keepBranch) await tryGit(p.repo_path, 'branch', '-D', row.branch);
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
@@ -855,21 +894,68 @@ export class SessionManager {
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
       if (opts.force) {
-        this.event(row.id, 'discarded', worktreeRemoved
-          ? `Discarded; worktree and branch ${row.branch} deleted`
-          : `Discarded, but the worktree at ${row.worktree_path} could not be removed, so branch ${row.branch} was kept`);
+        this.event(row.id, 'discarded', {
+          idle: `Discarded; changes and branch ${row.branch} deleted, worktree kept for the next session`,
+          removed: `Discarded; worktree and branch ${row.branch} deleted`,
+          earlier: `Discarded; branch ${row.branch} deleted`,
+          uncommitted: `Discarded, but the worktree at ${row.worktree_path} could not be removed, so branch ${row.branch} was kept`,
+          stuck: `Discarded, but the worktree at ${row.worktree_path} could not be removed, so branch ${row.branch} was kept`,
+        }[worktree]);
       } else if (!wasArchived) {
-        this.event(row.id, 'archived', worktreeRemoved ? 'Archived; worktree removed' : 'Archived; worktree kept because it has uncommitted changes');
+        this.event(row.id, 'archived', {
+          idle: 'Archived; worktree kept for the next session',
+          removed: 'Archived; worktree removed',
+          earlier: 'Archived',
+          uncommitted: 'Archived; worktree kept because it has uncommitted changes',
+          stuck: `Archived; git couldn't remove the worktree at ${row.worktree_path}, so it was kept`,
+        }[worktree]);
       }
       this.core.changed();
-      return { worktreeRemoved };
+      return { worktreeFreed, worktree };
     } finally {
       this.stopping.delete(row.id);
     }
   }
 
   /**
-   * Used when a project is deleted: stop everything, remove clean worktrees, keep branches.
+   * Lets go of an ending session's worktree. A clean one goes idle for the next session on the
+   * repo (build outputs stay) or, with the pool off, is removed. One with uncommitted changes
+   * stays the session's, unless force (Discard) throws the changes away first; ignored files
+   * survive that. A worktree the session no longer owns is left alone. Once it's let go of
+   * (idle, removed or earlier), the session is marked so, and its branch is free.
+   */
+  private async freeWorktree(row: SessionRow, repo: string, force: boolean): Promise<WorktreeFate> {
+    const pool = this.core.worktrees;
+    const path = row.worktree_path;
+    if (!pool.owns(row)) {
+      // Already let go of (an archive finishing a second time), or a pre-pool folder that's gone:
+      // make sure git no longer counts it as checking out the branch.
+      if (!existsSync(path)) await tryGit(repo, 'worktree', 'prune');
+      pool.released(row.id);
+      return 'earlier';
+    }
+    let fate: WorktreeFate;
+    if (!existsSync(path)) {
+      fate = (await removeWorktree(repo, path)) ? 'removed' : 'stuck'; // prunes git's record of it
+    } else {
+      if (force) await discardChanges(path);
+      const clean = await worktreeClean(path);
+      if (clean && (await pool.park(row, repo))) fate = 'idle';
+      else if (!clean && !force) fate = 'uncommitted';
+      else fate = (await removeWorktree(repo, path, force)) ? 'removed' : 'stuck';
+    }
+    if (fate === 'removed') pool.drop(path);
+    if (FREED.includes(fate)) pool.released(row.id);
+    return fate;
+  }
+
+  /** True while the session's worktree is its own (not idle or handed to another session). */
+  ownsWorktree(row: SessionRow): boolean {
+    return this.core.worktrees.owns(row);
+  }
+
+  /**
+   * Used when a project is deleted: stop everything, let go of clean worktrees, keep branches.
    * A worktree with uncommitted changes is kept, like Archive does. Returns the kept paths.
    */
   async teardownProject(projectId: string): Promise<string[]> {
@@ -886,12 +972,15 @@ export class SessionManager {
         this.awaitingStart.delete(row.id);
         this.recoverRetryAt.delete(row.id);
       }
-      if (p && !(await removeWorktree(p.repo_path, row.worktree_path))) {
+      // A worktree that went idle or to another session (maybe another project's) isn't this one's to remove.
+      if (p && this.ownsWorktree(row) && !FREED.includes(await this.freeWorktree(row, p.repo_path, false))) {
         kept.push(row.worktree_path);
         this.core.log.info(`kept the worktree of ${row.id} at ${row.worktree_path}: it has uncommitted changes`);
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
     }
+    // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
+    if (p) await this.core.worktrees.releaseRepo(p.repo_path, projectId);
     return kept;
   }
 

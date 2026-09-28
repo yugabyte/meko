@@ -20,7 +20,7 @@ from a browser.
 | Process host | tmux on a dedicated socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. |
 | New project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL. |
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
-| Working copy | Each session gets its own git worktree on its own branch. |
+| Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
 | Datapacks | Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets). |
 | Meko | Optional. With a key, projects get a dedicated datapack (or start without one, when Meko is down or the plan's datapack limit is reached, and get one later). Without a key, or turned off in Settings, AgentK works without datapacks. |
 | Meko wiring | Sessions get `MEKO_AGENT_ID=claude_code:<project>`, and the project's datapack is pinned for that agent id. The Meko hooks already honour both, so no plugin change is needed. |
@@ -173,7 +173,7 @@ The type is stored as `sessions.kind` and decides the first stage, the stages th
 the first prompt (`explore`, `design` or `code`) and the workflow line of the system prompt Claude
 gets. `CreateSessionRequest.skipDesign: true` still works and means Quick Code. The server fetches the base from `origin` and fast-forwards your local base
 branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside
-it, and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
+it (or in an idle worktree of the repo: see [Worktree reuse](#worktree-reuse)), and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
 local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
 says why.
 
@@ -229,7 +229,7 @@ approved.
 ### Starting
 
 Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session
-starts, the terminal shows its steps (updating the base branch and creating the worktree, starting
+starts, the terminal shows its steps (updating the base branch and preparing the worktree, starting
 Claude Code, loading, sending your task) with the current one animated and timed, plus the stage
 the session opens in. The session's tab shows the current step in its tooltip.
 
@@ -315,7 +315,8 @@ worktree has it checked out (git refuses anything but a fast-forward, and a bran
 or bisected). A base checked out in another session's worktree is left alone. Read-only git
 commands run with `GIT_OPTIONAL_LOCKS=0`, so they never take a lock Claude's own git commands need. It never rewrites, resets or discards anything in your main checkout. A
 **session** is one task. It has one worktree, one branch and one Claude conversation. Worktrees
-live outside the repo so they never show up in `git status`.
+live outside the repo so they never show up in `git status`, and outlive their session: a clean one
+goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse)).
 
 ```sh
 # layout on the host
@@ -325,7 +326,7 @@ live outside the repo so they never show up in `git status`.
   hook.sock                # Claude hooks → server
   certs/                   # self-signed pair, or symlinks to your own
   app/0.4.1/  app/current → 0.4.1
-  worktrees/<project>/<session>/   # git worktree, branch ak/<session>
+  worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
 
 # config.toml (excerpt)
@@ -333,6 +334,10 @@ live outside the repo so they never show up in `git status`.
 roots = ["~/code"]        # folders the New project dialog lists
 depth = 1                 # 1 = only direct children
 clone_into = "~/code"     # where "Clone from URL" puts new repos
+
+[worktrees]
+idle_per_repo = 3         # idle worktrees each repo keeps for its next session (0 to 20; 0 removes them)
+idle_days = 14            # an idle worktree no session used for this many days is removed (0 to 365; 0 keeps it)
 
 [meko]
 # enabled = false            # turn Meko off (projects work without datapacks); on by default
@@ -345,13 +350,13 @@ capture_transcripts = false  # send session transcripts to Meko conversations (o
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, `git worktree add … -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
 | Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
-| Archive | Kills the tmux session. The worktree is removed if it is clean, and the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits for Claude to start first. |
-| Discard | Chosen in Archive's confirmation step. Kills the tmux session, force-removes the worktree even with uncommitted changes, and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
-| Delete project | After confirmation, stops the project's sessions and removes their worktrees, keeping any worktree with uncommitted changes, and marks the project deleted. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks. |
+| Archive | Kills the tmux session. A clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits for Claude to start first. |
+| Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
+| Delete project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project deleted. Idle worktrees stay for the repo's other projects; the last project on a repo removes them. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks. |
 
 ```sql
 -- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.
@@ -378,6 +383,11 @@ CREATE TABLE sessions (
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
+CREATE TABLE worktrees (       -- session worktrees; idle ones (session_id NULL) wait for the repo's next session
+  path TEXT PRIMARY KEY, repo TEXT,  -- repo: the repo's real path, the pool key its projects share
+  session_id TEXT, released_at INTEGER,
+  stale INTEGER,                   -- 1: idle but not reusable (files git doesn't ignore)
+  created_at INTEGER);              -- (sessions.worktree_released is 1 once a session let go of its worktree)
 CREATE TABLE designs (         -- one per session: markdown, or an Artifact's page + claude.ai link
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT, updated_at INTEGER);
 CREATE TABLE review_comments ( -- comments on a session's diff: draft → queued → sent to Claude
@@ -409,14 +419,59 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
 
 `config.toml` holds host settings: the listen address and port, TLS paths, repo folders, the update
 channel, the Meko URL and key (only when typed at install), transcript capture, the tmux socket, the
-`claude` command and the database path. The Settings dialog writes its fields (repo folders, scan
-depth, clone folder, update channel) there too. Per-project settings, sessions and everything else
-live in `state.db`. Only values that differ from the defaults are written, so a changed default
-reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
+`claude` command, the database path and how many idle worktrees each repo keeps. The Settings dialog
+writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
+keep an unused one, update channel) there too. Per-project settings, sessions and everything else live in `state.db`. Only values that
+differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
 `AK_PORT` override `[server]` for one run (`npm run dev`) and are never written to the file. The Meko
 URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude
 Code's user `settings.json` (in `CLAUDE_CONFIG_DIR` if set); a later source's URL is skipped when that
 source has a key of its own, and with no URL it's Meko Cloud.
+
+### Worktree reuse
+
+Repos like yugabyte-db take a long time to build from scratch, so a worktree outlives its session
+and keeps its ignored files (`build/`, `node_modules/`, CMake caches) for the next one. The path
+stays the same, which matters to build systems that record absolute source paths (CMake,
+`yb_build.sh`): a copied or moved build tree would break.
+
+- **Idle.** When a session ends (Archive, Discard, Merge & Close, Delete project) with a clean
+  worktree (`git status --porcelain` empty), `git checkout --detach` frees its branch without
+  changing a file, and the worktree's row in `worktrees` loses its session. A worktree with
+  uncommitted changes stays the session's, as before, and is never handed on.
+- **Shared by the repo's projects.** Idle worktrees belong to the repo, keyed by its real path, so
+  every project on it (a repo can have many at once) takes from the same pool. New worktrees live
+  in `worktrees/<repo folder>.<8 hex of sha256(real path)>/wt-<n>`; the dot keeps these folders
+  apart from project ids, and older `worktrees/<project>/<session>` folders are reused where they are.
+- **Claim.** A new session claims the repo's most recently idled worktree in the same SQLite write
+  that adds the session, so two sessions starting at once never get the same one. The worktree
+  must still be a clean worktree of the repo on a detached HEAD; then the session's branch is
+  checked out there from the same start point a new worktree would get. Git rewrites only the files
+  that differ, so builds are incremental. If the checks fail, the worktree leaves the pool (removed
+  without `--force`, or kept as stale if git refuses) and the session gets a new worktree; if
+  something else fails (a bad base branch, a branch checked out elsewhere), the worktree goes back
+  to the pool and a new worktree is tried. Reuse never makes a start fail.
+- **Removal is safe while sessions start.** Trimming, expiry and the startup sweep forget an idle
+  worktree in one write that does nothing once a session has claimed it, and only then run
+  `git worktree remove`. A worktree git won't remove (files it doesn't ignore) stays recorded as
+  stale: never handed out or forgotten while its folder exists, and reusable once it's clean again.
+- **Cap.** Each repo keeps at most `[worktrees] idle_per_repo` idle worktrees (Settings › General,
+  default 3, 0 to 20). Beyond that the one idle longest is removed with a plain
+  `git worktree remove` (it has only ignored files left, so no `--force`). Saving a lower number
+  trims every repo in the background; 0 removes worktrees when sessions end.
+- **Expiry.** An idle worktree no session has used for `[worktrees] idle_days` days (Settings ›
+  General, default 14, 0 to 365; 0 keeps it until the cap trims it) is removed the same way. The
+  server checks at startup, every hour, and in the background when the setting is lowered.
+- **Ownership.** Once a session lets go of its worktree (idle, or removed), `sessions.worktree_released`
+  is set, so the session never reads or removes that folder again, whatever happens to the pool:
+  its Changes panel says the worktree is gone, Discard's check reports none, and `gh` runs in the
+  main checkout.
+- **Recovery.** At startup, in the background, the server forgets idle worktrees whose folder is gone,
+  marks stale the ones no longer clean and detached (and stale ones that are clean again usable),
+  removes those of repos no live project uses and those unused too long, and trims to the cap.
+  Deleting a project keeps the repo's idle worktrees while another project uses the repo.
+- **What carries over.** Every ignored file, not only build outputs: `.env`, `CLAUDE.local.md`,
+  `.claude/settings.local.json`, local databases and logs. Set the cap to 0 for fresh worktrees.
 
 ## Task lifecycle
 
@@ -456,7 +511,7 @@ stateDiagram-v2
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a summary taken from the design. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 4 · Review | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt, reviews before CI. A queued CI prompt is dropped if the head moves or CI stops failing. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, and Claude is neither working nor waiting on you in the terminal. |
-| 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, removes the worktree, deletes the local and remote branch, runs `git fetch --prune` in your main checkout, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
+| 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in your main checkout, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
   **Request another round**, which posts `/agentk review` (**Request AgentK review** before AgentK

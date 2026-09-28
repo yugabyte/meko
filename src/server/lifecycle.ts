@@ -277,9 +277,9 @@ export class Lifecycle {
     this.setQueue(id, q);
   }
 
-  /** gh needs a directory in the repo; the worktree is gone once cleanup removed it. */
+  /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */
   private ghCwd(row: SessionRow): string {
-    if (existsSync(row.worktree_path)) return row.worktree_path;
+    if (existsSync(row.worktree_path) && this.sessions.ownsWorktree(row)) return row.worktree_path;
     return projectRow(this.db, row.project_id)?.repo_path ?? row.worktree_path;
   }
 
@@ -630,8 +630,8 @@ export class Lifecycle {
   }
 
   /**
-   * Records what shipped in the datapack, then removes the worktree and branches. Branches
-   * with commits the merged PR lacks are kept.
+   * Records what shipped in the datapack, then lets go of the worktree (idle for the next session,
+   * or removed) and removes the branches. Branches with commits the merged PR lacks are kept.
    */
   async cleanup(row: SessionRow, st: github.PrStatus): Promise<void> {
     const p = projectRow(this.db, row.project_id);
@@ -657,9 +657,9 @@ export class Lifecycle {
       }
     }
     const keep = !!p && (await lacksLocalCommits(p.repo_path, row.branch, st));
-    const { worktreeRemoved } = await this.sessions.archive(row, { keepBranch: true });
+    const { worktreeFreed, worktree } = await this.sessions.archive(row, { keepBranch: true });
     if (p) {
-      if (worktreeRemoved && !keep) await deleteBranch(p.repo_path, row.branch);
+      if (worktreeFreed && !keep) await deleteBranch(p.repo_path, row.branch);
       if (!keep && st.headRefOid) {
         // Often already deleted by GitHub. The lease deletes it only while it's still the PR's head.
         await tryGit(p.repo_path, 'push', `--force-with-lease=refs/heads/${row.branch}:${st.headRefOid}`, 'origin', '--delete', row.branch);
@@ -668,11 +668,14 @@ export class Lifecycle {
     }
     if (keep) this.core.log.info(`kept branch ${row.branch} of ${row.id}: it has commits PR #${st.number} doesn't have`);
     this.sessions.setStage(row.id, 'done', 'auto');
-    this.sessions.event(row.id, 'cleanup', !worktreeRemoved
+    const wt = worktree === 'idle' ? 'worktree kept for the next session' : worktree === 'removed' ? 'worktree removed' : '';
+    this.sessions.event(row.id, 'cleanup', !worktreeFreed
       ? `Cleaned up; worktree kept at ${row.worktree_path} because it has uncommitted changes`
       : keep
-        ? `Cleaned up: worktree removed; branch ${row.branch} kept because it has commits PR #${st.number} doesn't have`
-        : `Cleaned up: worktree and branch ${row.branch} removed`);
+        ? `Cleaned up: ${wt ? `${wt}; ` : ''}branch ${row.branch} kept because it has commits PR #${st.number} doesn't have`
+        : worktree === 'removed'
+          ? `Cleaned up: worktree and branch ${row.branch} removed`
+          : `Cleaned up: branch ${row.branch} removed${wt ? `; ${wt}` : ''}`);
     this.core.changed();
   }
 }

@@ -186,10 +186,81 @@ export async function addWorktree(repo: string, path: string, branch: string, ba
     await git(repo, 'worktree', 'add', path, branch);
     return null;
   }
-  const sync = await fastForward(repo, base);
-  const start = sync.kind === 'skipped' && (await revParse(repo, `refs/remotes/origin/${base}`)) ? `origin/${base}` : base;
+  const { sync, start } = await startPoint(repo, base);
   await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, start);
   return sync;
+}
+
+/**
+ * Where a new branch starts: the local <base> after fast-forwarding it, or origin/<base>
+ * when that was skipped. <base> must already be fetched.
+ */
+async function startPoint(repo: string, base: string): Promise<{ sync: SyncResult; start: string }> {
+  const sync = await fastForward(repo, base);
+  const start = sync.kind === 'skipped' && (await revParse(repo, `refs/remotes/origin/${base}`)) ? `origin/${base}` : base;
+  return { sync, start };
+}
+
+/**
+ * Puts a new session's branch in an idle worktree of <repo>, keeping its ignored files (build
+ * outputs). The branch starts where addWorktree would start it. Throws, changing nothing, unless
+ * <path> is a clean worktree of <repo> on a detached HEAD. Returns null when the branch already existed.
+ */
+export async function reuseWorktree(repo: string, path: string, branch: string, base: string): Promise<SyncResult | null> {
+  await checkBranchName(repo, base);
+  await checkBranchName(repo, branch);
+  if (!(await isIdleWorktree(repo, path))) throw new Error(`${path} isn't a clean worktree of ${repo} with a detached HEAD`);
+  await tryGit(repo, 'fetch', '--quiet', 'origin', base);
+  if (await revParse(repo, `refs/heads/${branch}`)) {
+    await git(path, 'checkout', '--quiet', branch);
+    return null;
+  }
+  const { sync, start } = await startPoint(repo, base);
+  await git(path, 'checkout', '--quiet', '--no-track', '-b', branch, start);
+  return sync;
+}
+
+export interface WorktreeInfo {
+  path: string;
+  /** The branch checked out there (refs/heads/ stripped), or null. */
+  branch: string | null;
+  detached: boolean;
+}
+
+/** Every worktree of <repo>, its main checkout first, from `git worktree list --porcelain`. */
+export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
+  const out = (await tryGit(repo, 'worktree', 'list', '--porcelain')) ?? '';
+  return out.split('\n\n').flatMap((block) => {
+    const lines = block.split('\n');
+    const wt = lines.find((l) => l.startsWith('worktree '));
+    if (!wt) return [];
+    const br = lines.find((l) => l.startsWith('branch refs/heads/'));
+    return [{ path: wt.slice('worktree '.length), branch: br ? br.slice('branch refs/heads/'.length) : null, detached: lines.includes('detached') }];
+  });
+}
+
+/**
+ * A worktree of <repo> (not its main checkout) on a detached HEAD, with nothing uncommitted or
+ * untracked. Pass <list> (from listWorktrees) when checking several worktrees of one repo.
+ */
+export async function isIdleWorktree(repo: string, path: string, list?: WorktreeInfo[]): Promise<boolean> {
+  if (!existsSync(path) || samePath(path, repo)) return false;
+  const wt = (list ?? (await listWorktrees(repo))).find((w) => samePath(w.path, path));
+  return !!wt?.detached && worktreeClean(path);
+}
+
+/** Detaches HEAD at its commit, so the branch is free and no file changes. */
+export async function detachWorktree(path: string): Promise<boolean> {
+  return (await tryGit(path, 'checkout', '--quiet', '--detach')) !== null;
+}
+
+/**
+ * Throws away uncommitted changes and untracked files (for Discard). Ignored files, such as
+ * build outputs, stay; so do nested repos, which leave the worktree unclean.
+ */
+export async function discardChanges(path: string): Promise<void> {
+  await tryGit(path, 'reset', '--quiet', '--hard');
+  await tryGit(path, 'clean', '-fdq');
 }
 
 /**
@@ -229,15 +300,7 @@ function samePath(a: string, b: string): boolean {
 
 /** The worktree (main checkout included) that has <branch> checked out, if any. */
 async function checkedOutAt(repo: string, branch: string): Promise<string | null> {
-  const out = (await tryGit(repo, 'worktree', 'list', '--porcelain')) ?? '';
-  for (const block of out.split('\n\n')) {
-    const lines = block.split('\n');
-    if (lines.includes(`branch refs/heads/${branch}`)) {
-      const wt = lines.find((l) => l.startsWith('worktree '));
-      if (wt) return wt.slice('worktree '.length);
-    }
-  }
-  return null;
+  return (await listWorktrees(repo)).find((w) => w.branch === branch)?.path ?? null;
 }
 
 async function revParse(repo: string, ref: string): Promise<string | null> {
