@@ -20,8 +20,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `AK_HOME`/`MEKO_CHECKPOINT_INTERVAL` are cleared.
 - [ ] Auto-continue guards hold (once per 15 minutes; after two auto-continues in an hour the next
       mid-turn recovery is parked).
-- [ ] Status changes come from hook events or pane checks, not guesses. Deliberate stops (archive,
+- [ ] Status changes come from hook events or pane checks, not guesses (the one fallback: a starting
+      session whose hooks never came follows its transcript). Deliberate stops (archive,
       cleanup) don't show up as "exited".
+- [ ] The home may be seen by other hosts (a home shared over NFS). Only the server holding the
+      `server.lock` lease opens the database or binds the hook socket, the systemd units keep
+      `ConditionHost=`, and nothing removes a socket or file another server may own.
 - [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
       user's own status line with the same input, and never prints anything of its own.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).

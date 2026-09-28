@@ -16,8 +16,17 @@ function secs(ms: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-/** Shown over the terminal while a session starts: the steps, where it is, and the stage it opens in. */
-export function StartupPanel({ session }: { session: Session }) {
+/**
+ * Past this on the last steps, Claude may well be running with its hooks not reaching the server:
+ * the panel offers to show the terminal under it.
+ */
+const STUCK_MS = 90_000;
+
+/**
+ * Shown over the terminal while a session starts: the steps, where it is, and the stage it opens in.
+ * `onShowTerminal` hides it (the session still counts as starting).
+ */
+export function StartupPanel({ session, onShowTerminal }: { session: Session; onShowTerminal: () => void }) {
   const [, tick] = useReducer((x: number) => x + 1, 0);
   useEffect(() => {
     const t = setInterval(tick, 1000);
@@ -32,6 +41,7 @@ export function StartupPanel({ session }: { session: Session }) {
   const currentIdx = steps.findIndex((s) => s.step === current);
   const now = Date.now();
   const slow = current === 'loading' && st && now - st.stepSince > 20000;
+  const stuck = (current === 'loading' || current === 'prompt') && st && now - st.stepSince > STUCK_MS;
   const currentLabel = steps[currentIdx]?.label;
 
   return (
@@ -61,8 +71,15 @@ export function StartupPanel({ session }: { session: Session }) {
           );
         })}
       </ol>
-      {slow && (
-        <p className="startup-note">Claude Code loads its plugins, MCP servers and startup hooks first. This can take up to a minute.</p>
+      {stuck ? (
+        <div className="startup-stuck">
+          <p className="startup-note">This is taking longer than usual. Claude may already be running: check the terminal.</p>
+          <button className="btn small" onClick={onShowTerminal}>
+            Show terminal
+          </button>
+        </div>
+      ) : (
+        slow && <p className="startup-note">Claude Code loads its plugins, MCP servers and startup hooks first. This can take up to a minute.</p>
       )}
       <p className="startup-stage">
         <span className="stchip">{STAGE_LABELS[session.stage]}</span> {STAGE_HINT[session.stage] ?? `This session is in the ${STAGE_LABELS[session.stage]} stage.`}

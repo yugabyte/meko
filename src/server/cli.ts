@@ -13,12 +13,13 @@ import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
 import { errMsg, fileLogger } from './log.js';
 import { probeLocal } from './health.js';
 import { MekoClient } from './meko.js';
-import { getPaths, withLocalBin } from './paths.js';
+import { getPaths, tildify, withLocalBin } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
 import { hostServices } from './service.js';
 import { Tmux } from './tmux.js';
-import { HEALTHY_MS, Updater } from './updater.js';
+import { BEAT_MS, EXIT_BUSY, InstanceBusyError, InstanceLock } from './instance.js';
+import { HEALTHY_MS, uncountStart, Updater } from './updater.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +58,18 @@ async function serve(): Promise<void> {
   const paths = getPaths();
   const cfg = loadConfig(paths);
   const v = version();
+  // Before anything else touches the home: another server using it (here, or on another host
+  // that mounts it) would lose its hook socket and share the database.
+  let lock: InstanceLock;
+  try {
+    lock = await InstanceLock.acquire(paths.lock, tildify(paths.home), { version: v, port: cfg.server.port });
+  } catch (e) {
+    if (!(e instanceof InstanceBusyError)) throw e;
+    // Not in server.log: that belongs to the server holding the home.
+    console.error(`agent-k-local: ${e.message}`);
+    uncountStart(paths, v);
+    process.exit(EXIT_BUSY);
+  }
   const db = openDb(dbPath(paths, cfg));
   const log = fileLogger(join(paths.logs, 'server.log'));
   let core: Core | null = null;
@@ -71,16 +84,26 @@ async function serve(): Promise<void> {
   const shutdown = async (code: number) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clearInterval(beat);
     log.info('shutting down (sessions keep running in tmux)');
     try {
       await app?.close();
-      await core!.stop();
+      await core?.stop();
       db.close();
     } catch (e) {
       log.warn('shutdown error', errMsg(e));
+    } finally {
+      // Even after an error: a lease left behind keeps other hosts out until it goes stale.
+      lock.release();
     }
     process.exit(code);
   };
+  const beat = setInterval(() => {
+    if (shuttingDown || lock.beat()) return;
+    log.error(`another AgentK Local server took over ${paths.home} (this one stalled for too long); stopping`);
+    void shutdown(1);
+  }, BEAT_MS);
+  beat.unref();
 
   const updater = new Updater({
     paths,

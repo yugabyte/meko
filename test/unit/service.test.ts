@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EXIT_BUSY } from '../../src/server/instance.js';
 import {
   hostServices,
   LaunchdServices,
@@ -47,13 +48,13 @@ describe('hostServices', () => {
 
 describe('service templates', () => {
   it('escapes values for property lists only', () => {
-    expect(renderTemplate('<string>@AK_HOME@</string>', 'launchd', { AK_HOME: '/Users/a&b', TMUX: '' })).toBe('<string>/Users/a&amp;b</string>');
-    expect(renderTemplate('Environment=AK_HOME=@AK_HOME@', 'systemd', { AK_HOME: '/home/a&b', TMUX: '' })).toBe('Environment=AK_HOME=/home/a&b');
+    expect(renderTemplate('<string>@AK_HOME@</string>', 'launchd', { AK_HOME: '/Users/a&b', TMUX: '', HOST: 'mac' })).toBe('<string>/Users/a&amp;b</string>');
+    expect(renderTemplate('Environment=AK_HOME=@AK_HOME@', 'systemd', { AK_HOME: '/home/a&b', TMUX: '', HOST: 'box' })).toBe('Environment=AK_HOME=/home/a&b');
   });
 
   it('renders the launchd jobs: tmux in the foreground, the server kept alive', () => {
     const svc = new LaunchdServices(() => ok, '/Users/me', 501);
-    const out = renderServiceFiles(svc, { AK_HOME: '/Users/me/.agent-k-local', TMUX: '/opt/homebrew/bin/tmux' });
+    const out = renderServiceFiles(svc, { AK_HOME: '/Users/me/.agent-k-local', TMUX: '/opt/homebrew/bin/tmux', HOST: 'mac' });
     for (const text of Object.values(out)) {
       expect(text).not.toContain('@');
       expect(text).toContain('<key>KeepAlive</key>\n  <true/>');
@@ -67,9 +68,20 @@ describe('service templates', () => {
 
   it('renders the systemd units with a keepalive every sleep understands', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
-    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', TMUX: '/usr/bin/tmux' });
+    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', TMUX: '/usr/bin/tmux', HOST: 'box' });
     expect(out.tmux).toContain('ExecStart=/usr/bin/tmux -L agentk -f /home/me/.agent-k-local/tmux.conf new-session -d -s _ak "sleep 2147483647"');
     expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local serve');
+  });
+
+  it('runs the systemd units only on the host they were installed on, and never restarts a refused server', () => {
+    const svc = new SystemdServices(() => ok, {}, '/home/me');
+    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', TMUX: '/usr/bin/tmux', HOST: 'box' });
+    // A home shared over NFS: every other host that mounts it would start its own server on it.
+    for (const text of Object.values(out)) {
+      expect(text).not.toContain('@');
+      expect(text).toMatch(/^\[Unit\]\n(?:.*\n)*?ConditionHost=box\n(?:.*\n)*?\[Service\]/m);
+    }
+    expect(out.server).toContain(`RestartPreventExitStatus=${EXIT_BUSY}\n`);
   });
 });
 

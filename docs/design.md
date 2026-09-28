@@ -85,6 +85,11 @@ which drives the badges in the rail. Your global Claude settings stay untouched.
 `/resume` inside Claude) switches conversations, `SessionStart` carries the new session id, and
 Resume and recovery continue that conversation.
 
+The hook forwarder gives up quietly when the socket isn't there, so the server makes sure it is.
+It binds the socket under a temporary name and renames it into place, removes it when it stops
+only if the file is still its own, and every 10 seconds binds it again if the file was removed or
+replaced (see [One server per home](#one-server-per-home)).
+
 ## The app
 
 The left rail holds projects, each with its repo's folder name in small type under the project
@@ -240,6 +245,16 @@ starts, the terminal shows its steps (updating the base branch and preparing the
 Claude Code, loading, sending your task) with the current one animated and timed, plus the stage
 the session opens in. The session's tab shows the current step in its tooltip.
 
+The steps come from Claude's hooks. If they never arrive (the hook socket was gone, say), a
+session would stay on this view while Claude works under it. So the reconcile tick also watches
+the conversation's transcript: once it has been written since the start and the last step is more
+than 20 seconds old, Claude has taken a prompt, and the session moves on. Until a hook arrives,
+it shows working while the transcript changes (in the last 15 seconds) and idle otherwise, which
+is only a stand-in: a long tool call shows as idle and permission prompts don't show. A server
+that restarts while a session starts picks the startup back up, timed from when it began. After
+90 seconds on the last steps, the view says Claude may already be running and offers **Show
+terminal**, which hides it for that start in this page.
+
 ### Keyboard
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
@@ -331,6 +346,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
   state.db                 # SQLite: projects, sessions, events, auth (WAL)
   hook.sock                # Claude hooks → server
+  server.lock              # the running server's lease on this home (one server per home)
   certs/                   # self-signed pair, or symlinks to your own
   app/0.4.1/  app/current → 0.4.1
   worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
@@ -848,9 +864,36 @@ back; reinstalling never reloads a loaded tmux job.
 All of this sits behind one interface in `src/server/service.ts` (install, start, state, remove,
 boot check), with a systemd and a launchd implementation picked by platform.
 
+### One server per home
+
+Two servers on one `~/.agent-k-local` break each other: each binds the hook socket over the
+other's (a Unix socket bound on one host can't be reached from another, so hooks are lost and
+sessions stay on Starting), and both write the same SQLite file. This happens when the home is on
+a file system other hosts mount, like a home directory shared over NFS: every host you log in to
+sees the same `~/.config/systemd/user`, so its systemd starts the enabled units too.
+
+- **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
+  host name at install time. On any other host systemd skips them: nothing starts and nothing is
+  logged. Renaming the host means running the installer again.
+- **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
+  anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it
+  rewrites every 10 seconds; a lease not rewritten for 45 seconds is free. A lease from another
+  host that is still beating refuses the start at once. On this host a live pid proves nothing
+  (after a crash the pid may belong to another process), and an old server may still be exiting
+  (an update's restart), so the start waits until the lease is released, its pid exits or it
+  goes stale, and is refused only if the lease beats meanwhile. A refused start says which host
+  holds the home, writes nothing to the shared log, and exits with status 75. The server unit has
+  `RestartPreventExitStatus=75`, and a refused start is taken back off an update's start count, so
+  it can't cause a rollback. A server
+  that finds another one named in the lease (it stalled for longer than 45 seconds) stops. File
+  locks aren't used: they aren't reliable across NFS clients.
+- **`install` refuses** while a live server on another host holds the home, since it would pin the
+  units to the wrong host.
+
 | Event | What survives | What happens |
 |---|---|---|
 | Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the running tmux sessions, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](#releases-and-auto-update)). |
+| A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
 | tmux crash | Worktrees, transcripts, state | The unit restarts tmux, and the server relaunches every session with `desired: running` using `claude --resume`. |
 | Host reboot or crash | Worktrees, transcripts, state | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
 

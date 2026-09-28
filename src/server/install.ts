@@ -9,6 +9,7 @@ import { getOwner, issueSetupToken } from './auth.js';
 import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { openDb } from './db.js';
+import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko } from './meko.js';
 import { MekoSetupError, claudeHasMekoMcp, ensureMekoInClaude, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, runMekoSetup } from './mekosetup.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
@@ -149,7 +150,7 @@ function installServices(paths: Paths): boolean {
   }
   mkdirSync(paths.logs, { recursive: true }); // launchd opens its log files before starting a job
   try {
-    svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, TMUX: tmux }));
+    svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, TMUX: tmux, HOST: hostname() }));
   } catch (e) {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
     throw e;
@@ -323,6 +324,13 @@ export async function runInstall(args: string[]): Promise<void> {
 
   try {
     mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+    // A shared home in use on another host: installing here would pin its services to this host.
+    try {
+      assertFree(paths.lock, tildify(paths.home));
+    } catch (e) {
+      if (e instanceof InstanceBusyError) throw new InstallError(e.message);
+      throw e;
+    }
     const fresh = !existsSync(paths.config);
     const cfg: Config = loadConfig(paths);
 

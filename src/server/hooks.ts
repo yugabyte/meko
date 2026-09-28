@@ -1,6 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { chmodSync, lstatSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export interface HookPayload {
   hook_event_name?: string;
@@ -18,6 +19,20 @@ export interface HookPayload {
   [k: string]: unknown;
 }
 
+/**
+ * Which socket file is at `path`, or null when there is none. The server compares it with the one
+ * it bound: another process can remove or replace the file. The change time is part of it because
+ * a file made just after another was deleted can get the same inode number.
+ */
+export function socketId(path: string): string | null {
+  try {
+    const st = lstatSync(path, { bigint: true });
+    return st.isSocket() ? `${st.dev}:${st.ino}:${st.ctimeNs}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /** What a guard hook prints for Claude Code; null lets the tool call go ahead. */
 export type GuardDecision = Record<string, unknown> | null;
 
@@ -26,6 +41,11 @@ export type GuardDecision = Record<string, unknown> | null;
  * touch the network port. Each request carries the session's hook token.
  * `/hook` events are answered at once and handled afterwards; `/guard` requests
  * wait for the decision, which is returned as JSON (204 when there is none).
+ *
+ * The socket is bound under a temporary name and renamed into place. Closing a
+ * server unlinks the path it was bound to, so this way closing never removes a
+ * socket file another server put at `sockPath` since; the caller removes the file
+ * itself when it's still its own (socketId).
  */
 export function startHookServer(
   sockPath: string,
@@ -40,7 +60,9 @@ export function startHookServer(
     throw new Error(`${dir} is not a directory owned by this user; refusing to put the hook socket there.`);
   }
   if (st.mode & 0o077) chmodSync(dir, 0o700);
-  rmSync(sockPath, { force: true });
+  // No longer than the socket's own name, so it fits the same path length limit (see paths.ts).
+  const bound = join(dir, `.h${randomBytes(3).toString('hex')}`);
+  rmSync(bound, { force: true });
   const server = createServer((req, res) => {
     if (req.method !== 'POST' || (req.url !== '/hook' && req.url !== '/guard' && req.url !== '/statusline')) {
       res.writeHead(404).end();
@@ -77,8 +99,15 @@ export function startHookServer(
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(sockPath, () => {
-      chmodSync(sockPath, 0o600);
+    server.listen(bound, () => {
+      try {
+        chmodSync(bound, 0o600);
+        renameSync(bound, sockPath);
+      } catch (e) {
+        server.close();
+        reject(e instanceof Error ? e : new Error(String(e)));
+        return;
+      }
       resolve(server);
     });
   });

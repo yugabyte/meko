@@ -1,6 +1,9 @@
 [Unit]
 Description=agent-k-local web server
 Documentation=https://github.com/yugabyte/agent-k-local
+# The home can be on a shared (NFS) file system that other hosts mount: run only on the
+# host this was installed on, or every host you log into starts its own server on it.
+ConditionHost=@HOST@
 # tmux runs in its own unit so restarting or updating this one never kills sessions.
 Wants=agent-k-local-tmux.service
 After=agent-k-local-tmux.service network-online.target
@@ -12,6 +15,8 @@ Environment=AK_HOME=@AK_HOME@
 ExecStart=@AK_HOME@/app/current/bin/agent-k-local serve
 Restart=always
 RestartSec=2
+# 75: another server holds this home (instance.ts); restarting won't help.
+RestartPreventExitStatus=75
 # Only the server process belongs to this unit; it never forks tmux here
 # (it asks the tmux unit's server to create sessions over the socket).
 KillMode=mixed

@@ -21,6 +21,8 @@ export interface Paths {
   /** Per-session launcher scripts and the Claude hooks settings file. */
   run: string;
   hookSock: string;
+  /** The running server's lease on this home (instance.ts): one server per home, even across hosts. */
+  lock: string;
   tmuxConf: string;
   logs: string;
   /** Written by the updater before a restart; read by the bin wrapper for rollback. */
@@ -41,6 +43,7 @@ export function getPaths(home: string = akHome()): Paths {
     designs: join(home, 'designs'),
     run: join(home, 'run'),
     hookSock: hookSockPath(home),
+    lock: join(home, 'server.lock'),
     tmuxConf: join(home, 'tmux.conf'),
     logs: join(home, 'logs'),
     updatePending: join(home, 'update-pending.json'),

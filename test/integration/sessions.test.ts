@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { postHook } from '../hook-client.js';
 import { get, run } from '../../src/server/db.js';
 import { sleep } from '../../src/server/tmux.js';
+import { transcriptPathFor } from '../../src/server/claude.js';
+import { socketId, startHookServer } from '../../src/server/hooks.js';
+import { MISSED_START_MS } from '../../src/server/sessions.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
@@ -352,6 +355,75 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(steps.slice(0, 3)).toEqual(['worktree', 'launch', 'loading']);
     expect(steps).toContain('prompt');
     expect(env.core.sessions.get(s.id).startup).toBeNull();
+  });
+
+  it("follows the transcript of a session whose hooks never arrive, and binds a removed hook socket again", async () => {
+    const p = await newProject();
+    // As when another server removed the socket: Claude's hooks find nothing and give up quietly.
+    rmSync(env.core.paths.hookSock);
+    const s = await env.core.sessions.create(p.id, { name: 'No hooks', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => existsSync(join(env.fakeDir, `${s.claudeSessionId}.jsonl`)), Boolean, 10000, 'the first turn');
+    await env.core.sessions.reconcile();
+    expect(env.core.sessions.get(s.id).status).toBe('starting');
+
+    // The server restarts meanwhile: the new one picks the startup up, timed from when it began.
+    env.core.sessions.clearStartup(s.id);
+    await env.core.sessions.recover();
+    const began = get<{ last_event_at: number }>(env.core.db, 'SELECT last_event_at FROM sessions WHERE id = ?', s.id)!.last_event_at;
+    expect(env.core.sessions.get(s.id).startup).toMatchObject({ step: 'loading', startedAt: began, stepSince: began, hasPrompt: true });
+
+    // The fake writes its transcript elsewhere; Claude Code writes it here.
+    const transcript = transcriptPathFor(s.worktreePath, s.claudeSessionId);
+    mkdirSync(dirname(transcript), { recursive: true });
+    writeFileSync(transcript, '{}\n');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + MISSED_START_MS + 20_000);
+      await env.core.sessions.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(env.core.sessions.get(s.id)).toMatchObject({ status: 'idle', startup: null });
+    // It keeps following the transcript: written just now means working.
+    writeFileSync(transcript, '{}\n{}\n');
+    await env.core.sessions.reconcile();
+    expect(env.core.sessions.get(s.id).status).toBe('working');
+
+    await env.core.checkHookSocket();
+    expect(existsSync(env.core.paths.hookSock)).toBe(true);
+    await env.core.sessions.submit(s.id, 'second turn');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the Stop hook');
+    // Hooks arrive again, so the transcript no longer sets the status.
+    writeFileSync(transcript, '{}\n{}\n{}\n');
+    await env.core.sessions.reconcile();
+    expect(env.core.sessions.get(s.id).status).toBe('idle');
+  });
+
+  it('keeps trying to bind the hook socket after a failed rebind, and never binds it after stopping', async () => {
+    // A directory in the socket's place makes the rename fail.
+    rmSync(env.core.paths.hookSock);
+    mkdirSync(join(env.core.paths.hookSock, 'x'), { recursive: true });
+    await expect(env.core.checkHookSocket()).rejects.toThrow();
+    rmSync(env.core.paths.hookSock, { recursive: true });
+    await env.core.checkHookSocket();
+    expect(socketId(env.core.paths.hookSock)).not.toBeNull();
+
+    await env.core.stop();
+    expect(existsSync(env.core.paths.hookSock)).toBe(false);
+    await env.core.checkHookSocket();
+    expect(existsSync(env.core.paths.hookSock)).toBe(false);
+  });
+
+  it('leaves a hook socket another server bound when it stops', async () => {
+    rmSync(env.core.paths.hookSock);
+    const other = await startHookServer(env.core.paths.hookSock, () => undefined);
+    try {
+      const id = socketId(env.core.paths.hookSock);
+      await env.core.stop();
+      expect(socketId(env.core.paths.hookSock)).toBe(id);
+    } finally {
+      await new Promise<void>((r) => other.close(() => r()));
+    }
   });
 
   it('marks exited sessions and resumes them with --resume', async () => {

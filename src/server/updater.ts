@@ -269,6 +269,45 @@ export function repointSymlink(link: string, target: string): void {
 // ---------------------------------------------------------------------------
 // Updater
 
+/** The pending update the launcher's rollback reads, or null when there is none. */
+function readPending(paths: Paths): PendingUpdate | null {
+  try {
+    const p = JSON.parse(readFileSync(paths.updatePending, 'utf8')) as PendingUpdate;
+    return p && typeof p === 'object' ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Name of the running version's directory under app/ (what the rollback wrapper switches back to). */
+function runningDirName(version: string, appDir: string | undefined): string {
+  try {
+    return appDir ? basename(realpathSync(appDir)) : version;
+  } catch {
+    return version;
+  }
+}
+
+/** Whether `v` names the running version (by its version or its directory). */
+function isRunningVersion(v: string | undefined, version: string, appDir: string | undefined): boolean {
+  return !!v && (v === version || v === runningDirName(version, appDir));
+}
+
+/**
+ * Takes this start back off the launcher's count of starts of a version being tried out, when
+ * that version is the one running: after a clean stop, or a start refused because another server
+ * holds the home (instance.ts). Neither is a crash, so neither may lead to a rollback.
+ */
+export function uncountStart(paths: Paths, version: string, appDir: string | undefined = process.env.AK_APP_DIR): void {
+  const pending = readPending(paths);
+  if (!pending || !isRunningVersion(pending.to, version, appDir)) return;
+  try {
+    writeFileAtomic(paths.updatePending, JSON.stringify({ ...pending, attempts: Math.max(0, (Number(pending.attempts) || 0) - 1) }));
+  } catch {
+    // the launcher's count just stays as it was
+  }
+}
+
 export interface UpdaterDeps {
   paths: Paths;
   config: () => Config;
@@ -501,11 +540,7 @@ export class Updater {
 
   /** Name of the running version's directory under app/ (what the rollback wrapper switches back to). */
   private currentDirName(): string {
-    try {
-      return basename(realpathSync(this.appDir!));
-    } catch {
-      return this.deps.version;
-    }
+    return runningDirName(this.deps.version, this.appDir);
   }
 
   /** Called by the server once it has been healthy for HEALTHY_MS after boot. */
@@ -531,14 +566,7 @@ export class Updater {
    * can't look like a crash loop. The old version stopping for the update itself changes nothing.
    */
   stoppedCleanly(): void {
-    const file = this.deps.paths.updatePending;
-    const pending = this.readPending();
-    if (!pending || !this.isRunning(pending.to)) return;
-    try {
-      writeFileAtomic(file, JSON.stringify({ ...pending, attempts: Math.max(0, (Number(pending.attempts) || 0) - 1) }));
-    } catch {
-      // the launcher's count just stays as it was
-    }
+    uncountStart(this.deps.paths, this.deps.version, this.appDir);
   }
 
   /** Deletes installed versions except the running one and one previous version. */
@@ -594,17 +622,12 @@ export class Updater {
   }
 
   private readPending(): PendingUpdate | null {
-    try {
-      const p = JSON.parse(readFileSync(this.deps.paths.updatePending, 'utf8')) as PendingUpdate;
-      return p && typeof p === 'object' ? p : null;
-    } catch {
-      return null;
-    }
+    return readPending(this.deps.paths);
   }
 
   /** Whether `v` names this running version (by its version or its directory). */
   private isRunning(v: string | undefined): boolean {
-    return !!v && (v === this.deps.version || v === this.currentDirName());
+    return isRunningVersion(v, this.deps.version, this.appDir);
   }
 
   /** Ends a pending update: removes the file the launcher's rollback reads. */

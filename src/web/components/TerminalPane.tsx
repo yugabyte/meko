@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import type { Session } from '../../shared/types';
 import { useTouch } from '../hooks/useMedia';
 import { getTerminal } from '../terminals';
@@ -12,6 +12,10 @@ export function TerminalPane({ session }: { session: Session }) {
   const term = getTerminal(sessionId);
   const prevStatus = useRef(status);
   const touch = useTouch();
+  // The startup the user chose to look past (Show terminal); a later start shows the panel again.
+  const startKey = `${sessionId}:${session.startup?.startedAt ?? ''}`;
+  const [peeked, setPeeked] = useState<string | null>(null);
+  const showStartup = status === 'starting' && peeked !== startKey;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -31,7 +35,7 @@ export function TerminalPane({ session }: { session: Session }) {
   }, [status, term]);
 
   let overlay: string | null = null;
-  if (status === 'starting') overlay = null; // the startup panel covers this
+  if (showStartup) overlay = null; // the startup panel covers this
   else if (term.conn === 'connecting' && status !== 'exited') overlay = 'Connecting to the session…';
   else if (term.conn === 'closed') overlay = 'Connection lost. Reconnecting…';
   else if (term.conn === 'ended' && status !== 'exited') overlay = term.message ?? 'The terminal closed.';
@@ -41,7 +45,7 @@ export function TerminalPane({ session }: { session: Session }) {
       {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key). */}
       <div className="term-wrap" onClick={() => (!touch || term.typing) && term.focus()}>
         <div className="term-host" ref={hostRef} />
-        {status === 'starting' && <StartupPanel session={session} />}
+        {showStartup && <StartupPanel session={session} onShowTerminal={() => setPeeked(startKey)} />}
         {overlay && (
           <div className="term-overlay">
             {overlay}

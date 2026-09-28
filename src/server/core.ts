@@ -9,7 +9,7 @@ import { TranscriptCapture } from './capture.js';
 import { CommentService } from './comments.js';
 import { mekoConfigured, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
-import { startHookServer } from './hooks.js';
+import { socketId, startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
@@ -53,6 +53,9 @@ const SHARING_CHECK_MS = 60 * 60 * 1000;
 /** How often idle worktrees unused for too long are removed. */
 const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 
+/** How often the server checks that its hook socket file is still there. */
+const HOOK_SOCKET_CHECK_MS = 10_000;
+
 export class Core extends EventEmitter {
   readonly paths: Paths;
   readonly db: Db;
@@ -78,6 +81,12 @@ export class Core extends EventEmitter {
   private timersOn: boolean;
   private intervals: NodeJS.Timeout[] = [];
   private hookServer: Server | null = null;
+  /** The socket file the hook server bound (socketId), to tell it apart from one put there since. */
+  private hookSockId: string | null = null;
+  /** Between start() and stop(): the hook socket should be bound (and is bound again when it goes). */
+  private hooksOn = false;
+  /** A rebind of the hook socket in progress; stop() waits for it. */
+  private hookCheck: Promise<void> | null = null;
 
   constructor(o: CoreOptions) {
     super();
@@ -209,14 +218,8 @@ export class Core extends EventEmitter {
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
-    this.hookServer = await startHookServer(
-      this.paths.hookSock,
-      (token, payload) => {
-        this.sessions.onHook(token, payload).catch((e) => this.log.error('hook handling failed', e));
-      },
-      (token, payload) => this.sessions.guard(token, payload),
-      (token, input) => this.sessions.onStatusLine(token, input),
-    );
+    await this.bindHooks();
+    this.hooksOn = true;
     // A tmux service that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs tmux) retries on every reconcile tick.
     await this.tmux.ensureServer().catch((e) => this.log.error('tmux is not available', e));
@@ -225,6 +228,7 @@ export class Core extends EventEmitter {
     pruneSessionEvents(this.db);
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
+      this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
@@ -239,9 +243,52 @@ export class Core extends EventEmitter {
     for (const i of this.intervals) clearInterval(i);
     this.intervals = [];
     this.lifecycle.stop();
-    await new Promise<void>((r) => (this.hookServer ? this.hookServer.close(() => r()) : r()));
-    rmSync(this.paths.hookSock, { force: true });
+    this.hooksOn = false;
+    await this.hookCheck?.catch(() => undefined);
+    await this.closeHooks();
     await this.meko.close();
+  }
+
+  private async bindHooks(): Promise<void> {
+    this.hookServer = await startHookServer(
+      this.paths.hookSock,
+      (token, payload) => {
+        this.sessions.onHook(token, payload).catch((e) => this.log.error('hook handling failed', e));
+      },
+      (token, payload) => this.sessions.guard(token, payload),
+      (token, input) => this.sessions.onStatusLine(token, input),
+    );
+    this.hookSockId = socketId(this.paths.hookSock);
+  }
+
+  /** Stops the hook server. Its socket file is removed only if it is still ours. */
+  private async closeHooks(): Promise<void> {
+    const server = this.hookServer;
+    this.hookServer = null;
+    if (!server) return;
+    await new Promise<void>((r) => server.close(() => r()));
+    if (this.hookSockId && socketId(this.paths.hookSock) === this.hookSockId) rmSync(this.paths.hookSock, { force: true });
+    this.hookSockId = null;
+  }
+
+  /**
+   * Binds the hook socket again when its file was removed or replaced (by another server on
+   * this home, or a temp cleaner). Without it, hooks find no socket and are dropped quietly,
+   * so sessions never leave "Starting" and their status stops changing.
+   */
+  checkHookSocket(): Promise<void> {
+    if (!this.hooksOn) return Promise.resolve();
+    if (this.hookCheck) return this.hookCheck;
+    // A rebind that failed left no server: try again.
+    if (this.hookServer && socketId(this.paths.hookSock) === this.hookSockId) return Promise.resolve();
+    this.log.warn(`the hook socket ${this.paths.hookSock} was removed or replaced; listening on it again`);
+    this.hookCheck = (async () => {
+      await this.closeHooks();
+      if (this.hooksOn) await this.bindHooks();
+    })().finally(() => {
+      this.hookCheck = null;
+    });
+    return this.hookCheck;
   }
 
   private every(ms: number, fn: () => Promise<unknown> | unknown): void {

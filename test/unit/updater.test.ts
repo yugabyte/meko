@@ -24,6 +24,7 @@ import {
   pickLatest,
   releaseLane,
   tarballName,
+  uncountStart,
   Updater,
   verifySha256,
   versionsToPrune,
@@ -462,6 +463,15 @@ describe('Updater', () => {
     expect(attempts()).toBe(0);
     rmSync(fx.paths.updatePending);
     expect(() => u.stoppedCleanly()).not.toThrow(); // no update pending
+  });
+
+  it('a start refused because another server holds the home is not counted either', () => {
+    // serve calls this before the Updater exists (it hasn't opened the database).
+    writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.3', to: '0.1.0', attempts: 2, at: 1 }));
+    uncountStart(fx.paths, '0.1.0', undefined);
+    expect(JSON.parse(readFileSync(fx.paths.updatePending, 'utf8')).attempts).toBe(1);
+    uncountStart(fx.paths, '0.0.3', undefined);
+    expect(JSON.parse(readFileSync(fx.paths.updatePending, 'utf8')).attempts).toBe(1);
   });
 
   it('markHealthy after a manual switch keeps the newest older version', () => {

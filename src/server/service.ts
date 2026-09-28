@@ -318,14 +318,21 @@ function templatesDir(kind: ServiceManager['kind'], probe: string): string {
 
 const xmlEscape = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
-/** Fills in @AK_HOME@ and @TMUX@ (XML-escaped in property lists). */
-export function renderTemplate(template: string, kind: ServiceManager['kind'], vars: { AK_HOME: string; TMUX: string }): string {
+export interface TemplateVars {
+  AK_HOME: string;
+  TMUX: string;
+  /** This host's name: the systemd units run only here (ConditionHost). */
+  HOST: string;
+}
+
+/** Fills in @AK_HOME@, @TMUX@ and @HOST@ (XML-escaped in property lists). */
+export function renderTemplate(template: string, kind: ServiceManager['kind'], vars: TemplateVars): string {
   const esc = kind === 'launchd' ? xmlEscape : (s: string) => s;
-  return template.replaceAll('@AK_HOME@', esc(vars.AK_HOME)).replaceAll('@TMUX@', esc(vars.TMUX));
+  return template.replaceAll('@AK_HOME@', esc(vars.AK_HOME)).replaceAll('@TMUX@', esc(vars.TMUX)).replaceAll('@HOST@', esc(vars.HOST));
 }
 
 /** Renders both service files from the templates shipped in packaging/<kind>/. */
-export function renderServiceFiles(svc: ServiceManager, vars: { AK_HOME: string; TMUX: string }): Record<Service, string> {
+export function renderServiceFiles(svc: ServiceManager, vars: TemplateVars): Record<Service, string> {
   const dir = templatesDir(svc.kind, basename(svc.file('server')));
   const one = (s: Service) => renderTemplate(readFileSync(join(dir, basename(svc.file(s))), 'utf8'), svc.kind, vars);
   return { server: one('server'), tmux: one('tmux') };

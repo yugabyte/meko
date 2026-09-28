@@ -45,6 +45,10 @@ default over SSH or on a machine with no display. Then it prints the address, or
 access a one-time setup link that creates your login. Local access trusts everyone who can log
 in to the computer, so pick remote on a shared host.
 
+If your home directory is shared with other hosts (over NFS, say), AgentK Local runs only on the
+host you installed it on: logging in to another host doesn't start a second server on the same
+`~/.agent-k-local`. To run it on another host too, give that host its own home with `AK_HOME`.
+
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
 Code keeps its login in your Keychain, so AgentK Local runs while you're logged in. For a Mac mini
 that stays on, turn on automatic login and stop it sleeping (System Settings > Energy). With the

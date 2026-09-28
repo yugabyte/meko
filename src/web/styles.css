@@ -2595,6 +2595,12 @@ a.icon-btn {
   font-size: 13px;
   color: var(--muted);
 }
+.startup-stuck {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
 .startup-stage {
   margin: 0;
   padding-top: 10px;

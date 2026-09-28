@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../shared/types.js';
@@ -35,6 +35,13 @@ const WORKFLOW: Record<SessionKind, string> = {
 export const MAX_TIMER_SECS = Math.floor((2 ** 31 - 1) / 1000);
 const QUARTER_HOUR = 15 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
+/**
+ * A starting session this long past its last startup step, with a transcript written since, has
+ * missed its hooks (reconcile's followTranscript).
+ */
+export const MISSED_START_MS = 20_000;
+/** A transcript written this recently means the turn is still going. */
+const TRANSCRIPT_ACTIVE_MS = 15_000;
 /** How long stopping a session waits for its last turns to reach Meko. */
 const FINAL_CAPTURE_MS = 15000;
 /** How long a new session waits for its Meko conversation to be created before Claude starts anyway. */
@@ -102,6 +109,11 @@ export class SessionManager {
   private usageReadAt = new Map<string, number>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
+  /**
+   * Sessions that started without their hooks reaching the server (followTranscript): until a hook
+   * arrives, reconcile sets working or idle from the transcript.
+   */
+  private hookless = new Set<string>();
 
   setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
     const prev = this.startup.get(id);
@@ -541,6 +553,7 @@ export class SessionManager {
     const row = this.byToken(token);
     if (!row || row.desired !== 'running') return;
     const id = row.id;
+    this.hookless.delete(id);
     const ev = p.hook_event_name ?? '';
     const now = Date.now();
     run(this.db, 'UPDATE sessions SET last_event_at = ? WHERE id = ?', now, id);
@@ -662,7 +675,12 @@ export class SessionManager {
     for (const row of sessionRows(this.db)) {
       if (!this.recoverable(row) || !projectRow(this.db, row.project_id)) continue;
       const pane = panes.get(row.tmux_name);
-      if (pane && !pane.dead) continue; // server restart; Claude kept running
+      if (pane && !pane.dead) {
+        // Server restart; Claude kept running. One still starting lost its progress with the old
+        // server, and its startup hooks may have come while no server was listening.
+        if (row.status === 'starting' && !this.startup.has(row.id)) this.restoreStartup(row);
+        continue;
+      }
       if (pane && pane.dead) {
         if (row.status !== 'exited') this.setStatus(row.id, 'exited', 'Claude exited while the server was down');
         continue;
@@ -710,7 +728,10 @@ export class SessionManager {
       const trustShown = row.status === 'needs_input' && /trust this folder/.test(row.status_detail ?? '');
       if (!pane) {
         await this.tryRecover(row);
+      } else if (!pane.dead && this.hookless.has(row.id) && (row.status === 'working' || row.status === 'idle')) {
+        this.syncFromTranscript(row);
       } else if (!pane.dead && (row.status === 'starting' || this.awaitingStart.has(row.id)) && !trustShown && Date.now() - (row.last_event_at ?? 0) > 4000) {
+        if (this.followTranscript(row)) continue;
         // Claude fires no hooks until the folder-trust dialog is answered (new, resumed or recovered).
         const screen = await this.core.tmux.capture(row.tmux_name).catch(() => '');
         if (TRUST_PROMPT_RE.test(screen)) {
@@ -721,6 +742,7 @@ export class SessionManager {
         }
       } else if (pane.dead && row.status !== 'exited') {
         this.startup.delete(row.id);
+        this.hookless.delete(row.id);
         this.awaitingStart.delete(row.id);
         if (row.status === 'working') this.update(row.id, { interrupted: 1 });
         this.planPending.delete(row.id);
@@ -730,6 +752,57 @@ export class SessionManager {
         this.notifyUser(row.id, 'Exited', 'Claude exited. Resume it from the session header.');
       }
     }
+  }
+
+  /**
+   * A starting session whose Claude is up but whose startup hooks never arrived (say the hook
+   * socket was gone): once its transcript has been written since the start, Claude has taken a
+   * prompt, so the session leaves "Starting" and follows the transcript (syncFromTranscript)
+   * until a hook arrives. True when it moved the session on.
+   */
+  private followTranscript(row: SessionRow): boolean {
+    const st = this.startup.get(row.id);
+    if (row.status !== 'starting' || !st || (st.step !== 'loading' && st.step !== 'prompt') || Date.now() - st.stepSince < MISSED_START_MS) return false;
+    if (this.transcriptWrittenAt(row) <= st.startedAt) return false;
+    this.core.log.warn(`no startup hooks arrived from ${row.id}; following its transcript instead`);
+    this.clearStartup(row.id);
+    this.awaitingStart.delete(row.id);
+    this.hookless.add(row.id);
+    this.event(row.id, 'started', "Claude started, but its hooks never reached AgentK; its status follows the transcript until they do");
+    this.syncFromTranscript(row);
+    return true;
+  }
+
+  /**
+   * Working while the transcript is being written, idle otherwise. Only a stand-in for the hooks:
+   * a long tool call writes nothing and shows as idle, and permission prompts don't show at all.
+   */
+  private syncFromTranscript(row: SessionRow): void {
+    const next = Date.now() - this.transcriptWrittenAt(row) < TRANSCRIPT_ACTIVE_MS ? 'working' : 'idle';
+    if (row.status !== next) this.setStatus(row.id, next);
+  }
+
+  /** When the session's transcript was last written (ms), or 0 when there is none yet. */
+  private transcriptWrittenAt(row: SessionRow): number {
+    const files = [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)];
+    return Math.max(0, ...files.map((f) => {
+      try {
+        return f ? statSync(f).mtimeMs : 0;
+      } catch {
+        return 0;
+      }
+    }));
+  }
+
+  /**
+   * Startup progress for a session a previous server was starting: at the loading step, timed from
+   * when it began starting, so the Starting view counts on and followTranscript can move it on.
+   */
+  private restoreStartup(row: SessionRow): void {
+    const since = row.last_event_at ?? row.created_at;
+    const resumed = row.status_detail === 'Resuming';
+    this.startup.set(row.id, { step: 'loading', stepSince: since, startedAt: since, resumed, hasPrompt: !resumed && !!row.initial_prompt });
+    this.core.changed();
   }
 
   /**
