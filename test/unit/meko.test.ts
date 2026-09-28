@@ -92,6 +92,12 @@ describe('Meko client', () => {
     expect(await client.createDatapack('new')).toEqual({ id: 'd2', name: 'new' });
   });
 
+  it('fails on an unexpected datapack_list reply instead of reading it as no datapacks', async () => {
+    meko.tools.conversation_create = () => ({ id: 'conv-1' });
+    meko.tools.datapack_list = () => ({ items: [] });
+    await expect(client.listDatapacks()).rejects.toThrow(/unexpected reply/);
+  });
+
   it("keeps the owner, the description and the owner's account id", async () => {
     meko.tools.conversation_create = () => ({ id: 'conv-1' });
     meko.tools.datapack_list = () => [{

@@ -293,6 +293,48 @@ describe('datapacks shared with us', () => {
     expect(call?.args).toEqual(['dp-adlc-proj-demo-repo-fresh', 'AgentK Local project "fresh" · repo git@github.com:corp/demo-repo.git']);
   });
 
+  it("writes a fork's upstream remote into the description, not the fork", async () => {
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:hari90/demo-repo.git'], { cwd: env.repo });
+    execFileSync('git', ['remote', 'add', 'upstream', 'git@github.com:corp/demo-repo.git'], { cwd: env.repo });
+    await env.core.projects.create({ repoPath: env.repo, name: 'fresh', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/fresh' } });
+    expect(env.meko.calls.find((c) => c.name === 'setDatapackDescription')?.args[1]).toBe('AgentK Local project "fresh" · repo git@github.com:corp/demo-repo.git');
+    const listed = (await env.core.projects.repos()).repos.find((r) => r.path === env.repo);
+    expect(listed).toMatchObject({ remote: 'github.com/hari90/demo-repo', upstream: 'github.com/corp/demo-repo' });
+  });
+
+  it("falls back to origin when a fork's upstream is only a local path", async () => {
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:hari90/demo-repo.git'], { cwd: env.repo });
+    execFileSync('git', ['remote', 'add', 'upstream', '/mnt/mirror/demo-repo.git'], { cwd: env.repo });
+    await env.core.projects.create({ repoPath: env.repo, name: 'fresh', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/fresh' } });
+    expect(env.meko.calls.find((c) => c.name === 'setDatapackDescription')?.args[1]).toBe('AgentK Local project "fresh" · repo git@github.com:hari90/demo-repo.git');
+  });
+
+  it('refuses a read-only datapack as the dedicated one, and asks Meko only when the shares table has no grant', async () => {
+    await env.core.invites.sync();
+    await apiMode();
+    waiting = [incoming('inv-3', 'dp-v', 'adlc/proj/demo-repo/v', 'viewer')];
+    await env.core.invites.sync();
+    await expect(env.core.projects.create({
+      repoPath: env.repo, name: 'v', datapack: { mode: 'existing', id: 'dp-v', name: 'adlc/proj/demo-repo/v', inviteId: 'inv-3' },
+    })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/only read .* \(viewer\)/) });
+    expect(env.mekoApi.calls.some((c) => c.path === '/datapacks/invite-action')).toBe(false);
+    (env.meko as { describeDatapack: unknown }).describeDatapack = async () => ({ memoryCount: 0, knowledgeCount: 0, grant: 'viewer' });
+    await expect(env.core.projects.create({ repoPath: env.repo, name: 'w', datapack: { mode: 'existing', id: 'dp-w', name: 'team/w' } }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(env.core.state().projects).toEqual([]);
+  });
+
+  it("keeps a share accepted here while Meko's list catches up", async () => {
+    await env.core.invites.sync();
+    await apiMode();
+    waiting = [incoming('inv-3', 'dp-v', 'adlc/proj/demo-repo/v', 'viewer')];
+    await env.core.invites.sync();
+    await env.core.invites.accept('dp-v');
+    waiting = [];
+    await env.core.invites.sync(); // datapack_list doesn't show it yet
+    expect(env.core.invites.open().map((i) => [i.datapackId, i.state])).toEqual([['dp-v', 'later']]);
+  });
+
   it('leaves a local path out of the description', async () => {
     execFileSync('git', ['remote', 'add', 'origin', '/home/alice/src/demo-repo.git'], { cwd: env.repo });
     await env.core.projects.create({ repoPath: env.repo, name: 'fresh', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/fresh' } });

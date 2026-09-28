@@ -9,7 +9,7 @@ import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { projectDatapackDescription } from '../shared/datapacks.js';
-import { cloneRepo, defaultBranch, isMainRepo, listBranches, repoNameFromUrl, scanRepos, tryGit } from './git.js';
+import { canonicalRemote, cloneRepo, defaultBranch, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos } from './git.js';
 import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
 import { expandHome } from './paths.js';
@@ -101,15 +101,23 @@ export class ProjectService {
       } catch (e) {
         throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
       }
-      // The repo's remote in the description lets whoever it's shared with find the repo. Best
-      // effort, so it doesn't hold up the project: a failure is only logged.
-      const remote = (await tryGit(repoPath, 'config', '--get', 'remote.origin.url'))?.trim() || null;
+      // The repo's remote in the description lets whoever it's shared with find the repo: the
+      // upstream repo of a fork, not the fork. Best effort, so it doesn't hold up the project: a
+      // failure is only logged.
+      const remote = canonicalRemote(await readRemotes(repoPath));
       const created = dp;
       void this.core.meko.setDatapackDescription(created.id, projectDatapackDescription(name, remote)).catch((e) =>
         this.core.log.warn(`couldn't set the description of datapack ${created.name}`, errMsg(e)));
     } else {
       if (!req.datapack.id || !req.datapack.name) throw new HttpError(400, 'Choose a datapack.');
       dp = { id: req.datapack.id, name: req.datapack.name };
+      // Sessions write to the dedicated datapack, so a read-only one can't be it. The shares table
+      // knows the grant of a share; otherwise Meko is asked (a failure there doesn't block).
+      const grant = this.core.invites.grantOf(dp.id)
+        ?? (await this.core.meko.describeDatapack(dp.id, DESCRIBE_TIMEOUT_MS).then((d) => d.grant, () => null));
+      if (grant === 'viewer') {
+        throw new HttpError(400, `You can only read ${dp.name} (viewer), so sessions couldn't write to it. Pick another datapack for the project, and attach this one from the project's home.`);
+      }
       // An invite waiting in Meko is accepted first: if Meko refuses, nothing is written here.
       if (req.datapack.inviteId) await this.core.invites.acceptForProject(dp.id, req.datapack.inviteId);
     }

@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import type { DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
-import { isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName } from '../../shared/datapacks';
+import { canonicalRepoName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName } from '../../shared/datapacks';
 import { api, errorMessage } from '../api';
 import { cx, relativeTime, slugify } from '../util';
 import { Dialog, ErrorText, Field } from './common';
@@ -120,9 +120,20 @@ export function NewProjectDialog({
   }, [loadDatapacks]);
 
   // The project name is typed, or filled in from a chosen project datapack. The default name for a
-  // new datapack follows the chosen repo and the name until edited: adlc/proj/<repo>/<project_name>.
+  // new datapack follows the chosen repo and the name until edited: adlc/proj/<repo>/<project_name>,
+  // where <repo> is the upstream repo's name for a fork (canonicalRepoName). A typed folder that is
+  // one of the scanned repos is named the same way as picking it from the list.
+  const folderRepo = source === 'folder' ? (repos?.find((r) => r.path === folder.trim().replace(/\/+$/, '')) ?? null) : null;
   const repoName =
-    source === 'list' ? (selected?.name ?? '') : source === 'clone' ? remoteRepoName(cloneUrl) : nameFromPath(folder);
+    source === 'list'
+      ? selected
+        ? canonicalRepoName(selected)
+        : ''
+      : source === 'clone'
+        ? remoteRepoName(cloneUrl)
+        : folderRepo
+          ? canonicalRepoName(folderRepo)
+          : nameFromPath(folder);
   const defaultDp = `adlc/proj/${slugify(repoName) || 'repo'}/${slugify(name) || 'project'}`;
   useEffect(() => {
     if (!dpNameTouched) setDpName(defaultDp);
@@ -198,9 +209,11 @@ export function NewProjectDialog({
       setSelected(m.repo);
       setFilter('');
       const why =
-        m.by === 'remote'
-          ? `because its origin matches the datapack's description`
-          : `from the datapack name`;
+        m.by === 'upstream'
+          ? `because its upstream matches the datapack's description`
+          : m.by === 'remote'
+            ? `because its origin matches the datapack's description`
+            : `from the datapack name`;
       const more = m.count > 1 ? ` ${m.count} repos match; this one was used most recently.` : '';
       setAutoHint({ ok: true, text: `Repo ${m.repo.name} picked ${why}. Name set to ${parsed.project}.${more}` });
     } else if (o.remote) {
@@ -217,7 +230,11 @@ export function NewProjectDialog({
     if (!repos) return [];
     const q = filter.trim().toLowerCase();
     const list = repos.filter(
-      (r) => !q || r.name.toLowerCase().includes(q) || (r.remote ?? '').toLowerCase().includes(q),
+      (r) =>
+        !q ||
+        r.name.toLowerCase().includes(q) ||
+        (r.remote ?? '').toLowerCase().includes(q) ||
+        (r.upstream ?? '').toLowerCase().includes(q),
     );
     return list.sort((a, b) => (sort === 'az' ? a.name.localeCompare(b.name) : b.lastTouchedAt - a.lastTouchedAt));
   }, [repos, filter, sort]);

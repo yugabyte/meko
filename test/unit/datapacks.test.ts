@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isProjectDatapack, matchRepo, normaliseRemote, parseProjectDatapack, projectDatapackDescription, remoteFromDescription, remoteRepoName,
+  canonicalRepoName, isProjectDatapack, matchRepo, normaliseRemote, parseProjectDatapack, projectDatapackDescription, remoteFromDescription, remoteRepoName,
   shortRemote, withoutCredentials,
 } from '../../src/shared/datapacks.js';
 
@@ -75,6 +75,9 @@ describe('remotes', () => {
     expect(remoteFromDescription(projectDatapackDescription('x', null))).toBeNull();
     expect(remoteFromDescription('Some other text · repo git@x:y/z')).toBeNull();
     expect(remoteFromDescription(null)).toBeNull();
+    // A project name that itself contains " · repo …" doesn't fool it: the remote ends the description.
+    const tricky = projectDatapackDescription('x · repo github.com/other/thing', 'git@github.com:corp/real.git');
+    expect(remoteFromDescription(tricky)).toBe('git@github.com:corp/real.git');
   });
 });
 
@@ -86,6 +89,30 @@ describe('matchRepo', () => {
     const m = matchRepo(repos, 'adlc/proj/billing-api/retry', 'git@github.com:corp/billing-api.git');
     expect(m).toMatchObject({ by: 'remote', count: 1 });
     expect(m.repo?.name).toBe('billing');
+  });
+
+  it('picks a fork whose upstream is the remote over a clone of the remote itself', () => {
+    const repos = [
+      { ...repo('yugabyte-db', 'github.com/yugabyte/yugabyte-db', 9), upstream: null },
+      { ...repo('yugabyte-db2', 'github.com/yugabyte/yugabyte-db', 8), upstream: null },
+      { ...repo('hari-yugabyte-db', 'github.com/hari90/yugabyte-db', 1), upstream: 'github.com/yugabyte/yugabyte-db' },
+    ];
+    const m = matchRepo(repos, 'adlc/proj/yugabyte-db/vector', 'git@github.com:yugabyte/yugabyte-db.git');
+    expect(m).toMatchObject({ by: 'upstream', count: 1 });
+    expect(m.repo?.name).toBe('hari-yugabyte-db');
+    // By name, a fork's upstream name counts the same as a folder or origin name: the newest wins.
+    expect(matchRepo(repos, 'adlc/proj/yugabyte-db/vector', null)).toMatchObject({ by: 'name', count: 3 });
+    expect(matchRepo(repos, 'adlc/proj/yugabyte-db/vector', null).repo?.name).toBe('yugabyte-db');
+    const oldFork = { ...repo('old-fork', 'github.com/me/other', 0), upstream: 'github.com/yugabyte/yugabyte-db' };
+    expect(matchRepo([oldFork, repos[0]], 'adlc/proj/yugabyte-db/vector', null).repo?.name).toBe('yugabyte-db');
+    // Without a fork, the clone of the remote itself.
+    expect(matchRepo(repos.slice(0, 2), 'adlc/proj/yugabyte-db/vector', 'git@github.com:yugabyte/yugabyte-db.git')).toMatchObject({ by: 'remote', count: 2 });
+  });
+
+  it('names the repo part after the upstream repo, then the origin, then the folder', () => {
+    expect(canonicalRepoName({ name: 'hari-yugabyte-db', remote: 'github.com/hari90/yugabyte-db', upstream: 'github.com/yugabyte/yugabyte-db' })).toBe('yugabyte-db');
+    expect(canonicalRepoName({ name: 'agent-k-local-2', remote: 'github.com/yugabyte/agent-k-local', upstream: null })).toBe('agent-k-local');
+    expect(canonicalRepoName({ name: 'scratch', remote: null })).toBe('scratch');
   });
 
   it('falls back to the folder name', () => {

@@ -189,6 +189,22 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     await waitFor(() => env.core.mekoStatus.sharing, (m) => m === 'api', 5000, 'the sharing mode');
   });
 
+  it('saves only the Meko fields it changed, over a change made while it checked', async () => {
+    env.core.updateConfig((c) => {
+      c.meko.apiKey = 'mko_tkn_abcdefghij1234';
+    });
+    // While the web app URL is being checked, Claude Code's setup clears the key in config.toml.
+    const checkApi = env.mekoTools.tools.checkApi;
+    env.mekoTools.tools.checkApi = async (u) => {
+      env.core.updateConfig((c) => {
+        c.meko.apiKey = '';
+      });
+      return checkApi(u);
+    };
+    expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://meko.example.com' } })).statusCode).toBe(200);
+    expect(env.core.config.meko).toMatchObject({ webUrl: 'https://meko.example.com', apiKey: '' });
+  });
+
   it("runs Meko's setup for Claude Code and reports when it doesn't finish", async () => {
     env.core.updateConfig((c) => {
       c.meko.apiKey = 'mko_tkn_abcdefghij1234';

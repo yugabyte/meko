@@ -117,7 +117,8 @@ the repo.
 ![The New project dialog listing the git repos under ~/code](screenshots/new-project.png)
 
 - **What the list shows.** For each repo: its folder name, the `origin` remote, the current
-  branch, and when it was last touched. The server scans the folder when the dialog opens, so
+  branch, and when it was last touched. The scan also reads a fork's `upstream` remote, for naming
+  and matching (below). The server scans the folder when the dialog opens, so
   repos you clone by hand appear straight away.
 - **What it leaves out.** Folders that aren't git repos, and git worktrees (a `.git` *file*
   rather than a directory), are left out. Only the top level is scanned by default. The scan depth
@@ -135,17 +136,25 @@ the list to that one row (**Change** brings it back) and fills in the rest from 
 `adlc/proj/<repo>/<project>`:
 
 - **Project name:** the `<project>` part (everything after the repo part). You can still change it.
-- **Repo:** the repo whose `origin` is the remote in the datapack's description (AgentK writes it
-  there when it creates a datapack; SSH and HTTPS forms compare equal). Otherwise the repo whose
-  folder name, or remote name, matches `<repo>`. With several matches, the most recently touched,
-  and the hint says so. With none, the remote (if known) is filled in under Clone from URL, or the
+- **Repo:** by the remote in the datapack's description (AgentK writes it there when it creates a
+  datapack; SSH and HTTPS forms compare equal): first a fork whose `upstream` is that remote, since
+  that's where you work on it, then a clone whose `origin` is the remote itself. So with
+  `~/code/hari-yugabyte-db` (a fork of `yugabyte/yugabyte-db`) and `~/code/yugabyte-db` (a clone of
+  it), the fork is picked. Otherwise by `<repo>` against a fork's upstream repo name, the origin's
+  name or the folder name, all alike (a name says less than a remote, so an old fork doesn't beat
+  the clone you use). With several matches, the most recently touched, and the hint says so. The
+  repo filter also searches the upstream remote. With none, the remote (if known) is filled in under Clone from URL, or the
   hint says no repo by that name was found.
 
 The name and repo matching live in `src/shared/datapacks.ts`, so the server and the dialog use the
 same rules. **Create a new one** suggests a datapack named `adlc/proj/<repo>/<project>` from the
-repo and the name you type, as before; a name without the prefix gets a hint that people you share
+repo and the name you type, where `<repo>` is the upstream repo's name for a fork, else the
+origin's, else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the repo was picked
+from the list or typed under Other folder; a name without the prefix gets a hint that people you share
 it with won't be offered it as a project. Choosing an invite changes the button to **Accept and
 create project**: the server accepts the invite in Meko first, and creates nothing if Meko refuses.
+The server refuses a viewer-only datapack as a project's own too (from the shares table's grant,
+else `datapack_describe`), not only the dialog.
 
 ### New session
 
@@ -541,7 +550,9 @@ knows to pass the right `datapack_id` when it searches them.
 >   reconnects, and Meko and the sharing mode are checked again. An API URL that comes from a typed
 >   API or web app URL is checked too, without the key (it must answer with Meko's JSON envelope,
 >   `{ data }` or `{ error: { code, message } }`),
->   so a mistyped host never gets the key; a changed API URL also re-checks the sharing mode.
+>   so a mistyped host never gets the key; a changed API URL also re-checks the sharing mode. A save
+>   writes only the fields it changed, so a change that landed while its checks ran (Claude Code's
+>   setup clearing the key) isn't undone.
 >   Switching to another Meko host asks you to confirm, because existing projects' datapacks stay
 >   on the old one. The tab also says whether Claude Code's settings (which sessions use) name the
 >   same server and key, and when they don't, **Set up Claude Code with this Meko** runs Meko's
@@ -575,8 +586,10 @@ message; a 401 there also switches to link mode; anything else is a 502.
 | A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). | Same. |
 
 When AgentK creates a datapack for a new project, it sets the datapack's description (MCP
-`datapack_update`) to `AgentK Local project "<name>" · repo <origin url>`, so whoever it's shared
-with can find the repo. Only a network remote goes in: a local path (`/home/me/src/x.git`, `../x`)
+`datapack_update`) to `AgentK Local project "<name>" · repo <remote>`, so whoever it's shared
+with can find the repo. The remote is the repo's `upstream` when it's a fork with a network
+upstream, else its `origin`: people share the upstream repo, not your fork. Both are read with one
+`git config --get-regexp` call, which the repo scan uses too. Only a network remote goes in: a local path (`/home/me/src/x.git`, `../x`)
 is left out, and credentials in the URL (`https://user:token@…`) are removed, again when a
 description is read. The update runs in the background, so it never holds up the project; a
 failure is logged. Meko shows the
@@ -600,7 +613,9 @@ One sync runs at a time; a sync asked for meanwhile waits for it. A sync reads M
 the table in one transaction; when Accept, Decline, Later, a new project or a Meko account change
 changed things in between, that read is stale, so it reads again rather than undo the change (a
 list handed in by `/api/invites/check` carries a stamp taken before it was read, for the same
-check). Our Meko account id is only taken from a read that wasn't stale. An invite that was
+check). Our Meko account id is only taken from a read that wasn't stale. A `datapack_list` reply
+of an unexpected shape is an error, not an empty list, so it can't make every share look gone; and
+a share accepted here isn't taken for gone for 10 minutes while Meko's list catches up. An invite that was
 already accepted (by an earlier try whose project then failed, or in Meko) isn't accepted again,
 so **Accept and create project** can be retried. A change to the Meko URL or key may mean another
 account: the rows other than `used` and the first-sync flag are dropped, so the new account's

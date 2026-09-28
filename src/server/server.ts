@@ -21,7 +21,7 @@ import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
-import { mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
+import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
 import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
@@ -360,7 +360,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.reposDepth) c.repos.depth = b.reposDepth;
       if (b.cloneInto?.trim()) c.repos.cloneInto = b.cloneInto.trim();
       if (b.updateChannel) c.update.channel = b.updateChannel;
-      if (meko) c.meko = meko.next.meko;
+      if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
     if (meko) {
       audit(db, 'meko_settings_changed', { url: mekoSettings(core.config).effectiveUrl });

@@ -63,6 +63,18 @@ function checkUrl(v: string, what: string): void {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new HttpError(400, `The ${what} must start with https:// or http://.`);
 }
 
+/** The Meko settings the tab can change. */
+const MEKO_KEYS = ['url', 'apiKey', 'webUrl', 'apiUrl'] as const;
+type MekoKey = (typeof MEKO_KEYS)[number];
+
+/**
+ * Only the fields a save changed, onto the config as it is now: the checks take a while, and
+ * another change (Claude Code's setup clearing the key) may have landed meanwhile.
+ */
+export function applyMekoChange(c: Config, next: Config, changed: MekoKey[]): void {
+  for (const k of changed) c.meko[k] = next.meko[k];
+}
+
 /**
  * Applies a Meko tab change to a copy of the config and checks it before anything is saved: a new
  * server and key must answer, and an API URL that comes from what was typed (the API or web app
@@ -73,11 +85,13 @@ export async function nextMekoConfig(
   core: Core,
   tools: MekoTools,
   m: MekoSettingsUpdate,
-): Promise<{ next: Config; reconnect: boolean; recheck: boolean } | null> {
-  for (const k of ['url', 'apiKey', 'webUrl', 'apiUrl'] as const) {
+): Promise<{ next: Config; changed: MekoKey[]; reconnect: boolean; recheck: boolean } | null> {
+  for (const k of MEKO_KEYS) {
     if (m[k] !== undefined && typeof m[k] !== 'string') throw new HttpError(400, `meko.${k} must be a string.`);
   }
-  const next = structuredClone(core.config);
+  // One snapshot throughout: the checks below take a while, and another change may land meanwhile.
+  const base = core.config;
+  const next = structuredClone(base);
   if (m.url !== undefined) {
     const url = m.url.trim().replace(/\/+$/, '');
     checkUrl(url, 'MCP server URL');
@@ -97,8 +111,10 @@ export async function nextMekoConfig(
     if (/\s/.test(m.apiKey.trim())) throw new HttpError(400, "A Meko API key has no spaces in it. Paste it again.");
     next.meko.apiKey = m.apiKey.trim();
   }
-  if (JSON.stringify(next.meko) === JSON.stringify(core.config.meko)) return null;
-  const before = resolveMeko(core.config);
+  // What this save changes, against the config as it was when it began.
+  const changed = MEKO_KEYS.filter((k) => next.meko[k] !== base.meko[k]);
+  if (!changed.length) return null;
+  const before = resolveMeko(base);
   const after = resolveMeko(next);
   const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
   if (reconnect) {
@@ -107,14 +123,14 @@ export async function nextMekoConfig(
     if (!r.ok) throw new HttpError(400, `Meko at ${after.url} didn't accept that key: ${r.error}. Nothing was saved.`);
   }
   const apiAfter = resolveMekoApiUrl(next);
-  const recheck = reconnect || resolveMekoApiUrl(core.config) !== apiAfter;
+  const recheck = reconnect || resolveMekoApiUrl(base) !== apiAfter;
   // Worked out from a known Meko host, the API URL is trusted; one that came from a typed URL is checked.
-  const typed = next.meko.apiUrl !== core.config.meko.apiUrl || next.meko.webUrl !== core.config.meko.webUrl;
-  if (typed && apiAfter && apiAfter !== resolveMekoApiUrl(core.config)) {
+  const typed = next.meko.apiUrl !== base.meko.apiUrl || next.meko.webUrl !== base.meko.webUrl;
+  if (typed && apiAfter && apiAfter !== resolveMekoApiUrl(base)) {
     const r = await tools.checkApi(apiAfter);
     if (!r.ok) throw new HttpError(400, `${apiAfter} doesn't look like Meko's API: ${r.error}. Check the API or web app URL. Nothing was saved.`);
   }
-  return { next, reconnect, recheck };
+  return { next, changed, reconnect, recheck };
 }
 
 /**

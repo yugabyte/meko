@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
-import { remoteRepoName, shortRemote } from '../shared/datapacks.js';
+import { normaliseRemote, remoteRepoName, shortRemote } from '../shared/datapacks.js';
 
 const exec = promisify(execFile);
 
@@ -51,8 +51,30 @@ export interface ScannedRepo {
   path: string;
   name: string;
   remote: string | null;
+  /** The `upstream` remote of a fork, when it has one. */
+  upstream: string | null;
   branch: string | null;
   lastTouchedAt: number;
+}
+
+/** A repo's `origin` and `upstream` URLs, read with one git call; null for one it doesn't have. */
+export async function readRemotes(repo: string): Promise<{ origin: string | null; upstream: string | null }> {
+  const out = (await tryGit(repo, 'config', '--get-regexp', '^remote\\.(origin|upstream)\\.url$')) ?? '';
+  const urls: Record<string, string> = {};
+  for (const line of out.split('\n')) {
+    const m = /^remote\.(origin|upstream)\.url\s+(\S.*)$/.exec(line.trim());
+    if (m) urls[m[1]] ??= m[2].trim();
+  }
+  return { origin: urls.origin || null, upstream: urls.upstream || null };
+}
+
+/**
+ * The repo's canonical remote, the one to tell other people: `upstream` when it's a fork with a
+ * network upstream (the repo everyone works on), else a network `origin`. Null when neither is one
+ * (no remotes, or only local paths).
+ */
+export function canonicalRemote(remotes: { origin: string | null; upstream: string | null }): string | null {
+  return [remotes.upstream, remotes.origin].find((u) => u && normaliseRemote(u)) ?? null;
 }
 
 /**
@@ -83,11 +105,15 @@ export async function scanRepos(roots: string[], depth: number): Promise<Scanned
   for (const r of roots) walk(r, 1);
   return Promise.all(
     found.map(async (p) => {
-      const [remote, branch] = await Promise.all([
-        tryGit(p, 'config', '--get', 'remote.origin.url'),
-        tryGit(p, 'symbolic-ref', '--quiet', '--short', 'HEAD'),
-      ]);
-      return { path: p, name: basename(p), remote: remote ? prettyRemote(remote) : null, branch, lastTouchedAt: lastTouched(p) };
+      const [{ origin, upstream }, branch] = await Promise.all([readRemotes(p), tryGit(p, 'symbolic-ref', '--quiet', '--short', 'HEAD')]);
+      return {
+        path: p,
+        name: basename(p),
+        remote: origin ? prettyRemote(origin) : null,
+        upstream: upstream ? prettyRemote(upstream) : null,
+        branch,
+        lastTouchedAt: lastTouched(p),
+      };
     }),
   );
 }

@@ -25,6 +25,9 @@ interface InviteRow {
 /** Set once the first sync has recorded the shares that already existed, so they don't all pop up. */
 const BASELINE_KEY = 'invites.baselined';
 
+/** How long a share accepted here may be missing from datapack_list (Meko catching up) before it counts as gone. */
+const ACCEPT_GRACE_MS = 10 * 60 * 1000;
+
 function toInvite(r: InviteRow): DatapackInvite {
   return {
     datapackId: r.datapack_id,
@@ -53,6 +56,8 @@ export class InviteService {
   private gen = 0;
   /** The sync running now; a sync asked for meanwhile waits for it instead of starting another. */
   private running: Promise<void> | null = null;
+  /** Datapacks whose invite was accepted here, and when: not taken for gone while datapack_list catches up. */
+  private acceptedAt = new Map<string, number>();
 
   constructor(private core: Core, readonly api: MekoApi) {}
 
@@ -101,6 +106,7 @@ export class InviteService {
   /** The Meko server or key changed, so maybe the account: forget what came from the old one. */
   forgetAccount(): void {
     this.selfUserId = null;
+    this.acceptedAt.clear();
     this.gen++;
     // Datapacks used by a project here stay done with; the rest is read again, and the first sync
     // on the new account records its existing shares quietly, as after an upgrade.
@@ -117,6 +123,11 @@ export class InviteService {
   /** Every open one, the ones put off with Later included. */
   open(): DatapackInvite[] {
     return all<InviteRow>(this.db, `SELECT * FROM datapack_invites WHERE state IN ('invited', 'shared', 'later') ORDER BY first_seen_at, name`).map(toInvite);
+  }
+
+  /** Our access to a datapack shared with us, as far as the shares table knows; null when it doesn't. */
+  grantOf(datapackId: string): ShareGrant | null {
+    return asGrant(this.row(datapackId)?.grant_role);
   }
 
   private row(datapackId: string): InviteRow | undefined {
@@ -236,7 +247,12 @@ export class InviteService {
 
       // Shares that are gone from Meko (access removed, or the datapack deleted).
       for (const r of all<InviteRow>(this.db, `SELECT * FROM datapack_invites WHERE invite_id IS NULL AND state IN ('shared', 'later', 'baseline')`)) {
-        if (!acceptedIds.has(r.datapack_id)) write('DELETE FROM datapack_invites WHERE datapack_id = ?', r.datapack_id);
+        if (acceptedIds.has(r.datapack_id)) {
+          this.acceptedAt.delete(r.datapack_id);
+          continue;
+        }
+        if (now - (this.acceptedAt.get(r.datapack_id) ?? 0) < ACCEPT_GRACE_MS) continue;
+        write('DELETE FROM datapack_invites WHERE datapack_id = ?', r.datapack_id);
       }
 
       // Anything a project here now uses is done with.
@@ -278,6 +294,7 @@ export class InviteService {
     if (r && r.invite_id !== inviteId) throw new HttpError(409, 'That invite has changed. Refresh and try again.');
     await this.act(inviteId, 'accept');
     this.gen++;
+    this.acceptedAt.set(datapackId, Date.now());
     run(this.db, `UPDATE datapack_invites SET invite_id = NULL, state = 'shared' WHERE datapack_id = ?`, datapackId);
     // Shown now: if creating the project fails after this, the banner mustn't still offer Decline.
     this.core.changed();
@@ -296,6 +313,7 @@ export class InviteService {
     if (!r.invite_id) throw new HttpError(409, 'That share is already accepted.');
     await this.act(r.invite_id, 'accept');
     this.gen++;
+    this.acceptedAt.set(datapackId, Date.now());
     run(this.db, `UPDATE datapack_invites SET invite_id = NULL, state = 'later' WHERE datapack_id = ?`, datapackId);
     this.core.changed();
   }

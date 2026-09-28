@@ -90,41 +90,59 @@ export function projectDatapackDescription(projectName: string, remote: string |
 /** The repo remote from a description AgentK wrote, or null. Credentials and local paths never come through. */
 export function remoteFromDescription(description: string | null | undefined): string | null {
   if (!description?.startsWith(DESCRIPTION_PREFIX)) return null;
-  return shareableRemote(/ · repo (\S+)/.exec(description)?.[1]);
+  // The remote ends the description; one earlier on could be inside the quoted project name.
+  return shareableRemote(/ · repo (\S+)$/.exec(description.trimEnd())?.[1]);
 }
 
 export interface RepoCandidate {
   name: string;
   path: string;
   remote: string | null;
+  /** The `upstream` remote of a fork, when it has one. */
+  upstream?: string | null;
   lastTouchedAt: number;
+}
+
+/**
+ * The repo part for a project datapack's name (`adlc/proj/<repo>/…`): the upstream repo's name for a
+ * fork, else the origin's, else the folder's. So a fork in `~/code/hari-yugabyte-db` is `yugabyte-db`.
+ */
+export function canonicalRepoName(r: { name: string; remote: string | null; upstream?: string | null }): string {
+  return (r.upstream && remoteRepoName(r.upstream)) || (r.remote && remoteRepoName(r.remote)) || r.name;
 }
 
 export interface RepoMatch<T extends RepoCandidate> {
   repo: T | null;
-  /** What it was matched on. */
-  by: 'remote' | 'name' | null;
+  /** What it was matched on: its upstream remote (a fork), its origin, or a name. */
+  by: 'upstream' | 'remote' | 'name' | null;
   /** How many repos matched that way (more than one: the most recently touched was picked). */
   count: number;
 }
 
 /**
- * The local repo a project datapack belongs to: the one whose origin is the datapack's remote,
- * else the one whose folder name or remote name matches the datapack's repo part. With several,
- * the most recently touched.
+ * The local repo a project datapack belongs to. By the datapack's remote first: a fork whose
+ * upstream is that remote (where you work on it) before a clone whose origin is the remote itself.
+ * Else by the datapack's repo part against a fork's upstream name, the origin's name or the folder
+ * name, all alike: a name says less than a remote, so an old fork doesn't beat the clone in use.
+ * Among equals, the most recently touched.
  */
 export function matchRepo<T extends RepoCandidate>(repos: T[], datapackName: string, remote: string | null): RepoMatch<T> {
   const newest = (list: T[]) => [...list].sort((a, b) => b.lastTouchedAt - a.lastTouchedAt)[0];
+  /** The first tier with any hits; `count` is how many repos matched in that tier. */
+  const pick = (tiers: [RepoMatch<T>['by'], (r: T) => boolean][]): RepoMatch<T> | null => {
+    for (const [by, t] of tiers) {
+      const hits = repos.filter(t);
+      if (hits.length) return { repo: newest(hits), by, count: hits.length };
+    }
+    return null;
+  };
   const want = remote ? normaliseRemote(remote) : null;
-  if (want) {
-    const hits = repos.filter((r) => r.remote && normaliseRemote(r.remote) === want);
-    if (hits.length) return { repo: newest(hits), by: 'remote', count: hits.length };
-  }
+  const same = (url: string | null | undefined) => !!url && normaliseRemote(url) === want;
+  const byRemote = want && pick([['upstream', (r) => same(r.upstream)], ['remote', (r) => same(r.remote)]]);
+  if (byRemote) return byRemote;
   const parsed = parseProjectDatapack(datapackName);
   const part = parsed ? slugPart(parsed.repo) : '';
-  if (part) {
-    const hits = repos.filter((r) => slugPart(r.name) === part || (r.remote && slugPart(remoteRepoName(r.remote)) === part));
-    if (hits.length) return { repo: newest(hits), by: 'name', count: hits.length };
-  }
-  return { repo: null, by: null, count: 0 };
+  const named = (url: string | null | undefined) => !!url && slugPart(remoteRepoName(url)) === part;
+  const byName = part && pick([['name', (r) => named(r.upstream) || slugPart(r.name) === part || named(r.remote)]]);
+  return byName || { repo: null, by: null, count: 0 };
 }

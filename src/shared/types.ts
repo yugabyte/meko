@@ -308,6 +308,8 @@ export interface RepoInfo {
   path: string;
   name: string;
   remote: string | null;
+  /** The `upstream` remote of a fork (`github.com/org/repo`), when it has one. */
+  upstream: string | null;
   branch: string | null;
   lastTouchedAt: number;
   /** Projects that already use this repo (a repo can have several). */

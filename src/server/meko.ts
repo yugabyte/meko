@@ -208,7 +208,9 @@ export class MekoClient {
 
   async listDatapacks(): Promise<MekoDatapackRow[]> {
     const r = await this.call('datapack_list', { conversation_id: await this.serviceConv() }, 60000);
-    const arr = Array.isArray(r) ? r : Array.isArray((r as Json)?.datapacks) ? ((r as Json).datapacks as Json[]) : [];
+    // An unexpected reply is an error, not an empty list: callers act on what's missing from it.
+    const arr = Array.isArray(r) ? r : Array.isArray((r as Json)?.datapacks) ? ((r as Json).datapacks as Json[]) : null;
+    if (!arr) throw new MekoError(`datapack_list returned an unexpected reply: ${JSON.stringify(r).slice(0, 200)}`);
     return (arr as Json[])
       .map((d) => ({
         id: String(d.datapack_id ?? d.id ?? ''),
