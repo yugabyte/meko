@@ -651,6 +651,7 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
+  /** The first prompt. Left out, Plan & Implement and Quick Code sessions use `name`; an Exploration starts with none. */
   prompt?: string;
   baseBranch?: string;
   /** Defaults to `plan`. */

@@ -341,6 +341,22 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.sessions.create(p.id, { name: 'Odd', kind: 'yolo' as never })).rejects.toMatchObject({ status: 400 });
   });
 
+  it('uses the name as the first prompt of a task session started without one, but not of an exploration', async () => {
+    const p = await newProject();
+    const quick = await env.core.sessions.create(p.id, { name: 'Fix the typo', prompt: '  ', kind: 'quick' });
+    await waitFor(() => argvLog(env), (l) => l.length === 1, 10000, 'quick launch');
+    expect(argvLog(env)[0].args.at(-1)).toMatch(/^Task: Fix the typo/);
+    const plan = await env.core.sessions.create(p.id, { name: 'Add retries' });
+    await waitFor(() => argvLog(env), (l) => l.length === 2, 10000, 'plan launch');
+    expect(argvLog(env)[1].args.at(-1)).toMatch(/Task: Add retries/);
+    const explore = await env.core.sessions.create(p.id, { name: 'Why slow', kind: 'explore' });
+    await waitFor(() => argvLog(env), (l) => l.length === 3, 10000, 'explore launch');
+    expect(argvLog(env)[2].args).not.toContain('--'); // a prompt always follows "--"
+    const rows = [quick, plan, explore].map((s) => env.core.sessions.row(s.id).initial_prompt);
+    expect(rows).toEqual(['Fix the typo', 'Add retries', null]);
+    await expect(env.core.sessions.create(p.id, { name: 'Typed', prompt: 123 as never })).rejects.toMatchObject({ status: 400 });
+  });
+
   it('reports startup steps while a session starts', async () => {
     const p = await newProject();
     const steps: string[] = [];

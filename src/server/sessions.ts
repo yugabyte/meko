@@ -227,13 +227,17 @@ export class SessionManager {
   async create(projectId: string, req: CreateSessionRequest): Promise<Session> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
+    for (const k of ['name', 'prompt', 'baseBranch'] as const) {
+      if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
+    }
     const name = (req.name ?? '').trim();
     if (!name) throw new HttpError(400, 'Give the session a name.');
     const settings = parseSettings(p.settings_json);
     const base = (req.baseBranch ?? '').trim() || p.default_branch;
-    const task = (req.prompt ?? '').trim();
     const kind: SessionKind = req.kind ?? (req.skipDesign ? 'quick' : 'plan');
     if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
+    // A task session with no first prompt works on its name; an exploration waits for you.
+    const task = (req.prompt ?? '').trim() || (kind === 'explore' ? '' : name);
     const stage: Stage = KIND_STAGES[kind][0];
 
     const slug = await this.uniqueSlug(projectId, p.repo_path, settings.branchPrefix, slugify(name));

@@ -135,7 +135,14 @@ export function NewSessionDialog({
           />
         </Field>
         <KindPicker value={kind} onChange={setKind} />
-        <Field label="First prompt (optional)" hint="What should AgentK do? You can also type it in the terminal.">
+        <Field
+          label="First prompt (optional)"
+          hint={
+            kind === 'explore'
+              ? 'What should AgentK do? You can also type it in the terminal.'
+              : 'What should AgentK do? Left empty, AgentK starts on the name as the task.'
+          }
+        >
           <textarea
             id="ns-prompt"
             className="input"

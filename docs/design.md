@@ -173,8 +173,9 @@ shares table's grant, else `datapack_describe`), not only the dialog.
 ### New session
 
 You give it a name, a session type and, optionally, a first prompt and a base branch (the default
-is the project's default branch). The three types sit side by side, with a line under them saying
-what the selected one is for:
+is the project's default branch). A Plan & Implement or Quick Code session with no first prompt
+uses its name as the task; an Exploration without one starts at an empty prompt. The three types
+sit side by side, with a line under them saying what the selected one is for:
 
 | Type | For | Stages |
 |---|---|---|
