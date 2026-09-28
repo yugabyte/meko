@@ -2,10 +2,20 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loginShellCommand, shq, writeLauncher, type LaunchSpec } from '../../src/server/claude.js';
+import { hooksSettingsPath, loginShellCommand, shq, writeHookFiles, writeLauncher, type LaunchSpec } from '../../src/server/claude.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { tmuxName } from '../../src/server/tmux.js';
 import { tempDir } from '../helpers.js';
+
+describe('the hooks settings file', () => {
+  it('allows editing designs and publishing Artifacts, with Edit() rules only', () => {
+    const paths = getPaths(join(tempDir('akl-hooks-'), 'ak'));
+    writeHookFiles(paths);
+    const allow: string[] = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).permissions.allow;
+    // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
+    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact']);
+  });
+});
 
 describe('loginShellCommand', () => {
   const script = '/home/me/.agent-k-local/run/demo--fix-it.sh';

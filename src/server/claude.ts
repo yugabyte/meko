@@ -178,9 +178,10 @@ export function writeHookFiles(paths: Paths): void {
   const all = [{ hooks: [cmd] }];
   const settings = {
     // The design file lives outside the repo; writing it, and publishing the design as an
-    // Artifact (private by default), shouldn't stop for a permission prompt.
+    // Artifact (private by default), shouldn't stop for a permission prompt. Edit() rules cover
+    // every file-editing tool, Write included; Claude Code ignores Write() rules and warns about them.
     permissions: {
-      allow: [`Write(/${paths.designs}/**)`, `Edit(/${paths.designs}/**)`, 'Artifact'],
+      allow: [`Edit(/${paths.designs}/**)`, 'Artifact'],
     },
     statusLine: {
       type: 'command',
