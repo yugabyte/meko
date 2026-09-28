@@ -321,12 +321,15 @@ agent:
   # -- Reconcile loop interval (RECONCILE_INTERVAL). Empty => the binary's default (10s).
   reconcileInterval: ""
   # -- Chart reference the agent helm-upgrades this release to (CONTROLLER_CHART).
-  # Empty => the agent's own default, an OCI ref that is NOT published yet — so
-  # until it is, an environment whose controller version is driven from YCP has to
-  # name a chart the agent can actually pull here (an https .tgz URL, or a path).
-  # A packaged .tgz already carries its version, so a spec declaring a different
-  # chart_version against one is refused rather than looped on.
+  # Empty => the agent's own default, oci://quay.io/yugabyte/charts/yb-amp-controller,
+  # which is private and pulled with chartPullSecret. An https .tgz URL or a path
+  # also works; a packaged .tgz already carries its version, so a spec declaring a
+  # different chart_version against one is refused rather than looped on.
   controllerChart: ""
+  # -- kubernetes.io/dockerconfigjson Secret helm pulls an OCI controllerChart with
+  # (HELM_REGISTRY_CONFIG). Empty => imagePullSecrets[0], the customer's Quay pull
+  # secret, which also covers the chart repo.
+  chartPullSecret: ""
   # The YBM API key every YCP call authenticates with is read from a Secret, not
   # set inline, so it never lands in the release values. Create it before install:
   #   kubectl -n <ns> create secret generic amp-agent-api-key \

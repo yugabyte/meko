@@ -336,11 +336,10 @@ script over the same two preconditions, run by hand rather than by CI: it moves
 the controller's own version through YCP desired state and asserts the release
 advances one helm revision, the controller, agent and endpoint pin all land on
 the new tag, the endpoints running before the upgrade survive it unchanged, and
-endpoints created afterwards come up on the new pin. It needs a chart the agent
-can pull — `YCP_CONTROLLER_CHART` into `agent.controllerChart`, published by
-[`ycp/test/local/controller-chart-publish.sh`](../../ycp/test/local/controller-chart-publish.sh)
-— because the default OCI reference is not published yet, which is also why this
-is not in CI.
+endpoints created afterwards come up on the new pin. The agent pulls the default
+OCI chart with the install's pull secret; `YCP_CONTROLLER_CHART` into
+`agent.controllerChart` overrides it, e.g. with a pair published by
+[`ycp/test/local/controller-chart-publish.sh`](../../ycp/test/local/controller-chart-publish.sh).
 
 Stale `ci-pr-*` namespaces (from a run cancelled before teardown) are swept every
 6 h by [`amp-control-plane-gke-cleanup.yml`](../../.github/workflows/amp-control-plane-gke-cleanup.yml).

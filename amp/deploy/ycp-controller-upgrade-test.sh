@@ -157,9 +157,7 @@ UID_=$(cat /proc/sys/kernel/random/uuid)
   || bad "agent Deployment is at '$(deploy_tag amp-reconcile-agent)', want ${CTL_V1}"
 CHART_REF=$(kubectl -n "$NS" get deploy amp-reconcile-agent \
   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="CONTROLLER_CHART")].value}' 2>/dev/null)
-[ -n "$CHART_REF" ] && ok "agent has a chart it can pull" \
-  || bad "the agent has no CONTROLLER_CHART; its default OCI ref is unpublished, so every upgrade will fail"
-note "chart: ${CHART_REF:-<the agent default>}"
+note "chart: ${CHART_REF:-<the agent default, oci://quay.io/yugabyte/charts/yb-amp-controller>}"
 REV0=$(helm_revision)
 note "helm revision now: ${REV0:-?}"
 

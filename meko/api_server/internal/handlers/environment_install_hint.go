@@ -71,6 +71,11 @@ const mekoStackNamespace = "meko"
 // does not read the chart's list and would otherwise be the one pod that cannot pull.
 const mekoPullSecretName = "quay-registry-creds"
 
+// ampControllerChart is the published controller chart, the same reference the
+// reconcile-agent upgrades the release from. No --version: helm resolves the
+// newest release, and the agent moves it to any version YCP declares.
+const ampControllerChart = "oci://quay.io/yugabyte/charts/yb-amp-controller"
+
 // mekoTokenSecretName is the Secret the reconcile-agent reads its api-server token
 // from. Passed to the chart explicitly so the created Secret and the Deployment's
 // secretKeyRef cannot drift, even though it is the chart's default.
@@ -261,8 +266,10 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "# Prerequisites\n")
 	fmt.Fprintf(&b, "#   - YugabyteDB up and reachable from this cluster, with a yb_storage database:\n")
 	fmt.Fprintf(&b, "#       CREATE DATABASE yb_storage;\n")
-	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
 	fmt.Fprintf(&b, "#   - a docker-registry Secret for quay.io/yugabyte, in the namespace below\n")
+	fmt.Fprintf(&b, "#   - helm logged in to quay.io with that Secret's credential — the chart is\n")
+	fmt.Fprintf(&b, "#     private, like the images:\n")
+	fmt.Fprintf(&b, "#       helm registry login quay.io\n")
 	fmt.Fprintf(&b, "#   - the OpenTelemetry Operator, with the contrib collector distro. The\n")
 	fmt.Fprintf(&b, "#     collectors are OpenTelemetryCollector CRs, so nothing ships without it:\n")
 	fmt.Fprintf(&b, "#       helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts\n")
@@ -308,9 +315,9 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 		installStep = 4
 	}
 
-	fmt.Fprintf(&b, "# %d — install the amp controller and its reconcile-agent, from a meko checkout.\n", installStep)
+	fmt.Fprintf(&b, "# %d — install the amp controller and its reconcile-agent.\n", installStep)
 	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
-	fmt.Fprintf(&b, "helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller -n \"${NS}\" \\\n")
+	fmt.Fprintf(&b, "helm upgrade --install yb-amp-controller %s -n \"${NS}\" \\\n", ampControllerChart)
 	// Above the preflight hook's own budget. helm waits on a post-install hook for
 	// --timeout, which defaults to exactly 5m — the same as the preflight's default
 	// deadline — so without this helm abandons the release first and reports a
@@ -363,7 +370,7 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# Already running an amp controller in this namespace? Attach the agent to that\n")
 	fmt.Fprintf(&b, "# release instead, leaving every other value untouched:\n")
-	fmt.Fprintf(&b, "#   helm upgrade yb-amp-controller amp/deploy/helm/yb-amp-controller \\\n")
+	fmt.Fprintf(&b, "#   helm upgrade yb-amp-controller %s \\\n", ampControllerChart)
 	fmt.Fprintf(&b, "#     -n \"${NS}\" --reuse-values \\\n")
 	fmt.Fprintf(&b, "#     --set agent.enabled=true --set agent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "#     --set agent.envName=%s ", envID)

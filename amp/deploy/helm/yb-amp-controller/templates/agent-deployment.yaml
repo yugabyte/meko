@@ -1,6 +1,7 @@
 {{- if .Values.agent.enabled }}
 {{- if not .Values.agent.ycpUrl }}{{ fail "agent.ycpUrl is required when agent.enabled" }}{{- end }}
 {{- if not .Values.agent.envName }}{{ fail "agent.envName is required when agent.enabled" }}{{- end }}
+{{- $chartPullSecret := .Values.agent.chartPullSecret | default (dig "name" "" (first (.Values.imagePullSecrets | default (list dict)))) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,6 +51,14 @@ spec:
             {{- with .Values.agent.controllerChart }}
             - name: CONTROLLER_CHART
               value: {{ . | quote }}
+            {{- end }}
+            {{- /* A dockerconfigjson Secret is already the file helm reads OCI
+                   registry credentials from, so pointing helm at the mounted copy
+                   is the whole login. Mounted, not copied into env, so a rotated
+                   secret reaches the next helm invocation without a restart. */}}
+            {{- if $chartPullSecret }}
+            - name: HELM_REGISTRY_CONFIG
+              value: /etc/helm-registry/config.json
             {{- end }}
             - name: YCP_URL
               value: {{ .Values.agent.ycpUrl | quote }}
@@ -111,10 +120,25 @@ spec:
                   name: {{ $keySecret | quote }}
                   key: dev-api-key-id
                   optional: true
+          {{- if $chartPullSecret }}
+          volumeMounts:
+            - name: chart-pull-secret
+              mountPath: /etc/helm-registry
+              readOnly: true
+          {{- end }}
           {{- with .Values.agent.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if $chartPullSecret }}
+      volumes:
+        - name: chart-pull-secret
+          secret:
+            secretName: {{ $chartPullSecret | quote }}
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

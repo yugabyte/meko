@@ -594,9 +594,8 @@ func leaf(name string) string {
 // manages, with the chart's own default as the fallback for an install whose
 // objects helm did not apply.
 //
-// CONTROLLER_CHART is the one other override, and it exists because the default
-// chart reference is not published yet: without a way to point the agent at a
-// chart it can pull, this kind cannot be exercised against a real cluster at all.
+// CONTROLLER_CHART is the one other override, for a chart served somewhere other
+// than the default OCI reference — a test .tgz, or a local directory.
 func controllerConfig(ctx context.Context, kc *k8s) ampbackend.ControllerConfig {
 	release := kc.releaseName(ctx)
 	if release == "" {

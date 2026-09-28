@@ -11,11 +11,10 @@ import (
 // defaultControllerChart is where the agent pulls the controller chart from. It
 // cannot be baked into this image the way the controller image bakes its endpoint
 // chart: the docker build context is ycp/, which cannot see amp/deploy/helm. So
-// the chart is resolved at runtime, and this default is a promise the registry
-// does not keep yet — publishing the chart as OCI is separate work (byoc_upgrades
-// §10). Until it is published, CONTROLLER_CHART points the agent at one it can
-// actually pull — an https URL to a packaged .tgz, or a local directory — which
-// is the only way to exercise this against a real cluster.
+// the chart is resolved at runtime. The repository is private: the chart mounts
+// the customer's pull secret as HELM_REGISTRY_CONFIG, which helm reads on its own.
+// CONTROLLER_CHART overrides it — an https URL to a packaged .tgz, or a local
+// directory.
 const defaultControllerChart = "oci://quay.io/yugabyte/charts/yb-amp-controller"
 
 // defaultHelmBin is absolute because the final image is distroless: there is no

@@ -178,10 +178,63 @@ tests:
             name: OTEL_COLLECTOR_METRICS_URL
           any: true
 
-  # The chart the agent helm-upgrades this release to. It has to be settable here
-  # because the agent's built-in default is an OCI ref nobody has published — an
-  # environment whose controller version comes from YCP cannot resolve it, so
-  # without this value the upgrade fails on every tick with nothing to change.
+  # The install hint sets imagePullSecrets[0] and nothing else, so that secret is
+  # what the agent's helm pulls the private OCI chart with.
+  - it: mounts imagePullSecrets[0] as helm's registry config by default
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      imagePullSecrets: [{name: quay-registry-creds}]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HELM_REGISTRY_CONFIG
+            value: /etc/helm-registry/config.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: chart-pull-secret
+            mountPath: /etc/helm-registry
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: chart-pull-secret
+            secret:
+              secretName: quay-registry-creds
+              items:
+                - key: .dockerconfigjson
+                  path: config.json
+
+  - it: prefers agent.chartPullSecret over imagePullSecrets
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+      imagePullSecrets: [{name: quay-registry-creds}]
+      agent.chartPullSecret: chart-creds
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: chart-creds
+
+  - it: sets no registry config when there is no pull secret
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example.com/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HELM_REGISTRY_CONFIG
+          any: true
+
+  # Overrides the agent's default OCI ref, for a chart served elsewhere.
   - it: passes agent.controllerChart through as CONTROLLER_CHART
     set:
       agent.enabled: true

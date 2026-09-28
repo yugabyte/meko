@@ -55,7 +55,9 @@ func TestInstallHint_Amp(t *testing.T) {
 		"--from-literal=api-key=<YCP_AGENT_API_KEY>",
 		// The release name every deploy script and the chart README use, so a
 		// hint-installed release answers to `helm uninstall yb-amp-controller`.
-		"helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller",
+		"helm upgrade --install yb-amp-controller oci://quay.io/yugabyte/charts/yb-amp-controller",
+		// The chart is private; without a login the install fails before rendering.
+		"helm registry login quay.io",
 		"--set agent.enabled=true",
 		"--set agent.ycpUrl=http://ycp.example.com/api/v1",
 		"--set agent.envName=amp-acme-prod",
@@ -211,7 +213,7 @@ func TestInstallHint_AmpNamespaceIsAVariable(t *testing.T) {
 	for _, want := range []string{
 		`kubectl create namespace "${NS}"`,
 		`kubectl -n "${NS}" create secret generic`,
-		`amp/deploy/helm/yb-amp-controller -n "${NS}"`,
+		`oci://quay.io/yugabyte/charts/yb-amp-controller -n "${NS}"`,
 	} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint is missing %q — a hardcoded namespace collides with the\n"+

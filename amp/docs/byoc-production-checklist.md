@@ -491,7 +491,8 @@ Then install, and leave the rendered values where the next person can read them:
 ```sh
 NS=amp
 
-helm upgrade --install yb-amp-controller amp/deploy/helm/yb-amp-controller -n "$NS" \
+helm registry login quay.io   # the chart is private, like the images
+helm upgrade --install yb-amp-controller oci://quay.io/yugabyte/charts/yb-amp-controller -n "$NS" \
   --set-string imageTag='<tag>' \
   --set 'imagePullSecrets[0].name=amp-pull' \
   --set-string controller.databaseUrl='postgres://yugabyte@<host>:5433/yb_storage?sslmode=disable' \

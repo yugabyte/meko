@@ -79,8 +79,8 @@ Migrations run on every startup; the controller is deletable and recreatable.
 storage controller endpoints register against.
 
 **Delivery:** images on Quay (`amp-{controller,endpoint,pg}`,
-`ycp-reconciler-agent`); **no chart is published** — the install hint runs `helm`
-from a repo checkout.
+`ycp-reconciler-agent`); the controller chart on Quay as OCI
+(`charts/yb-amp-controller`), which the install hint installs from.
 
 ## 3. Principle
 
@@ -269,8 +269,8 @@ a time" means.
 - **The chart is resolved at runtime, not baked.** The agent image's build context
   is `ycp/`, so it cannot copy `amp/deploy/helm` the way the controller image copies
   its endpoint chart. The chart reference is a chart value instead, defaulting to the
-  OCI ref in §10 and taking a local path for a cluster test; publishing that chart is
-  still open.
+  OCI ref in §10 and taking a local path for a cluster test. The controller chart is
+  published there by `amp/deploy/helm/publish-controller-chart.sh`.
 - **The reconciler stays in the controller chart.** Its image tag already follows
   the chart's `imageTag`, so a `controller` upgrade upgrades the reconciler with it
   and there is no separate kind to build. The cost is the self-replacement above,

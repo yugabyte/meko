@@ -22,6 +22,22 @@ helm install yb-amp-controller deploy/helm/yb-amp-controller -n amp \
   --set-string controller.databaseUrl='postgres://yugabyte@yb-tserver.amp.svc.cluster.local:5433/yb_storage?sslmode=disable'
 ```
 
+### From Quay
+
+Every `main` commit touching this chart publishes it to
+`oci://quay.io/yugabyte/charts/yb-amp-controller`
+([`publish-controller-chart.sh`](../publish-controller-chart.sh)) as a prerelease of
+the next patch, `<major>.<minor>.<patch+1>-<UTC timestamp>.g<sha>`, plus `<version>`
+itself the first time a version appears. Helm skips prereleases unless asked, so:
+
+```sh
+helm registry login quay.io
+helm install yb-amp-controller oci://quay.io/yugabyte/charts/yb-amp-controller          # newest bumped version
+helm install yb-amp-controller oci://quay.io/yugabyte/charts/yb-amp-controller --devel  # newest commit
+```
+
+Bump `version` in `Chart.yaml` to cut a release a plain `helm install` resolves.
+
 The TLS mode needs **cert-manager** to issue the controller's and the endpoints'
 certificates, but this chart does not install it — `deploy/tls/trust-root.sh`
 does, along with trust-manager and the `amp-ca` issuer, and `up.sh`, `up-gke.sh`
@@ -206,7 +222,8 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `agent.placement` | `cloud` | `ENV_PLACEMENT` (`cloud` \| `onprem`); must match what the environment was registered with |
 | `agent.controllerUrl` | _(empty)_ | `AMP_CONTROLLER_URL`; empty ⇒ the in-cluster controller Service DNS **with** `/api/v1` |
 | `agent.reconcileInterval` | _(empty)_ | `RECONCILE_INTERVAL`; empty ⇒ the binary's default (10s) |
-| `agent.controllerChart` | _(empty)_ | `CONTROLLER_CHART`, the chart the agent helm-upgrades this release to when YCP declares a controller version. Empty ⇒ the agent's default OCI ref, which is not published yet — so driving the controller version from YCP requires naming a chart the agent can pull (an https `.tgz` URL, or a path) |
+| `agent.controllerChart` | _(empty)_ | `CONTROLLER_CHART`, the chart the agent helm-upgrades this release to when YCP declares a controller version. Empty ⇒ the agent's default, `oci://quay.io/yugabyte/charts/yb-amp-controller` |
+| `agent.chartPullSecret` | _(empty)_ | dockerconfigjson Secret mounted as helm's registry config (`HELM_REGISTRY_CONFIG`) to pull an OCI chart. Empty ⇒ `imagePullSecrets[0]`; neither set ⇒ no registry credentials |
 | `agent.apiKeySecret.name` / `.key` | `amp-agent-api-key` / `api-key` | Secret the agent reads the YBM API key from. Create it before install — the chart holds no credentials |
 | `agent.extraEnv` | `[]` | extra `{name, value}` env for the agent container, rendered **before** the chart's own vars so a name the chart sets wins. For a YCP reachable only through a proxy: set `HTTPS_PROXY` here, and `NO_PROXY` covering `.svc.cluster.local`, or the agent cannot reach its own controller or the collector |
 | `otel.environmentId` | _(empty)_ | stamped as an `environment_id` label on every series both metrics collectors scrape. The YCP environment id (same value as `agent.envName`); the install hint sets it |

@@ -181,14 +181,13 @@ increase and belongs in any review of this chart.
 
 ## What is not covered
 
-**The chart is still unpublished.** The default reference
-`oci://quay.io/yugabyte/charts/yb-amp-controller` does not resolve, so every
-install that wants its controller version driven from YCP has to name one the
-agent can pull (`agent.controllerChart` -> `CONTROLLER_CHART`).
-`ycp/test/local/controller-chart-publish.sh` packages the chart at two versions,
-publishes them to the dev uploads bucket, and asserts helm can resolve and render
-each over plain https; publishing it for real is the gate before this is turned
-on anywhere (`byoc_upgrades.md` §10).
+**The chart is private, pulled with the customer's pull secret.** The default
+reference `oci://quay.io/yugabyte/charts/yb-amp-controller` is published on every
+`main` commit touching the chart (`amp/deploy/helm/publish-controller-chart.sh`),
+as a next-patch prerelease `<major>.<minor>.<patch+1>-<timestamp>.g<sha>` and, once
+per bump, `<version>`. The chart mounts
+`agent.chartPullSecret` (default `imagePullSecrets[0]`) as helm's registry config,
+so the robot behind that secret needs read on the chart repo as well as the images.
 
 **A packaged chart reference cannot carry `spec.chart_version`.** helm silently
 IGNORES `--version` against a `.tgz` rather than refusing it, so a declaration

@@ -1,0 +1,50 @@
+name: Controller chart publish
+
+# Publishes amp/deploy/helm/yb-amp-controller to
+# oci://quay.io/yugabyte/charts/yb-amp-controller on every main commit that touches
+# it. A thin wrapper around amp/deploy/helm/publish-controller-chart.sh, which owns
+# the versioning and stays runnable locally.
+#
+# Auth is QUAY_AMP_TOKEN ("user:token"), the secret every pushing workflow here
+# uses; its robot needs write on that repository. Without it (a fork, or a branch
+# dispatch) the job packages with --dry-run and stays green.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'amp/deploy/helm/yb-amp-controller/**'
+      - 'amp/deploy/helm/publish-controller-chart.sh'
+      - '.github/workflows/amp-controller-chart-publish.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish yb-amp-controller chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.18.6
+
+      - name: Publish
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          # Only main publishes: a branch dispatch would otherwise put its chart
+          # at the top of --devel resolution.
+          if [ -n "${QUAY_TOKEN}" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            amp/deploy/helm/publish-controller-chart.sh
+          else
+            echo "::warning::QUAY_AMP_TOKEN not set or not on main — dry run, nothing pushed"
+            amp/deploy/helm/publish-controller-chart.sh --dry-run
+          fi

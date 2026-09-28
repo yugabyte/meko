@@ -5,10 +5,11 @@
 #
 # The `controller` desired-state kind helm-upgrades the release the agent runs
 # in, which needs a chart reference the agent can actually resolve. The default
-# (`oci://quay.io/yugabyte/charts/yb-amp-controller`) is not published, so until
-# it is there is no way to exercise the kind against a real cluster at all. This
-# publishes to the dev uploads bucket instead, which is served over https, and
-# CONTROLLER_CHART points the agent at it.
+# (`oci://quay.io/yugabyte/charts/yb-amp-controller`, published by
+# amp/deploy/helm/publish-controller-chart.sh) needs Quay credentials the agent
+# does not carry unless that repository is public. This publishes to the dev
+# uploads bucket instead, which is served over plain https, and CONTROLLER_CHART
+# points the agent at it.
 #
 # It is a TEST, not a publish script: every step asserts, and the last two
 # assertions are the ones that matter — that `helm show chart` can read what was
