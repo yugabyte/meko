@@ -511,13 +511,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- web app ----
   if (opts.webDir) {
-    await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: ['index.html'] });
-    const indexHtml = readFileSync(join(opts.webDir, 'index.html'), 'utf8');
+    // `/` is served by the not-found handler below too, so every page carries this server's version.
+    await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: false });
+    const indexHtml = stampVersion(readFileSync(join(opts.webDir, 'index.html'), 'utf8'), core.version);
     app.setNotFoundHandler((req, reply) => {
       const path = req.url.split('?')[0];
       // A missing file (say /favicon.ico) is a 404, not the app: a browser would take the HTML for the file.
       const missingFile = !path.startsWith('/p/') && /\.[a-z0-9]+$/i.test(path);
-      if (req.method !== 'GET' || path.startsWith('/api/') || path.startsWith('/ws/') || missingFile) {
+      if ((req.method !== 'GET' && req.method !== 'HEAD') || path.startsWith('/api/') || path.startsWith('/ws/') || missingFile) {
         return reply.code(404).send({ error: 'Not found.' });
       }
       return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml);
@@ -525,6 +526,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   }
 
   return app;
+}
+
+/**
+ * Adds the server's version to the page as `<meta name="ak-version">`: an open page that sees the
+ * server report another version reloads itself (src/web/reload.ts).
+ */
+export function stampVersion(html: string, version: string): string {
+  const v = version.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`);
+  return html.replace('</head>', `  <meta name="ak-version" content="${v}" />\n  </head>`);
 }
 
 export function findWebDir(serverDir: string): string | null {

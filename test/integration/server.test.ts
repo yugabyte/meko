@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeEnv, type TestEnv } from '../helpers.js';
-import { buildServer } from '../../src/server/server.js';
+import { buildServer, stampVersion } from '../../src/server/server.js';
 import { issueSetupToken, totpCode } from '../../src/server/auth.js';
 
 describe('HTTP API: auth, origin checks, projects', () => {
@@ -244,5 +244,24 @@ describe('web app: manifest and icons for the installed app', () => {
       expect(res.statusCode, url).toBe(200);
       expect(res.headers['content-type'], url).toMatch(/^text\/html/);
     }
+  });
+
+  it('stamps its version into every page, never cached, so an open page can tell it was updated', async () => {
+    for (const url of ['/', '/p/demo/s/s1', '/usage']) {
+      const res = await app.inject({ url });
+      expect(res.statusCode, url).toBe(200);
+      expect(res.headers['content-type'], url).toMatch(/^text\/html/);
+      expect(res.headers['cache-control'], url).toBe('no-cache');
+      expect(res.body, url).toMatch(/<meta name="ak-version" content="0\.0\.0-test" \/>\s*<\/head>/);
+      expect(res.body.match(/ak-version/g), url).toHaveLength(1);
+    }
+    expect((await app.inject({ method: 'HEAD', url: '/' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/' })).statusCode).toBe(404);
+  });
+});
+
+describe('stampVersion', () => {
+  it('escapes the version for the attribute', () => {
+    expect(stampVersion('<head></head>', '1"<x>&')).toBe('<head>  <meta name="ak-version" content="1&#34;&#60;x&#62;&#38;" />\n  </head>');
   });
 });

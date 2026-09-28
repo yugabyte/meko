@@ -123,6 +123,8 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           ref={box}
           id={`compose-${sessionId}`}
           className="compose-input"
+          // Its draft is kept in sessionStorage, so an update's reload doesn't wait on it (reload.ts).
+          data-reload-safe=""
           rows={1}
           placeholder={disabled ? 'Resume the session to message Claude' : 'Message Claude…'}
           aria-label="Message Claude"

@@ -98,11 +98,14 @@ function InviteBanners({
 export function Banners({
   state,
   conn,
+  stale,
   onError,
   onOpenInvite,
 }: {
   state: AppState;
   conn: Conn;
+  /** The server's version while this page still runs an older one (see useReload), else null. */
+  stale: string | null;
   onError: (m: string) => void;
   onOpenInvite: (i: DatapackInvite) => void;
 }) {
@@ -116,7 +119,16 @@ export function Banners({
       {conn === 'closed' && (
         <div className="banner warn">Lost the connection to the server. Reconnecting… Your sessions keep running.</div>
       )}
-      {updatedKey && dismissed !== updatedKey && (
+      {stale && (
+        <div className="banner info">
+          <span className="banner-text">AgentK Local was updated to v{stale}. Reload to use it.</span>
+          <button className="btn primary small" onClick={() => location.reload()}>
+            Reload
+          </button>
+        </div>
+      )}
+      {/* After an update this shows once the page has reloaded, not beside the Reload banner. */}
+      {!stale && updatedKey && dismissed !== updatedKey && (
         <div className="banner info">
           Updated to v{u.current} (from v{u.justUpdatedFrom}).
           {u.releaseUrl && (
@@ -163,7 +175,7 @@ export function Banners({
           </button>
         </div>
       )}
-      {u.applying && <div className="banner info">Installing the update… The page reconnects on its own.</div>}
+      {u.applying && <div className="banner info">Installing the update… The page reloads on its own when it’s done.</div>}
       <InviteBanners invites={state.invites ?? []} onOpen={onOpenInvite} onError={onError} />
     </div>
   );

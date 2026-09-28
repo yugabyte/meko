@@ -23,3 +23,9 @@ a **major** finding.
 - [ ] The desktop layout is unchanged unless the change is meant for it.
 - [ ] Touch input to the terminal goes through `terminals.ts` / `keys.ts`, and `keys.ts` changes
       have tests. The terminal doesn't take focus on touch screens outside typing mode.
+
+## Reloads after an update
+
+- [ ] A new place to type that keeps its text across a reload (in `sessionStorage`, say) is marked
+      `data-reload-safe`. Unsent text in any other field is in a `textarea`, a dialog or storage,
+      so the automatic reload after an update (`reload.ts`) waits for it instead of losing it.

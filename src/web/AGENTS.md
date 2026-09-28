@@ -37,6 +37,15 @@ with a finger. Before you finish a UI change:
   and the pure helpers in `keys.ts`, which have unit tests. Don't focus the terminal on touch
   screens unless typing mode is on (`term.typing`), or the keyboard pops up on every tap.
 
+## Reloads after an update
+
+An open page reloads itself when the server comes back on another version (`reload.ts`), unless
+the user is busy: a `role="dialog"` element is open, a text field has focus, or a `textarea` holds
+text. A field whose text survives a reload (kept in `sessionStorage`, like the terminal compose box)
+gets `data-reload-safe` so it doesn't hold the reload up. Text kept anywhere else in a field that
+isn't a focused input or a textarea is lost on the reload, so keep drafts that matter in a
+textarea, a dialog, or storage.
+
 ## Checking it
 
 `npm run dev` serves the UI on :5173. Use your browser's device toolbar with touch emulation. For a

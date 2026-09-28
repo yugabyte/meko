@@ -843,7 +843,7 @@ boot check), with a systemd and a launchd implementation picked by platform.
 
 | Event | What survives | What happens |
 |---|---|---|
-| Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the running tmux sessions, and browsers reconnect automatically. |
+| Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the running tmux sessions, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](#releases-and-auto-update)). |
 | tmux crash | Worktrees, transcripts, state | The unit restarts tmux, and the server relaunches every session with `desired: running` using `claude --resume`. |
 | Host reboot or crash | Worktrees, transcripts, state | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
 
@@ -962,6 +962,19 @@ check.
 
 The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance
 window, because they never touch tmux.
+
+**Open pages reload themselves.** The server stamps its version into every page it serves
+(`<meta name="ak-version">`, and the page is sent with `Cache-Control: no-cache`). When a page's
+event socket reconnects to a server on another version (an update, a reinstall or a rollback), the
+page reloads, keeping its route, so it never keeps running the old UI (`src/web/reload.ts`,
+`hooks/useReload.ts`). It waits while a reload could lose something: a dialog, sheet or popover is
+open, a text field has focus, or a textarea holds unsent text. Fields whose text survives a reload
+are marked `data-reload-safe` and don't count (the terminal compose box keeps its draft in
+`sessionStorage`), and neither does xterm's input. While it waits, a banner offers **Reload**, and
+it checks again when focus leaves a field, the tab is shown or hidden, and every 5 seconds. A tab
+reloads at most once for a given version (remembered in `sessionStorage`), so a mismatch a reload
+can't fix shows the banner instead of looping. Without the meta tag (the Vite dev server), the
+first version the server reports counts as the page's.
 
 ## Tech stack
 

@@ -3,6 +3,7 @@ import type { AppState, AuthStatus, DatapackInvite, ProjectWithSessions } from '
 import { api, errorMessage } from '../api';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
+import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { pruneTerminals } from '../terminals';
@@ -126,6 +127,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   );
 
   const { state, conn } = useEvents(onNotify, onInvite);
+  const stale = useReload(state?.version);
   const stateRef = useRef<AppState | null>(null);
   stateRef.current = state;
 
@@ -351,7 +353,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         open={drawer}
       />
       <div className="main">
-        <Banners state={state} conn={conn} onError={showToast} onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })} />
+        <Banners state={state} conn={conn} stale={stale} onError={showToast} onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })} />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} />
         ) : currentProject && route.view === 'home' ? (
