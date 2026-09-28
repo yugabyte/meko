@@ -108,7 +108,8 @@ Session states, shown with a dot in the rail and on each tab:
 A new project starts from a repo you already have. The dialog lists every git repo directly under
 your repos folder (`~/code` by default), with the most recently touched first. A repo can back
 several projects: one that already has a project is marked with its name (*In "infra"*, or *In 2
-projects*) and can still be picked. Each project on a repo gets its own datapack, Meko agent id,
+projects*) and can still be picked. A repo is matched by its real path, so one reached through a
+symlink or another folder is the same repo. Each project on a repo gets its own datapack, Meko agent id,
 settings, sessions and worktrees; project names must differ within a repo. Their session branches
 share the repo, so a branch name that another project already uses gets a number added
 (`ak/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on

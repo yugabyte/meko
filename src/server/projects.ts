@@ -14,6 +14,7 @@ import { errMsg } from './log.js';
 import { pinSlug, projectAgentId } from './meko.js';
 import { expandHome } from './paths.js';
 import { repoRoots } from './config.js';
+import { repoKey } from './worktrees.js';
 import { projectUsage } from './usage.js';
 import {
   DEFAULT_SETTINGS, dedicatedDatapack, projectDatapacks, projectRow, projectRows, slugify, toProject, type ProjectRow,
@@ -64,15 +65,16 @@ export class ProjectService {
     const cfg = this.core.config;
     const roots = repoRoots(cfg);
     const scanned = await scanRepos(roots, cfg.repos.depth);
+    // Keyed by real path, so a repo is marked with its projects however each of them reached it.
     const used = new Map<string, { id: string; name: string }[]>();
     for (const p of projectRows(this.db)) {
-      const key = resolve(p.repo_path);
+      const key = repoKey(p.repo_path);
       used.set(key, [...(used.get(key) ?? []), { id: p.id, name: p.name }]);
     }
     return {
       roots: cfg.repos.roots,
       repos: scanned
-        .map((r) => ({ ...r, projects: used.get(resolve(r.path)) ?? [] }))
+        .map((r) => ({ ...r, projects: used.get(repoKey(r.path)) ?? [] }))
         .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt),
     };
   }
@@ -108,14 +110,14 @@ export class ProjectService {
       repoPath = resolve(expandHome(req.repoPath!));
     }
     if (!isMainRepo(repoPath)) throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree).`);
-    const siblings = projectRows(this.db).filter((p) => resolve(p.repo_path) === repoPath);
+    const siblings = this.siblings(repoPath);
     this.checkNameFree(siblings, name);
 
     // Datapack first: if Meko refuses, nothing is written locally.
     const dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
 
-    // The first project on a repo is named after it; later ones add their own name.
-    const repoSlug = slugify(repoPath.split('/').pop() ?? name);
+    // The first project on a repo is named after it (its real folder); later ones add their own name.
+    const repoSlug = slugify(repoKey(repoPath).split('/').pop() ?? name);
     const id = this.uniqueId(siblings.length ? slugify(`${repoSlug}-${slugify(name)}`, 60) : repoSlug);
     const settings = { ...DEFAULT_SETTINGS };
     const branch = await defaultBranch(repoPath);
@@ -222,6 +224,12 @@ export class ProjectService {
     return this.get(id);
   }
 
+  /** The projects on a repo, matched by real path (as the worktree pool does), so a symlink or another path to it counts. */
+  private siblings(repo: string): ProjectRow[] {
+    const key = repoKey(repo);
+    return projectRows(this.db).filter((p) => repoKey(p.repo_path) === key);
+  }
+
   /** A repo can back several projects, but not two with the same name. */
   private checkNameFree(siblings: ProjectRow[], name: string): void {
     const clash = siblings.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
@@ -239,7 +247,7 @@ export class ProjectService {
     if (req.name !== undefined) {
       const n = req.name.trim();
       if (!n) throw new HttpError(400, 'The name can\'t be empty.');
-      this.checkNameFree(projectRows(this.db).filter((p) => p.id !== id && resolve(p.repo_path) === resolve(r.repo_path)), n);
+      this.checkNameFree(this.siblings(r.repo_path).filter((p) => p.id !== id), n);
       run(this.db, 'UPDATE projects SET name = ? WHERE id = ?', n, id);
     }
     if (req.settings) {

@@ -1,3 +1,5 @@
+import { symlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from '../helpers.js';
 
@@ -11,8 +13,8 @@ describe('projects', () => {
     await env.cleanup();
   });
 
-  const create = (name: string) =>
-    env.core.projects.create({ repoPath: env.repo, name, datapack: { mode: 'existing', id: `dp-${name}`, name } });
+  const create = (name: string, repoPath = env.repo) =>
+    env.core.projects.create({ repoPath, name, datapack: { mode: 'existing', id: `dp-${name}`, name } });
 
   it('keeps project names unique per repo when renaming', async () => {
     const a = await create('Alpha');
@@ -21,6 +23,20 @@ describe('projects', () => {
     expect(env.core.projects.get(b.id).name).toBe('Beta');
     // Renaming a project to its own name (in any case) is fine.
     expect(env.core.projects.update(a.id, { name: 'ALPHA' }).name).toBe('ALPHA');
+  });
+
+  it('puts several projects on one repo folder, however each reaches it', async () => {
+    const link = join(env.home, 'elsewhere');
+    symlinkSync(env.repo, link);
+    const a = await create('Alpha');
+    const b = await create('Beta', link);
+    expect(a.id).toBe('demo-repo');
+    // The second project on the repo adds its own name to the id, even through the symlink.
+    expect(b.id).toBe('demo-repo-beta');
+    await expect(create('ALPHA', link)).rejects.toThrow(/already has a project named "Alpha"/);
+    expect(() => env.core.projects.update(a.id, { name: 'beta' })).toThrow(/already has a project named "Beta"/);
+    const listed = (await env.core.projects.repos()).repos.find((r) => r.path === env.repo);
+    expect(listed?.projects.map((p) => p.name).sort()).toEqual(['Alpha', 'Beta']);
   });
 
   it('shows the project home without datapack counts when Meko fails, and asks it with a short timeout', async () => {

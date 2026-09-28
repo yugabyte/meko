@@ -39,7 +39,8 @@ export function AddDatapackDialog({
     api
       .repos()
       .then((r) => {
-        const repo = r.repos.find((x) => x.path === project.repoPath);
+        // The server marks each repo with its projects by real path, so a symlinked one still matches.
+        const repo = r.repos.find((x) => x.projects.some((p) => p.id === project.id));
         if (repo) setSuggested(defaultProjectDatapackName(canonicalRepoName(repo), project.name));
       })
       .catch(() => undefined);
@@ -47,7 +48,7 @@ export function AddDatapackDialog({
       .datapacks()
       .then(setDatapacks)
       .catch((e) => setError(errorMessage(e)));
-  }, [project.repoPath, project.name]);
+  }, [project.id, project.name]);
 
   useEffect(() => {
     if (suggested && !nameTouched) setDpName(suggested);
