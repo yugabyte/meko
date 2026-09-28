@@ -227,6 +227,7 @@ git log --oneline origin/main..HEAD    # re-read the full set of commits
   - **Config / env vars** — any new/required env var or flag, where it's set, and the default/degraded behavior when unset.
   - **Math / derivation** — only when the PR computes something.
   - **Deploy notes** — only when runtime setup changes: migrations, required env, ordering.
+  - **Upgrade safety** — only when the diff changes a format (wire/API shape, stored format, migration, persisted task, CRD, chart values): how old and new builds behave side by side and after a rollback, and the downgrade floor (see `open-pr`).
 
   Drop stale bullets for work that's no longer on the branch; add bullets for
   work that arrived since the PR was opened. Link related PRs/issues with full

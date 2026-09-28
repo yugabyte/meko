@@ -354,6 +354,57 @@ ImageVolume work:
 Old `yugabyte/amp` issue URLs redirect to the new location, so prefer pasting a full URL
 over a bare `#N`.
 
+### Every change must be upgrade safe
+
+Nothing here deploys atomically. A release rolls out over a running system, so for a
+while the old and new builds run side by side against the same data. BYOC deployments
+upgrade on the customer's schedule, so there the skew is permanent. A change that only
+works once everything is on the new build is a bug even when CI is green, because CI
+runs a single build.
+
+A change has to hold under each of these:
+
+- **Old and new running together.** That covers replicas of one component (the
+  `api_server` Deployment rolls pod by pod) and components that talk to each other:
+  controller and endpoints (endpoints move one at a time,
+  [`ac-endpoint-upgrade.md`](amp/controller/architecture/ac-endpoint-upgrade.md)),
+  pageserver and safekeeper
+  ([`high-level.md`](amp/compute/architecture/high-level.md#pssk-co-location-is-not-an-invariant)),
+  and the control plane and `reconcile-agent`. Wire formats, REST/OpenAPI/MCP shapes, JSON
+  tags and enums change **additively**: new fields are optional, and receivers tolerate
+  values they don't know. Removing or renaming takes several releases: stop reading it,
+  ship, stop writing it, ship, then delete.
+- **Data the old build wrote.** Persisted state outlives the binary that wrote it:
+  layer files, WAL, `yb_storage` rows, registry rows, CRs, Helm release values, and
+  controller task steps. A task an old controller started gets resumed by the new one,
+  so a renamed step `kind` or a step `args` shape that no longer decodes fails that task
+  ([`ac-tasks.md`](amp/controller/architecture/ac-tasks.md)). New code reads every
+  format the previous release wrote.
+- **Migrations that run while old pods still serve.** The first new pod migrates at
+  startup while the old pods already running keep serving. Use expand, then contract:
+  add columns, tables and enum values in one release, stop using the old ones in the
+  next, and drop them last. A migration that drops or renames something the previous
+  release still reads breaks every old pod mid-rollout.
+- **Rollback, and old pods restarting.** Every migrator (the amp controller's and
+  `api_server`'s) runs golang-migrate's `Up()` at startup and exits on any error. `Up()`
+  fails when the database is at a version the binary doesn't embed ("no migration found
+  for version N",
+  [`startup-failures.md`](amp/runbooks/startup-failures.md#b2-migration-no-migration-found-for-version-n)).
+  So once a migration has run, the previous build can't start against that database.
+  That covers a rollback, and also an old pod rescheduled mid-rollout. **Every new
+  migration file raises the downgrade floor, even a purely additive one**, and the PR
+  must say so ([`byoc_upgrades.md`](ycp/architecture/byoc_upgrades.md)). A new on-disk
+  format the previous release can't read raises it the same way.
+- **Upgrade in place, not a fresh install.** An upgrade is `helm upgrade` on an existing
+  release and a restart on an existing data directory. Install-only hooks don't run
+  again, a newly required value is unset on existing releases, and create-time-only
+  settings stay fixed. Pick defaults that are correct for releases that predate them.
+
+When a change can't be made upgrade safe, the PR carries the plan: the rollout order, a
+flag, or the multi-release sequence. When a change touches one of the surfaces above,
+the PR body's **Upgrade safety** section (the `open-pr` skill) says how a mixed-version
+pair behaves.
+
 ### Prose discipline — write for the reader, not for volume
 
 AI-written text runs long: PR descriptions that narrate the diff, comments that restate

@@ -223,6 +223,15 @@ you're touching:
 - `api_server/AGENTS.md` — Go REST API (handler → service → repository layering).
 - `meko-provisioner/AGENTS.md` — kubebuilder operator.
 
+## Upgrade safety
+
+Every change must be upgrade safe. `api_server` replicas roll one at a time, migrations
+run while the previous release still serves, and CLIs, BYOC data planes and MCP clients
+lag the server. So schema changes use expand, then contract, and API and CRD changes are
+additive. The full rule is in
+[`AGENTS.md > Every change must be upgrade safe`](../AGENTS.md#every-change-must-be-upgrade-safe);
+the meko surfaces are in [`REVIEW.md`](REVIEW.md).
+
 ## Prose discipline
 
 Comment the *why* when it isn't obvious; keep docs and PR descriptions to what the

@@ -24,6 +24,17 @@ Repo-wide configuration stays at the root: `.github/` (GitHub only runs workflow
 from there), `.gitmodules`, `.goreleaser.yml`, `.editorconfig`, `.gitignore` and
 `.claude/`.
 
+## Every change must be upgrade safe
+
+Releases roll out over running systems, and BYOC customers upgrade on their own
+schedule, so old and new builds always run together against the same data. Every change
+has to keep working next to the previous release and read the data that release wrote.
+This applies to wire and API shapes, on-disk formats, migrations, persisted tasks and
+Helm values. Anything that stops the previous release from starting again, as every
+migration does, must be called out as a downgrade floor. What that means in practice is
+in [`AGENTS.md`](AGENTS.md#every-change-must-be-upgrade-safe), and reviewers check it on
+every PR ([`REVIEW.md`](REVIEW.md#upgrade-safety--every-pr)).
+
 ## After cloning
 
 ```bash

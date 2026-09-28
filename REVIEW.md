@@ -69,6 +69,29 @@ targets — don't exceed them.
 
 Title conventions differ per tree (`[MEKO-<num>]` vs `[#<issue>]`) — see each guide.
 
+## Upgrade safety — every PR
+
+**Every change must be upgrade safe.** The rule and its five cases are in
+[`AGENTS.md`](AGENTS.md#every-change-must-be-upgrade-safe): old and new builds running
+together, data the old build wrote, migrations that run while old pods serve, rollback,
+and upgrade in place. CI runs a single build, so it can't catch a violation. That makes
+this check the reviewer's job on every PR, whichever tree it touches.
+
+For each persisted or cross-process surface the diff touches, ask:
+
+- What happens when the previous release sends this, or receives it?
+- Can the new build read what the previous release stored?
+- Can the old pods still running keep serving once the new build has migrated?
+- Does it stop the previous release from starting again? Every new migration file does,
+  and so does a format the previous release can't read. Then it raises the downgrade
+  floor, and the PR must name the new floor.
+
+A change that breaks one of these with no stated plan (rollout order, a flag, or a
+multi-release sequence) is a **high-severity** finding, even when every test passes.
+When the diff touches such a surface, the PR body's **Upgrade safety** section must say
+how a mixed-version pair behaves. A missing or hand-waved answer is also a finding. The
+tree guides list the surfaces particular to each tree.
+
 ## Reading paths in those guides
 
 Paths quoted **inside** each guide are relative to that guide's own directory, not to
@@ -88,8 +111,9 @@ Start from [`ycp/ARCHITECTURE.md`](ycp/ARCHITECTURE.md), then weight these by th
 ### `internal/api/types.go` is a wire contract, not internal types
 
 It is JSON on the wire between our control plane and an agent the customer upgrades on
-their own schedule, so **the two sides are always skewed in production**. Treat any
-change here as a compatibility change:
+their own schedule, so **the two sides are always skewed in production**. It is the
+sharpest case of [upgrade safety](#upgrade-safety--every-pr). Treat any change here as a
+compatibility change:
 
 - **JSON tags are the contract**, not the Go field names. Renaming a tag breaks agents in
   the field while the Go still compiles.

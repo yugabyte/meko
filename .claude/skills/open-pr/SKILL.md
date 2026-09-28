@@ -87,6 +87,12 @@ Use these sections. Drop one only when it truly doesn't apply, and say so:
   the numbers come from, a tiny worked example, and what's measured vs modeled.
 - **Deploy notes** — only when runtime setup changes: migrations, required env,
   ordering. Any new `meko/api_server/internal/db/migrations/**` file belongs here.
+- **Upgrade safety** — only when the diff changes a format: a wire or API shape, a
+  stored format, a migration, a persisted task, a CRD or chart values
+  ([`AGENTS.md`](../../../AGENTS.md#every-change-must-be-upgrade-safe)). Say how the old
+  and new builds behave side by side and after a rollback. Give the rollout order when
+  there is one, and the downgrade floor: a new migration file always sets one, since the
+  previous build can't start past it.
 
 Keep it crisp — size the Summary to the change and hold Files changed to a line
 each. Say **why**, always: a reviewer who has to reverse-engineer the motivation is

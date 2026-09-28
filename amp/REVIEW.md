@@ -1,9 +1,10 @@
 # PR review guide — amp
 
 **Read [`REVIEW.md`](../REVIEW.md) at the repository root first.** It carries the
-size gates, the review budget, the reporting rules and the model-selection rule —
-all of which apply to every review in this repo. This file is only the
-amp-specific layer: the traps and checks particular to this codebase, organized by area.
+size gates, the review budget, the reporting rules, the model-selection rule and the
+**upgrade-safety check** — all of which apply to every review in this repo. This
+file is only the amp-specific layer: the traps and checks particular to this
+codebase, organized by area.
 
 ## 1. Area-specific concerns
 
@@ -29,6 +30,15 @@ compute_ctl). Correctness is the dominant concern here:
   or restart changes) — unit tests don't exercise the cross-seam bugs. If the PR
   claims such a fix without integration evidence, ask for it before approving.
   (See the `integration-before-corruption-claim` skill.)
+- **Storage formats and the links between processes are read by other builds.** A
+  pageserver and its safekeeper can run different versions, so the SK→PS WAL wire
+  format must stay version-portable
+  ([`compute/architecture/high-level.md`](compute/architecture/high-level.md#pssk-co-location-is-not-an-invariant)).
+  The same holds for compute↔pageserver traffic while endpoints roll one at a time. What
+  lands in `yb_storage` (`blobs`, `wals`, the `blob_namespace` enum) outlives the build
+  that wrote it and must stay readable, including after a rollback. A new encoding or
+  enum value that an older reader can't handle needs negotiation or a stated downgrade
+  floor.
 
 **Control plane** (`controller/`). The concerns are cluster-state consistency,
 not row-level storage:
@@ -43,6 +53,22 @@ not row-level storage:
   (the control plane's task and endpoint locks) — they lease the same rows through
   the same `token_acquire` / `token_release`.
 - YB writes here follow the same idempotency contract as above.
+- **The controller resumes tasks an older controller started.** A step `kind` that is
+  renamed or removed, or step `args` whose shape no longer decodes, fails every in-flight
+  task of that kind after the upgrade
+  ([`controller/architecture/ac-tasks.md`](controller/architecture/ac-tasks.md)). Keep
+  old kinds registered and old args decodable for at least one release.
+- **Every file under `controller/migrations/` raises the downgrade floor.** The
+  controller runs `m.Up()` before it serves (`cmd/controller/main.go`), and an older
+  binary refuses to start against a database at a version it doesn't embed
+  ([`runbooks/startup-failures.md`](runbooks/startup-failures.md#b2-migration-no-migration-found-for-version-n)).
+  Additive SQL doesn't change that, so ask for the floor in the PR. Separately, the SQL
+  still expands, then contracts, so a controller that is already running keeps working
+  through the rollout.
+- **The API has clients the controller doesn't upgrade.** The `reconcile-agent` builds
+  against a vendored copy of `openapi_spec.yaml`, and MCP clients call the tools
+  directly. Request and response changes are additive; a removed or renamed field or
+  route is a break.
 
 **Deploy / Kubernetes** (`deploy/`). Mostly operational correctness:
 
@@ -51,6 +77,10 @@ not row-level storage:
 - Image registry/repo references stay pointed at the canonical ECR repos.
 - Update the matching [`runbooks/*.md`](runbooks/) when a deploy failure mode or
   its fix changes.
+- **Chart changes land as `helm upgrade` on existing releases.** A new controller
+  re-renders endpoint releases that an older one installed. A newly required value, a
+  renamed key, or an install-only hook breaks releases that predate it, so check the
+  upgrade path, not only a fresh `up.sh`.
 
 ## 2. On-demand CI checks
 

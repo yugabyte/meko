@@ -121,6 +121,11 @@ Code anchors:
   CONFLICT` (or `yb_enable_upsert_mode`), absolute `UPDATE`s (no `SET
   col = col + 1`), or `WHERE`-keyed `DELETE`s. See
   [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
+- **Every change must be upgrade safe.** Pageserver, safekeeper, endpoints and
+  the controller roll one at a time and read state older builds wrote, so formats,
+  protocols, migrations and persisted task steps change additively. See
+  [`AGENTS.md`](../AGENTS.md#every-change-must-be-upgrade-safe) and the amp surfaces in
+  [`REVIEW.md`](REVIEW.md).
 - **Reviewing a PR? Follow [`REVIEW.md`](REVIEW.md).** It is the
   checklist for amp-specific review.
 

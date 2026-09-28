@@ -1,9 +1,10 @@
 # PR review guide — meko
 
 **Read [`REVIEW.md`](../REVIEW.md) at the repository root first.** It carries the
-size gates, the review budget, the reporting rules and the model-selection rule —
-all of which apply to every review in this repo. This file is only the
-meko-specific layer: the traps and checks particular to this codebase.
+size gates, the review budget, the reporting rules, the model-selection rule and the
+**upgrade-safety check** — all of which apply to every review in this repo. This
+file is only the meko-specific layer: the traps and checks particular to this
+codebase.
 
 ## 1. Area-specific concerns
 
@@ -36,11 +37,28 @@ are layering and access control:
   query on the wrong pool is a bug.
 - **Secrets and feature gates are flags/env, never hardcoded**, and unset secrets
   must degrade gracefully (log + 503 / disabled feature), not crash.
+- **Its clients run other versions.** The Deployment rolls replica by replica, `meko`
+  CLIs in the field lag the server, BYOC data planes run whatever release the customer
+  installed, and agents call the MCP tools directly. Route, request/response and MCP
+  tool-schema changes are additive. A removed or renamed field, route or enum value is
+  a break, even when every client in this repo was updated in the same PR.
 
 **Database & migrations** (`api_server/internal/db/migrations/{system,data}`).
 Migrations run on every boot:
 
 - They must be idempotent and land in the correct `system` vs `data` folder.
+- **They run while the previous release is still serving.** The migrate step is an
+  init container on every api_server pod, built from that pod's own image
+  (`deploy/helm/meko/templates/api-server/deployment.yaml`). The first new pod migrates
+  while the old replicas already running keep taking traffic. Expand, then contract:
+  add in one release, drop or rename only once no supported release reads the old
+  shape. A `DROP COLUMN` or rename in the same PR that stops using the old shape is a
+  finding, and so is a new `NOT NULL` column without a default.
+- **Every new migration file raises the downgrade floor.** The init container runs
+  `m.Up()` (`api_server/internal/db/connect.go`), which fails on a database at a version
+  its image doesn't embed. After a rollback, and for any old pod recreated mid-rollout
+  (a drain, an eviction), the pod stays stuck in Init. Additive SQL doesn't change
+  that, so the PR must state the floor.
 - **Enums can't drop values in place** — the pattern is create a `_v2` type,
   rebind columns, drop the old, rename (see `000008_standard_tier`). A raw
   `ALTER TYPE ... DROP` is wrong.
@@ -79,6 +97,10 @@ correctness and generated-file hygiene:
   resources (namespaces, buckets, DNS). Watch secondary resources via `.Owns()` /
   `.Watches()`, not bare `RequeueAfter`.
 - Don't delete `// +kubebuilder:scaffold:*` markers or relocate scaffolded files.
+- **CRD changes must accept the CRs already stored.** A new required field, a
+  tightened validation or a renamed field rejects or drops existing objects on the next
+  update. `api_server` writes these CRs and rolls independently of the operator, so each
+  side has to tolerate the other's previous version.
 - Pinned to Go 1.25.8 via `GOTOOLCHAIN` for lint.
 
 **inference_gateway** (`inference_gateway/` — Python 3.11+, FastAPI + LangChain).
@@ -120,7 +142,7 @@ in the root [`REVIEW.md`](../REVIEW.md). On top of those:
   title is correct when there is genuinely no ticket, so don't ask for a
   placeholder like `[MEKO-xxx]`. Do flag an invented or guessed number.
 - Body includes the `open-pr` sections that apply: Summary, Files changed, Testing,
-  Config/env vars, and Math/derivation or Deploy notes.
+  Config/env vars, plus Upgrade safety, Math/derivation or Deploy notes when relevant.
 - Lint/typecheck clean for the touched module: Go — `go build ./...`,
   `go vet ./...`, `golangci-lint run ./...` (`goimports.local-prefixes: meko`,
   tabs, 120-col); web — `npm run check`; Python — `mypy` + `pycodestyle`.
