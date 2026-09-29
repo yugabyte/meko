@@ -9,9 +9,17 @@ import { ArrowRight, Check, Database } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  SHARE_INVITE_ROLES,
   shareGrantDescription,
   shareGrantLabel,
 } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { DatapackShareGrant } from "@/lib/datapackShareGrants";
 
 export function AgentGrantCard({
@@ -21,6 +29,7 @@ export function AgentGrantCard({
   grant,
   shared,
   sharing,
+  inviteSent,
   onShare,
 }: {
   /** The datapack being handed over. Named, not implied: the reader has two
@@ -33,6 +42,10 @@ export function AgentGrantCard({
   grant: DatapackShareGrant;
   shared: boolean;
   sharing: boolean;
+  /** An invite exists but is not accepted yet, so the agent still has no
+   *  access. Re-sending it is rejected as a duplicate, so the button stops
+   *  offering to, but this is NOT the granted state. */
+  inviteSent?: boolean;
   onShare: () => void;
 }) {
   return (
@@ -61,8 +74,33 @@ export function AgentGrantCard({
           </div>
         </div>
 
-        <Badge variant={shared ? "success" : "secondary"} className="shrink-0 text-[10px]">
-          {shared ? shareGrantLabel(grant).toLowerCase() : "no access"}
+        {/* The real role list, with the other two visible but disabled: the
+            lab fixes this grant at contributor, and hiding the levels either
+            side made it look like the only one that exists. Seeing them
+            greyed says "this is a choice the product offers, and the lab has
+            made it for you". */}
+        {/* Openable on purpose, and controlled with no onValueChange: the
+            reader can look at the three levels, and picking another does
+            nothing. Disabling the whole Select would have hidden the very
+            list this is here to show. */}
+        <Select value={grant}>
+          <SelectTrigger aria-label="Access level" className="h-8 w-[9.5rem] shrink-0 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SHARE_INVITE_ROLES.map((role) => (
+              <SelectItem key={role.id} value={role.id} disabled={role.id !== grant}>
+                {role.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Badge
+          variant={shared ? "success" : inviteSent ? "outline" : "secondary"}
+          className="shrink-0 text-[10px]"
+        >
+          {shared ? "granted" : inviteSent ? "invite pending" : "no access"}
         </Badge>
       </div>
 
@@ -78,12 +116,16 @@ export function AgentGrantCard({
         </div>
       </dl>
 
-      <Button onClick={onShare} disabled={shared || sharing} className="self-start">
-        {shared
-          ? `Shared with ${agentDisplayName}`
-          : sharing
-            ? "Sharing…"
-            : `Share with ${agentDisplayName}`}
+      <Button
+        busy={sharing}
+        busyLabel="Sharing"
+        done={shared}
+        doneLabel={`Shared with ${agentDisplayName}`}
+        disabled={inviteSent}
+        onClick={onShare}
+        className="self-start"
+      >
+        {inviteSent ? "Invite sent, not accepted" : `Share with ${agentDisplayName}`}
       </Button>
     </section>
   );

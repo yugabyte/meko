@@ -7,10 +7,10 @@ import { ADLC_REVIEW_AGENT_LAB_CHAPTERS } from "./adlcReviewAgentLab/chapters";
 
 export const ADLC_REVIEW_AGENT_LAB: LabDefinition = {
   id: "adlc-review-agent",
-  title: "Review a PR with AgentK",
+  title: "Agentic coding review (ADLC)",
   summary: "AgentK reviews a pull request against your org's coding standards, live.",
   description:
-    "A sample project with no coding standards yet. You'll build context with a Meko datapack, then watch AgentK use it for reviewing a PR.",
+    "Build a Meko datapack from your team's standards, then watch AgentK review a real pull request with it, and see exactly what that context changed.",
   tags: ["ADLC", "Code review"],
   icon: GitPullRequest,
   estimatedMinutes: 5,

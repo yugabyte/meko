@@ -42,6 +42,19 @@ index 1a2b3c4..5d6e7f8 100644
      rows = db.execute(
 `;
 
+/** 1-based line number, in the rendered diff, of the line that concatenates
+ *  request input straight into the SQL string. Chapter 1's whole argument
+ *  points at this line, so it is derived rather than written down — editing
+ *  the diff above moves the banner with it instead of leaving it lying. */
+export const SAMPLE_DIFF_SQL_CONCAT_LINE =
+  SAMPLE_DIFF_CONTENT.split("\n").findIndex((line) => line.includes("+ team_id")) + 1;
+
+/** Lines of Python this PR adds, for copy that quotes the size. Same reason:
+ *  the header's own +/- bar counts them, so prose must not disagree. */
+export const SAMPLE_DIFF_ADDED_LINES = SAMPLE_DIFF_CONTENT.split("\n").filter(
+  (line) => line.startsWith("+") && !line.startsWith("+++"),
+).length;
+
 export function buildSampleDiffFile(): File {
   return new File([SAMPLE_DIFF_CONTENT], "spend-summary.diff", { type: "text/x-diff" });
 }

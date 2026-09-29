@@ -3,13 +3,13 @@
 // -> server-side memory extraction, no direct memory_add call from the client).
 // Wraps SeedContextChat, reframed with this lesson's own copy and examples.
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { MessageSquare } from "lucide-react";
-import { deleteMemory, type Memory } from "@/lib/api/mekoApi";
+import { MessageSquare, Sparkles, Zap } from "lucide-react";
+
+import { WarningBanner } from "@/components/ui/warning-banner";
 
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
-import { MemoryDecisionCard, type MemoryDecisionState } from "../demo-apps/MemoryDecisionCard";
 import { SeedContextChat } from "./SeedContextChat";
 import {
   LAB_EXTRACTED_MEMORIES_QUERY_KEY,
@@ -17,6 +17,7 @@ import {
 } from "../../hooks/useExtractedMemories";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { XRayCall } from "../../lib/lessonTrace";
+import { BehindTheScenes } from "./BehindTheScenes";
 import { LabStageHeader } from "./LabStageHeader";
 
 const EXAMPLE_PROMPTS = [
@@ -32,58 +33,24 @@ export function ConversationStage({
   onGoToCreateDatapack: () => void;
 }) {
   const [turn, setTurn] = useState<{ conversationId: string; at: number } | null>(null);
-  // Per memory id, so deciding on one doesn't disable the others.
   const queryClient = useQueryClient();
-  const [decisions, setDecisions] = useState<Record<string, MemoryDecisionState>>({});
-  const [discarded, setDiscarded] = useState<Record<string, boolean>>({});
-  const [kept, setKept] = useState<Record<string, boolean>>({});
 
-  const { memories, waiting } = useExtractedMemories({
+  const { memories: shown, waiting } = useExtractedMemories({
     datapackId: session.datapackId,
     conversationId: turn?.conversationId ?? null,
     startedAt: turn?.at ?? null,
   });
-
-  // A discarded memory is gone from the listing, but its card has to stay on
-  // screen to say so -- otherwise the tile vanishes on click with no word on
-  // why. So the rendered set is the query's rows plus the ones this session
-  // decided on, rather than a copy of the listing.
-  const [decided, setDecided] = useState<Memory[]>([]);
-  const byId = new Map<string, Memory>();
-  for (const m of [...decided, ...memories]) byId.set(m.id, m);
-  const shown = Array.from(byId.values());
-
-  const discard = useCallback(
-    async (memory: Memory) => {
-      setDecisions((prev) => ({ ...prev, [memory.id]: "working" }));
-      try {
-        await deleteMemory(memory.id, session.datapackId as string);
-        setDecided((prev) => (prev.some((m) => m.id === memory.id) ? prev : [...prev, memory]));
-        setDiscarded((prev) => ({ ...prev, [memory.id]: true }));
-        setDecisions((prev) => ({ ...prev, [memory.id]: "idle" }));
-        // The pane beside this lesson counts memories, and the listing this
-        // stage reads no longer holds the deleted row.
-        session.bumpRefreshTick();
-        void queryClient.invalidateQueries({ queryKey: [LAB_EXTRACTED_MEMORIES_QUERY_KEY] });
-      } catch {
-        // Best-effort: the lesson is about the decision existing, not about
-        // recovering from a failed one. Returning to idle lets them retry.
-        setDecisions((prev) => ({ ...prev, [memory.id]: "idle" }));
-      }
-    },
-    [queryClient, session],
-  );
 
   if (!session.datapackId) {
     return <LabStageNeedsDatapack onGoToCreateDatapack={onGoToCreateDatapack} />;
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
       <LabStageHeader
         eyebrow="Chapter 1 · Step 5"
-        title="Or just start a conversation"
-        lede="Talk the way you'd talk to a teammate. Meko reads the conversation, decides what's worth keeping, and writes the memory itself."
+        title="Add conversation from Slack or an agent harness"
+        lede="The rules you never wrote down get said in passing. Drop one in the way it would arrive from Slack or a coding agent, and Meko reads it, decides what's worth keeping, and writes the memory itself."
         tags={["Conversation"]}
       />
       <SeedContextChat
@@ -103,7 +70,19 @@ export function ConversationStage({
           session.recordLessonTrace({ lessonTitle: "Chat about a preference", calls });
         }}
         examplePrompts={EXAMPLE_PROMPTS}
+        sampleOnly
       />
+
+      {turn && (
+        <BehindTheScenes
+          concept="conversation"
+          steps={[
+            { icon: MessageSquare, label: "Kept verbatim", detail: "the thread itself, indexed" },
+            { icon: Sparkles, label: "Read for facts", detail: "what looks durable, not chat" },
+            { icon: Zap, label: "Memory written", detail: "you never asked it to" },
+          ]}
+        />
+      )}
 
       {/* Extraction runs server-side after the reply, so there are a few
           seconds with nothing to show. Saying so beats a user watching an
@@ -134,38 +113,34 @@ export function ConversationStage({
       )}
 
       {/* This conversation's memories where the listing says so, plus
-          anything written since the turn -- see useExtractedMemories. */}
+          anything written since the turn -- see useExtractedMemories.
+          Shown, not offered for a decision: keep/discard made this a triage
+          screen, when the lesson is simply that Meko wrote one without being
+          asked. Chapter 4 is where a memory gets a human decision. */}
       {shown.map((memory) => (
-        <MemoryDecisionCard
+        <div
           key={memory.id}
-          text={memory.data}
-          badges={["memory extracted"]}
-          caption="from this conversation · you didn't ask"
-          primaryLabel="Keep it"
-          primaryDoneLabel="Kept"
-          secondaryLabel="Not useful"
-          state={kept[memory.id] ? "done" : (decisions[memory.id] ?? "idle")}
-          declined={discarded[memory.id] ?? false}
-          outcome={
-            discarded[memory.id] ? (
-              <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-                Discarded. It's out of the datapack, so no agent will read it.
-              </p>
-            ) : (
-              <p className="rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-                Kept. It's private to you until Chapter 4 promotes it.
-              </p>
-            )
-          }
-          // Local only. The obvious API for this, keep-as-memory, stamps
-          // meko_promotion_user_action = 'keep_as_memory', which
-          // PromoteMemoriesRepo.Promote then EXCLUDES -- so affirming a
-          // memory here would make Chapter 4 unable to promote it, which is
-          // the opposite of what this card says happens next.
-          onPrimary={() => setKept((prev) => ({ ...prev, [memory.id]: true }))}
-          onSecondary={() => void discard(memory)}
-        />
+          className="flex items-start gap-3 rounded-lg border border-context-memory/40 bg-context-memory/[0.06] p-4"
+        >
+          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-context-memory" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-context-memory">
+              Memory extracted
+            </p>
+            <p className="mt-1 text-sm text-foreground">{memory.data}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              from this conversation · you didn't ask
+            </p>
+          </div>
+        </div>
       ))}
+
+      {shown.length > 0 && (
+        <WarningBanner tone="success">
+          That's the whole point. The rule you'd have forgotten to write down is now context every
+          agent can read, and the trace remembers which sentence produced it.
+        </WarningBanner>
+      )}
     </div>
   );
 }

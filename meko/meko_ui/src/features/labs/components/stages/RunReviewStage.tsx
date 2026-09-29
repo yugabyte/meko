@@ -47,7 +47,14 @@ export function RunReviewStage({
           tags={["Live"]}
         />
       </div>
-      <PrReviewDemoApp demoApp={demoApp} session={session} reviewConfig={reviewConfig} savedRun={savedRun} onRunChange={onRunChange} />
+      <PrReviewDemoApp
+        demoApp={demoApp}
+        session={session}
+        reviewConfig={reviewConfig}
+        savedRun={savedRun}
+        onRunChange={onRunChange}
+        resultView="summary"
+      />
     </div>
   );
 }

@@ -36,6 +36,14 @@ export const ORG_CODING_STANDARDS_CONTENT = `# Org Coding Standards (excerpt)
   before merge — auth requirements, rate limiting, and PII handling.
 `;
 
+/** Shown on the sample's file card. Derived, so editing the excerpt above
+ *  moves the label with it. */
+export const ORG_CODING_STANDARDS_BYTES = new TextEncoder().encode(
+  ORG_CODING_STANDARDS_CONTENT,
+).length;
+
+export const ORG_CODING_STANDARDS_FILETYPE = "Markdown";
+
 export function buildOrgCodingStandardsFile(): File {
   return new File([ORG_CODING_STANDARDS_CONTENT], ORG_CODING_STANDARDS_FILENAME, {
     type: "text/markdown",

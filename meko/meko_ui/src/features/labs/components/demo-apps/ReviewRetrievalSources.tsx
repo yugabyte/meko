@@ -15,41 +15,12 @@
 // reports what the turn retrieved, not which chunk produced which comment, so
 // this says "grounded in these" rather than attaching a rule to a line.
 
-import { Badge } from "@/components/ui/badge";
 import type { KbHit, MemoryHit } from "@/lib/inferenceGateway";
+
+import { ContextCitation } from "./ContextCitation";
 
 function memoryScope(hit: MemoryHit): string {
   return hit.kind === "promoted" ? "collective" : hit.kind === "graph" ? "relation" : "private";
-}
-
-/** One quoted source under a set of findings: a soft-tinted pill naming the
- *  source kind, then where it came from and what it said. */
-function Citation({
-  kind,
-  source,
-  quote,
-}: {
-  kind: "knowledge" | "memory";
-  source: string;
-  quote: string;
-}) {
-  const tint =
-    kind === "knowledge"
-      ? "border-context-knowledge/25 bg-context-knowledge-soft text-context-knowledge"
-      : "border-context-memory/25 bg-context-memory-soft text-context-memory";
-  const name = kind === "knowledge" ? "text-context-knowledge" : "text-context-memory";
-
-  return (
-    <div className="flex items-start gap-3 rounded-md border border-border bg-card p-3">
-      <Badge variant="outline" className={`shrink-0 border ${tint}`}>
-        {kind}
-      </Badge>
-      <div className="min-w-0 flex-1">
-        <p className={`min-w-0 truncate font-mono text-xs ${name}`}>{source}</p>
-        <p className="mt-1 text-xs leading-relaxed text-foreground">“{quote}”</p>
-      </div>
-    </div>
-  );
 }
 
 export function ReviewRetrievalSources({
@@ -72,7 +43,7 @@ export function ReviewRetrievalSources({
   return (
     <div className="flex flex-col gap-2">
       {kbHits.map((hit, i) => (
-        <Citation
+        <ContextCitation
           key={`k-${i}`}
           kind="knowledge"
           source={hit.document_name?.trim() || hit.document_id || "Unknown document"}
@@ -80,7 +51,7 @@ export function ReviewRetrievalSources({
         />
       ))}
       {memoryHits.map((hit, i) => (
-        <Citation
+        <ContextCitation
           key={`m-${i}`}
           kind="memory"
           source={`${memoryScope(hit)} memory`}

@@ -12,28 +12,38 @@ lab means adding config, not touching those pages.
    (see `adlcReviewAgentLab/chapters.ts` for the pattern).
 2. Add a `LabDefinition` to `data/labDefinitions.ts` and push it onto
    `LAB_DEFINITIONS`.
-3. Run `npm run test -- labs` — `labDefinitions.test.ts` checks your config
-   for the common mistakes (duplicate ids, empty summaries) before you get
-   to manual testing.
+3. Run `npm run test -- labs` — `tests/data/labDefinitions.test.ts` checks
+   your config for the common mistakes (duplicate ids, empty summaries)
+   before you get to manual testing.
+
+## Where the tests live
+
+Under `tests/`, mirroring the tree they cover: a test for
+`components/stages/Foo.tsx` is `tests/components/stages/Foo.test.tsx`.
+
+This is deliberately unlike the rest of `meko_ui`, which co-locates its
+tests. Labs is the one feature large enough for the stage directories to be
+hard to read with a `.test.tsx` beside every component. Tests import their
+subject through the `@/` alias rather than a relative path, so a file can
+move without its test needing an edit.
 
 ## The fixed stages, grouped into chapters
 
 `LabStageId` (`types.ts`) is a closed union, not per-lab config — a lab
 supplies the `title`/`summary` copy for each, but the stage components
 (`components/stages/*`) are shared across every lab. The ADLC review lab
-walks 19 of them:
+walks 18 of them:
 
 | Chapter | Stages |
 |---|---|
 | Give your agent context | `see-the-pr` → `create-datapack` → `knowledge-base` → `memory` → `conversation` |
-| Share it with AgentK | `meet-agentk` → `share-with-agent` → `configure-agentk` → `retrieval-cost` → `guardrail` |
-| Read the review | `run-review` → `review-findings` → `review-cost` → `collaborate` |
-| Close the loop, then let go | `save-findings` → `promote-learning` |
-| See it in production | `production-reviews` → `production-trend` → `make-it-yours` |
+| Share it with AgentK | `meet-agentk` → `share-with-agent` → `configure-agentk` → `guardrail` |
+| Review the results | `run-review` → `review-findings` → `save-findings` → `review-cost` |
+| See it in production | `let-it-run` → `public-runs` → `read-one-yourself` → `production-reviews` → `make-it-yours` |
 
-The union also carries `dashboard-intro`, `create-amp-cluster`,
-`run-review-again` and `review-dashboard`. Those belong to the parked "Build
-a dashboard" chapter: their stage components are still in the tree, and
+The union also carries `collaborate`, plus `dashboard-intro`,
+`create-amp-cluster`, `run-review-again` and `review-dashboard`. The last
+four belong to the parked "Build a dashboard" chapter: their stage components are still in the tree, and
 restoring the chapter means uncommenting its block in
 `adlcReviewAgentLab/chapters.ts` and the matching cases in `LabStageSlot`.
 See that file's own comment for why it was parked.

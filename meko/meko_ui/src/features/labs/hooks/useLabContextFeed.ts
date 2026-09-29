@@ -14,6 +14,7 @@ import {
   listDatapackConversations,
   listMemories,
   listPromotedMemories,
+  type DatapackConversation,
   type KnowledgeBaseDocument,
   type Memory,
   type PromotedMemory,
@@ -36,8 +37,11 @@ export type LabContextFeed = {
   memoriesTotal: number;
   collective: PromotedMemory[];
   collectiveTotal: number;
-  /** Only a count — the pane doesn't list conversations, but a datapack that
-   *  has any is evidence the conversation lesson's work exists. */
+  /** The most recent few, newest first. The pane lists them the same way it
+   *  lists knowledge and memories: a conversation is a context source, and
+   *  leaving it as a bare number made it the only one the reader could not
+   *  see the contents of. */
+  conversations: DatapackConversation[];
   conversationsTotal: number;
   /** Every chunk across every document in this datapack's knowledge base.
    *  The per-run context stats report only what a search RETRIEVED, so this
@@ -47,6 +51,10 @@ export type LabContextFeed = {
    *  is unavailable; callers fall back to file size. */
   chunkSize: number | null;
   loading: boolean;
+  /** True once a fetch has actually resolved. Distinct from `!loading`,
+   *  which is also true on the very first render before anything has been
+   *  asked for -- see useNewlyAdded, which flashed every row without it. */
+  hasLoaded: boolean;
 };
 
 const EMPTY: LabContextFeed = {
@@ -56,10 +64,12 @@ const EMPTY: LabContextFeed = {
   memoriesTotal: 0,
   collective: [],
   collectiveTotal: 0,
+  conversations: [],
   conversationsTotal: 0,
   chunksTotal: null,
   chunkSize: null,
   loading: false,
+  hasLoaded: false,
 };
 
 export function useLabContextFeed({
@@ -91,7 +101,7 @@ export function useLabContextFeed({
         getKnowledgeBaseDocuments(datapackId, { page: 1, page_size: PAGE_SIZE, signal }),
         listMemories({ datapack_id: datapackId, page: 1, page_size: PAGE_SIZE }, { signal }),
         listPromotedMemories({ datapack_id: datapackId, page: 1, page_size: PAGE_SIZE }, { signal }),
-        listDatapackConversations(datapackId, { limit: 1 }, { signal }),
+        listDatapackConversations(datapackId, { limit: PAGE_SIZE }, { signal }),
         getKnowledgeBaseSummary(datapackId, { signal }),
       ]);
       if (signal.aborted) return;
@@ -102,11 +112,16 @@ export function useLabContextFeed({
         memoriesTotal: mem.status === "fulfilled" ? mem.value.total : 0,
         collective: promoted.status === "fulfilled" ? promoted.value.promoted_memories : [],
         collectiveTotal: promoted.status === "fulfilled" ? promoted.value.total : 0,
+        conversations: convos.status === "fulfilled" ? convos.value.conversations : [],
+        // The endpoint pages rather than counting, so this is "at least this
+        // many". PAGE_SIZE is well above what a lab run produces, and the
+        // gate only asks whether there is one at all.
         conversationsTotal:
           convos.status === "fulfilled" ? convos.value.conversations.length : 0,
         chunksTotal: summary.status === "fulfilled" ? (summary.value.total_chunks ?? null) : null,
         chunkSize: summary.status === "fulfilled" ? (summary.value.chunk_size ?? null) : null,
         loading: false,
+        hasLoaded: true,
       });
     },
     [datapackId],

@@ -1,13 +1,13 @@
 import type { LabChapter } from "../../types";
 
-// Five chapters. Chapter 1 opens on the PR itself so the user watches AgentK
+// Four chapters. Chapter 1 opens on the PR itself so the user watches AgentK
 // miss a real bug before building anything; Chapter 2 introduces the agent,
-// hands it the datapack and configures the run; Chapter 3 is the review. The
-// Chapter 4 closes the loop, and Chapter 5 leaves the sample behind: first
-// Yugabyte's own production AgentK (a dated snapshot, see
-// productionSnapshot.ts), then a real pull request of the user's own, fetched
-// client-side with their own GitHub token (lib/api/githubApi.ts) and never
-// sent to Meko.
+// hands it the datapack and configures the run; Chapter 3 is the review, from
+// running it through writing its findings back and pricing what that cost.
+// Chapter 4 leaves the sample behind: first Yugabyte's own production AgentK
+// (a dated snapshot, see productionSnapshot.ts), then a real pull request of
+// the user's own, fetched client-side with their own GitHub token
+// (lib/api/githubApi.ts) and never sent to Meko.
 export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   {
     id: "give-context",
@@ -72,28 +72,25 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
         gate: { message: "Share the datapack to continue" },
       },
       {
+        // Absorbed the old "How it reads the standards" step: choosing the
+        // retrieval strategy and choosing the model are one decision, and
+        // split across two screens neither could show the other's effect.
         id: "configure-agentk",
-        title: "Configure AgentK",
+        title: "How AgentK reviews",
         summary:
-          "Pick the model that reviews your PR, and which of your datapack's sources it may read. This is the run Chapter 3 executes.",
-      },
-      {
-        id: "retrieval-cost",
-        title: "How it reads the standards",
-        summary:
-          "Two ways to get a forty-page document into a model, and the token bill for each. This is the whole cost argument.",
+          "What the agent reads, and which model reads it. Retrieval is what makes a small model enough, and this is the run Chapter 3 executes.",
       },
       {
         id: "guardrail",
-        title: "Decide where it needs you",
+        title: "Hand over the wheel",
         summary:
-          "An autonomous agent is only useful when you know where it stops. This is the human-in-the-loop line for review.",
+          "Invert the loop: the agent drives the stage and comes back at the two moments that need a human. Context is what buys that.",
       },
     ],
   },
   {
     id: "read-the-review",
-    title: "Read the review",
+    title: "Review the results",
     summary:
       "The same pull request and the same agent, now reading the context you built: the findings it returns, and what that context cost.",
     stages: [
@@ -111,16 +108,24 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
           "Every comment names the rule it came from. Disagree with one and you fix the rule, not the prompt.",
       },
       {
+        // Was Chapter 4's opener. It belongs here: the findings are what the
+        // lesson before just produced, and writing them back is the same
+        // breath as reading them, not a chapter of its own.
+        id: "save-findings",
+        title: "Extract the learning",
+        summary:
+          "Write this review's findings into a datapack, so the agent that fixes them starts where the reviewer stopped.",
+      },
+      {
         id: "review-cost",
         title: "What the context cost",
         summary:
           "Real token counts for the run you just did, and what the same review would have cost without retrieval.",
       },
-      {
-        id: "collaborate",
-        title: "Collaborate",
-        summary: "Share this datapack with teammates so they see the same knowledge and memories.",
-      },
+      // PARKED: "Collaborate". Sharing with a teammate is the same act the
+      // chapter before already performs against AgentK, so as the last lesson
+      // of the review chapter it read as a repeat rather than a payoff.
+      // CollaborateStage and its case in LabStageSlot are still in the tree.
     ],
   },
   // PARKED: the whole "Build a dashboard" chapter. Its dashboard read Meko's
@@ -171,26 +176,11 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
   //     },
   //   ],
   // },
-  {
-    id: "close-the-loop",
-    title: "Close the loop",
-    summary:
-      "Point AgentK at a real pull request of your own, then take the whole setup back to your work.",
-    stages: [
-      {
-        id: "save-findings",
-        title: "Save the findings",
-        summary:
-          "Write this review's findings into the feature's own datapack, so the agent that fixes them starts where the reviewer stopped.",
-      },
-      {
-        id: "promote-learning",
-        title: "Promote the learning",
-        summary:
-          "One private memory becomes the datapack's. Promotion is the only step in this lab that changes what other people's agents read.",
-      },
-    ],
-  },
+  // REMOVED: the "Close the loop" chapter. "Save the findings" moved up into
+  // Chapter 3 as "Extract the learning", and "Promote the learning" is gone:
+  // promoting a private memory to the datapack is a product feature with its
+  // own page, and as a lab step it asked the reader to change what other
+  // people's agents read before they had any reason to.
   {
     id: "see-it-in-production",
     title: "See it in production",
@@ -198,16 +188,31 @@ export const ADLC_REVIEW_AGENT_LAB_CHAPTERS: LabChapter[] = [
       "The same loop, running against Yugabyte's own 104 repositories, then a pull request of your own.",
     stages: [
       {
-        id: "production-reviews",
-        title: "Real reviews, in the open",
+        id: "let-it-run",
+        title: "Let it run",
         summary:
-          "Yugabyte's live AgentK: 104 repositories, real pull requests, real comments, and the numbers its dashboard reports.",
+          "The loop you just drove by hand, running on its own against Yugabyte's code: what triggers it, and where a person still comes in.",
       },
       {
-        id: "production-trend",
+        id: "public-runs",
+        title: "The public runs",
+        summary:
+          "Real pull requests on yugabyte/yugabyte-db that AgentK reviewed, each one linking out to the thread so you can check it yourself.",
+      },
+      {
+        id: "read-one-yourself",
+        title: "Read one for yourself",
+        summary:
+          "One thread end to end: what AgentK said about a line of C++, and what the engineer who got the comment wrote back.",
+      },
+      {
+        // Absorbed the old "Thirty days of runs" step. The chart and the
+        // totals it adds up to were on separate screens, so neither could be
+        // read against the other.
+        id: "production-reviews",
         title: "Thirty days of runs",
         summary:
-          "A month of production reviews, and the cost per pull request that makes reviewing all of them affordable.",
+          "A month of production reviews, the dashboard totals behind them, and the cost per pull request that makes reviewing all of them affordable.",
       },
       {
         id: "make-it-yours",

@@ -25,7 +25,7 @@ export const PRODUCTION_SNAPSHOT = {
   /** Review rules and gotchas in the Meko corpus AgentK reads. */
   guidelinesInContext: 1_833,
   /** Promoted learnings credited in a posted comment — collective memory
-   *  doing in production what Chapter 4 does once. */
+   *  doing in production what Chapter 3 does once. */
   learningsApplied: 14,
   tokens30d: "596.33M",
   tokensIn30d: "276.57M",

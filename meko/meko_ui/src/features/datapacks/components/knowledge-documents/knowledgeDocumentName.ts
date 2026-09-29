@@ -6,6 +6,16 @@ export function documentNameLastSegment(name: string): string {
   return parts.length > 0 ? parts[parts.length - 1]! : trimmed;
 }
 
+/** The filename a user would recognise, out of the S3 key a
+ *  KnowledgeBaseDocument carries in `document_name`
+ *  (`<uuid>/<uuid>/<hash>/<n>_file.md`). Strips the key's path and the
+ *  numeric upload prefix. Shared because two surfaces compare against it:
+ *  the lab's right-hand pane labels rows with it, and the knowledge lesson
+ *  checks it to tell whether its sample is already in the datapack. */
+export function knowledgeDocDisplayName(documentName: string): string {
+  return documentNameLastSegment(documentName).replace(/^\d+_/, "");
+}
+
 /** Filename shortened for use *inside a sentence* — toasts, alerts, any
  *  fixed-width surface with no room for a `title` tooltip. Knowledge base
  *  uploads are routinely long enough (release names, hashed exports) to

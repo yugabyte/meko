@@ -7,6 +7,13 @@
 // to that one configured address instead of leaving them pending, so
 // AgentK typically appears in Members immediately after sending, rather
 // than sitting in Pending invites the way a real teammate's invite would.
+//
+// That auto-accept needs the address to ALREADY have a Meko account
+// (SharingService.Invite only accepts when recipientUserID is non-nil).
+// When it does not, the invite provisions a Cognito user and stays pending,
+// and the shared AgentK runtime -- which authenticates to Meko as that same
+// account -- gets datapack_access_denied on every read. So this stage gates
+// on a live grant, never on an invite having been sent.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -18,6 +25,7 @@ import {
   isDatapackGrantEligibleToShare,
 } from "@/lib/datapackShareGrants";
 import { readRuntimeEnv } from "@/lib/runtimeEnv";
+import { WarningBanner } from "@/components/ui/warning-banner";
 
 import { AgentGrantCard } from "../demo-apps/AgentGrantCard";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
@@ -74,18 +82,25 @@ function ShareWithAgentStageContent({
   // own row as "maintainer").
   const me = members.find((m) => m.user_email_id === session.currentUser?.email);
   const sharedByRole = me ? (me.is_owner ? DATAPACK_SHARE_GRANT_OWNER : me.grant) : null;
-  const priorShareCount = members.filter((m) => !m.is_owner).length + pendingInvites.length;
 
-  // AgentK typically shows up in Members immediately (api_server auto-accepts
-  // its one configured address -- see this file's header comment), but check
-  // pending invites too as a defensive fallback in case auto-accept hasn't
-  // landed yet in the deployed api_server. Either way, sending another
-  // invite to the same fixed recipient would just be a redundant duplicate.
+  // Two different questions, and conflating them sent users into Chapter 3
+  // with no grant: the shared AgentK runtime authenticates to Meko as this
+  // account, so a PENDING invite means its review will fail with
+  // datapack_access_denied. api_server auto-accepts this one configured
+  // address, but only when it already has a Meko account -- otherwise the
+  // invite provisions a Cognito user and sits pending.
   const agentkEmail = AGENTK_ADMIN_EMAIL.trim().toLowerCase();
-  const alreadySharedWithAgent =
+  // Live grant. The only thing that lets the review run, so the only thing
+  // that releases the gate.
+  const agentHasGrant =
     agentkEmail.length > 0 &&
-    (members.some((m) => m.user_email_id?.trim().toLowerCase() === agentkEmail) ||
-      pendingInvites.some((p) => p.recipient_email_id?.trim().toLowerCase() === agentkEmail));
+    members.some((m) => m.user_email_id?.trim().toLowerCase() === agentkEmail);
+  // Invite exists but nobody has accepted it. Re-sending is rejected as a
+  // duplicate, so the button goes away, but the lesson is not done.
+  const invitePending =
+    agentkEmail.length > 0 &&
+    !agentHasGrant &&
+    pendingInvites.some((p) => p.recipient_email_id?.trim().toLowerCase() === agentkEmail);
 
   // Derived from the share list rather than from the invite click: a user who
   // shared in an earlier run arrives with this already true, and should not
@@ -99,8 +114,8 @@ function ShareWithAgentStageContent({
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
   useEffect(() => {
-    if (alreadySharedWithAgent) onCompleteRef.current();
-  }, [alreadySharedWithAgent]);
+    if (agentHasGrant) onCompleteRef.current();
+  }, [agentHasGrant]);
 
   const refreshShares = () => void refetch({ silent: true });
 
@@ -151,10 +166,21 @@ function ShareWithAgentStageContent({
           agentDisplayName={AGENT_DISPLAY_NAME}
           agentEmail={AGENTK_ADMIN_EMAIL}
           grant={DATAPACK_SHARE_GRANT_CONTRIBUTOR}
-          shared={alreadySharedWithAgent}
+          shared={agentHasGrant}
           sharing={sharing}
+          inviteSent={invitePending}
           onShare={() => void handleShare()}
         />
+      )}
+
+      {invitePending && (
+        <WarningBanner>
+          {AGENT_DISPLAY_NAME}'s invite was sent but has not been accepted, so it still cannot read
+          this datapack and the review in Chapter 3 will fail. This is a deployment configuration
+          problem, not something you can fix from here: the account{" "}
+          <code className="font-mono">{AGENTK_ADMIN_EMAIL}</code> has to exist in Meko for its
+          invite to be auto-accepted.
+        </WarningBanner>
       )}
 
       {(error || shareError) && <p className="text-sm text-destructive">{shareError ?? error}</p>}

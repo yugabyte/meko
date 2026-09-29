@@ -1,5 +1,5 @@
-// Closes the loop: the review's findings go into a datapack, so the next
-// agent reads them instead of the thread being read once and lost.
+// Chapter 3's third lesson: the review's findings go into a datapack, so the
+// next agent reads them instead of the thread being read once and lost.
 //
 // Writes into a datapack the user picks, and deliberately does not touch
 // session.datapackId: the right-hand pane and every later stage still belong
@@ -124,15 +124,15 @@ export function SaveFindingsStage({
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 4 · Step 1"
-        title="Findings are context too"
+        eyebrow="Chapter 3 · Step 3"
+        title="Extract the learning"
         lede="A review that ends in a comment thread gets read once. Write it into a datapack and it becomes something the next agent reads before it writes a line."
         tags={["Datapacks"]}
       />
 
       {findings.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          Chapter 3's review didn't return structured findings, so there's nothing to write here. Continue when you're ready.
+          The review didn't return structured findings, so there's nothing to write here. Continue when you're ready.
         </p>
       ) : (
         <>

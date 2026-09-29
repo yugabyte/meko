@@ -34,6 +34,7 @@ import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "../../types";
 import { FindingsList } from "./FindingsList";
 import { PrDiffViewer } from "./PrDiffViewer";
+import { ReviewRunSummary } from "./ReviewRunSummary";
 import {
   MODEL_LABELS,
   type ReviewAgentConfig,
@@ -79,18 +80,10 @@ export type PrReviewRunState = {
   selectedModelId: SlmModelId | null;
   reviewPromptMessageId: string | null;
   sendError: string | null;
+  /** Wall clock for the review itself, measured here rather than reported
+   *  by the agent: it is what the user sat through, round trip included. */
+  durationMs: number | null;
 };
-
-function toNormalizedContextStats(stats: ContextStats) {
-  return {
-    kbChunksRetrieved: stats.kb_chunks_retrieved,
-    kbChunksTotal: stats.kb_chunks_total,
-    kbTokensEstimated: stats.kb_tokens_estimated,
-    memoriesRetrieved: stats.memories_retrieved,
-    memoriesTotal: stats.memories_total,
-    memoryTokensEstimated: stats.memory_tokens_estimated,
-  };
-}
 
 function buildReviewPrompt(title: string, diff: string): string {
   return `Review this pull request:\n\nTitle: ${title}\n\n\`\`\`diff\n${diff}\n\`\`\``;
@@ -114,6 +107,7 @@ export function PrReviewDemoApp({
   prSource,
   savedRun,
   onRunChange,
+  resultView = "chat",
 }: {
   demoApp: LabDemoAppConfig;
   session: ReturnType<typeof useLabRunnerSession>;
@@ -140,6 +134,11 @@ export function PrReviewDemoApp({
    *  (LabStageSlot) can hand the same state back in as `savedRun` next time
    *  this component mounts. */
   onRunChange?: (run: PrReviewRunState) => void;
+  /** "chat" is the full orchestrator: the findings inline, a Slack hand-off
+   *  and a follow-up box. "summary" keeps the run button and reports what
+   *  the run did, leaving the findings to the lesson that reads them, and
+   *  is what Chapter 3's first lesson uses. */
+  resultView?: "chat" | "summary";
 }) {
   const [messages, setMessages] = useState<Message[]>(() => savedRun?.messages ?? []);
   const [diffTitle, setDiffTitle] = useState<string | null>(() => savedRun?.diffTitle ?? null);
@@ -203,6 +202,7 @@ export function PrReviewDemoApp({
   // actually used.
   const [selectedModelId, setSelectedModelId] = useState<SlmModelId | null>(() => savedRun?.selectedModelId ?? null);
   const [sendError, setSendError] = useState<string | null>(() => savedRun?.sendError ?? null);
+  const [durationMs, setDurationMs] = useState<number | null>(() => savedRun?.durationMs ?? null);
   // id of the first, diff-embedded user turn — hidden from the transcript
   // since PrDiffViewer already shows the diff. Every later message (the
   // agent's reply, and any follow-up question/answer) renders normally.
@@ -254,6 +254,7 @@ export function PrReviewDemoApp({
       selectedModelId,
       reviewPromptMessageId,
       sendError,
+      durationMs,
     });
   }, [
     messages,
@@ -270,6 +271,7 @@ export function PrReviewDemoApp({
     selectedModelId,
     reviewPromptMessageId,
     sendError,
+    durationMs,
     onRunChange,
   ]);
 
@@ -278,8 +280,10 @@ export function PrReviewDemoApp({
       if (session.deploymentMode === "dedicated" && !session.deploymentId) return;
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      const startedAt = performance.now();
       setSending(true);
       setSendError(null);
+      if (isReviewPrompt) setDurationMs(null);
       const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: userText };
       if (isReviewPrompt) setReviewPromptMessageId(userMessage.id);
       const assistantId = crypto.randomUUID();
@@ -334,6 +338,11 @@ export function PrReviewDemoApp({
         // it lingers as a dead, permanently-empty card in the transcript.
         setMessages((prev) => prev.filter((m) => !(m.id === assistantId && m.content === "")));
       } finally {
+        // Only the review itself is timed; a follow-up question is a
+        // separate call and would overwrite the number the summary quotes.
+        if (isReviewPrompt && !controller.signal.aborted) {
+          setDurationMs(performance.now() - startedAt);
+        }
         setSending(false);
       }
     },
@@ -408,11 +417,85 @@ export function PrReviewDemoApp({
 
   const hasReviewed = diffContent !== null;
   const canFollowUp = canReview && conversationId !== null && reviewText !== null;
+  const isSummary = resultView === "summary";
+  // The `done` frame has landed, which is what turns the run button into its
+  // finished state and releases the summary below it.
+  const reviewComplete = hasReviewed && reviewFindings !== null && !sending;
+
+  const configSentence = (
+    <p className="text-sm text-muted-foreground">
+      Reviewing with{" "}
+      <span className="font-medium text-foreground">{MODEL_LABELS[reviewConfig.model]}</span>
+      {enabledTools.length > 0 ? (
+        <>
+          , reading your datapack over{" "}
+          {enabledTools.map((tool, i) => (
+            <span key={tool}>
+              {i > 0 && " and "}
+              <code className="font-mono">{tool}</code>
+            </span>
+          ))}
+          .
+        </>
+      ) : (
+        // Both sources switched off in the Configure step: the run
+        // reads nothing, which is a legitimate comparison to make
+        // and should not be described as retrieval.
+        ", with no datapack sources enabled."
+      )}
+    </p>
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 overflow-y-auto p-4">
-        {!hasReviewed ? (
+        {isSummary ? (
+          // Scope tile, then the action, then what the run did. The findings
+          // themselves belong to the next lesson.
+          <div className="flex flex-col gap-6">
+            <PrDiffViewer
+              title={diffTitle ?? prSource?.title ?? SAMPLE_DIFF_TITLE}
+              diff={diffContent ?? prSource?.diff ?? SAMPLE_DIFF_CONTENT}
+              isSample={hasReviewed ? isSample : !prSource}
+              url={(hasReviewed ? sourceUrl : prSource?.htmlUrl) ?? undefined}
+              collapsible
+            />
+            <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+              {configSentence}
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  busy={sending}
+                  busyLabel="Reviewing"
+                  done={reviewComplete}
+                  doneLabel="Review complete"
+                  disabled={!canReview}
+                  onClick={handleRunReview}
+                  className="self-start"
+                >
+                  <Send aria-hidden />
+                  Run review
+                </Button>
+                {(sending || reviewComplete) && (
+                  <span className="text-xs text-muted-foreground">
+                    {demoApp.agentDisplayName}
+                    {session.datapackName ? ` · reading ${session.datapackName}` : ""}
+                  </span>
+                )}
+              </div>
+            </div>
+            {sendError && <p className="text-sm text-destructive">{sendError}</p>}
+            {reviewComplete && reviewFindings !== null && (
+              <ReviewRunSummary
+                findings={reviewFindings}
+                usage={reviewUsage}
+                stats={contextStats}
+                durationMs={durationMs}
+                modelLabel={MODEL_LABELS[selectedModelId ?? reviewConfig.model]}
+                enabledTools={enabledTools}
+              />
+            )}
+          </div>
+        ) : !hasReviewed ? (
           <div className="flex flex-col gap-4">
             {/* The bundled sample diff already gets its own preview in an
                 earlier stage (review-sample-pr) before reaching this one --
@@ -422,29 +505,14 @@ export function PrReviewDemoApp({
                 and after the review itself. */}
             {prSource && <PrDiffViewer title={prSource.title} diff={prSource.diff} url={prSource.htmlUrl} />}
             <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
-              <p className="text-sm text-muted-foreground">
-                Reviewing with{" "}
-                <span className="font-medium text-foreground">{MODEL_LABELS[reviewConfig.model]}</span>
-                {enabledTools.length > 0 ? (
-                  <>
-                    , reading your datapack over{" "}
-                    {enabledTools.map((tool, i) => (
-                      <span key={tool}>
-                        {i > 0 && " and "}
-                        <code className="font-mono">{tool}</code>
-                      </span>
-                    ))}
-                    .
-                  </>
-                ) : (
-                  // Both sources switched off in the Configure step: the run
-                  // reads nothing, which is a legitimate comparison to make
-                  // and should not be described as retrieval.
-                  ", with no datapack sources enabled."
-                )}
-              </p>
-              <Button onClick={handleRunReview} disabled={!canReview || sending} className="self-start">
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {configSentence}
+              <Button
+                busy={sending}
+                disabled={!canReview}
+                onClick={handleRunReview}
+                className="self-start"
+              >
+                <Send aria-hidden />
                 Run review
               </Button>
             </div>
@@ -547,7 +615,7 @@ export function PrReviewDemoApp({
           </div>
         )}
       </div>
-      {hasReviewed && (
+      {!isSummary && hasReviewed && (
         <ChatInput
           value={input}
           onChange={setInput}

@@ -1,5 +1,5 @@
 // One extracted memory, with the two decisions a lesson can ask about it.
-// Shared: Chapter 1 asks keep-or-discard, Chapter 4 asks promote-or-keep, and
+// Chapter 1 asks keep-or-discard. Built to carry a promote-or-keep variant too, and
 // both render the same memory through this.
 
 import { type ReactNode } from "react";

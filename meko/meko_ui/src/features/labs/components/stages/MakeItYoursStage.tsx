@@ -48,7 +48,6 @@ export function MakeItYoursStage({
   onByocRunChange,
   onGoToCreateDatapack,
   onGoToDeployAgent,
-  onGoToCollaborate,
   onEndLab,
 }: {
   demoApp: LabDemoAppConfig;
@@ -59,7 +58,6 @@ export function MakeItYoursStage({
   onByocRunChange: (run: PrReviewRunState) => void;
   onGoToCreateDatapack: () => void;
   onGoToDeployAgent: () => void;
-  onGoToCollaborate: () => void;
   onEndLab: () => void;
 }) {
   const { totals, savings } = useLabReviewDashboard(session.datapackId);
@@ -68,7 +66,7 @@ export function MakeItYoursStage({
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 5 · Step 3"
+        eyebrow="Chapter 4 · Step 5"
         title="Make it yours"
         lede={`Every review so far used a bundled sample. Point ${demoApp.agentDisplayName} at a pull request of your own, reviewed against the same context.`}
         tags={["Your repo"]}
@@ -144,10 +142,7 @@ export function MakeItYoursStage({
       </section>
 
       <div className="flex flex-wrap gap-3">
-        <Button onClick={onGoToCollaborate}>Share this datapack</Button>
-        <Button variant="outline" onClick={onEndLab}>
-          Back to Labs
-        </Button>
+        <Button onClick={onEndLab}>Back to Labs</Button>
       </div>
     </div>
   );

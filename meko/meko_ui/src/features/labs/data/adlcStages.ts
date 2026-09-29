@@ -1,6 +1,6 @@
-// The four stages of the agentic development lifecycle, shown as a strip
-// above the lab list so a visitor can see which part of the loop Labs
-// covers today and what is still coming.
+// The four stages of the agentic development lifecycle, shown as a strip on a
+// lab's landing page so a visitor can see which part of the loop that lab
+// covers and what is still coming.
 
 export type AdlcStage = {
   label: string;
@@ -15,7 +15,36 @@ export const ADLC_STAGES: AdlcStage[] = [
   { label: "Fix & merge", live: false },
 ];
 
-export const ADLC_STAGES_HINT = "Review is live today. The rest land next.";
+/** The two lifecycles a visitor is likely to be conflating, one tile each.
+ *  `context` is split out of `body` rather than being another sentence in it
+ *  because it is the point: both lifecycles are capped by what their agents
+ *  can read, which is the whole reason Labs exists. Keeping it a separate
+ *  field lets the tile give it its own emphasis instead of burying it as the
+ *  tail of a paragraph. Global framing, not per-lab copy, which is why it
+ *  sits beside ADLC_STAGES rather than in a LabDefinition. */
+export type LifecycleDefinition = {
+  term: string;
+  expansion: string;
+  body: string;
+  context: string;
+};
+
+export const LIFECYCLE_DEFINITIONS: LifecycleDefinition[] = [
+  {
+    term: "ADLC",
+    expansion: "Agentic Development Life Cycle",
+    body: "Agents run your software lifecycle: spec, build, review, fix.",
+    context:
+      "An agent with no context guesses at your conventions. Give it your standards, your past decisions and the reasons behind them, and it reviews the way your team would.",
+  },
+  {
+    term: "AIDLC",
+    expansion: "AI Development Life Cycle",
+    body: "You build and ship the agents themselves.",
+    context:
+      "The model is the commodity; your context is not. What your agent knows about your business is the only part a competitor cannot buy off the shelf.",
+  },
+];
 
 /** Labs that don't exist yet. Deliberately NOT LabDefinitions — they have no
  *  chapters to run, and putting them in LAB_DEFINITIONS would mean every
@@ -29,15 +58,9 @@ export type UpcomingLab = {
 
 export const UPCOMING_LABS: UpcomingLab[] = [
   {
-    title: "Write a functional spec",
-    tags: ["Spec"],
+    title: "Financial Services / fraud detection",
+    tags: ["Financial services"],
     summary:
-      "Turn a Slack thread and a bug report into a spec the coding agent can build from, with the decisions traced back to who made them.",
-  },
-  {
-    title: "Ship the fix",
-    tags: ["Build"],
-    summary:
-      "Hand review findings to a coding agent, watch it patch against the same standards, and promote what it learned back to the team.",
+      "Ground a fraud-detection agent in your own policies, thresholds and past analyst decisions, so it escalates what your team would.",
   },
 ];

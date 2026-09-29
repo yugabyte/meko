@@ -191,7 +191,10 @@
   --info: 217 91% 40%;
   --border: var(--meko-navy-200);
   --input: var(--meko-navy-100);
-  --ring: 222 47% 11%;
+  /* Focus rings are the brand accent in both modes: near-black on white (and
+   * near-white on navy) read as a border thickening rather than as focus.
+   * One token, so input, textarea and select all move together. */
+  --ring: var(--primary);
   --radius: 0.5rem;
 
   /* AMP brand + sidebar — light mode */
@@ -248,7 +251,7 @@
   --info: 213 94% 68%;
   --border: 240 4% 20%;
   --input: var(--meko-navy-900);
-  --ring: 206 60% 97%;
+  --ring: var(--primary);
 
   /* AMP brand + sidebar — dark mode. Sidebar reads a shade deeper than
    * the page (navy-950) so the nav rail separates from the content. */

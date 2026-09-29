@@ -1,22 +1,48 @@
 // RIGHT pane of the lab runner: the live datapack the user is filling —
-// knowledge, memories and collective memory — with token savings and the
-// X-Ray trace collapsed underneath.
+// knowledge, memories and conversations — with token savings and the X-Ray
+// trace collapsed underneath.
+//
+// One section per context source, in the order Chapter 1 builds them. The
+// collective-memory section is parked: promoting a memory is no longer a
+// lesson, so it was a permanently empty panel the reader learned to ignore.
 
 import { Database } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import type { DatapackConversation } from "@/lib/api/mekoApi";
 import type { DatapackShareGrant } from "@/lib/datapackShareGrants";
-import { documentNameLastSegment } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentName";
+import { knowledgeDocDisplayName } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentName";
 
+import { useNewlyAdded } from "../../hooks/useNewlyAdded";
 import type { LabContextFeed } from "../../hooks/useLabContextFeed";
 import type { LessonTrace } from "../../lib/lessonTrace";
 import { LabContextRow, LabContextSection } from "./LabContextSection";
 import { TokenSavingsPane } from "./TokenSavingsPane";
 import { XRayPane } from "./XRayPane";
 
-/** Last path segment of the S3 key, minus the numeric upload prefix. */
-function knowledgeDocDisplayName(documentName: string): string {
-  return documentNameLastSegment(documentName).replace(/^\d+_/, "");
+/** The pane is a glance, not a listing. Three is enough to show a
+ *  conversation landed without pushing knowledge and memories off screen. */
+const CONVERSATION_PREVIEW_LIMIT = 3;
+
+/** What to call a thread. MCP passes a title on conversation_create, but a
+ *  session started any other way has none, and the opening prompt says more
+ *  about the thread than "Untitled" does. */
+function conversationTitle(conversation: DatapackConversation): string {
+  return (
+    conversation.title?.trim() ||
+    conversation.first_message?.trim() ||
+    "New conversation"
+  );
+}
+
+/** Message count, and the memories Meko read out of the thread when there
+ *  are any — that second number is the whole point of Chapter 1's last
+ *  lesson, so it belongs on the row rather than in a tooltip. */
+function conversationMeta(conversation: DatapackConversation): string {
+  const messages = `${conversation.messages} message${conversation.messages === 1 ? "" : "s"}`;
+  return conversation.memories_added > 0
+    ? `${messages} · ${conversation.memories_added} memories extracted`
+    : messages;
 }
 
 export function LabContextPane({
@@ -40,6 +66,23 @@ export function LabContextPane({
    *  memories, on the step whose whole point is that the agent has neither. */
   showContext: boolean;
 }) {
+  // Only indexed documents reach the pane. A row that appears while the file
+  // is still chunking claims the datapack holds something an agent could
+  // retrieve, which it does not yet — and it spends the flash on the wrong
+  // moment. The middle column already narrates the processing.
+  const indexedKnowledge = feed.knowledge.filter(
+    (doc) => doc.status?.toUpperCase() === "COMPLETED",
+  );
+  const newKnowledge = useNewlyAdded(indexedKnowledge.map((doc) => doc.id), feed.hasLoaded);
+  const newMemories = useNewlyAdded(
+    feed.memories.map((memory) => memory.id ?? ""),
+    feed.hasLoaded,
+  );
+  const conversations = feed.conversations.slice(0, CONVERSATION_PREVIEW_LIMIT);
+  const newConversations = useNewlyAdded(
+    conversations.map((conversation) => conversation.id),
+    feed.hasLoaded,
+  );
 
   return (
     <aside
@@ -72,10 +115,10 @@ export function LabContextPane({
             <LabContextSection
               kind="knowledge"
               label="Knowledge"
-              count={feed.knowledgeTotal}
+              count={indexedKnowledge.length}
               emptyHint="Upload your standards and the chunks land here, searchable."
             >
-              {feed.knowledge.map((doc) => (
+              {indexedKnowledge.map((doc) => (
                 <LabContextRow
                   key={doc.id}
                   kind="knowledge"
@@ -87,6 +130,7 @@ export function LabContextPane({
                       ? `${doc.chunks_processed} chunks · ${doc.status}`
                       : doc.status
                   }
+                  flash={newKnowledge.has(doc.id)}
                 />
               ))}
             </LabContextSection>
@@ -98,26 +142,45 @@ export function LabContextPane({
               emptyHint="Facts you save, and the ones Meko extracts from what you say."
             >
               {feed.memories.map((memory) => (
-                <LabContextRow key={memory.id} kind="memory" title={memory.data} meta="private" />
+                <LabContextRow
+                  key={memory.id}
+                  kind="memory"
+                  title={memory.data}
+                  meta="private"
+                  flash={newMemories.has(memory.id ?? "")}
+                />
               ))}
             </LabContextSection>
 
             <LabContextSection
-              kind="memory"
-              label="Collective memory"
-              count={feed.collectiveTotal}
-              emptyHint="Promote a memory and every agent on this datapack sees it."
+              kind="conversation"
+              label="Conversations"
+              count={feed.conversationsTotal}
+              emptyHint="Talk to the agent and the thread lands here, with the memories Meko reads out of it."
             >
-              {feed.collective.map((memory) => (
-                <LabContextRow key={memory.id} kind="memory" title={memory.data} meta="promoted" />
+              {conversations.map((conversation) => (
+                <LabContextRow
+                  key={conversation.id}
+                  kind="conversation"
+                  title={conversationTitle(conversation)}
+                  meta={conversationMeta(conversation)}
+                  flash={newConversations.has(conversation.id)}
+                />
               ))}
             </LabContextSection>
           </>
         )}
       </div>
 
-      <TokenSavingsPane datapackId={datapackId} />
-      <XRayPane trace={lastLessonTrace} />
+      {/* Both of these describe a datapack's activity, so they stay out of the
+          pane until there is a datapack to have any. Before that they are two
+          empty panels the reader has to learn to ignore. */}
+      {showContext && datapackId && (
+        <>
+          <TokenSavingsPane datapackId={datapackId} />
+          <XRayPane trace={lastLessonTrace} />
+        </>
+      )}
     </aside>
   );
 }

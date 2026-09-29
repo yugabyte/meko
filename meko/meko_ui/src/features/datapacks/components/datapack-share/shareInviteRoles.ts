@@ -27,7 +27,10 @@ export const SHARE_INVITE_ROLES: {
     {
       id: DATAPACK_SHARE_GRANT_CONTRIBUTOR,
       label: "Contributor",
-      description: "Includes viewer rights and can generate memories",
+      // Spells the viewer rights out rather than naming the role: a reader
+      // choosing between these should not have to look up what the level
+      // above or below them grants to understand this one.
+      description: "Can view Knowledge, memories and conversations, and can generate memories",
       icon: Pencil,
     },
     {

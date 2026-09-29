@@ -109,6 +109,11 @@ type Props = {
    *  Triggers a fresh getKBStatus fetch so the widget and the parent's
    *  document list stay in perfect sync. */
   pollTick?: number;
+  /** Minimal presentation: no header block, a single-line drop zone. For a
+   *  surface where the surrounding page already said what the uploader is
+   *  and the widget is the escape hatch rather than the main event (the
+   *  Labs knowledge lesson). The upload behaviour is identical. */
+  compact?: boolean;
 };
 
 export default function FileUpload({
@@ -120,6 +125,7 @@ export default function FileUpload({
   onProcessingActiveChange,
   refreshKey,
   pollTick,
+  compact,
 }: Props) {
   const { data: currentUser } = useCurrentUser();
   // Session-scoped caches (see KnowledgeUploadCacheProvider). Radix unmounts
@@ -884,39 +890,49 @@ export default function FileUpload({
     .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
 
   return (
-    <div className="space-y-6">
+    <div className={compact ? "space-y-3" : "space-y-6"}>
       {/* Upload section */}
       {/* Tighter mobile padding for more room in a narrow viewport. */}
-      <div className="rounded-xl border border-dashed border-border bg-card p-4 space-y-4 md:p-6">
+      <div
+        className={cn(
+          "rounded-xl bg-card",
+          compact ? "space-y-2" : "border border-dashed border-border p-4 space-y-4 md:p-6",
+        )}
+      >
         {/* Wraps below the icon+text on narrow widths instead of squeezing
             the button up against the description. */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-context-knowledge/10">
-              <Upload className="w-5 h-5 text-context-knowledge" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-sm font-medium text-foreground">
-                Upload files to Knowledge Base
-              </h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {KNOWLEDGE_UPLOAD_EXTENSIONS_HINT.toUpperCase()}
-                {Number.isFinite(maxFileSizeMB)
-                  ? ` — up to ${maxFileSizeMB >= 1024 ? `${(maxFileSizeMB / 1024).toFixed(maxFileSizeMB % 1024 === 0 ? 0 : 1)}GB` : `${maxFileSizeMB}MB`} each,`
-                  : " —"}{" "}
-                {KNOWLEDGE_UPLOAD_MAX_BATCH} in progress at a time.
-              </p>
-              {/* Its own line, and "in this session" spelled out: next to the
-                  batch cap this tally read as a fraction of it -- "3 uploaded"
-                  after "10 at a time" looks like 3 of 10 rather than a count
-                  of what has finished since the page opened. */}
-              {totalUploaded > 0 && (
-                <p className="text-xs text-muted-foreground/70 mt-0.5">
-                  {totalUploaded} file{totalUploaded === 1 ? "" : "s"} uploaded in this session.
+          {/* Compact drops the whole header: the page around it has already
+              said what this is, and repeating it is most of the widget's
+              height. The Upload button below still appears when files queue. */}
+          {!compact && (
+            <div className="flex min-w-0 items-center gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-context-knowledge/10">
+                <Upload className="w-5 h-5 text-context-knowledge" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-medium text-foreground">
+                  Upload files to Knowledge Base
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {KNOWLEDGE_UPLOAD_EXTENSIONS_HINT.toUpperCase()}
+                  {Number.isFinite(maxFileSizeMB)
+                    ? ` — up to ${maxFileSizeMB >= 1024 ? `${(maxFileSizeMB / 1024).toFixed(maxFileSizeMB % 1024 === 0 ? 0 : 1)}GB` : `${maxFileSizeMB}MB`} each,`
+                    : " —"}{" "}
+                  {KNOWLEDGE_UPLOAD_MAX_BATCH} in progress at a time.
                 </p>
-              )}
+                {/* Its own line, and "in this session" spelled out: next to the
+                    batch cap this tally read as a fraction of it -- "3 uploaded"
+                    after "10 at a time" looks like 3 of 10 rather than a count
+                    of what has finished since the page opened. */}
+                {totalUploaded > 0 && (
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">
+                    {totalUploaded} file{totalUploaded === 1 ? "" : "s"} uploaded in this session.
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          )}
           {pendingCount > 0 && (
             <Button
               className="shrink-0 gap-2"
@@ -938,7 +954,10 @@ export default function FileUpload({
         {/* Drop zone. Gated only by the total in-flight cap, not "is processing". */}
         <div
           className={cn(
-            "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors",
+            "flex rounded-lg border-2 border-dashed transition-colors",
+            compact
+              ? "flex-row items-center justify-center gap-2 px-3 py-2.5"
+              : "flex-col items-center justify-center p-8",
             batchFull
               ? "border-border/60 opacity-50 cursor-not-allowed"
               : isDragOver
@@ -956,10 +975,21 @@ export default function FileUpload({
           }}
           onClick={() => !batchFull && inputRef.current?.click()}
         >
-          <Upload className="w-8 h-8 text-muted-foreground mb-2" />
-          <p className="text-sm text-muted-foreground">
+          <Upload
+            className={cn(
+              "shrink-0 text-muted-foreground",
+              compact ? "h-3.5 w-3.5" : "w-8 h-8 mb-2",
+            )}
+          />
+          <p className={cn("text-muted-foreground", compact ? "text-xs" : "text-sm")}>
             {batchFull ? (
               `${KNOWLEDGE_UPLOAD_MAX_BATCH} files in progress — wait for one to finish or remove a pending file to add more`
+            ) : compact ? (
+              <>
+                <b className="font-semibold text-foreground">Or drop your own</b>:{" "}
+                {KNOWLEDGE_UPLOAD_EXTENSIONS_HINT.toUpperCase()} ·{" "}
+                {Number.isFinite(maxFileSizeMB) ? `up to ${maxFileSizeMB}MB each` : "any size"}
+              </>
             ) : (
               <>
                 Drag & drop files here, or <span className="text-context-knowledge underline">browse</span>
@@ -993,7 +1023,11 @@ export default function FileUpload({
           </div>
         )}
 
-        {doneCount > 0 && !isUploading && (
+        {/* Suppressed in compact mode: the surface embedding this one says
+            what the upload achieved in its own terms, and two success banners
+            stacked read as two different things having succeeded. A FAILURE
+            still shows either way — that one is never redundant. */}
+        {doneCount > 0 && !isUploading && (!compact || errorCount > 0) && (
           <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-4 py-2 text-xs text-success">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             {doneCount} file{doneCount > 1 ? "s" : ""} uploaded successfully.

@@ -126,15 +126,26 @@ export function ReviewAgentConfigPanel({
   value,
   onChange,
   agentDisplayName,
+  hideModel,
+  hideTools,
 }: {
   value: ReviewAgentConfig;
   onChange: (next: ReviewAgentConfig) => void;
   agentDisplayName: string;
+  /** The caller already offers the model as its own control (the model cards
+   *  in HowAgentReviewsStage), so this panel would be a second, disagreeing
+   *  place to change it. */
+  hideModel?: boolean;
+  /** Same, for the two search toggles: where the caller frames them as a
+   *  read-the-datapack-or-not choice, showing them again as raw tool
+   *  switches lets the two drift apart. */
+  hideTools?: boolean;
 }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border p-4">
+      {!hideTools && (
       <div className="flex flex-wrap items-center gap-2">
         <ToggleChip
           id="review-agent-use-kb"
@@ -151,7 +162,9 @@ export function ReviewAgentConfigPanel({
           <code className="font-mono">memory_search</code>
         </ToggleChip>
       </div>
+      )}
 
+      {!hideModel && (
       <div>
         <Label htmlFor="review-agent-model">Model</Label>
         <Select
@@ -174,6 +187,7 @@ export function ReviewAgentConfigPanel({
           Claude's reference review above.
         </p>
       </div>
+      )}
 
       <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <CollapsibleTrigger className="text-left text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground">

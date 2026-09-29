@@ -9,7 +9,7 @@
 // someone wants landing in a datapack they already rely on.
 
 import { useState } from "react";
-import { AlertCircle, Loader2, Plus } from "lucide-react";
+import { AlertCircle, ArrowRight, Loader2, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Datapack } from "@/lib/api/mekoApi";
 
-import { ContextSourceCards } from "./ContextSourceCards";
+import { suggestDatapackName } from "../../lib/datapackNameSuggestion";
+import { DatapackConstructs } from "./DatapackConstructs";
+import { LabNote } from "./LabNote";
 import { LabStageHeader } from "./LabStageHeader";
 
 export function CreateDatapackStage({
@@ -59,7 +61,9 @@ export function CreateDatapackStage({
   const [createChosen, setCreateChosen] = useState<boolean | null>(null);
   const showCreate = createChosen ?? (!heading && !hasHitDatapackCount);
   const setShowCreate = setCreateChosen;
-  const [newName, setNewName] = useState("");
+  // Seeded, not placeholder text: a name the user can accept with one click
+  // is the point, and they can still overwrite it.
+  const [newName, setNewName] = useState(() => suggestDatapackName());
   const [createError, setCreateError] = useState<string | null>(null);
 
   const handleCreate = async () => {
@@ -81,16 +85,22 @@ export function CreateDatapackStage({
       <LabStageHeader
         eyebrow={heading ? "Pick a datapack" : "Chapter 1 · Step 2"}
         title={heading ?? "One datapack holds the context"}
-        lede={
-          description ??
-          "A datapack is the unit agents read from and write to: a knowledge base, memories, and the conversations that produced them. You'll fill this one over the next three steps."
-        }
+        lede={description ?? "Create a context for code review."}
       />
+
+      {!heading && (
+        <>
+          <p className="text-sm text-muted-foreground">
+            A datapack holds all the context for one project. Here are its constructs.
+          </p>
+          <DatapackConstructs />
+        </>
+      )}
       {showCreate ? (
         <div className="flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/[0.03] p-5">
           <div>
             <Label htmlFor="create-datapack-name" className="text-base">
-              Create a datapack for this lab
+              Create a datapack
             </Label>
             <p className="mt-1 text-xs text-muted-foreground">
               A fresh one keeps the sample standards and memories you are about to add out of
@@ -175,12 +185,9 @@ export function CreateDatapackStage({
         </div>
       )}
       {!heading && (
-        <>
-          <ContextSourceCards />
-          <p className="text-xs text-muted-foreground">
-            Watch the right-hand pane as you go. That's the live datapack, not a mockup of one.
-          </p>
-        </>
+        <LabNote icon={ArrowRight}>
+          Watch the right-hand pane as you go. That's the live datapack, not a mockup of one.
+        </LabNote>
       )}
     </div>
   );

@@ -60,13 +60,23 @@ export function LabContextRow({
   kind,
   title,
   meta,
+  flash,
 }: {
   kind: LabContextKind;
   title: ReactNode;
   meta?: string;
+  /** Just appeared. Highlights the row and fades back, so the lesson that
+   *  produced it can be seen landing rather than the reader having to hunt
+   *  a list for what changed. */
+  flash?: boolean;
 }) {
   return (
-    <div className="flex items-start gap-2 rounded-md bg-card px-2.5 py-2">
+    <div
+      className={cn(
+        "flex items-start gap-2 rounded-md px-2.5 py-2 transition-colors duration-1000",
+        flash ? "bg-primary/15 ring-1 ring-primary/50" : "bg-card",
+      )}
+    >
       <i aria-hidden className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", KIND_MARKER[kind])} />
       <div className="min-w-0 flex-1">
         <p className="line-clamp-2 text-xs text-foreground">{title}</p>

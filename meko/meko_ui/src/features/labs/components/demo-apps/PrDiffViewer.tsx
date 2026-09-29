@@ -34,6 +34,8 @@ export function PrDiffViewer({
   isSample,
   url,
   collapsible,
+  showLineNumbers,
+  compact,
 }: {
   title: string;
   description?: string;
@@ -50,6 +52,13 @@ export function PrDiffViewer({
    *  reader has already seen rather than the thing they came for. The
    *  header's own stats stay visible either way. */
   collapsible?: boolean;
+  /** Numbers the rendered lines, so prose elsewhere on the page can point at
+   *  one ("line 14 concatenates request input"). Off by default: a diff shown
+   *  purely as evidence doesn't need a gutter. */
+  showLineNumbers?: boolean;
+  /** Shorter scroll window, for a stage where the diff shares the screen with
+   *  an action and a result rather than being the whole screen. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(!collapsible);
   const lines = diff.split("\n");
@@ -99,19 +108,36 @@ export function PrDiffViewer({
         </div>
       </div>
       {open && (
-      <pre className="max-h-64 overflow-auto p-3 font-mono text-xs leading-relaxed">
-        {lines.map((line, i) => (
-          <div
-            key={i}
-            className={cn(
-              line.startsWith("+") && !line.startsWith("+++") && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-              line.startsWith("-") && !line.startsWith("---") && "bg-red-500/10 text-red-700 dark:text-red-300",
-            )}
-          >
-            {line || " "}
-          </div>
-        ))}
-      </pre>
+        <pre
+          className={cn(
+            "overflow-auto p-3 font-mono text-xs leading-relaxed",
+            compact ? "max-h-44" : "max-h-64",
+          )}
+        >
+          {lines.map((line, i) => (
+            <div
+              key={i}
+              className={cn(
+                "flex",
+                line.startsWith("+") &&
+                  !line.startsWith("+++") &&
+                  "bg-context-knowledge/10 text-context-knowledge",
+                line.startsWith("-") &&
+                  !line.startsWith("---") &&
+                  "bg-destructive/10 text-destructive",
+              )}
+            >
+              {showLineNumbers && (
+                // `select-none` so copying the diff doesn't drag the gutter
+                // along with it.
+                <span className="mr-3 w-7 shrink-0 select-none text-right text-muted-foreground/60">
+                  {i + 1}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 whitespace-pre">{line || " "}</span>
+            </div>
+          ))}
+        </pre>
       )}
     </div>
   );

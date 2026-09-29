@@ -45,7 +45,15 @@ function ContextBarRow({ label, value, frac }: { label: ReactNode; value: string
  *  captured usage.input_tokens -- not exact, but not fabricated either).
  *  Shared by AnthropicReferenceCard (the static reference) and
  *  PrReviewDemoApp (a live run), both of which report the same shape. */
-export function ContextStatsCard({ stats }: { stats: NormalizedContextStats }) {
+export function ContextStatsCard({
+  stats,
+  note,
+}: {
+  stats: NormalizedContextStats;
+  /** Overrides the footnote, for a caller that has substituted its own token
+   *  figures and must say which estimate the reader is looking at. */
+  note?: string;
+}) {
   const hasKb = stats.kbChunksRetrieved > 0;
   const hasMemory = stats.memoriesRetrieved > 0;
   if (!hasKb && !hasMemory) return null;
@@ -80,8 +88,8 @@ export function ContextStatsCard({ stats }: { stats: NormalizedContextStats }) {
         />
       )}
       <p className="text-[11px] text-muted-foreground">
-        Chunk/memory counts are exact; token figures are estimated (Bedrock exposes no
-        pre-call tokenizer).
+        {note ??
+          "Chunk/memory counts are exact; token figures are estimated (Bedrock exposes no pre-call tokenizer)."}
       </p>
     </div>
   );

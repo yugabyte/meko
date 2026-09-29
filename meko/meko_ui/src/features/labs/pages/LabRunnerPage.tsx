@@ -46,7 +46,10 @@ const WIDE_STAGES: LabStageId[] = [
   "review-cost",
   "make-it-yours",
   "production-reviews",
-  "production-trend",
+  // Both show a table whose rows carry a title, an author and severity
+  // badges side by side, which a reading-measure column cannot hold.
+  "public-runs",
+  "read-one-yourself",
 ];
 
 /** The lessons that satisfy their gate by writing into the datapack. Each

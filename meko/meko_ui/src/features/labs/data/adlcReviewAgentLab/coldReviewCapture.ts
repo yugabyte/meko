@@ -15,7 +15,6 @@
 // "context sources available: none" is the lesson -- but it is labelled a
 // replay of a captured run, not dressed up as a live one.
 
-import type { ReviewFinding } from "./anthropicReferenceReview";
 
 export const COLD_REVIEW_MODEL_LABEL = "AgentK · no datapack";
 
@@ -37,11 +36,6 @@ export const COLD_REVIEW_TRACE: ColdReviewTraceLine[] = [
   { at: "3.8s", text: "checks: syntax, obvious null paths, naming" },
   { at: "4.6s", text: "verdict: no blocking issues", tone: "ok" },
 ];
-
-/** The whole point of the baseline: a cold agent finds nothing. A populated
- *  capture that DID find the injection would mean the sample diff no longer
- *  makes the lab's argument, and the copy would need rewriting. */
-export const COLD_REVIEW_FINDINGS: ReviewFinding[] = [];
 
 /** The verdict the cold run reaches, and the whole point of the baseline:
  *  an agent with no context approves a diff that carries an injection. Stated

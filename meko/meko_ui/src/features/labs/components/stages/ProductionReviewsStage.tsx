@@ -1,17 +1,25 @@
-// Chapter 5's opener: the same loop the user just built, running against
-// Yugabyte's own 104 repositories. Every figure is a dated snapshot, never a
-// live poll -- see productionSnapshot.ts.
+// Chapter 4's closing numbers: a month of runs and the dashboard totals
+// behind them, in one lesson.
+//
+// These were two steps. Splitting them put a 30-day chart on one screen and
+// the totals that chart adds up to on the next, so a reader had to hold the
+// first to make sense of the second. Every figure is a dated snapshot, never
+// a live poll -- see productionSnapshot.ts.
 
-import { Boxes, Coins, ExternalLink, FileText, Layers, Sparkles, ThumbsUp } from "lucide-react";
+import { Activity, Boxes, Coins, ExternalLink, FileText, Flame, Layers, Sparkles, ThumbsUp } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { StatTile } from "@/components/ui/stat-tile";
 
 import {
+  PRODUCTION_AVG_RUNS_PER_DAY,
+  PRODUCTION_BUSIEST_DAY,
   PRODUCTION_DASHBOARD_URL,
+  PRODUCTION_RUNS_30D_TOTAL,
   PRODUCTION_SNAPSHOT,
   PRODUCTION_SNAPSHOT_READ_ON,
 } from "../../data/adlcReviewAgentLab/productionSnapshot";
+import { RunsPerDayChart } from "../demo-apps/RunsPerDayChart";
 import { LabStageHeader } from "./LabStageHeader";
 
 const P = PRODUCTION_SNAPSHOT;
@@ -20,9 +28,9 @@ export function ProductionReviewsStage() {
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 5 · Step 1"
-        title="This isn't a demo bot"
-        lede={`Everything you just did is how Yugabyte reviews its own code. AgentK watches ${P.reposWatched} repositories and reviews every pull request onto a default branch. Yugabyte is an open-source company, so a good share of those reviews are sitting in public on GitHub.`}
+        eyebrow="Chapter 4 · Step 4"
+        title="Thirty days of runs"
+        lede={`The threads you just read are a handful out of this. AgentK watches ${P.reposWatched} repositories and reviews every pull request onto a default branch, and here is what a month of that looks like.`}
         tags={["Production"]}
       />
 
@@ -43,6 +51,36 @@ export function ProductionReviewsStage() {
           Open the dashboard
         </a>
       </div>
+
+      <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <p className="text-sm font-medium text-foreground">Runs per day</p>
+          <p className="text-xs text-muted-foreground">
+            {PRODUCTION_AVG_RUNS_PER_DAY} runs on an average day in this window
+          </p>
+        </div>
+        <RunsPerDayChart />
+        <div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-3">
+          <StatTile
+            icon={<Activity className="h-3 w-3" />}
+            label="Reviews in 30 days"
+            value={PRODUCTION_RUNS_30D_TOTAL.toLocaleString()}
+          />
+          <StatTile
+            icon={<Flame className="h-3 w-3" />}
+            label="Busiest day"
+            value={PRODUCTION_BUSIEST_DAY.runs.toLocaleString()}
+            hint={PRODUCTION_BUSIEST_DAY.day}
+          />
+          <StatTile
+            icon={<Coins className="h-3 w-3" />}
+            label="Average cost per PR"
+            value={`$${P.costPerPrUsd}`}
+          />
+        </div>
+      </section>
+
+      <h3 className="text-sm font-semibold text-foreground">All time, from its dashboard</h3>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <StatTile
@@ -93,11 +131,13 @@ export function ProductionReviewsStage() {
       </section>
 
       <section className="flex flex-col gap-1 rounded-lg border border-primary/40 bg-primary/[0.03] p-4">
-        <p className="text-sm font-medium text-foreground">The same loop, at scale</p>
+        <p className="text-sm font-medium text-foreground">Why it reviews everything</p>
         <p className="text-xs text-muted-foreground">
           The {P.guidelinesInContext.toLocaleString()} guidelines are the knowledge base you loaded
-          in Chapter 1. The {P.learningsApplied} learnings applied are collective memory doing what
-          you did in Chapter 4. Nothing here is a mechanism you haven't already used.
+          in Chapter 1, and the {P.learningsApplied} learnings applied are findings written back the
+          way you wrote yours back in Chapter 3. At ${P.costPerPrUsd} a pull request against the
+          cost of a reviewer-hour, that context is what makes reviewing every one of them
+          affordable instead of sampling. Nothing here is a mechanism you haven't already used.
         </p>
       </section>
     </div>

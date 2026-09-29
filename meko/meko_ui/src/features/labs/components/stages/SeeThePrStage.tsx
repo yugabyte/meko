@@ -5,14 +5,16 @@ import { useCallback, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { WarningBanner } from "@/components/ui/warning-banner";
 
 import {
   COLD_REVIEW_TRACE,
   COLD_REVIEW_VERDICT,
 } from "../../data/adlcReviewAgentLab/coldReviewCapture";
 import {
+  SAMPLE_DIFF_ADDED_LINES,
   SAMPLE_DIFF_CONTENT,
-  SAMPLE_DIFF_DESCRIPTION,
+  SAMPLE_DIFF_SQL_CONCAT_LINE,
   SAMPLE_DIFF_TITLE,
 } from "../../data/adlcReviewAgentLab/sampleDiff";
 import { ColdReviewTrace } from "../demo-apps/ColdReviewTrace";
@@ -39,15 +41,19 @@ export function SeeThePrStage({
       <LabStageHeader
         eyebrow="Chapter 1 · Step 1"
         title="Here's the pull request"
-        lede={`A teammate opened PR #418 on the billing service. Thirty-four lines, tests green, CI passing. Before you give ${agentDisplayName} anything, let it review the diff on its own.`}
+        lede={`A teammate opened PR #418 on the billing service, which adds ${SAMPLE_DIFF_ADDED_LINES} lines of Python.`}
         tags={["Sample PR"]}
       />
 
+      {/* No description: the PR's own blurb would tell the reader where to
+          look, and the point of this stage is that a cold agent doesn't get
+          that hint either. */}
       <PrDiffViewer
         title={SAMPLE_DIFF_TITLE}
-        description={SAMPLE_DIFF_DESCRIPTION}
         diff={SAMPLE_DIFF_CONTENT}
         isSample
+        showLineNumbers
+        compact
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -70,12 +76,27 @@ export function SeeThePrStage({
           <ColdReviewTrace lines={COLD_REVIEW_TRACE} onFinished={handleFinished} />
 
           {traceDone && (
-            <div className="flex gap-3 rounded-md border border-border bg-card p-4">
-              <Badge variant="success" className="h-fit shrink-0">
-                approved
-              </Badge>
-              <p className="min-w-0 text-sm font-medium text-foreground">“{COLD_REVIEW_VERDICT}”</p>
-            </div>
+            <>
+              <div className="flex gap-3 rounded-md border border-border bg-card p-4">
+                <Badge variant="success" className="h-fit shrink-0">
+                  approved
+                </Badge>
+                <p className="min-w-0 text-sm font-medium text-foreground">
+                  “{COLD_REVIEW_VERDICT}”
+                </p>
+              </div>
+
+              {/* The turn the whole lab pivots on: the agent was not wrong on
+                  what it knew, and naming the exact line is what makes that
+                  land rather than reading as a gotcha. */}
+              <WarningBanner>
+                <b className="font-semibold">
+                  Line {SAMPLE_DIFF_SQL_CONCAT_LINE} concatenates request input into a SQL string.
+                </b>{" "}
+                {agentDisplayName} isn't wrong by its own lights. Nobody ever told it how your team
+                writes SQL. That's the gap the next four minutes close.
+              </WarningBanner>
+            </>
           )}
         </>
       )}

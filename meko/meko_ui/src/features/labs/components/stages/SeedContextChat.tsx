@@ -19,6 +19,7 @@ export function SeedContextChat({
   userToken,
   onTurnComplete,
   examplePrompts,
+  sampleOnly,
 }: {
   datapackId: string;
   userId: string | null;
@@ -33,6 +34,11 @@ export function SeedContextChat({
    *  input — clicking one prefills the input rather than sending it, so
    *  the user can still edit before submitting. */
   examplePrompts?: string[];
+  /** Hides the free-text box and makes a chip SEND rather than prefill.
+   *  For a lesson whose point is what Meko does with a conversation, not
+   *  what you can type into one — an empty box there invites the reader to
+   *  compose a sentence that may extract nothing, and the lesson dead-ends. */
+  sampleOnly?: boolean;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -103,28 +109,37 @@ export function SeedContextChat({
             <button
               key={prompt}
               type="button"
-              onClick={() => setInput(prompt)}
-              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-border/80 hover:text-foreground"
+              disabled={sampleOnly && (!canChat || sending)}
+              onClick={() => {
+                if (!sampleOnly) {
+                  setInput(prompt);
+                  return;
+                }
+                void send(prompt);
+              }}
+              className="rounded-full border border-border bg-card px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-context-conversation/60 hover:text-foreground disabled:opacity-50"
             >
               {prompt}
             </button>
           ))}
         </div>
       )}
-      <ChatInput
-        compact
-        value={input}
-        onChange={setInput}
-        onSubmit={() => {
-          const text = input.trim();
-          if (!text) return;
-          setInput("");
-          void send(text);
-        }}
-        disabled={!canChat}
-        sending={sending}
-        blockedReason={canChat ? null : "Setting up this lab's datapack..."}
-      />
+      {!sampleOnly && (
+        <ChatInput
+          compact
+          value={input}
+          onChange={setInput}
+          onSubmit={() => {
+            const text = input.trim();
+            if (!text) return;
+            setInput("");
+            void send(text);
+          }}
+          disabled={!canChat}
+          sending={sending}
+          blockedReason={canChat ? null : "Setting up this lab's datapack..."}
+        />
+      )}
     </div>
   );
 }

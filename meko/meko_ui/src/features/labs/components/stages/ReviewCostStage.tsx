@@ -1,12 +1,14 @@
-// Chapter 3's payoff, in two tabs. Cost is this one run: what it spent, and
-// what the same review would have cost by pasting the whole standards
-// document instead of retrieving from it. Metrics is the datapack underneath
-// it, which is the half that outlives the session.
+// Chapter 3's payoff, in two tabs. Cost is this one run: what the two ways of
+// feeding a reviewer cost, side by side. Metrics is the datapack underneath
+// it, shown through the product's own Analytics section, which is the half
+// that outlives the session.
 
 import { Coins, Layers, Search } from "lucide-react";
 
 import { StatTile } from "@/components/ui/stat-tile";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { deriveDatapackMetrics } from "@/lib/datapackMetrics";
+import { useDatapackMetrics } from "@/features/datapacks/hooks/useDatapackMetrics";
 
 import {
   ANTHROPIC_REFERENCE_INPUT_TOKENS,
@@ -15,42 +17,35 @@ import {
   ANTHROPIC_REFERENCE_MODEL_LABEL,
   ANTHROPIC_REFERENCE_OUTPUT_TOKENS,
 } from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
-import { ORG_CODING_STANDARDS_CONTENT } from "../../data/adlcReviewAgentLab/orgCodingStandards";
 import { computeSavingsPct, estimateCost } from "../../lib/bedrockPricing";
-import { estimatePasteTokens } from "../../lib/retrievalCostEstimate";
+import {
+  coldContextTokens,
+  FRONTIER_MODEL_ID,
+  LAB_TOKENS_PER_CHUNK,
+  splitInputTokens,
+} from "../../lib/reviewCostModel";
 import { ColdVsContextCards } from "../demo-apps/ColdVsContextCards";
 import { ContextStatsCard } from "../demo-apps/ContextStatsCard";
-import { DatapackActivitySummary } from "../demo-apps/DatapackActivitySummary";
 import { CostPayoffCard } from "../demo-apps/CostPayoffCard";
+import { LabDatapackMetricsPanel } from "../demo-apps/LabDatapackMetricsPanel";
 import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
 import { MODEL_LABELS } from "../demo-apps/ReviewAgentConfigPanel";
-import { TokenCostBars } from "../demo-apps/TokenCostBars";
 import { LabStageHeader } from "./LabStageHeader";
+
+const FRONTIER_LABEL = "Claude Sonnet 4.5";
 
 export function ReviewCostStage({
   run,
   datapackId,
-  datapackName,
-  kbChunksTotal,
-  kbChunkSize,
   onGoToRunReview,
 }: {
   run: PrReviewRunState | null;
-  /** For the datapack-wide rollup on the Metrics tab. */
+  /** Drives both the quality figure on the comparison and the whole Metrics
+   *  tab below it. */
   datapackId: string | null;
-  /** Named on the with-context card, so the comparison says which datapack
-   *  did the work rather than "with a datapack". */
-  datapackName: string | null;
-  /** Every chunk in the datapack, and the index's chunk size, both from the
-   *  knowledge-base summary. `contextStats.kb_chunks_total` is the same
-   *  datapack-wide total (it comes from datapack_describe, and is the
-   *  denominator in "N of M chunks"), so it serves as the fallback -- the
-   *  summary is preferred only because it is present whether or not a run
-   *  reported stats. */
-  kbChunksTotal: number | null;
-  kbChunkSize: number | null;
   onGoToRunReview: () => void;
 }) {
+  const { data: metrics } = useDatapackMetrics(datapackId);
   const usage = run?.reviewUsage ?? null;
   const stats = run?.contextStats ?? null;
   const modelId = run?.selectedModelId ?? null;
@@ -59,7 +54,7 @@ export function ReviewCostStage({
     return (
       <div className="flex flex-1 flex-col items-start gap-4 overflow-y-auto p-6">
         <LabStageHeader
-          eyebrow="Chapter 3 · Step 3"
+          eyebrow="Chapter 3 · Step 4"
           title="What the context cost"
           lede="Run the review first. Every number on this page comes from that run."
         />
@@ -74,9 +69,6 @@ export function ReviewCostStage({
   // in prose, which is a different thing from finding nothing.
   const findings = Array.isArray(run?.reviewFindings) ? run.reviewFindings : null;
   const findingsCount = findings ? findings.length : null;
-  const blockingCount = findings
-    ? findings.filter((f) => f.severity === "critical" || f.severity === "major").length
-    : null;
 
   const modelLabel = MODEL_LABELS[modelId];
   const slmCost = estimateCost(modelId, usage);
@@ -88,29 +80,49 @@ export function ReviewCostStage({
     : null;
   const savingsPct = computeSavingsPct(slmCost, claudeCost);
 
-  // What this same review would have cost with the standards doc pasted in
-  // whole: the measured non-retrieval input, plus the whole document.
-  const retrievedTokens = (stats?.kb_tokens_estimated ?? 0) + (stats?.memory_tokens_estimated ?? 0);
-  const promptWithoutContext = Math.max(usage.input_tokens - retrievedTokens, 0);
-  const pasteTokens = promptWithoutContext + estimatePasteTokens(ORG_CODING_STANDARDS_CONTENT);
-  const saved = pasteTokens - usage.input_tokens;
+  // The with-datapack side is what the run actually sent. The no-datapack
+  // side is an estimate of what it would have had to send: every chunk in the
+  // knowledge base, because there is no way to retrieve a subset without one.
+  const coldTokens = coldContextTokens(stats?.kb_chunks_total);
+  const split = stats
+    ? splitInputTokens(usage.input_tokens, stats.kb_chunks_retrieved, stats.memories_retrieved)
+    : null;
+  // The datapack's own retrieval quality, not this run's -- a single review
+  // has too few scored hits to average.
+  const derived = deriveDatapackMetrics(metrics, {
+    knowledgeCount: 0,
+    memoryCount: 0,
+    collectiveMemoryCount: 0,
+  });
+  const qualityScore = derived.scores.total > 0 ? derived.qualityScore : null;
 
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <LabStageHeader
-        eyebrow="Chapter 3 · Step 3"
+        eyebrow="Chapter 3 · Step 4"
         title="What the context actually cost"
         lede={`Real token counts from the run you just did with ${modelLabel}.`}
       />
 
       <ColdVsContextCards
-        datapackName={datapackName ?? "your datapack"}
         findingsCount={findingsCount}
-        blockingCount={blockingCount}
-        inputTokens={usage.input_tokens}
-        kbChunksTotal={kbChunksTotal ?? stats?.kb_chunks_total ?? null}
-        kbChunkSize={kbChunkSize}
+        contextTokens={usage.input_tokens}
+        coldTokens={coldTokens}
+        qualityScore={qualityScore}
+        modelLabel={modelLabel}
+        modelId={modelId}
+        frontierModelLabel={FRONTIER_LABEL}
+        frontierModelId={FRONTIER_MODEL_ID}
       />
+
+      {/* One side is measured and the other is not, which the reader cannot
+          tell from the numbers alone. */}
+      <p className="text-xs text-muted-foreground">
+        The with-datapack figure is what this run actually sent. The no-datapack figure is an
+        estimate: every chunk in your knowledge base, priced at a round{" "}
+        {LAB_TOKENS_PER_CHUNK.toLocaleString()} tokens each, because a review with nothing to query
+        has to carry all of it.
+      </p>
 
       <Tabs defaultValue="cost" className="flex flex-col gap-6">
         <TabsList className="w-auto justify-start">
@@ -137,43 +149,20 @@ export function ReviewCostStage({
             />
           </div>
 
-          {/* Only worth drawing when retrieval actually happened -- with both
-              search tools disabled there is no second bar to compare against. */}
-          {retrievedTokens > 0 && saved > 0 && (
-            <section className="flex flex-col gap-3">
-              <h3 className="text-sm font-semibold text-foreground">Input tokens per review</h3>
-              <TokenCostBars
-                bars={[
-                  {
-                    label: "Paste the whole standards doc into every prompt",
-                    tokens: pasteTokens,
-                    isBaseline: true,
-                    note: "estimated",
-                  },
-                  {
-                    label: "Query the datapack for what this diff needs",
-                    tokens: usage.input_tokens,
-                  },
-                ]}
-              />
-              <p className="text-xs text-muted-foreground">
-                {saved.toLocaleString()} fewer input tokens on this review. The measured figure is
-                real; the paste figure is estimated from the sample document's size, since nothing
-                pasted it.
-              </p>
-            </section>
-          )}
-
           {stats && (
             <ContextStatsCard
               stats={{
                 kbChunksRetrieved: stats.kb_chunks_retrieved,
                 kbChunksTotal: stats.kb_chunks_total,
-                kbTokensEstimated: stats.kb_tokens_estimated,
+                // This run's own input, divided between the two searches
+                // rather than re-estimated, so the bars add up to the number
+                // the Cost tab reports directly above them.
+                kbTokensEstimated: split?.kb ?? stats.kb_tokens_estimated,
                 memoriesRetrieved: stats.memories_retrieved,
                 memoriesTotal: stats.memories_total,
-                memoryTokensEstimated: stats.memory_tokens_estimated,
+                memoryTokensEstimated: split?.memory ?? stats.memory_tokens_estimated,
               }}
+              note="Chunk and memory counts are exact. The token split apportions this run's input across the two searches, weighted toward knowledge; the prompt also carries the diff itself."
             />
           )}
 
@@ -192,16 +181,7 @@ export function ReviewCostStage({
             which is what actually compounds: these numbers outlive the session
             that produced them. */}
         <TabsContent value="metrics" className="mt-0 flex flex-col gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">
-              What the datapack has built up
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Read back from this datapack's own conversations and token accounting, not from this
-              run.
-            </p>
-          </div>
-          <DatapackActivitySummary datapackId={datapackId} />
+          <LabDatapackMetricsPanel datapackId={datapackId} />
         </TabsContent>
       </Tabs>
     </div>

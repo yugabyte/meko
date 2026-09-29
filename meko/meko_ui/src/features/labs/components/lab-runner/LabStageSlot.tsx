@@ -9,8 +9,7 @@ import {
   DEFAULT_REVIEW_AGENT_CONFIG,
   type ReviewAgentConfig,
 } from "../demo-apps/ReviewAgentConfigPanel";
-import { CollaborateStage } from "../stages/CollaborateStage";
-import { ConfigureAgentKStage } from "../stages/ConfigureAgentKStage";
+import { HowAgentReviewsStage } from "../stages/HowAgentReviewsStage";
 import { ConversationStage } from "../stages/ConversationStage";
 // PARKED with the create-amp-cluster stage, see chapters.ts.
 // import { CreateAmpClusterStage } from "../stages/CreateAmpClusterStage";
@@ -19,13 +18,13 @@ import { CreateDatapackStage } from "../stages/CreateDatapackStage";
 // import { DashboardIntroStage } from "../stages/DashboardIntroStage";
 import { GuardrailStage } from "../stages/GuardrailStage";
 import { KnowledgeBaseStage } from "../stages/KnowledgeBaseStage";
+import { LetItRunStage } from "../stages/LetItRunStage";
 import { MakeItYoursStage } from "../stages/MakeItYoursStage";
 import { MeetAgentKStage } from "../stages/MeetAgentKStage";
 import { ProductionReviewsStage } from "../stages/ProductionReviewsStage";
-import { ProductionTrendStage } from "../stages/ProductionTrendStage";
-import { PromoteLearningStage } from "../stages/PromoteLearningStage";
+import { PublicRunsStage } from "../stages/PublicRunsStage";
+import { ReadOneYourselfStage } from "../stages/ReadOneYourselfStage";
 import { MemoryStage } from "../stages/MemoryStage";
-import { RetrievalCostStage } from "../stages/RetrievalCostStage";
 import { ReviewCostStage } from "../stages/ReviewCostStage";
 import { ReviewFindingsStage } from "../stages/ReviewFindingsStage";
 // PARKED with chapter 4, see chapters.ts.
@@ -161,7 +160,7 @@ export function LabStageSlot({
       );
     case "configure-agentk":
       return (
-        <ConfigureAgentKStage
+        <HowAgentReviewsStage
           agentDisplayName={lab.demoApp.agentDisplayName}
           datapackId={session.datapackId}
           config={reviewConfig}
@@ -169,8 +168,6 @@ export function LabStageSlot({
           onGoToCreateDatapack={goToCreateDatapack}
         />
       );
-    case "retrieval-cost":
-      return <RetrievalCostStage agentDisplayName={lab.demoApp.agentDisplayName} feed={contextFeed} />;
     case "guardrail":
       return <GuardrailStage agentDisplayName={lab.demoApp.agentDisplayName} />;
     case "run-review":
@@ -198,14 +195,9 @@ export function LabStageSlot({
         <ReviewCostStage
           run={reviewRun}
           datapackId={session.datapackId}
-          datapackName={session.datapackName}
-          kbChunksTotal={contextFeed.chunksTotal}
-          kbChunkSize={contextFeed.chunkSize}
           onGoToRunReview={goToRunReview}
         />
       );
-    case "collaborate":
-      return <CollaborateStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
     // case "dashboard-intro":
     // return <DashboardIntroStage />;
     // // case "create-amp-cluster":
@@ -231,18 +223,14 @@ export function LabStageSlot({
     // );
     case "save-findings":
       return <SaveFindingsStage session={session} run={reviewRun} onComplete={completeCurrentStage} />;
-    case "promote-learning":
-      return (
-        <PromoteLearningStage
-          session={session}
-          feed={contextFeed}
-          onGoToCreateDatapack={goToCreateDatapack}
-        />
-      );
+    case "let-it-run":
+      return <LetItRunStage />;
+    case "public-runs":
+      return <PublicRunsStage />;
+    case "read-one-yourself":
+      return <ReadOneYourselfStage />;
     case "production-reviews":
       return <ProductionReviewsStage />;
-    case "production-trend":
-      return <ProductionTrendStage />;
     case "make-it-yours":
       return (
         <MakeItYoursStage
@@ -254,7 +242,6 @@ export function LabStageSlot({
           onByocRunChange={setByocReviewRun}
           onGoToCreateDatapack={goToCreateDatapack}
           onGoToDeployAgent={goToMeetAgentK}
-          onGoToCollaborate={() => progress.goToStageById("collaborate")}
           onEndLab={onEndLab}
         />
       );

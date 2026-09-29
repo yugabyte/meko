@@ -1,9 +1,9 @@
 // Spec → Build → Review → Fix & merge, with the stages that have no lab yet
-// dimmed. Sits above the lab list to place Labs inside the wider lifecycle.
+// dimmed. Sits on a lab's landing page to place it inside the wider lifecycle.
 
 import { cn } from "@/lib/utils";
 
-import { ADLC_STAGES, ADLC_STAGES_HINT } from "../data/adlcStages";
+import { ADLC_STAGES } from "../data/adlcStages";
 
 export function AdlcStageStrip() {
   return (
@@ -18,13 +18,19 @@ export function AdlcStageStrip() {
                 : "border-dashed border-border text-muted-foreground",
             )}
           >
-            <i
-              aria-hidden
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                stage.live ? "bg-primary" : "bg-muted-foreground/50",
-              )}
-            />
+            {stage.live ? (
+              // A ring that expands out of the dot and fades, so "live" reads
+              // as a heartbeat rather than another static bullet. The solid
+              // dot stays put underneath; only the ring moves, which keeps the
+              // chip's text from shifting. Honours prefers-reduced-motion —
+              // the dot alone still marks the stage.
+              <span aria-hidden className="relative inline-flex h-1.5 w-1.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75 motion-reduce:animate-none" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+              </span>
+            ) : (
+              <i aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
+            )}
             {stage.label}
           </span>
           {index < ADLC_STAGES.length - 1 && (
@@ -34,7 +40,6 @@ export function AdlcStageStrip() {
           )}
         </div>
       ))}
-      <p className="ml-1 text-xs text-muted-foreground">{ADLC_STAGES_HINT}</p>
     </div>
   );
 }

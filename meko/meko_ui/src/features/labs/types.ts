@@ -21,7 +21,6 @@ export type LabStageId =
   | "meet-agentk"
   | "share-with-agent"
   | "configure-agentk"
-  | "retrieval-cost"
   | "guardrail"
   // Chapter 3 — read the review
   | "run-review"
@@ -35,10 +34,11 @@ export type LabStageId =
   | "review-dashboard"
   // Chapter 4 — close the loop
   | "save-findings"
-  | "promote-learning"
   // Chapter 5 — see it in production
+  | "let-it-run"
+  | "public-runs"
+  | "read-one-yourself"
   | "production-reviews"
-  | "production-trend"
   | "make-it-yours";
 
 /** Blocks "Next" until the stage reports its own work done, by calling the

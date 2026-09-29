@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Check, Loader2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -62,17 +63,66 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
+  /**
+   * The action is running. Swaps the label for `busyLabel` behind a spinner
+   * and disables the button.
+   *
+   * Here rather than at each call site because an action button has the same
+   * three states everywhere -- idle, running, done -- and every screen that
+   * spelled them out by hand spelled them out slightly differently: one kept
+   * its primary colour when finished and another switched to outline, one
+   * showed a tick and another only changed its text.
+   */
+  busy?: boolean
+  busyLabel?: React.ReactNode
+  /** The action has completed. Shows a tick before `doneLabel`, keeps the
+   *  button's own variant, and disables it. */
+  done?: boolean
+  doneLabel?: React.ReactNode
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  (
+    {
+      className,
+      variant,
+      size,
+      asChild = false,
+      busy = false,
+      busyLabel,
+      done = false,
+      doneLabel,
+      disabled,
+      children,
+      ...props
+    },
+    ref
+  ) => {
     const Comp = asChild ? Slot : "button"
+    // `asChild` renders the caller's own element through Slot, which accepts
+    // exactly one child -- so the state decoration is skipped there and the
+    // caller keeps full control of its content.
+    const stateful = !asChild && (done || busy)
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        disabled={disabled || (!asChild && (busy || done))}
         {...props}
-      />
+      >
+        {stateful ? (
+          <>
+            {done ? (
+              <Check aria-hidden />
+            ) : (
+              <Loader2 className="animate-spin" aria-hidden />
+            )}
+            {done ? (doneLabel ?? children) : (busyLabel ?? children)}
+          </>
+        ) : (
+          children
+        )}
+      </Comp>
     )
   }
 )

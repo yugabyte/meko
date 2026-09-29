@@ -53,7 +53,7 @@ export function AgentIdentityCard({
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold text-foreground">{agentDisplayName}</h3>
           {deployment && (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant={isActive ? "success" : "secondary"} className="text-[10px]">
               {isActive ? "online" : deployment.status}
             </Badge>
           )}
