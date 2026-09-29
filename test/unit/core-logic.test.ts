@@ -6,7 +6,7 @@ import {
   LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
 import {
-  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
+  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { shortHost } from '../../src/server/core.js';
@@ -176,7 +176,6 @@ describe('config and db', () => {
   it('finds the Meko web app for known MCP hosts only', () => {
     expect(mekoWebUrl('https://mcp.mekodata.ai/mcp')).toBe('https://cloud.mekodata.ai');
     expect(mekoWebUrl('https://MCP.mekodata.ai/mcp/')).toBe('https://cloud.mekodata.ai');
-    expect(mekoWebUrl('https://mcp.mekodev.com/mcp')).toBe('https://app.mekodev.com');
     expect(mekoWebUrl('http://localhost:8000/mcp')).toBeNull();
     expect(mekoWebUrl('not a url')).toBeNull();
     expect(mekoWebUrl('http://localhost:8000/mcp', ' https://meko.example.com/ ')).toBe('https://meko.example.com');
@@ -541,8 +540,6 @@ describe('Meko credentials', () => {
     claudeSettings({});
     const cfg = structuredClone(DEFAULT_CONFIG);
     expect(resolveMekoApiUrl(cfg)).toBe('https://cloud.mekodata.ai/api/v1');
-    cfg.meko.url = 'https://mcp.mekodev.com/mcp';
-    expect(resolveMekoApiUrl(cfg)).toBe('https://app.mekodev.com/api/v1');
     cfg.meko.url = 'http://localhost:8000/mcp';
     expect(resolveMekoApiUrl(cfg)).toBeNull();
     cfg.meko.webUrl = 'https://meko.example.com';
@@ -552,6 +549,25 @@ describe('Meko credentials', () => {
     cfg.meko.apiUrl = 'https://config-api.example.com/api/v1';
     expect(resolveMekoApiUrl(cfg)).toBe('https://config-api.example.com/api/v1');
     delete process.env.MEKO_API_URL;
+  });
+
+  it('warns when Meko is on but its web app is not known', () => {
+    clearEnv();
+    delete process.env.MEKO_API_URL;
+    claudeSettings({});
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.meko.apiKey = 'config-key';
+    expect(mekoWebUrlWarning(cfg)).toBeNull();
+    cfg.meko.url = 'https://user:secret@meko.example.com/mcp';
+    expect(mekoWebUrlWarning(cfg)).toMatch(/web app for meko\.example\.com isn't known, so datapack links and sharing are off/);
+    expect(mekoWebUrlWarning(cfg)).not.toContain('secret');
+    cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
+    expect(mekoWebUrlWarning(cfg)).toMatch(/so datapack links are off/);
+    cfg.meko.webUrl = 'https://meko.example.com';
+    expect(mekoWebUrlWarning(cfg)).toBeNull();
+    cfg.meko.webUrl = '';
+    cfg.meko.enabled = false;
+    expect(mekoWebUrlWarning(cfg)).toBeNull();
   });
 
   it('takes a URL from a later source that has no key of its own', () => {

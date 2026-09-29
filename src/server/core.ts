@@ -7,7 +7,7 @@ import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
 import { CommentService } from './comments.js';
-import { mekoConfigured, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
+import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { writeHookFiles } from './claude.js';
@@ -218,6 +218,8 @@ export class Core extends EventEmitter {
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
+    const noWebUrl = mekoWebUrlWarning(this.cfg);
+    if (noWebUrl) this.log.warn(noWebUrl);
     await this.bindHooks();
     this.hooksOn = true;
     // A tmux service that is down must not keep the web server from starting: the UI stays

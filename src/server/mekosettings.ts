@@ -130,7 +130,7 @@ export async function nextMekoConfig(
   }
   const apiAfter = resolveMekoApiUrl(next);
   const recheck = reconnect || resolveMekoApiUrl(base) !== apiAfter;
-  // Worked out from a known Meko host, the API URL is trusted; one that came from a typed URL is checked.
+  // Worked out for Meko Cloud, the API URL is trusted; one that came from a typed URL is checked.
   const typed = next.meko.apiUrl !== base.meko.apiUrl || next.meko.webUrl !== base.meko.webUrl;
   if (typed && apiAfter && apiAfter !== resolveMekoApiUrl(base)) {
     const r = await tools.checkApi(apiAfter);

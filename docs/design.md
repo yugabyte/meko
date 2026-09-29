@@ -371,7 +371,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # enabled = false            # turn Meko off (projects work without datapacks); on by default
 # url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
 # api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
-# web_url = "…"              # Meko web app, for links; unset is worked out from the MCP URL (Cloud, mekodev)
+# web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
 capture_transcripts = false  # send session transcripts to Meko conversations (off for now)
 ```
@@ -655,7 +655,8 @@ knows to pass the right `datapack_id` when it searches them.
 >   a key from the environment or Claude Code's settings is ignored too) and back on (checked with
 >   Meko first; a new key turns it on as well). It sets the MCP server URL (empty means Meko Cloud, unless the
 >   environment or Claude Code's settings name one), the API key, and the web app and API URLs
->   (worked out from the MCP URL for Meko Cloud and mekodev; fill them in for your own Meko). The
+>   (worked out for Meko Cloud; for any other Meko, datapack links and sharing stay off until the
+>   web app URL is set, and the tab and the server log say so). The
 >   key never goes to the browser: the tab shows its last four characters and where it came from.
 >   A new URL or key is checked with a Meko ping before anything is saved; then the MCP connection
 >   is dropped (one still being opened with the old ones is dropped once it's up) so the next call

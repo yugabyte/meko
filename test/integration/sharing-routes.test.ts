@@ -151,22 +151,31 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
 
     expect((await call('PUT', '/api/settings', { meko: { url: 'ftp://x' } })).statusCode).toBe(400);
     env.mekoTools.state.checkError = 'invalid or expired token';
-    const bad = await call('PUT', '/api/settings', { meko: { url: 'https://mcp.mekodev.com/mcp', apiKey: 'mko_tkn_newkey000000' } });
+    const bad = await call('PUT', '/api/settings', { meko: { url: 'https://meko.example.com/mcp', apiKey: 'mko_tkn_newkey000000' } });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toMatch(/didn't accept that key: invalid or expired token. Nothing was saved/);
     expect(env.core.config.meko.url).toBe('');
     const onDisk = existsSync(env.core.paths.config) ? readFileSync(env.core.paths.config, 'utf8') : '';
-    expect(onDisk).not.toContain('mekodev');
+    expect(onDisk).not.toContain('meko.example.com');
 
     env.mekoTools.state.checkError = null;
     const before = env.meko.calls.filter((c) => c.name === 'reset').length;
-    const good = await call('PUT', '/api/settings', { meko: { url: 'https://mcp.mekodev.com/mcp', apiKey: 'mko_tkn_newkey000000' } });
+    const good = await call('PUT', '/api/settings', { meko: { url: 'https://meko.example.com/mcp', apiKey: 'mko_tkn_newkey000000' } });
     expect(good.statusCode).toBe(200);
-    expect(good.json().meko).toMatchObject({ url: 'https://mcp.mekodev.com/mcp', keyHint: '0000', effectiveWebUrl: 'https://app.mekodev.com' });
-    expect(env.mekoTools.calls.find((c) => c.name === 'check')?.args).toEqual(['https://mcp.mekodev.com/mcp', 'mko_tkn_newkey000000']);
+    expect(good.json().meko).toMatchObject({ url: 'https://meko.example.com/mcp', keyHint: '0000', effectiveWebUrl: null });
+    expect(env.mekoTools.calls.find((c) => c.name === 'check')?.args).toEqual(['https://meko.example.com/mcp', 'mko_tkn_newkey000000']);
     expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(before + 1);
-    expect(readFileSync(env.core.paths.config, 'utf8')).toContain('mcp.mekodev.com');
-    expect(env.core.state().meko.webUrl).toBe('https://app.mekodev.com');
+    expect(readFileSync(env.core.paths.config, 'utf8')).toContain('meko.example.com/mcp');
+    // A self-hosted MCP URL has no web app to work out until one is typed, and no API URL to check.
+    expect(env.core.state().meko.webUrl).toBeNull();
+    expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
+
+    // Back on Meko Cloud, its web app and API URLs are worked out and trusted: the API URL isn't checked.
+    const cloud = await call('PUT', '/api/settings', { meko: { url: 'https://mcp.mekodata.ai/mcp' } });
+    expect(cloud.statusCode).toBe(200);
+    expect(cloud.json().meko).toMatchObject({ url: '', effectiveWebUrl: 'https://cloud.mekodata.ai', effectiveApiUrl: 'https://cloud.mekodata.ai/api/v1' });
+    expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
+    expect(env.core.state().meko.webUrl).toBe('https://cloud.mekodata.ai');
 
     // A typed web app URL moves the API URL: that is checked (without the key), and nothing reconnects.
     const checks = env.mekoTools.calls.length;

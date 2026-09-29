@@ -395,7 +395,16 @@ function MekoTab({ status }: { status: MekoStatus }) {
           />
         </Field>
       </div>
-      <p className="hint">Leave the web app and API URLs empty for Meko Cloud and mekodev: they’re worked out from the MCP URL. Fill them in for your own Meko.</p>
+      <p className="hint">
+        Leave the web app and API URLs empty for Meko Cloud: they’re worked out from the MCP URL. For your own Meko, fill in
+        the web app URL; the API URL defaults to it plus /api/v1.
+      </p>
+      {status.configured && !m.effectiveWebUrl && (
+        <p className="confirm-warn" role="status">
+          AgentK can’t work out the web app for {hostOf(m.effectiveUrl) ?? 'this Meko'}, so datapack links
+          {m.effectiveApiUrl ? ' are' : ' and sharing are'} off. Set the web app URL to turn them on.
+        </p>
+      )}
 
       <div className="meko-status">
         <div className="meko-status-row">

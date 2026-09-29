@@ -32,6 +32,8 @@ export interface Config {
 
 /** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
 export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
+/** Meko Cloud's web app, which goes with DEFAULT_MEKO_URL. */
+export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
 
 export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777, name: '' },
@@ -183,20 +185,14 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
   return { url: url || DEFAULT_MEKO_URL, apiKey, keySource };
 }
 
-/** Meko Cloud web app for each known Meko MCP host. */
-const MEKO_WEB_BY_MCP_HOST: Record<string, string> = {
-  'mcp.mekodata.ai': 'https://cloud.mekodata.ai',
-  'mcp.mekodev.com': 'https://app.mekodev.com',
-};
-
 /**
- * The Meko web app that goes with an MCP URL, or null when it can't be known
- * (a local or self-hosted server). An explicit override always wins.
+ * The Meko web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else null (a local or
+ * self-hosted server, whose web app can't be known). An explicit override always wins.
  */
 export function mekoWebUrl(mcpUrl: string, override = ''): string | null {
   if (override.trim()) return override.trim().replace(/\/+$/, '');
   try {
-    return MEKO_WEB_BY_MCP_HOST[new URL(mcpUrl).hostname.toLowerCase()] ?? null;
+    return new URL(mcpUrl).hostname === new URL(DEFAULT_MEKO_URL).hostname ? DEFAULT_MEKO_WEB_URL : null;
   } catch {
     return null;
   }
@@ -218,6 +214,20 @@ export function resolveMekoApiUrl(cfg: Config): string | null {
   if (override) return override.replace(/\/+$/, '');
   const web = resolveMekoWebUrl(cfg);
   return web ? `${web}/api/v1` : null;
+}
+
+/** Why datapack links (and sharing) are off, for the server log; null when the web app is known or Meko is off. */
+export function mekoWebUrlWarning(cfg: Config): string | null {
+  if (!mekoConfigured(cfg) || resolveMekoWebUrl(cfg)) return null;
+  const off = resolveMekoApiUrl(cfg) ? 'datapack links are' : 'datapack links and sharing are';
+  // Only the host: a URL can carry credentials, and this goes to the log.
+  let host = 'this Meko';
+  try {
+    host = new URL(resolveMeko(cfg).url).host;
+  } catch {
+    /* not a URL: keep the generic name */
+  }
+  return `the Meko web app for ${host} isn't known, so ${off} off. Set it on the Meko tab in Settings, or with [meko] web_url in config.toml or MEKO_WEB_URL`;
 }
 
 /** The `env` block of Claude Code's user settings.json; empty when there's none. Values may be any JSON type. */
