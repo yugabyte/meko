@@ -415,6 +415,9 @@ which advances `wal_proposer_slot` and wakes synchronous-replication waiters —
 commit blocks until the safekeeper reports the WAL flushed (persisted to
 YugabyteDB, its durable store). The walproposer
 registers with `synchronous_standby_names` under application name `walproposer`.
+Every `synchronous_commit` level but `off` waits, `local` included: the fork
+makes `local` wait like `on`, because the compute's own WAL flush is not a
+durability point (`fsync=off`, and a restart discards `pg_wal`).
 `PageserverFeedback` LSNs are recorded in shared memory and read back by
 `replication_feedback_get_lsns()` (surfaced through the `backpressure_lsns()` SQL
 function as `received_lsn` / `consistent_lsn`).

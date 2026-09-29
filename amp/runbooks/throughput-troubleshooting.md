@@ -94,6 +94,7 @@ Cross-check the safekeeper is idle (low CPU) in Step 5. If SK CPU is low and WAL
 **Levers (load phase only — does NOT change the execute measurement):**
 - `ALTER SYSTEM SET synchronous_commit = off;` then `SELECT pg_reload_conf();` — commits return
   without waiting for SK durability. Multi-fold load speedup. Re-enable before a durability test.
+  `local` is not a cheaper middle ground: on amp it waits for the SK like `on`.
 - Fewer/larger commits (loader batch size) reduce the number of SyncRep waits.
 - Do **not** silently flip this for a run whose point is durability/latency — note it in results.
 
