@@ -75,6 +75,8 @@ type multitenantParams struct {
 	SeedRows int
 	// ForkSeedRows is the "large" parent for the fork-versus-size measurement.
 	ForkSeedRows int
+	// ForkRepeats is how many forks are timed off each parent.
+	ForkRepeats int
 	// EndpointCPU/EndpointMemory size each tenant's compute. They are set
 	// explicitly and small: tenants must FIT, and an unsized endpoint takes the
 	// product's default reservation, which is generous enough that a handful of
@@ -118,6 +120,7 @@ func multitenantParamsFromConfig(c *core.Config) multitenantParams {
 		MaxInterference: c.GetFloat("perf.multitenant.max_interference", 4),
 		SeedRows:        c.GetInt("perf.multitenant.seed_rows", 2000),
 		ForkSeedRows:    c.GetInt("perf.multitenant.fork_seed_rows", 20000),
+		ForkRepeats:     max(c.GetInt("perf.multitenant.fork_repeats", 5), 1),
 		// 4 cores and 8Gi, not the half-core the stress tier gives its light
 		// writers. A benchmark tenant loads a dataset and then serves a driver
 		// flat out. At 500m the compute sat pegged at its own limit: TPC-C's load
@@ -139,7 +142,7 @@ func multitenantParamsFromConfig(c *core.Config) multitenantParams {
 		EndpointCPU:         c.GetString("perf.multitenant.endpoint_cpu", "2"),
 		EndpointMemory:      c.GetString("perf.multitenant.endpoint_memory", "4Gi"),
 		MeasurementDuration: c.GetDuration("perf.multitenant.measurement_duration", 3*time.Minute),
-		Iterations:          c.GetInt("perf.multitenant.iterations", 3),
+		Iterations:          c.GetInt("perf.multitenant.iterations", 5),
 	}
 }
 
@@ -155,7 +158,7 @@ func init() {
 		Params:      []string{"perf.multitenant"},
 		// Setup (tenant creation, client pods, TPC-C's load), then Iterations solo
 		// runs per workload SERIALLY — solo means solo — and Iterations mixed runs
-		// concurrently. At the defaults (5 workloads × 3 × 5m, plus 3 × 5m mixed)
+		// concurrently. At the defaults (5 workloads × 5 × 3m, plus 5 × 3m mixed)
 		// that is ~90 minutes of measurement alone, and the measured phases must
 		// never be the part that runs out of budget.
 		Timeout: 4 * time.Hour,
@@ -509,22 +512,34 @@ func runMultitenant(t *core.T) error {
 			return fmt.Errorf("seed the minimal fork parent: %w", err)
 		}
 
-		emptyMS, err := timeFork(t, cl, poolID, minimal.ClusterID, minimal.BranchID, "fork-empty")
+		forks := func(name string) ([]float64, error) {
+			var out []float64
+			for i := 1; i <= params.ForkRepeats; i++ {
+				ms, err := timeFork(t, cl, poolID, minimal.ClusterID, minimal.BranchID, fmt.Sprintf("%s-%d", name, i))
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, ms)
+			}
+			return out, nil
+		}
+		empty, err := forks("fork-empty")
 		if err != nil {
 			return err
 		}
 		if err := seedTenant(t, &tenants[len(tenants)-1], params.ForkSeedRows); err != nil {
 			return err
 		}
-		seededMS, err := timeFork(t, cl, poolID, minimal.ClusterID, minimal.BranchID, "fork-seeded")
+		seeded, err := forks("fork-seeded")
 		if err != nil {
 			return err
 		}
-		s.Set("fork_empty_ms", fmt.Sprintf("%.0f", emptyMS))
-		s.Set("fork_seeded_ms", fmt.Sprintf("%.0f", seededMS))
+		emptyMS, seededMS := median(empty), median(seeded)
+		s.Set("fork_empty_ms", fmt.Sprint(empty))
+		s.Set("fork_seeded_ms", fmt.Sprint(seeded))
 		s.Set("seed_rows", params.ForkSeedRows)
-		t.Datapoint(core.Datapoint{Name: "multitenant.fork_empty_ms", Value: emptyMS, Unit: "ms", Direction: core.LowerIsBetter})
-		t.Datapoint(core.Datapoint{Name: "multitenant.fork_seeded_ms", Value: seededMS, Unit: "ms", Direction: core.LowerIsBetter})
+		t.Datapoint(core.Datapoint{Name: "multitenant.fork_empty_ms", Value: emptyMS, Unit: "ms", Direction: core.LowerIsBetter, N: len(empty), Samples: empty})
+		t.Datapoint(core.Datapoint{Name: "multitenant.fork_seeded_ms", Value: seededMS, Unit: "ms", Direction: core.LowerIsBetter, N: len(seeded), Samples: seeded})
 		// Copy-on-write means forking should not scale with the parent's size;
 		// recorded rather than gated, because one data size proves nothing on its
 		// own — the history is what will show it drifting.

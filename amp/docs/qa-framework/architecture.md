@@ -1136,8 +1136,9 @@ endpoint `perf.provisions` times** (default 3) and repeats the whole benchmark
 per provision — a warmup plus N iterations each — because iterations inside one
 stack agree to ~1% while stack-to-stack spread ran 20%+ before the stacks were
 pinned and sized Guaranteed (`perf.isolation`). The gated headline is the
-**median across provisions** of saturated throughput and of latency on one
-fixed-rate window at `perf.bench.fixed_rate_fraction` of it; saturated latency
+**median across provisions** of saturated throughput and of latency on the
+median of `perf.bench.fixed_rate_iterations` fixed-rate windows at
+`perf.bench.fixed_rate_fraction` of it; saturated latency
 is reported, not gated. The verdict is the **live arm**: as many stacks on the
 previous release run beside the run's own, and the gate is the median of the
 per-pair deltas with a sign test on the pairs, allowed the A/A band where A/A

@@ -1805,6 +1805,20 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 
+	// --- how many times each perf test repeats a measurement ---
+	for key, want := range map[string]int{
+		"perf.bench.iterations":            perf.DefaultBenchIterations,
+		"perf.bench.fixed_rate_iterations": perf.DefaultBenchFixedRateIterations,
+		"perf.microbench.rounds":           perf.DefaultMicrobenchRounds,
+		"perf.branch_depth.repeats":        perf.DefaultBranchDepthRepeats,
+		"perf.client_window.repeats":       perf.DefaultClientWindowRepeats,
+		"perf.latency_topology.iterations": perf.DefaultLatencyIterations,
+	} {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+
 	// --- perf/lifecycle (perf.lifecycle.*) ---
 	for key, want := range map[string]int{
 		"perf.lifecycle.iterations":      perf.DefaultLifecycleIterations,

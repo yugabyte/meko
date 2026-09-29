@@ -136,9 +136,11 @@ tests need (a single run would demand every cloud credential at once):
   (`perf.baseline.live`): a second set of stacks on the prior release runs the
   same workload concurrently, and the verdict is the median of the per-pair
   deltas (provision i against provision i), with a sign test on the pairs.
-  Throughput is gated at saturation and latency on one fixed-rate window at
+  Throughput is gated at saturation and latency on the median of
+  `perf.bench.fixed_rate_iterations` fixed-rate windows per stack at
   `perf.bench.fixed_rate_fraction` of the lowest arm's throughput. Every stack
-  is pinned to `perf.arm_node_selector`, and its tservers, masters and client
+  is pinned to `perf.arm_node_selector` and, with `perf.pin_zone`, to one of
+  that pool's zones, the same one for provision i of both arms. Its tservers, masters and client
   pod run with limits equal to requests (`perf.isolation.*`); the endpoint is
   Guaranteed already, by the product chart. A datapoint's allowance is its A/A
   band where `perf.baseline.aa` runs have built one. A band past
@@ -156,7 +158,9 @@ tests need (a single run would demand every cloud credential at once):
   set) and report them as series metrics under human keys — `[yb tserver] Write
   latency`, not a raw prometheus name. `microbench` samples the amp compute
   endpoint pod instead (`apps.metrics.endpoint_collect`, section `[endpoint]`),
-  since no YB backing is in its request path. Set
+  since no YB backing is in its request path, and runs its phase list
+  `perf.microbench.rounds` times, each round on a table of its own, gating each
+  phase's median. Set
   `apps.metrics.enabled=bool:false` to turn that off. `lifecycle` times the data
   lifecycle on a loaded tenant (fork off millions of rows, endpoint up on the
   fork, cold reads, pause/resume once `perf.lifecycle.pause_resume` is on, big
@@ -164,16 +168,23 @@ tests need (a single run would demand every cloud credential at once):
   `perf.lifecycle.iterations` concurrent fresh tenants with each phase's median
   as the portal-gated datapoint. Four more take a stack of their own too:
   `ops_latency` times every control-plane operation on fresh objects over
-  `perf.ops_latency.repeats` repeats, `chain_depth_read` times cold single-page
+  `perf.ops_latency.repeats` repeats (an operation with fewer samples than
+  five, or than the best-sampled operation when repeats is below five, such as a
+  cold endpoint create on a small stack, is reported and not gated),
+  `chain_depth_read` times cold single-page
   reads at each delta-chain depth and also asserts the `image_chain_limit`
   contract outright, `branch_depth` measures cold and warm point reads, a cold
-  scan, an insert, an update and a delete at each depth of a 20-deep fork chain
-  and asserts the first fork's cold p50 within `perf.branch_depth.max_ratio` of
+  scan, an insert, an update and a delete at each depth of a 20-deep fork chain,
+  each write and the scan split into `perf.branch_depth.repeats` disjoint slices
+  timed one statement each, and asserts the first fork's cold p50 within `perf.branch_depth.max_ratio` of
   the root's, and `idle_footprint` reads /proc inside an untouched
-  endpoint's container for its per-process idle CPU and RSS.
+  endpoint's container for its per-process idle CPU and RSS, gating the median
+  over the hold's intervals. `client_window` runs every operation
+  `perf.client_window.repeats` times round-robin and gates the medians.
   `latency_topology` benchmarks one sysbench (or pgbench,
   `perf.latency_topology.workload`) stack unshaped and then under each
-  `perf.latency_topology.topologies` entry, with tc netem delay injected into
+  `perf.latency_topology.topologies` entry, `perf.latency_topology.iterations`
+  windows each, with tc netem delay injected into
   the tservers' and the endpoint's network namespaces so the sites are the
   configured round trips apart (multi-AZ, multi-region, the endpoint remote
   from its universe), every round trip verified with ping first.

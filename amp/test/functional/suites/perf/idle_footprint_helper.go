@@ -21,11 +21,16 @@ const (
 	otherProcGroup = "other"
 )
 
+// CPUMilli and RSSMiB are medians over the hold's intervals and sweeps, so one
+// burst (a compaction, a GC pass) cannot set the number; CPURates and RSSRuns
+// are those samples. CPURates[i] is interval i for every group.
 type procUsage struct {
 	Name     string
 	CPUMilli float64
 	RSSMiB   float64
 	Procs    int
+	CPURates []float64
+	RSSRuns  []float64
 }
 
 type procSample struct {
@@ -34,11 +39,17 @@ type procSample struct {
 	Ticks     map[string]float64
 	Pages     map[string]float64
 	Counts    map[string]int
+	// PidTicks and PidGroup key utime+stime by pid, so an interval's CPU is
+	// the survivors' deltas: a group total drops by a whole lifetime when one
+	// of its processes exits.
+	PidTicks map[string]float64
+	PidGroup map[string]string
 }
 
 // comm is parenthesised and may contain spaces, so fields are counted from after the ")": utime and stime 12th and 13th, rss 22nd.
 func parseProcStat(out string, at time.Time) procSample {
-	s := procSample{At: at, PageBytes: defaultPageBytes, Ticks: map[string]float64{}, Pages: map[string]float64{}, Counts: map[string]int{}}
+	s := procSample{At: at, PageBytes: defaultPageBytes, Ticks: map[string]float64{}, Pages: map[string]float64{}, Counts: map[string]int{},
+		PidTicks: map[string]float64{}, PidGroup: map[string]string{}}
 	for _, line := range strings.Split(out, "\n") {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(line), 64); err == nil && v > 0 {
 			s.PageBytes = v
@@ -61,6 +72,10 @@ func parseProcStat(out string, at time.Time) procSample {
 			continue
 		}
 		g := procGroup(comm)
+		if pid := strings.TrimSpace(line[:lo]); pid != "" {
+			s.PidTicks[pid] = utime + stime
+			s.PidGroup[pid] = g
+		}
 		s.Ticks[g] += utime + stime
 		s.Pages[g] += rss
 		s.Counts[g]++
@@ -87,6 +102,24 @@ func procGroup(comm string) string {
 	}
 }
 
+// intervalTicks is each group's CPU ticks between two sweeps: every surviving
+// pid's delta, plus the whole count of a pid born in the interval. A pid that
+// exited is lost for its last interval, which /proc cannot recover.
+func intervalTicks(prev, cur procSample) map[string]float64 {
+	out := map[string]float64{}
+	for g := range cur.Ticks {
+		out[g] = 0
+	}
+	for pid, ticks := range cur.PidTicks {
+		d := ticks
+		if before, ok := prev.PidTicks[pid]; ok {
+			d = ticks - before
+		}
+		out[cur.PidGroup[pid]] += max(d, 0)
+	}
+	return out
+}
+
 func sampleIdleProcesses(ctx context.Context, pod *k8s.Kubectl, hold, interval time.Duration, logf func(string, ...any)) ([]procUsage, error) {
 	if interval <= 0 {
 		interval = DefaultIdleInterval
@@ -107,15 +140,13 @@ func sampleIdleProcesses(ctx context.Context, pod *k8s.Kubectl, hold, interval t
 	if len(prev.Counts) == 0 {
 		return nil, fmt.Errorf("the first /proc sweep parsed no process, so nothing was measured")
 	}
-	cpuSeconds := map[string]float64{}
-	rssSum := map[string]float64{}
-	rssN := map[string]int{}
+	cpuRates := map[string][]float64{}
+	rss := map[string][]float64{}
 	procs := map[string]int{}
-	var window float64
+	intervals := 0
 	addGauges := func(s procSample) {
 		for g, pages := range s.Pages {
-			rssSum[g] += pages * s.PageBytes / (1 << 20)
-			rssN[g]++
+			rss[g] = append(rss[g], pages*s.PageBytes/(1<<20))
 			procs[g] = max(procs[g], s.Counts[g])
 		}
 	}
@@ -133,27 +164,35 @@ func sampleIdleProcesses(ctx context.Context, pod *k8s.Kubectl, hold, interval t
 		}
 		dt := cur.At.Sub(prev.At).Seconds()
 		if dt > 0 {
-			window += dt
-			for g, ticks := range cur.Ticks {
-				if d := ticks - prev.Ticks[g]; d >= 0 {
-					cpuSeconds[g] += d / clockTicks
+			for g, ticks := range intervalTicks(prev, cur) {
+				// A group first seen now idled at 0 in every earlier interval.
+				for len(cpuRates[g]) < intervals {
+					cpuRates[g] = append(cpuRates[g], 0)
 				}
+				cpuRates[g] = append(cpuRates[g], ticks/clockTicks/dt*1000)
 			}
+			intervals++
 		}
 		addGauges(cur)
 		prev = cur
 	}
 
-	if window <= 0 {
+	if intervals == 0 {
 		return nil, fmt.Errorf("no /proc sweep after the first one succeeded, so no CPU window was measured")
 	}
 	var out []procUsage
-	for g, n := range rssN {
+	for g, runs := range rss {
+		rates := cpuRates[g]
+		for len(rates) < intervals {
+			rates = append(rates, 0)
+		}
 		out = append(out, procUsage{
 			Name:     g,
-			CPUMilli: cpuSeconds[g] / window * 1000,
-			RSSMiB:   rssSum[g] / float64(n),
+			CPUMilli: median(rates),
+			RSSMiB:   median(runs),
 			Procs:    procs[g],
+			CPURates: rates,
+			RSSRuns:  runs,
 		})
 	}
 	sortUsage(out)

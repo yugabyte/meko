@@ -124,6 +124,7 @@ func TestMultitenantKnobsAreDeclaredInDefaultConfig(t *testing.T) {
 		"perf.multitenant.benchbase_fork",
 		"perf.multitenant.seed_rows",
 		"perf.multitenant.fork_seed_rows",
+		"perf.multitenant.fork_repeats",
 		"perf.multitenant.max_interference",
 	} {
 		if !c.Has(key) {
@@ -139,8 +140,11 @@ func TestMultitenantKnobsAreDeclaredInDefaultConfig(t *testing.T) {
 	if p.EndpointCPU != "2" || p.EndpointMemory != "4Gi" {
 		t.Errorf("resolved endpoint size = %s/%s, want 2/4Gi", p.EndpointCPU, p.EndpointMemory)
 	}
-	if p.MeasurementDuration != 3*time.Minute || p.Iterations != 3 {
-		t.Errorf("resolved window = %s x%d, want 3m x3", p.MeasurementDuration, p.Iterations)
+	if p.MeasurementDuration != 3*time.Minute || p.Iterations != 5 {
+		t.Errorf("resolved window = %s x%d, want 3m x5", p.MeasurementDuration, p.Iterations)
+	}
+	if p.ForkRepeats != 5 {
+		t.Errorf("resolved fork_repeats = %d, want 5", p.ForkRepeats)
 	}
 	if got := mixTerminals(c); got != 16 {
 		t.Errorf("resolved terminals = %d, want 16", got)

@@ -69,7 +69,9 @@ const (
 	branchDepthTimings  = "bd_timings"
 	// "3" = insert and delete joined the update, and the id space is banded for
 	// them; the depth-N series from the earlier harnesses measured less work.
-	branchDepthHarnessRev = "3"
+	// "4" = each write and the cold scan is the median of perf.branch_depth.repeats
+	// statements over disjoint slices, not one statement over the whole band.
+	branchDepthHarnessRev = "4"
 
 	DefaultBranchDepthMaxDepth     = 20
 	DefaultBranchDepthRows         = 2000000
@@ -82,12 +84,13 @@ const (
 	DefaultBranchDepthEndpointCPU  = "2"
 	DefaultBranchDepthEndpointMem  = "4Gi"
 	DefaultBranchDepthReadyTimeout = 10 * time.Minute
+	DefaultBranchDepthRepeats      = 5
 
 	// Absolute floors on the gated datapoints: a history delta smaller than these
 	// is run-to-run noise at this dataset size, whatever percent it comes to.
 	branchDepthColdFloorMS  = 1.0
-	branchDepthScanFloorMS  = 1000.0
-	branchDepthWriteFloorMS = 500.0
+	branchDepthScanFloorMS  = 200.0
+	branchDepthWriteFloorMS = 100.0
 )
 
 // Every depth is measured and charted; these are the rungs whose numbers become
@@ -108,6 +111,7 @@ type branchDepthParams struct {
 	EndpointCPU  string
 	EndpointMem  string
 	ReadyTimeout time.Duration
+	Repeats      int
 }
 
 func branchDepthParamsFromConfig(c *core.Config) (branchDepthParams, error) {
@@ -123,6 +127,7 @@ func branchDepthParamsFromConfig(c *core.Config) (branchDepthParams, error) {
 		EndpointCPU:  c.GetString("perf.branch_depth.endpoint_cpu", DefaultBranchDepthEndpointCPU),
 		EndpointMem:  c.GetString("perf.branch_depth.endpoint_memory", DefaultBranchDepthEndpointMem),
 		ReadyTimeout: c.GetDuration("perf.branch_depth.ready_timeout", DefaultBranchDepthReadyTimeout),
+		Repeats:      max(c.GetInt("perf.branch_depth.repeats", DefaultBranchDepthRepeats), 1),
 	}
 	if p.MaxDepth < 1 {
 		return p, fmt.Errorf("perf.branch_depth.max_depth is %d; the test compares at least one fork with the root", p.MaxDepth)
@@ -135,6 +140,9 @@ func branchDepthParamsFromConfig(c *core.Config) (branchDepthParams, error) {
 	if p.TouchRows < 1 || 2*p.TouchRows*(p.MaxDepth+1) >= p.Rows {
 		return p, fmt.Errorf("perf.branch_depth.touch_rows %d needs an update and a delete band per level (2 x %d x %d) plus rows left pristine, which does not fit in the %d rows",
 			p.TouchRows, p.TouchRows, p.MaxDepth+1, p.Rows)
+	}
+	if p.TouchRows < p.Repeats {
+		return p, fmt.Errorf("perf.branch_depth.touch_rows %d cannot be split into %d write slices", p.TouchRows, p.Repeats)
 	}
 	if p.MaxRatio > 0 && (p.RatioDepth < 1 || p.RatioDepth > p.MaxDepth) {
 		return p, fmt.Errorf("perf.branch_depth.ratio_depth %d is not in 1..%d, so the max_ratio assertion would never run", p.RatioDepth, p.MaxDepth)
@@ -231,10 +239,15 @@ type branchLevel struct {
 	flushLSN string
 	cold     []float64
 	warm     []float64
-	scanMS   float64
-	insertMS float64
-	updateMS float64
-	deleteMS float64
+	// The *MS fields are the medians of the matching per-slice timings.
+	scanMS     float64
+	insertMS   float64
+	updateMS   float64
+	deleteMS   float64
+	scanRuns   []float64
+	insertRuns []float64
+	updateRuns []float64
+	deleteRuns []float64
 }
 
 type branchDepthRun struct {
@@ -528,18 +541,67 @@ func (r *branchDepthRun) measureLevel(l *branchLevel, attempt string) error {
 		return err
 	}
 	return r.t.Step(fmt.Sprintf("scan_cold_depth%d%s", l.depth, attempt), func(s *core.StepHandle) error {
-		start := time.Now()
-		n, err := l.ten.Conn.QueryInt(r.t.Context, "SELECT count(*) FROM "+branchDepthTable)
+		blocks, err := l.ten.Conn.QueryInt(r.t.Context,
+			fmt.Sprintf("SELECT pg_relation_size('%s') / current_setting('block_size')::bigint", branchDepthTable))
 		if err != nil {
 			return err
 		}
-		l.scanMS = msSince(start)
-		if n != int64(r.params.Rows) {
-			return fmt.Errorf("count(*) = %d on depth %d, want %d", n, l.depth, r.params.Rows)
+		slices := branchScanSlices(blocks, r.params.Repeats)
+		// A seq scan with a ctid filter would read the whole table per slice,
+		// every slice after the first warm.
+		var plan []string
+		if err := l.ten.Conn.Query(r.t.Context, func(rows pgx.Rows) error {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return err
+			}
+			plan = append(plan, strings.TrimSpace(line))
+			return nil
+		}, "EXPLAIN SELECT count(*) FROM "+branchDepthTable+" WHERE "+slices[0]); err != nil {
+			return err
 		}
+		if len(slices) > 1 && !strings.Contains(strings.Join(plan, " "), "Tid Range Scan") {
+			return fmt.Errorf("the planner does not scan a ctid slice by TID range (%q), so the slices are not disjoint reads", plan)
+		}
+		l.scanRuns = nil
+		var total int64
+		for _, q := range slices {
+			start := time.Now()
+			n, err := l.ten.Conn.QueryInt(r.t.Context, "SELECT count(*) FROM "+branchDepthTable+" WHERE "+q)
+			if err != nil {
+				return err
+			}
+			l.scanRuns = append(l.scanRuns, msSince(start))
+			total += n
+		}
+		l.scanMS = median(l.scanRuns)
+		if total != int64(r.params.Rows) {
+			return fmt.Errorf("count(*) over the %d block slices = %d on depth %d, want %d", len(l.scanRuns), total, l.depth, r.params.Rows)
+		}
+		s.Set("slices", len(l.scanRuns))
 		s.Set("ms", fmt.Sprintf("%.0f", l.scanMS))
 		return nil
 	})
+}
+
+// branchScanSlices cuts the table into n disjoint ctid block ranges, so each
+// slice is as cold as the whole scan was. The last is open-ended.
+func branchScanSlices(blocks int64, n int) []string {
+	n = max(n, 1)
+	if blocks < int64(n) {
+		n = 1
+	}
+	step := blocks / int64(n)
+	out := make([]string, n)
+	for i := range out {
+		lo := int64(i) * step
+		if i == n-1 {
+			out[i] = fmt.Sprintf("ctid >= '(%d,0)'::tid", lo)
+			continue
+		}
+		out[i] = fmt.Sprintf("ctid >= '(%d,0)'::tid AND ctid < '(%d,0)'::tid", lo, lo+step)
+	}
+	return out
 }
 
 func (r *branchDepthRun) timedReads(l *branchLevel, kind, attempt string, ids []int) ([]float64, error) {
@@ -633,43 +695,67 @@ func (r *branchDepthRun) sampleReadIDs(rnd *rand.Rand) []int {
 }
 
 // mutate runs the level's own writes: an INSERT above the loaded rows, an
-// UPDATE of its update band, a DELETE of its delete band. Insert and delete are
-// the same size, so count(*) is unchanged for the next level's scan.
+// UPDATE of its update band, a DELETE of its delete band, each once per
+// disjoint slice of the band. Insert and delete are the same size, so count(*)
+// is unchanged for the next level's scan.
 func (r *branchDepthRun) mutate(l *branchLevel) error {
-	slice := int64(r.sliceRows())
-	lo, hi := int64(l.depth)*slice+1, int64(l.depth+1)*slice
 	p := r.params
-	ops := []struct {
-		name string
-		stmt string
-		at   *float64
-	}{
-		{"insert", fmt.Sprintf("INSERT INTO %s (id, v, pad) SELECT g, g * 7, repeat('x', %d) FROM generate_series(%d, %d) g",
-			branchDepthTable, p.PayloadBytes, int64(p.Rows)+lo, int64(p.Rows)+hi), &l.insertMS},
-		{"update", fmt.Sprintf("UPDATE %s SET v = %d WHERE id BETWEEN %d AND %d",
-			branchDepthTable, -(l.depth + 1), lo, hi), &l.updateMS},
-		{"delete", fmt.Sprintf("DELETE FROM %s WHERE id BETWEEN %d AND %d",
-			branchDepthTable, int64(r.deleteBase())+lo, int64(r.deleteBase())+hi), &l.deleteMS},
-	}
-	for _, op := range ops {
-		if err := r.t.Step(fmt.Sprintf("%s_depth%d", op.name, l.depth), func(s *core.StepHandle) error {
-			start := time.Now()
-			n, err := l.ten.Conn.Exec(r.t.Context, op.stmt)
-			if err != nil {
+	base := int64(l.depth) * int64(r.sliceRows())
+	l.insertRuns, l.updateRuns, l.deleteRuns = nil, nil, nil
+	for i, sl := range branchWriteSlices(r.sliceRows(), p.Repeats) {
+		lo, hi := base+sl[0], base+sl[1]
+		ops := []struct {
+			name string
+			stmt string
+			at   *[]float64
+		}{
+			{"insert", fmt.Sprintf("INSERT INTO %s (id, v, pad) SELECT g, g * 7, repeat('x', %d) FROM generate_series(%d, %d) g",
+				branchDepthTable, p.PayloadBytes, int64(p.Rows)+lo, int64(p.Rows)+hi), &l.insertRuns},
+			{"update", fmt.Sprintf("UPDATE %s SET v = %d WHERE id BETWEEN %d AND %d",
+				branchDepthTable, -(l.depth + 1), lo, hi), &l.updateRuns},
+			{"delete", fmt.Sprintf("DELETE FROM %s WHERE id BETWEEN %d AND %d",
+				branchDepthTable, int64(r.deleteBase())+lo, int64(r.deleteBase())+hi), &l.deleteRuns},
+		}
+		for _, op := range ops {
+			if err := r.t.Step(fmt.Sprintf("%s_depth%d", op.name, l.depth), func(s *core.StepHandle) error {
+				s.Set("slice", i+1)
+				start := time.Now()
+				n, err := l.ten.Conn.Exec(r.t.Context, op.stmt)
+				if err != nil {
+					return err
+				}
+				ms := msSince(start)
+				*op.at = append(*op.at, ms)
+				if want := hi - lo + 1; n != want {
+					return fmt.Errorf("%s hit %d rows, want %d", op.name, n, want)
+				}
+				s.Set("rows", hi-lo+1)
+				s.Set("ms", fmt.Sprintf("%.0f", ms))
+				return nil
+			}); err != nil {
 				return err
 			}
-			*op.at = msSince(start)
-			if n != slice {
-				return fmt.Errorf("%s hit %d rows, want %d", op.name, n, slice)
-			}
-			s.Set("rows", slice)
-			s.Set("ms", fmt.Sprintf("%.0f", *op.at))
-			return nil
-		}); err != nil {
-			return err
 		}
 	}
+	l.insertMS, l.updateMS, l.deleteMS = median(l.insertRuns), median(l.updateRuns), median(l.deleteRuns)
 	return nil
+}
+
+// branchWriteSlices is n inclusive, 1-based ranges covering rows ids; the last
+// takes the remainder.
+func branchWriteSlices(rows, n int) [][2]int64 {
+	n = min(max(n, 1), max(rows, 1))
+	step := int64(rows / n)
+	out := make([][2]int64, n)
+	for i := range out {
+		lo := int64(i)*step + 1
+		hi := lo + step - 1
+		if i == n-1 {
+			hi = int64(rows)
+		}
+		out[i] = [2]int64{lo, hi}
+	}
+	return out
 }
 
 func (r *branchDepthRun) flush(l *branchLevel, step string) error {
@@ -771,17 +857,21 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 			info = append(info, core.Datapoint{Name: branchDepthPrefix + "read_warm_p50_ms" + suffix, Value: median(l.warm), Unit: "ms", Direction: core.LowerIsBetter})
 		}
 		if l.scanMS > 0 {
-			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "scan_cold_ms" + suffix, Value: l.scanMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthScanFloorMS})
+			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "scan_cold_ms" + suffix, Value: l.scanMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthScanFloorMS,
+				N: len(l.scanRuns), Samples: l.scanRuns})
 		}
 		if l.updateMS > 0 {
-			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "update_ms" + suffix, Value: l.updateMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthWriteFloorMS})
+			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "update_ms" + suffix, Value: l.updateMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthWriteFloorMS,
+				N: len(l.updateRuns), Samples: l.updateRuns})
 		}
 		for _, w := range []struct {
 			name string
 			v    float64
-		}{{"insert_ms", l.insertMS}, {"delete_ms", l.deleteMS}} {
+			runs []float64
+		}{{"insert_ms", l.insertMS, l.insertRuns}, {"delete_ms", l.deleteMS, l.deleteRuns}} {
 			if w.v > 0 {
-				info = append(info, core.Datapoint{Name: branchDepthPrefix + w.name + suffix, Value: w.v, Unit: "ms", Direction: core.LowerIsBetter})
+				info = append(info, core.Datapoint{Name: branchDepthPrefix + w.name + suffix, Value: w.v, Unit: "ms", Direction: core.LowerIsBetter,
+					N: len(w.runs), Samples: w.runs})
 			}
 		}
 		if l.endpointMS > 0 {
@@ -845,7 +935,7 @@ func branchDepthCharts(levels []*branchLevel) []core.Chart {
 
 func loadFieldsBranchDepth(p branchDepthParams) LoadFields {
 	return LoadFields{
-		Script:  fmt.Sprintf("branch_depth@%s/%s/d%d/t%d", p.EndpointCPU, p.EndpointMem, p.MaxDepth, p.TouchRows),
+		Script:  fmt.Sprintf("branch_depth@%s/%s/d%d/t%d/r%d", p.EndpointCPU, p.EndpointMem, p.MaxDepth, p.TouchRows, p.Repeats),
 		Rows:    p.Rows,
 		Clients: p.Samples,
 		Scale:   p.PayloadBytes,

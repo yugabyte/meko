@@ -2252,6 +2252,12 @@ perf:
   # Timeouts.
   ready_timeout: "5m"
   health_timeout: "5m"
+  # pin_zone keeps every pod of a benchmark stack (tservers, masters, client,
+  # endpoint) in one zone of the arm pool, discovered from its nodes at run
+  # time. Provision i of both arms shares a zone, so a pair's delta carries no
+  # cross-zone round trips. Off, the stacks straddle zones as the scheduler
+  # places them.
+  pin_zone: true
   # isolation is the resource shape of a benchmark stack (tpcc, pgbench,
   # sysbench, pgbench_uncached, latency_topology, and the lifecycle/microbench
   # arms): tservers, masters and the client pod pinned to arm_node_selector with
@@ -2276,9 +2282,7 @@ perf:
   # any per-workload duration knob).
   bench:
     # iterations is the number of MEASURED runs (excludes the warmup below).
-    # Iterations on one stack agree to ~1%, so a stack buys more than an
-    # iteration does: see perf.provisions.
-    iterations: 2
+    iterations: 5
     # warmup is one discarded run before the measured iterations (0 → skip). It
     # absorbs cold-cache / JIT / compaction warmup so the measured runs are steady.
     warmup: "30s"
@@ -2293,6 +2297,10 @@ perf:
     # saturated median tps, the lowest any concurrent arm proposed. Latency is
     # gated there: at saturation it is queueing delay. 0 skips it.
     fixed_rate_fraction: 0.6
+    # fixed_rate_iterations is how many fixed-rate windows run per stack; the
+    # gated latency is their median. One window per stack read 74, 11 and 709 ms
+    # p95 on the three stacks of one arm (run 48df0220).
+    fixed_rate_iterations: 5
     # sample_interval requests periodic in-run progress (for the time series);
     # a workload whose tool cannot report progress leaves the series empty.
     sample_interval: "1s"
@@ -2407,8 +2415,12 @@ perf:
     # tolerance is the fraction of the requested round trip (never under 1 ms)
     # a measured one may deviate before the shape counts as not taken.
     tolerance: 0.3
+    # iterations is how many measured windows each topology runs. It replaces
+    # perf.bench.iterations here: one stack, so they are every sample it gets.
+    iterations: 5
   # microbench is the phase-timed workload (perf/microbench): labelled DDL/bulk-DML
-  # statements, each one timed Exec, each a `microbench.<phase>` datapoint in ms.
+  # statements, each one timed Exec, run `rounds` times on a fresh table each;
+  # each phase's median across rounds is a `microbench.<phase>` datapoint in ms.
   # Unlike the rest of the tier it needs NO backing of its own and NO client pod —
   # it measures the amp COMPUTE ENDPOINT the env provider serves (sharedk8s /
   # universe), which is the layer the tserver-connected workloads
@@ -2434,6 +2446,10 @@ perf:
     # against real hardware: treat the first runs as establishing what the healthy
     # ratio is on your target. 0 disables the assertion, keeping the datapoint.
     max_phase_ratio: 2.0
+    # rounds is how many times the whole phase list runs, each round on a table
+    # of its own, so every DELETE removes its own freshly inserted rows. One
+    # DELETE of 200k rows read 303 to 989 ms on the same release.
+    rounds: 5
   # lifecycle is perf/lifecycle: the data lifecycle a customer runs on a
   # loaded tenant, each step timed as a lifecycle.<phase> datapoint — fork off a
   # near-empty branch and off `rows` rows, endpoint up on the fork, cold/warm
@@ -2444,8 +2460,9 @@ perf:
     # iterations runs the WHOLE lifecycle that many times CONCURRENTLY, each on
     # its own fresh tenant; the median of each tracked phase is what gets gated
     # (per-iteration timings live in phases.txt). One shot is not a signal here:
-    # create_endpoint has shown a 0.49 coefficient of variation in one run.
-    iterations: 3
+    # create_endpoint has shown a 0.49 coefficient of variation in one run, and
+    # three iterations left each phase's median resting on two draws.
+    iterations: 5
     # rows is the parent's dataset; ~100 bytes a row with the default payload.
     rows: 3000000
     # batch_rows is the size of one INSERT ... SELECT during the load.
@@ -2551,6 +2568,10 @@ perf:
     # level plus a pristine region the reads sample, so
     # 2 * (max_depth + 1) * touch_rows must leave rows over.
     touch_rows: 25000
+    # repeats cuts each band into that many disjoint slices, one timed statement
+    # each, and the cold scan into that many disjoint ctid block ranges; each
+    # datapoint is the median, so no write or scan rests on one statement.
+    repeats: 5
     # gate_depths are the rungs whose numbers become GATED datapoints; every
     # other depth still reports its numbers as informational. Gating all 21
     # rungs would put 105 series on the portal, most of them saying what their
@@ -2638,6 +2659,10 @@ perf:
     # that tail is the roll's cost, not an error outside the window. Only the
     # backing roll uses it.
     backing_settle: "2m"
+    # repeats is how many rounds of every operation run, round-robin; each
+    # datapoint is the median across them. Resize and the settings update
+    # alternate their target by round so every repeat changes something.
+    repeats: 5
   # scale is the shape every ladder shares: ONE tenant (one cluster, one
   # branch, one endpoint) that keeps getting more concurrent drivers —
   # perf/scale_tpcc, scale_ycsb, scale_pgbench escalate copies of one workload,
@@ -2895,7 +2920,7 @@ perf:
     # them (the reported figure is the median, with a coefficient of variation).
     # Every phase pays this twice — once solo per workload, once mixed.
     measurement_duration: "3m"
-    iterations: 3
+    iterations: 5
     # terminals is the per-tenant client concurrency for the benchbase drivers,
     # sampleapp_threads the reader AND writer count for the sample-app ones. A
     # tenant that is not driven hard enough shows no interference no matter how
@@ -2913,6 +2938,9 @@ perf:
     # non-trivial ancestor (a branch with no writes has no fork point at all).
     seed_rows: 2000
     fork_seed_rows: 20000
+    # fork_repeats is how many forks are timed off each of the two parents; the
+    # reported fork time is their median.
+    fork_repeats: 5
     # max_interference is the GATE: the worst allowed mixed-vs-solo throughput
     # ratio across workloads. 4x tolerates real contention while still failing a
     # collapse.

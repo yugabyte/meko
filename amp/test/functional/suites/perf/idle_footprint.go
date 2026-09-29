@@ -12,10 +12,16 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
+// idleCPUFloorMilli is the smallest CPU change worth a verdict. The safekeeper
+// idles near 3 mcores, so +1.5 mcores read as +43% (run b76ac4b9), and one
+// 100 Hz tick over a 30 s interval is already 0.33 mcores.
+const idleCPUFloorMilli = 2.0
+
 const (
 	testNameIdleFootprint = "perf/idle_footprint"
 	idlePrefix            = "idle."
-	idleHarnessRev        = "1"
+	// "2" = CPU and RSS are the median over the hold's intervals, not its mean.
+	idleHarnessRev = "2"
 )
 
 const (
@@ -146,25 +152,34 @@ func runIdleFootprint(t *core.T) error {
 }
 
 func idleDatapoints(usage []procUsage) (gated, info []core.Datapoint) {
-	var cpu, rss float64
+	var rss float64
+	var total []float64
 	var named int
 	for _, u := range usage {
-		cpuDP := core.Datapoint{Name: idlePrefix + "cpu_mcores@" + u.Name, Value: u.CPUMilli, Unit: "mcores", Direction: core.LowerIsBetter}
-		rssDP := core.Datapoint{Name: idlePrefix + "rss_mib@" + u.Name, Value: u.RSSMiB, Unit: "MiB", Direction: core.LowerIsBetter}
+		cpuDP := core.Datapoint{Name: idlePrefix + "cpu_mcores@" + u.Name, Value: u.CPUMilli, Unit: "mcores", Direction: core.LowerIsBetter,
+			MinDelta: idleCPUFloorMilli, N: len(u.CPURates), Samples: u.CPURates}
+		rssDP := core.Datapoint{Name: idlePrefix + "rss_mib@" + u.Name, Value: u.RSSMiB, Unit: "MiB", Direction: core.LowerIsBetter,
+			N: len(u.RSSRuns), Samples: u.RSSRuns}
 		info = append(info, core.Datapoint{Name: idlePrefix + "procs@" + u.Name, Value: float64(u.Procs), Unit: "procs", Direction: core.LowerIsBetter})
 		if u.Name == otherProcGroup {
 			info = append(info, cpuDP, rssDP)
 			continue
 		}
 		named++
-		cpu += u.CPUMilli
+		for i, r := range u.CPURates {
+			if i == len(total) {
+				total = append(total, 0)
+			}
+			total[i] += r
+		}
 		rss += u.RSSMiB
 		gated = append(gated, cpuDP, rssDP)
 	}
 	if named == 0 {
 		return gated, info
 	}
-	gated = append(gated, core.Datapoint{Name: idlePrefix + "cpu_mcores_total", Value: cpu, Unit: "mcores", Direction: core.LowerIsBetter})
+	gated = append(gated, core.Datapoint{Name: idlePrefix + "cpu_mcores_total", Value: median(total), Unit: "mcores", Direction: core.LowerIsBetter,
+		MinDelta: idleCPUFloorMilli, N: len(total), Samples: total})
 	info = append(info, core.Datapoint{Name: idlePrefix + "rss_mib_sum", Value: rss, Unit: "MiB", Direction: core.LowerIsBetter})
 	return gated, info
 }

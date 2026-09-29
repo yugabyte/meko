@@ -73,12 +73,14 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 	provErrs := make([]error, provisions)
 	baseResults := make([]BenchResult, provisions)
 	baseErrs := make([]error, provisions)
+	zones := armZones(t.Context, t, cfg, logf)
 	var wg sync.WaitGroup
 	for i := 1; i <= provisions; i++ {
+		zcfg := cfg.inZone(zoneFor(zones, i-1))
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			provResults[i-1], provErrs[i-1] = runOneProvision(t, spec, cfg, bc, provisionArm{n: i, of: provisions, barrier: barrier, rate: rate}, logf)
+			provResults[i-1], provErrs[i-1] = runOneProvision(t, spec, zcfg, bc, provisionArm{n: i, of: provisions, barrier: barrier, rate: rate}, logf)
 		}(i)
 		if baselineTag == "" {
 			continue
@@ -86,7 +88,7 @@ func runBenchProvisioned(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc B
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			baseResults[i-1], baseErrs[i-1] = runOneProvision(t, spec, cfg, bc, provisionArm{n: i, of: provisions, baseline: baselineTag, amp: &baseAmp, barrier: barrier, rate: rate}, logf)
+			baseResults[i-1], baseErrs[i-1] = runOneProvision(t, spec, zcfg, bc, provisionArm{n: i, of: provisions, baseline: baselineTag, amp: &baseAmp, barrier: barrier, rate: rate}, logf)
 		}(i)
 	}
 	wg.Wait()
@@ -295,6 +297,7 @@ func runOneProvision(t *core.T, spec benchWorkloadSpec, cfg perfConfig, bc Bench
 			if arm.baseline != "" {
 				s.Set("baseline", arm.baseline)
 			}
+			s.Set("node_selector", orNone(cfg.ArmNodeSelector))
 			return fn(t.Context)
 		}); err != nil {
 			return r.benchResult, err

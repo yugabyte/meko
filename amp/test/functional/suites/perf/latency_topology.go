@@ -57,6 +57,7 @@ const (
 	DefaultLatencyDevice      = "eth0"
 	DefaultLatencyVerifyPings = 10
 	DefaultLatencyTolerance   = 0.3
+	DefaultLatencyIterations  = 5
 )
 
 type latencyTopologyParams struct {
@@ -66,6 +67,7 @@ type latencyTopologyParams struct {
 	Topologies  []netshape.Topology
 	VerifyPings int
 	Tolerance   float64
+	Iterations  int
 }
 
 func latencyTopologyParamsFromConfig(c *core.Config) (latencyTopologyParams, error) {
@@ -88,6 +90,7 @@ func latencyTopologyParamsFromConfig(c *core.Config) (latencyTopologyParams, err
 		Topologies:  tps,
 		VerifyPings: c.GetInt("perf.latency_topology.verify_pings", DefaultLatencyVerifyPings),
 		Tolerance:   c.GetFloat("perf.latency_topology.tolerance", DefaultLatencyTolerance),
+		Iterations:  max(c.GetInt("perf.latency_topology.iterations", DefaultLatencyIterations), 1),
 	}
 	if p.Workload != "sysbench" && p.Workload != "pgbench" {
 		return latencyTopologyParams{}, fmt.Errorf("perf.latency_topology.workload %q: want sysbench or pgbench", p.Workload)
@@ -192,6 +195,7 @@ func runLatencyTopology(t *core.T) (err error) {
 		}
 	}
 	bc := benchConfigFromConfig(t.Options)
+	bc.Iterations = params.Iterations
 	// Its figures are ratios against the unshaped run on the same stack; a
 	// fixed-rate pass per topology would add minutes and no new ratio.
 	bc.FixedRateFraction = 0
@@ -199,6 +203,7 @@ func runLatencyTopology(t *core.T) (err error) {
 		return errors.New("perf.bench.skip_load and load_only do not apply: this test loads once and measures every topology on that dataset")
 	}
 	logf := t.Masker().Logf(log.Printf)
+	cfg = cfg.inZone(zoneFor(armZones(t.Context, t, cfg, logf), testZoneIndex(testNameLatencyTopology)))
 	r := &latencyRun{
 		t: t, cfg: cfg, bc: bc, params: params,
 		wl: latencyWorkloadFromConfig(t.Options, params.Workload, bc, cfg),

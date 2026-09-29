@@ -269,7 +269,7 @@ func TestRunBenchmarkFixedRateFailureKeepsSaturated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a failed fixed-rate window must not fail the benchmark: %v", err)
 	}
-	if res.FixedErr == nil || res.Fixed != nil || res.TPS.Median != 1000 {
+	if res.FixedErr == nil || len(res.Fixed) != 0 || res.TPS.Median != 1000 {
 		t.Errorf("want the saturated result with FixedErr set and no Fixed: %+v", res)
 	}
 	if specs := fixedRateSpecs("x", "latency_avg", res); specs != nil {
@@ -430,6 +430,87 @@ func TestShapeGateSkipsDriftOnSaturatedTails(t *testing.T) {
 		}
 		if m.Name == "pgbench.latency_p99" && !m.NoDrift {
 			t.Error("pgbench.latency_p99 skips the drift gate")
+		}
+	}
+}
+
+func TestOpsDatapointsKeepThinGroupsOutOfTheGate(t *testing.T) {
+	var results []phaseResult
+	for i := 0; i < 10; i++ {
+		results = append(results, phaseResult{Group: "endpoint_create_warm", MS: 100})
+	}
+	results = append(results, phaseResult{Group: "endpoint_create_cold", MS: 900}, phaseResult{Group: "endpoint_create_cold", MS: 950})
+	gated, info := opsDatapoints(results)
+	if len(gated) != 1 || gated[0].Name != "ops.endpoint_create_warm" {
+		t.Errorf("gated = %+v, want only the 10-sample group", gated)
+	}
+	found := false
+	for _, dp := range info {
+		found = found || dp.Name == "ops.endpoint_create_cold"
+	}
+	if !found {
+		t.Errorf("the 2-sample group must be reported, info = %+v", info)
+	}
+
+	// Repeats below the floor: the full-count groups still gate.
+	few := []phaseResult{{Group: "resize", MS: 1}, {Group: "resize", MS: 2}, {Group: "resize", MS: 3}}
+	if gated, _ := opsDatapoints(few); len(gated) != 1 {
+		t.Errorf("with 3 repeats every full group gates, got %+v", gated)
+	}
+}
+
+func TestIntervalTicksCountsSurvivorsOnly(t *testing.T) {
+	prev := parseProcStat("100 (postgres) S 0 0 0 0 0 0 0 0 0 0 50 50 0 0 0 0 0 0 0 0 10\n"+
+		"101 (postgres) S 0 0 0 0 0 0 0 0 0 0 500 500 0 0 0 0 0 0 0 0 10\n", time.Now())
+	// 101 exited with 1000 lifetime ticks; 100 used 10; 102 was born with 4.
+	cur := parseProcStat("100 (postgres) S 0 0 0 0 0 0 0 0 0 0 55 55 0 0 0 0 0 0 0 0 10\n"+
+		"102 (postgres) S 0 0 0 0 0 0 0 0 0 0 2 2 0 0 0 0 0 0 0 0 10\n", time.Now())
+	if got := intervalTicks(prev, cur)["postgres"]; got != 14 {
+		t.Errorf("postgres ticks = %v, want 14 (the survivor's 10 plus the newborn's 4)", got)
+	}
+}
+
+func TestIdleTotalIsTheMedianOfPerIntervalSums(t *testing.T) {
+	usage := []procUsage{
+		{Name: "pageserver", CPURates: []float64{10, 10, 40}, CPUMilli: 10},
+		{Name: "safekeeper", CPURates: []float64{1, 30, 1}, CPUMilli: 1},
+	}
+	gated, _ := idleDatapoints(usage)
+	for _, dp := range gated {
+		if dp.Name == idlePrefix+"cpu_mcores_total" && dp.Value != 40 {
+			t.Errorf("total = %v, want the median of 11, 40, 41 = 40", dp.Value)
+		}
+	}
+}
+
+func TestBranchSlicesAreDisjointAndCover(t *testing.T) {
+	for _, c := range []struct{ rows, n int }{{25000, 5}, {25003, 5}, {7, 5}, {3, 5}, {10, 1}} {
+		want := int64(1)
+		for _, sl := range branchWriteSlices(c.rows, c.n) {
+			if sl[0] != want || sl[1] < sl[0] {
+				t.Fatalf("rows %d n %d: slice %v does not start at %d", c.rows, c.n, sl, want)
+			}
+			want = sl[1] + 1
+		}
+		if want != int64(c.rows)+1 {
+			t.Errorf("rows %d n %d: slices end at %d, want %d", c.rows, c.n, want-1, c.rows)
+		}
+	}
+	for _, c := range []struct {
+		blocks int64
+		n      int
+		want   int
+	}{{28572, 5, 5}, {3, 5, 1}, {10, 1, 1}} {
+		got := branchScanSlices(c.blocks, c.n)
+		if len(got) != c.want || !strings.HasPrefix(got[0], "ctid >= '(0,0)'::tid") || strings.Contains(got[len(got)-1], "<") {
+			t.Errorf("blocks %d n %d: %v, want %d slices from block 0, the last open-ended", c.blocks, c.n, got, c.want)
+		}
+		for i := 1; i < len(got); i++ {
+			prevHi := got[i-1][strings.LastIndex(got[i-1], "<"):]
+			lo := strings.TrimPrefix(strings.SplitN(got[i], " AND", 2)[0], "ctid >= ")
+			if !strings.Contains(prevHi, lo) {
+				t.Errorf("blocks %d: slice %d starts at %s, previous ends %s", c.blocks, i, lo, prevHi)
+			}
 		}
 	}
 }

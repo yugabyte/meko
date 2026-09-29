@@ -209,9 +209,10 @@ func provisionLiveArm(ctx context.Context, t *core.T, cfg perfConfig, amp ampsta
 // current arm's error fails the caller; the baseline arm is best-effort and
 // comes back nil with its error as baseErr, so the caller can fall back to the
 // history gate and still record why the arm is missing.
-func provisionLiveArms(t *core.T, cfg perfConfig, tag string, logf func(string, ...any)) (cur, base *liveArm, baseErr error, err error) {
+func provisionLiveArms(t *core.T, testName string, cfg perfConfig, tag string, logf func(string, ...any)) (cur, base *liveArm, baseErr error, err error) {
 	var armErr error
 	stepErr := t.Step("provision_arms", func(s *core.StepHandle) error {
+		cfg = cfg.inZone(zoneFor(armZones(t.Context, t, cfg, logf), testZoneIndex(testName)))
 		s.Set("baseline", tag)
 		s.Set("node_selector", orNone(cfg.ArmNodeSelector))
 		baseAmp := ampstack.FromConfig(t.Options.Derive(baselineOverrides(tag)))

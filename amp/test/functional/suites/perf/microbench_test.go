@@ -93,10 +93,10 @@ func TestPhaseRatio(t *testing.T) {
 	}
 }
 
-// TestMicrobenchDatapoints: every single-shot phase is a gated ms datapoint, a
-// repeated group gates its median and keeps the cycles as info, the ratio
-// becomes its own datapoint, and it fails the run when it crosses the limit —
-// with no baseline anywhere in the picture.
+// TestMicrobenchDatapoints: every phase group is one gated ms datapoint, the
+// median of its timings carrying the samples, the ratio becomes its own
+// datapoint, and it fails the run when it crosses the limit — with no baseline
+// anywhere in the picture.
 func TestMicrobenchDatapoints(t *testing.T) {
 	results := []phaseResult{
 		{Name: "create", Group: phaseCreate, MS: 12},
@@ -115,7 +115,7 @@ func TestMicrobenchDatapoints(t *testing.T) {
 		t.Errorf("error = %q, want it to name the ratio datapoint", err)
 	}
 	wantGated := map[string]float64{
-		"microbench.create": 12, "microbench.insert_cold": 3704, "microbench.truncate_1": 31,
+		"microbench.create": 12, "microbench.insert_cold": 3704, "microbench.truncate": 31,
 		"microbench.insert_after_truncate": 18499,
 	}
 	if len(gated) != len(wantGated) {
@@ -131,11 +131,14 @@ func TestMicrobenchDatapoints(t *testing.T) {
 		if !strings.HasPrefix(dp.Name, microbenchDatapointPrefix) {
 			t.Errorf("phase datapoint %q is not namespaced", dp.Name)
 		}
+		if dp.Name == "microbench.insert_after_truncate" && (dp.N != 3 || len(dp.Samples) != 3) {
+			t.Errorf("the repeated group must carry its samples: %+v", dp)
+		}
 	}
-	if len(info) != 4 || info[0].Name != "microbench.insert_after_truncate_1" {
-		t.Fatalf("info datapoints = %+v, want the three cycles then the ratio", info)
+	if len(info) != 1 {
+		t.Fatalf("info datapoints = %+v, want only the ratio", info)
 	}
-	ratio := info[3]
+	ratio := info[0]
 	if ratio.Name != ratioDatapoint || ratio.Unit != "x" {
 		t.Fatalf("last info datapoint = %+v, want the ratio in x", ratio)
 	}
@@ -154,7 +157,7 @@ func TestMicrobenchDatapoints(t *testing.T) {
 	if err != nil {
 		t.Errorf("max_phase_ratio 0 must disable the assertion, got %v", err)
 	}
-	if len(info) != 4 {
+	if len(info) != 1 {
 		t.Errorf("max_phase_ratio 0 dropped the ratio datapoint: %+v", info)
 	}
 

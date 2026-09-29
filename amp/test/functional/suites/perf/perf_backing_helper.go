@@ -537,9 +537,9 @@ func orNone(s string) string {
 }
 
 // attachBenchSamples records the captured output of every benchmark run — the
-// discarded warmup and each measured iteration — onto sink under
-// <prefix>-warmup.out / <prefix>-iter-<n>.out, so the raw evidence for a
-// multi-iteration run lands on disk regardless of parse/gate outcome.
+// discarded warmup, each measured iteration and each fixed-rate window — onto
+// sink under <prefix>-warmup.out / <prefix>-iter-<n>.out / <prefix>-fixed-<n>.out,
+// so the raw evidence lands on disk regardless of parse/gate outcome.
 func attachBenchSamples(sink apps.ArtifactSink, res BenchResult, prefix string) {
 	if res.Warmup != nil && res.Warmup.Raw != "" {
 		_ = sink.Add(prefix+"-warmup.out", "log", []byte(res.Warmup.Raw))
@@ -547,6 +547,11 @@ func attachBenchSamples(sink apps.ArtifactSink, res BenchResult, prefix string) 
 	for i, s := range res.All {
 		if s.Raw != "" {
 			_ = sink.Add(fmt.Sprintf("%s-iter-%d.out", prefix, i), "log", []byte(s.Raw))
+		}
+	}
+	for i, s := range res.Fixed {
+		if s.Raw != "" {
+			_ = sink.Add(fmt.Sprintf("%s-fixed-%d.out", prefix, i), "log", []byte(s.Raw))
 		}
 	}
 }

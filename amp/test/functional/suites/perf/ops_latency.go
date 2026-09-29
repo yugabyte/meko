@@ -536,7 +536,17 @@ func opsInsert(ctx context.Context, conn *pg.Client, from, to int64, batch, payl
 	return nil
 }
 
+// opsMinGatedSamples is the fewest samples an operation must have to be gated,
+// capped at the most any operation got, so a run with repeats below it still
+// gates its full-count operations. endpoint_create_cold only gets the creates
+// that landed on a node without the image, which on a small stack is one or two.
+const opsMinGatedSamples = 5
+
 func opsDatapoints(results []phaseResult) (gated, info []core.Datapoint) {
+	most := 0
+	for _, g := range phaseGroups(results) {
+		most = max(most, len(groupValues(results, g)))
+	}
 	for _, g := range phaseGroups(results) {
 		vals := groupValues(results, g)
 		if len(vals) == 0 {
@@ -544,8 +554,9 @@ func opsDatapoints(results []phaseResult) (gated, info []core.Datapoint) {
 		}
 		st := aggregate(vals)
 		dp := core.Datapoint{Name: opsPrefix + g, Value: st.Median, Unit: "ms",
-			Direction: core.LowerIsBetter, SpreadPct: spreadPct(st)}
-		if strings.HasSuffix(g, "_task") || strings.HasSuffix(g, "_api") || g == "seed" || g == "transport_floor" {
+			Direction: core.LowerIsBetter, SpreadPct: spreadPct(st), N: len(vals), Samples: vals}
+		if strings.HasSuffix(g, "_task") || strings.HasSuffix(g, "_api") || g == "seed" || g == "transport_floor" ||
+			len(vals) < min(opsMinGatedSamples, most) {
 			info = append(info, dp)
 			continue
 		}

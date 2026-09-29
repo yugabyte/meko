@@ -28,14 +28,15 @@ import (
 // Bench defaults (perf.bench.*). Kept modest so a benchmark stays cheap while
 // still producing a stable multi-iteration signal.
 const (
-	// Iterations on one stack agree to ~1%; the spread is stack to stack, so a
-	// third iteration bought nothing a provision would not buy better.
-	DefaultBenchIterations          = 2
+	DefaultBenchIterations          = 5
 	DefaultBenchWarmup              = 30 * time.Second
 	DefaultBenchMeasurementDuration = 60 * time.Second
 	DefaultBenchCooldown            = 0 * time.Second
 	DefaultBenchDiscardFirst        = false
 	DefaultBenchFixedRateFraction   = 0.6
+	// One fixed-rate window per stack put 74 ms and 709 ms p95 beside 11 ms on
+	// three stacks of one arm (run 48df0220); the latency gate needs a median.
+	DefaultBenchFixedRateIterations = 5
 	benchLatencyFloorMS             = 1.0
 	DefaultBenchSampleInterval      = 1 * time.Second
 	DefaultBenchMinIterations       = 1
@@ -106,6 +107,8 @@ type BenchConfig struct {
 	// FixedRateFraction is the fixed-rate run's target as a fraction of the
 	// saturated median tps; 0 skips the run.
 	FixedRateFraction float64
+	// FixedRateIterations is how many fixed-rate windows run; below 1 means 1.
+	FixedRateIterations int
 	// StartGate blocks after the load phase until every concurrent arm is loaded,
 	// so the measured windows overlap; nil = start immediately.
 	StartGate func(context.Context) error
@@ -125,6 +128,7 @@ func benchConfigFromConfig(c *core.Config) BenchConfig {
 		SampleInterval:      c.GetDuration("perf.bench.sample_interval", DefaultBenchSampleInterval),
 		MinIterations:       c.GetInt("perf.bench.min_iterations", DefaultBenchMinIterations),
 		FixedRateFraction:   c.GetFloat("perf.bench.fixed_rate_fraction", DefaultBenchFixedRateFraction),
+		FixedRateIterations: c.GetInt("perf.bench.fixed_rate_iterations", DefaultBenchFixedRateIterations),
 		SkipLoad:            c.GetBool("perf.bench.skip_load", false),
 		LoadOnly:            c.GetBool("perf.bench.load_only", false),
 	}
@@ -173,9 +177,9 @@ type BenchResult struct {
 	LatencyP95 BenchStats
 	LatencyP99 BenchStats
 	CacheHit   BenchStats
-	// Fixed is the fixed-rate run at FixedTarget tps; nil when it was skipped.
+	// Fixed is every fixed-rate window at FixedTarget tps; empty when skipped.
 	// FixedErr is why it failed; the saturated result stands without it.
-	Fixed       *Sample
+	Fixed       []Sample
 	FixedErr    error
 	FixedTarget float64
 	FixedTPS    BenchStats
@@ -252,7 +256,8 @@ func RunBenchmark(ctx context.Context, ex exec.RemoteExecutor, w Workload, bc Be
 	res.LatencyP99 = aggregate(field(res.Kept, func(s Sample) float64 { return s.LatencyP99MS }))
 	res.CacheHit = aggregate(field(res.Kept, func(s Sample) float64 { return s.CacheHitPct }))
 	if err := runFixedRate(ctx, ex, w, bc, &res); err != nil {
-		res.Fixed, res.FixedTarget, res.FixedErr = nil, 0, err
+		// The windows that did run stay in Fixed for the attachments.
+		res.FixedTarget, res.FixedErr = 0, err
 	}
 	return res, nil
 }
@@ -272,15 +277,18 @@ func runFixedRate(ctx context.Context, ex exec.RemoteExecutor, w Workload, bc Be
 	if target <= 0 {
 		return nil
 	}
-	s, err := w.RunOnce(ctx, ex, RunParams{Duration: bc.MeasurementDuration, SampleInterval: bc.SampleInterval, Rate: target})
-	res.Fixed, res.FixedTarget = &s, target
-	if err != nil {
-		return fmt.Errorf("fixed-rate run at %.1f tps: %w", target, err)
+	res.FixedTarget = target
+	for i := 0; i < max(bc.FixedRateIterations, 1); i++ {
+		s, err := w.RunOnce(ctx, ex, RunParams{Duration: bc.MeasurementDuration, SampleInterval: bc.SampleInterval, Rate: target})
+		res.Fixed = append(res.Fixed, s)
+		if err != nil {
+			return fmt.Errorf("fixed-rate window %d at %.1f tps: %w", i+1, target, err)
+		}
 	}
-	res.FixedTPS = aggregate([]float64{s.TPS})
-	res.FixedAvg = aggregate([]float64{s.LatencyAvgMS})
-	res.FixedP95 = aggregate([]float64{s.LatencyP95MS})
-	res.FixedP99 = aggregate([]float64{s.LatencyP99MS})
+	res.FixedTPS = aggregate(field(res.Fixed, func(s Sample) float64 { return s.TPS }))
+	res.FixedAvg = aggregate(field(res.Fixed, func(s Sample) float64 { return s.LatencyAvgMS }))
+	res.FixedP95 = aggregate(field(res.Fixed, func(s Sample) float64 { return s.LatencyP95MS }))
+	res.FixedP99 = aggregate(field(res.Fixed, func(s Sample) float64 { return s.LatencyP99MS }))
 	return nil
 }
 
@@ -482,7 +490,9 @@ func splitDatapoints(specs []metricSpec) (gated, info []core.Datapoint) {
 // fixedRateSpecs is the fixed-rate run's metric set under prefix: the
 // latencies gated, the achieved rate reported. centre names the driver's primary
 // latency (TPC-C's is its median, the rest an average). A latency the driver
-// did not report (zero) is left out.
+// did not report (zero) is left out. NoDrift: the windows are repeats to take a
+// median over, and a saturated tail moved 78% between two iterations of one
+// healthy stack (run 60486d4d); nothing shows these windows steadier.
 func fixedRateSpecs(prefix, centre string, res BenchResult) []metricSpec {
 	if res.FixedTarget <= 0 {
 		return nil
@@ -492,9 +502,9 @@ func fixedRateSpecs(prefix, centre string, res BenchResult) []metricSpec {
 		{Name: p + "tps", Unit: "tps", Dir: core.HigherIsBetter, Stats: res.FixedTPS, Info: true},
 	}
 	for _, m := range []metricSpec{
-		{Name: p + centre, Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedAvg},
-		{Name: p + "latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedP95},
-		{Name: p + "latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedP99},
+		{Name: p + centre, Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedAvg, NoDrift: true},
+		{Name: p + "latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedP95, NoDrift: true},
+		{Name: p + "latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.FixedP99, NoDrift: true},
 	} {
 		if m.Stats.Median > 0 {
 			specs = append(specs, m)

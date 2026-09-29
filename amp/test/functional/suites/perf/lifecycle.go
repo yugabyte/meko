@@ -41,7 +41,7 @@ const (
 	DefaultLifecyclePauseResume   = false
 	DefaultLifecycleEndpointCPU   = "2"
 	DefaultLifecycleEndpointMem   = "4Gi"
-	DefaultLifecycleIterations    = 3
+	DefaultLifecycleIterations    = 5
 )
 
 type lifecycleParams struct {
@@ -151,7 +151,7 @@ func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf
 	id := identityFromConfig(t.Options, "", frameworkCommit(), load).forLiveArm(t.Options)
 	t.SetPerfIdentity(id.core())
 
-	cur, base, baseErr, err := provisionLiveArms(t, cfg, tag, logf)
+	cur, base, baseErr, err := provisionLiveArms(t, testNameLifecycle, cfg, tag, logf)
 	if cur != nil {
 		defer cur.teardown(logf)
 	}
@@ -777,10 +777,11 @@ func loadFieldsLifecycle(p lifecycleParams) LoadFields {
 		script += "+pause"
 	}
 	return LoadFields{
-		Script:  script,
-		Rows:    p.Rows,
-		Clients: p.ForkWriteRows,
-		Scale:   p.PayloadBytes,
-		Harness: lifecycleHarnessRev,
+		Script:     script,
+		Rows:       p.Rows,
+		Clients:    p.ForkWriteRows,
+		Scale:      p.PayloadBytes,
+		Iterations: p.Iterations,
+		Harness:    lifecycleHarnessRev,
 	}
 }

@@ -24,11 +24,12 @@ const (
 	testNameClientWindow = "perf/client_window"
 	cwPrefix             = "client_window."
 	cwTable              = "cw_probe"
-	cwHarnessRev         = "1"
+	// "2" = every operation runs perf.client_window.repeats times and each
+	// datapoint is the median across them.
+	cwHarnessRev = "2"
 
 	// A postmaster-context setting, so storing it forces a restart. Not shared_buffers: a bad value leaves a compute that cannot start again.
-	cwRestartSettingName  = "track_commit_timestamp"
-	cwRestartSettingValue = "on"
+	cwRestartSettingName = "track_commit_timestamp"
 )
 
 const (
@@ -55,6 +56,9 @@ const (
 	DefaultClientWindowJavaClient       = true
 	DefaultClientWindowBackingRollSleep = 30 * time.Second
 	DefaultClientWindowBackingSettle    = 2 * time.Minute
+	// backing_roll.first_success_after_seconds read 423 to 783 s on one release
+	// (meko#1441), so one roll per run says nothing about a build.
+	DefaultClientWindowRepeats = 5
 )
 
 var DefaultClientWindowOperations = []string{
@@ -77,6 +81,7 @@ type cwParams struct {
 	BackingRollSleep time.Duration
 	BackingSettle    time.Duration
 	PauseResume      bool
+	Repeats          int
 }
 
 func cwParamsFromConfig(c *core.Config) cwParams {
@@ -96,6 +101,7 @@ func cwParamsFromConfig(c *core.Config) cwParams {
 		BackingRollSleep: c.GetDuration("perf.client_window.backing_roll_sleep", DefaultClientWindowBackingRollSleep),
 		BackingSettle:    c.GetDuration("perf.client_window.backing_settle", DefaultClientWindowBackingSettle),
 		PauseResume:      c.GetBool("perf.lifecycle.pause_resume", DefaultLifecyclePauseResume),
+		Repeats:          max(c.GetInt("perf.client_window.repeats", DefaultClientWindowRepeats), 1),
 	}
 }
 
@@ -117,8 +123,8 @@ func init() {
 		Tags:       []string{"perf"},
 		OwningTeam: core.TeamControlPlane,
 		Description: "Measure the client-visible error window of every amp operation (compute restart, resize, a settings update that forces a restart, an endpoint upgrade roll and back, pause/resume and a rolling backing " +
-			"restart) from the controller task's own start, with a pgx pool, a pinned pgx session carrying a prepared statement and an idle transaction, and the Java sample app all driving the endpoint at " +
-			"perf.client_window.rate_tps. Each operation gates error_seconds, first_success_after_seconds and errors_total, and every error has to be a SQLSTATE in class 57 or 08, a severed socket or a statement timeout, with " +
+			"restart) from the controller task's own start, perf.client_window.repeats times each, with a pgx pool, a pinned pgx session carrying a prepared statement and an idle transaction, and the Java sample app all driving the endpoint at " +
+			"perf.client_window.rate_tps. Each operation gates the median of its error_seconds, first_success_after_seconds and errors_total across repeats, and every error has to be a SQLSTATE in class 57 or 08, a severed socket or a statement timeout, with " +
 			"nothing at all outside the window plus perf.client_window.grace.",
 		Params:  []string{"perf.client_window", "perf.gate", "perf.lifecycle"},
 		Timeout: 4 * time.Hour,
@@ -128,6 +134,7 @@ func init() {
 
 type cwResult struct {
 	Op                string
+	Round             int
 	ErrorSeconds      float64
 	FirstSuccessAfter float64
 	Errors            int
@@ -199,9 +206,13 @@ func runClientWindow(t *core.T) error {
 	defer stopDriver()
 	go r.drv.run(driverCtx)
 
-	for _, op := range r.operations() {
-		if err := r.measure(op); err != nil {
-			return err
+	// Round-robin, so a slow stretch of the cluster lands on every operation
+	// rather than on all the repeats of one.
+	for round := 1; round <= r.params.Repeats; round++ {
+		for _, op := range r.operations(round) {
+			if err := r.measure(op, round); err != nil {
+				return err
+			}
 		}
 	}
 	stopDriver()
@@ -340,7 +351,11 @@ type cwOp struct {
 	Run    func(ctx context.Context) (time.Time, error)
 }
 
-func (r *clientWindowRun) operations() []cwOp {
+// operations is one round. Resize and the settings update alternate their
+// target by round, because repeating the same target changes nothing and
+// measures no window.
+func (r *clientWindowRun) operations(round int) []cwOp {
+	even := round%2 == 0
 	var ops []cwOp
 	add := func(op cwOp) {
 		if r.params.wants(op.Name) {
@@ -348,8 +363,8 @@ func (r *clientWindowRun) operations() []cwOp {
 		}
 	}
 	add(cwOp{Name: cwComputeRestart, Run: r.restartCompute})
-	add(cwOp{Name: cwResize, Run: r.resize})
-	add(cwOp{Name: cwSettingsUpdate, Run: r.settingsUpdate})
+	add(cwOp{Name: cwResize, Run: func(ctx context.Context) (time.Time, error) { return r.resize(ctx, even) }})
+	add(cwOp{Name: cwSettingsUpdate, Run: func(ctx context.Context) (time.Time, error) { return r.settingsUpdate(ctx, even) }})
 	if r.params.wants(cwUpgradeRoll) {
 		away := cwOp{Name: cwUpgradeRoll, Run: r.upgradeRollAway}
 		back := cwOp{Name: cwUpgradeRollBack, Run: r.upgradeRollBack}
@@ -373,8 +388,9 @@ func (r *clientWindowRun) operations() []cwOp {
 	return ops
 }
 
-func (r *clientWindowRun) measure(op cwOp) error {
+func (r *clientWindowRun) measure(op cwOp, round int) error {
 	return r.t.Step("op_"+op.Name, func(s *core.StepHandle) error {
+		s.Set("round", round)
 		if op.Skip != "" {
 			s.Set("skipped", op.Skip)
 			r.logf("client_window: %s skipped: %s", op.Name, op.Skip)
@@ -383,7 +399,7 @@ func (r *clientWindowRun) measure(op cwOp) error {
 		if err := sleepCtx(r.t.Context, r.params.Hold); err != nil {
 			return err
 		}
-		mark := fmt.Sprintf("%s-%s", op.Name, r.t.ResourceSuffix())
+		mark := fmt.Sprintf("%s-%d-%s", op.Name, round, r.t.ResourceSuffix())
 		tx, err := beginIdleTx(r.t.Context, r.ten.Conn.Pool(), cwTable, mark)
 		if err != nil {
 			return err
@@ -428,6 +444,7 @@ func (r *clientWindowRun) measure(op cwOp) error {
 			return err
 		}
 		res.Prepared = prepared
+		res.Round = round
 		r.results = append(r.results, res)
 		s.Set("errors", res.Errors)
 		s.Set("error_seconds", fmt.Sprintf("%.1f", res.ErrorSeconds))
@@ -604,17 +621,24 @@ func (r *clientWindowRun) runningComputePod(ctx context.Context) (string, error)
 	return "", fmt.Errorf("no Running pod matches %q", selector)
 }
 
-func (r *clientWindowRun) resize(ctx context.Context) (time.Time, error) {
+func (r *clientWindowRun) resize(ctx context.Context, home bool) (time.Time, error) {
+	cpu, mem := r.params.ResizeCPU, r.params.ResizeMem
+	if home {
+		cpu, mem = r.params.EndpointCPU, r.params.EndpointMem
+	}
 	return r.async(ctx, func() (controller.Task, string, error) {
 		return r.cl.ResizeEndpoint(ctx, r.poolID, r.ten.ClusterID, r.ten.BranchID, r.ten.Endpoint.ID,
-			controller.ResizeEndpointRequest{Resources: controller.EndpointResources{
-				CPU: r.params.ResizeCPU, Memory: r.params.ResizeMem}})
+			controller.ResizeEndpointRequest{Resources: controller.EndpointResources{CPU: cpu, Memory: mem}})
 	})
 }
 
-func (r *clientWindowRun) settingsUpdate(ctx context.Context) (time.Time, error) {
+func (r *clientWindowRun) settingsUpdate(ctx context.Context, home bool) (time.Time, error) {
 	start := time.Now()
-	settings := map[string]string{cwRestartSettingName: cwRestartSettingValue}
+	value := "on"
+	if home {
+		value = "off"
+	}
+	settings := map[string]string{cwRestartSettingName: value}
 	out, err := r.cl.UpdateEndpointSettings(ctx, r.poolID, r.ten.ClusterID, r.ten.BranchID, r.ten.Endpoint.ID,
 		controller.UpdateSettingsRequest{PgSettings: &settings})
 	if err != nil {
@@ -626,7 +650,7 @@ func (r *clientWindowRun) settingsUpdate(ctx context.Context) (time.Time, error)
 		}
 	}
 	return start, fmt.Errorf("%s=%s restarted nothing (%+v), so this step measured no window",
-		cwRestartSettingName, cwRestartSettingValue, out.Endpoints)
+		cwRestartSettingName, value, out.Endpoints)
 }
 
 // The version has to change for the pod to move: a roll onto the version already recorded re-renders an identical release and helm leaves the pod alone.
@@ -752,6 +776,8 @@ func (r *clientWindowRun) checkJava(s *core.StepHandle) error {
 	offset := captured.Sub(anchor)
 	errs := parseJavaErrors(logText, offset)
 	s.Set("exceptions", len(errs))
+	perOp := map[string][]float64{}
+	var ops []string
 	for i := range r.results {
 		res := &r.results[i]
 		windowEnd := res.Start.Add(time.Duration(res.FirstSuccessAfter * float64(time.Second)))
@@ -769,8 +795,14 @@ func (r *clientWindowRun) checkJava(s *core.StepHandle) error {
 					res.Op, e.SQLState, e.Line)
 			}
 		}
-		s.Set(res.Op+"_java_errors", n)
-		r.t.Metric(cwPrefix+res.Op+".java_errors", float64(n), "count")
+		if _, ok := perOp[res.Op]; !ok {
+			ops = append(ops, res.Op)
+		}
+		perOp[res.Op] = append(perOp[res.Op], float64(n))
+	}
+	for _, op := range ops {
+		s.Set(op+"_java_errors", fmt.Sprint(perOp[op]))
+		r.t.Metric(cwPrefix+op+".java_errors", median(perOp[op]), "count")
 	}
 	return nil
 }
@@ -784,17 +816,27 @@ func (r *clientWindowRun) gate(s *core.StepHandle) error {
 	// One second of probes: at 10 tps a single extra failed probe is +14% on a
 	// median of 7, far inside what the run-to-run count already varies by.
 	errFloor := float64(r.params.RateTPS)
-	for _, res := range r.results {
+	for _, op := range cwOps(r.results) {
+		dp := func(metric, unit string, floor float64, get func(cwResult) float64) core.Datapoint {
+			var vals []float64
+			for _, res := range r.results {
+				if res.Op == op {
+					vals = append(vals, get(res))
+				}
+			}
+			return core.Datapoint{Name: cwPrefix + op + "." + metric, Value: median(vals), Unit: unit, Direction: core.LowerIsBetter,
+				MinDelta: floor, N: len(vals), Samples: vals}
+		}
 		gated = append(gated,
-			core.Datapoint{Name: cwPrefix + res.Op + ".error_seconds", Value: res.ErrorSeconds, Unit: "s", Direction: core.LowerIsBetter, MinDelta: secFloor},
-			core.Datapoint{Name: cwPrefix + res.Op + ".first_success_after_seconds", Value: res.FirstSuccessAfter, Unit: "s", Direction: core.LowerIsBetter, MinDelta: secFloor},
-			core.Datapoint{Name: cwPrefix + res.Op + ".errors_total", Value: float64(res.Errors), Unit: "count", Direction: core.LowerIsBetter, MinDelta: errFloor},
+			dp("error_seconds", "s", secFloor, func(c cwResult) float64 { return c.ErrorSeconds }),
+			dp("first_success_after_seconds", "s", secFloor, func(c cwResult) float64 { return c.FirstSuccessAfter }),
+			dp("errors_total", "count", errFloor, func(c cwResult) float64 { return float64(c.Errors) }),
 		)
 		info = append(info,
-			core.Datapoint{Name: cwPrefix + res.Op + ".transport_errors", Value: float64(res.Transport), Unit: "count", Direction: core.LowerIsBetter},
-			core.Datapoint{Name: cwPrefix + res.Op + ".timeouts", Value: float64(res.Timeouts), Unit: "count", Direction: core.LowerIsBetter},
-			core.Datapoint{Name: cwPrefix + res.Op + ".relay_errors", Value: float64(res.Relay), Unit: "count", Direction: core.LowerIsBetter},
-			core.Datapoint{Name: cwPrefix + res.Op + ".operation_seconds", Value: res.TaskSeconds, Unit: "s", Direction: core.LowerIsBetter},
+			dp("transport_errors", "count", 0, func(c cwResult) float64 { return float64(c.Transport) }),
+			dp("timeouts", "count", 0, func(c cwResult) float64 { return float64(c.Timeouts) }),
+			dp("relay_errors", "count", 0, func(c cwResult) float64 { return float64(c.Relay) }),
+			dp("operation_seconds", "s", 0, func(c cwResult) float64 { return c.TaskSeconds }),
 		)
 	}
 	s.Set("operations", len(r.results))
@@ -806,18 +848,26 @@ func (r *clientWindowRun) gate(s *core.StepHandle) error {
 		id, r.logf)
 }
 
+func cwOps(results []cwResult) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, res := range results {
+		if !seen[res.Op] {
+			seen[res.Op] = true
+			out = append(out, res.Op)
+		}
+	}
+	return out
+}
+
 func cwChart(results []cwResult) core.Chart {
 	var errSeries, recoverySeries []core.ChartPoint
 	for i, res := range results {
 		errSeries = append(errSeries, core.ChartPoint{X: float64(i + 1), Y: res.ErrorSeconds})
 		recoverySeries = append(recoverySeries, core.ChartPoint{X: float64(i + 1), Y: res.FirstSuccessAfter})
 	}
-	names := make([]string, 0, len(results))
-	for _, res := range results {
-		names = append(names, res.Op)
-	}
 	return core.Chart{
-		Title:  "Client window per operation (" + strings.Join(names, ", ") + ")",
+		Title:  "Client window per operation, in run order (" + strings.Join(cwOps(results), ", ") + ", repeated)",
 		Kind:   core.ChartBar,
 		XLabel: "operation", YLabel: "seconds",
 		Series: []core.ChartSeries{
@@ -832,8 +882,9 @@ func loadFieldsClientWindow(p cwParams, clients int) LoadFields {
 		Script: fmt.Sprintf("client_window:%s@%s/%s/rate%d/grace%s/hold%s/stmt%s/settle%s",
 			strings.Join(p.Operations, "+"), p.EndpointCPU, p.EndpointMem,
 			p.RateTPS, p.Grace, p.Hold, p.StatementTimeout, p.BackingSettle),
-		Clients: clients,
-		Harness: cwHarnessRev,
+		Clients:    clients,
+		Iterations: p.Repeats,
+		Harness:    cwHarnessRev,
 	}
 }
 

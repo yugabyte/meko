@@ -4,7 +4,9 @@
 // WHAT it measures: labelled SQL PHASES, not steady-state throughput. Each phase
 // is one timed Exec through apps/pg — create, a cold bulk insert, then
 // truncate + re-insert cycles, a full count, a PK lookup, a bulk update, a bulk
-// delete, drop — and each becomes a `microbench.<phase>` datapoint in ms. The
+// delete, drop — run perf.microbench.rounds times, every round on a table of its
+// own, and each phase's median across rounds is a `microbench.<phase>` datapoint
+// in ms. The
 // GATE is a ratio computed INSIDE the run: median(insert_after_truncate) /
 // insert_cold, emitted as its own datapoint and asserted against
 // perf.microbench.max_phase_ratio. Because the reference is another phase of the
@@ -24,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +60,10 @@ const (
 	// on real hardware — the first runs should be treated as establishing what
 	// the healthy ratio is.
 	DefaultMicrobenchMaxPhaseRatio = 2.0
+	// DefaultMicrobenchRounds is how many times the whole phase list runs, each
+	// round on a fresh table. One DELETE of 200k rows read anywhere from 303 to
+	// 989 ms on the same release, so a single timing cannot carry a verdict.
+	DefaultMicrobenchRounds = 5
 )
 
 // Phase groups. A phase's group is its datapoint prefix and the key the ratio
@@ -81,6 +88,7 @@ type microbenchParams struct {
 	Rows           int
 	TruncateCycles int
 	MaxPhaseRatio  float64
+	Rounds         int
 }
 
 // microbenchParamsFromConfig reads perf.microbench.* into a microbenchParams.
@@ -89,6 +97,7 @@ func microbenchParamsFromConfig(c *core.Config) microbenchParams {
 		Rows:           c.GetInt("perf.microbench.rows", DefaultMicrobenchRows),
 		TruncateCycles: c.GetInt("perf.microbench.truncate_cycles", DefaultMicrobenchTruncateCycles),
 		MaxPhaseRatio:  c.GetFloat("perf.microbench.max_phase_ratio", DefaultMicrobenchMaxPhaseRatio),
+		Rounds:         max(c.GetInt("perf.microbench.rounds", DefaultMicrobenchRounds), 1),
 	}
 }
 
@@ -110,7 +119,7 @@ func init() {
 		Tags:       []string{"perf"},
 		OwningTeam: core.TeamCompute,
 		Description: "Time labelled DDL/bulk-DML phases (create, cold 200k insert, truncate + re-insert cycles, count, PK lookup, update, delete, drop) " +
-			"through an amp compute endpoint, and gate median(insert_after_truncate)/insert_cold against perf.microbench.max_phase_ratio — an intra-run ratio, so it asserts with no stored baseline.",
+			"through an amp compute endpoint, perf.microbench.rounds times on a fresh table each, gate each phase's median across rounds, and gate median(insert_after_truncate)/insert_cold against perf.microbench.max_phase_ratio — an intra-run ratio, so it asserts with no stored baseline.",
 		Params: []string{"perf.microbench", "perf.baseline", "perf.baseline_path", "perf.update_baseline", "perf.latency_rise_pct", "perf.ready_timeout"},
 		Run:    runMicrobench,
 	})
@@ -151,15 +160,17 @@ func runMicrobench(t *core.T) error {
 	}
 
 	table := "mb_" + t.ResourceSuffix()
-	phases := microbenchPhases(table, params)
+	phases := microbenchRounds(table, params)
 	var results []phaseResult
 
 	if err := t.Step("run_phases", func(s *core.StepHandle) error {
-		// The phase list ends in DROP, but a phase failing part-way leaves the
+		// Each round ends in DROP, but a phase failing part-way leaves its
 		// table behind on a shared env.
 		defer func() {
 			if len(results) < len(phases) {
-				_, _ = client.Exec(context.WithoutCancel(t.Context), "DROP TABLE IF EXISTS "+table)
+				for _, tbl := range microbenchTables(table, params) {
+					_, _ = client.Exec(context.WithoutCancel(t.Context), "DROP TABLE IF EXISTS "+tbl)
+				}
 			}
 		}()
 		stepper := func(name string, fn func(set func(string, any)) error) error {
@@ -169,13 +180,14 @@ func runMicrobench(t *core.T) error {
 		results = r
 		s.Set("phases", len(results))
 		s.Set("rows", params.Rows)
+		s.Set("rounds", params.Rounds)
 		return err
 	}); err != nil {
 		attachPhases(t, results)
 		return err
 	}
 	attachPhases(t, results)
-	t.Chart(phaseChart(results))
+	t.Chart(phaseChart(medianPhases(results)))
 
 	return t.Step("gate_phase_ratio", func(s *core.StepHandle) error {
 		gated, info, ratioErr := microbenchDatapoints(results, params)
@@ -198,7 +210,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 	id := identityFromConfig(t.Options, "", frameworkCommit(), load).forLiveArm(t.Options)
 	t.SetPerfIdentity(id.core())
 
-	cur, base, armErr, err := provisionLiveArms(t, cfg, tag, logf)
+	cur, base, armErr, err := provisionLiveArms(t, testNameMicrobench, cfg, tag, logf)
 	if cur != nil {
 		defer cur.teardown(logf)
 	}
@@ -234,7 +246,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 	}
 
 	table := "mb_" + t.ResourceSuffix()
-	phases := microbenchPhases(table, params)
+	phases := microbenchRounds(table, params)
 
 	var baseResults []phaseResult
 	var baseErr error
@@ -259,6 +271,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 		results = r
 		s.Set("phases", len(results))
 		s.Set("rows", params.Rows)
+		s.Set("rounds", params.Rounds)
 		s.Set("baseline", tag)
 		return err
 	})
@@ -268,7 +281,7 @@ func runMicrobenchProvisioned(t *core.T, cfg perfConfig, params microbenchParams
 	if stepErr != nil {
 		return stepErr
 	}
-	t.Chart(phaseChart(results))
+	t.Chart(phaseChart(medianPhases(results)))
 	if baseErr != nil {
 		logf("perf: WARN live baseline arm failed (%v) — gating on history instead", baseErr)
 		baseResults = nil
@@ -307,6 +320,34 @@ type phase struct {
 	Name  string // unique within the run (a repeated group's phases are numbered)
 	Group string
 	SQL   string
+}
+
+// microbenchRounds is params.Rounds copies of the phase list, round i on table
+// <table>_r<i> with its phases named r<i>_<phase>. The group is unchanged, so a
+// phase's datapoint aggregates every round.
+func microbenchRounds(table string, params microbenchParams) []phase {
+	if params.Rounds <= 1 {
+		return microbenchPhases(table, params)
+	}
+	var out []phase
+	for i, tbl := range microbenchTables(table, params) {
+		for _, ph := range microbenchPhases(tbl, params) {
+			ph.Name = fmt.Sprintf("r%d_%s", i+1, ph.Name)
+			out = append(out, ph)
+		}
+	}
+	return out
+}
+
+func microbenchTables(table string, params microbenchParams) []string {
+	if params.Rounds <= 1 {
+		return []string{table}
+	}
+	out := make([]string, params.Rounds)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s_r%d", table, i+1)
+	}
+	return out
 }
 
 // microbenchPhases builds the phase list: create → cold bulk insert → N
@@ -363,6 +404,14 @@ func runPhasesPaired(ctx context.Context, client pgExecer, phases []phase, logf 
 	results := make([]phaseResult, 0, len(phases))
 	for _, ph := range phases {
 		pair.sync(0, ph.Name)
+		// Every round's step shares the bare phase name, so the report shows one
+		// row per phase; the round rides on the step.
+		step, round := ph.Name, 0
+		if n, rest, ok := strings.Cut(ph.Name, "_"); ok && strings.HasPrefix(n, "r") {
+			if v, err := strconv.Atoi(n[1:]); err == nil {
+				step, round = rest, v
+			}
+		}
 		var ms float64
 		// The timing stays inside the step body: the step's span is the measured
 		// window, not a second measurement of it.
@@ -371,12 +420,15 @@ func runPhasesPaired(ctx context.Context, client pgExecer, phases []phase, logf 
 			_, err := client.Exec(ctx, ph.SQL)
 			ms = float64(time.Since(start).Microseconds()) / 1000
 			set("group", ph.Group)
+			if round > 0 {
+				set("round", round)
+			}
 			set("ms", fmt.Sprintf("%.1f", ms))
 			return err
 		}
 		var err error
 		if stepper != nil {
-			err = stepper(ph.Name, run)
+			err = stepper(step, run)
 		} else {
 			err = run(func(string, any) {})
 		}
@@ -392,28 +444,19 @@ func runPhasesPaired(ctx context.Context, client pgExecer, phases []phase, logf 
 }
 
 // microbenchDatapoints turns the timings into the tier's datapoints and applies
-// the intra-run gate: every phase becomes a baseline-gated ms datapoint, and the
-// insert-after-truncate ratio becomes its own datapoint asserted against
-// params.MaxPhaseRatio (a ratio of two phases of the SAME run, so the assertion
-// holds with no stored baseline). A missing or zero cold phase leaves the ratio
-// unreported rather than dividing by it. Pure — unit-tested.
-// Gated: one datapoint per phase group. A repeated group (the truncate cycles)
-// gates its MEDIAN and keeps the per-cycle timings as info, so the history still
-// records them. One 200k-row INSERT swings 20-40% between cycles of the same run,
-// so gating each cycle against its twin on the other arm gated that jitter.
+// the intra-run gate: every phase group becomes one gated ms datapoint, the
+// MEDIAN of every round's (and every truncate cycle's) timing, carrying the
+// samples; the per-phase timings stay in phases.txt. The insert-after-truncate
+// ratio becomes its own datapoint asserted against params.MaxPhaseRatio (a
+// ratio of two phases of the SAME run, so the assertion holds with no stored
+// baseline). A missing or zero cold phase leaves the ratio unreported rather
+// than dividing by it. Pure — unit-tested.
 func microbenchDatapoints(results []phaseResult, params microbenchParams) (gated, info []core.Datapoint, err error) {
-	seen := map[string]bool{}
-	for _, r := range results {
-		vals := groupValues(results, r.Group)
-		if len(vals) == 1 {
-			gated = append(gated, phaseDatapoint(microbenchDatapointPrefix+r.Name, r.MS))
-			continue
-		}
-		info = append(info, phaseDatapoint(microbenchDatapointPrefix+r.Name, r.MS))
-		if !seen[r.Group] {
-			seen[r.Group] = true
-			gated = append(gated, phaseDatapoint(microbenchDatapointPrefix+r.Group, median(vals)))
-		}
+	for _, g := range phaseGroups(results) {
+		vals := groupValues(results, g)
+		dp := phaseDatapoint(microbenchDatapointPrefix+g, median(vals))
+		dp.N, dp.Samples = len(vals), vals
+		gated = append(gated, dp)
 	}
 	ratio, ok := phaseRatio(results, phaseInsertAfterTruncate, phaseInsertCold)
 	if !ok {
@@ -433,8 +476,8 @@ func phaseDatapoint(name string, ms float64) core.Datapoint {
 	return core.Datapoint{Name: name, Value: ms, Unit: "ms", Direction: core.LowerIsBetter}
 }
 
-// microbenchBestValues is each repeated group's fastest cycle, the second leg
-// of the live-arm verdict: a real regression slows the best draw too.
+// microbenchBestValues is each repeated group's fastest draw, the second leg of
+// the live-arm verdict: a real regression slows the best draw too.
 func microbenchBestValues(results []phaseResult) map[string]float64 {
 	out := map[string]float64{}
 	for _, r := range results {
@@ -521,7 +564,7 @@ func microbenchVersion(t *core.T) string {
 }
 
 // loadFieldsMicrobench is the perf/microbench load: the row count per bulk
-// statement and the number of truncate cycles.
+// statement, the number of truncate cycles and of rounds.
 func loadFieldsMicrobench(params microbenchParams) LoadFields {
-	return LoadFields{Rows: params.Rows, Cycles: params.TruncateCycles}
+	return LoadFields{Rows: params.Rows, Cycles: params.TruncateCycles, Iterations: params.Rounds}
 }
