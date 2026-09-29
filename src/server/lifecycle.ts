@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
-import { artifactUrlIn, isArtifactPublish, readArtifactHtml, readDesignFile } from './design.js';
+import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
 import { deleteBranch, git, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { errMsg } from './log.js';
@@ -68,6 +68,8 @@ export class Lifecycle {
   private merging = new Set<string>();
   /** Per session, the tail of the GitHub work (polls, review requests, merge) queued for it. */
   private chains = new Map<string, Promise<void>>();
+  /** Per session, the tail of its design sends to Meko. */
+  private designSends = new Map<string, Promise<void>>();
   /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
   private ciFailSince = new Map<string, { head: string; at: number }>();
 
@@ -104,22 +106,55 @@ export class Lifecycle {
     const markdown = d.markdown ?? prev?.markdown ?? '';
     const html = d.html ?? prev?.html ?? null;
     const url = d.artifactUrl ?? prev?.artifact_url ?? null;
+    // A part that changed hasn't been sent to Meko yet.
     run(this.db, `INSERT INTO designs(session_id, markdown, html, artifact_url, updated_at) VALUES (?, ?, ?, ?, ?)
                   ON CONFLICT(session_id) DO UPDATE SET markdown = excluded.markdown, html = excluded.html,
-                    artifact_url = excluded.artifact_url, updated_at = excluded.updated_at`, id, markdown, html, url, Date.now());
+                    artifact_url = excluded.artifact_url, updated_at = excluded.updated_at,
+                    md_sent = (designs.md_sent AND designs.markdown = excluded.markdown),
+                    html_sent = (designs.html_sent AND designs.html IS excluded.html)`, id, markdown, html, url, Date.now());
     this.core.changed();
+    void this.sendDesign(id);
+  }
+
+  /**
+   * Sends the parts of a session's design that Meko doesn't have yet, one session's sends at a
+   * time. Meko can't replace a file, so each one is a new version (see mekoDesignName), counted
+   * only once it's sent: a failed send is tried again at the next save, turn end or approval.
+   */
+  private sendDesign(id: string): Promise<void> {
+    const next = (this.designSends.get(id) ?? Promise.resolve()).then(() => this.sendDesignNow(id))
+      .catch((e) => this.core.log.warn(`saving design to Meko failed for ${id}`, errMsg(e)));
+    this.designSends.set(id, next);
+    void next.then(() => {
+      if (this.designSends.get(id) === next) this.designSends.delete(id);
+    });
+    return next;
+  }
+
+  private async sendDesignNow(id: string): Promise<void> {
     const row = sessionRow(this.db, id);
     const dp = row && dedicatedDatapack(this.db, row.project_id);
-    // No datapack, or Meko is off: the design stays here only.
+    // No datapack, or Meko is off: the design stays here until it can be sent.
     if (!row || !dp || !this.core.mekoStatus.configured) return;
-    const files: [string, string, string][] = [];
-    if (d.markdown !== undefined) files.push([`design-${row.slug}.md`, d.markdown, 'text/markdown']);
-    if (d.html !== undefined) files.push([`design-${row.slug}.html`, d.html, 'text/html']);
-    if (!files.length) return;
-    this.core.projects.ensureConversation(row.project_id)
-      .then((conv) => Promise.all(files.map(([name, text, type]) =>
-        this.core.meko.putArtifact(name, text, type, dp.id, projectAgentId(row.project_id), conv))))
-      .catch((e) => this.core.log.warn(`saving design to Meko failed for ${id}`, errMsg(e)));
+    const d = get<{ markdown: string; html: string | null; md_version: number; md_sent: number; html_version: number; html_sent: number }>(
+      this.db, 'SELECT markdown, html, md_version, md_sent, html_version, html_sent FROM designs WHERE session_id = ?', id);
+    if (!d) return;
+    const parts: { name: string; text: string; type: string; sent: string; version: number }[] = [];
+    if (!d.md_sent && d.markdown) {
+      parts.push({ name: mekoDesignName(row.slug, 'md', d.md_version + 1), text: d.markdown, type: 'text/markdown',
+        sent: 'UPDATE designs SET md_version = ?, md_sent = (markdown = ?) WHERE session_id = ?', version: d.md_version + 1 });
+    }
+    if (!d.html_sent && d.html !== null) {
+      parts.push({ name: mekoDesignName(row.slug, 'html', d.html_version + 1), text: d.html, type: 'text/html',
+        sent: 'UPDATE designs SET html_version = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
+    }
+    if (!parts.length) return;
+    const conv = await this.core.projects.ensureConversation(row.project_id);
+    await Promise.all(parts.map(async (p) => {
+      await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, projectAgentId(row.project_id), conv);
+      // The version is used; it's the current design only if nothing changed while it was sent.
+      run(this.db, p.sent, p.version, p.text, id);
+    }));
   }
 
   /** After an Artifact tool call during Design: keeps the published page and its link as the design. */
@@ -147,6 +182,7 @@ export class Lifecycle {
         this.designChanged.add(row.id);
       }
     }
+    void this.sendDesign(row.id); // anything an earlier send couldn't deliver
     return this.designChanged.delete(row.id);
   }
 
@@ -191,6 +227,7 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row || row.stage !== 'design') return;
     this.sessions.setStage(id, 'code', by);
+    void this.sendDesign(id); // the approved design, if Meko doesn't have it yet
   }
 
   // ---- PR ----

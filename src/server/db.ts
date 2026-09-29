@@ -255,6 +255,21 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN branch_reused INTEGER NOT NULL DEFAULT 0;
   UPDATE sessions SET repo_path = (SELECT repo_path FROM projects WHERE projects.id = sessions.project_id);
   `,
+  // 15: designs in Meko, where a file can't be replaced: how many versions of the markdown and
+  // HTML were sent (naming the next one, design-<slug>-v2.md, …), and whether the current one was.
+  // A design saved before this in a project with a dedicated datapack counts as sent once.
+  `
+  ALTER TABLE designs ADD COLUMN md_version INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE designs ADD COLUMN md_sent INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE designs ADD COLUMN html_version INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE designs ADD COLUMN html_sent INTEGER NOT NULL DEFAULT 0;
+  UPDATE designs SET md_version = 1, md_sent = 1 WHERE markdown != '' AND EXISTS (
+    SELECT 1 FROM sessions s JOIN project_datapacks d ON d.project_id = s.project_id AND d.role = 'dedicated'
+    WHERE s.id = designs.session_id);
+  UPDATE designs SET html_version = 1, html_sent = 1 WHERE html IS NOT NULL AND EXISTS (
+    SELECT 1 FROM sessions s JOIN project_datapacks d ON d.project_id = s.project_id AND d.role = 'dedicated'
+    WHERE s.id = designs.session_id);
+  `,
 ];
 
 export function openDb(path: string): Db {

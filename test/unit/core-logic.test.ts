@@ -220,6 +220,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV15(db);
     dropV14(db);
     dropV13(db);
     dropV12(db);
@@ -249,6 +250,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV15(db);
     dropV14(db);
     dropV13(db);
     dropV12(db);
@@ -283,6 +285,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV15(db);
     dropV14(db);
     dropV13(db);
     dropV12(db);
@@ -300,6 +303,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV15(db);
     dropV14(db);
     dropV13(db);
     dropV12(db);
@@ -322,6 +326,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV15(db);
     dropV14(db);
     dropV13(db);
     db.exec('PRAGMA user_version = 12');
@@ -346,6 +351,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV15(db);
     dropV14(db);
     db.exec('PRAGMA user_version = 13');
     db.close();
@@ -354,6 +360,34 @@ describe('config and db', () => {
     expect(db.prepare('SELECT id, repo_path, branch_reused FROM sessions ORDER BY id').all()).toEqual([
       { id: 's1', repo_path: '/code/api', branch_reused: 0 },
       { id: 's2', repo_path: '/code/web', branch_reused: 0 },
+    ]);
+    db.close();
+  });
+
+  it('counts designs saved before a schema 15 database in a project with a datapack as sent to Meko once', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('web', 'web', '/code/web', 'main', 0)`);
+    run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'd1', 'adlc/proj/api/api', 'dedicated')`);
+    const add = (id: string, project: string, markdown: string, html: string | null) => {
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+        VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'design', 5)`, id, project, id, id, id, `/wt/${id}`, id);
+      run(db, 'INSERT INTO designs(session_id, markdown, html, updated_at) VALUES (?, ?, ?, 1)', id, markdown, html);
+    };
+    add('md', 'api', '# Design', null);
+    add('page', 'api', '', '<h1>x</h1>');
+    add('local', 'web', '# Design', null);
+    dropV15(db);
+    db.exec('PRAGMA user_version = 14');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(db.prepare('SELECT session_id, md_version, md_sent, html_version, html_sent FROM designs ORDER BY session_id').all()).toEqual([
+      { session_id: 'local', md_version: 0, md_sent: 0, html_version: 0, html_sent: 0 },
+      { session_id: 'md', md_version: 1, md_sent: 1, html_version: 0, html_sent: 0 },
+      { session_id: 'page', md_version: 0, md_sent: 0, html_version: 1, html_sent: 1 },
     ]);
     db.close();
   });
@@ -373,6 +407,13 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 15 (the design versions sent to Meko), for tests that rewind the schema. */
+function dropV15(db: ReturnType<typeof openDb>) {
+  for (const c of ['md_version', 'md_sent', 'html_version', 'html_sent']) {
+    if (db.prepare("SELECT 1 FROM pragma_table_info('designs') WHERE name = ?").get(c)) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
+  }
+}
 
 /** Undoes migration 14 (each session's repo, and reused branches), for tests that rewind the schema. */
 function dropV14(db: ReturnType<typeof openDb>) {

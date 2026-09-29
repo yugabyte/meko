@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_DESIGN_HTML, artifactUrlIn, isArtifactPublish, readArtifactHtml, readDesignFile } from '../../src/server/design.js';
+import { MAX_DESIGN_HTML, artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from '../../src/server/design.js';
 import { DESIGN_FRAME_CSP, designFrameDoc } from '../../src/web/design-frame.js';
 
 describe('design capture', () => {
@@ -16,6 +16,12 @@ describe('design capture', () => {
     expect(artifactUrlIn('{"text":"Published https://claude.ai/code/artifact/ab12-cd34. Watching."}')).toBe('https://claude.ai/code/artifact/ab12-cd34');
     expect(artifactUrlIn('see https://claude.ai/artifact/xyz_9')).toBe('https://claude.ai/artifact/xyz_9');
     expect(artifactUrlIn('https://example.com/artifact/1')).toBeNull();
+  });
+
+  it('names each later version of a design in Meko with a v number', () => {
+    expect(mekoDesignName('new-login', 'md', 1)).toBe('design-new-login.md');
+    expect(mekoDesignName('new-login', 'md', 2)).toBe('design-new-login-v2.md');
+    expect(mekoDesignName('new-login', 'html', 12)).toBe('design-new-login-v12.html');
   });
 
   it('counts only page publishes', () => {

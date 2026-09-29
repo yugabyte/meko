@@ -13,6 +13,14 @@ export function artifactUrlIn(text: string): string | null {
   return ARTIFACT_URL.exec(text)?.[0] ?? null;
 }
 
+/**
+ * The Meko filename for version `version` (from 1) of a session's design. Meko can't replace a
+ * file, so each later version gets its own name: design-<slug>.md, design-<slug>-v2.md, …
+ */
+export function mekoDesignName(slug: string, ext: 'md' | 'html', version: number): string {
+  return `design-${slug}${version > 1 ? `-v${version}` : ''}.${ext}`;
+}
+
 /** True for an Artifact tool call that publishes a page (not a read, list, asset upload…). */
 export function isArtifactPublish(input: Record<string, unknown>): boolean {
   const action = input.action;

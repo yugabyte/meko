@@ -301,6 +301,64 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.sessions.action(s.id, 'approve-design')).resolves.toMatchObject({ stage: 'code' });
   });
 
+  /** The design files of a session sent to Meko, as [name, content]. */
+  const designsSent = (slug: string) => env.meko.calls.filter((c) => c.name === 'putArtifact' && String(c.args[0]).startsWith(`design-${slug}`))
+    .map((c) => [c.args[0], c.args[1]] as [string, string]);
+
+  it('saves each changed version of a design to Meko under its own name', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Redesign', prompt: 'hi', kind: 'quick' });
+    const save = async (d: { markdown?: string; html?: string; artifactUrl?: string }, total: number) => {
+      await env.core.lifecycle.saveDesign(s.id, d);
+      await waitFor(() => designsSent('redesign').length, (n) => n >= total, 5000, `${total} designs sent`);
+    };
+    await save({ markdown: '# One' }, 1);
+    await save({ markdown: '# One' }, 1); // unchanged: not sent again
+    await save({ markdown: '# Two' }, 2);
+    await save({ html: '<h1>A</h1>', artifactUrl: 'https://claude.ai/code/artifact/abc' }, 3);
+    await save({ html: '<h1>A</h1>', artifactUrl: 'https://claude.ai/code/artifact/abc' }, 3);
+    await save({ html: '<h1>B</h1>' }, 4);
+    await save({ markdown: '# Three' }, 5);
+    expect(designsSent('redesign')).toEqual([
+      ['design-redesign.md', '# One'],
+      ['design-redesign-v2.md', '# Two'],
+      ['design-redesign.html', '<h1>A</h1>'],
+      ['design-redesign-v2.html', '<h1>B</h1>'],
+      ['design-redesign-v3.md', '# Three'],
+    ]);
+  });
+
+  it('sends a design saved while Meko was off once it is back, as the first version', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Offline design', prompt: 'hi', kind: 'quick' });
+    env.core.mekoStatus = { ...env.core.mekoStatus, configured: false };
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# One' });
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# Two' });
+    env.core.mekoStatus = { ...env.core.mekoStatus, configured: true };
+    await env.core.lifecycle.collectDesign(env.core.sessions.row(s.id)); // a turn end, with the design unchanged
+    await waitFor(() => designsSent('offline-design'), (d) => d.length > 0, 5000, 'design sent');
+    expect(designsSent('offline-design')).toEqual([['design-offline-design.md', '# Two']]);
+  });
+
+  it('sends a design again under the same name when sending it failed', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Retry', prompt: 'hi', kind: 'quick' });
+    const put = env.meko.putArtifact;
+    const down = vi.fn(async () => {
+      throw new Error('Meko is down');
+    });
+    env.meko.putArtifact = down;
+    try {
+      await env.core.lifecycle.saveDesign(s.id, { markdown: '# One' });
+      await waitFor(() => down.mock.calls.length, (n) => n > 0, 5000, 'failed send');
+    } finally {
+      env.meko.putArtifact = put;
+    }
+    await env.core.lifecycle.collectDesign(env.core.sessions.row(s.id));
+    await waitFor(() => designsSent('retry'), (d) => d.length > 0, 5000, 'design sent');
+    expect(designsSent('retry')).toEqual([['design-retry.md', '# One']]);
+  });
+
   it('refuses to approve a design that does not exist yet', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'No design', prompt: 'just think' });
