@@ -1,5 +1,5 @@
 // ExecutiveDashboardPage: a VP/manager-facing overview for a selected date
-// range (default: last 4 months). Fetched as four parallel panels — growth,
+// range (default: last 1 month). Fetched as four parallel panels — growth,
 // engagement, knowledge, savings — so each renders on its own timeline instead
 // of the whole page waiting on the slowest (KB pipeline / Langfuse) query.
 import { useState, type ReactNode } from "react";
@@ -22,9 +22,9 @@ import { DatapacksByWeekChart } from "@/features/exec/components/DatapacksByWeek
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export function ExecutiveDashboardPage() {
-  // Default window: the last 4 months (inclusive), Start/End reusing the same
+  // Default window: the last 1 month (inclusive), Start/End reusing the same
   // pickers as the Metrics page.
-  const [startDate, setStartDate] = useState<Date | undefined>(subMonths(new Date(), 4));
+  const [startDate, setStartDate] = useState<Date | undefined>(subMonths(new Date(), 1));
   const [endDate, setEndDate] = useState<Date | undefined>(new Date());
   const start = startDate ? format(startDate, "yyyy-MM-dd") : undefined;
   const end = endDate ? format(endDate, "yyyy-MM-dd") : undefined;

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func mockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, func()) {
@@ -93,21 +94,24 @@ func TestCountDatapacksByWeek_GroupsByWeek(t *testing.T) {
 	}
 }
 
-// CountIndexedDocsBreakdownAll returns one row per document type (joining
-// dist_rag.documents for the file type) and, from that single scan, the summed
-// document and chunk totals the knowledge panel's tiles need.
+// CountIndexedDocsBreakdownAll reads the base pipeline_details/documents tables
+// (not the view), inside a statement_timeout tx, and from that single scan gives
+// one row per document type plus the summed document and chunk totals the
+// knowledge panel's tiles need.
 func TestCountIndexedDocsBreakdownAll_SumsAndGroupsByType(t *testing.T) {
 	db, mock, done := mockDB(t)
 	defer done()
 	repo := NewAdminRepo(nil, db, nil)
 
-	mock.ExpectQuery(`LEFT JOIN dist_rag\.documents d`).
-		WithArgs("sch", "idx").
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL statement_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`FROM\s+dist_rag\.pipeline_details pd`).
 		WillReturnRows(sqlmock.NewRows([]string{"document_type", "doc_count", "chunk_count"}).
 			AddRow("application/pdf", int64(5), int64(50)).
 			AddRow("text/markdown", int64(3), int64(12)))
+	mock.ExpectCommit()
 
-	out, err := repo.CountIndexedDocsBreakdownAll("sch", "idx", nil, nil)
+	out, err := repo.CountIndexedDocsBreakdownAll(nil, nil)
 	if err != nil {
 		t.Fatalf("CountIndexedDocsBreakdownAll: %v", err)
 	}
@@ -129,7 +133,7 @@ func TestCountIndexedDocsBreakdownBySourceIDs_EmptySourcesNoQuery(t *testing.T) 
 	defer done()
 	repo := NewAdminRepo(nil, db, nil)
 
-	out, err := repo.CountIndexedDocsBreakdownBySourceIDs("sch", "idx", nil, nil, nil)
+	out, err := repo.CountIndexedDocsBreakdownBySourceIDs(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CountIndexedDocsBreakdownBySourceIDs: %v", err)
 	}
@@ -138,5 +142,90 @@ func TestCountIndexedDocsBreakdownBySourceIDs_EmptySourcesNoQuery(t *testing.T) 
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unexpected query ran: %v", err)
+	}
+}
+
+// CountCompletedDocsAndChunksAll runs the 2-column totals query inside the
+// statement_timeout tx (Begin -> SET LOCAL -> query -> Commit) against
+// pipeline_details, with no source join.
+func TestCountCompletedDocsAndChunksAll_TotalsUnderTimeoutTx(t *testing.T) {
+	db, mock, done := mockDB(t)
+	defer done()
+	repo := NewAdminRepo(nil, db, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL statement_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`FROM\s+dist_rag\.pipeline_details pd`).
+		WillReturnRows(sqlmock.NewRows([]string{"documents", "chunks"}).AddRow(int64(11), int64(220)))
+	mock.ExpectCommit()
+
+	c, err := repo.CountCompletedDocsAndChunksAll(nil, nil)
+	if err != nil {
+		t.Fatalf("CountCompletedDocsAndChunksAll: %v", err)
+	}
+	if c.Documents != 11 || c.Chunks != 220 {
+		t.Errorf("got (%d, %d), want (11, 220)", c.Documents, c.Chunks)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// CountCompletedDocsAndChunksBySourceIDs joins documents and filters on
+// source_id = ANY($1), with the range args following at $2.
+func TestCountCompletedDocsAndChunksBySourceIDs_JoinAndArgOrder(t *testing.T) {
+	db, mock, done := mockDB(t)
+	defer done()
+	repo := NewAdminRepo(nil, db, nil)
+	ids := []string{"11111111-1111-1111-1111-111111111111"}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL statement_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`(?s)JOIN\s+dist_rag\.documents d0.*d0\.source_id = ANY\(\$1::uuid\[\]\).*created_at >= \$2 AND .*created_at < \$3`).
+		WithArgs(pq.Array(ids), rangeStart, rangeEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"documents", "chunks"}).AddRow(int64(4), int64(40)))
+	mock.ExpectCommit()
+
+	c, err := repo.CountCompletedDocsAndChunksBySourceIDs(ids, &rangeStart, &rangeEnd)
+	if err != nil {
+		t.Fatalf("CountCompletedDocsAndChunksBySourceIDs: %v", err)
+	}
+	if c.Documents != 4 || c.Chunks != 40 {
+		t.Errorf("got (%d, %d), want (4, 40)", c.Documents, c.Chunks)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// CountIndexedDocsBreakdownBySourceIDs (non-empty) joins documents for the
+// source filter, keeps the LEFT JOIN for the file type, and sums per-type rows.
+func TestCountIndexedDocsBreakdownBySourceIDs_JoinAndSums(t *testing.T) {
+	db, mock, done := mockDB(t)
+	defer done()
+	repo := NewAdminRepo(nil, db, nil)
+	ids := []string{"22222222-2222-2222-2222-222222222222"}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL statement_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`(?s)d0\.source_id = ANY\(\$1::uuid\[\]\).*LEFT JOIN dist_rag\.documents d`).
+		WithArgs(pq.Array(ids)).
+		WillReturnRows(sqlmock.NewRows([]string{"document_type", "doc_count", "chunk_count"}).
+			AddRow("application/pdf", int64(2), int64(20)).
+			AddRow("text/plain", int64(1), int64(3)))
+	mock.ExpectCommit()
+
+	out, err := repo.CountIndexedDocsBreakdownBySourceIDs(ids, nil, nil)
+	if err != nil {
+		t.Fatalf("CountIndexedDocsBreakdownBySourceIDs: %v", err)
+	}
+	if out.Documents != 3 || out.Chunks != 23 {
+		t.Errorf("totals = (%d, %d), want (3, 23)", out.Documents, out.Chunks)
+	}
+	if len(out.ByType) != 2 || out.ByType[0].DocumentType != "application/pdf" {
+		t.Errorf("byType = %+v", out.ByType)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }

@@ -331,8 +331,10 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 
 	// document_status alone lags pipeline_status: the row-level check
 	// below (dist_rag.documents.status, surfaced by ListDistRagDocuments
-	// and admin_kb.go via the same COALESCE) reflects completion sooner
-	// than document_status does.
+	// via the same COALESCE) reflects completion sooner than
+	// document_status does. (admin_kb.go's analytics counts read
+	// pipeline_details directly and intentionally count only documents
+	// that have a pipeline run — see kbSpine.)
 	rows, err := r.db.Query(
 		`SELECT DISTINCT ON (document_uri)
 		        schema_name, index_name, source_uri, document_name,

@@ -1,12 +1,20 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/lib/pq"
 )
+
+// kbStmtTimeout bounds the KB analytics queries. dist_rag.pipeline_details has no
+// index on created_at yet (only PK + document_id), so a wide window still scans
+// the table; the timeout turns a runaway into a fast, clean failure the caller
+// swallows (empty panel) instead of a request that hangs until the gateway 504s.
+// Drop/raise once dist_rag adds (document_id, created_at DESC).
+const kbStmtTimeout = "30s"
 
 // AdminKBCounts holds the COMPLETED-document and chunk totals used by
 // the admin metrics endpoint.
@@ -15,22 +23,12 @@ type AdminKBCounts struct {
 	Chunks    int64
 }
 
-// completedDocsChunksSQL collapses dist_rag.vector_index_pipeline_details
-// to the latest run per document (DISTINCT ON), keeps COMPLETED-only,
-// then COUNTs documents and SUMs chunks_processed. The %s is an optional
-// extra predicate (e.g. a source_id filter + range); pass "" for the
-// global all-time scope.
-func completedDocsChunksSQL(extraPredicate string) string {
-	return fmt.Sprintf(`WITH latest_per_document AS (
-	   SELECT DISTINCT ON (document_id)
-	          document_id,
-	          chunks_processed,
-	          COALESCE(pipeline_status::text, document_status::text) AS status
-	   FROM   dist_rag.vector_index_pipeline_details
-	   WHERE  schema_name = $1 AND index_name = $2%s
-	   ORDER  BY document_id,
-	             pipeline_created_at DESC NULLS LAST,
-	             pipeline_id DESC
+// completedDocsChunksSQL collapses the pipeline to the latest run per document
+// (DISTINCT ON), keeps COMPLETED-only, then COUNTs documents and SUMs
+// chunks_processed. sourceFilter is "" for the global scope, or the documents
+// join + source_id filter for the per-user scope (see kbSpine).
+func completedDocsChunksSQL(sourceFilter, rangePred string) string {
+	return `WITH latest_per_document AS (` + kbSpine(sourceFilter, rangePred) + `
 	 ),
 	 completed_documents AS (
 	   SELECT document_id, chunks_processed
@@ -39,21 +37,89 @@ func completedDocsChunksSQL(extraPredicate string) string {
 	 )
 	 SELECT COUNT(*)::bigint,
 	        COALESCE(SUM(chunks_processed), 0)::bigint
-	 FROM   completed_documents`, extraPredicate)
+	 FROM   completed_documents`
+}
+
+// kbSpine is the shared "latest COMPLETED pipeline run per document" scan, read
+// from the base dist_rag tables (pipeline_details, joined to documents only when
+// a source filter is needed) rather than the vector_index_pipeline_details VIEW.
+//
+// The view is a 5-table join carrying a mandatory ORDER BY over its whole result,
+// so every query against it sorted the entire dataset before our WHERE/DISTINCT
+// applied — the cause of the exec knowledge panel's timeouts (MEKO-728 follow-up).
+// Meko runs a single global index (datapacks/knowledge_bases) to which every KB
+// source maps, so scanning pipeline_details directly (optionally filtered to a
+// user's sources via documents.source_id) counts the same rows the view's
+// index-scoped join did — without the join and the global sort. If Meko ever runs
+// more than one dist_rag index this must re-scope by index.
+//
+// Semantics note: the old view LEFT JOINed pipeline_details, so a document with
+// NO pipeline run still appeared and its documents.status decided COMPLETED (the
+// COALESCE(pipeline_status, document_status) fallback). This spine reads
+// pipeline_details directly, so "indexed" means "has ≥1 pipeline run" — a run is
+// what produces chunks and the only per-document timestamp we can window on, so a
+// run-less document has 0 chunks and no date anyway. Windowed calls are identical
+// to the old query (a NULL pipeline_created_at was already excluded by the range);
+// only the all-time overall count omits run-less COMPLETED documents, which is
+// intended.
+//
+// sourceFilter is "" (global) or " AND d0.source_id = ANY($1::uuid[])" and, when
+// set, requires the documents join below; rangePred is the pipeline_created_at
+// window (mapped to pd.created_at), or "".
+func kbSpine(sourceFilter, rangePred string) string {
+	join := ""
+	if sourceFilter != "" {
+		join = "\n	   JOIN   dist_rag.documents d0 ON d0.document_id = pd.document_id"
+	}
+	return fmt.Sprintf(`
+	   SELECT DISTINCT ON (pd.document_id)
+	          pd.document_id,
+	          pd.chunks_processed,
+	          pd.status::text AS status
+	   FROM   dist_rag.pipeline_details pd%s
+	   WHERE  TRUE%s%s
+	   ORDER  BY pd.document_id,
+	             pd.created_at DESC NULLS LAST,
+	             pd.pipeline_id DESC`, join, sourceFilter, rangePred)
+}
+
+// runCounts executes a 2-column (documents, chunks) KB query under a short
+// read-only statement_timeout.
+func (r *AdminRepo) runCounts(query string, args ...any) (AdminKBCounts, error) {
+	var c AdminKBCounts
+	err := r.withKBTimeout(func(tx *sql.Tx) error {
+		return tx.QueryRow(query, args...).Scan(&c.Documents, &c.Chunks)
+	})
+	return c, err
+}
+
+// withKBTimeout runs fn inside a read-only tx that has SET LOCAL statement_timeout,
+// so a slow KB query fails fast rather than hanging. fn must consume its rows
+// before returning (the tx ends here).
+func (r *AdminRepo) withKBTimeout(fn func(*sql.Tx) error) error {
+	tx, err := r.dataDB.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("kb query: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	if _, err := tx.Exec("SET LOCAL statement_timeout = '" + kbStmtTimeout + "'"); err != nil {
+		return fmt.Errorf("kb query: set timeout: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CountCompletedDocsAndChunksAll returns the global COMPLETED-document
 // count and chunk sum across every datapack (overall admin metric).
 // start/endExclusive optionally window by pipeline_created_at.
 func (r *AdminRepo) CountCompletedDocsAndChunksAll(
-	schema, indexName string, start, endExclusive *time.Time,
+	start, endExclusive *time.Time,
 ) (AdminKBCounts, error) {
-	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 3)
-	args := append([]any{schema, indexName}, rangeArgs...)
-	var c AdminKBCounts
-	if err := r.dataDB.QueryRow(
-		completedDocsChunksSQL(pred), args...,
-	).Scan(&c.Documents, &c.Chunks); err != nil {
+	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 1)
+	c, err := r.runCounts(completedDocsChunksSQL("", pred), rangeArgs...)
+	if err != nil {
 		return c, fmt.Errorf("kb admin counts (all): %w", err)
 	}
 	return c, nil
@@ -64,19 +130,16 @@ func (r *AdminRepo) CountCompletedDocsAndChunksAll(
 // admin metric). Callers pass an empty slice → zero without a query.
 // start/endExclusive optionally window by pipeline_created_at.
 func (r *AdminRepo) CountCompletedDocsAndChunksBySourceIDs(
-	schema, indexName string, sourceIDs []string, start, endExclusive *time.Time,
+	sourceIDs []string, start, endExclusive *time.Time,
 ) (AdminKBCounts, error) {
-	var c AdminKBCounts
 	if len(sourceIDs) == 0 {
-		return c, nil
+		return AdminKBCounts{}, nil
 	}
-	// source_id occupies $3; range params (if any) start at $4.
-	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 4)
-	args := append([]any{schema, indexName, pq.Array(sourceIDs)}, rangeArgs...)
-	if err := r.dataDB.QueryRow(
-		completedDocsChunksSQL(" AND source_id = ANY($3::uuid[])"+pred),
-		args...,
-	).Scan(&c.Documents, &c.Chunks); err != nil {
+	// source_ids occupy $1; range params (if any) start at $2.
+	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 2)
+	args := append([]any{pq.Array(sourceIDs)}, rangeArgs...)
+	c, err := r.runCounts(completedDocsChunksSQL(" AND d0.source_id = ANY($1::uuid[])", pred), args...)
+	if err != nil {
 		return c, fmt.Errorf("kb admin counts (by source ids): %w", err)
 	}
 	return c, nil
@@ -100,23 +163,13 @@ type AdminKBBreakdown struct {
 	ByType    []KBDocTypeCount
 }
 
-// indexedDocsBreakdownSQL collapses the pipeline to the latest run per document,
-// keeps COMPLETED-only, joins dist_rag.documents for the file type, and returns
-// one row per type with its document count and chunk sum. Summing the rows gives
-// the same doc/chunk totals the two separate count queries produced, so the
-// knowledge panel scans the (large) pipeline table once, not twice. %s is the
-// optional extra predicate (source-id filter and/or pipeline_created_at range).
-func indexedDocsBreakdownSQL(extraPredicate string) string {
-	return fmt.Sprintf(`WITH latest_per_document AS (
-	   SELECT DISTINCT ON (document_id)
-	          document_id,
-	          chunks_processed,
-	          COALESCE(pipeline_status::text, document_status::text) AS status
-	   FROM   dist_rag.vector_index_pipeline_details
-	   WHERE  schema_name = $1 AND index_name = $2%s
-	   ORDER  BY document_id,
-	             pipeline_created_at DESC NULLS LAST,
-	             pipeline_id DESC
+// indexedDocsBreakdownSQL is completedDocsChunksSQL plus the document-type
+// grouping: it joins dist_rag.documents for the file type and returns one row per
+// type with its document count and chunk sum. Summing the rows gives the same
+// doc/chunk totals, so the knowledge panel's tiles and its by-type chart come
+// from a single scan (see kbSpine for why this reads base tables, not the view).
+func indexedDocsBreakdownSQL(sourceFilter, rangePred string) string {
+	return `WITH latest_per_document AS (` + kbSpine(sourceFilter, rangePred) + `
 	 ),
 	 completed_documents AS (
 	   SELECT document_id, chunks_processed
@@ -129,7 +182,7 @@ func indexedDocsBreakdownSQL(extraPredicate string) string {
 	 FROM   completed_documents cd
 	 LEFT JOIN dist_rag.documents d ON d.document_id = cd.document_id
 	 GROUP  BY 1
-	 ORDER  BY 2 DESC`, extraPredicate)
+	 ORDER  BY 2 DESC`
 }
 
 // scanKBBreakdown reads the per-type rows into the doc/chunk totals and the
@@ -149,43 +202,54 @@ func scanKBBreakdown(rows *sql.Rows) (AdminKBBreakdown, error) {
 	return out, rows.Err()
 }
 
+// runBreakdown executes a 3-column breakdown query under the KB statement_timeout
+// and scans it. Rows are read before the tx ends.
+func (r *AdminRepo) runBreakdown(query string, args ...any) (AdminKBBreakdown, error) {
+	var out AdminKBBreakdown
+	err := r.withKBTimeout(func(tx *sql.Tx) error {
+		rows, qErr := tx.Query(query, args...)
+		if qErr != nil {
+			return qErr
+		}
+		defer rows.Close()
+		var sErr error
+		out, sErr = scanKBBreakdown(rows)
+		return sErr
+	})
+	return out, err
+}
+
 // CountIndexedDocsBreakdownAll returns the global COMPLETED-document + chunk
 // totals and the by-file-type document counts across every datapack, optionally
-// windowed by pipeline_created_at. One scan of the pipeline table (see
-// indexedDocsBreakdownSQL).
+// windowed by pipeline_created_at. One scan of pipeline_details (see kbSpine).
 func (r *AdminRepo) CountIndexedDocsBreakdownAll(
-	schema, indexName string, start, endExclusive *time.Time,
+	start, endExclusive *time.Time,
 ) (AdminKBBreakdown, error) {
-	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 3)
-	args := append([]any{schema, indexName}, rangeArgs...)
-	rows, err := r.dataDB.Query(indexedDocsBreakdownSQL(pred), args...)
+	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 1)
+	out, err := r.runBreakdown(indexedDocsBreakdownSQL("", pred), rangeArgs...)
 	if err != nil {
 		return AdminKBBreakdown{}, fmt.Errorf("kb breakdown (all): %w", err)
 	}
-	defer rows.Close()
-	return scanKBBreakdown(rows)
+	return out, nil
 }
 
 // CountIndexedDocsBreakdownBySourceIDs is CountIndexedDocsBreakdownAll scoped to
 // a user's rag source ids (per-user knowledge metric). An empty slice returns
 // the zero value without a query.
 func (r *AdminRepo) CountIndexedDocsBreakdownBySourceIDs(
-	schema, indexName string, sourceIDs []string, start, endExclusive *time.Time,
+	sourceIDs []string, start, endExclusive *time.Time,
 ) (AdminKBBreakdown, error) {
 	if len(sourceIDs) == 0 {
 		return AdminKBBreakdown{ByType: []KBDocTypeCount{}}, nil
 	}
-	// source_id occupies $3; range params (if any) start at $4.
-	pred, rangeArgs := rangePredicate("pipeline_created_at", start, endExclusive, 4)
-	args := append([]any{schema, indexName, pq.Array(sourceIDs)}, rangeArgs...)
-	rows, err := r.dataDB.Query(
-		indexedDocsBreakdownSQL(" AND source_id = ANY($3::uuid[])"+pred), args...,
-	)
+	// source_ids occupy $1; range params (if any) start at $2.
+	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 2)
+	args := append([]any{pq.Array(sourceIDs)}, rangeArgs...)
+	out, err := r.runBreakdown(indexedDocsBreakdownSQL(" AND d0.source_id = ANY($1::uuid[])", pred), args...)
 	if err != nil {
 		return AdminKBBreakdown{}, fmt.Errorf("kb breakdown (by source ids): %w", err)
 	}
-	defer rows.Close()
-	return scanKBBreakdown(rows)
+	return out, nil
 }
 
 // GetSourceIDsByOwner returns rag_source_ids across every datapack owned

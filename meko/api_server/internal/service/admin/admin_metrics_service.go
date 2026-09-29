@@ -12,7 +12,6 @@ import (
 
 	"meko/api_server/internal/repository"
 	adminrepo "meko/api_server/internal/repository/admin"
-	"meko/api_server/internal/service"
 )
 
 // ErrUserNotFound is returned by Metrics when a per-user request names a user
@@ -167,9 +166,7 @@ func (s *AdminMetricsService) overall(ctx context.Context, start, end *time.Time
 	m.SharedDatapacks = shared
 
 	// Data-plane: KB pipeline aggregates (global).
-	if kb, kbErr := s.repo.CountCompletedDocsAndChunksAll(
-		service.DatapackIndexSchema, service.DatapackIndexName, start, end,
-	); kbErr != nil {
+	if kb, kbErr := s.repo.CountCompletedDocsAndChunksAll(start, end); kbErr != nil {
 		slog.Error("admin metrics: kb counts (all)", "error", kbErr)
 	} else {
 		m.KBDocuments, m.KBChunks = kb.Documents, kb.Chunks
@@ -279,9 +276,7 @@ func (s *AdminMetricsService) perUser(ctx context.Context, userID string, start,
 	if sourceIDs, sErr := s.repo.GetSourceIDsByOwner(userID); sErr != nil {
 		slog.Error("admin metrics: kb source ids", "user_id", userID, "error", sErr)
 	} else if len(sourceIDs) > 0 {
-		if kb, kbErr := s.repo.CountCompletedDocsAndChunksBySourceIDs(
-			service.DatapackIndexSchema, service.DatapackIndexName, sourceIDs, start, end,
-		); kbErr != nil {
+		if kb, kbErr := s.repo.CountCompletedDocsAndChunksBySourceIDs(sourceIDs, start, end); kbErr != nil {
 			slog.Error("admin metrics: kb counts (user)", "user_id", userID, "error", kbErr)
 		} else {
 			m.KBDocuments, m.KBChunks = kb.Documents, kb.Chunks
@@ -499,6 +494,9 @@ func (s *AdminMetricsService) searchCount(userID, metric string, start, endExclu
 
 // UserKnowledge: indexed KB docs + chunks and the by-type breakdown, scoped to
 // the user's rag sources. One pipeline scan (see CountIndexedDocsBreakdown*).
+// NOT best-effort: a source-id or scan failure (including the statement_timeout)
+// is returned so the handler 500s and the tab shows its error state, rather than
+// rendering a misleading "0 documents".
 func (s *AdminMetricsService) UserKnowledge(_ context.Context, userID string, start, end *time.Time) (UserKnowledge, error) {
 	out := UserKnowledge{KBDocumentsByType: []ExecDocTypeCount{}}
 	endExclusive := endExclusiveBound(end)
@@ -506,14 +504,12 @@ func (s *AdminMetricsService) UserKnowledge(_ context.Context, userID string, st
 	sourceIDs, err := s.repo.GetSourceIDsByOwner(userID)
 	if err != nil {
 		slog.Error("user metrics: kb source ids", "user_id", userID, "error", err)
-		return out, nil
+		return out, err
 	}
-	kb, err := s.repo.CountIndexedDocsBreakdownBySourceIDs(
-		service.DatapackIndexSchema, service.DatapackIndexName, sourceIDs, start, endExclusive,
-	)
+	kb, err := s.repo.CountIndexedDocsBreakdownBySourceIDs(sourceIDs, start, endExclusive)
 	if err != nil {
 		slog.Error("user metrics: kb breakdown", "user_id", userID, "error", err)
-		return out, nil
+		return out, err
 	}
 	out.KBDocuments, out.KBChunks = kb.Documents, kb.Chunks
 	for _, t := range kb.ByType {

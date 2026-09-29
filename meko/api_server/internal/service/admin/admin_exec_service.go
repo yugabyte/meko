@@ -13,7 +13,6 @@ import (
 	"time"
 
 	adminrepo "meko/api_server/internal/repository/admin"
-	"meko/api_server/internal/service"
 )
 
 // Executive leaderboard tuning: show the top 10 users by tokens saved. There is
@@ -160,19 +159,20 @@ func (s *AdminMetricsService) Engagement(ctx context.Context, start, end *time.T
 }
 
 // Knowledge: indexed KB documents + chunks and the by-file-type breakdown in
-// range. Best-effort (data plane). The tiles and the chart come from one
-// pipeline scan (CountIndexedDocsBreakdownAll) rather than two, which is what
-// keeps this panel from timing out for a heavy deployment.
+// range. The tiles and the chart come from one pipeline scan
+// (CountIndexedDocsBreakdownAll) rather than two, which is what keeps this panel
+// from timing out for a heavy deployment. Unlike the other panels this one is
+// NOT best-effort: a scan error (including the statement_timeout on too wide a
+// window) is returned so the handler 500s and the dashboard shows its error
+// state — rendering zeroes would look like real "0 documents" data.
 func (s *AdminMetricsService) Knowledge(_ context.Context, start, end *time.Time) (ExecKnowledge, error) {
 	out := ExecKnowledge{KBDocumentsByType: []ExecDocTypeCount{}}
 	endExclusive := endExclusiveBound(end)
 
-	kb, err := s.repo.CountIndexedDocsBreakdownAll(
-		service.DatapackIndexSchema, service.DatapackIndexName, start, endExclusive,
-	)
+	kb, err := s.repo.CountIndexedDocsBreakdownAll(start, endExclusive)
 	if err != nil {
 		slog.Error("exec knowledge: kb breakdown", "error", err)
-		return out, nil
+		return out, err
 	}
 	out.KBDocuments, out.KBChunks = kb.Documents, kb.Chunks
 	for _, t := range kb.ByType {
