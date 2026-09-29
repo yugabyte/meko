@@ -396,7 +396,16 @@ func (r *clientWindowRun) measure(op cwOp, round int) error {
 			r.logf("client_window: %s skipped: %s", op.Name, op.Skip)
 			return nil
 		}
-		if err := sleepCtx(r.t.Context, r.params.Hold); err != nil {
+		q, err := r.waitQuiet(op.Name)
+		s.Set("quiet_wait_seconds", fmt.Sprintf("%.0f", q.Waited.Seconds()))
+		if q.Errors > 0 {
+			s.Set("tail_errors", q.Errors)
+			s.Set("tail_errors_span", fmt.Sprintf("%s..%s", q.First.Format(time.RFC3339), q.Last.Format(time.RFC3339)))
+		}
+		if q.Reopened > 0 {
+			s.Set("pinned_session_reopened", q.Reopened)
+		}
+		if err != nil {
 			return err
 		}
 		mark := fmt.Sprintf("%s-%d-%s", op.Name, round, r.t.ResourceSuffix())
@@ -451,6 +460,79 @@ func (r *clientWindowRun) measure(op cwOp, round int) error {
 		s.Set("first_success_after_seconds", fmt.Sprintf("%.1f", res.FirstSuccessAfter))
 		return nil
 	})
+}
+
+// quietWait is what waitQuiet absorbed: the previous operation's tail, which
+// neither operation's window covers.
+type quietWait struct {
+	Waited      time.Duration
+	Errors      int
+	First, Last time.Time
+	Reopened    int
+}
+
+// waitQuiet holds until no client has errored for params.Hold and the pinned
+// session is alive, so an operation never starts inside the previous one's
+// tail: a pinned session reported 57P01 four seconds after a backing roll's
+// window closed (run c2231381). The tail's errors are still held to the
+// licensed classes, and a dead pinned session is re-opened, else the next
+// operation would run with one client missing from its counts.
+func (r *clientWindowRun) waitQuiet(op string) (quietWait, error) {
+	var q quietWait
+	t0 := time.Now()
+	begin := t0
+	deadline := t0.Add(r.params.RecoverTimeout)
+	seen := begin
+	for {
+		quietSince := begin
+		for _, ev := range r.drv.snapshot() {
+			if ev.ok() || !ev.At.After(begin) {
+				continue
+			}
+			quietSince = maxTime(quietSince, ev.At)
+			if !ev.At.After(seen) {
+				continue
+			}
+			seen = ev.At
+			if ev.Class == errClassOther {
+				q.Waited = time.Since(t0)
+				return q, unlicensed("before "+op, ev)
+			}
+			q.Errors++
+			if q.First.IsZero() {
+				q.First = ev.At
+			}
+			q.Last = ev.At
+		}
+		wait := time.Until(quietSince.Add(r.params.Hold))
+		if wait <= 0 && r.drv.pinnedDead() {
+			q.Reopened++
+			if _, err := r.drv.checkPrepared(r.t.Context); err != nil {
+				q.Waited = time.Since(t0)
+				return q, fmt.Errorf("before %s: %w", op, err)
+			}
+			begin, wait = time.Now(), r.params.Hold
+		}
+		if wait <= 0 {
+			q.Waited = time.Since(t0)
+			return q, nil
+		}
+		if time.Now().Add(wait).After(deadline) {
+			q.Waited = time.Since(t0)
+			return q, fmt.Errorf("before %s: clients kept erroring for %s after the previous operation, so the endpoint never settled", op, r.params.RecoverTimeout)
+		}
+		if err := sleepCtx(r.t.Context, wait); err != nil {
+			q.Waited = time.Since(t0)
+			return q, err
+		}
+	}
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 func (r *clientWindowRun) waitHealthy() error {

@@ -248,6 +248,12 @@ const (
 	preparedReconnect  preparedStatementOutcome = "session_replaced"
 )
 
+func (d *pgxDriver) pinnedDead() bool {
+	d.pinMu.Lock()
+	defer d.pinMu.Unlock()
+	return d.pin != nil && d.pinDead
+}
+
 func (d *pgxDriver) checkPrepared(ctx context.Context) (preparedStatementOutcome, error) {
 	outcome, err := d.checkPreparedOnSession(ctx)
 	if err != nil || outcome != "" {
