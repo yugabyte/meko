@@ -1,9 +1,12 @@
 package helm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -177,5 +180,53 @@ func TestWaitTimeout(t *testing.T) {
 	noWait := Release{Name: "ep-1"}
 	if got := waitTimeout(noWait, timedOut); got != timedOut {
 		t.Errorf("waitTimeout() rewrote a failure on a release that did not --wait: %v", got)
+	}
+}
+
+// The text is helm's own, captured from a delete_cluster that followed its
+// endpoint's delete_endpoint on meko-dev (helm 3.18.6, the controller image's).
+const purgeRaceStderr = "Error: uninstallation completed with 1 error(s): uninstall: Failed to purge the release: release: not found"
+
+func TestLostPurgeRace(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"purge lost to a concurrent uninstall", "helm uninstall yb-ep-1: exit status 1: " + purgeRaceStderr, true},
+		{"release already marked uninstalled, purge lost", "helm uninstall yb-ep-1: exit status 1: " +
+			"Error: uninstall: Failed to purge the release: release: not found", true},
+		{"purge plus another error", "helm uninstall yb-ep-1: exit status 1: Error: uninstallation completed with 2 error(s): " +
+			"failed to delete Service yb-ep-1: forbidden; uninstall: Failed to purge the release: release: not found", false},
+		{"resource deletion failed", "helm uninstall yb-ep-1: exit status 1: Error: uninstallation completed with 1 error(s): " +
+			"failed to delete Deployment yb-ep-1: forbidden", false},
+		{"cluster unreachable", "helm uninstall yb-ep-1: exit status 1: Error: Kubernetes cluster unreachable", false},
+	} {
+		if got := lostPurgeRace(errors.New(tc.msg)); got != tc.want {
+			t.Errorf("%s: lostPurgeRace() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// fakeHelm writes a helm stand-in that prints stderr and exits with code.
+func fakeHelm(t *testing.T, stderr string, code int) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "helm")
+	script := fmt.Sprintf("#!/bin/sh\necho %q >&2\nexit %d\n", stderr, code)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func TestUninstallToleratesLostPurgeRace(t *testing.T) {
+	c := New(fakeHelm(t, purgeRaceStderr, 1), "", nil)
+	if err := c.Uninstall(context.Background(), "yb-ep-1", "amp-dev", true, time.Minute); err != nil {
+		t.Errorf("Uninstall() = %v, want nil: the release is gone", err)
+	}
+
+	c = New(fakeHelm(t, "Error: Kubernetes cluster unreachable", 1), "", nil)
+	if err := c.Uninstall(context.Background(), "yb-ep-1", "amp-dev", true, time.Minute); err == nil {
+		t.Error("Uninstall() = nil for an unreachable cluster, want the error")
 	}
 }

@@ -417,6 +417,13 @@ Deploy/retire converge on retry rather than duplicating or wedging:
   `uninstall`) before installing.
 - `SetEndpointAddress` is an absolute `UPDATE … WHERE id = $1`.
 - `helm uninstall --ignore-not-found` tolerates an already-gone release (helm ≥ 3.13).
+- An uninstall that overlaps another uninstall of the same release (a cluster
+  delete right behind its endpoint's delete) can lose the final purge: helm
+  reports `Failed to purge the release: release: not found`, either as the sole
+  error of `uninstallation completed with 1 error(s)` or alone when the release
+  was already marked uninstalled. `--ignore-not-found` does not cover it, since
+  the release existed when that uninstall started. The wrapper treats it as
+  success: the release is gone. Any other uninstall error still fails the step.
 - `DeleteEndpoint` is `DELETE … WHERE id = $1` (absent row = no-op).
 - `RecordBranch` is idempotent: it fills a branch's creation group once and
   leaves an existing record untouched. A *newly registered* fork is also

@@ -121,7 +121,8 @@ func (c *Client) recoverPending(ctx context.Context, release, namespace string) 
 }
 
 // Uninstall removes a release. It tolerates an already-absent release so a
-// reclaimed retire step re-runs cleanly.
+// reclaimed retire step re-runs cleanly, and a release another uninstall
+// removed while this one was running (see lostPurgeRace).
 func (c *Client) Uninstall(ctx context.Context, release, namespace string, wait bool, timeout time.Duration) error {
 	args := []string{"uninstall", release, "--namespace", namespace, "--ignore-not-found"}
 	if wait {
@@ -131,7 +132,39 @@ func (c *Client) Uninstall(ctx context.Context, release, namespace string, wait 
 		args = append(args, "--timeout", timeout.String())
 	}
 	_, err := c.run(ctx, "uninstall "+release, args)
+	if err != nil && lostPurgeRace(err) {
+		if c.logger != nil {
+			c.logger.Info("helm release removed by a concurrent uninstall", "release", release)
+		}
+		return nil
+	}
 	return err
+}
+
+// lostPurgeRace reports helm's answer when two uninstalls of one release
+// overlap and this one lost the final purge: the release record it loaded was
+// already purged by the other. --ignore-not-found does not cover it, because
+// the release existed when this uninstall started. The release is gone, which
+// is what the caller asked for. Seen when a cluster delete follows its
+// endpoint's delete back to back.
+//
+// helm (pkg/action/uninstall.go, 3.18) reports it two ways, and both qualify:
+//   - it deleted the resources, then the purge failed: "uninstallation
+//     completed with 1 error(s): uninstall: Failed to purge the release:
+//     release: not found". Only a count of 1 qualifies; with any other error
+//     alongside, the failure still surfaces.
+//   - the release was already marked uninstalled, so it went straight to the
+//     purge: "uninstall: Failed to purge the release: release: not found",
+//     with no count.
+func lostPurgeRace(err error) bool {
+	msg := err.Error()
+	if !strings.Contains(msg, "uninstall: Failed to purge the release: release: not found") {
+		return false
+	}
+	if !strings.Contains(msg, "uninstallation completed with") {
+		return true
+	}
+	return strings.Contains(msg, "uninstallation completed with 1 error(s)")
 }
 
 // upgradeArgs builds the argv (excluding the binary) for an upgrade --install.
