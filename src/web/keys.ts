@@ -1,11 +1,10 @@
 // What the terminal key bar and compose box send, as terminal input. Pure, so it's unit-tested.
 
-export type BarKey = 'esc' | 'shift-tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter';
+export type BarKey = 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter';
 
 /** The key bar, in order. The sticky Ctrl key sits after the first one (see TermKeys). */
 export const BAR_KEYS: { key: BarKey; label: string; title: string }[] = [
-  { key: 'esc', label: 'esc', title: 'Escape: interrupt Claude or close a menu' },
-  { key: 'shift-tab', label: '⇧tab', title: 'Shift+Tab: switch mode' },
+  { key: 'tab', label: 'tab', title: 'Tab' },
   { key: 'up', label: '↑', title: 'Up' },
   { key: 'down', label: '↓', title: 'Down' },
   { key: 'left', label: '←', title: 'Left' },
@@ -17,8 +16,7 @@ export const BAR_KEYS: { key: BarKey; label: string; title: string }[] = [
 const ARROWS: Partial<Record<BarKey, string>> = { up: 'A', down: 'B', right: 'C', left: 'D' };
 
 const FIXED: Partial<Record<BarKey, string>> = {
-  esc: '\x1b',
-  'shift-tab': '\x1b[Z',
+  tab: '\t',
   'ctrl-c': '\x03',
   enter: '\r',
 };
@@ -77,6 +75,12 @@ export function pasteText(text: string, bracketed: boolean): string {
 export function wheelReport(up: boolean, col: number, row: number, cols: number, rows: number): string {
   const clamp = (v: number, max: number) => Math.min(Math.max(1, Math.round(v)), Math.max(1, max));
   return `\x1b[<${up ? 64 : 65};${clamp(col, cols)};${clamp(row, rows)}M`;
+}
+
+/** The screen row (0-based) under a finger at `y`, in a terminal drawn from `top` over `height` px. */
+export function touchRow(y: number, top: number, height: number, rows: number): number {
+  const row = Math.floor(((y - top) / Math.max(1, height)) * rows);
+  return Math.min(Math.max(0, row), Math.max(0, rows - 1));
 }
 
 /** Where a finger was, and when (ms), for a swipe's release speed. */

@@ -323,16 +323,18 @@ you, and the sheet says why a closed gate is closed. Dialogs open as bottom shee
 the overlay behind a dialog or sheet, are pinned to the visible viewport (its height and, where iOS
 pans the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
 covering the prompt or a dialog's fields; while you type, the terminal stays scrolled to its newest line. On
-touch screens the terminal gets a key bar (Esc, a sticky Ctrl, Shift+Tab, arrows, Ctrl+C, Enter;
-with Ctrl lit, the next letter typed in the compose box or in typing mode goes to Claude as Ctrl
-plus that letter, such as Ctrl+O or Ctrl+R) and a compose box (it grows with its text to about a fifth
+touch screens the terminal gets a key bar (Tab, a sticky Ctrl, arrows, Ctrl+C, Enter, select mode
+and typing mode; with Ctrl lit, the next letter typed in the compose box or in typing mode goes to
+Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape) and a compose box (it grows with its text to about a fifth
 of the visible screen, then scrolls) whose text goes in as one bracketed
 paste (with any Escape characters removed), then Enter; if the terminal isn't connected, the text
 stays in the box. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
 runs full screen and takes the mouse). The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
-its context, or sizes its canvas wrongly). Tapping the terminal only brings up the keyboard in
+its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
+selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches tmux
+as a mouse click meanwhile. Tapping the terminal only brings up the keyboard in
 typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
 adjustable in the ⋯ sheet and remembered per browser.
 

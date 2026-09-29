@@ -96,6 +96,20 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           </Fragment>
         ))}
         <button
+          className={cx('key', term.selecting && 'on')}
+          aria-pressed={term.selecting}
+          title={term.selecting ? 'Stop selecting' : 'Select lines to copy: drag over them'}
+          aria-label="Select lines to copy"
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={() => term.setSelecting(!term.selecting)}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 6h10 M4 12h16 M4 18h12" />
+            <path d="M19 3v6 M17 3h4 M17 9h4" />
+          </svg>
+        </button>
+        <button
           className={cx('key', term.typing && 'on')}
           aria-pressed={term.typing}
           title={term.typing ? 'Stop typing into the terminal' : 'Type straight into the terminal'}

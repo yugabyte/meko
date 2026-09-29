@@ -10,7 +10,7 @@ import { checkLogin, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52 } from './clipboard';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pasteText, wheelReport, wheelSteps, FLING_WINDOW_MS,
+  clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
 
@@ -99,6 +99,8 @@ class SessionTerminal {
   /** Disconnected on purpose while the page is hidden; reconnects when it's shown again. */
   private paused = false;
   private touch: { x: number; y: number; travel: number } | null = null;
+  /** In select mode, the buffer line the finger went down on. */
+  private selectAnchor: number | null = null;
   /** Where the last swipe was, so momentum reports its wheel steps at the same cell. */
   private point = { x: 0, y: 0 };
   private samples: TouchSample[] = [];
@@ -114,6 +116,8 @@ class SessionTerminal {
   typing = false;
   /** Sticky Ctrl from the key bar: the next character typed is sent with Ctrl. */
   ctrl = false;
+  /** Select mode from the key bar (touch screens): a drag selects whole lines and copies them. */
+  selecting = false;
   conn: TermConn = 'connecting';
   message: string | null = null;
   /** The server said why it can't attach (in `message`): no reconnecting until reconnect(). */
@@ -148,9 +152,10 @@ class SessionTerminal {
     this.term.open(this.el);
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
-    this.el.addEventListener('touchstart', this.touchStart, { capture: true, passive: true });
+    // Not passive: in select mode a touch is prevented, so no tap reaches tmux as a mouse click.
+    this.el.addEventListener('touchstart', this.touchStart, { capture: true, passive: false });
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
-    this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: true });
+    this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: false });
     this.el.addEventListener('touchcancel', this.touchCancel, { capture: true, passive: true });
     // xterm measures its cells when it opens. If the web font arrives later (a cold cache), the
     // cells were measured with a fallback font and the rows no longer fit: re-measure and refit.
@@ -198,14 +203,10 @@ class SessionTerminal {
     return () => this.listeners.delete(fn);
   }
 
-  private async copy(text: string) {
+  private async copy(text: string, copied = 'Copied') {
     const ok = await copyText(text);
-    this.showNotice(
-      ok
-        ? 'Copied'
-        : `Couldn’t copy: the browser blocked the clipboard. Select with ${IS_MAC ? 'Option' : 'Shift'}-drag and press ${IS_MAC ? '⌘C' : 'Ctrl+C'}.`,
-      ok ? 1500 : 6000,
-    );
+    const how = matches(TOUCH_QUERY) ? '' : ` Select with ${IS_MAC ? 'Option' : 'Shift'}-drag and press ${IS_MAC ? '⌘C' : 'Ctrl+C'}.`;
+    this.showNotice(ok ? copied : `Couldn’t copy: the browser blocked the clipboard.${how}`, ok ? 1500 : 6000);
   }
 
   /** Shows a short note over the terminal for `ms`. */
@@ -368,6 +369,7 @@ class SessionTerminal {
    */
   setTyping(on: boolean) {
     this.typing = on;
+    if (on) this.endSelecting();
     const ta = this.term.textarea;
     if (!ta) return;
     const wasFocused = document.activeElement === ta;
@@ -382,6 +384,36 @@ class SessionTerminal {
     this.listeners.forEach((l) => l());
   }
 
+  /** Turns select mode on or off. On, it puts the keyboard away so there's more to select from. */
+  setSelecting(on: boolean) {
+    if (this.selecting === on) return;
+    if (on) {
+      this.selecting = true;
+      this.stopFling();
+      if (this.typing) this.setTyping(false);
+      this.showNotice('Drag over lines to copy them', 2500);
+    } else this.endSelecting();
+    this.listeners.forEach((l) => l());
+  }
+
+  private endSelecting() {
+    this.selecting = false;
+    this.selectAnchor = null;
+    this.term.clearSelection();
+  }
+
+  /** The buffer line under a finger. */
+  private lineAt(y: number): number {
+    const r = this.el.getBoundingClientRect();
+    return this.term.buffer.active.viewportY + touchRow(y, r.top, r.height, this.term.rows);
+  }
+
+  private selectTo(y: number) {
+    if (this.selectAnchor === null) return;
+    const line = this.lineAt(y);
+    this.term.selectLines(Math.min(this.selectAnchor, line), Math.max(this.selectAnchor, line));
+  }
+
   setFontSize(size: number) {
     if (this.term.options.fontSize === size) return;
     this.term.options.fontSize = size;
@@ -391,6 +423,14 @@ class SessionTerminal {
   private touchStart = (e: TouchEvent) => {
     this.stopFling();
     const t = e.touches[0];
+    if (this.selecting) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.touch = null;
+      this.selectAnchor = e.touches.length === 1 && t ? this.lineAt(t.clientY) : null;
+      if (t) this.selectTo(t.clientY);
+      return;
+    }
     this.touch = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY, travel: 0 } : null;
     this.samples = t ? [{ y: t.clientY, t: e.timeStamp }] : [];
     if (t) this.point = { x: t.clientX, y: t.clientY };
@@ -398,6 +438,12 @@ class SessionTerminal {
 
   private touchMove = (e: TouchEvent) => {
     const t = e.touches[0];
+    if (this.selecting) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.touches.length === 1 && t) this.selectTo(t.clientY);
+      return;
+    }
     if (!this.touch || e.touches.length !== 1 || !t) return;
     e.preventDefault();
     e.stopPropagation();
@@ -414,6 +460,19 @@ class SessionTerminal {
   };
 
   private touchEnd = (e: TouchEvent) => {
+    if (this.selecting) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (this.selectAnchor === null) return;
+      this.selectAnchor = null;
+      // Lifting the finger is the gesture the clipboard needs.
+      const text = this.term.getSelection();
+      if (text.trim()) {
+        const lines = text.split('\n').length;
+        void this.copy(text, lines === 1 ? 'Copied 1 line' : `Copied ${lines} lines`);
+      }
+      return;
+    }
     const wasSwiping = !!this.touch;
     this.touch = null;
     const v = wasSwiping ? flingVelocity(this.samples, e.timeStamp) : 0;
@@ -423,6 +482,7 @@ class SessionTerminal {
 
   private touchCancel = () => {
     this.touch = null;
+    this.selectAnchor = null;
     this.samples = [];
   };
 

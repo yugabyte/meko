@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pasteText, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pasteText, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
 describe('terminal key bar', () => {
   it('sends the bytes a keyboard would', () => {
-    expect(keySequence('esc')).toBe('\x1b');
-    expect(keySequence('shift-tab')).toBe('\x1b[Z');
+    expect(keySequence('tab')).toBe('\t');
     expect(keySequence('ctrl-c')).toBe('\x03');
     expect(keySequence('enter')).toBe('\r');
   });
@@ -16,11 +15,26 @@ describe('terminal key bar', () => {
     expect(['up', 'down', 'right', 'left'].map((k) => keySequence(k as 'up'))).toEqual(['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D']);
     expect(['up', 'down', 'right', 'left'].map((k) => keySequence(k as 'up', true))).toEqual(['\x1bOA', '\x1bOB', '\x1bOC', '\x1bOD']);
     // Other keys don't change with the mode.
-    expect(keySequence('esc', true)).toBe('\x1b');
+    expect(keySequence('tab', true)).toBe('\t');
   });
 
   it('has a sequence for every key on the bar', () => {
     for (const k of BAR_KEYS) expect(keySequence(k.key)).not.toBe('');
+  });
+});
+
+describe('select mode', () => {
+  it('finds the row under a finger, kept on the screen', () => {
+    // 20 rows over 400 px starting at 100: 20 px a row.
+    expect(touchRow(100, 100, 400, 20)).toBe(0);
+    expect(touchRow(119, 100, 400, 20)).toBe(0);
+    expect(touchRow(120, 100, 400, 20)).toBe(1);
+    expect(touchRow(499, 100, 400, 20)).toBe(19);
+    // Dragged past the top or bottom edge.
+    expect(touchRow(40, 100, 400, 20)).toBe(0);
+    expect(touchRow(900, 100, 400, 20)).toBe(19);
+    // No rows yet.
+    expect(touchRow(10, 0, 400, 0)).toBe(0);
   });
 });
 
@@ -52,7 +66,7 @@ describe('sticky Ctrl', () => {
   });
 
   it('is not on the bar as a key that sends bytes', () => {
-    expect(BAR_KEYS.map((k) => k.label)).toEqual(['esc', '⇧tab', '↑', '↓', '←', '→', '^C', '⏎']);
+    expect(BAR_KEYS.map((k) => k.label)).toEqual(['tab', '↑', '↓', '←', '→', '^C', '⏎']);
   });
 });
 
