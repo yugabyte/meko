@@ -6,7 +6,7 @@ import {
   LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
 import {
-  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
+  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { shortHost } from '../../src/server/core.js';
@@ -182,6 +182,18 @@ describe('config and db', () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.meko.webUrl = 'https://meko.internal';
     expect(resolveMekoWebUrl(cfg)).toBe('https://meko.internal');
+  });
+
+  it("names the Meko server's host for PR descriptions: the web app's, else the MCP server's", () => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    expect(mekoHost(cfg)).toBe('cloud.mekodata.ai');
+    cfg.meko.url = 'http://meko.example.com:8000/mcp';
+    expect(mekoHost(cfg)).toBe('meko.example.com'); // no web app known for a self-hosted MCP server
+    cfg.meko.webUrl = 'https://app.meko.example.com:8443/';
+    expect(mekoHost(cfg)).toBe('app.meko.example.com');
+    cfg.meko.webUrl = 'not a url';
+    cfg.meko.url = 'also not a url';
+    expect(mekoHost(cfg)).toBe('cloud.mekodata.ai');
   });
 
   it('links a datapack by id', () => {

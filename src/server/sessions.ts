@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DiscardCheck, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -1160,12 +1160,21 @@ export class SessionManager {
   private async nameConversation(r: SessionRow): Promise<void> {
     const dp = dedicatedDatapack(this.db, r.project_id);
     if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
-    const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
     try {
-      await this.core.meko.ensureConversation(projectAgentId(r.project_id), dp.id, r.claude_session_id, title);
+      await this.conversationId(r, dp);
     } catch (e) {
       this.core.log.warn(`naming the Meko conversation for ${r.id} failed`, errMsg(e));
     }
+  }
+
+  /**
+   * The id of the session's Meko conversation in its project's dedicated datapack (keyed by the
+   * Claude session id, so the plugin's hooks and AgentK share it), titled after the session if
+   * Meko doesn't have it yet. Callers check that Meko is on.
+   */
+  conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
+    const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
+    return this.core.meko.ensureConversation(projectAgentId(r.project_id), dp.id, r.claude_session_id, title);
   }
 
   // ---- token usage ----

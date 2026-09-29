@@ -85,6 +85,18 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 {{comments}}`,
 };
 
+/**
+ * Added to the PR prompt when the project has a Meko datapack: the lines that end the PR
+ * description, so the PR points back at the datapack and at the session's Meko conversation.
+ */
+export function mekoPrFooter(host: string, datapackId: string, conversationId: string | null): string {
+  const lines = [`${host}://${datapackId}`];
+  if (conversationId) lines.push(`meko_conversation_id:${conversationId}`);
+  return `End the PR description with ${lines.length === 1 ? 'this line' : 'these lines'}, exactly as written and each on its own line, after everything else. Keep ${lines.length === 1 ? 'it' : 'them'} there if you update the description later.
+
+${lines.join('\n')}`;
+}
+
 export function loadPrompt(db: Db, name: PromptName, worktree: string | null): string {
   if (worktree) {
     const f = join(worktree, '.agent-k', 'stages', `${name}.md`);

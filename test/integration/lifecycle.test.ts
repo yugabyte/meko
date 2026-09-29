@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
-import type { CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
+import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, tmux and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
@@ -378,6 +378,58 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 502 });
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', busy: false });
+  });
+
+  /** Opens a PR for a new session in a project with this datapack; returns the PR prompt Claude got. */
+  async function prPrompt(datapack: CreateProjectRequest['datapack']) {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack });
+    const s = await env.core.sessions.create(p.id, { name: 'Footer', prompt: 'do it', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
+    const submit = vi.spyOn(env.core.tmux, 'submit');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const text = String(submit.mock.calls.find((c) => String(c[1]).startsWith('Open a pull request'))?.[1]);
+    return { text, row: env.core.sessions.row(s.id) };
+  }
+
+  it("ends the PR description with the project's datapack and the session's Meko conversation", async () => {
+    const { text, row } = await prPrompt({ mode: 'existing', id: 'dp-1', name: 'team/demo' });
+    expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1\nmeko_conversation_id:conv-1')).toBe(true);
+    expect(text).toContain('End the PR description with these lines, exactly as written');
+    const conv = env.meko.calls.filter((c) => c.name === 'ensureConversation').at(-1);
+    expect(conv?.args.slice(0, 4)).toEqual([`claude_code:${row.project_id}`, 'dp-1', row.claude_session_id, 'Footer (Demo)']);
+  });
+
+  it("still opens the PR, with just the datapack line, when Meko can't name the conversation", async () => {
+    env.meko.ensureConversation = async () => {
+      throw new Error('Meko is down');
+    };
+    const { text } = await prPrompt({ mode: 'existing', id: 'dp-1', name: 'team/demo' });
+    expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1')).toBe(true);
+    expect(text).toContain('End the PR description with this line');
+    expect(text).not.toContain('meko_conversation_id');
+  });
+
+  it("doesn't type the PR prompt if Claude needs the user by the time Meko answers", async () => {
+    let answer: ((id: string) => void) | null = null;
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Slow Meko', prompt: 'do it', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
+    env.meko.ensureConversation = () => new Promise<string>((r) => (answer = r));
+    const submit = vi.spyOn(env.core.tmux, 'submit');
+    const opening = env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => answer, (a) => a !== null, 5000, 'the Meko lookup');
+    env.core.sessions.update(s.id, { status: 'needs_input' });
+    answer!('conv-1');
+    await expect(opening).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
+    expect(env.core.sessions.row(s.id).stage).toBe('code');
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('adds no Meko lines to the PR prompt for a project without a datapack', async () => {
+    const { text } = await prPrompt({ mode: 'none' });
+    expect(text).toContain('gh pr create');
+    expect(text).not.toContain('mekodata');
+    expect(env.meko.calls.some((c) => c.name === 'ensureConversation')).toBe(false);
   });
 
   function commitIn(dir: string) {

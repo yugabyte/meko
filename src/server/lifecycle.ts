@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
@@ -7,6 +8,7 @@ import * as github from './github.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
+import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
 import type { ReviewerMode } from '../shared/types.js';
 import { dedicatedDatapack, parseSettings, projectRow, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
@@ -21,6 +23,8 @@ const CLOSING_RESUME_MS = 24 * 60 * 60 * 1000;
 const CI_SETTLE_MS = 10 * 60 * 1000;
 /** Heads in a row that get a CI-fix prompt before a failing CI is left to the user. */
 const MAX_CI_FIXES = 3;
+/** How long Open PR waits for Meko to name the session's conversation for the PR description. */
+const PR_CONVERSATION_TIMEOUT_MS = 10000;
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
@@ -233,23 +237,55 @@ export class Lifecycle {
   // ---- PR ----
 
   async openPr(row: SessionRow): Promise<void> {
+    this.checkOpenPr(row);
+    if (row.branch_reused) await this.followPrBase(row);
+    const footer = await this.prFooter(row);
+    // Waiting on GitHub or Meko gave Claude and the user time to move on: check again.
+    const cur = this.sessions.row(row.id);
+    this.checkOpenPr(cur);
+    // The stage moves first: Claude's turn can end before submit returns.
+    this.sessions.setStage(row.id, 'pr', 'you');
+    this.sessions.setBusy(row.id, true);
+    try {
+      await this.sessions.submit(row.id, [this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
+    } catch (e) {
+      this.sessions.setBusy(row.id, false);
+      if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, 'code', 'auto');
+      throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
+    }
+  }
+
+  private checkOpenPr(row: SessionRow): void {
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
     if (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy) {
       throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     }
     if (row.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
-    if (row.branch_reused) await this.followPrBase(row);
-    // The stage moves first: Claude's turn can end before submit returns.
-    this.sessions.setStage(row.id, 'pr', 'you');
-    this.sessions.setBusy(row.id, true);
-    try {
-      await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'pr'));
-    } catch (e) {
-      this.sessions.setBusy(row.id, false);
-      if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, 'code', 'auto');
-      throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
-    }
+  }
+
+  /**
+   * The PR prompt's Meko lines (see mekoPrFooter), or '' when the project has no dedicated
+   * datapack or Meko is off. When Meko fails or takes longer than PR_CONVERSATION_TIMEOUT_MS
+   * (connecting included), the PR goes out without the conversation line; a slow lookup is left
+   * to finish on its own rather than cut short, which would close the Meko connection others share.
+   */
+  private async prFooter(row: SessionRow): Promise<string> {
+    const dp = dedicatedDatapack(this.db, row.project_id);
+    if (!dp || !this.core.mekoStatus.configured) return '';
+    const lookup = this.sessions.conversationId(row, dp).catch((e: unknown): null => {
+      this.core.log.warn(`looking up the Meko conversation for ${row.id} failed`, errMsg(e));
+      return null;
+    });
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<null>((r) => {
+      timer = setTimeout(() => {
+        this.core.log.warn(`Meko took too long to look up the conversation for ${row.id}; the PR goes out without it`);
+        r(null);
+      }, PR_CONVERSATION_TIMEOUT_MS);
+    });
+    const conv = await Promise.race([lookup, late]).finally(() => clearTimeout(timer));
+    return mekoPrFooter(mekoHost(this.core.config), dp.id, conv);
   }
 
   /**

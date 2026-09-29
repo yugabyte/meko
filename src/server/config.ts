@@ -206,6 +206,21 @@ export function resolveMekoWebUrl(cfg: Config): string | null {
 }
 
 /**
+ * The Meko server's host name, as PR descriptions name it (`<host>://<datapack id>`): the web
+ * app's, else the MCP server's (a self-hosted Meko whose web app isn't set), else Meko Cloud's.
+ */
+export function mekoHost(cfg: Config): string {
+  for (const u of [resolveMekoWebUrl(cfg), resolveMeko(cfg).url]) {
+    try {
+      if (u) return new URL(u).hostname;
+    } catch {
+      /* not a URL: try the next */
+    }
+  }
+  return new URL(DEFAULT_MEKO_WEB_URL).hostname;
+}
+
+/**
  * Meko's REST API base (used for sharing): config first, then MEKO_API_URL, then the web app URL
  * plus /api/v1 (the Meko web app serves its API on the same origin). Null when neither is known.
  */
