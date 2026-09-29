@@ -290,3 +290,87 @@ describe('changes vs. the base (real git)', () => {
     expect(await changes(wt, 'main')).toMatchObject({ files: [], added: 0, removed: 0 });
   });
 });
+
+describe('the diff base of a fork (real git)', () => {
+  let home: string;
+  let repo: string; // the user's clone of their fork: origin is the fork, upstream the repo it forks
+  let maint: string; // a maintainer's clone, pushing to upstream
+  let wt: string;
+  const png = (n: number) => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, n]);
+
+  beforeEach(async () => {
+    home = tempDir('akl-fork-');
+    const seed = gitRepo(join(home, 'seed'));
+    writeFileSync(join(seed, 'docs.txt'), 'old docs\n'.repeat(50));
+    writeFileSync(join(seed, 'logo.png'), png(1));
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-q', '-m', 'docs');
+    git(home, 'clone', '-q', '--bare', seed, 'upstream.git');
+    git(home, 'clone', '-q', '--bare', 'upstream.git', 'origin.git');
+    git(home, 'clone', '-q', 'origin.git', 'repo');
+    git(home, 'clone', '-q', 'upstream.git', 'maint');
+    repo = join(home, 'repo');
+    maint = join(home, 'maint');
+    identity(repo);
+    identity(maint);
+    git(repo, 'remote', 'add', 'upstream', join(home, 'upstream.git'));
+    git(repo, 'fetch', '-q', 'upstream');
+    wt = join(home, 'wt');
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  /** Upstream moves on without the fork: the docs go and the logo changes. */
+  function advanceUpstream() {
+    unlinkSync(join(maint, 'docs.txt'));
+    writeFileSync(join(maint, 'logo.png'), png(2));
+    git(maint, 'add', '-A');
+    git(maint, 'commit', '-q', '-m', 'drop the old docs');
+    git(maint, 'push', '-q', 'origin', 'main');
+  }
+
+  /** One small commit on the session's branch. */
+  function work() {
+    writeFileSync(join(wt, 'README.md'), '# test\nmore\n');
+    git(wt, 'commit', '-q', '-am', 'work');
+  }
+
+  it("counts only the branch's work once it's rebased onto upstream", async () => {
+    await addWorktree(repo, wt, 'ak/x', 'main'); // starts from the fork's main, now behind
+    advanceUpstream();
+    work();
+    git(wt, 'fetch', '-q', 'upstream');
+    git(wt, 'rebase', '-q', 'upstream/main');
+
+    const c = (await changes(wt, 'main'))!;
+    expect(c.base).toBe('upstream/main');
+    expect(c.files.map((f) => f.path)).toEqual(['README.md']);
+    expect(await diffStat(wt, 'main')).toEqual({ added: 1, removed: 0 });
+    // The Before side of an image is upstream's.
+    expect((await changedImage(wt, 'main', 'logo.png', 'old'))?.data).toEqual(png(2));
+  });
+
+  it("uses origin when the fork's base is ahead of upstream's", async () => {
+    advanceUpstream();
+    git(repo, 'pull', '-q', '--ff-only', join(home, 'upstream.git'), 'main');
+    writeFileSync(join(repo, 'fork.txt'), 'fork only\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'fork only');
+    git(repo, 'push', '-q', 'origin', 'main');
+    await addWorktree(repo, wt, 'ak/x', 'main');
+    work();
+
+    const c = (await changes(wt, 'main'))!;
+    expect(c.base).toBe('origin/main');
+    expect(c.files.map((f) => f.path)).toEqual(['README.md']);
+  });
+
+  it('uses origin when the fork and upstream agree, or there is no upstream', async () => {
+    await addWorktree(repo, wt, 'ak/x', 'main');
+    work();
+    expect((await changes(wt, 'main'))!.base).toBe('origin/main');
+
+    git(repo, 'remote', 'remove', 'upstream');
+    expect((await changes(wt, 'main'))!.base).toBe('origin/main');
+    expect(await diffStat(wt, 'main')).toEqual({ added: 1, removed: 0 });
+  });
+});

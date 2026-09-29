@@ -195,6 +195,9 @@ says why.
 
 Clicking the `+N −N` numbers in the footer opens a side panel with every file changed on the
 branch since it left the base: committed, uncommitted and untracked (ignored files are left out).
+The base is the branch's merge base with `origin/<base>` or, in a fork, `upstream/<base>`, whichever
+is closer to the branch (a fork's own `<base>` can lag the upstream one the branch was rebased onto);
+`origin` wins a tie, and the local `<base>` is used only when neither remote has one.
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
 edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
 past that only line counts are shown.

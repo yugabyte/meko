@@ -31,13 +31,26 @@ function gitDiff(worktree: string, ...args: string[]): Promise<string> {
   return gitRaw(worktree, ...DIFF_CONFIG, 'diff', ...DIFF_OPTS, ...args);
 }
 
-/** Where the branch left its base: merge base of HEAD and origin/<base>, else <base>. */
+/**
+ * Where the branch left its base: its merge base with origin/<base> or, in a fork, upstream/<base>,
+ * whichever is closer to HEAD (a fork's own <base> can lag the upstream one the branch was rebased
+ * onto, and commits already on either aren't the branch's work). Origin wins a tie. The local <base>
+ * is used only when neither remote has one.
+ */
 export async function diffBase(worktree: string, base: string): Promise<{ ref: string; sha: string } | null> {
-  for (const ref of [`origin/${base}`, base]) {
+  const found: { ref: string; sha: string }[] = [];
+  for (const ref of [`origin/${base}`, `upstream/${base}`]) {
+    if (!(await tryGit(worktree, 'rev-parse', '--verify', '--quiet', `refs/remotes/${ref}`))) continue;
     const sha = await tryGit(worktree, 'merge-base', 'HEAD', ref);
-    if (sha) return { ref, sha };
+    if (sha) found.push({ ref, sha });
   }
-  return null;
+  if (found.length === 2 && found[0].sha !== found[1].sha) {
+    const [a, b] = await Promise.all(found.map((f) => tryGit(worktree, 'rev-list', '--count', `${f.sha}..HEAD`)));
+    if (a !== null && b !== null && Number(b) < Number(a)) return found[1];
+  }
+  if (found.length) return found[0];
+  const sha = await tryGit(worktree, 'merge-base', 'HEAD', base);
+  return sha ? { ref: base, sha } : null;
 }
 
 /** Lines added/removed vs. the base, uncommitted and untracked files included. */
