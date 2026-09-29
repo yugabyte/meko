@@ -100,6 +100,10 @@ your phone can connect.
   subagents included. **Usage** in the left panel adds it up across every project, deleted ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
+- **Usage stats:** once a day AgentK Local sends anonymous counts to YugabyteDB: how many
+  projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
+  It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
+  (details in [docs/design.md](docs/design.md#usage-stats)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
 - **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback

@@ -1,0 +1,463 @@
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import {
+  SESSION_KINDS,
+  type FileTypeCount, type MekoStatus, type SessionKind, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeReport,
+  type CallHomeTokens,
+} from '../shared/types.js';
+import { isLoopback, mekoConfigured, resolveMekoWithSource, type Config } from './config.js';
+import { all, get, kvGet, kvSet, type Db } from './db.js';
+import { readFileTypes, sumFileTypes } from './filetypes.js';
+import { errMsg, type Logger } from './log.js';
+import { usageOverview } from './usage.js';
+
+// Anonymous usage stats ("Call Home"). Once a day each install sends counts to a collector run
+// by the AgentK Local team: no names, paths, prompts, code or anything that says who someone is.
+// Every string in the report is an enum, a version, a model id or a file extension, and the
+// report's shape is the collector's contract (CallHomeReport, docs/call-home-report.schema.json;
+// the collector is yugabyte/agent-k's services/ak-local-call-home).
+
+const execFileP = promisify(execFile);
+
+const STAGES: Stage[] = ['explore', 'design', 'code', 'pr', 'review', 'merge', 'done'];
+const DAY_MS = 24 * 3600 * 1000;
+
+/** Days in a report: the first one an install sends goes back as far as session events are kept. */
+export const REPORT_DAYS = 7;
+export const FIRST_REPORT_DAYS = 30;
+/** How often the server checks whether a report is due. */
+export const CHECK_EVERY_MS = 3600 * 1000;
+/** A report is due this long after the last one: just under a day, so hourly checks don't drift later each day. */
+export const SEND_AFTER_MS = 23 * 3600 * 1000;
+/** The first check after start waits a random time in this range, so a release doesn't make every install report at once. */
+export const FIRST_CHECK_MS: [number, number] = [10 * 60 * 1000, 60 * 60 * 1000];
+const SEND_TIMEOUT_MS = 15_000;
+const PROBE_TIMEOUT_MS = 10_000;
+/** tokensByModel keeps this many models; the rest are summed into `other`. */
+const MODEL_LIMIT = 20;
+
+const KV_INSTALL_ID = 'call_home_install_id';
+const KV_LAST_SENT = 'call_home_last_sent';
+const KV_FIRST_DAY = 'call_home_first_day';
+
+/** Plain model ids (`claude-opus-5-5`), as the collector's schema has them. Anything else is `other`. */
+export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+/** Versions (ours, Node's, tmux's `3.2a`, Claude Code's), as the collector's schema has them. */
+export const VERSION_RE = /^v?[0-9]+(\.[0-9A-Za-z]+){0,3}([-+][0-9A-Za-z.-]{1,24})?$/;
+
+/** The UTC day of a time, as YYYY-MM-DD. */
+export function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+const byKind = (): Record<SessionKind, number> => ({ explore: 0, plan: 0, quick: 0 });
+const byStage = (): Record<Stage, number> => Object.fromEntries(STAGES.map((s) => [s, 0])) as Record<Stage, number>;
+
+function emptyDay(day: string): CallHomeDay {
+  return {
+    day, activeProjects: 0, activeSessions: 0, messages: 0, projectsCreated: 0, projectsDeleted: 0,
+    sessionsCreated: byKind(), sessionsArchived: 0, stageEntries: byStage(), prsOpened: 0, prsMerged: 0,
+    prCommits: 0, prAdditions: 0, prDeletions: 0, directPushes: 0, directCommits: 0, reviews: 0, ciFailures: 0,
+    commentBatches: 0, recoveries: 0, resumes: 0, worktreesReused: 0, fileTypes: [], tokensByModel: [],
+  };
+}
+
+const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+
+function payload(json: string | null): Record<string, unknown> {
+  if (!json) return {};
+  try {
+    const v = JSON.parse(json) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Model ids that aren't plain ids become `other`; after that, the MODEL_LIMIT largest by messages are kept. */
+function capModels(rows: (CallHomeTokens & { model: string })[]): (CallHomeTokens & { model: string })[] {
+  const by = new Map<string, CallHomeTokens & { model: string }>();
+  for (const r of rows) {
+    const model = MODEL_RE.test(r.model) ? r.model : 'other';
+    const t = by.get(model) ?? { model, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
+    t.input += r.input;
+    t.output += r.output;
+    t.cacheRead += r.cacheRead;
+    t.cacheWrite += r.cacheWrite;
+    t.messages += r.messages;
+    by.set(model, t);
+  }
+  const sorted = [...by.values()].sort((a, b) => b.messages - a.messages || (a.model < b.model ? -1 : 1));
+  if (sorted.length <= MODEL_LIMIT) return sorted;
+  const keep = sorted.filter((r) => r.model !== 'other').slice(0, MODEL_LIMIT - 1);
+  const kept = new Set(keep.map((r) => r.model));
+  const other = { model: 'other', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
+  for (const r of sorted) {
+    if (kept.has(r.model)) continue;
+    other.input += r.input;
+    other.output += r.output;
+    other.cacheRead += r.cacheRead;
+    other.cacheWrite += r.cacheWrite;
+    other.messages += r.messages;
+  }
+  return [...keep, other];
+}
+
+export interface ReportOptions {
+  installId: string;
+  install: CallHomeInstall;
+  /** How many UTC days, ending today. */
+  days: number;
+  now?: number;
+}
+
+/** The report, from the database alone: only numeric columns, enums, model ids and file-type counts are read. */
+export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
+  const now = o.now ?? Date.now();
+  const today = Date.parse(utcDay(now));
+  const start = today - (o.days - 1) * DAY_MS;
+  const days = new Map<string, CallHomeDay>();
+  for (let i = 0; i < o.days; i++) {
+    const d = utcDay(start + i * DAY_MS);
+    days.set(d, emptyDay(d));
+  }
+  const dayOf = (at: number) => (at >= start ? days.get(utcDay(at)) : undefined);
+  const dayFiles = new Map<string, FileTypeCount[][]>();
+  const addDayFiles = (d: CallHomeDay, list: FileTypeCount[] | null) => {
+    if (list?.length) dayFiles.set(d.day, [...(dayFiles.get(d.day) ?? []), list]);
+  };
+  const DAY_SQL = "strftime('%Y-%m-%d', u.at / 1000, 'unixepoch')";
+
+  // Activity and tokens.
+  for (const r of all<{ day: string; projects: number; sessions: number; messages: number }>(db,
+    `SELECT ${DAY_SQL} AS day, COUNT(DISTINCT s.project_id) AS projects, COUNT(DISTINCT u.session_id) AS sessions, COUNT(*) AS messages
+     FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE u.at >= ? GROUP BY day`, start)) {
+    const d = days.get(r.day);
+    if (!d) continue;
+    d.activeProjects = r.projects;
+    d.activeSessions = r.sessions;
+    d.messages = r.messages;
+  }
+  const models = new Map<string, (CallHomeTokens & { model: string })[]>();
+  for (const r of all<{ day: string; model: string; input: number; output: number; cache_read: number; cache_write: number; messages: number }>(db,
+    `SELECT ${DAY_SQL} AS day, u.model, SUM(u.input) AS input, SUM(u.output) AS output, SUM(u.cache_read) AS cache_read,
+            SUM(u.cache_write) AS cache_write, COUNT(*) AS messages
+     FROM usage_messages u WHERE u.at >= ? GROUP BY day, u.model`, start)) {
+    models.set(r.day, [...(models.get(r.day) ?? []),
+      { model: r.model, input: n(r.input), output: n(r.output), cacheRead: n(r.cache_read), cacheWrite: n(r.cache_write), messages: n(r.messages) }]);
+  }
+  for (const [day, rows] of models) {
+    const d = days.get(day);
+    if (d) d.tokensByModel = capModels(rows);
+  }
+
+  // Projects.
+  const projects = all<{ id: string; repo_path: string; created_at: number; deleted_at: number | null }>(db,
+    'SELECT id, repo_path, created_at, deleted_at FROM projects');
+  for (const p of projects) {
+    const c = dayOf(p.created_at);
+    if (c) c.projectsCreated++;
+    const d = p.deleted_at != null ? dayOf(p.deleted_at) : undefined;
+    if (d) d.projectsDeleted++;
+  }
+  const current = projects.filter((p) => p.deleted_at == null);
+  const currentIds = new Set(current.map((p) => p.id));
+  const datapacks = all<{ project_id: string; role: string }>(db, 'SELECT project_id, role FROM project_datapacks')
+    .filter((r) => currentIds.has(r.project_id));
+
+  // Sessions.
+  const sessions = all<{ kind: string; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
+    'SELECT kind, stage, desired, created_at, archived_at FROM sessions');
+  const kinds = byKind();
+  const openByStage = byStage();
+  for (const s of sessions) {
+    const kind = (SESSION_KINDS as string[]).includes(s.kind) ? (s.kind as SessionKind) : null;
+    if (kind) kinds[kind]++;
+    if (s.desired === 'running' && (STAGES as string[]).includes(s.stage)) openByStage[s.stage as Stage]++;
+    const c = dayOf(s.created_at);
+    if (c && kind) c.sessionsCreated[kind]++;
+    const a = s.archived_at != null ? dayOf(s.archived_at) : undefined;
+    if (a) a.sessionsArchived++;
+  }
+  for (const r of all<{ stage: string; entered_at: number }>(db, 'SELECT stage, entered_at FROM session_stages WHERE entered_at >= ?', start)) {
+    const d = dayOf(r.entered_at);
+    if (d && (STAGES as string[]).includes(r.stage)) d.stageEntries[r.stage as Stage]++;
+  }
+
+  // Session events (kept 30 days, except `merged`).
+  for (const e of all<{ kind: string; text: string | null; payload_json: string | null; at: number }>(db,
+    `SELECT kind, text, payload_json, at FROM session_events
+     WHERE at >= ? AND kind IN ('pr', 'review', 'ci', 'comments', 'recovered', 'resumed', 'created')`, start)) {
+    const d = dayOf(e.at);
+    if (!d) continue;
+    if (e.kind === 'pr') d.prsOpened++;
+    // Reviews handed to Claude; not the "Requested another AgentK review" notes.
+    else if (e.kind === 'review' && /^(AgentK review:|Review from )/.test(e.text ?? '')) d.reviews++;
+    else if (e.kind === 'ci') d.ciFailures++;
+    else if (e.kind === 'comments') d.commentBatches++;
+    else if (e.kind === 'recovered') d.recoveries++;
+    else if (e.kind === 'resumed') d.resumes++;
+    else if (e.kind === 'created' && payload(e.payload_json).reused === true) d.worktreesReused++;
+  }
+
+  // Merged PRs: the first `merged` event of each session, with the PR's size once it was recorded.
+  const shipped = { prCommits: 0, prAdditions: 0, prDeletions: 0 };
+  const allFiles: FileTypeCount[][] = [];
+  for (const m of all<{ payload_json: string | null; at: number }>(db,
+    `SELECT payload_json, MIN(at) AS at FROM session_events WHERE kind = 'merged' GROUP BY session_id`)) {
+    const p = payload(m.payload_json);
+    const files = readFileTypes(p.fileTypes);
+    shipped.prCommits += n(p.commits);
+    shipped.prAdditions += n(p.additions);
+    shipped.prDeletions += n(p.deletions);
+    if (files) allFiles.push(files);
+    const d = dayOf(m.at);
+    if (!d) continue;
+    d.prsMerged++;
+    d.prCommits += n(p.commits);
+    d.prAdditions += n(p.additions);
+    d.prDeletions += n(p.deletions);
+    addDayFiles(d, files);
+  }
+
+  // Direct pushes to a base branch.
+  for (const p of all<{ at: number; commits: number | null; file_types: string | null }>(db, 'SELECT at, commits, file_types FROM pushes')) {
+    const files = readFileTypes(p.file_types);
+    if (files) allFiles.push(files);
+    const d = dayOf(p.at);
+    if (!d) continue;
+    d.directPushes++;
+    d.directCommits += n(p.commits);
+    addDayFiles(d, files);
+  }
+  for (const [day, lists] of dayFiles) days.get(day)!.fileTypes = sumFileTypes(lists);
+
+  const overview = usageOverview(db, 1, now);
+  return {
+    schema: 1,
+    installId: o.installId,
+    sentAt: new Date(now).toISOString(),
+    install: o.install,
+    totals: {
+      projects: {
+        current: current.length,
+        deleted: projects.length - current.length,
+        withDatapack: new Set(datapacks.filter((r) => r.role === 'dedicated').map((r) => r.project_id)).size,
+        sharedDatapacks: datapacks.filter((r) => r.role === 'shared').length,
+        repos: new Set(current.map((p) => p.repo_path)).size,
+      },
+      sessions: {
+        total: sessions.length,
+        open: sessions.filter((s) => s.desired === 'running').length,
+        archived: sessions.filter((s) => s.desired === 'archived').length,
+        byKind: kinds,
+        openByStage,
+      },
+      shipped: { mergedPrs: overview.mergedPrs, directPushes: overview.directPushes, directCommits: overview.directCommits, ...shipped },
+      fileTypes: sumFileTypes(allFiles),
+      tokens: { ...overview.total },
+      worktrees: { idle: get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM worktrees WHERE session_id IS NULL')?.n ?? 0 },
+    },
+    days: [...days.values()],
+  };
+}
+
+/** Runs a command for its version output; rejects on failure or after PROBE_TIMEOUT_MS. */
+export type Probe = (cmd: string, args: string[]) => Promise<string>;
+
+const defaultProbe: Probe = async (cmd, args) => {
+  const { stdout } = await execFileP(cmd, args, { timeout: PROBE_TIMEOUT_MS, env: { ...process.env, NO_COLOR: '1' } });
+  return stdout;
+};
+
+/** The version a command prints, or '' when it can't be read. */
+async function probeVersion(probe: Probe, cmd: string, args: string[], re: RegExp): Promise<string> {
+  try {
+    const v = re.exec(await probe(cmd, args))?.[1] ?? '';
+    return VERSION_RE.test(v) ? v : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Which service manager runs this server, from what systemd and launchd put in its environment. */
+function serviceKind(): CallHomeInstall['service'] {
+  if (process.platform === 'linux' && process.env.INVOCATION_ID) return 'systemd';
+  if (process.platform === 'darwin' && process.env.XPC_SERVICE_NAME?.includes('agent-k-local')) return 'launchd';
+  return 'none';
+}
+
+export interface InstallInputs {
+  config: Config;
+  version: string;
+  meko: MekoStatus;
+  firstDay: string;
+  probe?: Probe;
+}
+
+export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
+  const probe = o.probe ?? defaultProbe;
+  const [tmux, claudeCode] = await Promise.all([
+    probeVersion(probe, 'tmux', ['-V'], /(\d+(?:\.\d+)*[a-z]?)/),
+    probeVersion(probe, o.config.claude.command, ['--version'], /(\d+\.\d+\.\d+)/),
+  ]);
+  const meko = mekoConfigured(o.config);
+  return {
+    version: VERSION_RE.test(o.version) ? o.version : '0.0.0',
+    channel: o.config.update.channel,
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    tmux,
+    claudeCode,
+    access: isLoopback(o.config.server.bind) ? 'local' : 'remote',
+    service: serviceKind(),
+    meko: {
+      enabled: meko,
+      keySource: (meko && resolveMekoWithSource(o.config).keySource) || 'none',
+      sharing: (meko && o.meko.sharing) || 'none',
+    },
+    firstDay: o.firstDay,
+  };
+}
+
+/** The collector URL release builds carry: a CALL_HOME_URL file next to VERSION (see package-release.sh). */
+export function bakedCallHomeUrl(appDir = process.env.AK_APP_DIR): string {
+  if (!appDir) return '';
+  try {
+    return readFileSync(join(appDir, 'CALL_HOME_URL'), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** An http(s) URL, or null. */
+function collectorUrl(raw: string): string | null {
+  const s = raw.trim();
+  try {
+    const u = new URL(s);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface CallHomeOptions {
+  db: Db;
+  config: () => Config;
+  version: string;
+  meko: () => MekoStatus;
+  log: Logger;
+  fetch?: typeof fetch;
+  now?: () => number;
+  /** The collector URL release builds carry; by default read from AK_APP_DIR. */
+  bakedUrl?: () => string;
+  probe?: Probe;
+  random?: () => number;
+}
+
+/** Sends the daily report while `[call_home] enabled` is on and there is a collector URL. */
+export class CallHomeService {
+  private readonly fetchImpl: typeof fetch;
+  private readonly now: () => number;
+  private baked: string | null = null;
+  private sending: Promise<boolean> | null = null;
+  /** The last send failed: failures are logged once until a send works again. */
+  private failing = false;
+  private firstCheck: NodeJS.Timeout | null = null;
+
+  constructor(private o: CallHomeOptions) {
+    this.fetchImpl = o.fetch ?? fetch;
+    this.now = o.now ?? Date.now;
+  }
+
+  /** Where reports go (the collector's full report URL): `[call_home] url`, else the one this build carries; null when there's neither. */
+  endpoint(): string | null {
+    const configured = this.o.config().callHome.url;
+    if (configured.trim()) return collectorUrl(configured);
+    this.baked ??= (this.o.bakedUrl ?? bakedCallHomeUrl)();
+    return this.baked ? collectorUrl(this.baked) : null;
+  }
+
+  enabled(): boolean {
+    return this.o.config().callHome.enabled;
+  }
+
+  installId(): string {
+    let id = kvGet(this.o.db, KV_INSTALL_ID);
+    if (!id) {
+      id = randomUUID();
+      kvSet(this.o.db, KV_INSTALL_ID, id);
+    }
+    return id;
+  }
+
+  /** The report the next send carries. */
+  async report(): Promise<CallHomeReport> {
+    const now = this.now();
+    let firstDay = kvGet(this.o.db, KV_FIRST_DAY);
+    if (!firstDay) {
+      firstDay = utcDay(now);
+      kvSet(this.o.db, KV_FIRST_DAY, firstDay);
+    }
+    const install = await installFacts({ config: this.o.config(), version: this.o.version, meko: this.o.meko(), firstDay, probe: this.o.probe });
+    const first = !kvGet(this.o.db, KV_LAST_SENT);
+    return buildReport(this.o.db, { installId: this.installId(), install, days: first ? FIRST_REPORT_DAYS : REPORT_DAYS, now });
+  }
+
+  /** Sends a report if one is due. Never throws; true when one was sent. */
+  tick(): Promise<boolean> {
+    this.sending ??= this.sendIfDue().finally(() => {
+      this.sending = null;
+    });
+    return this.sending;
+  }
+
+  private async sendIfDue(): Promise<boolean> {
+    if (!this.enabled()) return false;
+    const url = this.endpoint();
+    if (!url) return false;
+    const last = Number(kvGet(this.o.db, KV_LAST_SENT) ?? 0);
+    if (last && this.now() - last < SEND_AFTER_MS) return false;
+    try {
+      const body = JSON.stringify(await this.report());
+      // Turned off while the report was being built.
+      if (!this.enabled()) return false;
+      const res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': `agent-k-local/${this.o.version}` },
+        body,
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`the collector answered ${res.status}`);
+      kvSet(this.o.db, KV_LAST_SENT, String(this.now()));
+      if (this.failing) this.o.log.info('usage stats sent');
+      this.failing = false;
+      return true;
+    } catch (e) {
+      if (!this.failing) this.o.log.warn('sending usage stats failed; trying again every hour', errMsg(e));
+      this.failing = true;
+      return false;
+    }
+  }
+
+  /** Checks after a random first delay, then through `every` (Core's timers) once an hour. */
+  start(every: (ms: number, fn: () => Promise<unknown>) => void): void {
+    const [lo, hi] = FIRST_CHECK_MS;
+    const delay = lo + Math.floor((this.o.random ?? Math.random)() * (hi - lo));
+    this.firstCheck = setTimeout(() => {
+      this.firstCheck = null;
+      void this.tick();
+      every(CHECK_EVERY_MS, () => this.tick());
+    }, delay);
+    this.firstCheck.unref();
+  }
+
+  stop(): void {
+    if (this.firstCheck) clearTimeout(this.firstCheck);
+    this.firstCheck = null;
+  }
+}

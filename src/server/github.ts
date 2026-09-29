@@ -108,6 +108,31 @@ export async function prStatus(worktree: string, number: number): Promise<PrStat
   return JSON.parse(out) as PrStatus;
 }
 
+/** What a PR changed: its commits, lines, and each file (paths go only as far as filetypes.ts). */
+export interface PrStats {
+  commits: number;
+  additions: number;
+  deletions: number;
+  files: { path: string; additions: number; deletions: number }[];
+}
+
+/** The size of a PR, by URL (so any folder will do as `cwd`). GitHub lists up to 100 files. */
+export async function prStats(cwd: string, url: string): Promise<PrStats> {
+  const r = JSON.parse(await gh(cwd, 'pr', 'view', url, '--json', 'commits,additions,deletions,files')) as {
+    commits?: unknown[];
+    additions?: number;
+    deletions?: number;
+    files?: { path?: string; additions?: number; deletions?: number }[] | null;
+  };
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    commits: Array.isArray(r.commits) ? r.commits.length : 0,
+    additions: n(r.additions),
+    deletions: n(r.deletions),
+    files: (r.files ?? []).map((f) => ({ path: String(f.path ?? ''), additions: n(f.additions), deletions: n(f.deletions) })),
+  };
+}
+
 const FAILED = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'];
 
 export function ciSummary(rollup: CheckRun[] | null): CiSummary {

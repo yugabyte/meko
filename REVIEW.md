@@ -117,6 +117,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Share invites: a project created from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
       share notifies once. Sharing features work in both API and link mode.
+- [ ] Nothing that identifies a person or their work goes into the usage stats report
+      (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
+      field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and
+      paths are reduced to extensions where they're read (`filetypes.ts`), never stored.
 - [ ] Token usage stays incremental (byte offsets) and deduplicated by message id; subagent
       transcripts are included; archived sessions still count toward their project.
 

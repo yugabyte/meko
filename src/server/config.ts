@@ -28,6 +28,12 @@ export interface Config {
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
    */
   worktrees: { idlePerRepo: number; idleDays: number };
+  /**
+   * Anonymous usage stats (callhome.ts). enabled: send the daily report. url: where to POST it
+   * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
+   * nothing is sent.
+   */
+  callHome: { enabled: boolean; url: string };
 }
 
 /** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
@@ -45,6 +51,7 @@ export const DEFAULT_CONFIG: Config = {
   tmux: { socket: 'agentk' },
   claude: { command: 'claude' },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
+  callHome: { enabled: true, url: '' },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

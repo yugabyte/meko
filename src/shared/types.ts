@@ -170,6 +170,102 @@ export interface UsageOverview {
   daily: DailyUsage[];
 }
 
+// ---- usage stats (Call Home) ----
+//
+// The report each install sends once a day to the usage stats collector (yugabyte/agent-k,
+// services/ak-local-call-home). docs/call-home-report.schema.json is the collector's copy of this
+// contract; keep the two in step.
+// Only counts, enums, version strings, model ids and file extensions: never a name, path, prompt
+// or anything else that says who someone is or what they work on.
+
+/** Files changed with one extension, and their lines. ext is lowercase, `none` (no suffix) or `other`. */
+export interface FileTypeCount {
+  ext: string;
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface CallHomeTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  messages: number;
+}
+
+export interface CallHomeInstall {
+  version: string;
+  channel: 'stable' | 'prerelease' | 'off';
+  platform: string;
+  arch: string;
+  node: string;
+  /** The version number only, or '' when it can't be read. */
+  tmux: string;
+  claudeCode: string;
+  access: 'local' | 'remote';
+  service: 'systemd' | 'launchd' | 'none';
+  /** 'none' when Meko is off (or the sharing mode isn't known yet). */
+  meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: SharingMode | 'none' };
+  /** The UTC day this install first built a report. */
+  firstDay: string;
+}
+
+export interface CallHomeTotals {
+  projects: { current: number; deleted: number; withDatapack: number; sharedDatapacks: number; repos: number };
+  sessions: {
+    total: number;
+    open: number;
+    archived: number;
+    byKind: Record<SessionKind, number>;
+    openByStage: Record<Stage, number>;
+  };
+  /** prCommits, prAdditions and prDeletions cover merges recorded since this was added. */
+  shipped: { mergedPrs: number; directPushes: number; directCommits: number; prCommits: number; prAdditions: number; prDeletions: number };
+  fileTypes: FileTypeCount[];
+  tokens: CallHomeTokens;
+  worktrees: { idle: number };
+}
+
+/** One UTC day. Days are sent again in later reports; the latest report for a day wins. */
+export interface CallHomeDay {
+  day: string;
+  activeProjects: number;
+  activeSessions: number;
+  messages: number;
+  projectsCreated: number;
+  projectsDeleted: number;
+  sessionsCreated: Record<SessionKind, number>;
+  sessionsArchived: number;
+  stageEntries: Record<Stage, number>;
+  prsOpened: number;
+  prsMerged: number;
+  prCommits: number;
+  prAdditions: number;
+  prDeletions: number;
+  directPushes: number;
+  directCommits: number;
+  reviews: number;
+  ciFailures: number;
+  commentBatches: number;
+  recoveries: number;
+  resumes: number;
+  worktreesReused: number;
+  fileTypes: FileTypeCount[];
+  tokensByModel: (CallHomeTokens & { model: string })[];
+}
+
+export interface CallHomeReport {
+  schema: 1;
+  /** A random id made on first use, one per AgentK home. */
+  installId: string;
+  sentAt: string;
+  install: CallHomeInstall;
+  totals: CallHomeTotals;
+  /** Oldest first: the last 7 UTC days, or 30 in an install's first report. */
+  days: CallHomeDay[];
+}
+
 export interface ProjectSettings {
   /** Send a continue prompt to sessions that were mid-turn when the host went down. */
   autoContinue: boolean;
@@ -463,6 +559,8 @@ export interface Settings {
   idleWorktreesPerRepo: number;
   /** Days an idle worktree may go unused before it's removed (0 to 365; 0 keeps it until the cap trims it). */
   idleWorktreeDays: number;
+  /** `[call_home] enabled`: send anonymous usage stats (the Account tab's checkbox). */
+  callHomeEnabled: boolean;
   meko: MekoSettings;
 }
 
@@ -784,7 +882,7 @@ export type TermServerMessage =
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
-//                                                           '' goes back to the host name)
+//                                                           '' goes back to the host name; callHomeEnabled is a boolean)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus

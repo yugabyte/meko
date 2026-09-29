@@ -7,10 +7,11 @@ import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addWorktree, checkedOutAt, defaultBranch, discardChanges, existingBranch, git, isIdleWorktree, removeWorktree,
+  BranchGoneError, addWorktree, checkedOutAt, defaultBranch, discardChanges, existingBranch, git, gitRaw, isIdleWorktree, removeWorktree,
   restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookPayload } from './hooks.js';
+import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import { loadPrompt, render, type PromptName } from './prompts.js';
@@ -271,7 +272,8 @@ export class SessionManager {
       this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
       const naming = this.nameConversation(this.row(id));
       const made = await this.makeWorktree(id, repo, worktree, reused, branch, base, !!where);
-      this.event(id, 'created', startedText(branch, base, made.sync, !!where) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''));
+      this.event(id, 'created', startedText(branch, base, made.sync, !!where) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''),
+        { reused: made.reused });
 
       const row = this.row(id);
       const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
@@ -1196,7 +1198,10 @@ export class SessionManager {
     void this.countPushedCommits(r);
   }
 
-  /** Fills in how many commits each newly found push carried; -1 when git can't tell. */
+  /**
+   * Fills in how many commits each newly found push carried (-1 when git can't tell) and what it
+   * changed per file extension (NULL when git can't tell), for the usage page and the usage stats.
+   */
   private async countPushedCommits(r: SessionRow): Promise<void> {
     const pending = all<{ range: string }>(this.db, 'SELECT range FROM pushes WHERE session_id = ? AND commits IS NULL', r.id);
     if (!pending.length) return;
@@ -1204,11 +1209,15 @@ export class SessionManager {
     const repo = sessionRepo(this.db, r);
     for (const { range } of pending) {
       let n = -1;
+      let fileTypes: string | null = null;
       if (repo) {
         const out = await git(repo, 'rev-list', '--count', range).catch(() => '');
         if (/^\d+$/.test(out)) n = Number(out);
+        const [from, to] = range.split('..');
+        const stat = await gitRaw(repo, 'diff', '--numstat', '-z', from, to).catch(() => null);
+        if (stat !== null) fileTypes = JSON.stringify(countFileTypes(parseNumstatZ(stat)));
       }
-      run(this.db, 'UPDATE pushes SET commits = ? WHERE session_id = ? AND range = ? AND commits IS NULL', n, r.id, range);
+      run(this.db, 'UPDATE pushes SET commits = ?, file_types = ? WHERE session_id = ? AND range = ? AND commits IS NULL', n, fileTypes, r.id, range);
     }
   }
 

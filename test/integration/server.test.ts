@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,26 @@ describe('HTTP API: auth, origin checks, projects', () => {
 
     expect((await put('')).json().serverName).toBe('');
     expect((await state()).serverName).toBe(shortHost(hostname()));
+  });
+
+  it('turns usage stats off and on from Settings', async () => {
+    const cookie = await setup();
+    const put = (callHomeEnabled: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { callHomeEnabled } });
+    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().callHomeEnabled).toBe(true);
+
+    const off = await put(false);
+    expect(off.statusCode).toBe(200);
+    expect(off.json().callHomeEnabled).toBe(false);
+    expect(env.core.config.callHome.enabled).toBe(false);
+    expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[call_home\]\nenabled = false/);
+    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().callHomeEnabled).toBe(false);
+
+    const bad = await put('no');
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('callHomeEnabled must be true or false.');
+
+    expect((await put(true)).json().callHomeEnabled).toBe(true);
+    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain('call_home');
   });
 
   it('refuses cross-origin writes', async () => {

@@ -17,6 +17,7 @@
 #     lib/packaging/systemd/   service templates used by `agent-k-local install` (Linux)
 #     lib/packaging/launchd/   service templates used by `agent-k-local install` (macOS)
 #     VERSION
+#     CALL_HOME_URL            the usage stats collector, when AK_CALL_HOME_URL is set
 set -eu
 
 if [ $# -ne 4 ]; then
@@ -64,6 +65,10 @@ cp -R "$repo/packaging/systemd" "$root/lib/packaging/systemd"
 cp -R "$repo/packaging/launchd" "$root/lib/packaging/launchd"
 cp "$repo/LICENSE" "$root/LICENSE"
 printf '%s\n' "$version" > "$root/VERSION"
+# Kept out of the repo: release builds get it from the CALL_HOME_URL repo variable.
+if [ -n "${AK_CALL_HOME_URL:-}" ]; then
+  printf '%s\n' "$AK_CALL_HOME_URL" > "$root/CALL_HOME_URL"
+fi
 
 # node-pty ships prebuilds for some platforms; we compile it ourselves.
 rm -rf "$root/lib/node_modules/node-pty/prebuilds"

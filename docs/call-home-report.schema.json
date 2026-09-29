@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yugabyte/agent-k-local/docs/call-home-report.schema.json",
+  "title": "AgentK Local CallHomeReport",
+  "description": "The daily usage report an AgentK Local install POSTs to /v1/report. Schema 1. Only counts, enums and version strings: no names, paths or free text. The collector (yugabyte/agent-k services/ak-local-call-home) accepts reports that match this and folds anything it does not know into \"other\".",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "installId", "sentAt", "install", "totals", "days"],
+  "properties": {
+    "schema": { "const": 1 },
+    "installId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "sentAt": { "type": "string", "format": "date-time" },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "channel", "platform", "arch", "node", "access", "service", "meko", "firstDay"],
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "channel": { "enum": ["stable", "prerelease", "off"] },
+        "platform": { "enum": ["aix", "android", "cygwin", "darwin", "freebsd", "haiku", "linux", "netbsd", "openbsd", "sunos", "win32"] },
+        "arch": { "enum": ["arm", "arm64", "ia32", "loong64", "mips", "mipsel", "ppc", "ppc64", "riscv64", "s390", "s390x", "x64"] },
+        "node": { "$ref": "#/$defs/version" },
+        "tmux": { "$ref": "#/$defs/optionalVersion" },
+        "claudeCode": { "$ref": "#/$defs/optionalVersion" },
+        "access": { "enum": ["local", "remote"] },
+        "service": { "enum": ["systemd", "launchd", "none"] },
+        "meko": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "keySource", "sharing"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "keySource": { "enum": ["config", "env", "claude", "none"] },
+            "sharing": { "enum": ["api", "link", "none"] }
+          }
+        },
+        "firstDay": { "$ref": "#/$defs/day" }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projects", "sessions", "shipped", "fileTypes", "tokens", "worktrees"],
+      "properties": {
+        "projects": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "current": { "$ref": "#/$defs/count" },
+            "deleted": { "$ref": "#/$defs/count" },
+            "withDatapack": { "$ref": "#/$defs/count" },
+            "sharedDatapacks": { "$ref": "#/$defs/count" },
+            "repos": { "$ref": "#/$defs/count" }
+          }
+        },
+        "sessions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "total": { "$ref": "#/$defs/count" },
+            "open": { "$ref": "#/$defs/count" },
+            "archived": { "$ref": "#/$defs/count" },
+            "byKind": { "$ref": "#/$defs/kindCounts" },
+            "openByStage": { "$ref": "#/$defs/stageCounts" }
+          }
+        },
+        "shipped": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mergedPrs": { "$ref": "#/$defs/count" },
+            "directPushes": { "$ref": "#/$defs/count" },
+            "directCommits": { "$ref": "#/$defs/count" },
+            "prCommits": { "$ref": "#/$defs/count" },
+            "prAdditions": { "$ref": "#/$defs/count" },
+            "prDeletions": { "$ref": "#/$defs/count" }
+          }
+        },
+        "fileTypes": { "type": "array", "maxItems": 26, "items": { "$ref": "#/$defs/fileType" } },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input": { "$ref": "#/$defs/count" },
+            "output": { "$ref": "#/$defs/count" },
+            "cacheRead": { "$ref": "#/$defs/count" },
+            "cacheWrite": { "$ref": "#/$defs/count" },
+            "messages": { "$ref": "#/$defs/count" }
+          }
+        },
+        "worktrees": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "idle": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    },
+    "days": {
+      "type": "array",
+      "maxItems": 31,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["day"],
+        "properties": {
+          "day": { "$ref": "#/$defs/day" },
+          "activeProjects": { "$ref": "#/$defs/count" },
+          "activeSessions": { "$ref": "#/$defs/count" },
+          "messages": { "$ref": "#/$defs/count" },
+          "projectsCreated": { "$ref": "#/$defs/count" },
+          "projectsDeleted": { "$ref": "#/$defs/count" },
+          "sessionsCreated": { "$ref": "#/$defs/kindCounts" },
+          "sessionsArchived": { "$ref": "#/$defs/count" },
+          "stageEntries": { "$ref": "#/$defs/stageCounts" },
+          "prsOpened": { "$ref": "#/$defs/count" },
+          "prsMerged": { "$ref": "#/$defs/count" },
+          "prCommits": { "$ref": "#/$defs/count" },
+          "prAdditions": { "$ref": "#/$defs/count" },
+          "prDeletions": { "$ref": "#/$defs/count" },
+          "directPushes": { "$ref": "#/$defs/count" },
+          "directCommits": { "$ref": "#/$defs/count" },
+          "reviews": { "$ref": "#/$defs/count" },
+          "ciFailures": { "$ref": "#/$defs/count" },
+          "commentBatches": { "$ref": "#/$defs/count" },
+          "recoveries": { "$ref": "#/$defs/count" },
+          "resumes": { "$ref": "#/$defs/count" },
+          "worktreesReused": { "$ref": "#/$defs/count" },
+          "fileTypes": { "type": "array", "maxItems": 26, "items": { "$ref": "#/$defs/fileType" } },
+          "tokensByModel": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/modelTokens" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0, "maximum": 9007199254740992 },
+    "day": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "version": { "type": "string", "pattern": "^v?[0-9]+(\\.[0-9A-Za-z]+){0,3}([-+][0-9A-Za-z.-]{1,24})?$" },
+    "optionalVersion": { "type": "string", "pattern": "^$|^v?[0-9]+(\\.[0-9A-Za-z]+){0,3}([-+][0-9A-Za-z.-]{1,24})?$" },
+    "kindCounts": {
+      "type": "object",
+      "propertyNames": { "enum": ["explore", "plan", "quick"] },
+      "additionalProperties": { "$ref": "#/$defs/count" }
+    },
+    "stageCounts": {
+      "type": "object",
+      "propertyNames": { "enum": ["explore", "design", "code", "pr", "review", "merge", "done"] },
+      "additionalProperties": { "$ref": "#/$defs/count" }
+    },
+    "fileType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ext", "files", "additions", "deletions"],
+      "properties": {
+        "ext": { "type": "string", "pattern": "^[a-z0-9]{1,10}$" },
+        "files": { "$ref": "#/$defs/count" },
+        "additions": { "$ref": "#/$defs/count" },
+        "deletions": { "$ref": "#/$defs/count" }
+      }
+    },
+    "modelTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$" },
+        "input": { "$ref": "#/$defs/count" },
+        "output": { "$ref": "#/$defs/count" },
+        "cacheRead": { "$ref": "#/$defs/count" },
+        "cacheWrite": { "$ref": "#/$defs/count" },
+        "messages": { "$ref": "#/$defs/count" }
+      }
+    }
+  }
+}

@@ -37,7 +37,12 @@ export function SettingsDialog({
     >
       {tab === 'general' && <GeneralTab />}
       {tab === 'meko' && <MekoTab status={meko} />}
-      {tab === 'account' && (auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />)}
+      {tab === 'account' && (
+        <div className="stack">
+          {auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />}
+          <UsageStatsCheck />
+        </div>
+      )}
       {tab === 'updates' && <UpdatesTab initial={update} />}
     </Dialog>
   );
@@ -452,6 +457,44 @@ function MekoTab({ status }: { status: MekoStatus }) {
         {saved && <span className="muted small">Saved</span>}
       </div>
     </form>
+  );
+}
+
+/** `[call_home] enabled`, saved as soon as it's changed. */
+function UsageStatsCheck() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((x) => setOn(x.callHomeEnabled))
+      .catch((e) => setError(errorMessage(e)));
+  }, []);
+
+  const change = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setOn((await api.saveSettings({ callHomeEnabled: next })).callHomeEnabled);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="stack">
+      {on !== null && (
+        <label className="check">
+          <input id="acc-usage-stats" type="checkbox" checked={on} disabled={busy} onChange={(e) => void change(e.target.checked)} />
+          <span>Send anonymous usage stats to YugabyteDB</span>
+        </label>
+      )}
+      <ErrorText error={error} />
+    </div>
   );
 }
 

@@ -5,6 +5,7 @@ import { get, run } from './db.js';
 import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
 import { deleteBranch, git, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
+import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
@@ -706,17 +707,40 @@ export class Lifecycle {
       row.project_id, row.id);
     if (row.desired === 'running' && (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy)) {
       // Stopping Claude mid-turn could lose its work: onTurnEnd closes the session when the turn ends.
-      if (!announced) this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when AgentK finishes`, { url: st.url });
+      if (!announced) {
+        this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when AgentK finishes`, { url: st.url });
+        await this.recordPrStats(row, st);
+      }
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
       return;
     }
     this.closing.add(row.id);
     try {
-      if (!announced) this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
+      if (!announced) {
+        this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
+        await this.recordPrStats(row, st);
+      }
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
       await this.cleanup(this.sessions.row(row.id), st);
     } finally {
       this.closing.delete(row.id);
+    }
+  }
+
+  /**
+   * Adds the PR's size to its `merged` event, for the usage stats: commits, lines, and files per
+   * extension (never the paths). Best-effort: a failure leaves the event as it was.
+   */
+  private async recordPrStats(row: SessionRow, st: github.PrStatus): Promise<void> {
+    try {
+      const cwd = sessionRepo(this.db, row) ?? row.worktree_path;
+      const pr = await github.prStats(cwd, st.url);
+      run(this.db, `UPDATE session_events SET payload_json = json_set(COALESCE(payload_json, '{}'),
+                      '$.commits', ?, '$.additions', ?, '$.deletions', ?, '$.fileTypes', json(?))
+                    WHERE session_id = ? AND kind = 'merged'`,
+        pr.commits, pr.additions, pr.deletions, JSON.stringify(countFileTypes(pr.files)), row.id);
+    } catch (e) {
+      this.core.log.warn(`reading the size of PR #${st.number} failed for ${row.id}`, errMsg(e));
     }
   }
 

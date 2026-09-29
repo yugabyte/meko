@@ -1,0 +1,505 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { hostname, userInfo } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { MekoStatus, CallHomeInstall, CallHomeReport } from '../../src/shared/types.js';
+import { DEFAULT_CONFIG, loadConfig, saveConfig, type Config } from '../../src/server/config.js';
+import { kvGet, openDb, run, type Db } from '../../src/server/db.js';
+import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, sumFileTypes } from '../../src/server/filetypes.js';
+import type { Logger } from '../../src/server/log.js';
+import { getPaths } from '../../src/server/paths.js';
+import {
+  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_REPORT_DAYS, REPORT_DAYS, SEND_AFTER_MS, CallHomeService, bakedCallHomeUrl, buildReport,
+  installFacts, utcDay, type Probe,
+} from '../../src/server/callhome.js';
+import { usageOverview } from '../../src/server/usage.js';
+import { tempDir } from '../helpers.js';
+
+const SCHEMA = JSON.parse(readFileSync(fileURLToPath(new URL('../../docs/call-home-report.schema.json', import.meta.url)), 'utf8')) as Schema;
+
+// ---- a small JSON Schema checker for the keywords docs/call-home-report.schema.json uses ----
+// (The schema is the collector's copy, from yugabyte/agent-k services/ak-local-call-home.)
+
+type Schema = { [k: string]: unknown };
+const KEYWORDS = new Set([
+  '$schema', '$id', 'title', 'description', '$defs', '$ref', 'type', 'const', 'enum', 'pattern', 'format', 'minimum', 'maximum',
+  'properties', 'propertyNames', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'anyOf',
+]);
+
+/** Every keyword in the schema, so the checker below is known to cover all of them. */
+function keywords(s: unknown, out = new Set<string>()): Set<string> {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return out;
+  for (const [k, v] of Object.entries(s)) {
+    out.add(k);
+    if (k === 'properties' || k === '$defs') for (const sub of Object.values(v as object)) keywords(sub, out);
+    else if (k === 'items' || k === 'propertyNames' || k === 'additionalProperties') keywords(v, out);
+    else if (k === 'anyOf') for (const sub of v as unknown[]) keywords(sub, out);
+  }
+  return out;
+}
+
+function typeOf(v: unknown): string {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number';
+  return typeof v;
+}
+
+/** The errors in `v` against `s` (empty when it's valid). */
+function validate(v: unknown, s: Schema, at = '$', root: Schema = s): string[] {
+  if (typeof s.$ref === 'string') return validate(v, (root.$defs as Record<string, Schema>)[s.$ref.replace('#/$defs/', '')], at, root);
+  const errs: string[] = [];
+  if (s.anyOf) {
+    if (!(s.anyOf as Schema[]).some((sub) => !validate(v, sub, at, root).length)) errs.push(`${at}: matches none of anyOf`);
+    return errs;
+  }
+  if ('const' in s && v !== s.const) errs.push(`${at}: should be ${JSON.stringify(s.const)}`);
+  if (s.enum && !(s.enum as unknown[]).includes(v)) errs.push(`${at}: ${JSON.stringify(v)} is not one of ${JSON.stringify(s.enum)}`);
+  const t = typeOf(v);
+  if (s.type && !(s.type === t || (s.type === 'number' && t === 'integer'))) return [...errs, `${at}: should be ${String(s.type)}, is ${t}`];
+  if (typeof s.pattern === 'string' && typeof v === 'string' && !new RegExp(s.pattern).test(v)) errs.push(`${at}: ${JSON.stringify(v)} doesn't match ${s.pattern}`);
+  if (typeof s.minimum === 'number' && typeof v === 'number' && v < s.minimum) errs.push(`${at}: below ${s.minimum}`);
+  if (typeof s.maximum === 'number' && typeof v === 'number' && v > s.maximum) errs.push(`${at}: above ${s.maximum}`);
+  if (s.format === 'date-time' && typeof v === 'string' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(v)) {
+    errs.push(`${at}: not a date-time`);
+  }
+  if (t === 'object') {
+    const o = v as Record<string, unknown>;
+    const props = (s.properties ?? {}) as Record<string, Schema>;
+    for (const r of (s.required as string[]) ?? []) if (!(r in o)) errs.push(`${at}: missing ${r}`);
+    for (const [k, val] of Object.entries(o)) {
+      if (s.propertyNames) errs.push(...validate(k, s.propertyNames as Schema, `${at}{${k}}`, root));
+      if (props[k]) errs.push(...validate(val, props[k], `${at}.${k}`, root));
+      else if (s.additionalProperties === false) errs.push(`${at}: unexpected ${k}`);
+      else if (s.additionalProperties && typeof s.additionalProperties === 'object') errs.push(...validate(val, s.additionalProperties as Schema, `${at}.${k}`, root));
+    }
+  }
+  if (t === 'array') {
+    const a = v as unknown[];
+    if (typeof s.minItems === 'number' && a.length < s.minItems) errs.push(`${at}: fewer than ${s.minItems} items`);
+    if (typeof s.maxItems === 'number' && a.length > s.maxItems) errs.push(`${at}: more than ${s.maxItems} items`);
+    if (s.items) a.forEach((x, i) => errs.push(...validate(x, s.items as Schema, `${at}[${i}]`, root)));
+  }
+  return errs;
+}
+
+// ---- seeded database ----
+
+const NOW = Date.parse('2026-09-28T12:00:00Z');
+const at = (iso: string) => Date.parse(iso);
+
+const INSTALL: CallHomeInstall = {
+  version: '0.20260928.0', channel: 'stable', platform: 'linux', arch: 'x64', node: '22.18.0', tmux: '3.2a', claudeCode: '2.4.1',
+  access: 'remote', service: 'none', meko: { enabled: true, keySource: 'claude', sharing: 'api' }, firstDay: '2026-07-02',
+};
+const INSTALL_ID = '5f0c7a8e-3b1d-4c2e-9f6a-1b2c3d4e5f60';
+
+/** Names, paths and URLs that must never reach a report. */
+const SECRETS = ['Secret Project Zeta', 'zeta', 'alice', 'secret-branch', 'Secret task', 'adlc/proj', 'github.com', '123456789012', '/srv/gone', 'wt-1', 'Gone for good'];
+
+function seeded(): Db {
+  const db = openDb(':memory:');
+  const project = (id: string, name: string, repo: string, created: number, deleted: number | null = null) =>
+    run(db, 'INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?)', id, name, repo, 'main', created, deleted);
+  project('p1', 'Secret Project Zeta', '/home/alice/zeta-repo', at('2026-09-27T10:00:00Z'));
+  project('p2', 'Other', '/home/alice/zeta-repo', at('2026-01-01T00:00:00Z'));
+  project('p3', 'Gone for good', '/srv/gone', at('2026-01-01T00:00:00Z'), at('2026-09-26T05:00:00Z'));
+  for (const [p, dp, name, role] of [['p1', 'dp-1', 'adlc/proj/zeta/secret', 'dedicated'], ['p1', 'dp-2', 'team/zeta-kb', 'shared'], ['p3', 'dp-3', 'adlc/proj/gone', 'dedicated']]) {
+    run(db, 'INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, ?)', p, dp, name, role);
+  }
+  const session = (id: string, p: string, kind: string, desired: string, stage: string, created: number, archived: number | null = null) =>
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
+             desired, status, stage, kind, created_at, archived_at) VALUES (?, ?, ?, 'Secret task', 'c', 'ak/secret-branch', 'main', '/home/alice/wt-1', 't', ?, ?, 'idle', ?, ?, ?, ?)`,
+      id, p, id, `tok-${id}`, desired, stage, kind, created, archived);
+  session('s1', 'p1', 'plan', 'running', 'review', at('2026-09-27T11:00:00Z'));
+  session('s2', 'p1', 'quick', 'archived', 'done', at('2026-09-20T09:00:00Z'), at('2026-09-28T01:00:00Z'));
+  session('s3', 'p2', 'explore', 'running', 'explore', at('2026-01-01T00:00:00Z'));
+  session('s4', 'p3', 'plan', 'archived', 'done', at('2026-01-01T00:00:00Z'), at('2026-01-02T00:00:00Z'));
+  const stage = (s: string, st: string, iso: string) =>
+    run(db, "INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'auto')", s, st, at(iso));
+  stage('s1', 'design', '2026-09-27T11:00:00Z');
+  stage('s1', 'code', '2026-09-27T12:00:00Z');
+  stage('s1', 'pr', '2026-09-27T13:00:00Z');
+  stage('s1', 'review', '2026-09-27T14:00:00Z');
+  stage('s2', 'done', '2026-09-28T01:00:00Z');
+  stage('s4', 'done', '2026-01-02T00:00:00Z');
+  const event = (s: string, p: string, kind: string, text: string, iso: string, payload?: unknown) =>
+    run(db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
+      s, p, kind, text, payload === undefined ? null : JSON.stringify(payload), at(iso));
+  event('s1', 'p1', 'created', 'Started ak/secret-branch from main in a reused worktree (wt-1)', '2026-09-27T11:00:00Z', { reused: true });
+  event('s1', 'p1', 'pr', 'Opened PR #7', '2026-09-27T13:00:00Z', { url: 'https://github.com/alice/zeta/pull/7' });
+  event('s1', 'p1', 'pr', 'Opened PR #3', '2026-09-01T13:00:00Z', { url: 'https://github.com/alice/zeta/pull/3' });
+  event('s1', 'p1', 'review', 'AgentK review: 2 findings in secret-branch', '2026-09-27T14:30:00Z');
+  event('s1', 'p1', 'review', 'Requested another AgentK review', '2026-09-27T14:40:00Z');
+  event('s1', 'p1', 'ci', 'CI failed: build', '2026-09-27T14:50:00Z');
+  event('s1', 'p1', 'comments', 'Sent 3 to AgentK', '2026-09-27T15:10:00Z');
+  event('s1', 'p1', 'recovered', 'Relaunched', '2026-09-27T16:10:00Z');
+  event('s1', 'p1', 'resumed', 'Resumed', '2026-09-27T16:20:00Z');
+  event('s2', 'p1', 'created', 'Started', '2026-09-20T09:00:00Z', { reused: false });
+  const pr = {
+    url: 'https://github.com/alice/zeta/pull/9', commits: 3, additions: 100, deletions: 20,
+    fileTypes: [{ ext: 'ts', files: 2, additions: 90, deletions: 15 }, { ext: 'md', files: 1, additions: 10, deletions: 5 }],
+  };
+  event('s2', 'p1', 'merged', 'PR #9 merged', '2026-09-28T00:30:00Z', pr);
+  // Logged again after a restart: still one merge.
+  event('s2', 'p1', 'merged', 'PR #9 merged', '2026-09-28T00:40:00Z', pr);
+  event('s4', 'p3', 'merged', 'PR #2 merged', '2026-01-02T00:00:00Z', { url: 'https://github.com/alice/gone/pull/2' });
+  run(db, 'INSERT INTO pushes(session_id, range, ref, at, commits, file_types) VALUES (?, ?, ?, ?, ?, ?)', 's1', 'aaa1111..bbb2222', 'main',
+    at('2026-09-26T08:00:00Z'), 2, JSON.stringify([{ ext: 'ts', files: 1, additions: 5, deletions: 1 }, { ext: 'none', files: 1, additions: 1, deletions: 0 }]));
+  run(db, 'INSERT INTO pushes(session_id, range, ref, at, commits, file_types) VALUES (?, ?, ?, ?, ?, ?)', 's3', 'ccc3333..ddd4444', 'main',
+    at('2026-01-05T08:00:00Z'), -1, null);
+  const usage = (s: string, id: string, model: string, iso: string, u: [number, number, number, number]) =>
+    run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write)
+             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`, s, id, model, at(iso), ...u);
+  usage('s1', 'm1', 'claude-opus-5-5', '2026-09-27T15:00:00Z', [10, 100, 1000, 50]);
+  usage('s1', 'm2', 'claude-haiku-4-5', '2026-09-27T16:00:00Z', [1, 10, 0, 0]);
+  usage('s2', 'm3', 'claude-opus-5-5', '2026-09-28T00:10:00Z', [2, 20, 200, 10]);
+  usage('s3', 'm4', 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc', '2026-09-26T09:00:00Z', [3, 30, 300, 0]);
+  usage('s4', 'm5', 'claude-opus-5-5', '2026-01-02T00:00:00Z', [4, 40, 400, 0]);
+  run(db, 'INSERT INTO worktrees(path, repo, session_id, created_at) VALUES (?, ?, NULL, ?)', '/home/alice/wt-2', '/home/alice/zeta-repo', NOW);
+  run(db, 'INSERT INTO worktrees(path, repo, session_id, created_at) VALUES (?, ?, ?, ?)', '/home/alice/wt-1', '/home/alice/zeta-repo', 's1', NOW);
+  return db;
+}
+
+const report = (db: Db, days = REPORT_DAYS) => buildReport(db, { installId: INSTALL_ID, install: INSTALL, days, now: NOW });
+
+describe('file types', () => {
+  it('counts a file under its last suffix, lowercased', () => {
+    expect(extOf('src/App.TSX')).toBe('tsx');
+    expect(extOf('a.test.ts')).toBe('ts');
+    expect(extOf('dir.v2/Makefile')).toBe('none');
+    expect(extOf('.gitignore')).toBe('none');
+    expect(extOf('notes.')).toBe('none');
+    expect(extOf('archive.tar.gz')).toBe('gz');
+    // Anything that could carry a name counts as other.
+    expect(extOf('report.my-secret-name')).toBe('other');
+    expect(extOf('x.averyveryverylongsuffix')).toBe('other');
+    expect(extOf('x.ünï')).toBe('other');
+  });
+
+  it('sums files per extension, most files first', () => {
+    expect(countFileTypes([
+      { path: 'a.ts', additions: 3, deletions: 1 }, { path: 'b.ts', additions: 2, deletions: 0 },
+      { path: 'README.md', additions: 9, deletions: 9 }, { path: 'Makefile', additions: 1, deletions: 0 },
+    ])).toEqual([
+      { ext: 'ts', files: 2, additions: 5, deletions: 1 },
+      { ext: 'md', files: 1, additions: 9, deletions: 9 },
+      { ext: 'none', files: 1, additions: 1, deletions: 0 },
+    ]);
+  });
+
+  it(`keeps the ${FILE_TYPE_LIMIT} largest and sums the rest into other`, () => {
+    const files = Array.from({ length: 40 }, (_, i) => Array.from({ length: 40 - i }, () => ({ path: `f.e${i}`, additions: 1, deletions: 0 }))).flat();
+    const out = countFileTypes([...files, { path: 'x.my-secret', additions: 1, deletions: 0 }]);
+    expect(out).toHaveLength(FILE_TYPE_LIMIT);
+    expect(out.slice(0, 3).map((c) => c.ext)).toEqual(['e0', 'e1', 'e2']);
+    const other = out.at(-1)!;
+    expect(other.ext).toBe('other');
+    // e24 … e39 (16 down to 1 files each), plus the odd one.
+    expect(other.files).toBe((16 * 17) / 2 + 1);
+    expect(out.reduce((n, c) => n + c.files, 0)).toBe(files.length + 1);
+  });
+
+  it('adds lists together and never passes an unknown extension through', () => {
+    expect(sumFileTypes([
+      [{ ext: 'ts', files: 1, additions: 1, deletions: 1 }],
+      [{ ext: 'ts', files: 2, additions: 3, deletions: 0 }, { ext: 'Secret Name', files: 1, additions: 0, deletions: 0 }],
+    ])).toEqual([{ ext: 'ts', files: 3, additions: 4, deletions: 1 }, { ext: 'other', files: 1, additions: 0, deletions: 0 }]);
+    expect(readFileTypes('[{"ext":"ts","files":1,"additions":0,"deletions":0}, 5]')).toEqual([{ ext: 'ts', files: 1, additions: 0, deletions: 0 }]);
+    expect(readFileTypes('not json')).toBeNull();
+    expect(readFileTypes(null)).toBeNull();
+  });
+
+  it('reads git diff --numstat -z, binaries and renames included', () => {
+    const out = '3\t1\tsrc/a.ts\0-\t-\tlogo.png\0' + '2\t0\t\0old/name.js\0new/name.ts\0' + '1\t1\tweird\tname\nwith lines.md\0';
+    expect(parseNumstatZ(out)).toEqual([
+      { path: 'src/a.ts', additions: 3, deletions: 1 },
+      { path: 'logo.png', additions: 0, deletions: 0 },
+      { path: 'new/name.ts', additions: 2, deletions: 0 },
+      { path: 'weird\tname\nwith lines.md', additions: 1, deletions: 1 },
+    ]);
+    expect(parseNumstatZ('')).toEqual([]);
+  });
+});
+
+describe('the usage stats report', () => {
+  it('buckets activity by UTC day, oldest first', () => {
+    const r = report(seeded());
+    expect(r.days.map((d) => d.day)).toEqual(['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28']);
+    const day = (d: string) => r.days.find((x) => x.day === d)!;
+
+    expect(day('2026-09-27')).toMatchObject({
+      activeProjects: 1, activeSessions: 1, messages: 2, projectsCreated: 1, projectsDeleted: 0,
+      sessionsCreated: { plan: 1, quick: 0, explore: 0 },
+      stageEntries: { explore: 0, design: 1, code: 1, pr: 1, review: 1, merge: 0, done: 0 },
+      prsOpened: 1, prsMerged: 0, reviews: 1, ciFailures: 1, commentBatches: 1, recoveries: 1, resumes: 1, worktreesReused: 1,
+      tokensByModel: [
+        { model: 'claude-haiku-4-5', input: 1, output: 10, cacheRead: 0, cacheWrite: 0, messages: 1 },
+        { model: 'claude-opus-5-5', input: 10, output: 100, cacheRead: 1000, cacheWrite: 50, messages: 1 },
+      ],
+    });
+    expect(day('2026-09-28')).toMatchObject({
+      activeSessions: 1, messages: 1, sessionsArchived: 1, stageEntries: { done: 1 },
+      prsMerged: 1, prCommits: 3, prAdditions: 100, prDeletions: 20,
+      fileTypes: [{ ext: 'ts', files: 2, additions: 90, deletions: 15 }, { ext: 'md', files: 1, additions: 10, deletions: 5 }],
+    });
+    expect(day('2026-09-26')).toMatchObject({
+      activeProjects: 1, projectsDeleted: 1, directPushes: 1, directCommits: 2,
+      fileTypes: [{ ext: 'ts', files: 1, additions: 5, deletions: 1 }, { ext: 'none', files: 1, additions: 1, deletions: 0 }],
+      // A model id that isn't a plain id (this one carries an account number) counts as other.
+      tokensByModel: [{ model: 'other', input: 3, output: 30, cacheRead: 300, cacheWrite: 0, messages: 1 }],
+    });
+    expect(day('2026-09-22')).toMatchObject({ messages: 0, prsOpened: 0, fileTypes: [], tokensByModel: [] });
+    // The older PR is outside the window.
+    expect(r.days.reduce((n, d) => n + d.prsOpened, 0)).toBe(1);
+  });
+
+  it('sends 30 days in a first report', () => {
+    const r = report(seeded(), FIRST_REPORT_DAYS);
+    expect(r.days).toHaveLength(30);
+    expect(r.days[0].day).toBe('2026-08-30');
+    expect(r.days.reduce((n, d) => n + d.prsOpened, 0)).toBe(2);
+  });
+
+  it('adds up all-time totals, deleted projects and archived sessions included', () => {
+    const db = seeded();
+    const r = report(db);
+    const overview = usageOverview(db);
+    expect(r.totals).toEqual({
+      projects: { current: 2, deleted: 1, withDatapack: 1, sharedDatapacks: 1, repos: 1 },
+      sessions: {
+        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1 },
+        openByStage: { explore: 1, design: 0, code: 0, pr: 0, review: 1, merge: 0, done: 0 },
+      },
+      shipped: { mergedPrs: 2, directPushes: 2, directCommits: 2, prCommits: 3, prAdditions: 100, prDeletions: 20 },
+      fileTypes: [
+        { ext: 'ts', files: 3, additions: 95, deletions: 16 },
+        { ext: 'md', files: 1, additions: 10, deletions: 5 },
+        { ext: 'none', files: 1, additions: 1, deletions: 0 },
+      ],
+      tokens: overview.total,
+      worktrees: { idle: 1 },
+    });
+    expect(r.totals.shipped).toMatchObject({ mergedPrs: overview.mergedPrs, directPushes: overview.directPushes, directCommits: overview.directCommits });
+    expect(r).toMatchObject({ schema: 1, installId: INSTALL_ID, sentAt: '2026-09-28T12:00:00.000Z', install: INSTALL });
+  });
+
+  it('never carries a name, path or URL', () => {
+    const text = JSON.stringify(report(seeded(), FIRST_REPORT_DAYS)).toLowerCase();
+    const mine = [userInfo().username, hostname()].filter((s) => s.length >= 4);
+    for (const s of [...SECRETS, ...mine]) expect(text, s).not.toContain(s.toLowerCase());
+  });
+
+  it('matches docs/call-home-report.schema.json', () => {
+    expect([...keywords(SCHEMA)].filter((k) => !KEYWORDS.has(k))).toEqual([]);
+    for (const days of [REPORT_DAYS, FIRST_REPORT_DAYS]) {
+      expect(validate(report(seeded(), days), SCHEMA)).toEqual([]);
+      expect(validate(report(openDb(':memory:'), days), SCHEMA)).toEqual([]);
+    }
+    const r = report(seeded()) as unknown as Record<string, unknown> & CallHomeReport;
+    expect(validate({ ...r, extra: 1 }, SCHEMA)).toEqual(['$: unexpected extra']);
+    const { worktrees, ...totals } = r.totals;
+    expect(validate({ ...r, totals: { ...totals, worktree: worktrees } }, SCHEMA)).toEqual(['$.totals: missing worktrees', '$.totals: unexpected worktree']);
+    expect(validate({ ...r, install: { ...r.install, platform: 'Alice’s Mac' } }, SCHEMA)).toHaveLength(1);
+  });
+});
+
+describe('what the report says about the install', () => {
+  const meko: MekoStatus = { configured: true, webUrl: null, sharing: 'link' };
+  const probe = (answers: Record<string, string | Error>): Probe => async (cmd) => {
+    const a = answers[cmd];
+    if (a instanceof Error || a === undefined) throw a ?? new Error('not found');
+    return a;
+  };
+
+  it('reads the tmux and Claude Code versions, and Meko and access from the config', async () => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.server.bind = '127.0.0.1';
+    cfg.meko.apiKey = 'key';
+    cfg.update.channel = 'prerelease';
+    const facts = await installFacts({ config: cfg, version: '0.20260928.0', meko, firstDay: '2026-09-28', probe: probe({ tmux: 'tmux 3.2a\n', claude: '2.4.1 (Claude Code)\n' }) });
+    expect(facts).toMatchObject({
+      version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
+      tmux: '3.2a', claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'link' }, firstDay: '2026-09-28',
+    });
+  });
+
+  it('leaves out versions it cannot read, and Meko details when Meko is off', async () => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    const facts = await installFacts({ config: cfg, version: 'not a version!', meko, firstDay: '2026-09-28', probe: probe({ tmux: new Error('ENOENT'), claude: 'no digits here' }) });
+    expect(facts).toMatchObject({ version: '0.0.0', tmux: '', claudeCode: '', access: 'remote', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
+  });
+
+  it('reads the collector URL a release build carries', () => {
+    const dir = tempDir('akl-baked-');
+    expect(bakedCallHomeUrl(dir)).toBe('');
+    writeFileSync(join(dir, 'CALL_HOME_URL'), 'https://collector.test\n');
+    expect(bakedCallHomeUrl(dir)).toBe('https://collector.test');
+    expect(bakedCallHomeUrl(undefined)).toBe('');
+  });
+});
+
+describe('[call_home] in config.toml', () => {
+  it('is on by default, can be turned off, and is written only when changed', () => {
+    const paths = getPaths(tempDir('akl-callhome-cfg-'));
+    expect(loadConfig(paths).callHome).toEqual({ enabled: true, url: '' });
+    saveConfig(paths, structuredClone(DEFAULT_CONFIG));
+    expect(readFileSync(paths.config, 'utf8')).not.toContain('call_home');
+
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.callHome.enabled = false;
+    saveConfig(paths, cfg);
+    expect(readFileSync(paths.config, 'utf8')).toMatch(/\[call_home\]\nenabled = false/);
+    expect(loadConfig(paths).callHome).toEqual({ enabled: false, url: '' });
+
+    writeFileSync(paths.config, '[call_home]\nenabled = "no"\nurl = "https://collector.test"\n');
+    const warnings: string[] = [];
+    expect(loadConfig(paths, (m) => warnings.push(m)).callHome).toEqual({ enabled: true, url: 'https://collector.test' });
+    expect(warnings).toEqual(['config.toml: call_home.enabled should be a boolean; using the default (true)']);
+  });
+});
+
+describe('sending the report', () => {
+  afterEach(() => vi.useRealTimers());
+
+  function setup(o: { url?: string; baked?: string; status?: number } = {}) {
+    const db = seeded();
+    const cfg: Config = structuredClone(DEFAULT_CONFIG);
+    cfg.callHome.url = o.url ?? 'https://collector.test/v1/report';
+    const clock = { now: NOW };
+    const calls: { url: string; init: RequestInit }[] = [];
+    const answer = { status: o.status ?? 204, error: null as Error | null };
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      if (answer.error) throw answer.error;
+      return new Response(null, { status: answer.status });
+    }) as typeof fetch;
+    const logs: string[] = [];
+    const log: Logger = { info: (m) => logs.push(`info ${m}`), warn: (m) => logs.push(`warn ${m}`), error: (m) => logs.push(`error ${m}`) };
+    const service = () => new CallHomeService({
+      db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: null }), log,
+      fetch: fetchImpl, now: () => clock.now, bakedUrl: () => o.baked ?? '', probe: async () => { throw new Error('no probes in tests'); },
+    });
+    const body = (i: number) => JSON.parse(String(calls[i].init.body)) as CallHomeReport;
+    return { db, cfg, clock, calls, answer, logs, service, body };
+  }
+
+  it('sends a first report of 30 days, then 7 days once a day', async () => {
+    const t = setup();
+    const svc = t.service();
+    expect(await svc.tick()).toBe(true);
+    expect(t.calls).toHaveLength(1);
+    expect(t.calls[0].url).toBe('https://collector.test/v1/report');
+    expect(t.calls[0].init.method).toBe('POST');
+    expect(t.calls[0].init.headers).toMatchObject({ 'Content-Type': 'application/json', 'User-Agent': 'agent-k-local/0.20260928.0' });
+    const first = t.body(0);
+    expect(first.days).toHaveLength(FIRST_REPORT_DAYS);
+    expect(first.install.firstDay).toBe('2026-09-28');
+    expect(validate(first, SCHEMA)).toEqual([]);
+
+    t.clock.now += SEND_AFTER_MS - 60_000;
+    expect(await svc.tick()).toBe(false);
+    t.clock.now += 60_000;
+    expect(await svc.tick()).toBe(true);
+    const second = t.body(1);
+    expect(second.days).toHaveLength(REPORT_DAYS);
+    expect(second.installId).toBe(first.installId);
+    expect(second.install.firstDay).toBe('2026-09-28');
+  });
+
+  it("doesn't send again after a restart", async () => {
+    const t = setup();
+    await t.service().tick();
+    t.clock.now += 3600_000;
+    expect(await t.service().tick()).toBe(false);
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it('sends nothing, and builds nothing, while turned off', async () => {
+    const t = setup();
+    t.cfg.callHome.enabled = false;
+    expect(await t.service().tick()).toBe(false);
+    expect(t.calls).toHaveLength(0);
+    expect(kvGet(t.db, 'call_home_install_id')).toBeNull();
+    // Turned back on: sent at the next check, with no restart.
+    t.cfg.callHome.enabled = true;
+    expect(await t.service().tick()).toBe(true);
+  });
+
+  it("sends nothing without a collector URL, and uses a release build's URL when config.toml has none", async () => {
+    expect(await setup({ url: '' }).service().tick()).toBe(false);
+    expect(await setup({ url: 'not a url' }).service().tick()).toBe(false);
+    expect(await setup({ url: 'ftp://collector.test' }).service().tick()).toBe(false);
+
+    // The URL is the collector's full report URL, used as given.
+    const baked = setup({ url: '', baked: 'https://baked.test/v1/report' });
+    expect(await baked.service().tick()).toBe(true);
+    expect(baked.calls[0].url).toBe('https://baked.test/v1/report');
+
+    const both = setup({ url: 'https://mine.test/collect', baked: 'https://baked.test/v1/report' });
+    await both.service().tick();
+    expect(both.calls[0].url).toBe('https://mine.test/collect');
+  });
+
+  it('tries again every hour after a failure, logging it once', async () => {
+    const t = setup({ status: 500 });
+    const svc = t.service();
+    expect(await svc.tick()).toBe(false);
+    t.answer.status = 204;
+    t.answer.error = new Error('ECONNREFUSED');
+    t.clock.now += CHECK_EVERY_MS;
+    expect(await svc.tick()).toBe(false);
+    expect(t.logs).toEqual(['warn sending usage stats failed; trying again every hour']);
+    expect(kvGet(t.db, 'call_home_last_sent')).toBeNull();
+
+    t.answer.error = null;
+    t.clock.now += CHECK_EVERY_MS;
+    expect(await svc.tick()).toBe(true);
+    expect(t.logs.at(-1)).toBe('info usage stats sent');
+    // Still the first report: nothing had been received.
+    expect(t.body(2).days).toHaveLength(FIRST_REPORT_DAYS);
+  });
+
+  it('runs one send at a time', async () => {
+    const t = setup();
+    const svc = t.service();
+    const [a, b] = await Promise.all([svc.tick(), svc.tick()]);
+    expect([a, b]).toEqual([true, true]);
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it('checks first after a random delay, then every hour', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const svc = new CallHomeService({
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: null }),
+      log: { info() {}, warn() {}, error() {} }, fetch: (async () => new Response(null, { status: 204 })) as typeof fetch,
+      now: () => t.clock.now, probe: async () => '', random: () => 0.5,
+    });
+    const every: number[] = [];
+    const tick = vi.spyOn(svc, 'tick');
+    svc.start((ms) => void every.push(ms));
+    const delay = FIRST_CHECK_MS[0] + Math.floor(0.5 * (FIRST_CHECK_MS[1] - FIRST_CHECK_MS[0]));
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(tick).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(tick).toHaveBeenCalledTimes(1);
+    expect(every).toEqual([CHECK_EVERY_MS]);
+
+    // Stopped before the first check: it never runs.
+    const other = setup();
+    const svc2 = other.service();
+    const tick2 = vi.spyOn(svc2, 'tick');
+    svc2.start(() => undefined);
+    svc2.stop();
+    await vi.advanceTimersByTimeAsync(FIRST_CHECK_MS[1]);
+    expect(tick2).not.toHaveBeenCalled();
+  });
+
+  it('uses UTC days', () => {
+    expect(utcDay(Date.parse('2026-09-28T23:59:59Z'))).toBe('2026-09-28');
+    expect(utcDay(Date.parse('2026-09-29T00:00:00Z'))).toBe('2026-09-29');
+  });
+});
+

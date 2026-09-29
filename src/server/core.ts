@@ -22,6 +22,7 @@ import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Lifecycle } from './lifecycle.js';
 import { projectRows, pruneSessionEvents, toProject } from './store.js';
+import { CallHomeService } from './callhome.js';
 import { Tmux, writeTmuxConf } from './tmux.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
@@ -42,6 +43,8 @@ export interface CoreOptions {
   mekoApi?: MekoApi;
   /** Checking Meko credentials and setting up Claude Code, for the Meko tab in Settings. */
   mekoTools?: MekoTools;
+  /** How usage stats are sent (tests fake it); by default the global fetch. */
+  callHomeFetch?: typeof fetch;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -75,6 +78,7 @@ export class Core extends EventEmitter {
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
   readonly mekoTools: MekoTools;
+  readonly callHome: CallHomeService;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -117,6 +121,9 @@ export class Core extends EventEmitter {
     this.comments = new CommentService(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
+    this.callHome = new CallHomeService({
+      db: this.db, config: () => this.cfg, version: this.version, meko: () => this.mekoStatus, log: this.log, fetch: o.callHomeFetch,
+    });
     this.invites = new InviteService(this, o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey })));
   }
 
@@ -235,6 +242,7 @@ export class Core extends EventEmitter {
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(SHARING_CHECK_MS, () => this.invites.checkMode());
+      this.callHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
       void this.refreshSharing();
       this.lifecycle.start();
@@ -244,6 +252,7 @@ export class Core extends EventEmitter {
   async stop(): Promise<void> {
     for (const i of this.intervals) clearInterval(i);
     this.intervals = [];
+    this.callHome.stop();
     this.lifecycle.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);

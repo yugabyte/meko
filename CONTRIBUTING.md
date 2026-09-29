@@ -71,6 +71,13 @@ sorts higher.
    server deletes every installed version under `~/.agent-k-local/app/` except the running one and
    one previous version (the one it updated from) to roll back to by hand.
 
+**Usage stats.** Release builds carry the collector's report URL (the full URL, ending in
+`/v1/report`) from the `CALL_HOME_URL` repo variable (Settings → Secrets and variables → Actions → Variables), written into the tarball as
+`CALL_HOME_URL`. Without the variable, releases send nothing. To try the report against a
+collector of your own, set `[call_home] url` in the dev home's `config.toml`
+(`.dev-home/config.toml`). The collector (`services/ak-local-call-home` in yugabyte/agent-k) has
+its own copy of `docs/call-home-report.schema.json`; change both together.
+
 Run the Release workflow by hand with **force** to release without feat/fix/perf commits, or with
 a **tag** to rebuild the assets of an existing release (a tag from before macOS support gets its
 Linux tarballs only).
@@ -83,6 +90,7 @@ agent-k-local-<version>/
   node/bin/node            bundled Node runtime
   lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/
   VERSION
+  CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
 ```
 
 ## Installing a release

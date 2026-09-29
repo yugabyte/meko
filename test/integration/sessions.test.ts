@@ -866,6 +866,35 @@ describe('pushes straight to the base branch', () => {
       (r) => r?.commits != null, 10000, 'commit count');
     expect(row?.commits).toBe(2);
   });
+
+  it('records what a push changed per file type, never the paths', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Direct', prompt: 'do it', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: env.repo, encoding: 'utf8' }).trim();
+    const from = git('rev-parse', '--short', 'HEAD');
+    mkdirSync(join(env.repo, 'src'), { recursive: true });
+    writeFileSync(join(env.repo, 'src', 'secret-module.ts'), 'a\nb\n');
+    writeFileSync(join(env.repo, 'src', 'Other.TS'), 'c\n');
+    writeFileSync(join(env.repo, 'README.md'), '# test\nmore\n');
+    writeFileSync(join(env.repo, 'logo.png'), Buffer.from([0, 1, 2, 3, 0, 255]));
+    git('add', '.');
+    git('commit', '-q', '-m', 'files');
+    const to = git('rev-parse', '--short', 'HEAD');
+    const result = { stdout: '', stderr: `To https://github.com/acme/demo.git\n   ${from}..${to}  HEAD -> main\n`, interrupted: false };
+    writeFileSync(join(env.fakeDir, `${s.claudeSessionId}.jsonl`), JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), toolUseResult: result }) + '\n', { flag: 'a' });
+    env.core.sessions.ingestUsage(s.id);
+    const row = await waitFor(
+      () => get<{ commits: number | null; file_types: string | null }>(env.core.db, 'SELECT commits, file_types FROM pushes WHERE session_id = ?', s.id),
+      (r) => r?.commits != null, 10000, 'commit count');
+    expect(row?.commits).toBe(1);
+    expect(JSON.parse(row!.file_types!)).toEqual([
+      { ext: 'ts', files: 2, additions: 3, deletions: 0 },
+      { ext: 'md', files: 1, additions: 1, deletions: 0 },
+      { ext: 'png', files: 1, additions: 0, deletions: 0 },
+    ]);
+    expect(row!.file_types).not.toContain('secret-module');
+  });
 });
 
 describe('with Meko transcript capture off', () => {

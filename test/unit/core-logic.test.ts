@@ -232,6 +232,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV16(db);
     dropV15(db);
     dropV14(db);
     dropV13(db);
@@ -262,6 +263,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV16(db);
     dropV15(db);
     dropV14(db);
     dropV13(db);
@@ -297,6 +299,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV16(db);
     dropV15(db);
     dropV14(db);
     dropV13(db);
@@ -315,6 +318,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV16(db);
     dropV15(db);
     dropV14(db);
     dropV13(db);
@@ -338,6 +342,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV16(db);
     dropV15(db);
     dropV14(db);
     dropV13(db);
@@ -363,6 +368,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV16(db);
     dropV15(db);
     dropV14(db);
     db.exec('PRAGMA user_version = 13');
@@ -373,6 +379,23 @@ describe('config and db', () => {
       { id: 's1', repo_path: '/code/api', branch_reused: 0 },
       { id: 's2', repo_path: '/code/web', branch_reused: 0 },
     ]);
+    db.close();
+  });
+
+  it('adds file types to the pushes of a schema 15 database, leaving old pushes without them', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+      VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV16(db);
+    run(db, "INSERT INTO pushes(session_id, range, ref, at, commits) VALUES ('s', 'a..b', 'main', 1, 2)");
+    db.exec('PRAGMA user_version = 15');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(db.prepare('SELECT commits, file_types FROM pushes').all()).toEqual([{ commits: 2, file_types: null }]);
     db.close();
   });
 
@@ -391,6 +414,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV16(db);
     dropV15(db);
     db.exec('PRAGMA user_version = 14');
     db.close();
@@ -419,6 +443,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 16 (pushes.file_types), for tests that rewind the schema. */
+function dropV16(db: ReturnType<typeof openDb>) {
+  if (db.prepare("SELECT 1 FROM pragma_table_info('pushes') WHERE name = 'file_types'").get()) db.exec('ALTER TABLE pushes DROP COLUMN file_types');
+}
 
 /** Undoes migration 15 (the design versions sent to Meko), for tests that rewind the schema. */
 function dropV15(db: ReturnType<typeof openDb>) {

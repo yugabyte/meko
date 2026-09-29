@@ -7,7 +7,7 @@ from a browser.
 
 **Contents:** [Decisions](#decisions-so-far) · [Architecture](#architecture) · [The app](#the-app) ·
 [Projects & sessions](#projects-worktrees-and-sessions) · [Task lifecycle](#task-lifecycle) ·
-[Datapacks](#datapacks) · [Token usage](#token-usage) · [Login & security](#login-and-security) ·
+[Datapacks](#datapacks) · [Token usage](#token-usage) · [Usage stats](#usage-stats) · [Login & security](#login-and-security) ·
 [Crash recovery](#surviving-crashes-restarts-and-updates) ·
 [Releases & updates](#releases-and-auto-update) · [Tech stack](#tech-stack) ·
 [Milestones](#milestones) · [Open questions](#open-questions)
@@ -31,6 +31,7 @@ from a browser.
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents. |
+| Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
 | Task lifecycle | Design → Code → PR → Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration sessions have none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
@@ -405,6 +406,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
 capture_transcripts = false  # send session transcripts to Meko conversations (off for now)
+
+[call_home]
+# enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
+# url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
 ```
 
 | Action | What the server does |
@@ -801,8 +806,10 @@ Close only ends in Done after a merge), counted once per session. A push
 straight to the base branch is found in the same transcript pass: a Bash tool result that is a
 push (git push's `To <remote>` line, or Claude Code's `gitOperation.push` marker, which also covers
 output cut short with `| tail`) with a fast-forward `old..new  src -> <base>` ref update is stored
-in `pushes(session_id, range, ref, at, commits)`, and `git rev-list --count old..new` in the
-project's repo fills in `commits` (`-1` when git can't tell; the push still counts). Fetch and pull
+in `pushes(session_id, range, ref, at, commits, file_types)`, and `git rev-list --count old..new` in the
+project's repo fills in `commits` (`-1` when git can't tell; the push still counts), and
+`git diff --numstat -z old new` fills in `file_types`, what it changed per file extension, for the
+[usage stats](#usage-stats) (NULL when git can't tell, and for pushes found before it was added). Fetch and pull
 output (`main -> origin/main`, under `From`), forced updates and new refs don't match. The
 migration that added the table cleared the read offsets, so every transcript was read once more
 (usage rows are upserts) and older pushes were found; transcripts of archived sessions are read at
@@ -839,6 +846,70 @@ only move when a session gets a reply, so the rail says when they were last repo
   tokens are tracked; dollar estimates aren't, since most people use a subscription.
 - **In Meko.** When a task is cleaned up, its token totals are included in the "shipped" summary
   written to the project's dedicated datapack.
+
+## Usage stats
+
+Each install sends a small report of counts once a day to a collector run by the AgentK Local team,
+so we know how many installs are active and how much work goes through them. The collector is a
+separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
+`CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](call-home-report.schema.json)
+is the collector's copy of the same contract, kept identical to the one in that repo. A unit test
+checks the reports the server builds against the schema. `schema` in the report goes up when a
+field changes meaning or is removed; adding a field doesn't change it. The collector stores an
+enum value, model id, extension or version it doesn't know as `other` rather than refusing the
+report, so an install that is ahead of it still reports.
+
+**What's in it** (`src/server/callhome.ts`, `buildReport`):
+
+- *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
+  hosts sharing a home count once), the version and update channel, platform, CPU, Node, tmux and
+  Claude Code versions (`tmux -V`, `claude --version`; `''` when they can't be read), local or
+  remote access, the service manager, whether Meko is on (and where its key comes from, and the
+  sharing mode; `none` when Meko is off or the mode isn't known), and the UTC day of the first
+  report.
+- *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
+  attached, distinct repos), sessions (by kind, open ones by stage), what shipped (merged PRs,
+  direct pushes and their commits as on the Usage page, plus the commits and lines of merged PRs),
+  file types, tokens, and idle worktrees.
+- *Each UTC day* of the last 7 (30 in an install's first report, as far back as session events are
+  kept): active projects and sessions, responses, projects created and deleted, sessions created
+  by kind and archived, stage entries, PRs opened and merged with their commits and lines, direct
+  pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
+  resumes, reused worktrees, file types, and tokens by model.
+- *File types* are counts per file extension: files changed, lines added and deleted, from merged
+  PRs and direct pushes. When a PR is merged, one `gh pr view <url> --json
+  commits,additions,deletions,files` call adds its size to the `merged` event's payload; for a
+  direct push it's `git diff --numstat -z`. Paths are reduced to extensions right away
+  (`src/server/filetypes.ts`): the last dot-suffix, lowercased; `none` for no suffix or a
+  dotfile; `other` for a suffix that isn't 1 to 10 letters and digits. Each list keeps the 25
+  largest and sums the rest into `other`. GitHub lists up to 100 files per PR.
+
+Never sent: project, session, repo, branch, datapack or file names, paths, prompts, designs,
+transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and
+the server name, and Meko keys or ids. Model ids that aren't plain ids (a Bedrock ARN carries an
+account number) are sent as `other`.
+
+**Sending.** An hourly check (the first one 10 to 60 minutes after start, at random, so a release
+doesn't make every install report at once) sends a report when the last one went out 23 hours ago
+or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. It POSTs the JSON
+to the collector's report URL, as given, with a 15-second timeout; a failure is logged once and tried again an hour
+later, and nothing else waits on it. The collector upserts each day on `(installId, day)`, so a
+resend changes nothing and a missed day is filled in by the next report. The URL is
+`[call_home] url`, or else the one release builds carry: a `CALL_HOME_URL` file next to `VERSION`,
+written by `scripts/package-release.sh` from the `CALL_HOME_URL` repo variable, so it never
+appears in the repo. Dev servers and tests have neither, so they send nothing. Node's `fetch`
+ignores `HTTPS_PROXY`, so an install behind a proxy doesn't report.
+
+**Turning it off.** It's on by default. The **Send anonymous usage stats to YugabyteDB** checkbox
+in Settings → Account (under the password forms, or the local-access note) writes
+`[call_home] enabled = false`; from then on no report is built or sent, without a restart.
+
+**Downloads** aren't sent from here: the collector reads every release asset's download count
+from the GitHub API each hour, so a pruned release loses at most an hour of downloads.
+
+**The collector's side of the contract.** `POST /v1/report` takes the report with no auth and
+answers 2xx (anything else counts as a failure); it should cap the body at 64 KB, limit reports per
+`installId` per day, check the schema, and store no IP addresses.
 
 ## Login and security
 
@@ -1006,7 +1077,7 @@ comes back. **Auto-continue is on by default**, with guards:
   with no build for its platform; the installer takes the latest release (or `--version`) and stops
   with a clear message if it has none. Releases since macOS support always include the macOS
   build: publishing waits for it, and only a rebuild of an older tag goes without. Each release also includes `SHA256SUMS`, a build provenance attestation
-  and `install.sh`. Afterwards, releases beyond the newest 5 in each lane (`stable`, or the
+  and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](#usage-stats)). Afterwards, releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`) are deleted; their tags stay.
 
 > **glibc.** RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run

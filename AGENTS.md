@@ -52,6 +52,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/mekosettings.ts` | The Meko tab in Settings: what it shows (never the key), checking a change against Meko before it's saved, and running Meko's setup for Claude Code. |
 | `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents), which also finds pushes to the base branch, and per session/project/model/day totals plus the all-projects overview (`GET /api/usage`). |
+| `src/server/callhome.ts`, `filetypes.ts` | Anonymous usage stats: the daily report (`buildReport`, counts only; its contract is `CallHomeReport` and `docs/call-home-report.schema.json`), sending it to the collector (`[call_home]`, or the `CALL_HOME_URL` a release carries), and file types (paths reduced to extensions right away). |
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping. |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback (tarball per platform and CPU); host install. |

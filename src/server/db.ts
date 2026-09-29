@@ -270,6 +270,9 @@ const MIGRATIONS: string[] = [
     SELECT 1 FROM sessions s JOIN project_datapacks d ON d.project_id = s.project_id AND d.role = 'dedicated'
     WHERE s.id = designs.session_id);
   `,
+  // 16: what a direct push changed, per file extension (a JSON list of FileTypeCount), filled in
+  // with its commit count. Pushes found before this stay NULL.
+  `ALTER TABLE pushes ADD COLUMN file_types TEXT;`,
 ];
 
 export function openDb(path: string): Db {

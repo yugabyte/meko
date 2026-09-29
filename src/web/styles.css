@@ -2961,6 +2961,13 @@ a.icon-btn {
   .th-sort {
     min-height: 40px;
   }
+  .check {
+    min-height: 36px;
+    align-items: center;
+  }
+  .check input {
+    margin-top: 0;
+  }
   .cmt-meta .link-btn,
   .cmt-meta .confirm-inline .btn {
     min-height: 36px;

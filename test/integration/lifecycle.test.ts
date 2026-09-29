@@ -12,6 +12,7 @@ const gh = vi.hoisted(() => ({
   comments: [] as string[],
   merges: [] as string[],
   bots: [] as string[],
+  stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
 }));
 
 vi.mock('../../src/server/github.js', async (orig) => {
@@ -28,6 +29,10 @@ vi.mock('../../src/server/github.js', async (orig) => {
     },
     resolveMergeMethod: async () => 'squash' as const,
     botLogins: async () => gh.bots,
+    prStats: async () => {
+      if (!gh.stats || gh.stats instanceof Error) throw gh.stats ?? new Error('no PR stats');
+      return gh.stats;
+    },
   };
 });
 
@@ -59,6 +64,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.comments = [];
     gh.merges = [];
     gh.bots = [];
+    gh.stats = null;
     env = await makeEnv();
   });
   afterEach(async () => {
@@ -111,6 +117,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(get().canMerge).toBe(true);
 
     const worktree = get().worktreePath;
+    gh.stats = {
+      commits: 2, additions: 40, deletions: 7,
+      files: [{ path: 'src/secret.ts', additions: 30, deletions: 7 }, { path: 'docs/x.md', additions: 10, deletions: 0 }],
+    };
     await env.core.sessions.action(s.id, 'merge');
     expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
     const row = env.core.sessions.row(s.id);
@@ -124,6 +134,12 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const memory = env.meko.calls.find((c) => c.name === 'addMemory');
     expect(String(memory?.args[0])).toMatch(/Shipped in Demo: "Fix the thing" \(PR #7/);
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
+    // The PR's size, for the usage stats: extensions only, never the paths.
+    const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
+    expect(JSON.parse(merged!.payload_json)).toEqual({
+      url: 'https://github.com/acme/demo/pull/7', commits: 2, additions: 40, deletions: 7,
+      fileTypes: [{ ext: 'ts', files: 1, additions: 30, deletions: 7 }, { ext: 'md', files: 1, additions: 10, deletions: 0 }],
+    });
   });
 
   /** A session in Review with PR #7 open and approved by AgentK (unless AgentK isn't listened to). */
@@ -149,6 +165,16 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).stage).toBe('done');
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
     expect(shipped()).toBe(1);
+  });
+
+  it("merges and closes when the PR's size can't be read", async () => {
+    const s = await inReview('No stats');
+    gh.stats = new Error('gh: rate limited');
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
+    expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
   });
 
   it('cleans up once when polls overlap', async () => {
