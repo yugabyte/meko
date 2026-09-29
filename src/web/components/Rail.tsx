@@ -89,6 +89,7 @@ export function Rail({
               key={p.id}
               className={cx('proj', p.id === currentId && 'sel', overId === p.id && dragId !== p.id && (dropAfter(p.id) ? 'drop-after' : 'drop-target'))}
               onClick={() => onSelect(p)}
+              aria-current={p.id === currentId ? 'page' : undefined}
               draggable={!touch}
               onDragStart={(e) => {
                 setDragId(p.id);
