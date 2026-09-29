@@ -220,6 +220,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV14(db);
     dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 6');
@@ -248,6 +249,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV14(db);
     dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 9');
@@ -281,6 +283,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV14(db);
     dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 10');
@@ -297,6 +300,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV14(db);
     dropV13(db);
     dropV12(db);
     db.exec('PRAGMA user_version = 11');
@@ -318,6 +322,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV14(db);
     dropV13(db);
     db.exec('PRAGMA user_version = 12');
     db.close();
@@ -327,6 +332,29 @@ describe('config and db', () => {
       { path: '/wt/live', repo: '/code/api', session_id: 'live', released_at: null, stale: 0, created_at: 5 },
     ]);
     expect(db.prepare('SELECT DISTINCT worktree_released FROM sessions').all()).toEqual([{ worktree_released: 0 }]);
+    db.close();
+  });
+
+  it('gives each session its project\'s repo when upgrading a schema 13 database', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('web', 'web', '/code/web', 'main', 0, 1)`);
+    const add = (id: string, project: string) =>
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+        VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
+    add('s1', 'api');
+    add('s2', 'web');
+    dropV14(db);
+    db.exec('PRAGMA user_version = 13');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(db.prepare('SELECT id, repo_path, branch_reused FROM sessions ORDER BY id').all()).toEqual([
+      { id: 's1', repo_path: '/code/api', branch_reused: 0 },
+      { id: 's2', repo_path: '/code/web', branch_reused: 0 },
+    ]);
     db.close();
   });
 
@@ -345,6 +373,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 14 (each session's repo, and reused branches), for tests that rewind the schema. */
+function dropV14(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'repo_path', 'branch_reused');
+}
 
 /** Undoes migration 13 (the worktrees table), for tests that rewind the schema. */
 function dropV13(db: ReturnType<typeof openDb>) {

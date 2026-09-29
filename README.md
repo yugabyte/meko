@@ -60,7 +60,9 @@ your phone can connect.
 - **Projects** in a left rail: each is an effort to build or improve a feature, product or service,
   worked on in a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
-  New sessions start from the base branch after it's fast-forwarded to `origin`.
+  New sessions start from the base branch after it's fast-forwarded to `origin`. Under
+  **Advanced** a session can work in another of your repos, or on a branch you name, including an
+  existing one no running session uses.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of

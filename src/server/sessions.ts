@@ -7,8 +7,8 @@ import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addWorktree, discardChanges, git, isIdleWorktree, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount,
-  unpushedCount, worktreeClean, type SyncResult,
+  BranchGoneError, addWorktree, checkedOutAt, defaultBranch, discardChanges, existingBranch, git, isIdleWorktree, removeWorktree,
+  restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookPayload } from './hooks.js';
 import { errMsg } from './log.js';
@@ -17,7 +17,7 @@ import { loadPrompt, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
-  dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRow, sessionRows, slugify, toSession,
+  dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
@@ -58,7 +58,8 @@ const RECOVERY_BACKOFF_MS = 5 * 60 * 1000;
 const SESSION_ENV_UNSET = ['MEKO_CHECKPOINT_INTERVAL'];
 
 /** The "created" event: where the branch started, and what happened to the local base. */
-function startedText(branch: string, base: string, sync: SyncResult | null): string {
+function startedText(branch: string, base: string, sync: SyncResult | null, reused: boolean): string {
+  if (reused) return `Started on the existing branch ${branch} (base ${base})`;
   switch (sync?.kind) {
     case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to origin/${base})`;
     case 'current': return `Started on ${branch} from ${base} (already up to date with origin)`;
@@ -227,34 +228,39 @@ export class SessionManager {
   async create(projectId: string, req: CreateSessionRequest): Promise<Session> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
-    for (const k of ['name', 'prompt', 'baseBranch'] as const) {
+    for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch'] as const) {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     const name = (req.name ?? '').trim();
     if (!name) throw new HttpError(400, 'Give the session a name.');
     const settings = parseSettings(p.settings_json);
-    const base = (req.baseBranch ?? '').trim() || p.default_branch;
+    const repo = this.core.projects.sessionRepo(p, req.repoPath);
     const kind: SessionKind = req.kind ?? (req.skipDesign ? 'quick' : 'plan');
     if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
     // A task session with no first prompt works on its name; an exploration waits for you.
     const task = (req.prompt ?? '').trim() || (kind === 'explore' ? '' : name);
     const stage: Stage = KIND_STAGES[kind][0];
+    const wanted = (req.branch ?? '').trim();
+    const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
+    const base = (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
 
-    const slug = await this.uniqueSlug(projectId, p.repo_path, settings.branchPrefix, slugify(name));
-    const branch = `${settings.branchPrefix}${slug}`;
+    const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, slugify(name));
+    const branch = wanted || `${settings.branchPrefix}${slug}`;
     const id = `${projectId}--${slug}`;
     const now = Date.now();
     const pool = this.core.worktrees;
     // The row goes in first so the tab (and its "Starting…" view) shows up right away. The
     // repo's most recently idled worktree is claimed in the same write, so two sessions starting
-    // at once (in any projects on the repo) never get the same one.
+    // at once (in any projects on the repo) never get the same one, and two starts on one typed
+    // branch can't both pass the in-use check.
     const { worktree, reused } = tx(this.db, () => {
-      const claimed = pool.claim(p.repo_path, id);
-      const path = claimed ?? pool.add(p.repo_path, id);
-      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path,
-                      tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0)`,
-        id, projectId, slug, name, randomUUID(), branch, base, path, tmuxName(projectId, slug),
+      if (wanted) this.checkBranchFree(repo, wanted);
+      const claimed = pool.claim(repo, id);
+      const path = claimed ?? pool.add(repo, id);
+      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, branch_reused,
+                      worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0)`,
+        id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
         randomBytes(24).toString('base64url'), kind, stage, task || null, now, now);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
@@ -264,8 +270,8 @@ export class SessionManager {
     try {
       this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
       const naming = this.nameConversation(this.row(id));
-      const made = await this.makeWorktree(id, p.repo_path, worktree, reused, branch, base);
-      this.event(id, 'created', startedText(branch, base, made.sync) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''));
+      const made = await this.makeWorktree(id, repo, worktree, reused, branch, base, !!where);
+      this.event(id, 'created', startedText(branch, base, made.sync, !!where) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''));
 
       const row = this.row(id);
       const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
@@ -293,13 +299,13 @@ export class SessionManager {
    * or a new one. A claimed worktree that can't be reused is dropped from the pool and the
    * session gets a new one, so reuse never makes a start fail. On failure the session is deleted.
    */
-  private async makeWorktree(id: string, repo: string, path: string, claimed: boolean, branch: string, base: string): Promise<{ sync: SyncResult | null; reused: boolean }> {
+  private async makeWorktree(id: string, repo: string, path: string, claimed: boolean, branch: string, base: string, fromOrigin: boolean): Promise<{ sync: SyncResult | null; reused: boolean }> {
     const pool = this.core.worktrees;
     let current = path;
     try {
       if (claimed) {
         try {
-          return { sync: await reuseWorktree(repo, path, branch, base), reused: true };
+          return { sync: await reuseWorktree(repo, path, branch, base, fromOrigin), reused: true };
         } catch (e) {
           if (await isIdleWorktree(repo, path)) {
             // The worktree is fine; what failed was the branch or base. It goes back to the pool,
@@ -313,7 +319,7 @@ export class SessionManager {
           this.update(id, { worktree_path: current });
         }
       }
-      return { sync: await addWorktree(repo, current, branch, base), reused: false };
+      return { sync: await addWorktree(repo, current, branch, base, fromOrigin), reused: false };
     } catch (e) {
       this.startup.delete(id);
       pool.drop(current);
@@ -323,14 +329,51 @@ export class SessionManager {
     }
   }
 
-  private async uniqueSlug(projectId: string, repo: string, prefix: string, base: string): Promise<string> {
+  /**
+   * A slug no session of the project has. With a <prefix> (AgentK names the branch), the branch
+   * `<prefix><slug>` mustn't exist in <repo> either.
+   */
+  private async uniqueSlug(projectId: string, repo: string, prefix: string | null, base: string): Promise<string> {
     for (let i = 1; ; i++) {
       const slug = i === 1 ? base : `${base}-${i}`;
       const taken =
         get(this.db, 'SELECT 1 AS x FROM sessions WHERE (project_id = ? AND slug = ?) OR tmux_name = ?', projectId, slug, tmuxName(projectId, slug)) ||
-        (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${prefix}${slug}`));
+        (prefix !== null && (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${prefix}${slug}`)));
       if (!taken) return slug;
     }
+  }
+
+  /**
+   * Checks a branch the user typed: a valid name that no running session uses and no checkout
+   * has. Returns where it already exists (local, or only on origin), or null for a new branch.
+   */
+  private async checkWantedBranch(repo: string, branch: string): Promise<'local' | 'origin' | null> {
+    let where: 'local' | 'origin' | null;
+    try {
+      where = await existingBranch(repo, branch);
+    } catch (e) {
+      throw new HttpError(400, errMsg(e));
+    }
+    this.checkBranchFree(repo, branch);
+    const at = where === 'local' ? await checkedOutAt(repo, branch) : null;
+    if (at) {
+      // git reports the real path; the stored one may go through a symlink.
+      const kept = all<{ name: string; worktree_path: string }>(this.db,
+        `SELECT name, worktree_path FROM sessions WHERE desired = 'archived' AND worktree_released = 0`)
+        .find((s) => realpath(s.worktree_path) === realpath(at));
+      throw new HttpError(409, kept
+        ? `Branch ${branch} is still checked out at ${at}, the worktree kept for the archived session "${kept.name}" because it has uncommitted changes. Remove that worktree (git worktree remove ${at}), or pick another branch.`
+        : `Branch ${branch} is checked out at ${at}. Switch that checkout to another branch, or pick another branch.`);
+    }
+    return where;
+  }
+
+  /** Throws a 409 when a running session (in any project) works on <branch> of <repo>. */
+  private checkBranchFree(repo: string, branch: string): void {
+    const s = get<{ name: string; project: string }>(this.db,
+      `SELECT s.name, p.name AS project FROM sessions s JOIN projects p ON p.id = s.project_id
+        WHERE s.desired = 'running' AND s.repo_path = ? AND s.branch = ?`, repo, branch);
+    if (s) throw new HttpError(409, `Branch ${branch} is in use by the session "${s.name}" in ${s.project}. Archive that session first, or pick another branch.`);
   }
 
   /** Where Claude writes a markdown design during the Design stage (outside the repo). */
@@ -393,7 +436,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
+      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
     ];
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${projectAgentId(row.project_id)}" on Meko calls that write.`);
@@ -447,7 +490,7 @@ export class SessionManager {
    */
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null }): Promise<void> {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
-    const repo = projectRow(this.db, row.project_id)?.repo_path;
+    const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
     this.pinDatapack(row.project_id);
     const designDir = join(this.core.paths.designs, row.id);
@@ -533,7 +576,7 @@ export class SessionManager {
     const raw = p.tool_input?.file_path ?? p.tool_input?.notebook_path;
     if (typeof raw !== 'string' || !raw) return null;
     const file = resolve(p.cwd || row.worktree_path, raw);
-    const repo = projectRow(this.db, row.project_id)?.repo_path;
+    const repo = sessionRepo(this.db, row);
     const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d)]);
     if (!roots.some((d) => file === d || file.startsWith(d + sep))) return null;
     return {
@@ -739,7 +782,7 @@ export class SessionManager {
         // Claude fires no hooks until the folder-trust dialog is answered (new, resumed or recovered).
         const screen = await this.core.tmux.capture(row.tmux_name).catch(() => '');
         if (TRUST_PROMPT_RE.test(screen)) {
-          const repo = projectRow(this.db, row.project_id)?.repo_path;
+          const repo = sessionRepo(this.db, row);
           if (repo) await this.trustRepo(repo); // so the next session skips it
           this.setStatus(row.id, 'needs_input', 'Claude is asking whether you trust this folder. Answer in the terminal.');
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
@@ -821,7 +864,7 @@ export class SessionManager {
   private async recoverNow(row: SessionRow): Promise<void> {
     const p = projectRow(this.db, row.project_id);
     if (!p) return;
-    await restoreWorktree(p.repo_path, row.worktree_path, row.branch);
+    await restoreWorktree(sessionRepo(this.db, row) ?? p.repo_path, row.worktree_path, row.branch);
     const now = Date.now();
     const history = (JSON.parse(row.auto_continue_at) as number[]).filter((t) => now - t < HOUR);
     const wasWorking = row.status === 'working' || row.interrupted === 1;
@@ -871,7 +914,10 @@ export class SessionManager {
       case 'request-review': await lc.requestReview(row, false); break;
       case 'force-review': await lc.requestReview(row, true); break;
       case 'resume': await this.resume(row); break;
-      case 'archive': await this.archive(row, { keepBranch: true }); break;
+      case 'archive':
+        await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');
+        await this.archive(row, { keepBranch: true });
+        break;
       case 'discard': await this.archive(row, { keepBranch: false, force: true }); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
@@ -893,7 +939,7 @@ export class SessionManager {
     if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
     const p = projectRow(this.db, row.project_id);
     if (p) {
-      await restoreWorktree(p.repo_path, row.worktree_path, row.branch).catch((e: unknown) => {
+      await restoreWorktree(sessionRepo(this.db, row) ?? p.repo_path, row.worktree_path, row.branch).catch((e: unknown) => {
         throw e instanceof BranchGoneError ? new HttpError(409, e.message) : e;
       });
     }
@@ -905,6 +951,16 @@ export class SessionManager {
     await this.launch(row, { resume, prompt: firstPrompt });
     this.setStartup(row.id, 'loading');
     this.event(row.id, 'resumed', 'Resumed');
+  }
+
+  /**
+   * Throws a 409 while the session's own worktree has uncommitted or untracked files: Archive and
+   * Merge would leave the branch checked out there, where no later session could have it.
+   */
+  async refuseUncommitted(row: SessionRow, fix: string): Promise<void> {
+    if (!this.ownsWorktree(row)) return;
+    const n = await uncommittedCount(row.worktree_path);
+    if (n) throw new HttpError(409, `This session's worktree has ${n === 1 ? '1 uncommitted file' : `${n} uncommitted files`}. ${fix}`);
   }
 
   /** What Discard would throw away: uncommitted files and commits no remote has. */
@@ -937,7 +993,7 @@ export class SessionManager {
     const owned = this.ownsWorktree(row);
     const [uncommittedFiles, unpushedCommits] = await Promise.all([
       owned ? uncommittedCount(row.worktree_path) : 0,
-      p ? unpushedCount(p.repo_path, row.branch, row.base_branch) : 0,
+      p ? unpushedCount(sessionRepo(this.db, row) ?? p.repo_path, row.branch, row.base_branch) : 0,
     ]);
     return { worktreeExists: owned && existsSync(row.worktree_path), uncommittedFiles, unpushedCommits };
   }
@@ -960,9 +1016,10 @@ export class SessionManager {
       await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
       await this.core.tmux.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
-      const worktree: WorktreeFate = p ? await this.freeWorktree(row, p.repo_path, !!opts.force) : 'stuck';
+      const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
+      const worktree: WorktreeFate = repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
       const worktreeFreed = FREED.includes(worktree);
-      if (p && worktreeFreed && !opts.keepBranch) await tryGit(p.repo_path, 'branch', '-D', row.branch);
+      if (repo && worktreeFreed && !opts.keepBranch) await tryGit(repo, 'branch', '-D', row.branch);
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
@@ -1050,14 +1107,17 @@ export class SessionManager {
         this.recoverRetryAt.delete(row.id);
       }
       // A worktree that went idle or to another session (maybe another project's) isn't this one's to remove.
-      if (p && this.ownsWorktree(row) && !FREED.includes(await this.freeWorktree(row, p.repo_path, false))) {
+      if (p && this.ownsWorktree(row) && !FREED.includes(await this.freeWorktree(row, sessionRepo(this.db, row) ?? p.repo_path, false))) {
         kept.push(row.worktree_path);
         this.core.log.info(`kept the worktree of ${row.id} at ${row.worktree_path}: it has uncommitted changes`);
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
     }
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
-    if (p) await this.core.worktrees.releaseRepo(p.repo_path, projectId);
+    if (p) {
+      const repos = new Set([p.repo_path, ...sessionRows(this.db, projectId).map((r) => r.repo_path).filter((r): r is string => !!r)]);
+      for (const repo of repos) await this.core.worktrees.releaseRepo(repo, projectId);
+    }
     return kept;
   }
 
@@ -1132,7 +1192,7 @@ export class SessionManager {
     const pending = all<{ range: string }>(this.db, 'SELECT range FROM pushes WHERE session_id = ? AND commits IS NULL', r.id);
     if (!pending.length) return;
     // Deleted projects keep their row, and their repo usually still has the commits.
-    const repo = get<{ repo_path: string }>(this.db, 'SELECT repo_path FROM projects WHERE id = ?', r.project_id)?.repo_path;
+    const repo = sessionRepo(this.db, r);
     for (const { range } of pending) {
       let n = -1;
       if (repo) {

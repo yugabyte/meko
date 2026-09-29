@@ -187,13 +187,22 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(argvLog(env)).toHaveLength(1);
   });
 
-  it('archive keeps a worktree with uncommitted changes, and its branch', async () => {
+  it('refuses to archive a session with uncommitted or untracked files, and keeps its branch once it can', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Keep me', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     writeFileSync(join(s.worktreePath, 'draft.txt'), 'wip\n');
+    await expect(env.core.sessions.action(s.id, 'archive')).rejects.toMatchObject({
+      status: 409, message: "This session's worktree has 1 uncommitted file. Ask AgentK to commit, or Discard the session to throw the changes away.",
+    });
+    expect(env.core.sessions.get(s.id).desired).toBe('running');
+    expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(true);
+
+    const g = (...a: string[]) => execFileSync('git', a, { cwd: s.worktreePath, stdio: 'ignore' });
+    g('add', 'draft.txt');
+    g('commit', '-q', '-m', 'draft');
     await env.core.sessions.action(s.id, 'archive');
-    expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(true);
+    expect(env.core.sessions.get(s.id).desired).toBe('archived');
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).toContain('ak/keep-me');
   });
 
@@ -634,7 +643,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
     const tries = vi.spyOn(env.core.sessions, 'recoverOne');
     // The worktree is gone and can't be restored (as when the remote is unreachable).
-    run(env.core.db, 'UPDATE projects SET repo_path = ? WHERE id = ?', join(env.home, 'gone'), p.id);
+    run(env.core.db, 'UPDATE sessions SET repo_path = ? WHERE id = ?', join(env.home, 'gone'), s.id);
     rmSync(s.worktreePath, { recursive: true, force: true });
     execFileSync('tmux', ['-L', env.socket, 'kill-server']);
     await env.core.sessions.reconcile();
@@ -688,7 +697,8 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const clean = await env.core.sessions.create(p.id, { name: 'Clean', prompt: 'hi', kind: 'quick' });
     await waitFor(() => [kept, dirty, clean].map((x) => env.core.sessions.get(x.id).status), (st) => st.every((x) => x === 'idle'), 10000, 'idle');
     writeFileSync(join(kept.worktreePath, 'draft.txt'), 'wip\n');
-    await env.core.sessions.action(kept.id, 'archive'); // kept: uncommitted changes
+    // Archive refuses this; a PR merged on GitHub still archives with the changes kept.
+    await env.core.sessions.archive(env.core.sessions.row(kept.id), { keepBranch: true });
     writeFileSync(join(dirty.worktreePath, 'draft.txt'), 'wip\n');
     await env.core.projects.delete(p.id);
     expect(existsSync(join(kept.worktreePath, 'draft.txt'))).toBe(true);

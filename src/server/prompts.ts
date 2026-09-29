@@ -50,7 +50,7 @@ Implement this on the current branch ({{branch}}). Follow the repo's conventions
 
 1. Review the full diff against {{base}}. Make sure the repo's tests and checks pass.
 2. Commit using this repo's commit conventions (see CLAUDE.md and any commit skill) on branch {{branch}}.
-3. Push the branch to origin and run \`gh pr create --base {{base}}\` with a clear title and a description that summarizes the design and the change.
+3. Push the branch to origin. If the branch has no open PR yet, run \`gh pr create --base {{base}}\` with a clear title and a description that summarizes the design and the change; if it already has one (\`gh pr view\`), update that PR's title and description instead of opening another.
 
 Finish by printing the PR URL.`,
 

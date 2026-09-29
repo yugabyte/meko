@@ -10,7 +10,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, repoFolder, totalTokens, usageTitle } from '../util';
 import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
@@ -96,7 +96,12 @@ export function ProjectView({
   const gateReady = !!session && !session.busy && ((session.stage === 'design' && session.hasDesign) || (session.stage === 'review' && session.canMerge));
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
-  const branchText = session && <span>branch {session.branch}</span>;
+  // A session in another repo than the project's names it first.
+  const branchText = session && (
+    <span title={session.repoPath !== project.repoPath ? session.repoPath : undefined}>
+      {session.repoPath && session.repoPath !== project.repoPath ? `${repoFolder(session.repoPath)} · ` : ''}branch {session.branch}
+    </span>
+  );
   const tokensText = session && (
     <span title={usageTitle(session.usage)}>
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out

@@ -102,7 +102,8 @@ describe('worktree reuse (real tmux + git, fake claude)', () => {
     const p = await project();
     const dirty = await session(p.id, 'Dirty');
     writeFileSync(join(dirty.worktreePath, 'draft.txt'), 'wip\n');
-    await env.core.sessions.action(dirty.id, 'archive');
+    // Archive refuses this; a PR merged on GitHub still archives with the changes kept.
+    await env.core.sessions.archive(env.core.sessions.row(dirty.id), { keepBranch: true });
     expect(event(dirty.id, 'archived')).toBe('Archived; worktree kept because it has uncommitted changes');
     const next = await session(p.id, 'Next');
     expect(next.worktreePath).not.toBe(dirty.worktreePath);

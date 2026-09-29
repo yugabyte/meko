@@ -206,6 +206,8 @@ export interface Session {
   claudeSessionId: string;
   branch: string;
   baseBranch: string;
+  /** The repo the session works in (the project's unless another one was picked). */
+  repoPath: string;
   worktreePath: string;
   tmuxName: string;
   desired: 'running' | 'archived';
@@ -320,6 +322,13 @@ export interface RepoInfo {
   lastTouchedAt: number;
   /** Projects that already use this repo (a repo can have several). */
   projects: { id: string; name: string }[];
+}
+
+/** A repo's branches for the New session dialog. */
+export interface RepoBranches {
+  defaultBranch: string;
+  /** Local branches, most recent commit first. */
+  branches: string[];
 }
 
 export interface ReposResponse {
@@ -653,7 +662,16 @@ export interface CreateSessionRequest {
   name: string;
   /** The first prompt. Left out, Plan & Implement and Quick Code sessions use `name`; an Exploration starts with none. */
   prompt?: string;
+  /** Defaults to the repo's default branch. */
   baseBranch?: string;
+  /** A main git repo to work in instead of the project's (one of the scanned repos). */
+  repoPath?: string;
+  /**
+   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`. An
+   * existing branch (local, or only on origin) is picked up as it is, unless a running session
+   * uses it or another checkout has it.
+   */
+  branch?: string;
   /** Defaults to `plan`. */
   kind?: SessionKind;
   /** Deprecated: use `kind: 'quick'`. True starts a Quick Code session when `kind` is unset. */
@@ -726,6 +744,7 @@ export type TermServerMessage =
 // POST   /api/auth/totp/disable { code }       → 204
 // GET    /api/state                            → AppState
 // GET    /api/repos                            → ReposResponse
+// GET    /api/repos/branches?path=             → RepoBranches   (400 unless the path is a scanned repo or a project's)
 // GET    /api/meko/datapacks                   → MekoDatapack[]
 // GET    /api/meko/datapacks/:id/people        → DatapackPeople   (the datapack must be in a project here)
 // POST   /api/meko/datapacks/:id/people ShareDatapackRequest → DatapackPeople   (invites by email; Meko emails them)
@@ -747,7 +766,8 @@ export type TermServerMessage =
 // GET    /api/projects/:id/home                → ProjectHome
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind)
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind, a bad branch name or a
+//        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
 // GET    /api/sessions/:id/design              → DesignDoc
 // GET    /api/sessions/:id/discard-check       → DiscardCheck

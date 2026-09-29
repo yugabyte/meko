@@ -37,6 +37,10 @@ export interface SessionRow {
   transcript_path: string | null;
   branch: string;
   base_branch: string;
+  /** The repo the session works in: the project's, or another one picked when it started. */
+  repo_path: string | null;
+  /** 1 when the session started on a branch that already existed. */
+  branch_reused: number;
   worktree_path: string;
   /** 1 once the session let go of its worktree (idle, another session's, or removed). */
   worktree_released: number;
@@ -117,6 +121,14 @@ export function sessionRow(db: Db, id: string): SessionRow | undefined {
   return get<SessionRow>(db, 'SELECT * FROM sessions WHERE id = ?', id);
 }
 
+/**
+ * The repo a session works in. Every session has its own since it may use another repo than
+ * its project's; a row without one (never expected) falls back to the project's, deleted or not.
+ */
+export function sessionRepo(db: Db, r: SessionRow): string | null {
+  return r.repo_path ?? get<{ repo_path: string }>(db, 'SELECT repo_path FROM projects WHERE id = ?', r.project_id)?.repo_path ?? null;
+}
+
 export function sessionRows(db: Db, projectId?: string): SessionRow[] {
   return projectId
     ? all<SessionRow>(db, 'SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at', projectId)
@@ -145,6 +157,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     claudeSessionId: r.claude_session_id,
     branch: r.branch,
     baseBranch: r.base_branch,
+    repoPath: sessionRepo(db, r) ?? '',
     worktreePath: r.worktree_path,
     tmuxName: r.tmux_name,
     desired: r.desired,

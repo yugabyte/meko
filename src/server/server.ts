@@ -228,6 +228,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- state, repos, datapacks ----
   app.get('/api/state', async () => core.state());
   app.get('/api/repos', async () => core.projects.repos());
+  app.get<{ Querystring: { path?: string } }>('/api/repos/branches', async (req) => core.projects.repoBranches(req.query.path));
   /** A datapack_list row for the browser: without the owner's account id. */
   const toDatapack = ({ ownerUserId: _, ...d }: MekoDatapackRow): MekoDatapack => d;
   app.get('/api/meko/datapacks', async (): Promise<MekoDatapack[]> => {

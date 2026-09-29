@@ -250,6 +250,11 @@ const MIGRATIONS: string[] = [
     FROM sessions s JOIN projects p ON p.id = s.project_id
     WHERE s.desired = 'running';
   `,
+  `
+  ALTER TABLE sessions ADD COLUMN repo_path TEXT;
+  ALTER TABLE sessions ADD COLUMN branch_reused INTEGER NOT NULL DEFAULT 0;
+  UPDATE sessions SET repo_path = (SELECT repo_path FROM projects WHERE projects.id = sessions.project_id);
+  `,
 ];
 
 export function openDb(path: string): Db {

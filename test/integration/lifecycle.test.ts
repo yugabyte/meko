@@ -3,11 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
-import type { ReviewerMode } from '../../src/shared/types.js';
+import type { CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, tmux and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
-  pr: null as null | { number: number; url: string; state: 'OPEN' | 'MERGED' | 'CLOSED' },
+  pr: null as null | { number: number; url: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; createdAt?: string; baseRefName?: string },
   status: null as null | PrStatus,
   comments: [] as string[],
   merges: [] as string[],
@@ -127,12 +127,12 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   });
 
   /** A session in Review with PR #7 open and approved by AgentK (unless AgentK isn't listened to). */
-  async function inReview(name: string, reviewer?: ReviewerMode) {
+  async function inReview(name: string, reviewer?: ReviewerMode, opts: Partial<CreateSessionRequest> = {}) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     if (reviewer) env.core.projects.update(p.id, { settings: { reviewer } });
-    const s = await env.core.sessions.create(p.id, { name, prompt: 'do it', kind: 'quick' });
+    const s = await env.core.sessions.create(p.id, { name, prompt: 'do it', kind: 'quick', ...opts });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
-    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+    gh.pr ??= { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
     gh.status = status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
     await env.core.sessions.action(s.id, 'open-pr');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review' && (reviewer === 'people' || x.reviewState === 'approved') && x.status === 'idle', 10000, 'review stage');
@@ -222,6 +222,39 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('CI is failing.') as string });
     expect(gh.merges).toEqual([]);
     expect(env.core.sessions.row(s.id).stage).toBe('review');
+  });
+
+  it('lists uncommitted files as a merge blocker and refuses to merge', async () => {
+    const s = await inReview('Dirty merge');
+    writeFileSync(join(env.core.sessions.row(s.id).worktree_path, 'draft.txt'), 'wip\n');
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.get(s.id)).toMatchObject({ canMerge: false, mergeBlockers: ['The worktree has 1 uncommitted file: commit or discard them.'] });
+    await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({
+      status: 409, message: 'Not ready to merge: The worktree has 1 uncommitted file: commit or discard them.',
+    });
+    expect(gh.merges).toEqual([]);
+    expect(env.core.sessions.row(s.id).stage).toBe('review');
+  });
+
+  it('merges and cleans up a session in another repo there', async () => {
+    const { gitRepo } = await import('../helpers.js');
+    const other = gitRepo(join(env.home, 'code', 'other-repo'));
+    const s = await inReview('Elsewhere', undefined, { repoPath: other });
+    const worktree = env.core.sessions.row(s.id).worktree_path;
+    await env.core.sessions.action(s.id, 'merge');
+    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: other, encoding: 'utf8' }).trim()).toBe('');
+    expect(dbGet<{ repo: string }>(env.core.db, 'SELECT repo FROM worktrees WHERE path = ? AND session_id IS NULL', worktree)?.repo).toBe(other);
+  });
+
+  it('picks up the open PR a reused branch already has, and its base', async () => {
+    execFileSync('git', ['branch', 'feature/old'], { cwd: env.repo });
+    execFileSync('git', ['branch', 'release'], { cwd: env.repo });
+    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN', createdAt: '2026-01-01T00:00:00Z', baseRefName: 'release' };
+    const s = await inReview('Carry on', undefined, { branch: 'feature/old' });
+    expect(env.core.sessions.get(s.id)).toMatchObject({ prNumber: 7, baseBranch: 'release' });
+    expect(lastEvent(s.id, 'pr')).toBe('Picked up PR #7');
+    expect(lastEvent(s.id, 'base')).toBe('Base set to release, the base of PR #7');
   });
 
   it('sends one merge when Merge is pressed twice', async () => {

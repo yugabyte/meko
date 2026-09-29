@@ -2,14 +2,14 @@ import { existsSync } from 'node:fs';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { artifactUrlIn, isArtifactPublish, readArtifactHtml, readDesignFile } from './design.js';
-import { deleteBranch, git, tryGit } from './git.js';
+import { deleteBranch, git, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { HttpError } from './projects.js';
 import type { ReviewerMode } from '../shared/types.js';
-import { dedicatedDatapack, parseSettings, projectRow, sessionRow, sessionRows, type SessionRow } from './store.js';
+import { dedicatedDatapack, parseSettings, projectRow, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
@@ -202,16 +202,29 @@ export class Lifecycle {
     }
     if (row.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+    if (row.branch_reused) await this.followPrBase(row);
     // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
     try {
-      await this.sessions.submit(row.id, this.sessions.prompt(row, 'pr'));
+      await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'pr'));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, 'code', 'auto');
       throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
     }
+  }
+
+  /**
+   * A session started on an existing branch that already has an open PR works against that PR's
+   * base, so the PR prompt, the diff and the Changes panel compare with what the PR merges into.
+   */
+  private async followPrBase(row: SessionRow): Promise<void> {
+    const pr = await github.findPr(this.ghCwd(row), row.branch, row.created_at, true).catch(() => null);
+    const base = pr?.state === 'OPEN' ? pr.baseRefName : undefined;
+    if (!base || base === row.base_branch) return;
+    this.sessions.update(row.id, { base_branch: base });
+    this.sessions.event(row.id, 'base', `Base set to ${base}, the base of PR #${pr!.number}`);
   }
 
   /** Called on every Stop hook: a Claude turn just finished. */
@@ -280,7 +293,7 @@ export class Lifecycle {
   /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */
   private ghCwd(row: SessionRow): string {
     if (existsSync(row.worktree_path) && this.sessions.ownsWorktree(row)) return row.worktree_path;
-    return projectRow(this.db, row.project_id)?.repo_path ?? row.worktree_path;
+    return sessionRepo(this.db, row) ?? row.worktree_path;
   }
 
   // ---- polling ----
@@ -329,10 +342,12 @@ export class Lifecycle {
   private async doPollPrStage(id: string): Promise<void> {
     const before = sessionRow(this.db, id);
     if (!before || before.stage !== 'pr' || before.desired !== 'running') return;
-    const pr = await github.findPr(before.worktree_path, before.branch, before.created_at);
+    // A session on a branch that existed before it takes that branch's open PR, however old.
+    const pr = await github.findPr(before.worktree_path, before.branch, before.created_at, !!before.branch_reused);
     if (!pr || sessionRow(this.db, id)?.stage !== 'pr') return;
     this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting' });
-    this.sessions.event(id, 'pr', `Opened PR #${pr.number}`, { url: pr.url });
+    const older = Date.parse(pr.createdAt) < before.created_at - github.CLOCK_SKEW_MS;
+    this.sessions.event(id, 'pr', older ? `Picked up PR #${pr.number}` : `Opened PR #${pr.number}`, { url: pr.url });
     this.sessions.setStage(id, 'review', 'auto');
     await this.doPollReview(id);
   }
@@ -349,7 +364,9 @@ export class Lifecycle {
     if (!p) return;
     this.lastPoll.set(id, Date.now());
     const st = await github.prStatus(this.ghCwd(before), before.pr_number);
-    const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(p.repo_path, before.branch, st));
+    const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(sessionRepo(this.db, before) ?? p.repo_path, before.branch, st));
+    // Merge & Close ends in an archive, which would keep a dirty worktree on the branch.
+    const uncommitted = this.sessions.ownsWorktree(before) ? await uncommittedCount(before.worktree_path) : 0;
     // Read the row again: a turn may have ended or a review been requested during the calls above.
     let row = sessionRow(this.db, id);
     if (!row || row.stage === 'done') return;
@@ -440,7 +457,7 @@ export class Lifecycle {
     this.watchCi(this.sessions.row(row.id), st, ci, unpushed);
     // A failed send stays queued; the next poll or turn end retries it.
     await this.deliverNext(row.id).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
-    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, mode, unpushed));
+    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, mode, unpushed, uncommitted));
     this.core.changed();
   }
 
@@ -536,12 +553,13 @@ export class Lifecycle {
     }
   }
 
-  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false): { canMerge: boolean; blockers: string[] } {
+  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false, uncommitted = 0): { canMerge: boolean; blockers: string[] } {
     const b: string[] = [];
     if (st.state !== 'OPEN') b.push('The PR is not open.');
     if (row.status === 'working' || this.sessions.runtime(row.id).busy) b.push('AgentK is still working.');
     else if (row.status === 'needs_input') b.push('AgentK is waiting on you in the terminal.');
     if (unpushed) b.push("The branch has commits that aren't pushed to the PR.");
+    if (uncommitted) b.push(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`);
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') b.push('CI is failing.');
     else if (ci === 'pending') b.push('CI is still running.');
@@ -656,15 +674,16 @@ export class Lifecycle {
         this.core.log.warn(`saving the shipped summary to Meko failed for ${row.id}`, errMsg(e));
       }
     }
-    const keep = !!p && (await lacksLocalCommits(p.repo_path, row.branch, st));
+    const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
+    const keep = !!repo && (await lacksLocalCommits(repo, row.branch, st));
     const { worktreeFreed, worktree } = await this.sessions.archive(row, { keepBranch: true });
-    if (p) {
-      if (worktreeFreed && !keep) await deleteBranch(p.repo_path, row.branch);
+    if (repo) {
+      if (worktreeFreed && !keep) await deleteBranch(repo, row.branch);
       if (!keep && st.headRefOid) {
         // Often already deleted by GitHub. The lease deletes it only while it's still the PR's head.
-        await tryGit(p.repo_path, 'push', `--force-with-lease=refs/heads/${row.branch}:${st.headRefOid}`, 'origin', '--delete', row.branch);
+        await tryGit(repo, 'push', `--force-with-lease=refs/heads/${row.branch}:${st.headRefOid}`, 'origin', '--delete', row.branch);
       }
-      await git(p.repo_path, 'fetch', '--prune', '--quiet', 'origin').catch(() => undefined);
+      await git(repo, 'fetch', '--prune', '--quiet', 'origin').catch(() => undefined);
     }
     if (keep) this.core.log.info(`kept branch ${row.branch} of ${row.id}: it has commits PR #${st.number} doesn't have`);
     this.sessions.setStage(row.id, 'done', 'auto');

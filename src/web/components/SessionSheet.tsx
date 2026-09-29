@@ -71,6 +71,7 @@ export function SheetItem({
 
 /**
  * Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost.
+ * Archive waits for uncommitted files to be committed (the server refuses it too).
  * Shown in the session header on desktop and in the session sheet on phones.
  */
 export function EndSessionButton({
@@ -88,8 +89,21 @@ export function EndSessionButton({
   disabled?: boolean;
 }) {
   const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
-  const [check, setCheck] = useState<DiscardCheck | null>(null);
+  /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
+  const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  // One check per opening, shared by Archive and Discard; a later opening's check replaces it.
+  const pending = useRef<Promise<DiscardCheck | null> | null>(null);
+
+  const open = () => {
+    setStep('choose');
+    setCheck(undefined);
+    const p = api.discardCheck(session.id).catch(() => null);
+    pending.current = p;
+    void p.then((c) => {
+      if (pending.current === p) setCheck(c);
+    });
+  };
 
   const run = async (action: SessionAction) => {
     setBusy(true);
@@ -103,17 +117,16 @@ export function EndSessionButton({
 
   const askDiscard = async () => {
     setStep('checking');
-    try {
-      setCheck(await api.discardCheck(session.id));
-    } catch {
-      setCheck(null);
-    }
+    const p = pending.current ?? api.discardCheck(session.id).catch(() => null);
+    const c = await p;
+    if (pending.current !== null && pending.current !== p) return; // reopened meanwhile
+    setCheck(c);
     setStep('discard');
   };
 
   if (step === 'closed') {
     return (
-      <button className={className} disabled={disabled} onClick={() => setStep('choose')}>
+      <button className={className} disabled={disabled} onClick={open}>
         {label}
       </button>
     );
@@ -124,10 +137,18 @@ export function EndSessionButton({
     </button>
   );
   if (step !== 'discard') {
+    const uncommitted = check?.uncommittedFiles ?? 0;
     return (
       <span className="confirm-inline">
         <span className="confirm-prompt">End this session?</span>
-        <button className="btn primary" disabled={busy || disabled || step === 'checking'} onClick={() => run('archive')}>
+        {uncommitted > 0 && (
+          <span className="confirm-warn">{plural(uncommitted, 'uncommitted file')}. Commit first, or Discard.</span>
+        )}
+        <button
+          className="btn primary"
+          disabled={busy || disabled || step === 'checking' || check === undefined || uncommitted > 0}
+          onClick={() => run('archive')}
+        >
           Archive (keep branch)
         </button>
         <button className="btn danger" disabled={busy || disabled || step === 'checking'} onClick={askDiscard}>

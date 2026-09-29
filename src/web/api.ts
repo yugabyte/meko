@@ -16,6 +16,7 @@ import type {
   Project,
   ProjectHome,
   UsageOverview,
+  RepoBranches,
   ReposResponse,
   ReviewComment,
   SearchResult,
@@ -100,6 +101,7 @@ export const api = {
 
   state: () => get<AppState>('/api/state'),
   repos: () => get<ReposResponse>('/api/repos'),
+  repoBranches: (path: string) => get<RepoBranches>(`/api/repos/branches?path=${enc(path)}`),
   datapacks: () => get<MekoDatapack[]>('/api/meko/datapacks'),
   datapackPeople: (id: string) => get<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`),
   shareDatapack: (id: string, b: ShareDatapackRequest) => post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`, b),

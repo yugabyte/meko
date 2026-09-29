@@ -140,6 +140,19 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const badKind = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Odd', kind: 'yolo' } });
     expect(badKind.statusCode).toBe(400);
     expect(badKind.json().error).toMatch(/Pick a session type/);
+    const repoBranches = await app.inject({ url: `/api/repos/branches?path=${encodeURIComponent(repos.repos[0].path)}`, headers: { cookie } });
+    expect(repoBranches.json()).toEqual({ defaultBranch: 'main', branches: expect.arrayContaining(['main', 'ak/api-session']) });
+    expect((await app.inject({ url: '/api/repos/branches?path=/nowhere', headers: { cookie } })).statusCode).toBe(400);
+    expect((await app.inject({ url: '/api/repos/branches', headers: { cookie } })).statusCode).toBe(400);
+    const named = await app.inject({
+      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie },
+      payload: { name: 'Named', kind: 'quick', repoPath: repos.repos[0].path, branch: 'feature/named' },
+    });
+    expect(named.json()).toMatchObject({ branch: 'feature/named', repoPath: repos.repos[0].path });
+    const taken = await app.inject({
+      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Again', kind: 'quick', branch: 'feature/named' },
+    });
+    expect(taken.statusCode).toBe(409);
     const home = (await app.inject({ url: `/api/projects/${pid}/home`, headers: { cookie } })).json();
     expect(home.datapacks[0].memoryCount).toBe(3);
     expect(home.activity.length).toBeGreaterThan(0);

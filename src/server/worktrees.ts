@@ -156,15 +156,28 @@ export class WorktreePool {
    */
   async releaseRepo(repo: string, exceptProject: string): Promise<void> {
     const key = repoKey(repo);
-    const others = all<{ repo_path: string }>(this.db, 'SELECT repo_path FROM projects WHERE deleted_at IS NULL AND id != ?', exceptProject);
-    if (others.some((p) => repoKey(p.repo_path) === key)) return;
+    if (this.liveRepos(exceptProject).has(key)) return;
     await this.trim(key, 0);
+  }
+
+  /**
+   * The repos live projects (other than <exceptProject>) use: their own, and any other one their
+   * sessions, running or archived, worked in.
+   */
+  private liveRepos(exceptProject = ''): Set<string> {
+    const rows = all<{ repo_path: string }>(this.db,
+      `SELECT repo_path FROM projects WHERE deleted_at IS NULL AND id != ?
+       UNION
+       SELECT s.repo_path FROM sessions s JOIN projects p ON p.id = s.project_id
+        WHERE p.deleted_at IS NULL AND p.id != ? AND s.repo_path IS NOT NULL`, exceptProject, exceptProject);
+    return new Set(rows.map((r) => repoKey(r.repo_path)));
   }
 
   /**
    * At startup: re-keys rows by the repo's real path, forgets idle worktrees whose folder is gone,
    * marks stale the ones no longer clean and detached (and makes stale ones reusable again once
-   * they are), removes those of repos no live project uses and those unused too long, and trims
+   * they are), removes those of repos no live project uses (as its repo or a session's) and those
+   * unused too long, and trims
    * to the cap. Idempotent, and safe while sessions start: every change to an idle row is
    * conditional on it still being idle.
    */
@@ -173,7 +186,7 @@ export class WorktreePool {
       const key = repoKey(w.repo);
       if (key !== w.repo) run(this.db, 'UPDATE worktrees SET repo = ? WHERE path = ?', key, w.path);
     }
-    const live = new Set(all<{ repo_path: string }>(this.db, 'SELECT repo_path FROM projects WHERE deleted_at IS NULL').map((p) => repoKey(p.repo_path)));
+    const live = this.liveRepos();
     const idle = all<WorktreeRow>(this.db, 'SELECT * FROM worktrees WHERE session_id IS NULL');
     for (const repo of new Set(idle.map((w) => w.repo))) {
       const list = await listWorktrees(repo);

@@ -82,6 +82,23 @@ export function canonicalRemote(remotes: { origin: string | null; upstream: stri
  * Worktrees (.git is a file) and non-repos are skipped.
  */
 export async function scanRepos(roots: string[], depth: number): Promise<ScannedRepo[]> {
+  return Promise.all(
+    findRepos(roots, depth).map(async (p) => {
+      const [{ origin, upstream }, branch] = await Promise.all([readRemotes(p), tryGit(p, 'symbolic-ref', '--quiet', '--short', 'HEAD')]);
+      return {
+        path: p,
+        name: basename(p),
+        remote: origin ? prettyRemote(origin) : null,
+        upstream: upstream ? prettyRemote(upstream) : null,
+        branch,
+        lastTouchedAt: lastTouched(p),
+      };
+    }),
+  );
+}
+
+/** The paths of the main repos under <roots>, <depth> folders deep at most. */
+function findRepos(roots: string[], depth: number): string[] {
   const found: string[] = [];
   const walk = (dir: string, level: number) => {
     let entries: string[];
@@ -103,19 +120,7 @@ export async function scanRepos(roots: string[], depth: number): Promise<Scanned
     }
   };
   for (const r of roots) walk(r, 1);
-  return Promise.all(
-    found.map(async (p) => {
-      const [{ origin, upstream }, branch] = await Promise.all([readRemotes(p), tryGit(p, 'symbolic-ref', '--quiet', '--short', 'HEAD')]);
-      return {
-        path: p,
-        name: basename(p),
-        remote: origin ? prettyRemote(origin) : null,
-        upstream: upstream ? prettyRemote(upstream) : null,
-        branch,
-        lastTouchedAt: lastTouched(p),
-      };
-    }),
-  );
+  return found;
 }
 
 function lastTouched(repo: string): number {
@@ -173,17 +178,35 @@ export async function checkBranchName(repo: string, name: string): Promise<void>
 }
 
 /**
+ * Where an existing branch is, after fetching it from origin: `local`, only on `origin` (fetched
+ * into refs/remotes/origin), or null when it's in neither. A branch origin no longer has (merged
+ * and deleted on GitHub) loses its stale refs/remotes/origin copy, so it never counts as on origin.
+ */
+export async function existingBranch(repo: string, branch: string): Promise<'local' | 'origin' | null> {
+  await checkBranchName(repo, branch);
+  const err = await gitError(repo, 'fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`);
+  if (err && /couldn't find remote ref/i.test(err)) await tryGit(repo, 'update-ref', '-d', `refs/remotes/origin/${branch}`);
+  if (await revParse(repo, `refs/heads/${branch}`)) return 'local';
+  return (await revParse(repo, `refs/remotes/origin/${branch}`)) ? 'origin' : null;
+}
+
+/**
  * Creates a worktree. A new branch starts from the local <base>, fast-forwarded
  * to origin/<base> first (after a fetch) so new work starts from the latest
  * upstream. If <base> can't be fast-forwarded, the branch starts from
- * origin/<base> instead. Returns null when the branch already existed.
+ * origin/<base> instead. Returns null when the branch already existed. With
+ * <fromOrigin>, a branch that is only on origin gets a local branch at origin/<branch>.
  */
-export async function addWorktree(repo: string, path: string, branch: string, base: string): Promise<SyncResult | null> {
+export async function addWorktree(repo: string, path: string, branch: string, base: string, fromOrigin = false): Promise<SyncResult | null> {
   await checkBranchName(repo, base);
   await checkBranchName(repo, branch);
   await tryGit(repo, 'fetch', '--quiet', 'origin', base);
   if (await revParse(repo, `refs/heads/${branch}`)) {
     await git(repo, 'worktree', 'add', path, branch);
+    return null;
+  }
+  if (fromOrigin && (await revParse(repo, `refs/remotes/origin/${branch}`))) {
+    await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, `origin/${branch}`);
     return null;
   }
   const { sync, start } = await startPoint(repo, base);
@@ -205,14 +228,19 @@ async function startPoint(repo: string, base: string): Promise<{ sync: SyncResul
  * Puts a new session's branch in an idle worktree of <repo>, keeping its ignored files (build
  * outputs). The branch starts where addWorktree would start it. Throws, changing nothing, unless
  * <path> is a clean worktree of <repo> on a detached HEAD. Returns null when the branch already existed.
+ * <fromOrigin> is as for addWorktree.
  */
-export async function reuseWorktree(repo: string, path: string, branch: string, base: string): Promise<SyncResult | null> {
+export async function reuseWorktree(repo: string, path: string, branch: string, base: string, fromOrigin = false): Promise<SyncResult | null> {
   await checkBranchName(repo, base);
   await checkBranchName(repo, branch);
   if (!(await isIdleWorktree(repo, path))) throw new Error(`${path} isn't a clean worktree of ${repo} with a detached HEAD`);
   await tryGit(repo, 'fetch', '--quiet', 'origin', base);
   if (await revParse(repo, `refs/heads/${branch}`)) {
     await git(path, 'checkout', '--quiet', branch);
+    return null;
+  }
+  if (fromOrigin && (await revParse(repo, `refs/remotes/origin/${branch}`))) {
+    await git(path, 'checkout', '--quiet', '--no-track', '-b', branch, `origin/${branch}`);
     return null;
   }
   const { sync, start } = await startPoint(repo, base);
@@ -299,7 +327,7 @@ function samePath(a: string, b: string): boolean {
 }
 
 /** The worktree (main checkout included) that has <branch> checked out, if any. */
-async function checkedOutAt(repo: string, branch: string): Promise<string | null> {
+export async function checkedOutAt(repo: string, branch: string): Promise<string | null> {
   return (await listWorktrees(repo)).find((w) => w.branch === branch)?.path ?? null;
 }
 

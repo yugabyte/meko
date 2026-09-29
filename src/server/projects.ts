@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
-  ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, Project, ProjectHome, ReposResponse, SearchResult,
+  ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
   UpdateProjectRequest,
 } from '../shared/types.js';
 import { REVIEWER_LABELS } from '../shared/types.js';
@@ -316,6 +316,47 @@ export class ProjectService {
 
   async branches(id: string): Promise<string[]> {
     return listBranches(this.row(id).repo_path);
+  }
+
+  /**
+   * The repo (its key) a new session of <project> works in: the project's, or <path> when it is one
+   * of the scanned repos. Throws a 400 otherwise.
+   */
+  sessionRepo(project: ProjectRow, path: unknown): string {
+    if (path == null || path === '') return project.repo_path;
+    if (typeof path !== 'string') throw new HttpError(400, 'The session\'s repo must be a path.');
+    const key = repoKey(resolve(expandHome(path.trim())));
+    if (key === project.repo_path) return key;
+    return this.scannedRepo(key);
+  }
+
+  /**
+   * <key> when it's the real path of a repo the New project dialog lists (a main repo at most
+   * `depth` folders under a root, through no hidden folder or other repo), else a 400. Checks the
+   * path's own folders instead of scanning the roots.
+   */
+  private scannedRepo(key: string): string {
+    const cfg = this.core.config;
+    const listed = isMainRepo(key) && repoRoots(cfg).some((root) => {
+      const rel = relative(repoKey(root), key);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false;
+      const parts = rel.split(sep);
+      if (parts.length > cfg.repos.depth || parts.some((d) => d.startsWith('.'))) return false;
+      // The scan stops at a repo, so one nested inside another isn't listed.
+      return parts.slice(0, -1).every((_, i) => !isMainRepo(join(repoKey(root), ...parts.slice(0, i + 1))));
+    });
+    if (!listed) throw new HttpError(400, `${key} isn't one of the repos under ${cfg.repos.roots.join(', ') || 'your repos folders'}.`);
+    return key;
+  }
+
+  /** A scanned repo's branches and default branch, for the New session dialog. */
+  async repoBranches(path: unknown): Promise<RepoBranches> {
+    if (typeof path !== 'string' || !path.trim()) throw new HttpError(400, 'Give the repo\'s path.');
+    const key = repoKey(resolve(expandHome(path.trim())));
+    // A project's repo may sit outside the scanned folders.
+    const repo = projectRows(this.db).some((p) => p.repo_path === key) ? key : this.scannedRepo(key);
+    const [branches, dflt] = await Promise.all([listBranches(repo), defaultBranch(repo)]);
+    return { defaultBranch: dflt, branches: branches.includes(dflt) ? branches : [dflt, ...branches] };
   }
 
   async home(id: string): Promise<ProjectHome> {

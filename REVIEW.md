@@ -98,6 +98,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       two sessions never get the same worktree, and deleting a project leaves idle worktrees another
       project on the repo can use. A project's `repo_path` is the repo's real path (`repoKey()`), so
       repo matches are plain equality on it; no new code compares repos by the path as typed.
+- [ ] A session may work in another repo than its project's (`sessions.repo_path`). Git and `gh` work
+      for a session uses `sessionRepo()`, never the project's `repo_path`, and anything that decides
+      whether a repo is still in use counts the repos of a live project's sessions too. A branch the
+      user names goes through `checkBranchName()` and is refused while a running session has it.
 - [ ] Worktree reuse never hands over a worktree with uncommitted changes or untracked files (it's
       checked when the worktree goes idle and again when it's claimed), never touches a worktree
       that is another session's (check `ownsWorktree()` before reading or removing an archived

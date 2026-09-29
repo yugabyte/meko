@@ -14,24 +14,30 @@ export interface PrRef {
   url: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   createdAt: string;
+  /** From a fork: `gh pr list --head` matches the branch name in any repo. */
+  isCrossRepository?: boolean;
+  baseRefName?: string;
 }
 
 /** Leeway for the host's clock being ahead of GitHub's. */
-const CLOCK_SKEW_MS = 60_000;
+export const CLOCK_SKEW_MS = 60_000;
 
 /**
  * The PR for a branch that was opened at or after `since` (ms). Branch names can be reused,
  * so an older PR from the same branch is never taken for this one.
  */
-export async function findPr(worktree: string, branch: string, since: number): Promise<PrRef | null> {
-  const out = await gh(worktree, 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,createdAt', '--limit', '20');
-  return pickPr(JSON.parse(out || '[]') as PrRef[], since);
+export async function findPr(worktree: string, branch: string, since: number, anyOpen = false): Promise<PrRef | null> {
+  const out = await gh(worktree, 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,createdAt,isCrossRepository,baseRefName', '--limit', '20');
+  return pickPr(JSON.parse(out || '[]') as PrRef[], since, anyOpen);
 }
 
-/** The newest PR opened since `since`, an open one first. */
-export function pickPr(prs: PrRef[], since: number): PrRef | null {
+/**
+ * The newest PR opened since `since`, an open one first. With `anyOpen`, an older open PR from this
+ * repo (not a fork's branch of the same name) counts too.
+ */
+export function pickPr(prs: PrRef[], since: number, anyOpen = false): PrRef | null {
   const fresh = prs
-    .filter((p) => Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
+    .filter((p) => (anyOpen && p.state === 'OPEN' && p.isCrossRepository === false) || Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return fresh.find((p) => p.state === 'OPEN') ?? fresh[0] ?? null;
 }
