@@ -1,14 +1,21 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { DailyUsage, ProjectUsage, TokenUsage } from '../../shared/types';
+import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
-import { cx, formatTokens, totalTokens, usageTitle } from '../util';
+import { cx, formatCost, formatTokens, totalTokens, usageTitle } from '../util';
+import { MekoUsageSection } from './MekoUsageSection';
 
-/** Token usage for a project: headline numbers, a 14-day chart, and per-session and per-model tables. */
-export function UsagePanel({ projectId, usage }: { projectId: string; usage: ProjectUsage }) {
+/**
+ * Token usage for a project: headline numbers, a 14-day chart, Meko use, and per-session and
+ * per-model tables. `mekoOn`: Meko is on and the project has a datapack, so the Meko section shows
+ * before any call is made.
+ */
+export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; usage: ProjectUsage; mekoOn: boolean }) {
   const [showTable, setShowTable] = useState(false);
   const t = usage.total;
   const empty = t.messages === 0;
+  const showMeko = usage.meko.calls > 0 || mekoOn;
+  const mekoColumn = usage.bySession.some((s) => s.meko.lookups + s.meko.saves > 0);
   return (
     <section className="box usage-box">
       <div className="usage-hd">
@@ -21,6 +28,7 @@ export function UsagePanel({ projectId, usage }: { projectId: string; usage: Pro
         <>
           <div className="usage-stats">
             <Stat label="Total" value={totalTokens(t)} strong />
+            <CostStat cost={usage.cost} />
             <Stat label="Output" value={t.output} />
             <Stat label="Input" value={t.input} />
             <Stat label="Cache write" value={t.cacheWrite} />
@@ -39,11 +47,18 @@ export function UsagePanel({ projectId, usage }: { projectId: string; usage: Pro
           </div>
           {showTable ? <DailyTable daily={usage.daily} /> : <DailyChart daily={usage.daily} />}
 
+          {showMeko && (
+            <div className="usage-meko">
+              <MekoUsageSection meko={usage.meko} />
+            </div>
+          )}
+
           <div className="usage-tables">
             <table className="usage-table">
               <thead>
                 <tr>
                   <th>Session</th>
+                  {mekoColumn && <th className="num" title="Meko lookups that found something, of all lookups">Meko</th>}
                   <th className="num">Output</th>
                   <th className="num">Total</th>
                 </tr>
@@ -61,6 +76,14 @@ export function UsagePanel({ projectId, usage }: { projectId: string; usage: Pro
                       )}{' '}
                       <span className="muted small">{s.archived ? 'archived' : STAGE_LABELS[s.stage].toLowerCase()}</span>
                     </td>
+                    {mekoColumn && (
+                      <td
+                        className="num"
+                        title={`${s.meko.found} of ${s.meko.lookups} Meko lookups found something · ${s.meko.saves} ${s.meko.saves === 1 ? 'save' : 'saves'}`}
+                      >
+                        {s.meko.lookups > 0 ? `${s.meko.found}/${s.meko.lookups}` : '—'}
+                      </td>
+                    )}
                     <td className="num">{formatTokens(s.usage.output)}</td>
                     <td className="num">{formatTokens(totalTokens(s.usage))}</td>
                   </tr>
@@ -97,6 +120,19 @@ export function Stat({ label, value, strong }: { label: string; value: number; s
     <div className="usage-stat" title={`${value.toLocaleString()} tokens`}>
       <span className={cx('usage-num', strong && 'strong')}>{formatTokens(value)}</span>
       <span className="usage-lbl">{label}</span>
+    </div>
+  );
+}
+
+/** What the tokens would cost at Anthropic's API list prices. */
+export function CostStat({ cost }: { cost: UsageCost }) {
+  const left = cost.unpricedMessages > 0
+    ? ` Leaves out ${cost.unpricedMessages.toLocaleString()} ${cost.unpricedMessages === 1 ? 'response' : 'responses'} from models without a known price.`
+    : '';
+  return (
+    <div className="usage-stat" title={`At Anthropic's API list prices.${left}`}>
+      <span className="usage-num">{formatCost(cost.usd)}</span>
+      <span className="usage-lbl">Est. cost</span>
     </div>
   );
 }

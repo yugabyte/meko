@@ -116,6 +116,15 @@ export function formatTokens(n: number): string {
   return `${v >= 100 ? Math.round(v) : v >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(2).replace(/\.?0+$/, '')}${unit}`;
 }
 
+/** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */
+export function formatCost(usd: number): string {
+  const sign = usd < 0 ? '−' : '';
+  const v = Math.abs(usd);
+  if (v === 0) return '$0';
+  if (v < 0.01) return `${sign}<$0.01`;
+  return `${sign}$${v < 100 ? v.toFixed(2) : Math.round(v).toLocaleString('en-US')}`;
+}
+
 /** One-line breakdown for tooltips. */
 export function usageTitle(u: TokenUsage): string {
   const f = (n: number) => n.toLocaleString();

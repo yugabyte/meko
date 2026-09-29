@@ -209,4 +209,14 @@ describe('token formatting (web)', () => {
     expect(formatTokens(250_000_000)).toBe('250M');
     expect(formatTokens(1_200_000_000)).toBe('1.2B');
   });
+
+  it('formats costs in dollars', async () => {
+    const { formatCost } = await import('../../src/web/util.js');
+    expect(formatCost(0)).toBe('$0');
+    expect(formatCost(0.004)).toBe('<$0.01');
+    expect(formatCost(3.064)).toBe('$3.06');
+    expect(formatCost(241.4)).toBe('$241');
+    expect(formatCost(1234.5)).toBe('$1,235');
+    expect(formatCost(-2.75)).toBe('−$2.75');
+  });
 });

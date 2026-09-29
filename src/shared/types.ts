@@ -117,12 +117,53 @@ export interface ModelUsage {
   usage: TokenUsage;
 }
 
+/** What tokens would cost at Anthropic's API list prices (`src/shared/pricing.ts`). */
+export interface UsageCost {
+  /** USD, for the models with a known price. */
+  usd: number;
+  /** Responses from models with no known price, left out of `usd`. */
+  unpricedMessages: number;
+}
+
+/**
+ * Meko calls Claude made, read from the session transcripts. A lookup searches or fetches from Meko;
+ * a save writes to it. Sizes are estimated as characters ÷ 4.
+ */
+export interface MekoUsage {
+  /** Every Meko call, admin ones (datapacks, conversations) included. */
+  calls: number;
+  lookups: number;
+  /** Lookups that returned something. */
+  found: number;
+  /** Lookups that returned nothing. */
+  empty: number;
+  /** Lookups and saves that failed. */
+  errors: number;
+  saves: number;
+  /** About how many tokens the lookups that returned something brought in. */
+  foundTokens: number;
+  savings: MekoSavings;
+}
+
+/**
+ * An estimate of what Meko saved: each search that found something is credited with the exploring
+ * it most likely replaced, by a fixed formula (`src/server/mekosavings.ts`).
+ */
+export interface MekoSavings {
+  /** Searches that found something: the only calls that count. */
+  searches: number;
+  tokens: number;
+  /** USD at API list prices; null when none of the searches' models has a known price. */
+  usd: number | null;
+}
+
 export interface SessionUsage {
   sessionId: string;
   name: string;
   stage: Stage;
   archived: boolean;
   usage: TokenUsage;
+  meko: { lookups: number; found: number; saves: number };
 }
 
 export interface DailyUsage {
@@ -133,6 +174,8 @@ export interface DailyUsage {
 
 export interface ProjectUsage {
   total: TokenUsage;
+  cost: UsageCost;
+  meko: MekoUsage;
   byModel: ModelUsage[];
   /** Every session with usage, archived ones included, largest first. */
   bySession: SessionUsage[];
@@ -147,6 +190,10 @@ export interface ProjectUsageSummary {
   /** Deleted projects keep their sessions and usage. */
   deleted: boolean;
   usage: TokenUsage;
+  cost: UsageCost;
+  mekoLookups: number;
+  mekoFound: number;
+  mekoSavings: MekoSavings;
   sessions: number;
   /** Sessions whose PR was merged. */
   mergedPrs: number;
@@ -160,6 +207,8 @@ export interface ProjectUsageSummary {
 /** Usage across every project, deleted ones included. */
 export interface UsageOverview {
   total: TokenUsage;
+  cost: UsageCost;
+  meko: MekoUsage;
   mergedPrs: number;
   directPushes: number;
   directCommits: number;

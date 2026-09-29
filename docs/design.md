@@ -30,7 +30,7 @@ from a browser.
 | Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
-| Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents. |
+| Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts, with an estimate of what Meko searches saved. |
 | Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
 | Task lifecycle | Design → Code → PR → Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration sessions have none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
@@ -798,8 +798,67 @@ and once a minute. It remembers the byte offset it reached, so each line is read
 
 One response spans several transcript lines with the same message id, so usage is stored once per
 message: `usage_messages(session_id, message_id, agent, model, at, input, output, cache_read,
-cache_write)`. Totals per session, project, model and day are sums over that table, and archived
-sessions keep counting toward their project.
+cache_write, cache_write_1h)`. Totals per session, project, model and day are sums over that table, and archived
+sessions keep counting toward their project. `cache_write_1h` is the 1-hour share of the cache
+writes (the transcript's `cache_creation.ephemeral_1h_input_tokens`; without that split, every write
+counts as 1-hour, which is what Claude Code uses).
+
+**Cost.** Tokens are priced at Anthropic's API list prices (`src/shared/pricing.ts`: input, output
+and cache read per model, with cache writes at 1.25× input for the 5-minute cache and 2× for the
+1-hour one), from per-model sums. It's shown as **Est. cost**, what the tokens would cost on the
+API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
+A model with no known price adds tokens but no cost, and the tooltip says how many responses were
+left out. Model ids match with a date (`-20251001`), `[1m]` or `@…` suffix.
+
+**Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
+(`mcp__meko__<tool>`, or a plugin's `mcp__plugin_…_meko__<tool>`) and their results, in the main
+transcript and subagents: `meko_calls(session_id, tool_use_id, agent, tool, kind, at, outcome,
+results, input_chars, result_chars, model, context_tokens)`. A **lookup** searches or fetches
+(`memory_search`, `knowledgebase_search`, `context_search`, `memory_get_all`, `memory_get_by_id`,
+`conversation_get`, `artifact_get`); a **save** writes (`memory_add`, `memory_update`,
+`memory_promote`, `artifact_put`, `conversation_add_message`); anything else (datapacks,
+conversations) is counted as a call only. A result can come in a later read than its call, so a call
+waits with no outcome until its `tool_result` is read. Meko wraps its JSON in `{"result": "…"}`; a
+lookup **found something** when its items (`results`, `memories`, context_search's buckets, or a
+single record) aren't empty, and it failed on a tool error or an `{"error": …}` reply. A result too
+large to show, which Claude Code saved to a file, counts as found at the size its notice gives; a call
+moved to the background found nothing. `model` and `context_tokens` (input, cache read and write)
+come from the response that made the call. Sizes are characters ÷ 4. The Meko plugin's hooks
+inject no recalled memory, so the transcript is the whole record of what Meko gave a session.
+The migration that added the table cleared the read offsets again, so older sessions got their
+calls and 1-hour writes.
+
+**What Meko saved (an estimate).** Nobody sees the run where Meko wasn't there, so savings come
+from a fixed formula (`src/server/mekosavings.ts`), not a comparison. Only searches that found
+something count (`memory_search`, `knowledgebase_search`, `context_search`). Without Meko, Claude
+would have found the same thing by exploring: several tool calls, each re-reading the whole context
+and adding file contents. The constants come from this host's transcripts (2026-09-29):
+
+| Constant | Value | From |
+|---|---:|---|
+| `EXPLORE_CALLS` | 3 | Calls one search stands in for (a search of the code and two reads); sessions make a median of 14 exploring calls before their first edit |
+| `EXPLORE_RESULT_TOKENS` | 2,000 | Tokens each adds: median Read ≈ 5,800, median Bash ≈ 150, so one read and two shell calls ≈ 6,000 |
+| `CALL_OUTPUT_TOKENS` | 240 | Median output of a response that makes a tool call |
+| `CARRY_TURNS` | 10 | Later responses counted as re-reading the extra content (the median is 211, but compaction cuts the context) |
+
+For a search with a result of *R* tokens at a context of *C* tokens, followed by *k* =
+min(10, later responses in the same conversation or subagent), with *X* = 3 × 2,000:
+
+```
+re-reads  (3 − 1) × C       cache-read price
+output    (3 − 1) × 240     output price
+content   X − R             1-hour cache-write price (2× input)
+carry     (X − R) × k       cache-read price
+```
+
+The saving is the sum, in tokens and in USD at the calling model's price. A result over 6,000
+tokens makes the content and carry terms negative, and they're kept. Session, project and overall
+figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10
+later responses, one search saves about 483k tokens, almost all of them cache reads, so the dollar
+figure is much smaller than the token count. The estimate can't show that Meko didn't help, which is
+why it's labelled **Est.** A comparison of sessions with and without Meko finds was tried and
+dropped: too few sessions to compare, no chance deciding which sessions used Meko, and nothing to
+compare with once every session does.
 
 **What shipped.** A merged PR is the session's `merged` event, or a Done session with a PR (Merge &
 Close only ends in Done after a merge), counted once per session. A push
@@ -835,15 +894,22 @@ only move when a session gets a reply, so the rail says when they were last repo
 
 - **Where it shows.** The session footer and tab tooltip show the session's total and output
   tokens. The rail tooltip shows the project total. The project home has a **Token usage**
-  section: headline numbers, a 14-day chart with a table view, and breakdowns by session and by
-  model. **Usage** in the rail (and the command palette) opens `/usage`: totals, merged PRs and
-  commits pushed straight to a base branch, a 14-day chart, and breakdowns by project (current ones
-  first, then deleted ones, which keep their sessions and usage; each row shows its repo folder and
-  when it was last active) and by model. Every column header sorts its table; tapping it again
-  reverses the order.
+  section: headline numbers with **Est. cost**, a 14-day chart with a table view, the Meko section,
+  and breakdowns by session (with a **Meko** column, found / lookups, when any session called Meko)
+  and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
+  cost, merged PRs and commits pushed straight to a base branch, a 14-day chart, the Meko section
+  for every project, and breakdowns by project (current ones first, then deleted ones, which keep
+  their sessions and usage; each row shows its repo folder and when it was last active, and has
+  **Cost**, **Meko** and **Est. saved** columns, which a phone leaves out) and by model. Every
+  column header sorts its table; tapping it again reverses the order.
+- **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
+  light theme, white in the dark) and tiles for lookups, lookups that found something, saves,
+  tokens found, and **Est. saved** in USD and tokens, green for a saving (a negative estimate is in
+  the normal text color, and a dash means no search has found anything). It shows once there's any
+  Meko call, or before that while Meko is on (and, on the project home, the project has a datapack).
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
-  output. Cache reads dominate long sessions, so the headline total is shown next to output. Only
-  tokens are tracked; dollar estimates aren't, since most people use a subscription.
+  output. Cache reads dominate long sessions, so the headline total is shown next to output. The
+  cost is an estimate at API list prices, not a bill.
 - **In Meko.** When a task is cleaned up, its token totals are included in the "shipped" summary
   written to the project's dedicated datapack.
 

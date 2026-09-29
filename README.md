@@ -97,8 +97,10 @@ your phone can connect.
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
   people's by default, or every reviewer's, or only people's) and CI failures to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
-  subagents included. **Usage** in the left panel adds it up across every project, deleted ones
-  too, with what shipped: merged PRs and commits pushed straight to the base branch. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
+  subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, deleted ones
+  too, with what shipped: merged PRs and commits pushed straight to the base branch.
+- **Meko usage**: the Meko lookups and saves each session made, and an estimate of the tokens and
+  cost that Meko searches saved, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
 - **Usage stats:** once a day AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.

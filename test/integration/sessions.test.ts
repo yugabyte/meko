@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { postHook } from '../hook-client.js';
 import { get, run } from '../../src/server/db.js';
+import { usageOverview } from '../../src/server/usage.js';
 import { sleep } from '../../src/server/tmux.js';
 import { transcriptPathFor } from '../../src/server/claude.js';
 import { socketId, startHookServer } from '../../src/server/hooks.js';
@@ -168,6 +169,22 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     const u = await env.core.sessions.create(p.id, { name: 'Unnamed', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
+  });
+
+  it('counts the Meko searches Claude makes and estimates what they saved', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Look it up', prompt: 'MEKO_SEARCH', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const home = await waitFor(() => env.core.projects.home(p.id), (h) => h.usage.meko.found === 1, 10000, 'the Meko search');
+    expect(home.usage.meko).toMatchObject({ calls: 1, lookups: 1, found: 1, empty: 0, errors: 0, saves: 0 });
+    // The stub's model has no price: the estimate is in tokens only, and the cost leaves it out.
+    // Context 5,103 tokens, a 20-token result, one later response: 2 × 5,103 + 480 + (6,000 − 20) × 2.
+    expect(home.usage.meko.savings).toEqual({ searches: 1, tokens: 22_646, usd: null });
+    expect(home.usage.cost).toEqual({ usd: 0, unpricedMessages: 2 });
+    expect(home.usage.bySession[0].meko).toEqual({ lookups: 1, found: 1, saves: 0 });
+    const overview = usageOverview(env.core.db);
+    expect(overview.meko.found).toBe(1);
+    expect(overview.byProject[0]).toMatchObject({ mekoLookups: 1, mekoFound: 1, mekoSavings: { searches: 1, tokens: 22_646, usd: null } });
   });
 
   it('reconcile leaves a session alone while it is still being created', async () => {

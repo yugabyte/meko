@@ -1,0 +1,199 @@
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
+import { classifyResult, mekoTool, parseMekoCalls, parseMekoResults } from '../../src/server/mekousage.js';
+import { searchSaving } from '../../src/server/mekosavings.js';
+import { ingestSessionUsage, projectUsage, usageOverview } from '../../src/server/usage.js';
+
+const usage = { input_tokens: 2, output_tokens: 100, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 998 };
+
+/** A model response calling tools, as Claude Code writes it. */
+function call(msgId: string, tools: [id: string, name: string][], opts: { model?: string; at?: string } = {}): string {
+  return JSON.stringify({
+    type: 'assistant',
+    timestamp: opts.at ?? new Date().toISOString(),
+    message: {
+      id: msgId,
+      model: opts.model ?? 'claude-opus-5-5',
+      usage,
+      content: tools.map(([id, name]) => ({ type: 'tool_use', id, name, input: { query: 'q' } })),
+    },
+  }) + '\n';
+}
+
+/** A tool result line. Meko wraps its JSON in `{"result": "<json>"}`. */
+function result(id: string, content: unknown, isError = false): string {
+  return JSON.stringify({
+    type: 'user',
+    timestamp: new Date().toISOString(),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }] },
+  }) + '\n';
+}
+
+const wrapped = (v: unknown) => JSON.stringify({ result: JSON.stringify(v) });
+const found = wrapped({ results: [{ id: 'm1', memory: 'x'.repeat(4000) }] });
+
+function reply(msgId: string, at?: string): string {
+  return JSON.stringify({ type: 'assistant', timestamp: at ?? new Date().toISOString(), message: { id: msgId, model: 'claude-opus-5-5', usage } }) + '\n';
+}
+
+function setup() {
+  const dir = mkdtempSync(join(tmpdir(), 'akl-meko-'));
+  const db = openDb(':memory:');
+  const now = Date.now();
+  run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('p', 'P', '/r', 'main', ?)`, now);
+  run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+           hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', ?)`, now);
+  return { dir, db };
+}
+
+describe('Meko calls in transcripts', () => {
+  it('recognizes the Meko server under its own name or a plugin, and nothing else', () => {
+    expect(mekoTool('mcp__meko__memory_search')).toBe('memory_search');
+    expect(mekoTool('mcp__plugin_meko-agent-skills_meko__memory_add')).toBe('memory_add');
+    expect(mekoTool('mcp__claude_ai_MekoDev__authenticate')).toBeNull();
+    expect(mekoTool('mcp__phorge__phabricator_task_search')).toBeNull();
+    expect(mekoTool('Read')).toBeNull();
+  });
+
+  it('reads calls from a model response, with its model and context', () => {
+    const calls = parseMekoCalls(call('m1', [['t1', 'mcp__meko__memory_search'], ['t2', 'Read'], ['t3', 'mcp__meko__memory_add']]));
+    expect(calls).toEqual([
+      expect.objectContaining({ toolUseId: 't1', tool: 'memory_search', kind: 'lookup', model: 'claude-opus-5-5', contextTokens: 201_000 }),
+      expect.objectContaining({ toolUseId: 't3', tool: 'memory_add', kind: 'save' }),
+    ]);
+    expect(parseMekoCalls('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__meko__')).toEqual([]);
+    expect(parseMekoCalls(result('t1', 'mcp__meko__memory_search'))).toEqual([]);
+  });
+
+  it('tells a lookup that found something from one that found nothing or failed', () => {
+    expect(classifyResult('lookup', found, false)).toMatchObject({ outcome: 'found', results: 1 });
+    expect(classifyResult('lookup', wrapped({ results: [], count: 0 }), false)).toMatchObject({ outcome: 'empty', results: 0 });
+    const buckets = (memory: unknown[]) => wrapped({ results: { knowledge_base: [], memory, conversation: { hits: [], thread: [] } }, token_savings: { total_tokens: 10000 } });
+    expect(classifyResult('lookup', buckets([]), false)).toMatchObject({ outcome: 'empty' });
+    expect(classifyResult('lookup', buckets([{ memory: 'a' }, { memory: 'b' }]), false)).toMatchObject({ outcome: 'found', results: 2 });
+    expect(classifyResult('lookup', wrapped({ memories: [], total: 0 }), false).outcome).toBe('empty');
+    expect(classifyResult('lookup', wrapped({ id: 'm1', memory: 'one record' }), false).outcome).toBe('found');
+    expect(classifyResult('lookup', "Error calling tool 'memory_search': [Errno 111] Connection refused", true).outcome).toBe('error');
+    expect(classifyResult('lookup', wrapped({ error: 'agent_id_mismatch', detail: 'x' }), false).outcome).toBe('error');
+    expect(classifyResult('save', wrapped({ message: 'Memory updated successfully!' }), false).outcome).toBe('ok');
+    // Too large to show: Claude Code saved it to a file, and the notice gives its size.
+    expect(classifyResult('lookup', 'Error: result (70,748 characters) exceeds maximum allowed tokens. Output has been saved to /x.txt', false))
+      .toEqual({ outcome: 'found', results: null, resultChars: 70_748 });
+    expect(classifyResult('lookup', 'MCP tool "meko/memory_search" is still running after 120s. It was moved to the background', false).outcome).toBe('empty');
+  });
+
+  it('reads results only for calls waiting for one, as text or text blocks', () => {
+    const pending = new Map([['t1', 'lookup' as const]]);
+    expect(parseMekoResults(result('t1', [{ type: 'text', text: found }]), pending)).toEqual([
+      { toolUseId: 't1', outcome: 'found', results: 1, resultChars: found.length },
+    ]);
+    expect(parseMekoResults(result('t9', found), pending)).toEqual([]);
+    expect(parseMekoResults(result('t1', found), new Map())).toEqual([]);
+  });
+
+  it('records calls, their results across reads and subagents, once each', () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    writeFileSync(main, call('m1', [['t1', 'mcp__meko__memory_search']]));
+    mkdirSync(join(dir, 'c', 'subagents'), { recursive: true });
+    writeFileSync(join(dir, 'c', 'subagents', 'agent-x1.jsonl'), call('sub1', [['t2', 'mcp__meko__knowledgebase_search']]) + result('t2', wrapped({ results: [] })));
+    expect(ingestSessionUsage(db, 's1', main)).toBe(true);
+    const rows = () => all<{ tool_use_id: string; agent: string | null; outcome: string | null }>(db,
+      'SELECT tool_use_id, agent, outcome FROM meko_calls ORDER BY tool_use_id');
+    expect(rows()).toEqual([
+      { tool_use_id: 't1', agent: null, outcome: null }, // still waiting
+      { tool_use_id: 't2', agent: 'x1', outcome: 'empty' },
+    ]);
+    // The result lands in a later read.
+    appendFileSync(main, result('t1', found) + reply('m2'));
+    expect(ingestSessionUsage(db, 's1', main)).toBe(true);
+    expect(rows()[0].outcome).toBe('found');
+    // Reading everything again (a migration cleared the offsets) adds nothing.
+    run(db, 'DELETE FROM usage_files');
+    ingestSessionUsage(db, 's1', main);
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('splits 1-hour cache writes out, and counts them all as 1-hour without the split', () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    const split = { ...usage, cache_creation: { ephemeral_1h_input_tokens: 900, ephemeral_5m_input_tokens: 98 } };
+    writeFileSync(main,
+      JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id: 'a', model: 'claude-opus-5-5', usage: split } }) + '\n' + reply('b'));
+    ingestSessionUsage(db, 's1', main);
+    expect(all(db, 'SELECT message_id, cache_write, cache_write_1h FROM usage_messages ORDER BY message_id')).toEqual([
+      { message_id: 'a', cache_write: 998, cache_write_1h: 900 },
+      { message_id: 'b', cache_write: 998, cache_write_1h: 998 },
+    ]);
+  });
+
+  it('migrates a database from before Meko calls, reading every transcript again', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akl-migrate-'));
+    const path = join(dir, 'state.db');
+    let db = openDb(path);
+    const v = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('p', 'P', '/r', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
+    db.exec(`DROP TABLE meko_calls; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 1}`);
+    db.close();
+    db = openDb(path);
+    expect(schemaVersion(db)).toBe(v);
+    expect(all(db, 'SELECT * FROM usage_files')).toEqual([]);
+    expect(all(db, 'SELECT * FROM meko_calls')).toEqual([]);
+    db.close();
+  });
+});
+
+describe('what Meko saved', () => {
+  it('credits a search with the exploring it replaced (the worked example)', () => {
+    // Context 216k, a 1,420-token result, 10 or more responses after it, on Opus 5.5.
+    const s = searchSaving({ contextTokens: 216_000, resultTokens: 1420, laterResponses: 211, model: 'claude-opus-5-5' });
+    expect(s.tokens).toBe(432_000 + 480 + 4580 + 45_800);
+    // Re-reads and carry at the cache-read price, output at the output price, new content at the 1-hour write price.
+    expect(s.usd).toBeCloseTo((432_000 * 0.2 + 480 * 20 + 4580 * 8 + 45_800 * 0.2) / 1e6, 10);
+  });
+
+  it('counts fewer later responses near the end, lets a large result count for less, and has no price for an unknown model', () => {
+    expect(searchSaving({ contextTokens: 0, resultTokens: 0, laterResponses: 3, model: null }))
+      .toEqual({ tokens: 480 + 6000 * 4, usd: null });
+    expect(searchSaving({ contextTokens: 0, resultTokens: 8000, laterResponses: 10, model: 'claude-opus-5-5' }).tokens).toBe(480 - 2000 * 11);
+    expect(searchSaving({ contextTokens: 1000, resultTokens: 0, laterResponses: 0, model: 'claude-fake-1' }).usd).toBeNull();
+  });
+
+  it('sums only searches that found something, per session, project and overall', () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    const at = (s: number) => new Date(Date.UTC(2026, 8, 29, 12, 0, s)).toISOString();
+    writeFileSync(main,
+      call('m1', [['s-found', 'mcp__meko__memory_search'], ['s-empty', 'mcp__meko__context_search'], ['get', 'mcp__meko__memory_get_by_id'], ['add', 'mcp__meko__memory_add']], { at: at(0) }) +
+      result('s-found', found) + result('s-empty', wrapped({ results: [] })) + result('get', wrapped({ id: 'm1', memory: 'x' })) +
+      result('add', "Error calling tool 'memory_add': refused", true) +
+      reply('m2', at(1)) + reply('m3', at(2)));
+    ingestSessionUsage(db, 's1', main);
+    const expected = searchSaving({ contextTokens: 201_000, resultTokens: Math.round(found.length / 4), laterResponses: 2, model: 'claude-opus-5-5' });
+
+    const pu = projectUsage(db, 'p');
+    expect(pu.meko).toMatchObject({ calls: 4, lookups: 3, found: 2, empty: 1, errors: 1, saves: 1 });
+    expect(pu.meko.savings).toEqual({ searches: 1, tokens: expected.tokens, usd: expected.usd });
+    expect(pu.bySession[0].meko).toEqual({ lookups: 3, found: 2, saves: 1 });
+    expect(pu.cost.usd).toBeGreaterThan(0);
+    expect(pu.cost.unpricedMessages).toBe(0);
+
+    const o = usageOverview(db);
+    expect(o.meko.savings).toEqual(pu.meko.savings);
+    expect(o.byProject[0]).toMatchObject({ mekoLookups: 3, mekoFound: 2, mekoSavings: pu.meko.savings, cost: pu.cost });
+    expect(o.cost).toEqual(pu.cost);
+  });
+
+  it('shows nothing saved, and no Meko use, for a project that never called Meko', () => {
+    const { db } = setup();
+    expect(projectUsage(db, 'p').meko).toEqual({
+      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, tokens: 0, usd: 0 },
+    });
+  });
+});

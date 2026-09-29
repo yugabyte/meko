@@ -4,25 +4,43 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { cx, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
+import { cx, formatCost, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
+import { MekoUsageSection, savedClass, savedText } from './MekoUsageSection';
 import { TopBar } from './TopBar';
-import { DailyChart, DailyTable, Stat } from './UsagePanel';
+import { CostStat, DailyChart, DailyTable, Stat } from './UsagePanel';
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
-type ProjectKey = 'name' | 'sessions' | 'mergedPrs' | 'directCommits' | 'output' | 'total';
+type ProjectKey = 'name' | 'sessions' | 'mergedPrs' | 'directCommits' | 'output' | 'total' | 'cost' | 'meko' | 'saved';
 type ModelKey = 'model' | 'output' | 'total';
 
-const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
-  k === 'name' ? p.name : k === 'output' ? p.usage.output : k === 'total' ? totalTokens(p.usage) : p[k];
+const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string => {
+  switch (k) {
+    case 'name':
+      return p.name;
+    case 'output':
+      return p.usage.output;
+    case 'total':
+      return totalTokens(p.usage);
+    case 'cost':
+      return p.cost.usd;
+    case 'meko':
+      return p.mekoFound;
+    case 'saved':
+      return p.mekoSavings.usd ?? 0;
+    default:
+      return p[k];
+  }
+};
 const modelValue = (m: ModelUsage, k: ModelKey): number | string =>
   k === 'model' ? m.model : k === 'output' ? m.usage.output : totalTokens(m.usage);
 
 /**
- * Usage across every project, deleted ones included: tokens by project, model and day, and what
- * shipped (merged PRs, and commits pushed straight to a base branch).
+ * Usage across every project, deleted ones included: tokens and their cost by project, model and
+ * day, Meko use and its estimated savings, and what shipped (merged PRs, and commits pushed
+ * straight to a base branch). `mekoConfigured`: Meko is on, so the Meko section shows before any call.
  */
-export function UsageView({ onMenu }: { onMenu: () => void }) {
+export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; mekoConfigured: boolean }) {
   const mobile = useIsMobile();
   const [usage, setUsage] = useState<UsageOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +68,7 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
   }, []);
 
   const t = usage?.total;
+  const showMeko = !!usage && (usage.meko.calls > 0 || mekoConfigured);
   return (
     <div className="home-view">
       {mobile && <TopBar onMenu={onMenu} title="Usage" />}
@@ -67,6 +86,7 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
               <span className="label">Totals</span>
               <div className="usage-stats">
                 <Stat label="Total tokens" value={totalTokens(t)} strong />
+                <CostStat cost={usage.cost} />
                 <Stat label="Output" value={t.output} />
                 <Stat label="Input" value={t.input} />
                 <Stat label="Cache write" value={t.cacheWrite} />
@@ -87,6 +107,12 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
               {showTable ? <DailyTable daily={usage.daily} /> : <DailyChart daily={usage.daily} />}
             </section>
 
+            {showMeko && (
+              <section className="box">
+                <MekoUsageSection meko={usage.meko} />
+              </section>
+            )}
+
             <section className="box">
               <span className="label">By project</span>
               {usage.byProject.length === 0 ? (
@@ -103,6 +129,9 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
                           {projectHeader('directCommits', 'Pushed', { className: 'num', title: "Commits a session pushed straight to the project's base branch" })}
                           {projectHeader('output', 'Output', { className: 'num opt' })}
                           {projectHeader('total', 'Total', { className: 'num' })}
+                          {projectHeader('cost', 'Cost', { className: 'num opt', title: "What the tokens would cost at Anthropic's API list prices" })}
+                          {showMeko && projectHeader('meko', 'Meko', { className: 'num opt', title: 'Meko lookups that found something, of all lookups' })}
+                          {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something' })}
                         </tr>
                       </thead>
                       <tbody>
@@ -133,6 +162,21 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
                             </td>
                             <td className="num opt">{formatTokens(p.usage.output)}</td>
                             <td className="num">{formatTokens(totalTokens(p.usage))}</td>
+                            <td
+                              className="num opt"
+                              title={p.cost.unpricedMessages > 0 ? `Leaves out ${plural(p.cost.unpricedMessages, 'response')} from models without a known price` : undefined}
+                            >
+                              {formatCost(p.cost.usd)}
+                            </td>
+                            {showMeko && <td className="num opt">{p.mekoLookups > 0 ? `${p.mekoFound}/${p.mekoLookups}` : '—'}</td>}
+                            {showMeko && (
+                              <td
+                                className={cx('num opt', savedClass(p.mekoSavings))}
+                                title={p.mekoSavings.searches > 0 ? `≈ ${p.mekoSavings.tokens.toLocaleString()} tokens from ${p.mekoSavings.searches.toLocaleString()} ${p.mekoSavings.searches === 1 ? 'search' : 'searches'}` : undefined}
+                              >
+                                {savedText(p.mekoSavings)}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -140,6 +184,7 @@ export function UsageView({ onMenu }: { onMenu: () => void }) {
                   </div>
                   <p className="muted small usage-key">
                     Merged PRs: sessions whose PR was merged. Pushed: commits sessions pushed straight to the project’s base branch.
+                    Cost: at Anthropic’s API list prices.
                   </p>
                 </>
               )}

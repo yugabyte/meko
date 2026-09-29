@@ -106,8 +106,22 @@ async function turn(text) {
     hook('PreToolUse', { tool_name: 'ExitPlanMode', tool_input: { plan: '# Design\n\nDo the thing.' } });
     return; // waits for approval (Enter)
   }
+  if (text.includes('MEKO_SEARCH')) mekoSearch();
   respond();
   hook('Stop', {});
+}
+
+// Like Claude Code calling the Meko MCP server: a memory_search that finds one memory.
+function mekoSearch() {
+  const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
+  const toolUseId = `toolu_${id}`;
+  const usage = { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100 };
+  const call = { type: 'tool_use', id: toolUseId, name: 'mcp__meko__memory_search', input: { query: 'how does it work' } };
+  const found = JSON.stringify({ result: JSON.stringify({ results: [{ id: 'm1', memory: 'It works like this.' }] }) });
+  writeFileSync(transcript,
+    JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', usage, content: [call] } }) + '\n' +
+    JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: found }] } }) + '\n',
+    { flag: 'a' });
 }
 
 // Like Claude Code: one response is written as several lines sharing a message id.

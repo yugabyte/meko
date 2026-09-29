@@ -357,7 +357,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       <div className="main">
         <Banners state={state} conn={conn} stale={stale} onError={showToast} onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })} />
         {route.view === 'usage' ? (
-          <UsageView onMenu={openDrawer} />
+          <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}

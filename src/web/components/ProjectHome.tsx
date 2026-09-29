@@ -247,7 +247,7 @@ export function ProjectHomeView({
             )}
           </section>
         </div>
-        {home && <UsagePanel projectId={project.id} usage={home.usage} />}
+        {home && <UsagePanel projectId={project.id} usage={home.usage} mekoOn={mekoConfigured && project.datapacks.length > 0} />}
         <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
       </div>
       {dialog?.kind === 'share' && dedicated && (

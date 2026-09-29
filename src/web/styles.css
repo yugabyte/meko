@@ -2349,6 +2349,56 @@ a.icon-btn {
   text-transform: uppercase;
   color: var(--muted);
 }
+.usage-num.muted {
+  color: var(--muted);
+}
+/* Est. saved: green for a saving (bold, so it reads as large text on the pale green). */
+.usage-stat.saved {
+  background: var(--diff-add-bg);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.usage-stat.saved .usage-num {
+  color: var(--ok);
+  font-weight: 600;
+}
+.usage-table td.saved {
+  color: var(--ok);
+}
+/* Meko in the project home's usage panel, below the chart. */
+.usage-meko {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+.meko-usage-hd {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+/* The black logo on light backgrounds, the white one on dark. */
+.meko-logo {
+  display: block;
+  height: 18px;
+  width: auto;
+}
+.meko-logo.on-dark {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .meko-logo.on-light {
+    display: none;
+  }
+  :root:not([data-theme='light']) .meko-logo.on-dark {
+    display: block;
+  }
+}
+:root[data-theme='dark'] .meko-logo.on-light {
+  display: none;
+}
+:root[data-theme='dark'] .meko-logo.on-dark {
+  display: block;
+}
 .usage-chart-hd {
   display: flex;
   justify-content: space-between;

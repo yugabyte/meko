@@ -273,6 +273,28 @@ const MIGRATIONS: string[] = [
   // 16: what a direct push changed, per file extension (a JSON list of FileTypeCount), filled in
   // with its commit count. Pushes found before this stay NULL.
   `ALTER TABLE pushes ADD COLUMN file_types TEXT;`,
+  // 17: Meko calls found in transcripts (outcome NULL until the result is read), and the 1-hour
+  // share of cache writes, which costs more. Clearing the read offsets makes every transcript be
+  // read once more (usage rows are upserts), so old sessions get both.
+  `
+  CREATE TABLE meko_calls (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    tool_use_id TEXT NOT NULL,
+    agent TEXT,
+    tool TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('lookup', 'save', 'other')),
+    at INTEGER NOT NULL,
+    outcome TEXT CHECK (outcome IN ('found', 'empty', 'error', 'ok')),
+    results INTEGER,
+    input_chars INTEGER NOT NULL,
+    result_chars INTEGER,
+    model TEXT,
+    context_tokens INTEGER,
+    PRIMARY KEY (session_id, tool_use_id)
+  );
+  ALTER TABLE usage_messages ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0;
+  DELETE FROM usage_files;
+  `,
 ];
 
 export function openDb(path: string): Db {
