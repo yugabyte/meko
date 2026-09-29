@@ -31,14 +31,14 @@ type Modal =
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
-// Notifications come from the page (`new Notification`), or through the service worker where the
-// page may not make them (Android Chrome), with a tap then opening the session through it too.
+// Notifications go through the service worker when it's running: its notifications stay clickable
+// after this page reloads (as it does after an update) or closes, and a click switches to the tab
+// already showing the session (see sw.js). Without one, the page shows them itself (`new Notification`).
 const canNotify = typeof Notification !== 'undefined';
-let pageNotifications = canNotify;
 
 /**
  * Shows a notification. `tag` replaces an earlier one with the same tag; `data` is what the
- * service worker gets when it's tapped there instead (see sw.js).
+ * service worker gets when it's clicked (see sw.js), and `onClick` runs for a page notification.
  */
 async function showNotification(
   n: { title: string; body: string },
@@ -47,20 +47,20 @@ async function showNotification(
   onClick: () => void,
 ): Promise<void> {
   const options = { body: n.body, icon: '/logo.png', tag };
-  if (pageNotifications) {
+  const reg = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
+  if (reg?.active) {
     try {
-      const note = new Notification(n.title, options);
-      note.onclick = () => {
-        onClick();
-        note.close();
-      };
+      await reg.showNotification(n.title, { ...options, data });
       return;
     } catch {
-      pageNotifications = false;
+      // Fall back to the page's own notification.
     }
   }
-  const reg = await navigator.serviceWorker?.getRegistration();
-  await reg?.showNotification(n.title, { ...options, data });
+  const note = new Notification(n.title, options);
+  note.onclick = () => {
+    onClick();
+    note.close();
+  };
 }
 
 if (typeof navigator !== 'undefined') {
@@ -131,7 +131,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const stateRef = useRef<AppState | null>(null);
   stateRef.current = state;
 
-  // A share's notification tapped through the service worker (Android): open it here.
+  // A share's notification clicked through the service worker: open it here.
   useEffect(() => {
     const sw = navigator.serviceWorker;
     if (!sw) return;

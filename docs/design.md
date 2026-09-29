@@ -299,10 +299,13 @@ needs HTTPS or localhost.
 A browser notification fires when any session moves to *needs you* or finishes a turn while its
 tab is hidden. You can mute it per project. Only one open AgentK page shows them, the one used
 last (pages queue for a Web Lock and a page that gets focus steals it; when it closes, the next one
-takes over), so clicking a notification opens its session in the window you're using rather than
-in a forgotten background tab. Phones where a page can't show notifications itself (Android Chrome) get them through a
-minimal service worker (`/sw.js`); tapping one opens its session in an open AgentK window, or a new
-one. The service worker caches nothing and handles no requests.
+takes over), so each shows once. They go through a minimal service worker (`/sw.js`), so a
+notification stays clickable after the page that showed it reloads (as open pages do after an
+update) or closes. Clicking one switches to the browser tab already showing its session, else to
+one on its project (which then opens the session), else opens it in the window you used last, or a
+new one. A design doc open on its own page is left alone. If the service worker isn't running (it
+failed to register, say), the page shows the notification itself, and clicking it opens the session
+in that page. The service worker caches nothing and handles no requests.
 
 A project datapack shared with you also sends one notification (an `invite` event, once per
 datapack); clicking it opens the New project dialog for it. Tapped through the service worker, it
