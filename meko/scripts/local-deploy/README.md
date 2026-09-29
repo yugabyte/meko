@@ -10,10 +10,10 @@ One-command local deployment of the full Meko stack. YugabyteDB runs **natively*
 | 4 | Meko UI | `meko/meko/meko_ui/` | container `meko-ui` behind nginx |
 | 5 | Inference gateway | `meko/meko/inference_gateway/` | container `meko-inference-gateway` (`:8088`) |
 | 6 | API server | `meko/meko/api_server/` | container `meko-api-server` (`:25433`) + one-shot `meko-api-server-migrate` |
-| 7 | RAG agent | `yugabyte-db/python/ai/rag_agent/` | container `meko-rag-agent` (work-queue poller) |
+| 7 | RAG agent | `yugabyte-db/python/ai/rag_agent/` | containers `meko-rag-agent` (text) and `meko-rag-agent-pdf` (PDF), one image, work-queue pollers |
 | — | Infra | — | `meko-redis`, `meko-minio`, `meko-proxy` (nginx), 2 one-shot Langfuse schema-init jobs |
 
-All databases live on **one** YugabyteDB instance on `:5433` — `yugabyte` DB (meko_system schema, datapacks, mem0 pgvector + mage graph, pg_dist_rag work queue) and `langfuse` DB (Langfuse metadata + tracing under a `clickhouse` schema). No ClickHouse, no Neo4j.
+All databases live on **one** YugabyteDB instance on `:5433` — `yugabyte` DB (meko_system schema, datapacks, mem0 pgvector, pg_dist_rag work queue) and `langfuse` DB (Langfuse metadata + tracing under a `clickhouse` schema). No ClickHouse, no Neo4j.
 
 ---
 
@@ -21,12 +21,13 @@ All databases live on **one** YugabyteDB instance on `:5433` — `yugabyte` DB (
 
 | What | Details |
 |---|---|
-| **Docker Desktop** | `docker info` must succeed. Settings → Resources: **≥ 12 GB RAM** and **≥ 120 GB disk** (first build downloads ~20 GB of layers; the Langfuse Next.js build alone peaks at ~8 GB RAM). |
-| **Repo layout** | `meko/`, `meko-mem0/`, `meko-mcp-server/`, `meko-langfuse/`, `yugabyte-db/` checked out as **siblings** under one parent directory — the default layout. You don't have to clone the `meko-*` siblings yourself: **`start.sh` auto-clones any missing one** (over HTTPS from `github.com/yugabyte/*`, checking out `meko-embed-ui-setup` for `meko-langfuse`) — you just need access to the internal repos. Override the host with `MEKO_GIT_BASE` (e.g. `git@github.com:yugabyte` for SSH) or opt out with `MEKO_NO_CLONE=1`. Only `yugabyte-db` must be provided manually (next row). To point a component at a non-default checkout, set its `MEKO_*_DIR` var in `.env` (see below). |
+| **Docker** | Docker Desktop (macOS) or Docker Engine with the Compose v2 plugin (Linux); `docker info` must succeed. Podman's `docker` shim is refused: its builds cap open files at 1024, which breaks the UI and Langfuse builds. Docker Desktop → Resources: **≥ 12 GB RAM** and **≥ 120 GB disk** (first build downloads ~20 GB of layers; the Langfuse Next.js build alone peaks at ~8 GB RAM). On Linux, images and build cache (~41 GB after a first build) share the host disk with yugabyted. |
+| **Repo layout** | `meko/`, `meko-mem0/`, `meko-mcp-server/`, `meko-langfuse/`, `yugabyte-db/` checked out as **siblings** under one parent directory — the default layout. You don't have to clone the `meko-*` siblings yourself: **`start.sh` auto-clones any missing one** (over HTTPS from `github.com/yugabyte/*`, checking out `patch/date-aware-extraction` for `meko-mem0`; the others track their default branch) — you just need access to the internal repos. They're private, so HTTPS clones need git credentials for github.com (e.g. `gh auth login && gh auth setup-git`), or set `MEKO_GIT_BASE=git@github.com:yugabyte` to clone over SSH. Override the host with `MEKO_GIT_BASE` or opt out with `MEKO_NO_CLONE=1`. Only `yugabyte-db` must be provided manually (next row). To point a component at a non-default checkout, set its `MEKO_*_DIR` var in `.env` (see below). |
 | **`yugabyted` with the required extensions** | A YugabyteDB distribution that ships the `mage`, `vector`, and `pg_dist_rag` extensions. Obtain it one of two ways: **(a)** clone the source from GitHub (`git clone https://github.com/yugabyte/yugabyte-db.git`, `master` branch) and build it with `./yb_build.sh`; or **(b)** use a provided YugabyteDB release tarball for your OS and architecture that already includes the extensions. Either way, point `MEKO_YB_HOME` in `.env` at the resulting tree. |
 | **Cognito user** (mekodev AWS account) | See §2. No signup flow needed — the user is created directly in Cognito. |
 | **OpenAI API key** | For mem0's LLM + embeddings (`LLM_PROVIDER`/`EMBEDDER_PROVIDER` default to `openai`). |
-| **AWS Bedrock credentials** | **Required.** The inference gateway defaults to `INFERENCE_LLM_PROVIDER=bedrock`, so the playground needs `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` set in `.env`. start.sh fails fast if any are missing. |
+| **AWS Bedrock credentials** | **Required** by default: the inference gateway defaults to `INFERENCE_LLM_PROVIDER=bedrock`, so the playground needs `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` in `.env`, plus `AWS_SESSION_TOKEN` for temporary (`ASIA…`) keys. start.sh fails fast if any are missing. Not needed with `INFERENCE_LLM_PROVIDER=openai`. |
+| **Host tools** | `git`, `openssl`, `curl`, `ss` or `lsof`, and on Linux `ip` (all standard on macOS and Linux dev images). The `aws` CLI is only needed for `create-cognito-user.sh` (§2) and isn't installed by default. |
 
 ### Component source directory overrides (optional)
 
@@ -57,7 +58,9 @@ Auth is backed by the shared dev Cognito User Pool in the **mekodev** AWS accoun
 
 There is **no self-service signup** — the signin page intentionally hides the signup link. Instead, create your user with the helper script, which wraps the two AWS CLI calls (`admin-create-user` + `admin-set-user-password`).
 
-**First, log in to the mekodata-dev AWS account** in your terminal — e.g. `aws sso login --profile <your-profile>` (then pass `--profile`, or export `AWS_PROFILE`), or export `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env credentials. The script preflights with `aws sts get-caller-identity` and stops early if you're not authenticated.
+**First, log in to the mekodata-dev AWS account** in your terminal — e.g. `aws sso login --profile <your-profile>` (then pass `--profile`, or export `AWS_PROFILE`), or export `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env credentials (plus `AWS_SESSION_TOKEN` for temporary `ASIA…` keys). `aws sso login` needs AWS CLI v2. The script preflights with `aws sts get-caller-identity` and stops early, printing AWS's error, if you're not authenticated.
+
+The app client whose id/secret go in `.env` must have **`ALLOW_USER_PASSWORD_AUTH`** enabled and a client secret; otherwise every login fails with `USER_PASSWORD_AUTH flow not enabled for this client`. Users belong to the pool, so switching app clients doesn't need new users.
 
 ```bash
 cd meko/meko/scripts/local-deploy
@@ -87,24 +90,35 @@ So a fresh user can go straight from "Cognito user exists" → "chatting in the 
 ```bash
 cd meko/meko/scripts/local-deploy
 
-./start.sh          # first invocation copies .env.example → .env, then exits
-vi .env             # fill in: COGNITO_* (pool eu-north-1_8jgrVhzW6, client id/secret),
-                    #          OPENAI_API_KEY, MEKO_YB_HOME (your built yugabyte-db tree)
-./start.sh          # brings everything up
+# Interactive (a real terminal): one command. It creates .env if missing, then walks you
+# through EVERY required value (each pre-filled with its default — Enter to keep, or type to
+# change; secrets hidden), saves them to .env, and brings the stack up.
+./start.sh
+
+# Non-interactive (piped / CI / -y): it can't prompt, so the first run copies
+# .env.example → .env and exits; fill it in by hand, then re-run:
+#   vi .env      # COGNITO_* (pool eu-north-1_8jgrVhzW6, client id/secret), OPENAI_API_KEY,
+#                # MEKO_YB_HOME (your built yugabyte-db tree), AWS_* for Bedrock chat
+#                # (or set INFERENCE_LLM_PROVIDER=openai)
+#   ./start.sh
 ```
+
+Run `./start.sh --help` for the full flag/subcommand list.
 
 What `start.sh` does, in order:
 
-1. Validates `.env` (required vars), Docker, and the `yugabyted`/`ysqlsh` binaries under `MEKO_YB_HOME`.
+1. Validates `.env` (required vars), Docker, and the `yugabyted`/`ysqlsh` binaries under `MEKO_YB_HOME`. On a real terminal it runs an **interactive setup**: on a first run or with `--reconfigure` it prompts for **every** required value, each pre-filled with its current `.env` value (the `.env.example` default on a first run) — Enter keeps it, or type to override; secrets are entered hidden. On a normal run it prompts only for values still blank. Non-interactively (piped, CI, or `-y`) it doesn't prompt — it reports the blanks and stops. Then checks disk space: it stops if the disk holding `YB_BASE_DIR` has less than 5% free plus 3 GB (YugabyteDB rejects writes below 5%), and asks before continuing if an image still has to be built and Docker's disk has less than ~45 GB free (plus that floor when both share a disk). `MEKO_SKIP_DISK_CHECK=1` skips it.
 2. Auto-generates `MEKO_MCP_INTERNAL_SECRET` if blank (written back to `.env`).
 3. **Verifies every component source dir** (resolved from the `MEKO_*_DIR` vars, defaulting to the sibling layout), prints each one's **git branch**, and classifies `MEKO_YB_HOME` as a *cloned/build repo* (shows its branch) or a *release tarball* (shows version + build number). Then **prompts for confirmation before starting** (the prompt warns about data loss only when `--clean` is set). Pass `-y`/`--yes` (or set `MEKO_ASSUME_YES=1`) to skip the prompt for non-interactive runs.
-4. Starts yugabyted with `--master_flags="ysql_yb_enable_mage=true" --tserver_flags="ysql_yb_enable_mage=true"`, then polls `yugabyted status` until `Status: Running` **and** `YSQL Status: Ready`. **By default existing data is preserved** — a running cluster is reused, otherwise the existing `base_dir` is resumed. Pass **`-c`/`--clean`** (or set `MEKO_CLEAN=1`) to `yugabyted destroy` the prior state first and start fresh.
+4. Starts yugabyted with `--master_flags="ysql_yb_enable_mage=true,tablet_replicas_per_gib_limit=0" --tserver_flags="ysql_yb_enable_mage=true"`, plus `--advertise_address=<default-route IP>` on Linux for a new `base_dir` (a resumed one keeps the address stored in its `yugabyted.conf`), then polls `yugabyted status` until `Status: Running` **and** `YSQL Status: Ready`. `tablet_replicas_per_gib_limit=0` lifts yugabyted's per-node tablet cap, which Meko's ~1,650-tablet schema exceeds on hosts under ~19 GB RAM; on hosts under 16 GB it prints a memory warning. **By default existing data is preserved** — a running cluster is reused, otherwise the existing `base_dir` is resumed. Pass **`-c`/`--clean`** (or set `MEKO_CLEAN=1`) to `yugabyted destroy` the prior state first and start fresh.
 5. Creates extensions: `vector`, `mage`, `pg_dist_rag`.
-6. `docker compose up -d --build` — first run builds all images (~15–20 min; **the Langfuse image alone takes ~10–15 min**, peaking at ~8 GB RAM); later runs hit cache (~30 s). Startup ordering inside compose: redis/minio → Langfuse schema-init jobs → `meko-api-server-migrate` (one-shot `-migrate-only`, creates `meko_system.*`) → api_server → everything else.
+6. Builds all component images, then starts the containers (`docker compose build` then `up -d` — shown as two sub-stages) — first run builds all images (~15–20 min; **the Langfuse image alone takes ~10–15 min**, peaking at ~8 GB RAM); later runs hit cache (~30 s). Startup ordering inside compose: redis/minio → Langfuse schema-init jobs → `meko-api-server-migrate` (one-shot `-migrate-only`, creates `meko_system.*`) → api_server → everything else. On a fresh database the one-shot jobs take ~25 min (Langfuse metadata ~7–9 min, migrations ~17 min), during which compose prints only `Waiting`.
 7. Waits for api_server health, then repoints the seeded `meko_system.yb_universes` row at the local yugabyted.
 8. Prints the URLs.
 
 > ⚠️ `./start.sh` **preserves YugabyteDB data by default** — it resumes the existing cluster, so it's safe for day-to-day restarts. Only `./start.sh --clean` **wipes** the data (step 4) for a fresh stack. For reloading individual services without touching the DB, use the reload commands in §5.
+
+**Changing config later:** `./start.sh --reconfigure` re-asks **every** required value (current value shown as the default — Enter keeps it, or type to change), then deploys. Nothing is wiped; you override only what you want. Needs a terminal; can't be combined with `--reload`/`--update`.
 
 ### URLs
 
@@ -146,7 +160,7 @@ All `docker compose` commands below run from this directory (`meko/meko/scripts/
 Only `start.sh` detects the IP that YSQL bound to and exports `HOST_GATEWAY_IP`, which the compose `extra_hosts` uses to map `host.docker.internal` → the host running yugabyted (`docker-compose.yml:13–17`). A `--force-recreate`/rebuild **recreates** the container, so it re-reads that mapping at creation time — run by hand with `HOST_GATEWAY_IP` unset, the new container falls back to the docker-bridge gateway and a DB-touching service (api-server, mcp-server, rag-agent) can no longer reach yugabyted. On **Linux**, export it first (macOS resolves `host.docker.internal` automatically, so skip this there):
 
 ```bash
-export HOST_GATEWAY_IP=$(ss -ltnH "sport = :5433" | awk '{print $4}' | sed -E 's/:[0-9]+$//' | grep -vE '^(127\.|0\.0\.0\.0$|\[?::1?\]?$|\*$)' | head -1)
+export HOST_GATEWAY_IP=$(ss -ltnH "sport = :${YB_PORT:-5433}" | awk '{print $4}' | sed -E 's/:[0-9]+$//' | grep -vE '^(127\.|0\.0\.0\.0$|\[?::1?\]?$|\*$)' | head -1)
 ```
 
 Plain `docker compose restart <svc>` is unaffected — it does not recreate the container, so it keeps the mapping `start.sh` baked in.
@@ -158,7 +172,7 @@ Plain `docker compose restart <svc>` is unaffected — it does not recreate the 
 | `meko-mem0/mem0/**.py` | `docker compose restart meko-mcp-server` | ~5 s |
 | `meko-mcp-server/src/**.py` | `docker compose restart meko-mcp-server` | ~5 s |
 | `meko/meko/inference_gateway/**.py` | `docker compose restart meko-inference-gateway` | ~5 s |
-| `yugabyte-db/python/ai/rag_agent/**.py` | `docker compose restart meko-rag-agent` | ~5 s |
+| `yugabyte-db/python/ai/rag_agent/**.py` | `docker compose restart meko-rag-agent meko-rag-agent-pdf` (the source is shared by both workers) | ~5 s |
 | `meko/meko/api_server/**.go` (or new migration) | `docker compose build meko-api-server && docker compose up -d --force-recreate meko-api-server-migrate meko-api-server && docker compose restart meko-proxy` | ~30–60 s |
 | `meko/meko/meko_ui/**` (TS/React) | `docker compose build meko-ui && docker compose up -d --force-recreate meko-ui && docker compose restart meko-proxy` | ~30–60 s |
 | `meko-langfuse/**` (TS/Next.js) | `docker compose build langfuse-web langfuse-worker && docker compose up -d --force-recreate langfuse-web langfuse-worker && docker compose restart meko-proxy` | ~10–15 min, ~8 GB RAM |
@@ -167,7 +181,29 @@ Plain `docker compose restart <svc>` is unaffected — it does not recreate the 
 | `.env` value baked into the UI (`VITE_COGNITO_*`, `VITE_OBSERVE_EMBED_PATH`, `VITE_INFERENCE_GATEWAY_URL`) | `docker compose build meko-ui && docker compose up -d --force-recreate meko-ui && docker compose restart meko-proxy` (build-time args, so a plain recreate is not enough). **Exception:** `VITE_RUDDERSTACK_*` and the free-tier/feature flags are *runtime* since #312 (served via `/runtime-config.js`) — a plain `--force-recreate meko-ui` is enough for those. | ~30–60 s |
 | `docker-compose.yml` | `docker compose up -d` (Compose recreates only what changed) | ~10 s |
 | `nginx/default.conf` | `docker compose restart meko-proxy` | ~2 s |
-| `init/*.sql`, yugabyted flags, or "give me a clean slate" | `./start.sh --clean` (wipes YB data; plain `./start.sh` resumes without wiping) | ~2 min + cached builds |
+| `init/*.sql`, yugabyted flags, or "give me a clean slate" | `./start.sh --clean` (wipes YB data; plain `./start.sh` resumes without wiping) | ~25–30 min (fresh-database setup, see §3 step 6) + cached builds |
+
+For the per-component rows above, `./start.sh --reload <target> [target...]` runs the
+correct command for you (targets: `mcp`, `gateway`, `rag`, `proxy`, `api`, `ui`,
+`langfuse`; pass several at once, e.g. `--reload mcp rag`; `mcp-rebuild` and `rag-rebuild`
+rebuild those images when their dependency files or Dockerfile change, which `--update`
+picks automatically) and, on Linux, re-detects
+`HOST_GATEWAY_IP` first so a `--force-recreate` keeps reaching yugabyted. To reload
+**everything** in one pass, use `./start.sh --reload all` (or `--reload-all`): it rebuilds
+all images (cache-fast) and force-recreates every container, so it picks up both compiled
+and bind-mounted changes — the langfuse rebuild can take ~10-15 min. See `./start.sh --help`.
+
+To pull the **latest code** for a component repo, `./start.sh --update <target> [target...]`
+runs `git pull --rebase --autostash` on it — fetching the latest commit and replaying your
+local commits and uncommitted edits on top. Targets: `mem0`, `mcp`, `langfuse`, and `rag`
+(the `yugabyte-db` tree at `MEKO_YB_HOME`, **only when it's a git checkout** — a release
+tarball can't be pulled). `api`/`ui`/`gateway` live in this meko repo and are refused —
+`git pull` it yourself. **By default it then reloads whatever changed** — cheap restarts
+(mcp/rag) run automatically, and a slow rebuild (langfuse) is confirmed first (`--apply`
+skips that confirm, like `-y`; `--no-apply` pulls only and prints the reload command).
+`./start.sh --update all` (or `--update-all`) pulls the sibling repos — `mem0`, `mcp`,
+`langfuse` — but **not** `yugabyte-db` (usually a tarball, and a heavy repo; run `--update rag`
+explicitly for it).
 
 ### Why three different reload types?
 
@@ -206,8 +242,9 @@ docker compose logs -f <service>                 # follow logs
 docker logs meko-mcp-server 2>&1 | tail -50      # one-shot tail
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 
-# Inspect the DB directly
-$MEKO_YB_HOME/bin/ysqlsh -h 127.0.0.1 -p 5433 -U yugabyte -d yugabyte
+# Inspect the DB directly. macOS: -h 127.0.0.1. Linux: yugabyted listens only on the
+# advertise address, i.e. the IP start.sh printed ("starting yugabyted (… advertise=<ip>)").
+$MEKO_YB_HOME/bin/ysqlsh -h <127.0.0.1 or advertise ip> -p ${YB_PORT:-5433} -U yugabyte -d yugabyte
 ```
 
 ---
@@ -220,11 +257,12 @@ $MEKO_YB_HOME/bin/ysqlsh -h 127.0.0.1 -p 5433 -U yugabyte -d yugabyte
 | start.sh: `extension mage.control missing` | `MEKO_YB_HOME` points at a YugabyteDB build without the required extensions. Use a source build or a release (matching your OS/arch) that ships `mage`, `vector`, and `pg_dist_rag`. |
 | start.sh: yugabyted never reaches `YSQL Status: Ready` | Check `$MEKO_YB_HOME/bin/yugabyted status --base_dir=$YB_BASE_DIR` and logs under `$YB_BASE_DIR/logs/` and `$YB_BASE_DIR/data/yb-data/{master,tserver}/logs/*.FATAL`. |
 | api_server logs `relation "meko_system.yb_universes" does not exist` | The migrate init container didn't run/succeed → `docker logs meko-api-server-migrate`. |
-| `/chat` → `MCP tool discovery failed … 401` | Expired Cognito JWT (1 h lifetime) — re-login, or use a PAT (§4). |
+| `/chat` → `MCP tool discovery failed … 401` | Expired Cognito JWT (1 h lifetime) — re-login, or use an API key (`mko_tkn_…`, created in the UI under **Settings > API Keys**). |
 | mcp-server logs `invalid connection option "load_balance"` | `load_balance` is a YugabyteDB smart-driver flag; stock psycopg rejects it. Remove it from `YUGABYTEDB_URL` (already removed in this compose). |
-| `/chat` → `No Langfuse project found for datapack …` | Datapack created via UI/API lacks a Langfuse mapping — run the `langfuse/project-keys` provisioning curl from §2. |
+| `/chat` → `No Langfuse project found for datapack …` | Datapack created via UI/API lacks a Langfuse mapping — provision it as the datapack's owner: `curl -X POST http://localhost:25433/api/v1/datapacks/<datapack_id>/langfuse/project-keys -H "Authorization: Bearer <access token or mko_tkn_ API key>"`. |
 | Login fails with Cognito error about password change | User was created without `--permanent` — re-run `admin-set-user-password … --permanent`. |
 | First build fails with `No space left on device` | rag-agent's deps pull the torch/CUDA stack (~10 GB unpacked); Langfuse build adds more. Raise Docker Desktop → Resources → disk limit (≥ 120 GB). |
+| Langfuse schema-init or a migration fails with `Write to tablet … rejected … insufficient disk space` | YugabyteDB rejects writes when its disk is under 5% free; on Linux, images and build cache share that disk. `docker builder prune` frees the build cache without touching images or volumes. |
 | Langfuse build OOM (`exit code 137` / `cannot allocate memory`) | Raise Docker Desktop RAM to ≥ 12 GB for the build; can lower again afterwards. |
 | KB uploads fail in rag-agent with S3/DNS errors | MinIO requires path-style S3 URLs — `AWS_S3_ADDRESSING_STYLE=path` must be set on `meko-rag-agent` (already set in this compose). |
 | Langfuse schema-init logs "database already exists; skipping" | Expected on every run after the first. |
@@ -249,7 +287,7 @@ meko-ui:5000      meko-api-server:25433   inference-gateway:8088   meko-mcp-serv
    │                       │                       │                       │              (worker)
    │   /api/v1 proxy →     │                       │  /mcp ──→             │                 │
    │ ←─ api_server ─→      ├── meko_system schema  │  mcp-server (mem0     │ pg_dist_rag ←──┘
-   │                       │   pg_dist_rag work_q  │  library, mage graph) │ work queue
+   │                       │   pg_dist_rag work_q  │  library, pgvector)   │ work queue
    │                       │   datapacks schema    │                       │
    │                       │                       │                       │
    ├── inference gateway ──┤                       └── Langfuse traces ────┤
@@ -262,8 +300,8 @@ meko-ui:5000      meko-api-server:25433   inference-gateway:8088   meko-mcp-serv
                                           │      yugabyted on host:5433        │
                                           │        DB yugabyte   → meko_system │
                                           │                       datapacks    │
-                                          │                       mem0 (mage,  │
-                                          │                       pgvector)    │
+                                          │                       mem0         │
+                                          │                       (pgvector)   │
                                           │        DB langfuse   → metadata    │
                                           │                       clickhouse   │
                                           │                       (schema)     │

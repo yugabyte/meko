@@ -90,8 +90,10 @@ COGNITO_DOMAIN=auth.mekodev.com
 MEKO_BASE_URL=http://localhost:25433/api/v1
 MCP_BASE_URL=http://localhost:8000
 
-# mem0_client reads generic names (HOST/PORT/DBNAME/USER/PASSWORD) — NOT META_*.
-# Re-export right before launching the MCP server, since USER collides with shell.
+# Graph-store connection, read only by meko-mcp-server before
+# https://github.com/yugabyte/meko-mcp-server/pull/260 (meko-mem0 1.x);
+# 2.x has no graph store. Re-export right before launching the MCP server, since
+# USER collides with the shell's.
 HOST=127.0.0.1
 PORT=5433
 DBNAME=yugabyte

@@ -2,7 +2,7 @@
 #
 # YugabyteDB runs NATIVELY (via yugabyted, started by start.sh).
 # Every other component runs in this compose. Containers reach
-# yugabyted via host.docker.internal:5433.
+# yugabyted via host.docker.internal:${YB_PORT} (5433 by default).
 #
 # All builds use BIND-MOUNTED LOCAL SOURCE so edits in
 # /Users/gargsans/meko/meko-{mem0,mcp-server,langfuse}/ and
@@ -126,7 +126,7 @@ services:
         condition: service_started
     environment:
       PGHOST: host.docker.internal
-      PGPORT: "5433"
+      PGPORT: "${YB_PORT}"
       PGUSER: ${YB_USER}
       PGPASSWORD: ${YB_PASSWORD}
     entrypoint: ["sh", "-eu", "-c"]
@@ -157,7 +157,7 @@ services:
         condition: service_completed_successfully
     environment:
       PGHOST: host.docker.internal
-      PGPORT: "5433"
+      PGPORT: "${YB_PORT}"
       PGUSER: ${YB_USER}
       PGPASSWORD: ${YB_PASSWORD}
     entrypoint: ["sh", "-eu", "-c"]
@@ -347,7 +347,7 @@ services:
     command:
       - "-migrate-only"
       - "-db-host=host.docker.internal"
-      - "-db-port=5433"
+      - "-db-port=${YB_PORT}"
       - "-db-user-name=${YB_USER}"
       - "-db-password=${YB_PASSWORD}"
       - "-db-name=yugabyte"
@@ -372,7 +372,7 @@ services:
       LANGFUSE_HOST: http://langfuse-web:3000
       LANGFUSE_ADMIN_API_KEY: ${LANGFUSE_ADMIN_API_KEY}
       LANGFUSE_DB_HOST: host.docker.internal
-      LANGFUSE_DB_PORT: "5433"
+      LANGFUSE_DB_PORT: "${YB_PORT}"
       LANGFUSE_DB_NAME: langfuse
       LANGFUSE_DB_USER: ${YB_USER}
       LANGFUSE_DB_PASSWORD: ${YB_PASSWORD}
@@ -401,7 +401,7 @@ services:
     command:
       - "-port=25433"
       - "-db-host=host.docker.internal"
-      - "-db-port=5433"
+      - "-db-port=${YB_PORT}"
       - "-db-user-name=${YB_USER}"
       - "-db-password=${YB_PASSWORD}"
       - "-db-name=yugabyte"
@@ -463,9 +463,12 @@ services:
       EMBEDDER_MODEL: ${EMBEDDER_MODEL}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AWS_REGION: ${AWS_REGION}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      # Graph store (mage on YB) needs these as separate env vars.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # Graph store (mage on YB): read only by meko-mcp-server before
+      # https://github.com/yugabyte/meko-mcp-server/pull/260 with meko-mem0 1.x;
+      # 2.x has no graph store and ignores them.
       HOST: host.docker.internal
       PORT: ${YB_PORT}
       DBNAME: yugabyte
@@ -516,8 +519,9 @@ services:
       INFERENCE_LOG_LEVEL: INFO
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AWS_REGION: ${AWS_REGION}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     volumes:
       - ${MEKO_INFERENCE_GATEWAY_DIR:-../../inference_gateway}/inference_gateway:/opt/venv/lib/python3.11/site-packages/inference_gateway:ro
     ports:

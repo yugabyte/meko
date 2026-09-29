@@ -4,7 +4,8 @@
 #
 # Prereq: you must be authenticated to the mekodata-dev AWS account first, e.g.
 #   aws sso login --profile <profile>     (then pass --profile, or export AWS_PROFILE)
-#   — or export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env creds.
+#   — or export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env creds (plus
+#   AWS_SESSION_TOKEN for temporary ASIA… keys). `aws sso login` needs AWS CLI v2.
 #
 # Pool/region default to COGNITO_POOL_ID / COGNITO_REGION from ./.env; override
 # with flags. Email/password are prompted if not passed.
@@ -61,8 +62,10 @@ AWS_ARGS=()
 
 # Preflight: confirm we're authenticated to AWS before touching Cognito.
 info "checking AWS credentials"
-aws "${AWS_ARGS[@]}" sts get-caller-identity >/dev/null 2>&1 \
-  || die "not authenticated to AWS. Log in to the mekodata-dev account first (e.g. 'aws sso login --profile <profile>' then pass --profile, or export env creds), then re-run."
+if ! sts_err="$(aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} sts get-caller-identity 2>&1 >/dev/null)"; then
+  printf '%s\n' "${sts_err}" | sed 's/^/    /' >&2
+  die "not authenticated to AWS (error above). Log in to the mekodata-dev account first (e.g. 'aws sso login --profile <profile>' then pass --profile, or export env creds incl. AWS_SESSION_TOKEN for ASIA… keys), then re-run."
+fi
 
 [ -n "${EMAIL}" ] || { printf "${CYAN}▸${NC} email: "; read -r EMAIL; }
 [ -n "${EMAIL}" ] || die "email is required"
@@ -74,7 +77,7 @@ fi
 # 1. Create the user. SUPPRESS skips the invitation email; email_verified=true
 #    skips the confirmation-code step.
 info "creating Cognito user ${EMAIL} in pool ${POOL_ID} (${REGION})"
-aws "${AWS_ARGS[@]}" cognito-idp admin-create-user \
+aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} cognito-idp admin-create-user \
   --user-pool-id "${POOL_ID}" \
   --username "${EMAIL}" \
   --user-attributes Name=email,Value="${EMAIL}" Name=email_verified,Value=true \
@@ -84,7 +87,7 @@ aws "${AWS_ARGS[@]}" cognito-idp admin-create-user \
 # 2. Set a permanent password (otherwise the first login forces a
 #    temporary-password change flow).
 info "setting a permanent password"
-aws "${AWS_ARGS[@]}" cognito-idp admin-set-user-password \
+aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} cognito-idp admin-set-user-password \
   --user-pool-id "${POOL_ID}" \
   --username "${EMAIL}" \
   --password "${PASSWORD}" \
