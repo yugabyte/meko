@@ -274,8 +274,10 @@ const MIGRATIONS: string[] = [
   // with its commit count. Pushes found before this stay NULL.
   `ALTER TABLE pushes ADD COLUMN file_types TEXT;`,
   // 17: Meko calls found in transcripts (outcome NULL until the result is read), and the 1-hour
-  // share of cache writes, which costs more. Clearing the read offsets makes every transcript be
-  // read once more (usage rows are upserts), so old sessions get both.
+  // share of cache writes, which costs more. The index serves the savings estimate, which counts
+  // the responses after each search in the same conversation or subagent. Clearing the read
+  // offsets makes every transcript be read once more (usage rows are upserts), so old sessions
+  // get both.
   `
   CREATE TABLE meko_calls (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -293,6 +295,7 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (session_id, tool_use_id)
   );
   ALTER TABLE usage_messages ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX usage_messages_agent_at ON usage_messages(session_id, agent, at);
   DELETE FROM usage_files;
   `,
 ];

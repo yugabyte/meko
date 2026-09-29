@@ -155,6 +155,8 @@ export interface MekoSavings {
   tokens: number;
   /** USD at API list prices; null when none of the searches' models has a known price. */
   usd: number | null;
+  /** Searches on a model with no known price: in `tokens`, left out of `usd`. */
+  unpricedSearches: number;
 }
 
 export interface SessionUsage {
@@ -191,9 +193,7 @@ export interface ProjectUsageSummary {
   deleted: boolean;
   usage: TokenUsage;
   cost: UsageCost;
-  mekoLookups: number;
-  mekoFound: number;
-  mekoSavings: MekoSavings;
+  meko: MekoUsage;
   sessions: number;
   /** Sessions whose PR was merged. */
   mergedPrs: number;

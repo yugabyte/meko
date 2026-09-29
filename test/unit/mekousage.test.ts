@@ -79,10 +79,21 @@ describe('Meko calls in transcripts', () => {
     expect(classifyResult('lookup', "Error calling tool 'memory_search': [Errno 111] Connection refused", true).outcome).toBe('error');
     expect(classifyResult('lookup', wrapped({ error: 'agent_id_mismatch', detail: 'x' }), false).outcome).toBe('error');
     expect(classifyResult('save', wrapped({ message: 'Memory updated successfully!' }), false).outcome).toBe('ok');
-    // Too large to show: Claude Code saved it to a file, and the notice gives its size.
-    expect(classifyResult('lookup', 'Error: result (70,748 characters) exceeds maximum allowed tokens. Output has been saved to /x.txt', false))
-      .toEqual({ outcome: 'found', results: null, resultChars: 70_748 });
+    // Too large to show: Claude Code saved it to a file. Only its notice entered the context.
+    const notice = 'Error: result (70,748 characters) exceeds maximum allowed tokens. Output has been saved to /x.txt';
+    expect(classifyResult('lookup', notice, false)).toEqual({ outcome: 'found', results: null, resultChars: notice.length });
     expect(classifyResult('lookup', 'MCP tool "meko/memory_search" is still running after 120s. It was moved to the background', false).outcome).toBe('empty');
+  });
+
+  it('reads plain-text replies, empty error fields and unwrapped buckets right', () => {
+    expect(classifyResult('lookup', JSON.stringify({ result: 'No memories found for this query.' }), false).outcome).toBe('empty');
+    expect(classifyResult('lookup', 'No results found', false).outcome).toBe('empty');
+    expect(classifyResult('lookup', JSON.stringify({ result: 'The deploy runs on Fridays.' }), false).outcome).toBe('found');
+    expect(classifyResult('lookup', wrapped({ results: [{ id: 'm1' }], error: null }), false)).toMatchObject({ outcome: 'found', results: 1 });
+    expect(classifyResult('lookup', wrapped({ results: [], error: '' }), false).outcome).toBe('empty');
+    // context_search's buckets without the results wrapper.
+    expect(classifyResult('lookup', wrapped({ memory: [], knowledge_base: [], conversation: { hits: [] } }), false).outcome).toBe('empty');
+    expect(classifyResult('lookup', wrapped({ memory: [{ memory: 'a' }], knowledge_base: [], conversation: { hits: [] } }), false).outcome).toBe('found');
   });
 
   it('reads results only for calls waiting for one, as text or text blocks', () => {
@@ -139,13 +150,20 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    db.exec(`DROP TABLE meko_calls; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 1}`);
+    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 1}`);
     db.close();
     db = openDb(path);
     expect(schemaVersion(db)).toBe(v);
     expect(all(db, 'SELECT * FROM usage_files')).toEqual([]);
     expect(all(db, 'SELECT * FROM meko_calls')).toEqual([]);
     db.close();
+  });
+
+  it('counts the responses after a search through an index, not a scan of the session', () => {
+    const { db } = setup();
+    const plan = all<{ detail: string }>(db, `EXPLAIN QUERY PLAN SELECT COUNT(*) FROM usage_messages u
+      WHERE u.session_id = ? AND u.agent IS ? AND u.at > ?`, 's1', null, 0).map((r) => r.detail).join('\n');
+    expect(plan).toContain('usage_messages_agent_at');
   });
 });
 
@@ -179,21 +197,33 @@ describe('what Meko saved', () => {
 
     const pu = projectUsage(db, 'p');
     expect(pu.meko).toMatchObject({ calls: 4, lookups: 3, found: 2, empty: 1, errors: 1, saves: 1 });
-    expect(pu.meko.savings).toEqual({ searches: 1, tokens: expected.tokens, usd: expected.usd });
+    expect(pu.meko.savings).toEqual({ searches: 1, tokens: expected.tokens, usd: expected.usd, unpricedSearches: 0 });
     expect(pu.bySession[0].meko).toEqual({ lookups: 3, found: 2, saves: 1 });
     expect(pu.cost.usd).toBeGreaterThan(0);
     expect(pu.cost.unpricedMessages).toBe(0);
 
     const o = usageOverview(db);
     expect(o.meko.savings).toEqual(pu.meko.savings);
-    expect(o.byProject[0]).toMatchObject({ mekoLookups: 3, mekoFound: 2, mekoSavings: pu.meko.savings, cost: pu.cost });
+    expect(o.byProject[0]).toMatchObject({ meko: pu.meko, cost: pu.cost });
     expect(o.cost).toEqual(pu.cost);
+  });
+
+  it('keeps searches on unpriced models in the tokens, and says the dollars leave them out', () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    writeFileSync(main,
+      call('m1', [['a', 'mcp__meko__memory_search']]) + result('a', found) +
+      call('m2', [['b', 'mcp__meko__memory_search']], { model: 'claude-fake-1' }) + result('b', found) + reply('m3'));
+    ingestSessionUsage(db, 's1', main);
+    const s = projectUsage(db, 'p').meko.savings;
+    expect(s).toMatchObject({ searches: 2, unpricedSearches: 1 });
+    expect(s.usd).toBeGreaterThan(0);
   });
 
   it('shows nothing saved, and no Meko use, for a project that never called Meko', () => {
     const { db } = setup();
     expect(projectUsage(db, 'p').meko).toEqual({
-      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, tokens: 0, usd: 0 },
+      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, tokens: 0, usd: 0, unpricedSearches: 0 },
     });
   });
 });

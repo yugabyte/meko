@@ -179,12 +179,12 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(home.usage.meko).toMatchObject({ calls: 1, lookups: 1, found: 1, empty: 0, errors: 0, saves: 0 });
     // The stub's model has no price: the estimate is in tokens only, and the cost leaves it out.
     // Context 5,103 tokens, a 20-token result, one later response: 2 × 5,103 + 480 + (6,000 − 20) × 2.
-    expect(home.usage.meko.savings).toEqual({ searches: 1, tokens: 22_646, usd: null });
+    expect(home.usage.meko.savings).toEqual({ searches: 1, tokens: 22_646, usd: null, unpricedSearches: 1 });
     expect(home.usage.cost).toEqual({ usd: 0, unpricedMessages: 2 });
     expect(home.usage.bySession[0].meko).toEqual({ lookups: 1, found: 1, saves: 0 });
     const overview = usageOverview(env.core.db);
     expect(overview.meko.found).toBe(1);
-    expect(overview.byProject[0]).toMatchObject({ mekoLookups: 1, mekoFound: 1, mekoSavings: { searches: 1, tokens: 22_646, usd: null } });
+    expect(overview.byProject[0].meko).toMatchObject({ lookups: 1, found: 1, savings: { searches: 1, tokens: 22_646, usd: null } });
   });
 
   it('reconcile leaves a session alone while it is still being created', async () => {

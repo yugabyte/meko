@@ -125,6 +125,11 @@ export function formatCost(usd: number): string {
   return `${sign}$${v < 100 ? v.toFixed(2) : Math.round(v).toLocaleString('en-US')}`;
 }
 
+/** A cost that leaves out models with no known price is a lower bound: "≥ $3.06". */
+export function formatCostOf(cost: { usd: number; unpricedMessages: number }): string {
+  return `${cost.unpricedMessages > 0 ? '≥ ' : ''}${formatCost(cost.usd)}`;
+}
+
 /** One-line breakdown for tooltips. */
 export function usageTitle(u: TokenUsage): string {
   const f = (n: number) => n.toLocaleString();

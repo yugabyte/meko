@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
-import { cx, formatCost, formatTokens, totalTokens, usageTitle } from '../util';
+import { cx, formatCostOf, formatTokens, totalTokens, usageTitle } from '../util';
 import { MekoUsageSection } from './MekoUsageSection';
 
 /**
@@ -124,15 +124,16 @@ export function Stat({ label, value, strong }: { label: string; value: number; s
   );
 }
 
-/** What the tokens would cost at Anthropic's API list prices. */
+/** What the tokens would cost at Anthropic's API list prices; partial when some models have no price. */
 export function CostStat({ cost }: { cost: UsageCost }) {
-  const left = cost.unpricedMessages > 0
+  const partial = cost.unpricedMessages > 0;
+  const left = partial
     ? ` Leaves out ${cost.unpricedMessages.toLocaleString()} ${cost.unpricedMessages === 1 ? 'response' : 'responses'} from models without a known price.`
     : '';
   return (
     <div className="usage-stat" title={`At Anthropic's API list prices.${left}`}>
-      <span className="usage-num">{formatCost(cost.usd)}</span>
-      <span className="usage-lbl">Est. cost</span>
+      <span className="usage-num">{formatCostOf(cost)}</span>
+      <span className="usage-lbl">{partial ? 'Est. cost, partial' : 'Est. cost'}</span>
     </div>
   );
 }

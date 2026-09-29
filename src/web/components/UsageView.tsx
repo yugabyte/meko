@@ -4,8 +4,8 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { cx, formatCost, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
-import { MekoUsageSection, savedClass, savedText } from './MekoUsageSection';
+import { cx, formatCostOf, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
+import { MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { CostStat, DailyChart, DailyTable, Stat } from './UsagePanel';
 
@@ -25,9 +25,12 @@ const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
     case 'cost':
       return p.cost.usd;
     case 'meko':
-      return p.mekoFound;
-    case 'saved':
-      return p.mekoSavings.usd ?? 0;
+      return p.meko.found;
+    case 'saved': {
+      // No estimate sorts last; a tokens-only one (no known price) sorts by its tokens among $0.
+      const s = p.meko.savings;
+      return s.searches === 0 ? -Number.MAX_VALUE : (s.usd ?? 0) + s.tokens * 1e-12;
+    }
     default:
       return p[k];
   }
@@ -166,15 +169,15 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                               className="num opt"
                               title={p.cost.unpricedMessages > 0 ? `Leaves out ${plural(p.cost.unpricedMessages, 'response')} from models without a known price` : undefined}
                             >
-                              {formatCost(p.cost.usd)}
+                              {formatCostOf(p.cost)}
                             </td>
-                            {showMeko && <td className="num opt">{p.mekoLookups > 0 ? `${p.mekoFound}/${p.mekoLookups}` : '—'}</td>}
+                            {showMeko && <td className="num opt">{p.meko.lookups > 0 ? `${p.meko.found}/${p.meko.lookups}` : '—'}</td>}
                             {showMeko && (
                               <td
-                                className={cx('num opt', savedClass(p.mekoSavings))}
-                                title={p.mekoSavings.searches > 0 ? `≈ ${p.mekoSavings.tokens.toLocaleString()} tokens from ${p.mekoSavings.searches.toLocaleString()} ${p.mekoSavings.searches === 1 ? 'search' : 'searches'}` : undefined}
+                                className={cx('num opt', savedClass(p.meko.savings))}
+                                title={savedTitle(p.meko.savings)}
                               >
-                                {savedText(p.mekoSavings)}
+                                {savedText(p.meko.savings)}
                               </td>
                             )}
                           </tr>

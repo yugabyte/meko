@@ -11,6 +11,18 @@ describe('API list prices', () => {
     expect(priceFor('claude-fable-5')?.cacheRead).toBe(1);
   });
 
+  it('prices older models, and Bedrock ids', () => {
+    expect(priceFor('claude-sonnet-4-5-20250929')).toEqual({ input: 3, output: 15, cacheRead: 0.3 });
+    expect(priceFor('claude-opus-4-1-20250805')).toEqual({ input: 15, output: 75, cacheRead: 1.5 });
+    expect(priceFor('claude-opus-4-20250514')).toEqual({ input: 15, output: 75, cacheRead: 1.5 });
+    expect(priceFor('claude-sonnet-4-20250514')?.input).toBe(3);
+    expect(priceFor('claude-3-5-haiku-20241022')).toEqual({ input: 0.8, output: 4, cacheRead: 0.08 });
+    expect(priceFor('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toEqual(priceFor('claude-sonnet-4-5'));
+    expect(priceFor('anthropic.claude-haiku-4-5-20251001-v1:0')).toEqual(priceFor('claude-haiku-4-5'));
+    // Opus 4.8 is its own model, not Opus 4 with a suffix.
+    expect(priceFor('claude-opus-4-8')?.input).toBe(5);
+  });
+
   it('has no price for a model it does not know', () => {
     expect(priceFor('claude-fake-1')).toBeNull();
     expect(priceFor('claude-opus-5-50')).toBeNull();

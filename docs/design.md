@@ -807,8 +807,9 @@ counts as 1-hour, which is what Claude Code uses).
 and cache read per model, with cache writes at 1.25× input for the 5-minute cache and 2× for the
 1-hour one), from per-model sums. It's shown as **Est. cost**, what the tokens would cost on the
 API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
-A model with no known price adds tokens but no cost, and the tooltip says how many responses were
-left out. Model ids match with a date (`-20251001`), `[1m]` or `@…` suffix.
+A model with no known price adds tokens but no cost; the cost then reads `≥ $…` (**Est. cost,
+partial**), and the tooltip says how many responses were left out. Model ids match with a date
+(`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).
 
 **Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
 (`mcp__meko__<tool>`, or a plugin's `mcp__plugin_…_meko__<tool>`) and their results, in the main
@@ -820,9 +821,10 @@ results, input_chars, result_chars, model, context_tokens)`. A **lookup** search
 conversations) is counted as a call only. A result can come in a later read than its call, so a call
 waits with no outcome until its `tool_result` is read. Meko wraps its JSON in `{"result": "…"}`; a
 lookup **found something** when its items (`results`, `memories`, context_search's buckets, or a
-single record) aren't empty, and it failed on a tool error or an `{"error": …}` reply. A result too
-large to show, which Claude Code saved to a file, counts as found at the size its notice gives; a call
-moved to the background found nothing. `model` and `context_tokens` (input, cache read and write)
+single record; a plain-text reply unless it says nothing was found) aren't empty, and it failed on a
+tool error or a reply with a non-empty `error`. A result too large to show, which Claude Code saved to
+a file, counts as found at the size of its notice, since only the notice entered the context (reading
+the file is Claude's own tool call); a call moved to the background found nothing. `model` and `context_tokens` (input, cache read and write)
 come from the response that made the call. Sizes are characters ÷ 4. The Meko plugin's hooks
 inject no recalled memory, so the transcript is the whole record of what Meko gave a session.
 The migration that added the table cleared the read offsets again, so older sessions got their
@@ -851,7 +853,9 @@ content   X − R             1-hour cache-write price (2× input)
 carry     (X − R) × k       cache-read price
 ```
 
-The saving is the sum, in tokens and in USD at the calling model's price. A result over 6,000
+The saving is the sum, in tokens and in USD at the calling model's price. A search on a model with
+no known price counts in the tokens but not the dollars, and the tile says how many were left out.
+An index on `usage_messages(session_id, agent, at)` keeps counting *k* cheap. A result over 6,000
 tokens makes the content and carry terms negative, and they're kept. Session, project and overall
 figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10
 later responses, one search saves about 483k tokens, almost all of them cache reads, so the dollar

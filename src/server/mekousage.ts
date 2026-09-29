@@ -1,4 +1,4 @@
-import type { MekoSavings, MekoUsage, SessionUsage } from '../shared/types.js';
+import type { MekoUsage, SessionUsage } from '../shared/types.js';
 import { all, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 
@@ -108,23 +108,31 @@ function resultText(content: unknown): string {
   return (content as Json[]).map((c) => (c?.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('');
 }
 
-/** Claude Code's notice for a result too large to show, which it saved to a file instead. */
+/**
+ * Claude Code's notice for a result too large to show, which it saved to a file instead. Only the
+ * notice enters the context; reading the file is a tool call of Claude's own, counted as usual.
+ */
 const TOO_LARGE = /^Error: result \(([\d,]+) characters\) exceeds maximum allowed tokens/;
 /** Claude Code's notice for a call it moved to the background: no result yet. */
 const BACKGROUND = /^MCP tool "[^"]*" is still running after/;
-/** Where a lookup's items are, by tool: memory and KB `results`, `memories`, context_search's buckets. */
-const ITEM_KEYS = ['results', 'memories', 'hits', 'chunks', 'documents', 'items', 'messages'];
+/**
+ * Where a lookup's items are: memory and KB `results`, `memories`, and context_search's buckets
+ * (`memory`, `knowledge_base`, `conversation`), wrapped in `results` or not.
+ */
+const ITEM_KEYS = ['results', 'memories', 'hits', 'chunks', 'documents', 'items', 'messages', 'memory', 'knowledge_base', 'conversation'];
+/** A plain-text reply that says nothing was found. */
+const NOTHING = /^(?:no|nothing|0)\b|\bnot found\b|\bno (?:results|memories|matches|documents)\b/i;
 
 /** Found, empty or failed, from a result's text. Meko wraps its JSON in `{"result": "<json>"}`. */
 export function classifyResult(kind: MekoKind, text: string, isError: boolean): Omit<MekoResult, 'toolUseId'> {
   const chars = text.length;
   if (isError) return { outcome: 'error', results: null, resultChars: chars };
   const big = TOO_LARGE.exec(text);
-  if (big) return { outcome: kind === 'lookup' ? 'found' : 'ok', results: null, resultChars: Number(big[1].replace(/,/g, '')) };
+  if (big) return { outcome: kind === 'lookup' ? 'found' : 'ok', results: null, resultChars: chars };
   if (BACKGROUND.test(text)) return { outcome: kind === 'lookup' ? 'empty' : 'ok', results: null, resultChars: chars };
   if (/^Error( calling tool|:)/.test(text)) return { outcome: 'error', results: null, resultChars: chars };
   const v = unwrap(text);
-  if (v && typeof v === 'object' && !Array.isArray(v) && 'error' in v) return { outcome: 'error', results: null, resultChars: chars };
+  if (v && typeof v === 'object' && !Array.isArray(v) && hasError((v as Json).error)) return { outcome: 'error', results: null, resultChars: chars };
   if (kind !== 'lookup') return { outcome: 'ok', results: null, resultChars: chars };
   const n = countItems(v);
   return { outcome: n > 0 ? 'found' : 'empty', results: n, resultChars: chars };
@@ -147,17 +155,29 @@ function unwrap(text: string): unknown {
   return v;
 }
 
+/** An `error` field that says something (`"error": null` or `""` in a good reply doesn't). */
+function hasError(e: unknown): boolean {
+  if (e == null || e === false || e === '') return false;
+  if (typeof e === 'object') return Object.keys(e).length > 0;
+  return true;
+}
+
 function countItems(v: unknown): number {
   if (Array.isArray(v)) return v.length;
-  if (typeof v === 'string') return v && v !== '[]' && v !== '{}' ? 1 : 0;
+  if (typeof v === 'string') return v && v !== '[]' && v !== '{}' && !NOTHING.test(v) ? 1 : 0;
   if (!v || typeof v !== 'object') return 0;
   const keys = ITEM_KEYS.filter((k) => k in v);
   // A single record (a memory by id, an artifact, a conversation) counts as one.
   if (keys.length === 0) return Object.keys(v).length > 0 ? 1 : 0;
-  return keys.reduce((n, k) => n + deepCount((v as Json)[k]), 0);
+  return keys.reduce((n, k) => n + itemCount((v as Json)[k]), 0);
 }
 
-/** Items in a list, or in every list inside an object (context_search's buckets). */
+/** Items under an item key: a list, the lists inside an object (context_search's buckets), or one text. */
+function itemCount(v: unknown): number {
+  if (typeof v === 'string') return v.trim() ? 1 : 0;
+  return deepCount(v);
+}
+
 function deepCount(v: unknown): number {
   if (Array.isArray(v)) return v.length;
   if (v && typeof v === 'object') return Object.values(v).reduce<number>((n, x) => n + deepCount(x), 0);
@@ -195,7 +215,10 @@ const tokensOf = (chars: number | null) => Math.round((chars ?? 0) / 4);
 
 /** Counts and the savings estimate for a set of calls. */
 export function summarizeMeko(rows: CallRow[]): MekoUsage {
-  const u: MekoUsage = { calls: rows.length, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, tokens: 0, usd: null } };
+  const u: MekoUsage = {
+    calls: rows.length, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0,
+    savings: { searches: 0, tokens: 0, usd: null, unpricedSearches: 0 },
+  };
   let usd = 0;
   let priced = 0;
   for (const r of rows) {
@@ -214,14 +237,12 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
     if (s.usd !== null) {
       usd += s.usd;
       priced++;
+    } else {
+      u.savings.unpricedSearches++;
     }
   }
   u.savings.usd = priced > 0 || u.savings.searches === 0 ? usd : null;
   return u;
-}
-
-export function emptySavings(): MekoSavings {
-  return { searches: 0, tokens: 0, usd: 0 };
 }
 
 /** Calls grouped by a key (session or project), each summarized. */

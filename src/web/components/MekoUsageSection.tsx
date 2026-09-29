@@ -48,10 +48,17 @@ function SavedStat({ savings: s }: { savings: MekoSavings }) {
     );
   }
   const title = `${ESTIMATE} ${s.tokens.toLocaleString()} tokens from ${s.searches.toLocaleString()} ${s.searches === 1 ? 'search' : 'searches'}.`;
+  // Dollars that leave out searches on unpriced models say so in the label (tooltips aren't seen on touch).
+  const partial = s.usd !== null && s.unpricedSearches > 0;
   return (
     <div className={cx('usage-stat', savedClass(s))} title={title}>
       <span className="usage-num">{s.usd !== null ? formatCost(s.usd) : `≈ ${signedTokens(s.tokens)}`}</span>
       <span className="usage-lbl">{s.usd !== null ? `Est. saved · ≈ ${signedTokens(s.tokens)} tokens` : 'Est. tokens saved'}</span>
+      {partial && (
+        <span className="usage-lbl">
+          $ leaves out {s.unpricedSearches} unpriced {s.unpricedSearches === 1 ? 'search' : 'searches'}
+        </span>
+      )}
     </div>
   );
 }
@@ -65,6 +72,14 @@ export function savedClass(s: MekoSavings): string | false {
 export function savedText(s: MekoSavings): string {
   if (s.searches === 0) return '—';
   return s.usd !== null ? formatCost(s.usd) : `≈ ${signedTokens(s.tokens)}`;
+}
+
+/** Tooltip for an Est. saved cell: the tokens behind it, and searches its dollars leave out. */
+export function savedTitle(s: MekoSavings): string | undefined {
+  if (s.searches === 0) return undefined;
+  const n = (k: number, w: string) => `${k.toLocaleString()} ${k === 1 ? w : `${w}es`}`;
+  const left = s.usd !== null && s.unpricedSearches > 0 ? `; the dollars leave out ${n(s.unpricedSearches, 'search')} on models without a known price` : '';
+  return `≈ ${s.tokens.toLocaleString()} tokens from ${n(s.searches, 'search')}${left}`;
 }
 
 function signedTokens(n: number): string {

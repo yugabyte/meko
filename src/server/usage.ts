@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
-import { emptySavings, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult } from './mekousage.js';
+import { mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult } from './mekousage.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -361,9 +361,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now()): UsageOvervie
       deleted: p.deleted_at != null,
       usage: byUsage.get(p.id) ?? { ...ZERO_USAGE },
       cost: toCost(costRows.get(p.id) ?? []),
-      mekoLookups: meko.get(p.id)?.lookups ?? 0,
-      mekoFound: meko.get(p.id)?.found ?? 0,
-      mekoSavings: meko.get(p.id)?.savings ?? emptySavings(),
+      meko: meko.get(p.id) ?? summarizeMeko([]),
       sessions: sessions.get(p.id)?.n ?? 0,
       mergedPrs: merged.get(p.id)?.n ?? 0,
       directPushes: pushed.get(p.id)?.pushes ?? 0,

@@ -219,4 +219,10 @@ describe('token formatting (web)', () => {
     expect(formatCost(1234.5)).toBe('$1,235');
     expect(formatCost(-2.75)).toBe('−$2.75');
   });
+
+  it('marks a cost that leaves out unpriced models as a lower bound', async () => {
+    const { formatCostOf } = await import('../../src/web/util.js');
+    expect(formatCostOf({ usd: 3.06, unpricedMessages: 0 })).toBe('$3.06');
+    expect(formatCostOf({ usd: 3.06, unpricedMessages: 4 })).toBe('≥ $3.06');
+  });
 });
