@@ -563,7 +563,8 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 
 	datapackGroup := v1.Group("")
 	// dpDirect is the only group that opts into PAT acceptance via
-	// auth.WithPAT. The 7 DatapackHandler routes hang off it; every
+	// auth.WithPAT: the routes an agent has to reach with a key rather
+	// than a browser session, each carrying its own RequireScope. Every
 	// other route stays JWT-only on datapackGroup. In dev mode (auth
 	// disabled) the two groups are identical -- DevAuth synthesises
 	// pat_scopes=["*"] so RequireScope is a no-op.
@@ -955,9 +956,8 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 // registerDatapackRoutes wires all datapack, observe, agent, and
 // knowledge-base routes onto the given groups.
 //
-// g is the JWT-only group used by everything except the 7
-// DatapackHandler endpoints that the MCP server / cli_app need to
-// reach with a PAT bearer.
+// g is the JWT-only group used by everything except the routes the MCP
+// server / cli_app / AgentK need to reach with a PAT bearer.
 //
 // dpDirect is the PAT-accepting group (auth.WithPAT applied) that
 // also has the per-PAT rate limiter attached. Each PAT-bearing
@@ -1064,9 +1064,20 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.POST("/feedback", feedbackH.Create)
 	g.GET("/feedback", feedbackH.ListGET)
 
+	// Sharing: all on dpDirect (not the JWT-only group `g`) so an agent
+	// holding a PAT can run the share flow in its own UI instead of
+	// deep-linking the user into meko_ui's Share page. Same reasoning as
+	// promote-memories and conversation-search-opt-out. Every
+	// datapack-scoped guard is unchanged; only the credential widens.
 	shareH := handlers.NewSharingHandler(reg.sharingSvc)
-	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)
-	g.POST("/datapacks/invite-action", shareH.InviteAction)
+	dpDirect.GET("/datapacks/incoming-shares", shareH.IncomingShares,
+		auth.RequireScope(auth.ScopeRead),
+	)
+	// No datapack guard: the invite is resolved from the body's invite_id
+	// and authorized against the CALLER's account inside the handler.
+	dpDirect.POST("/datapacks/invite-action", shareH.InviteAction,
+		auth.RequireScope(auth.ScopeWrite),
+	)
 
 	// Describe allows both owners and shared users. Reachable via PAT
 	// (read scope) so MCP clients can resolve a datapack by UUID.
@@ -1134,27 +1145,32 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	)
 
 	// Pending outgoing invites: owner or maintainer only.
-	g.GET("/datapacks/:datapack_id/outgoing-shares", shareH.OutgoingShares,
+	dpDirect.GET("/datapacks/:datapack_id/outgoing-shares", shareH.OutgoingShares,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
 	// Accepted members (roster): any role with datapack access.
-	g.GET("/datapacks/:datapack_id/member-list", shareH.MemberList,
+	dpDirect.GET("/datapacks/:datapack_id/member-list", shareH.MemberList,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	// Invite / resend / revoke: owner or maintainer (not under RequireDatapackOwnership).
 	// Middleware order is required: RequireDatapackAccess loads dp into context;
 	// RequireDatapackOwnerOrMaintainerGrant only reads that context (see its doc comment).
-	g.POST("/datapacks/:datapack_id/share", shareH.Invite,
+	dpDirect.POST("/datapacks/:datapack_id/share", shareH.Invite,
+		auth.RequireScope(auth.ScopeWrite),
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
-	g.POST("/datapacks/:datapack_id/invite/:invite_id/resend", shareH.ResendInvite,
+	dpDirect.POST("/datapacks/:datapack_id/invite/:invite_id/resend", shareH.ResendInvite,
+		auth.RequireScope(auth.ScopeWrite),
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
-	g.DELETE("/datapacks/:datapack_id/invite/:invite_id", shareH.RevokeInvite,
+	dpDirect.DELETE("/datapacks/:datapack_id/invite/:invite_id", shareH.RevokeInvite,
+		auth.RequireScope(auth.ScopeWrite),
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)

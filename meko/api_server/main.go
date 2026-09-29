@@ -254,8 +254,8 @@ func run() error {
 		"cadence for flushing MCP PAT last_used_at touches to the DB (e.g. 30s, 2m). Values <1s are clamped to 1s.")
 
 	// Per-PAT rate limit. Applied only on routes that opted into PAT
-	// acceptance (currently the 7 DatapackHandler routes); JWT
-	// requests are untouched. perMin <= 0 disables the limiter.
+	// acceptance (the dpDirect group in api/router.go); JWT requests
+	// are untouched. perMin <= 0 disables the limiter.
 	patRateLimitPerMin := flag.Int("pat-rate-limit-per-min",
 		envIntOrDefault("PAT_RATE_LIMIT_PER_MIN", 60),
 		"max requests per minute per PAT on opted-in routes (<=0 disables)")

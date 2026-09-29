@@ -289,8 +289,12 @@ func (s *SharingService) ListIncomingShares(email string) ([]models.IncomingShar
 
 // InviteActionRequest is the body for POST /datapacks/invite-action.
 type InviteActionRequest struct {
-	InviteID        string `json:"invite_id"`
-	RecipientUserID string `json:"recipient_user_id"`
+	InviteID string `json:"invite_id"`
+	// RecipientUserID is set by the handler from the authenticated account,
+	// never from the request body -- a caller-supplied value would let
+	// anyone holding an invite_id act on another person's invite. It stays
+	// on the struct because HandleInviteAction authorizes against it.
+	RecipientUserID string `json:"-"`
 	UserAction      string `json:"user_action"`
 }
 

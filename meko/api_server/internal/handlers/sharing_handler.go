@@ -80,6 +80,18 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 			"INTERNAL_ERROR", "failed to send invite, please try again or contact support")
 	}
 
+	// Attribute the invite to the credential, not just the account: this
+	// path provisions a Cognito user and mails a temporary password when
+	// the recipient is new, so a disputed invite has to point at one
+	// revocable key.
+	slog.Info("invite sent",
+		"datapack_id", dp.ID,
+		"recipient_email", req.RecipientEmail,
+		"grant_role", req.GrantRole,
+		"auth_method", auth.GetAuthMethod(c),
+		"pat_id", auth.GetPATID(c),
+	)
+
 	return ok(c, http.StatusOK, resp)
 }
 
@@ -117,6 +129,7 @@ func (h *SharingHandler) IncomingShares(c echo.Context) error {
 //	@Param		body	body		service.InviteActionRequest	true	"Action request"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	403		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
@@ -127,6 +140,18 @@ func (h *SharingHandler) InviteAction(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"INVALID_JSON", "malformed request body")
 	}
+
+	// The recipient is the CALLER, never whatever the body claims. The
+	// service only checks recipient_user_id against the invite, so without
+	// this any authenticated caller holding an invite_id and the real
+	// recipient's user_id could accept or decline on their behalf -- and
+	// GET /datapacks/:id/outgoing-shares hands both to every maintainer.
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+	req.RecipientUserID = account.ID
 
 	resp, err := h.svc.HandleInviteAction(req)
 	if err != nil {

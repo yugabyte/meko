@@ -67,6 +67,25 @@ func GetAccount(c echo.Context) (*models.Account, error) {
 	return account, nil
 }
 
+// GetAuthMethod reports how the current request authenticated:
+// AuthMethodCognito, AuthMethodPAT, or "" when no auth middleware ran.
+func GetAuthMethod(c echo.Context) string {
+	if method, ok := c.Get(ContextKeyAuthMethod).(string); ok {
+		return method
+	}
+	return ""
+}
+
+// GetPATID returns the id of the PAT that authenticated this request, or
+// "" on the JWT path. Pair it with GetAuthMethod when logging: an empty id
+// alone does not distinguish a JWT request from a PAT one.
+func GetPATID(c echo.Context) string {
+	if id, ok := c.Get(ContextKeyPATID).(string); ok {
+		return id
+	}
+	return ""
+}
+
 // GetDatapack extracts the resolved datapack from the Echo context.
 // Returns an error if neither RequireDatapackOwnership nor
 // RequireDatapackAccess has populated ContextKeyDatapack.

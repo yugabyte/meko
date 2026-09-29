@@ -262,8 +262,6 @@ definitions:
     properties:
       invite_id:
         type: string
-      recipient_user_id:
-        type: string
       user_action:
         type: string
     type: object
@@ -3233,6 +3231,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "403":

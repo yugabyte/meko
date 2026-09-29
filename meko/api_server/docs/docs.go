@@ -2392,6 +2392,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
@@ -6151,9 +6157,6 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "invite_id": {
-                    "type": "string"
-                },
-                "recipient_user_id": {
                     "type": "string"
                 },
                 "user_action": {
