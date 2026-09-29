@@ -240,8 +240,12 @@ mekoUi:
 # the rag workers.
 #
 # Off here:
-#   ragAgent    — enableable with that overlay. The text worker runs anywhere; the
-#                 PDF worker is gated on ragAgent.gpu.enabled and needs a GPU pool.
+#   ragAgent    — enableable with that overlay, or directly: text and conversations
+#                 run anywhere (null their nodeSelector if the cluster has no
+#                 rag-worker pool); pdf runs CPU-degraded without a GPU pool
+#                 (ragAgent.gpu.enabled=false) rather than needing one. What still
+#                 isn't chart-rendered for a BYOC install: rag-agent-secret and the
+#                 KB S3 bucket credential, unlike dataPlaneSecrets' other Secrets.
 #   langfuse    — NOT a flag away: v3 wants ClickHouse, a Valkey release of its own
 #                 (valkey.managed: false) and object storage beside it.
 #   provisioner — deliberately not: it renders ClusterRoles and a CRD, and manages
@@ -276,6 +280,7 @@ inferenceGateway:
 ragAgent:
   enabled: false
   text: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
+  conversations: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
   pdf: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
 langfuse:
   enabled: false

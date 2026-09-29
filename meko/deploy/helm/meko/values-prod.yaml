@@ -98,8 +98,9 @@ inferenceGateway:
 
 ragAgent:
   # §6.4: prod pulls meko/meko-rag-agent (dev pulls meko/rag-agent).
-  text: { image: { repository: meko/meko-rag-agent, tag: "1.0.4-20260507" } }
-  pdf:  { image: { repository: meko/meko-rag-agent, tag: "1.0.3-20260507" } }
+  text:          { image: { repository: meko/meko-rag-agent, tag: "1.0.4-20260507" } }
+  conversations: { image: { repository: meko/meko-rag-agent, tag: "1.0.9-20260917-context-search" } }
+  pdf:           { image: { repository: meko/meko-rag-agent, tag: "1.0.3-20260507" } }
   # Bedrock-only prod. Set true to build the prod-with-openai variant.
   openai: { enabled: false }
   config:

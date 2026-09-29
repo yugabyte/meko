@@ -17,6 +17,11 @@ Enabled components:
 {{- end }}
 {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true" }}
   - rag-agent         ns={{ .Values.ragAgent.namespace }} (gpu.enabled={{ .Values.ragAgent.gpu.enabled }}, selfManagedPlugin={{ .Values.ragAgent.gpu.selfManagedPlugin }})
+{{- if not .Values.ragAgent.gpu.enabled }}
+    rag-agent-pdf has no GPU pool (gpu.enabled=false): it runs on CPU instead of
+    being unschedulable. Expected to be slower per document, not broken — but
+    unverified against the image itself; watch it on first rollout.
+{{- end }}
 {{- end }}
 {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true" }}
   - langfuse          ns={{ .Values.langfuse.namespace }} (requires a separate valkey release: REDIS_HOST={{ .Values.langfuse.config.REDIS_HOST }})

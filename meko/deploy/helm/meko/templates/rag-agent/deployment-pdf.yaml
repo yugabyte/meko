@@ -1,4 +1,4 @@
-{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true") .Values.ragAgent.gpu.enabled }}
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true") }}
 {{- $c := .Values.ragAgent }}
 apiVersion: apps/v1
 kind: Deployment
@@ -28,6 +28,12 @@ spec:
         {{- include "meko.configChecksum" (dict "root" $ "files" (list "rag-agent/configmap.yaml")) | nindent 8 }}
     spec:
       {{- include "meko.imagePullSecrets" . }}
+      {{- /* Without a GPU pool (gpu.enabled=false — no shipping preset sets this
+             today; values-byoc.yaml leaves ragAgent off entirely, and only the
+             opt-in values-byoc-full.yaml turns it on), this worker still runs:
+             PDF ingestion falls back to CPU and is slower, not absent. Only pin
+             it to a GPU node when one is expected. */}}
+      {{- if $c.gpu.enabled }}
       {{- with $c.gpu.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -35,6 +41,7 @@ spec:
       {{- with $c.gpu.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- end }}
       terminationGracePeriodSeconds: 120
       securityContext:
@@ -51,7 +58,7 @@ spec:
             - configMapRef:
                 name: rag-agent-config
           resources:
-            {{- toYaml $c.pdf.resources | nindent 12 }}
+            {{- toYaml (ternary $c.pdf.resources $c.pdf.resourcesCpuOnly $c.gpu.enabled) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false

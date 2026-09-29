@@ -152,6 +152,9 @@ ragAgent:
   text:
     nodeSelector: { node_type: null, cloud.google.com/gke-nodepool: default-pool }
     resources: { requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 1Gi } }
+  conversations:
+    nodeSelector: { node_type: null, cloud.google.com/gke-nodepool: default-pool }
+    resources: { requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 1Gi } }
 EOF
 
 # Single-step install. The migrate Job is a POST-install/upgrade hook, so it

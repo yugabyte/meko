@@ -1,0 +1,116 @@
+# rag-agent has three workers now, not two — kustomize's rag-agent-conversations
+# (AUTO_COLUMN_EMBEDDING) had no chart template at all until this suite's changes.
+# And rag-agent-pdf used to be gated on gpu.enabled, so a cluster with no GPU pool
+# (a BYOC customer's) silently had NO pdf worker rather than a degraded one. Both
+# regress silently — a missing Deployment or a stray nodeSelector isn't something
+# `helm lint` catches.
+#
+#   helm unittest charts/meko
+suite: rag-agent workers
+templates:
+  # configmap.yaml is loaded because each Deployment includes it for a config
+  # checksum; only the three Deployments below are asserted against.
+  - templates/rag-agent/configmap.yaml
+  - templates/rag-agent/deployment-text.yaml
+  - templates/rag-agent/deployment-conversations.yaml
+  - templates/rag-agent/deployment-pdf.yaml
+set:
+  global.imageRegistry: docker.io/library
+  ragAgent.enabled: true
+  ragAgent.text.image.tag: t
+  ragAgent.conversations.image.tag: t
+  ragAgent.pdf.image.tag: t
+tests:
+  - it: renders all three workers when ragAgent is enabled
+    asserts:
+      - hasDocuments:
+          template: templates/rag-agent/deployment-text.yaml
+          count: 1
+      - hasDocuments:
+          template: templates/rag-agent/deployment-conversations.yaml
+          count: 1
+      - hasDocuments:
+          template: templates/rag-agent/deployment-pdf.yaml
+          count: 1
+
+  - it: conversations worker sets WORKER_TYPE and its own DB-connection env, not WORKER_DOCUMENT_TYPE
+    template: templates/rag-agent/deployment-conversations.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WORKER_TYPE
+            value: "AUTO_COLUMN_EMBEDDING"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: COLUMN_EMBED_BATCH_MAX_WAIT_SECONDS
+            value: "5"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WORKER_DOCUMENT_TYPE
+
+  - it: pdf renders on a GPU pool by default — nodeSelector, toleration, and the gpu resource request
+    template: templates/rag-agent/deployment-pdf.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            node_type: gpu
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: "nvidia.com/gpu"
+            operator: "Exists"
+            effect: "NoSchedule"
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests["nvidia.com/gpu"]
+          value: "1"
+
+  - it: pdf still renders without a GPU pool, degraded rather than absent
+    template: templates/rag-agent/deployment-pdf.yaml
+    set:
+      ragAgent.gpu.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.template.spec.nodeSelector
+      - notExists:
+          path: spec.template.spec.tolerations
+      - notExists:
+          path: spec.template.spec.containers[0].resources.requests["nvidia.com/gpu"]
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "2"
+
+  - it: pdf's dev-sized CPU-only fallback doesn't exceed dev's own GPU-path resources
+    template: templates/rag-agent/deployment-pdf.yaml
+    values:
+      - ../values-dev.yaml
+    set:
+      ragAgent.gpu.enabled: false
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "1"
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 3Gi
+
+  - it: text worker is unaffected by the pdf/conversations refactor
+    template: templates/rag-agent/deployment-text.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WORKER_DOCUMENT_TYPE
+            value: "TEXT"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENABLE_LANGFUSE_TRACING
+            value: "true"

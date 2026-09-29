@@ -535,6 +535,37 @@ dataPlaneSecrets:
   # Distinct from awsAccessKeyId above — that is Bedrock for the inference
   # gateway, this is S3 for the api-server. Same cloud, different grants, and
   # nothing requires them to be the same principal.
+  #
+  # IAM policy this principal needs, scoped to apiServer.config.S3_BUCKET.
+  # TWO statements, not one — s3:ListBucket is a bucket-level action and only
+  # works on the bucket ARN itself, never on a /* object ARN:
+  #   { "Effect": "Allow",
+  #     "Action": "s3:ListBucket",
+  #     "Resource": "arn:aws:s3:::<bucket>" }
+  #   { "Effect": "Allow",
+  #     "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+  #     "Resource": "arn:aws:s3:::<bucket>/*" }
+  # PutObject signs the presigned upload URL; GetObject serves the file back
+  # (viewing/downloading a previously uploaded KB document); DeleteObject
+  # backs the per-file delete handler. ListBucket is easy to miss because
+  # nothing here looks like a listing call, but s3_service.go's upload path
+  # calls ListObjectsV2 first (content-hash dedup: does an object with this
+  # hash already exist under the user/datapack prefix?), and KB sync/listing
+  # does the same — both AccessDenied without it. Losing ListBucket also
+  # breaks ObjectExists in a way that is easy to miss in testing: S3 answers a
+  # HeadObject on a missing key with 403 instead of 404 when the caller can't
+  # list, so the "not found" branch never triggers and the call surfaces as an
+  # error instead of a clean false.
+  #
+  # A SEPARATE grant is needed for ragAgent: the RAG workers process what lands
+  # in this bucket, but there is no S3-specific credential slot in their pod
+  # spec — only ragAgent.secrets.existing.rag's AWS_ACCESS_KEY_ID/
+  # AWS_SECRET_ACCESS_KEY (see ragAgent.config.AWS_S3_BUCKET_NAME below), the
+  # same pair already used for Bedrock. That principal needs s3:GetObject
+  # (and, if the worker enumerates rather than being handed an exact key,
+  # s3:ListBucket on the bucket ARN, same as above) added to its
+  # bedrock:InvokeModel grant. Two different buckets are not supported — set
+  # the same bucket name in both places.
   s3AccessKey: ""
   s3SecretKey: ""
   # apiServer.secrets.existing.oidc (key `oidc-client-secret`), when the data
@@ -757,7 +788,23 @@ ragAgent:
   enabled: true
   namespace: meko-rag-workers
   # Resources default to base (= prod); dev overrides in values-dev.yaml.
+  #
+  # text/conversations/pdf.image.tag are each REQUIRED at deploy time (meko.image
+  # fails a render on an empty one) whenever ragAgent.enabled is true — which is
+  # the default. An install that sets its own component tags without also using
+  # values-dev.yaml/values-prod.yaml (which already supply all three) needs to
+  # set every one of these explicitly, not just the ones it means to change.
   text:
+    image: { repository: meko/rag-agent, tag: "" }
+    nodeSelector: { node_type: rag-worker }
+    resources:
+      requests: { cpu: "500m", memory: "4Gi", ephemeral-storage: "8Gi" }
+      limits: { cpu: "2", memory: "6Gi", ephemeral-storage: "12Gi" }
+  # AUTO_COLUMN_EMBEDDING worker (kustomize's rag-agent-conversations): same
+  # image family and CPU footprint as text, on the same rag-worker pool — it
+  # differs only in WORKER_TYPE and reads its own YB connection string as
+  # COLUMN_EMBED_SOURCE_DB_CONNECTION_STRING (see deployment-conversations.yaml).
+  conversations:
     image: { repository: meko/rag-agent, tag: "" }
     nodeSelector: { node_type: rag-worker }
     resources:
@@ -768,8 +815,24 @@ ragAgent:
     resources:
       requests: { cpu: "2", memory: "6Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }
       limits: { cpu: "3", memory: "6Gi", ephemeral-storage: "12Gi", nvidia.com/gpu: "1" }
+    # Used instead of `resources` above when gpu.enabled is false (see below):
+    # same worker, no nvidia.com/gpu request. UNVERIFIED against rag-agent's own
+    # source (private image, no source checkout available to this chart): the
+    # assumption is that nothing in it requires a GPU to run, only to run fast,
+    # so PDF ingestion still works — slower per document — rather than crashing.
+    # If the image initializes CUDA unconditionally, this degrades to a
+    # crash-looping pod instead; confirm against a real rollout before relying
+    # on it, and see the matching caveat in NOTES.txt.
+    resourcesCpuOnly:
+      requests: { cpu: "2", memory: "6Gi", ephemeral-storage: "8Gi" }
+      limits: { cpu: "3", memory: "6Gi", ephemeral-storage: "12Gi" }
   gpu:
     enabled: true
+    # Also gates rag-agent-pdf's own scheduling (deployment-pdf.yaml): when
+    # false, the Deployment still renders but drops this nodeSelector and
+    # toleration and uses pdf.resourcesCpuOnly instead, so it lands on an
+    # ordinary CPU node. Set false — rather than disabling pdf — on a cluster
+    # with no GPU pool, e.g. a BYOC customer's.
     nodeSelector: { node_type: gpu }
     tolerations:
       - key: "nvidia.com/gpu"
@@ -786,6 +849,9 @@ ragAgent:
     TASK_LEASE_DURATION: "600"
     TXT_LANGFUSE_HOST: ""
     PDF_LANGFUSE_HOST: ""
+    # Same bucket as apiServer.config.S3_BUCKET — this is what these workers
+    # read to process an uploaded KB file. The IAM policy secrets.existing.rag
+    # needs for that is documented at dataPlaneSecrets.s3AccessKey above.
     AWS_S3_BUCKET_NAME: ""
     ENABLE_FINETUNING: "true"
   openai:
@@ -802,6 +868,11 @@ ragAgent:
   dbConnectionString: ""
   secrets:
     existing:
+      # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY here is the ONE AWS credential
+      # these workers get — no separate slot for S3. It needs bedrock:InvokeModel
+      # (for embedding/inference) AND s3:GetObject on config.AWS_S3_BUCKET_NAME
+      # (to read what api-server's presigned upload put there). See
+      # dataPlaneSecrets.s3AccessKey above for the exact policy shape.
       rag: rag-agent-secret
 
 # ---------------------------------------------------------------------------

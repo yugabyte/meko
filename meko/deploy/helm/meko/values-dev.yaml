@@ -98,12 +98,24 @@ ragAgent:
     resources:
       requests: { cpu: "500m", memory: "2Gi", ephemeral-storage: "8Gi" }
       limits: { cpu: "2", memory: "4Gi", ephemeral-storage: "12Gi" }
+  conversations:
+    image: { repository: meko/rag-agent, tag: "1.0.9-20260917-context-search" }
+    # dev: smaller memory footprint (base is 4Gi request / 6Gi limit).
+    resources:
+      requests: { cpu: "500m", memory: "2Gi", ephemeral-storage: "8Gi" }
+      limits: { cpu: "2", memory: "4Gi", ephemeral-storage: "12Gi" }
   pdf:
     image: { repository: meko/rag-agent, tag: "1.0.3-20260507" }
     # dev: smaller CPU/memory for the GPU worker.
     resources:
       requests: { cpu: "1", memory: "3Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }
       limits: { cpu: "2", memory: "4Gi", ephemeral-storage: "12Gi", nvidia.com/gpu: "1" }
+    # Same shrink as `resources` above, minus the GPU request — without this,
+    # gpu.enabled=false in dev falls through to the base (=prod) resourcesCpuOnly,
+    # which requests MORE than dev's own GPU path.
+    resourcesCpuOnly:
+      requests: { cpu: "1", memory: "3Gi", ephemeral-storage: "8Gi" }
+      limits: { cpu: "2", memory: "4Gi", ephemeral-storage: "12Gi" }
   config:
     TXT_LANGFUSE_HOST: http://k8s-mekolang-langfuse-5855532971-660935736e2a0dc8.elb.us-east-2.amazonaws.com:3000
     PDF_LANGFUSE_HOST: http://k8s-mekolang-langfuse-5855532971-660935736e2a0dc8.elb.us-east-2.amazonaws.com:3000

@@ -392,6 +392,7 @@ for c in aws gcp; do for e in dev prod; do for m in "" ycp agent; do
     --set-string apiServer.image.tag=t --set-string mekoUi.image.tag=t \
     --set-string mekoMcpServer.image.tag=t --set-string inferenceGateway.image.tag=t \
     --set-string provisioner.image.tag=t --set-string ragAgent.text.image.tag=t \
+    --set-string ragAgent.conversations.image.tag=t \
     --set-string ragAgent.pdf.image.tag=t --set-string agent.image.tag=t \
     --set agent.ycpUrl=http://x --set agent.envName=e
 done; done; done
@@ -416,9 +417,13 @@ diff <(helm template t /tmp/meko-chart-base/charts/meko -f … ) \
 - **AWS parity**: `-f values-aws.yaml` renders byte-identical to the current
   kustomize manifests (verified dev+prod). GKE-only wiring (GCE ingress,
   imagePullSecrets, ManagedCertificate) is gated on `global.cloud`/ingress class.
-- **rag-agent** requires a GPU node pool (`node_type=gpu` +
-  `cloud.google.com/gke-accelerator`) for the PDF worker and a `rag-worker` pool
-  for text; without them those pods stay Pending.
+- **rag-agent**: text and conversations need a `rag-worker` node pool
+  (`node_type=rag-worker`) by default; the PDF worker needs a GPU pool
+  (`node_type=gpu` + `cloud.google.com/gke-accelerator`) only while
+  `ragAgent.gpu.enabled` is true (the default) — set it false on a cluster with
+  no GPU pool and PDF ingestion still runs, on CPU, rather than staying
+  Pending. text/conversations' `nodeSelector` isn't gated the same way; null it
+  out explicitly if the target cluster has no `rag-worker` pool either.
 - **CRD**: `mekouseraccounts.saas.mekodata.ai` is templated with
   `helm.sh/resource-policy: keep` — `helm uninstall` will NOT remove it (protects
   tenant data). Delete manually if you truly want it gone.

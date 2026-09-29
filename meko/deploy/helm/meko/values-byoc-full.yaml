@@ -50,14 +50,19 @@ inferenceGateway:
 
 ragAgent:
   enabled: true
-  # Text only. The PDF worker is gated on this flag and requests nvidia.com/gpu,
-  # which no BYOC cluster is assumed to have; turn it on where there is a GPU pool.
+  # PDF runs CPU-degraded (slower per document) without a GPU pool, rather than
+  # being unschedulable — see ragAgent.pdf.resourcesCpuOnly in values.yaml. Turn
+  # this on where there is a GPU pool for pdf to request nvidia.com/gpu instead.
   gpu:
     enabled: false
   text:
     # null, not {}: Helm MERGES maps, so an empty one leaves the base and env preset
     # selectors (node_type=rag-worker, and on GKE a rag-worker nodepool) in place and
     # the worker sits Pending on a cluster that has neither.
+    nodeSelector: null
+  # Same reason as text — this worker has no BYOC-side nodeSelector gate of its
+  # own either, unlike pdf's gpu.enabled above.
+  conversations:
     nodeSelector: null
   openai:
     # The BYOC stack has no Bedrock credentials, so indexes are OPENAI-provider ones
