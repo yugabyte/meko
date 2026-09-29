@@ -2011,7 +2011,31 @@ async fn flush_batch(
         .iter()
         .map(|r| encode_run(&batch[r.clone()], codec))
         .collect();
-    flush_batch_thin(yb_thinclient, branch_id, batch, &runs, &encoded).await
+    // The same lease again, this time for the leader to enforce. The check above
+    // only stops a writer that is on time to notice; one that stalls between it
+    // and the write is refused by the tablet, and `write_fenced` then resubmits
+    // under a renewed token or exits. The batch is one bucket, but a bucket's
+    // key span is not pinned to one tablet once tablets split, so a refusal
+    // can be partial — see compute-fencing.md § Known gaps.
+    utils::write_fence::global()
+        .write_fenced("WAL flush to amp_storage.wals", server_fenced, |deadline| {
+            flush_batch_thin(
+                yb_thinclient,
+                branch_id,
+                batch,
+                &runs,
+                &encoded,
+                deadline.into(),
+            )
+        })
+        .await
+}
+
+/// A write error the leader returned because the write's lease deadline had
+/// passed, as opposed to a failure worth retrying.
+fn server_fenced(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<yb_thin_client::YbError>()
+        .is_some_and(yb_thin_client::YbError::is_fenced)
 }
 
 /// Concatenate a run's chunk payloads and wrap them in the
@@ -2050,19 +2074,23 @@ fn encode_run(chunks: &[PendingChunk], codec: payload_codec::Codec) -> bytes::By
 /// Thin-client (`yb_thin_client`) variant of the batched write: one Perform
 /// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
 /// first chunk and valued as the concatenation of the run's chunks
-/// ([`encode_run`]). The whole batch carries ONE bucket, so all ops
-/// land on one tablet and the tserver session applies them as one write
-/// batch (atomic) — a crash mid-flush cannot leave a hole (the invariant
-/// `load_max_offset`'s simple max-end rehydration relies on).
+/// ([`encode_run`]). The whole batch carries ONE bucket, so while that
+/// bucket's key span is one tablet the ops apply as one write batch and a
+/// crash mid-flush cannot leave a hole — the invariant `load_max_offset`'s
+/// max-end rehydration relies on. Once a tablet splits inside the bucket, two
+/// runs of a batch can land on different tablets, and a crash or a fence
+/// refusal mid-flush can leave one: https://github.com/yugabyte/meko/issues/1570.
 ///
 /// `encoded` carries the [`payload_codec`]-wrapped run buffers produced by
-/// [`flush_batch`], 1:1 with `runs`.
+/// [`flush_batch`], 1:1 with `runs`. `deadline` is the lease the rows are
+/// fenced on; deciding what a refusal means is [`flush_batch`]'s job.
 async fn flush_batch_thin(
     yb_thinclient: &YbThinClient,
     branch_id: BranchId,
     batch: &[PendingChunk],
     runs: &[std::ops::Range<usize>],
     encoded: &[bytes::Bytes],
+    deadline: yb_thin_client::WriteDeadline,
 ) -> Result<()> {
     // Test-only failpoint (build with `--features testing`, configure via
     // `fail::cfg("sk-wal-direct-flush-fail", "return(())")`): inject a
@@ -2117,7 +2145,7 @@ async fn flush_batch_thin(
     // consumer's flush and stalls WAL durability. There is no per-attempt
     // session rotation: the shim owns the session pool and the tserver does
     // the routing.
-    let res = yb_thinclient.client.upsert(&rows).await;
+    let res = yb_thinclient.client.upsert(&rows, deadline).await;
     crate::metrics::YB_WAL_INSERT_SECONDS
         .with_label_values(&["yb_thin_client"])
         .observe(started.elapsed().as_secs_f64());
@@ -5504,6 +5532,102 @@ mod tests {
             got[0].end_offset, 2000,
             "the covering chunk must actually span the fetch position"
         );
+
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// The WAL write carries the lease to the leader. A flush submitted under
+    /// a deadline that has passed is refused and leaves nothing in `wals`, and
+    /// the refusal reads as the fence — `flush_batch` keys its resubmit-or-exit
+    /// decision on that — rather than as a failure the consumer would retry
+    /// against the same lapsed lease. The same batch under a live deadline
+    /// lands.
+    ///
+    /// This is the stalled-writer case the local check cannot catch: the
+    /// deadline is passed in rather than read from the process's fence, so the
+    /// test reaches the write with its lease already over.
+    #[tokio::test]
+    async fn a_wal_flush_past_its_deadline_is_refused_and_leaves_nothing() {
+        let table = scratch_table("wals_test_fence");
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, &table).await;
+        let (db_oid, oids) = ysql_client::lookup_table_oids(&client, "public", &[table.as_str()])
+            .await
+            .expect("look up scratch wals table OIDs");
+        let thin_client = thin_client();
+        let wals = thin_client
+            .open_table(db_oid, oids[table.as_str()])
+            .expect("open scratch wals table via the thin lane");
+        let thin = YbThinClient {
+            client: thin_client,
+            wals,
+        };
+
+        let branch_id = BranchId::generate();
+        let batch = vec![PendingChunk {
+            segno: 1,
+            bucket_id: 0,
+            chunk_offset: 0,
+            chunk_size: 64,
+            data: Arc::new(vec![0xab; 64]),
+            end_lsn: Lsn(SEG_SIZE + 64),
+        }];
+        let runs = coalesce_runs(&batch);
+        let encoded: Vec<bytes::Bytes> = runs
+            .iter()
+            .map(|r| encode_run(&batch[r.clone()], payload_codec::Codec::Lz4))
+            .collect();
+        let rows_for_branch = || async {
+            client
+                .query_opt(
+                    &format!(
+                        "SELECT count(*) FROM {} WHERE branch_id=$1",
+                        quote_relation(&table)
+                    ),
+                    &[&branch_id],
+                )
+                .await
+                .expect("count")
+                .map(|r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        let now_us = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let minute_us = 60_000_000;
+
+        let err = flush_batch_thin(
+            &thin,
+            branch_id,
+            &batch,
+            &runs,
+            &encoded,
+            yb_thin_client::WriteDeadline::EpochMicros(now_us - minute_us),
+        )
+        .await
+        .expect_err("a flush under a lapsed deadline must be refused");
+        assert!(
+            server_fenced(&err),
+            "the refusal must read as the fence, not a retryable failure: {err:#}"
+        );
+        assert_eq!(rows_for_branch().await, 0, "a refused flush must not land");
+
+        flush_batch_thin(
+            &thin,
+            branch_id,
+            &batch,
+            &runs,
+            &encoded,
+            yb_thin_client::WriteDeadline::EpochMicros(now_us + minute_us),
+        )
+        .await
+        .expect("a flush under a live deadline lands");
+        assert_eq!(rows_for_branch().await, 1);
 
         drop_wals_table(&client, &table).await;
     }

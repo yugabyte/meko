@@ -25,8 +25,13 @@ pub enum YbError {
     /// Anything else — fatal.
     #[error("yb_thin_client error: {0}")]
     Other(String),
-    /// The row's `ignore_after_hybrid_time` fence had passed: the write did
-    /// NOT take effect. Never retry — the lease it was fenced on is gone.
+    /// The row's `ignore_after_hybrid_time` fence had passed, so its leader
+    /// refused it. That says at least one row was refused, not that nothing
+    /// landed: a batch spanning tablets is judged per tablet and may be partly
+    /// applied, and `upsert` can return this after an earlier attempt already
+    /// committed but failed with `Network`. Never retried here: re-sending
+    /// under the same deadline is refused again, and whether a renewed lease
+    /// makes a new deadline safe is the caller's call (`utils::write_fence`).
     #[error("yb_thin_client fenced: {0}")]
     Fenced(String),
 }
@@ -41,6 +46,11 @@ impl YbError {
 
     pub fn is_read_restart(&self) -> bool {
         matches!(self, YbError::ReadRestart(_))
+    }
+
+    /// The leader refused the write because its deadline had passed.
+    pub fn is_fenced(&self) -> bool {
+        matches!(self, YbError::Fenced(_))
     }
 }
 

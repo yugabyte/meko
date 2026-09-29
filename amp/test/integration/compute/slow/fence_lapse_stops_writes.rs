@@ -139,8 +139,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
                 break;
             }
             Ok(()) => {
-                // Undo it so the row count below still means something if the
-                // very next attempt is the one that fails.
+                // Tidy up, best effort. The count below excludes the probe, so
+                // it does not depend on this landing: the fence can take the
+                // endpoint down between the INSERT and this DELETE, leaving a
+                // probe that committed while the lease was still live.
                 let _ = db::batch(&conn, "DELETE FROM fenced WHERE id = 100001").await;
             }
         }
@@ -158,7 +160,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
             bail!("the endpoint did not come back within {RECLAIM_BUDGET:?} of the stolen lease expiring");
         }
         sleep(Duration::from_secs(2)).await;
-        if let Ok(n) = db::query_i64(&conn, "SELECT count(*) FROM fenced").await {
+        // The probe is left out: whether it survived depends on where the fence
+        // cut, not on whether the fence works — "writes stopped" above is what
+        // proves that. Counting it is what made this test fail with 501.
+        if let Ok(n) = db::query_i64(&conn, "SELECT count(*) FROM fenced WHERE id <> 100001").await {
             if n != before {
                 bail!("came back with {n} rows, not the {before} committed before the lapse");
             }

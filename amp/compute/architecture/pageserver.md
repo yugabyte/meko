@@ -977,10 +977,19 @@ this process over `POST /v1/write_token`. With `require_write_token = true`,
 immediately before every write reaches YugabyteDB:
 
 - `put_pages`, `put_slru_pages`, `put_meta` — the data writes;
+- `gc_enqueue_candidates` — the GC queue;
 - `advance_consistent_lsn` — the durability commit;
-- `publish_gc_cutoff`, and each of the seven `gc_act_*` deletes. The deletes
+- `publish_gc_cutoff`, `gc_dequeue_candidates`, and each of the seven
+  `gc_act_*` deletes. The deletes
   are gated separately from the publish that authorises them because the drain
   runs after an RCU grace wait, so the lease can lapse in between.
+
+The first four are thin-client writes, so they also carry the token to the
+leader as `ignore_after_hybrid_time`, which refuses a row whose deadline has
+passed by the time the write is applied — the stalled writer the local check
+cannot see. A refusal is resubmitted under a renewed token if one has arrived,
+and otherwise exits like the local check (`WriteFence::write_fenced`). The rest
+are YSQL, which has no such field, so the local check is all that guards them.
 
 Past the deadline the process **exits** (code 66) rather than returning an
 error, because an error would go back to a client that reconnects and retries

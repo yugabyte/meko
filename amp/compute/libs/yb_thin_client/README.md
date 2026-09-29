@@ -49,8 +49,12 @@ read is just a one-op batch; writes are the same shape.
   `read_scan` are RPC-free sugar over it (the latter pages a whole scan pinned
   to the first page's snapshot, and fails it once a continuation has returned
   more than `THIN_SCAN_BARREN_ROUNDS` empty pages without advancing).
-- **`client.upsert(&[UpsertRow])`** — a batch of upserts as one write `Perform`;
-  rows may span tables.
+- **`client.upsert(&[UpsertRow], WriteDeadline)`** — a batch of upserts as one
+  write `Perform`; rows may span tables. Every row is fenced on the deadline:
+  the leader refuses one whose deadline has passed with `YbError::Fenced`.
+  `WriteDeadline::EpochMicros` takes the lease token as issued; this crate is
+  the one place it becomes a hybrid time (`<< 12`). `Unfenced` is for writers
+  that hold no lease.
 - Builders: `RangeRead::new(table, hash_values).cond(...).targets(...).limit(...)`
   and `UpsertRow::new(table, key_values, &[(col, val)])` resolve column names to
   ids against the `TableHandle` (RPC-free). `BindValue` is the input value type,
@@ -64,9 +68,10 @@ read is just a one-op batch; writes are the same shape.
   `Value::as_i64()/as_bytes()/…` return `Result`.
 - Errors: `YbError` mirrors the shim's status codes (`Invalid`, `Network`,
   `TryAgain`, `ReadRestart`, `Schema`, `Fenced`, `Other`); `ReadRestart` means
-  restart the whole batch on a fresh read point, and `Fenced` means the row's
-  `ignore_after_hybrid_time` had passed — the write did not take effect, so it
-  is never retried.
+  restart the whole batch on a fresh read point, and `Fenced` means a row's
+  `ignore_after_hybrid_time` had passed. A batch spanning tablets may be partly
+  applied when that happens. It is never retried here; `WriteFence::write_fenced`
+  resubmits under a renewed token or exits.
 
 ## Session / connection pool
 

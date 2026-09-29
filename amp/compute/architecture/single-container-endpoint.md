@@ -202,15 +202,18 @@ In this pod, concretely:
 - 15 s TTL (`WRITE_TOKEN_TTL_MS`), renewed every 5 s
   (`WRITE_TOKEN_RENEW_SECONDS`). Each renewal is pushed to the
   safekeeper and pageserver over `POST /v1/write_token`.
-- Losing the lease — a denial, or renewals failing until the token runs
-  out — SIGTERMs **every** child, then goes back to waiting for the
+- Losing the lease — a denial, renewals failing until the token runs
+  out, or a renewal granted only after the token had already lapsed —
+  SIGTERMs **every** child, then goes back to waiting for the
   token and re-runs the whole bring-up when it wins one. A clean SIGTERM
   releases the lease, so a replacement starts immediately instead of
   waiting out the TTL.
 - The safekeeper and pageserver are armed via `require_write_token = true`
   in the configs the supervisor renders, and kill themselves rather than
   write past their token's deadline — including when they have never been
-  given one.
+  given one. Their page and WAL writes also carry the deadline to
+  YugabyteDB, whose leader refuses them past it, so a service that stalls
+  after checking cannot land them late either.
 
 `REQUIRE_WRITE_TOKEN=false` runs the endpoint unfenced (no lease, no
 pushes, `require_write_token = false`). It is the escape hatch for a

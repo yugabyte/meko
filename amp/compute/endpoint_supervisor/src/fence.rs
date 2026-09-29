@@ -468,8 +468,27 @@ impl Fence {
     /// immediate: someone else holds it.
     fn renew(&mut self) -> bool {
         while !crate::supervise::shutdown_requested() {
-            match self.acquire() {
+            let ttl = timings().0;
+            match self.acquire_with_ttl(ttl) {
                 Ok(g) if g.granted => {
+                    if let Some(held) = self.token
+                        && !granted_while_live(held, g.token, ttl)
+                    {
+                        // The store grants the holder a renewal however long
+                        // ago its token lapsed, so a grant is not proof the
+                        // lease was never lost: after a pause longer than the
+                        // lease — a frozen VM, a stopped pod — another endpoint
+                        // may have taken the branch and given it back. The
+                        // children kept this tenure's in-memory state and must
+                        // not carry on under a new one, so this is a loss, and
+                        // the new token is never pushed to them.
+                        tracing::error!(
+                            held,
+                            granted = g.token,
+                            "write token: the lease lapsed before this renewal was granted"
+                        );
+                        return false;
+                    }
                     self.token = Some(g.token);
                     set_current(self.token);
                     self.push();
@@ -513,12 +532,15 @@ impl Fence {
     }
 
     fn acquire(&self) -> Result<TokenGrant> {
+        self.acquire_with_ttl(timings().0)
+    }
+
+    fn acquire_with_ttl(&self, ttl: Duration) -> Result<TokenGrant> {
         let budget = self.call_budget();
         self.rt.block_on(async {
             tokio::time::timeout(
                 budget,
-                self.store
-                    .acquire(&self.resource, &self.cfg.client_id, timings().0),
+                self.store.acquire(&self.resource, &self.cfg.client_id, ttl),
             )
             .await
             .map_err(|_| anyhow::anyhow!("token_acquire did not answer within {budget:?}"))?
@@ -567,6 +589,20 @@ impl Fence {
             }
         }
     }
+}
+
+/// Was `granted` — a token just issued for `ttl` — granted while `held` was
+/// still live?
+///
+/// `token_acquire` issues `now_us() + ttl`, so `granted - ttl` is the moment it
+/// granted, read off the database's clock, the same clock `held` came from. A
+/// grant before `held` expired continues the lease: no one else could have
+/// taken it, since a takeover waits for `held` plus the skew grace. A grant at
+/// or after it starts a new one, which the daemons must not be pushed —
+/// `WriteFence::write_fenced` resubmits a refused write under any newer token,
+/// on the strength of that token extending the same lease.
+fn granted_while_live(held: WriteToken, granted: WriteToken, ttl: Duration) -> bool {
+    granted.saturating_sub(ttl.as_micros() as u64) < held
 }
 
 /// Sleep, waking early if a shutdown lands. Polled rather than signalled because
@@ -639,6 +675,40 @@ mod tests {
             renew_every: Duration::from_secs(DEFAULT_RENEW_SECONDS),
             client_id: "test-client".into(),
         }
+    }
+
+    const TTL: Duration = Duration::from_secs(15);
+
+    fn us(secs: u64) -> WriteToken {
+        secs * 1_000_000
+    }
+
+    /// The steady state: a renewal every few seconds, well inside the lease.
+    #[test]
+    fn a_renewal_inside_the_lease_continues_it() {
+        let held = us(1_000_015); // expires at t = 1_000_015
+        let granted = us(1_000_010) + TTL.as_micros() as u64; // granted at t = 1_000_010
+        assert!(granted_while_live(held, granted, TTL));
+    }
+
+    /// A pod frozen past its lease comes back and the store grants its old
+    /// client id again. That grant starts a new tenure, not a renewal: someone
+    /// may have held the branch in between.
+    #[test]
+    fn a_grant_after_the_lease_lapsed_is_a_new_tenure() {
+        let held = us(1_000_015);
+        let granted = us(1_000_600) + TTL.as_micros() as u64; // ten minutes on
+        assert!(!granted_while_live(held, granted, TTL));
+    }
+
+    /// The deadline is the end of the lease, not its last instant — the same
+    /// rule `WriteFence` applies to a write at the expiry time.
+    #[test]
+    fn a_grant_at_the_deadline_is_a_new_tenure() {
+        let held = us(1_000_015);
+        let granted = held + TTL.as_micros() as u64;
+        assert!(!granted_while_live(held, granted, TTL));
+        assert!(granted_while_live(held, granted - 1, TTL));
     }
 
     /// Renewing no sooner than the lease expires leaves nothing to retry a

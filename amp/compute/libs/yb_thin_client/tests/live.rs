@@ -19,10 +19,12 @@
 //! DROP→CREATE catalog races the shared cluster throws at it (#508, #1130),
 //! and teardown through `drop_table`, which is best-effort.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use yb_thin_client::{BindValue, RangeRead, ReadOp, TsClient, TsClientConfig, UpsertRow};
+use yb_thin_client::{
+    BindValue, RangeRead, ReadOp, TsClient, TsClientConfig, UpsertRow, WriteDeadline, YbError,
+};
 use ysql_client::{HostPorts, YbConnConfig, YsqlClient};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -220,7 +222,10 @@ async fn smoke_connect_open_upsert_read() {
         .expect("build upsert row")
     };
     client
-        .upsert(&[mk_row("s", 1, 1, b"hello-s"), mk_row("t", 2, 2, b"hello-t")])
+        .upsert(
+            &[mk_row("s", 1, 1, b"hello-s"), mk_row("t", 2, 2, b"hello-t")],
+            WriteDeadline::Unfenced,
+        )
         .await
         .expect("upsert");
 
@@ -282,6 +287,107 @@ async fn smoke_connect_open_upsert_read() {
     drop_table(&ysql, TABLE).await;
 }
 
+/// The lease fence, against a real tserver.
+///
+/// A row submitted under a deadline that has already passed must come back
+/// `Fenced` and must not land. A row under a deadline still ahead lands. And an armed writer that was never issued a
+/// token — deadline zero — must be refused, not read as the wire's "no fence".
+///
+/// The unit tests pin the encoding; this is what shows the tserver agrees with
+/// it. Raw micros, or the wrong shift, pass those and fail here: they read as a
+/// 1970 hybrid time and fence every write, including the one that must land.
+/// YSQL is the witness for what landed, so the check does not rest on the thin
+/// client's own error alone.
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
+async fn fence_refuses_a_write_past_its_deadline() {
+    const TABLE: &str = "thin_fence";
+    let ysql = ysql().await;
+    recreate_table(
+        &ysql,
+        TABLE,
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
+                 branch_id TEXT NOT NULL,
+                 lsn BIGINT NOT NULL,
+                 payload BYTEA NOT NULL,
+                 PRIMARY KEY ((branch_id) HASH, lsn DESC))"
+        ),
+    )
+    .await;
+    let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
+    let client = TsClient::connect(&ts_config()).expect("thin-client connect");
+    let table = client.open_table(db_oid, table_oid).expect("open_table");
+    let row = |branch: &str| {
+        UpsertRow::new(
+            &table,
+            vec![BindValue::Text(branch.into()), BindValue::I64(1)],
+            &[("payload", BindValue::Bytes(Bytes::from_static(b"x")))],
+        )
+        .expect("build upsert row")
+    };
+
+    // A minute either side of now: far outside any clock disagreement between
+    // this process and the tserver, so the verdict is the encoding's, not the
+    // clocks'.
+    let now_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after the epoch")
+        .as_micros() as u64;
+    let minute_us = 60_000_000;
+
+    // Two rows, both past their deadline: every one of them has to be refused.
+    // They may share a tablet (the table is not pre-split), so this checks the
+    // refusal, not how a batch spanning tablets is judged.
+    let lapsed = client
+        .upsert(
+            &[row("lapsed-a"), row("lapsed-b")],
+            WriteDeadline::EpochMicros(now_us - minute_us),
+        )
+        .await
+        .expect_err("a write under a lapsed deadline must be refused");
+    assert!(matches!(lapsed, YbError::Fenced(_)), "lapsed: {lapsed}");
+
+    let never_issued = client
+        .upsert(&[row("zero")], WriteDeadline::EpochMicros(0))
+        .await
+        .expect_err("a zero deadline must be refused, not treated as unfenced");
+    assert!(
+        matches!(never_issued, YbError::Fenced(_)),
+        "zero deadline: {never_issued}"
+    );
+
+    client
+        .upsert(
+            &[row("live")],
+            WriteDeadline::EpochMicros(now_us + minute_us),
+        )
+        .await
+        .expect("a write under a live deadline lands");
+    client
+        .upsert(&[row("unfenced")], WriteDeadline::Unfenced)
+        .await
+        .expect("an unfenced write lands");
+
+    let landed: Vec<String> = ysql
+        .query(
+            &format!("SELECT branch_id FROM {TABLE} ORDER BY branch_id"),
+            &[],
+        )
+        .await
+        .expect("read back through YSQL")
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(
+        landed,
+        vec!["live".to_string(), "unfenced".to_string()],
+        "only the writes whose deadline had not passed may land"
+    );
+
+    drop_table(&ysql, TABLE).await;
+}
+
 /// A `uuid` key column binds as bytea, and the 16 raw bytes are the value.
 ///
 /// This is what lets `amp_storage`'s `branch_id` be `uuid` while the thin lane
@@ -336,12 +442,15 @@ async fn uuid_key_column_binds_as_bytea() {
 
     let id = BindValue::Bytes(Bytes::from_static(&ID_BYTES));
     client
-        .upsert(&[UpsertRow::new(
-            &table,
-            vec![id.clone(), BindValue::I64(7)],
-            &[("payload", BindValue::Bytes(Bytes::from_static(b"uuid-key")))],
+        .upsert(
+            &[UpsertRow::new(
+                &table,
+                vec![id.clone(), BindValue::I64(7)],
+                &[("payload", BindValue::Bytes(Bytes::from_static(b"uuid-key")))],
+            )
+            .expect("build upsert row")],
+            WriteDeadline::Unfenced,
         )
-        .expect("build upsert row")])
         .await
         .expect("upsert");
 
@@ -729,7 +838,9 @@ async fn repro_cross_client_visibility() {
             &[("payload", BindValue::Bytes(Bytes::from(vec![i as u8; 4])))],
         )
         .unwrap();
-        a.upsert(&[row]).await.expect("A upsert");
+        a.upsert(&[row], WriteDeadline::Unfenced)
+            .await
+            .expect("A upsert");
     }
 
     // Client B = a FRESH client (like the branch's newly-started pageserver),
@@ -901,7 +1012,9 @@ async fn repro_concurrent_read_write() {
                 &[("payload", BindValue::Bytes(Bytes::from(vec![0xCD; 4096])))],
             )
             .unwrap();
-            wc.upsert(&[row]).await.expect("concurrent upsert");
+            wc.upsert(&[row], WriteDeadline::Unfenced)
+                .await
+                .expect("concurrent upsert");
         }
         200
     });
@@ -1077,7 +1190,7 @@ async fn repro_wals_covering_read() {
     )
     .expect("build big wals upsert");
     wclient
-        .upsert(&[row])
+        .upsert(&[row], WriteDeadline::Unfenced)
         .await
         .expect("thin upsert of large chunk");
     // Verify via YSQL that the whole payload landed.
@@ -1286,7 +1399,10 @@ async fn repro_pages_multipage_scan() {
         ],
     )
     .expect("build pages upsert");
-    client.upsert(&[row]).await.expect("thin upsert");
+    client
+        .upsert(&[row], WriteDeadline::Unfenced)
+        .await
+        .expect("thin upsert");
 
     // Mirrors PageStore::read_chain_thin: a known blknum determines the bucket,
     // so the whole 7-column prefix binds and this is a single-tablet read with
@@ -1424,7 +1540,10 @@ async fn repro_read_after_write_visibility() {
             &[("payload", BindValue::Bytes(Bytes::from(vec![0xEE; 256])))],
         )
         .unwrap();
-        client.upsert(&[row]).await.expect("upsert");
+        client
+            .upsert(&[row], WriteDeadline::Unfenced)
+            .await
+            .expect("upsert");
 
         // Fresh cross-session read of the just-committed key. Must be visible
         // immediately; if it trails, spin (bounded) and time the window.
@@ -1759,7 +1878,10 @@ async fn repro_wals_range_sharded() {
             .expect("build upsert row")
         })
         .collect();
-    client.upsert(&rows).await.expect("cross-tablet upsert");
+    client
+        .upsert(&rows, WriteDeadline::Unfenced)
+        .await
+        .expect("cross-tablet upsert");
     let written = ysql
         .query(
             &format!(

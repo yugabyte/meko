@@ -396,6 +396,56 @@ impl UpsertRow {
     }
 }
 
+// ---- write deadline ----------------------------------------------------
+
+/// The lease deadline a write is submitted under.
+///
+/// The leader applies a row only if the hybrid time it assigns the write is
+/// before this instant, and otherwise refuses it with [`YbError::Fenced`]. It
+/// is judged per tablet, so a batch whose rows span tablets and straddles the
+/// deadline can be partly applied — the same cut a crash at that instant makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteDeadline {
+    /// No fence: the writer holds no lease.
+    Unfenced,
+    /// Microseconds since the Unix epoch, the unit the lease token is issued in.
+    EpochMicros(u64),
+}
+
+impl From<Option<u64>> for WriteDeadline {
+    fn from(us: Option<u64>) -> Self {
+        us.map_or(WriteDeadline::Unfenced, WriteDeadline::EpochMicros)
+    }
+}
+
+/// Bits a YugabyteDB `HybridTime` keeps for its logical component
+/// (`src/yb/common/hybrid_time.h`): physical microseconds sit above them.
+const HT_LOGICAL_BITS: u32 = 12;
+
+impl WriteDeadline {
+    /// The value for the shim's `ignore_after_hybrid_time`, and the only place
+    /// the token becomes a hybrid time: `epoch_micros << 12`, logical bits 0.
+    ///
+    /// `0` on the wire means "no fence", so a zero deadline — an armed writer
+    /// that was never issued a token — is sent as the earliest representable
+    /// time instead, which every leader refuses. Collapsing it to `0` would
+    /// turn the most fenced writer there is into an unfenced one.
+    pub fn ignore_after_hybrid_time(self) -> Result<u64, YbError> {
+        match self {
+            WriteDeadline::Unfenced => Ok(0),
+            WriteDeadline::EpochMicros(us) => {
+                let us = us.max(1);
+                if us > u64::MAX >> HT_LOGICAL_BITS {
+                    return Err(YbError::Invalid(format!(
+                        "write deadline {us}us does not fit a hybrid time"
+                    )));
+                }
+                Ok(us << HT_LOGICAL_BITS)
+            }
+        }
+    }
+}
+
 // ---- config ------------------------------------------------------------
 
 #[derive(Clone, Debug, Default)]
@@ -959,26 +1009,34 @@ impl TsClient {
         unreachable!("the final scan attempt returns or propagates")
     }
 
-    /// Apply a batch of upserts as one `Perform` (one write RPC). Rows may
-    /// span tables.
-    pub async fn upsert(&self, rows: &[UpsertRow]) -> Result<(), YbError> {
+    /// Apply a batch of upserts as one `Perform` (one write RPC), every row
+    /// fenced on `deadline`. Rows may span tables.
+    ///
+    /// A retry re-sends under the same deadline, so a write that outlives its
+    /// lease comes back [`YbError::Fenced`] rather than landing late.
+    pub async fn upsert(&self, rows: &[UpsertRow], deadline: WriteDeadline) -> Result<(), YbError> {
+        let ignore_after = deadline.ignore_after_hybrid_time()?;
         // Upserts are idempotent (full-overwrite by primary key), so every
         // retryable class is safe to re-issue: nothing to give up early on.
-        with_retries("upsert", |_| false, || self.upsert_once(rows)).await
+        with_retries("upsert", |_| false, || self.upsert_once(rows, ignore_after)).await
     }
 
     /// One write `Perform`, no retries. [`Self::upsert`] wraps this with the
     /// retry driver.
-    async fn upsert_once(&self, rows: &[UpsertRow]) -> Result<(), YbError> {
+    async fn upsert_once(&self, rows: &[UpsertRow], ignore_after: u64) -> Result<(), YbError> {
         // Fire from a synchronous helper for the same `Send` reason as
         // `read`: the FFI marshalling holds `!Send` raw shim pointers that
         // must not live in this future across the await.
-        self.fire_upsert(rows)
+        self.fire_upsert(rows, ignore_after)
             .await
             .unwrap_or_else(|_| Err(YbError::Other("shim dropped the write callback".into())))
     }
 
-    fn fire_upsert(&self, rows: &[UpsertRow]) -> oneshot::Receiver<Result<(), YbError>> {
+    fn fire_upsert(
+        &self,
+        rows: &[UpsertRow],
+        ignore_after: u64,
+    ) -> oneshot::Receiver<Result<(), YbError>> {
         // Own the per-row bind arrays so their pointers stay valid across
         // the call.
         let keys: Vec<Vec<ffi::YbBind>> = rows
@@ -999,7 +1057,7 @@ impl TsClient {
                 value_ids: r.value_ids.as_ptr(),
                 values: vals[i].as_ptr(),
                 n_values: vals[i].len(),
-                ignore_after_hybrid_time: 0,
+                ignore_after_hybrid_time: ignore_after,
             })
             .collect();
 
@@ -1149,8 +1207,67 @@ mod tests {
 
     use bytes::Bytes;
 
-    use super::{MAX_ATTEMPTS, next_scan_page, with_retries};
+    use super::{MAX_ATTEMPTS, WriteDeadline, next_scan_page, with_retries};
     use crate::error::YbError;
+
+    /// The encoding the leader compares against its own clock: physical
+    /// microseconds above 12 logical bits. Sending raw micros would read as a
+    /// 1970 hybrid time and fence every write; a wrong shift fences at the
+    /// wrong instant. `live.rs` checks the same value against a real tserver.
+    #[test]
+    fn a_deadline_is_epoch_micros_shifted_past_the_logical_bits() {
+        let us = 1_786_161_733_463_940_u64;
+        assert_eq!(
+            WriteDeadline::EpochMicros(us)
+                .ignore_after_hybrid_time()
+                .unwrap(),
+            us << 12
+        );
+        assert_eq!(
+            WriteDeadline::EpochMicros(us)
+                .ignore_after_hybrid_time()
+                .unwrap()
+                >> 12,
+            us,
+            "the physical part must round-trip exactly"
+        );
+    }
+
+    #[test]
+    fn unfenced_is_zero_on_the_wire() {
+        assert_eq!(
+            WriteDeadline::Unfenced.ignore_after_hybrid_time().unwrap(),
+            0
+        );
+        assert_eq!(WriteDeadline::from(None), WriteDeadline::Unfenced);
+        assert_eq!(WriteDeadline::from(Some(7)), WriteDeadline::EpochMicros(7));
+    }
+
+    /// An armed writer with no token holds deadline 0. The wire's 0 means "no
+    /// fence", so passing it through would unfence the one writer that must be
+    /// refused. It has to become the earliest real hybrid time instead.
+    #[test]
+    fn a_zero_deadline_is_already_expired_not_unfenced() {
+        let ht = WriteDeadline::EpochMicros(0)
+            .ignore_after_hybrid_time()
+            .unwrap();
+        assert_ne!(ht, 0, "a zero deadline must never be sent as unfenced");
+        assert_eq!(ht, 1 << 12);
+    }
+
+    #[test]
+    fn a_deadline_past_the_hybrid_time_range_is_refused() {
+        let max = u64::MAX >> 12;
+        assert!(
+            WriteDeadline::EpochMicros(max)
+                .ignore_after_hybrid_time()
+                .is_ok()
+        );
+        assert!(matches!(
+            WriteDeadline::EpochMicros(max + 1).ignore_after_hybrid_time(),
+            Err(YbError::Invalid(_))
+        ));
+    }
 
     /// Retryable errors are re-issued until one succeeds. Without this the
     /// hot path (now the default lane) turns a routine tablet-leader move or

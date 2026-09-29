@@ -645,6 +645,11 @@ fn run() -> Result<std::process::ExitCode> {
         if let Some(f) = fence.as_mut() {
             if !f.acquire_blocking() {
                 tracing::info!("shutdown requested while waiting for the write token");
+                // After a lease lost to a late renewal, the store still names this
+                // client with a fresh deadline (`Fence::renew`); release it so a
+                // replacement is not left waiting out the TTL. A no-op when no
+                // token was ever held.
+                f.release();
                 return Ok(std::process::ExitCode::SUCCESS);
             }
         }

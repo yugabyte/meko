@@ -66,13 +66,17 @@ const HT_LOGICAL_BITS: u32 = 12;
 let ignore_after_ht: u64 = token << HT_LOGICAL_BITS;
 ```
 
-The field now exists: `ybthin_upsert_row.ignore_after_hybrid_time`, added by the
-2026.1.2 shim. **No caller sets it yet** — `TsClient::upsert` sends `0`, which
-means "no fence" — so the encoding above is still unwritten, and the daemons go
-on comparing the token against their own wall clock, where micros are the
-natural unit. Keeping the shift in one place, on the client, is what stops two
-implementations drifting apart; sending raw micros to the server would be read
-as a 1970 timestamp and reject every write — fail-closed, but broken.
+That point is `WriteDeadline::ignore_after_hybrid_time`
+([`yb_thin_client`](../libs/yb_thin_client/src/client.rs)), which every
+`TsClient::upsert` goes through: the caller hands over the token in micros and
+never sees a hybrid time. Keeping the shift in one place is what stops two
+implementations drifting apart; sending raw micros would be read as a 1970
+timestamp and refuse every write — fail-closed, but broken.
+
+`0` on the wire means **no fence**, so a zero token — an armed daemon that was
+never issued one — cannot pass through as `0`: it is sent as the earliest
+representable hybrid time instead, which every leader refuses. A disarmed
+daemon sends `0`, because it holds no lease to fence on.
 
 ## Schema
 
@@ -197,6 +201,52 @@ owns the branch.
 checked before the page/relation writes go to YB, and an expired token
 exits the process.
 
+#### The leader enforces it too
+
+The checks above are the process checking itself, so they stop a writer that
+is on time to notice its lease has lapsed. A writer that stalls **between the
+check and the write** — a long GC pause, a frozen VM, a node that comes back
+from a partition — would land the write anyway, after another endpoint has
+taken the branch. So every thin-client write also carries the token to the
+leader as `ignore_after_hybrid_time`, and the leader refuses a row whose
+deadline has passed by the time it assigns the write its hybrid time:
+
+| Writer | Table |
+| --- | --- |
+| safekeeper `flush_batch` | `wals` |
+| pageserver `put_pages` | `pages` |
+| pageserver `put_slru_pages` | `slru_pages` |
+| pageserver `put_meta` | `meta` |
+| pageserver `gc_enqueue_candidates` | `pending_gc` |
+
+All five go through
+[`WriteFence::write_fenced`](../libs/utils/src/write_fence.rs), which reads the
+deadline when the write is submitted and decides what a refusal means:
+
+- **A renewed token has arrived since** → re-send under it. The supervisor
+  pushes a newer token only for a renewal granted while the previous one was
+  still live ("Granted too late", below), so a newer token always extends the
+  same lease and nobody else can have written the branch in between.
+  Without this a write that merely outlasts its deadline — the supervisor
+  renewing the lease while it is in flight — would fence an endpoint that
+  still holds its lease. The loop cannot spin: each resubmission carries a
+  strictly newer token.
+- **No newer token** → the lease is over, and the process exits with the same
+  code as the local check (`66`). The server's view wins even when the local
+  clock thinks the token is still live, since the two disagree by up to the
+  skew grace.
+
+**A refused batch may have been partly applied.** The leader judges each
+tablet on its own, so a batch whose rows span tablets and straddles the
+deadline can land on some and not others. That is safe for the same reason a
+crash mid-write is: a page batch was never atomic across tablets, and nothing
+past it is acknowledged until `advance_consistent_lsn` runs, which a refused
+write never reaches. A WAL batch is one bucket, but a bucket's key span can
+cross tablets once they split, so it too can be refused in part; a
+resubmission fills the gap, and what an exit leaves behind is Known gap 2.
+Every write here is an idempotent upsert, which is what makes the
+resubmission safe as well.
+
 ### Losing the token
 
 The supervisor treats loss as a whole-endpoint event, because it is:
@@ -208,6 +258,15 @@ this instance is no longer the endpoint.
 - **Renewal failing** (YB unreachable, connection error): retried every
   second until the token's own deadline passes. Transient blips cost
   nothing; a real partition costs at most the 10 s of slack.
+- **Granted too late**: a renewal the store granted at or after the held
+  token's deadline. `token_acquire` renews its holder however long ago the
+  token lapsed, so after a pause longer than the lease — a frozen VM, a
+  stopped pod — the grant arrives looking like a renewal, even though another
+  endpoint may have taken the branch and handed it back meanwhile. The
+  supervisor reads the grant time off the database's clock (`token − ttl`,
+  since `token_acquire` issues `now_us() + ttl`) and treats a late one as a
+  loss, **without pushing it**. That keeps a daemon from ever being handed a
+  token from a different tenure than the one its in-memory state belongs to.
 
 On loss the supervisor SIGTERMs every child immediately — safekeeper,
 pageserver, `compute_ctl` and its Postgres — then goes
@@ -392,24 +451,34 @@ it is consistent with the answer rather than with a later clock read.
 
 ## Known gaps / follow-ups
 
-1. **The fence is available on the write path, and amp does not ask for it.**
-   The server side landed for the thin client: `ignore_after_hybrid_time` is a
-   per-row field on `ybthin_upsert_row`, and per the shim's ABI header the leader
-   rejects the write with `YBTHIN_FENCED` when that hybrid time has already passed
-   by the time the op is assigned its own — judged per tablet, so a batch
-   straddling the boundary can be partly applied. What is missing is on our side:
-   `TsClient::upsert` hardcodes `0`, so no write carries a fence and the token
-   stays cooperative — it stops a *well-behaved* writer that notices its lease
-   lapsed, not a wedged one that resumes mid-write after a long stall. Closing it
-   means threading the lease token through the page and WAL writers and encoding
-   it as above. The general YSQL path is still uncovered
-   ([yugabyte-db#33175](https://github.com/yugabyte/yugabyte-db/issues/33175) is
-   open): no such field on `PgPerformOptionsPB` / `PgPerformRequestPB`
-   (`src/yb/tserver/pg_client.proto`) or `PgsqlWriteRequestPB`
-   (`src/yb/common/pgsql_protocol.proto`) — but amp's only write transport is the
-   thin client, so that does not block us.
+1. **Writes over YSQL carry no server-side fence.** YSQL has no equivalent of
+   `ignore_after_hybrid_time` — no such field on `PgPerformOptionsPB` /
+   `PgPerformRequestPB` (`src/yb/tserver/pg_client.proto`) or
+   `PgsqlWriteRequestPB` (`src/yb/common/pgsql_protocol.proto`).
+   The page and WAL hot paths are thin-client writes and are fenced by the
+   leader (above), but the daemons also write over YSQL, and a writer that
+   stalls past its lease can still land those:
 
-   Two things that look like they could stand in for it, and cannot:
+   | Writer | Statement | Local check |
+   | --- | --- | --- |
+   | pageserver `advance_consistent_lsn` | `UPDATE branch_state SET consistent_lsn` | yes |
+   | pageserver `gc_dequeue_candidates`, `gc_act_*`, `publish_gc_cutoff` | `DELETE` on `pages` / `slru_pages` / `meta` / `pending_gc`; `UPDATE branch_state` | yes |
+   | pageserver `update_branch_initial_state` | `UPDATE branch_state`, once, at creation | no |
+   | safekeeper `truncate_wals_above` | `DELETE` / `UPDATE` on `wals` | **no** |
+   | safekeeper `remove_up_to` | `DELETE` on `wals` | **no** |
+   | safekeeper control file `write_row` | `UPDATE branch_state` | **no** |
+
+   The local check narrows the window to the stall between the check and the
+   statement; the safekeeper rows have no check at all. The one to worry about
+   first is `truncate_wals_above`: a safekeeper that stalls inside it and resumes
+   after a takeover deletes WAL above its cut — WAL the new owner may have
+   written since. And `advance_consistent_lsn` is a plain assignment, not a
+   `GREATEST`, so a late one from a stalled old owner can move the watermark
+   backwards under the new one. Tracked in
+   [#1569](https://github.com/yugabyte/meko/issues/1569).
+
+   Two things that look like they could stand in for a server-side fence, and
+   cannot:
 
    - **An RPC deadline cannot substitute.** Once a write is handed to Raft
      nothing cancels it — `ReplicateBatch` takes no deadline
@@ -422,3 +491,17 @@ it is consistent with the answer rather than with a later clock read.
      variants; note a dropped session is reopened lazily and synchronously
      before dispatch (`DoHeartbeat` in `yb_thin_client.cc`, under the session
      mutex), so one logical call can burn 2x the timeout.
+
+2. **A partly refused WAL batch can leave a hole the next load misses.** A WAL
+   batch is one `wals` bucket, but once a tablet splits inside that bucket's key
+   span, two runs of one batch are judged by different leaders, and a later run
+   can land while an earlier one is refused. A resubmission under a renewed
+   token re-sends the whole batch and fills the gap. An exit leaves it: the
+   next load rehydrates the end of WAL from the highest stored chunk, and
+   `find_anchor` walks back only to the nearest fresh-record page, so a hole
+   below that anchor is not seen. The safekeeper would then report WAL flushed
+   across the hole, and the pageserver stalls on `YB WAL hole`. None of the
+   refused batch was acknowledged, so no committed WAL is lost; the fix is for
+   rehydration to prove contiguity from the durable floor, or for a batch to be
+   kept within one tablet. Tracked in
+   [#1570](https://github.com/yugabyte/meko/issues/1570).

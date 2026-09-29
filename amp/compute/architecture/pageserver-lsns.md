@@ -200,8 +200,10 @@ by the `FlushTask`'s final drain pass.
 
 **Write fencing:** the process checks `utils::write_fence` immediately before
 this UPDATE and exits if the endpoint's lease has lapsed, so a stale writer is
-gone rather than merely rejected — and the page writes ahead of the commit are
-fenced the same way (see [`compute-fencing.md`](compute-fencing.md)).
+gone rather than merely rejected. The page writes ahead of the commit get the
+same check, and the leader also refuses them past the lease's deadline; the
+UPDATE itself is YSQL, so the local check is its only guard (see
+[`compute-fencing.md`](compute-fencing.md)).
 
 **Read by:**
 - SK feedback: `consistent_lsn` in `PageserverFeedback` is populated

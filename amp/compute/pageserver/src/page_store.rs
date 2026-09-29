@@ -1662,7 +1662,11 @@ impl PageStore {
         let (encoded, tally) = self.encode_payloads("pages", rows.iter().map(|r| &r.payload));
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        self.put_pages_thin(&p, branch_id, rows, &encoded).await?;
+        utils::write_fence::global()
+            .write_fenced("write to amp_storage.pages", server_fenced, |deadline| {
+                self.put_pages_thin(&p, branch_id, rows, &encoded, deadline.into())
+            })
+            .await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_pages", "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
@@ -1675,6 +1679,7 @@ impl PageStore {
         branch_id: BranchId,
         rows: &[Arc<PageRow>],
         encoded: &[Bytes],
+        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pages = &p.pages;
@@ -1734,7 +1739,7 @@ impl PageStore {
                 // no per-attempt session rotation — the shim owns the session
                 // pool and the tserver does the routing. A terminal failure
                 // fails the flush.
-                client.upsert(&batch).await.with_context(|| {
+                client.upsert(&batch, deadline).await.with_context(|| {
                     format!("put_pages(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}")
                 })?;
                 for (k, l) in &traced_in_chunk {
@@ -2078,7 +2083,12 @@ impl PageStore {
         let (encoded, tally) = self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        self.put_slru_pages_thin(&p, branch_id, rows, &encoded)
+        utils::write_fence::global()
+            .write_fenced(
+                "write to amp_storage.slru_pages",
+                server_fenced,
+                |deadline| self.put_slru_pages_thin(&p, branch_id, rows, &encoded, deadline.into()),
+            )
             .await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_slru_pages", "yb_thin_client"])
@@ -2259,6 +2269,7 @@ impl PageStore {
         branch_id: BranchId,
         rows: &[SlruPageRow],
         encoded: &[Bytes],
+        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let slru = &p.slru_pages;
@@ -2297,7 +2308,7 @@ impl PageStore {
             futs.push(Box::pin(async move {
                 // Full retry budget inside `upsert`, no session rotation
                 // (see put_pages' thin lane).
-                client.upsert(&batch).await.with_context(|| {
+                client.upsert(&batch, deadline).await.with_context(|| {
                     format!(
                         "put_slru_pages(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}"
                     )
@@ -2324,7 +2335,11 @@ impl PageStore {
         let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        self.put_meta_thin(&p, branch_id, rows, &encoded).await?;
+        utils::write_fence::global()
+            .write_fenced("write to amp_storage.meta", server_fenced, |deadline| {
+                self.put_meta_thin(&p, branch_id, rows, &encoded, deadline.into())
+            })
+            .await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_meta", "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
@@ -2346,6 +2361,7 @@ impl PageStore {
         branch_id: BranchId,
         rows: &[MetaRow],
         encoded: &[Bytes],
+        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let meta = &p.meta;
@@ -2387,7 +2403,7 @@ impl PageStore {
             futs.push(Box::pin(async move {
                 // Full retry budget inside `upsert`, no session rotation
                 // (see put_pages' thin lane).
-                client.upsert(&batch).await.with_context(|| {
+                client.upsert(&batch, deadline).await.with_context(|| {
                     format!("put_meta(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}")
                 })?;
                 Ok(())
@@ -3121,6 +3137,14 @@ impl PageStore {
     }
 }
 
+/// A write error the leader returned because the write's lease deadline had
+/// passed — which `WriteFence::write_fenced` resubmits under a renewed token or
+/// exits on — as opposed to a failure worth retrying.
+pub(crate) fn server_fenced(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<yb_thin_client::YbError>()
+        .is_some_and(yb_thin_client::YbError::is_fenced)
+}
+
 /// Invariants that every chain returned by `read_chain` / `scan_range` /
 /// `read_slru_chain` / `scan_slru_range` must satisfy *for a single key*
 /// when iterated in the SQL's `lsn DESC, will_init DESC` order, i.e.
@@ -3753,6 +3777,84 @@ mod tests {
             before + 1,
             "dropping a DISTINCT non-superseded delta must trip"
         );
+    }
+
+    /// The page write carries the lease to the leader. Rows submitted under a
+    /// deadline that has passed are refused and none of them land, across the
+    /// buckets — so tablets — one flush spreads them over; the refusal reads as
+    /// the fence, which `put_pages` resubmits or exits on; and the same rows
+    /// under a live deadline land.
+    ///
+    /// The deadline is passed in rather than read from the process's fence, so
+    /// the write is reached with its lease already over: the stalled writer the
+    /// local check cannot stop.
+    #[tokio::test]
+    async fn a_page_write_past_its_deadline_is_refused_and_none_land() {
+        let (store, schema) = make_store("fence").await;
+        let branch = rand_branch();
+        // Far-apart blocks, so the rows hash to different buckets and the one
+        // `Perform` spans tablets: every leader has to refuse its share.
+        let keys: Vec<Bytes> = (0..8u32)
+            .map(|i| page_key(1663, 5, 16384, 0, i * 100_003))
+            .collect();
+        let rows: Vec<Arc<PageRow>> = keys
+            .iter()
+            .map(|k| page_row(k.clone(), 10, true, true, b"img"))
+            .collect();
+        let (encoded, _) = store.encode_payloads("pages", rows.iter().map(|r| &r.payload));
+        let p = store.thinclient.current().await;
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let minute_us = 60_000_000;
+
+        let err = store
+            .put_pages_thin(
+                &p,
+                branch,
+                &rows,
+                &encoded,
+                yb_thin_client::WriteDeadline::EpochMicros(now_us - minute_us),
+            )
+            .await
+            .expect_err("a page write under a lapsed deadline must be refused");
+        assert!(
+            server_fenced(&err),
+            "the refusal must read as the fence, not a retryable failure: {err:#}"
+        );
+        for k in &keys {
+            assert!(
+                store
+                    .read_chain(branch, k, Lsn(10_000))
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "a refused page write must not land"
+            );
+        }
+
+        store
+            .put_pages_thin(
+                &p,
+                branch,
+                &rows,
+                &encoded,
+                yb_thin_client::WriteDeadline::EpochMicros(now_us + minute_us),
+            )
+            .await
+            .expect("a page write under a live deadline lands");
+        for k in &keys {
+            assert_eq!(
+                store
+                    .read_chain(branch, k, Lsn(10_000))
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        drop_schema(&store, &schema).await;
     }
 
     #[tokio::test]

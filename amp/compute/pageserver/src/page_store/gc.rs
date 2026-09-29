@@ -551,9 +551,18 @@ impl PageStore {
         if rows.is_empty() {
             return Ok(());
         }
+        // The same two fences as every other write: the local check, then the
+        // deadline the leader enforces.
+        self.write_gate("write to amp_storage.pending_gc");
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        self.gc_enqueue_candidates_thin(&p, branch_id, rows).await?;
+        utils::write_fence::global()
+            .write_fenced(
+                "write to amp_storage.pending_gc",
+                super::server_fenced,
+                |deadline| self.gc_enqueue_candidates_thin(&p, branch_id, rows, deadline.into()),
+            )
+            .await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["gc_enqueue_candidates", "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
@@ -581,6 +590,7 @@ impl PageStore {
         p: &ThinClientTables,
         branch_id: BranchId,
         rows: &[PendingGcRow],
+        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pending_gc = &p.pending_gc;
@@ -617,7 +627,7 @@ impl PageStore {
             futs.push(Box::pin(async move {
                 // Full retry budget inside `upsert`, no session rotation
                 // (see put_pages' thin lane).
-                client.upsert(&batch).await.with_context(|| {
+                client.upsert(&batch, deadline).await.with_context(|| {
                     format!(
                         "gc_enqueue_candidates(yb_thin_client) branch={branch_id} \
                          chunk_rows={chunk_rows}"
@@ -780,6 +790,7 @@ impl PageStore {
         if candidates.is_empty() {
             return Ok(0);
         }
+        self.write_gate("GC dequeue from amp_storage.pending_gc");
         // Bucket straight into the three parallel arrays the statement binds.
         let mut by_bucket: std::collections::HashMap<i16, DropShrinkBinds> =
             std::collections::HashMap::new();

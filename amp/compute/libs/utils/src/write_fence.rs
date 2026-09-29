@@ -342,6 +342,21 @@ impl std::fmt::Display for FenceLapsed {
     }
 }
 
+/// What to do about a write the server refused at its deadline — see
+/// [`WriteFence::write_fenced`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerFenceVerdict {
+    /// A newer token that is still live has arrived since the write was
+    /// submitted. The supervisor pushes one only for a renewal granted while
+    /// the previous token was still live, and treats any later grant as the
+    /// lease lost; so a newer token extends the same lease, nobody else can
+    /// have written the branch in between, and the write can be re-sent.
+    Resubmit(WriteToken),
+    /// No newer live token: the lease the write was fenced on is the last this
+    /// process holds, and the server has already seen it end.
+    Lapsed,
+}
+
 /// The process's answer to "may I still write?".
 ///
 /// One process serves one branch, so this is a singleton rather than something
@@ -460,6 +475,103 @@ impl WriteFence {
         if let Err(lapsed) = self.check() {
             tracing::error!("write fence: refusing {what}: {lapsed}; exiting");
             std::process::exit(FENCE_LAPSED_EXIT_CODE);
+        }
+    }
+
+    /// The deadline a write submitted now carries to the server, in the
+    /// token's epoch micros: `None` while disarmed, when there is no lease to
+    /// fence on, and otherwise the token held — zero included, which the thin
+    /// client sends as already expired rather than as "no fence".
+    ///
+    /// This is what closes the gap [`Self::enforce`] leaves. `enforce` is a
+    /// check the process makes of itself, so a writer that stalls between the
+    /// check and the write — a long GC pause, a frozen VM — lands it anyway,
+    /// after another endpoint has taken the branch. A deadline the leader
+    /// compares against its own clock refuses that write.
+    #[inline]
+    pub fn server_deadline(&self) -> Option<WriteToken> {
+        self.is_armed().then(|| self.token())
+    }
+
+    /// Decide what to do about a write the server refused because `submitted`,
+    /// the deadline it carried, had passed when the leader applied it.
+    pub fn after_server_fence(&self, submitted: WriteToken) -> ServerFenceVerdict {
+        self.after_server_fence_at(submitted, SystemTime::now())
+    }
+
+    fn after_server_fence_at(&self, submitted: WriteToken, now: SystemTime) -> ServerFenceVerdict {
+        let held = self.token();
+        if held > submitted && remaining_at(held, now) > Duration::ZERO {
+            ServerFenceVerdict::Resubmit(held)
+        } else {
+            ServerFenceVerdict::Lapsed
+        }
+    }
+
+    /// Run one write under the fence, handing `attempt` the deadline to submit
+    /// with ([`Self::server_deadline`]).
+    ///
+    /// The write's own result comes back unchanged, with one exception: when
+    /// `is_fenced` says the server refused it at its deadline. Then, if a
+    /// renewed token has arrived meanwhile, the write is re-sent under that;
+    /// otherwise the lease is gone and the process exits, exactly as
+    /// [`Self::enforce`] does — the fence removes the writer, not the write.
+    ///
+    /// Resubmitting is what keeps a slow write from costing the endpoint. The
+    /// deadline is read when the write is submitted, so a write that outlasts
+    /// it is refused even when the supervisor renewed the lease while it was in
+    /// flight; exiting then would fence an endpoint that still holds its lease
+    /// (#1333 is that cascade on the renewal side). The loop cannot spin: each
+    /// resubmission carries a strictly newer token than the last.
+    ///
+    /// A refused batch may have been partly applied, since the leader judges
+    /// each tablet on its own. Re-sending is safe because every write here is
+    /// an idempotent upsert, and so is exiting: the rows that landed did so
+    /// before the deadline, and nothing past them was acknowledged — the same
+    /// state a crash at that instant leaves.
+    pub async fn write_fenced<T, E, Fut>(
+        &self,
+        what: &str,
+        is_fenced: impl Fn(&E) -> bool,
+        mut attempt: impl FnMut(Option<WriteToken>) -> Fut,
+    ) -> Result<T, E>
+    where
+        Fut: std::future::Future<Output = Result<T, E>>,
+    {
+        let mut deadline = self.server_deadline();
+        loop {
+            match attempt(deadline).await {
+                Err(e) if is_fenced(&e) => {
+                    // An unfenced write carries 0, which no leader fences. One
+                    // that says otherwise is a bug to surface, not a lease to
+                    // act on.
+                    let Some(submitted) = deadline else {
+                        return Err(e);
+                    };
+                    match self.after_server_fence(submitted) {
+                        ServerFenceVerdict::Resubmit(renewed) => {
+                            tracing::warn!(
+                                submitted,
+                                renewed,
+                                "write fence: the server refused {what} at its deadline, \
+                                 but the lease has since been renewed; resubmitting under it"
+                            );
+                            deadline = Some(renewed);
+                        }
+                        ServerFenceVerdict::Lapsed => {
+                            tracing::error!(
+                                submitted,
+                                remaining_ms = token_remaining(submitted).as_millis() as u64,
+                                "write fence: the server refused {what}: its deadline had \
+                                 passed when the leader applied it, and no renewed token has \
+                                 arrived; exiting"
+                            );
+                            std::process::exit(FENCE_LAPSED_EXIT_CODE);
+                        }
+                    }
+                }
+                other => return other,
+            }
         }
     }
 }
@@ -602,6 +714,210 @@ mod tests {
         assert_eq!(fence.set_token(older), newer);
         assert_eq!(fence.token(), newer);
         assert!(fence.check_at(now + Duration::from_secs(7)).is_ok());
+    }
+
+    // --- the server-side deadline ------------------------------------------
+
+    #[test]
+    fn a_disarmed_fence_submits_unfenced_and_an_armed_one_its_token() {
+        let now = SystemTime::now();
+        let token = token_at(now + Duration::from_secs(10));
+
+        let disarmed = WriteFence::new();
+        disarmed.set_token(token);
+        assert_eq!(
+            disarmed.server_deadline(),
+            None,
+            "a disarmed daemon holds no lease; fencing its writes would refuse them all"
+        );
+
+        let armed = WriteFence::new();
+        armed.arm();
+        assert_eq!(
+            armed.server_deadline(),
+            Some(0),
+            "armed with no token: the deadline is zero, which the server refuses"
+        );
+        armed.set_token(token);
+        assert_eq!(armed.server_deadline(), Some(token));
+    }
+
+    #[test]
+    fn a_refusal_after_a_renewal_resubmits_under_the_new_token() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let submitted = token_at(now - Duration::from_millis(1));
+        fence.set_token(submitted);
+        let renewed = token_at(now + Duration::from_secs(10));
+        fence.set_token(renewed);
+        assert_eq!(
+            fence.after_server_fence_at(submitted, now),
+            ServerFenceVerdict::Resubmit(renewed)
+        );
+    }
+
+    /// The case the whole mechanism is for: the lease ended and nothing renewed
+    /// it. Resubmitting under the same token would be refused forever.
+    #[test]
+    fn a_refusal_with_no_renewal_is_the_lease_ending() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let submitted = token_at(now - Duration::from_millis(1));
+        fence.set_token(submitted);
+        assert_eq!(
+            fence.after_server_fence_at(submitted, now),
+            ServerFenceVerdict::Lapsed
+        );
+    }
+
+    /// The server's clock can run ahead of ours, so it can refuse a write this
+    /// process still thinks is in time. That is not a renewal: without a newer
+    /// token the lease is over, whatever the local clock says.
+    #[test]
+    fn a_refusal_the_local_clock_disagrees_with_is_still_the_lease_ending() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let submitted = token_at(now + Duration::from_millis(200));
+        fence.set_token(submitted);
+        assert!(
+            fence.check_at(now).is_ok(),
+            "locally the token is still live"
+        );
+        assert_eq!(
+            fence.after_server_fence_at(submitted, now),
+            ServerFenceVerdict::Lapsed
+        );
+    }
+
+    /// A newer token that is itself already expired proves nothing about now.
+    #[test]
+    fn a_renewal_that_has_also_lapsed_does_not_resubmit() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let submitted = token_at(now - Duration::from_secs(2));
+        fence.set_token(submitted);
+        fence.set_token(token_at(now - Duration::from_secs(1)));
+        assert_eq!(
+            fence.after_server_fence_at(submitted, now),
+            ServerFenceVerdict::Lapsed
+        );
+    }
+
+    /// Bootstrap: a write submitted before the first token arrived carried
+    /// deadline zero. The first token is a grant like any renewal.
+    #[test]
+    fn a_first_token_after_a_zero_submission_resubmits() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let first = token_at(now + Duration::from_secs(10));
+        fence.set_token(first);
+        assert_eq!(
+            fence.after_server_fence_at(0, now),
+            ServerFenceVerdict::Resubmit(first)
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum TestErr {
+        Fenced,
+        Other,
+    }
+
+    fn is_fenced(e: &TestErr) -> bool {
+        *e == TestErr::Fenced
+    }
+
+    #[tokio::test]
+    async fn write_fenced_hands_each_attempt_the_current_deadline() {
+        let token = token_at(SystemTime::now() + Duration::from_secs(10));
+
+        let disarmed = WriteFence::new();
+        let seen = std::sync::Mutex::new(Vec::new());
+        disarmed
+            .write_fenced("t", is_fenced, |d| {
+                seen.lock().unwrap().push(d);
+                async { Ok::<(), TestErr>(()) }
+            })
+            .await
+            .unwrap();
+
+        let armed = WriteFence::new();
+        armed.arm();
+        armed.set_token(token);
+        armed
+            .write_fenced("t", is_fenced, |d| {
+                seen.lock().unwrap().push(d);
+                async { Ok::<(), TestErr>(()) }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(*seen.lock().unwrap(), vec![None, Some(token)]);
+    }
+
+    /// A write that outlasts the deadline it was submitted under, while the
+    /// supervisor renews the lease underneath it: resubmitted under the renewal,
+    /// and the endpoint keeps running.
+    #[tokio::test]
+    async fn write_fenced_resubmits_a_refused_write_after_a_renewal() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let first = token_at(now + Duration::from_secs(1));
+        let renewed = token_at(now + Duration::from_secs(10));
+        fence.set_token(first);
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        fence
+            .write_fenced("t", is_fenced, |d| {
+                let n = {
+                    let mut s = seen.lock().unwrap();
+                    s.push(d);
+                    s.len()
+                };
+                if n == 1 {
+                    // The renewal lands while the first write is in flight.
+                    fence.set_token(renewed);
+                }
+                async move { if n == 1 { Err(TestErr::Fenced) } else { Ok(()) } }
+            })
+            .await
+            .expect("the resubmission lands");
+        assert_eq!(*seen.lock().unwrap(), vec![Some(first), Some(renewed)]);
+    }
+
+    #[tokio::test]
+    async fn write_fenced_passes_other_errors_through_once() {
+        let fence = WriteFence::new();
+        fence.arm();
+        fence.set_token(token_at(SystemTime::now() + Duration::from_secs(10)));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let err = fence
+            .write_fenced("t", is_fenced, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                async { Err::<(), _>(TestErr::Other) }
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err, TestErr::Other);
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "not the fence's to retry");
+    }
+
+    /// An unfenced write sends 0, which no leader fences; a refusal of one is a
+    /// bug, returned rather than acted on as a lost lease (which would exit).
+    #[tokio::test]
+    async fn write_fenced_returns_a_refusal_of_an_unfenced_write() {
+        let disarmed = WriteFence::new();
+        let err = disarmed
+            .write_fenced("t", is_fenced, |_| async { Err::<(), _>(TestErr::Fenced) })
+            .await
+            .unwrap_err();
+        assert_eq!(err, TestErr::Fenced);
     }
 
     /// The reply `POST /v1/write_token` sends back, which is the supervisor's

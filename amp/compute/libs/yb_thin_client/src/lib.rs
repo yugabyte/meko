@@ -18,7 +18,7 @@ mod tls_watch;
 pub use barren::{StuckContinuation, THIN_SCAN_BARREN_ROUNDS, check_barren_round};
 pub use client::{
     BindValue, ColKind, Column, CondOp, RangeRead, ReadBatch, ReadOp, ReadPage, ReadResult, Row,
-    TableHandle, TlsOpts, TsClient, TsClientConfig, UpsertRow, Value, ValueType,
+    TableHandle, TlsOpts, TsClient, TsClientConfig, UpsertRow, Value, ValueType, WriteDeadline,
 };
 pub use error::YbError;
 pub use recycle::{RECYCLE_RETRY_COOLDOWN, Recycling};

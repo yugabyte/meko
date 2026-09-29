@@ -848,10 +848,11 @@ primitive (§5.3), so an old and a new pageserver for the same branch can briefl
 coexist during a replace, and the endpoint's write lease is what is meant to keep
 the stale one out. It is a deadline the daemon holds and compares against its own
 clock, so a *well-behaved* stale process removes itself rather than waiting to be
-told — but nothing on the YB write path checks the token server-side, so the
-fence is cooperative and does not stop a writer wedged mid-write. On that
-specific point it is weaker than the column predicate it replaced, which the
-database enforced on every statement. See
+told. The tablet leader also enforces the token on every thin-client write —
+the page and WAL hot paths — so a writer wedged mid-write is refused there. The
+daemons' YSQL writes carry no server-side check and stay cooperative, so on
+those it is weaker than the column predicate it replaced, which the database
+enforced on every statement. See
 [compute-fencing.md](../../compute/architecture/compute-fencing.md) §"Known gaps".
 
 ### 11.4 Notes
