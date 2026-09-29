@@ -118,9 +118,11 @@ function mekoSearch() {
   const usage = { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100 };
   const call = { type: 'tool_use', id: toolUseId, name: 'mcp__meko__memory_search', input: { query: 'how does it work' } };
   const found = JSON.stringify({ result: JSON.stringify({ results: [{ id: 'm1', memory: 'It works like this.' }] }) });
+  // A second before the response that follows it, as a real tool call would be.
+  const at = new Date(Date.now() - 1000).toISOString();
   writeFileSync(transcript,
-    JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', usage, content: [call] } }) + '\n' +
-    JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: found }] } }) + '\n',
+    JSON.stringify({ type: 'assistant', timestamp: at, message: { id, model: 'claude-fake-1', usage, content: [call] } }) + '\n' +
+    JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: found }] } }) + '\n',
     { flag: 'a' });
 }
 

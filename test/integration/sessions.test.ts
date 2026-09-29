@@ -175,7 +175,8 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Look it up', prompt: 'MEKO_SEARCH', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
-    const home = await waitFor(() => env.core.projects.home(p.id), (h) => h.usage.meko.found === 1, 10000, 'the Meko search');
+    // Both responses (the search and the one after it) must be read before the estimate settles.
+    const home = await waitFor(() => env.core.projects.home(p.id), (h) => h.usage.meko.found === 1 && h.usage.total.messages === 2, 10000, 'the Meko search');
     expect(home.usage.meko).toMatchObject({ calls: 1, lookups: 1, found: 1, empty: 0, errors: 0, saves: 0 });
     // The stub's model has no price: the estimate is in tokens only, and the cost leaves it out.
     // Context 5,103 tokens, a 20-token result, one later response: 2 × 5,103 + 480 + (6,000 − 20) × 2.
