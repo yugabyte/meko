@@ -527,14 +527,12 @@ pub struct ThinClientTables {
 
 /// Anchor-stop accumulation for ONE block's chain over a clustered scan.
 /// Rows arrive `lsn DESC`, base before non-base on an equal-LSN tie (the PKs
-/// are `will_init DESC`), so once the `will_init` anchor and its tie group are
-/// in hand the rest of that block's (shadowed) history streams past
-/// unbuffered.
+/// are `will_init DESC`), so the first `will_init` row ends the chain: what
+/// follows it is shadowed.
 struct ChainCollector<T> {
     blk: i64,
     rows: Vec<T>,
-    anchor_lsn: Option<i64>,
-    skipping: bool,
+    complete: bool,
 }
 
 impl<T> ChainCollector<T> {
@@ -542,40 +540,31 @@ impl<T> ChainCollector<T> {
         ChainCollector {
             blk,
             rows: Vec::new(),
-            anchor_lsn: None,
-            skipping: false,
+            complete: false,
         }
     }
 
     /// The op binds `blk`, so a row for any other block means the server
     /// answered a different question than the one asked. Refuse it: filing it
     /// here would serve another block's pages as this one's.
-    fn push(&mut self, blk: i64, lsn: i64, will_init: bool, row: T) -> Result<()> {
+    fn push(&mut self, blk: i64, will_init: bool, row: T) -> Result<()> {
         anyhow::ensure!(
             blk == self.blk,
             "chain scan op bound blk={} but a row came back for blk={blk}",
             self.blk
         );
-        if self.skipping {
+        if self.complete {
             return Ok(());
         }
-        if let Some(anchor) = self.anchor_lsn {
-            if lsn < anchor {
-                self.skipping = true;
-                return Ok(());
-            }
-        }
-        if self.anchor_lsn.is_none() && will_init {
-            self.anchor_lsn = Some(lsn);
-        }
+        self.complete = will_init;
         self.rows.push(row);
         Ok(())
     }
 
-    /// True once the chain is past its anchor, so further rows are dropped and
-    /// the op can stop paging.
+    /// True once the anchor is in hand, so further rows are dropped and the op
+    /// can stop paging.
     fn complete(&self) -> bool {
-        self.skipping
+        self.complete
     }
 }
 
@@ -668,8 +657,8 @@ async fn run_batched_block_scan(
 /// When an op of [`run_batched_block_scan`] stops paging.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScanStop {
-    /// At its block's `will_init` anchor and tie group, however many rounds
-    /// that takes: the chain a page reconstruction needs.
+    /// At its block's `will_init` anchor, however many rounds that takes: the
+    /// chain a page reconstruction needs.
     Anchor,
     /// After its first round that returns rows (the read's `limit` sizes it):
     /// the top of the chain. A round with no rows but a continuation is
@@ -899,72 +888,26 @@ const DIRECT_CHAIN_PAGE_ROWS: u64 = 32;
 /// the common case to one round trip.
 const DIRECT_SLRU_CHAIN_PAGE_ROWS: u64 = 1024;
 
-/// Streaming anchor-stop accumulator for a paged single-key chain fetch
-/// in clustered order (LSN-descending). Accumulation stops once a
-/// `will_init` anchor AND its complete equal-LSN tie group are in hand
-/// (a row with a lower LSN, or range exhaustion, proves the group
-/// complete); rows below the anchor within the last page are discarded
-/// later by [`normalize_chain`].
-struct ChainFetchState<R> {
-    raw: Vec<R>,
-    anchor_lsn: Option<i64>,
-    lsn_idx: usize,
-    will_init_idx: usize,
-}
-
-impl<R: RowCells> ChainFetchState<R> {
-    fn new(lsn_idx: usize, will_init_idx: usize) -> Self {
-        ChainFetchState {
-            raw: Vec::new(),
-            anchor_lsn: None,
-            lsn_idx,
-            will_init_idx,
-        }
-    }
-
-    /// Push one row; returns `true` when the chain is complete and the
-    /// fetch can stop (the pushed row itself is below the anchor and
-    /// dropped).
-    fn push(&mut self, row: R) -> Result<bool> {
-        let lsn = row.cell_i64(self.lsn_idx)?;
-        if let Some(anchor) = self.anchor_lsn {
-            if lsn < anchor {
-                return Ok(true);
-            }
-        }
-        if self.anchor_lsn.is_none() && row.cell_bool(self.will_init_idx)? {
-            self.anchor_lsn = Some(lsn);
-        }
-        self.raw.push(row);
-        Ok(false)
-    }
-}
-
-/// Paged single-key chain fetch on the direct-RPC lane; the anchor-stop
-/// logic lives in [`ChainFetchState`].
+/// Paged single-key chain fetch on the direct-RPC lane. Rows arrive `lsn DESC, will_init DESC`,
+/// so the first `will_init` row ends the chain.
 async fn fetch_chain_rows_thin(
     client: &yb_thin_client::TsClient,
     table: &Arc<yb_thin_client::TableHandle>,
     read: yb_thin_client::RangeRead,
-    lsn_idx: usize,
     will_init_idx: usize,
 ) -> Result<Vec<yb_thin_client::Row>> {
-    let state = client
-        .read_scan(
-            table,
-            &read,
-            || ChainFetchState::new(lsn_idx, will_init_idx),
-            |state, rows| -> anyhow::Result<bool> {
-                for row in rows {
-                    if state.push(row)? {
-                        return Ok(true);
-                    }
+    client
+        .read_scan(table, &read, Vec::new, |chain, rows| -> anyhow::Result<bool> {
+            for row in rows {
+                let anchor = row.cell_bool(will_init_idx)?;
+                chain.push(row);
+                if anchor {
+                    return Ok(true);
                 }
-                Ok(false)
-            },
-        )
-        .await?;
-    Ok(state.raw)
+            }
+            Ok(false)
+        })
+        .await
 }
 
 /// Per-`put_*` accumulation of what the codec did, held until the YB write
@@ -1146,9 +1089,8 @@ fn assemble_slru_chain<R: RowCells>(
 fn feed_scan_rows<R: RowCells>(collector: &mut ChainCollector<R>, rows: Vec<R>) -> Result<()> {
     for row in rows {
         let blk = row.cell_i64(0)?;
-        let lsn = row.cell_i64(1)?;
         let will_init = row.cell_bool(3)?;
-        collector.push(blk, lsn, will_init, row)?;
+        collector.push(blk, will_init, row)?;
     }
     Ok(())
 }
@@ -1760,7 +1702,7 @@ impl PageStore {
     ///
     /// No anchor predicate. The direct-RPC lane binds the whole key
     /// prefix, streams the block's versions LSN-descending and stops at
-    /// the first `will_init` row ([`ChainFetchState::push`]), which
+    /// the first `will_init` row ([`fetch_chain_rows_thin`]), which
     /// `will_init DESC` puts at the head of its tie group.
     pub async fn read_chain(
         &self,
@@ -1807,7 +1749,7 @@ impl PageStore {
             .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
             .limit(DIRECT_CHAIN_PAGE_ROWS);
         let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
-        let raw = fetch_chain_rows_thin(&p.client, pages, read, 0, 2)
+        let raw = fetch_chain_rows_thin(&p.client, pages, read, 2)
             .await
             .with_context(|| {
                 format!("thin-lane chain read for branch={branch_id} key={key} lsn<={target}")
@@ -2143,7 +2085,7 @@ impl PageStore {
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
             .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
-        let raw = fetch_chain_rows_thin(&p.client, slru, read, 0, 2)
+        let raw = fetch_chain_rows_thin(&p.client, slru, read, 2)
             .await
             .with_context(|| {
                 format!(
@@ -3264,49 +3206,50 @@ mod normalize_chain_tests {
 #[cfg(test)]
 mod chain_collector_tests {
     //! [`ChainCollector`] consumes ONE block's chain in PK order and must stop
-    //! buffering once the anchor's tie group is complete.
+    //! buffering at the anchor.
     use super::*;
 
     fn collect(blk: i64, rows: &[(i64, bool)]) -> Vec<i64> {
         let mut c = ChainCollector::new(blk);
         for &(lsn, will_init) in rows {
-            c.push(blk, lsn, will_init, lsn).unwrap();
+            c.push(blk, will_init, lsn).unwrap();
         }
         c.rows
     }
 
-    /// Must not flip on the anchor row itself, and must stay false without an
-    /// anchor — there the scan has to page to the end.
+    /// Flips on the anchor row itself, so a round ending on it pages no further.
     #[test]
     fn complete_tracks_the_anchor() {
         let mut c = ChainCollector::new(1);
         assert!(!c.complete(), "nothing collected yet");
-        c.push(1, 90, false, 90).unwrap();
+        c.push(1, false, 90).unwrap();
         assert!(!c.complete(), "above the anchor");
-        c.push(1, 70, true, 70).unwrap();
-        assert!(!c.complete(), "the anchor row is itself part of the chain");
-        c.push(1, 60, false, 60).unwrap();
-        assert!(c.complete(), "past the anchor, the rest is dropped");
+        c.push(1, true, 70).unwrap();
+        assert!(c.complete(), "the anchor ends the chain");
     }
 
     #[test]
     fn a_chain_with_no_anchor_never_completes() {
         let mut c = ChainCollector::new(3);
-        c.push(3, 30, false, 30).unwrap();
-        c.push(3, 20, false, 20).unwrap();
+        c.push(3, false, 30).unwrap();
+        c.push(3, false, 20).unwrap();
         assert!(!c.complete());
     }
 
     #[test]
-    fn drops_history_below_the_anchor_but_keeps_its_tie_group() {
+    fn drops_everything_after_the_anchor() {
         assert_eq!(
             collect(1, &[(90, false), (70, true), (60, false), (50, true)]),
             vec![90, 70]
         );
-        // The equal-LSN sibling at the anchor LSN survives here;
-        // `normalize_chain` sorts and trims it.
+        // The delta the materialiser stamped its image over sorts after it.
         assert_eq!(
-            collect(2, &[(80, false), (80, true), (40, false)]),
+            collect(2, &[(80, true), (80, false), (40, false)]),
+            vec![80]
+        );
+        // Out of PK order, a tied delta before the base is kept; `normalize_chain` trims it.
+        assert_eq!(
+            collect(3, &[(80, false), (80, true), (40, false)]),
             vec![80, 80]
         );
     }
@@ -3317,8 +3260,8 @@ mod chain_collector_tests {
     #[test]
     fn rejects_a_row_for_another_block() {
         let mut c = ChainCollector::new(7);
-        c.push(7, 90, false, 90).unwrap();
-        let err = c.push(8, 80, false, 80).unwrap_err().to_string();
+        c.push(7, false, 90).unwrap();
+        let err = c.push(8, false, 80).unwrap_err().to_string();
         assert!(err.contains("bound blk=7"), "{err}");
         assert!(err.contains("blk=8"), "{err}");
     }
