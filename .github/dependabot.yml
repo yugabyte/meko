@@ -23,6 +23,11 @@ updates:
       # Types track the Node major we run on (engines, .nvmrc, the bundled runtime).
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # TypeScript 7 ships no compiler API, and typescript-eslint 8 refuses it (peer range
+      # <6.1.0, and a throw at load). Drop this once typescript-eslint supports TS 7:
+      # https://github.com/typescript-eslint/typescript-eslint/issues/10940
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     # A package goes into the first group it matches. Packages that must move together
     # (peer ranges) share a group for every update type, majors included, so a stuck bump
     # only holds back its own family. Everything else: one PR per dependency type for minor
