@@ -1199,8 +1199,10 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #     from its GitHub release (checksum-verified) into ~/.local/bin, and Claude Code with
 #     Anthropic's installer (claude.ai/install.sh, which publishes no checksum) into ~/.local/bin;
 #     with GITHUB_TOKEN set, a missing gh is only installed with --install-deps (downloads use
-#     curl and the token); then offers `gh auth login` and `claude auth login` for whichever isn't
-#     signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
+#     curl and the token). It checks the tools themselves afterwards: Homebrew exiting with an
+#     error once they work (it builds from source on a macOS it no longer supports) is a warning,
+#     while a failed Linux package manager stops it; then offers `gh auth login` and `claude auth
+#     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
 #  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
 #  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:

@@ -175,6 +175,57 @@ describe('install.sh: installing missing tools', () => {
     expect(r.calls.some((c) => c.startsWith('sudo'))).toBe(false);
   });
 
+  // A brew that installs what it can from the repo, then exits with an error (as on a macOS
+  // Homebrew builds from source for). `list` says whether tmux came from Homebrew.
+  const failingBrew = (tmuxFromBrew = false) =>
+    stub(bin, 'brew', `echo "brew $*" >> "${log}"; case $1 in list) exit ${tmuxFromBrew ? 0 : 1} ;; --prefix) echo /nowhere; exit 0 ;; esac; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
+
+  it('goes on when Homebrew exits with an error but installed the tools anyway', () => {
+    have('git', 'curl');
+    failingBrew();
+    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
+    expect(r.err).toContain('brew          exited with an error, but tmux gh work: going on');
+    expect(r.code).toBe(0);
+  });
+
+  it('names the tool Homebrew failed to install, and how to see why', () => {
+    have('git', 'curl');
+    // gh lands, tmux doesn't.
+    rmSync(join(repo, 'tmux'));
+    failingBrew();
+    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('brew failed (see the output above');
+    expect(r.err).toContain('tmux 3.2 or newer is still not on PATH');
+    expect(r.err).toContain("Run 'brew install tmux' yourself to see what went wrong");
+    expect(r.err).not.toContain('going on');
+  });
+
+  it('upgrades tmux even when installing the other tools with Homebrew fails', () => {
+    have('git', 'curl');
+    stub(bin, 'tmux', 'echo "tmux 3.0"');
+    failingBrew(true);
+    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
+    expect(r.calls).toEqual(expect.arrayContaining(['brew install gh', 'brew upgrade tmux']));
+    expect(r.err).toContain('going on');
+    expect(r.code).toBe(0);
+    // When the upgrade leaves tmux too old, the hint is the upgrade.
+    stub(bin, 'tmux', 'echo "tmux 3.0"');
+    const old = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', FAKE_NEW_TMUX: '3.0' });
+    expect(old.code).toBe(1);
+    expect(old.err).toContain("found: 3.0). Run 'brew upgrade tmux' yourself to see what went wrong");
+  });
+
+  it('stops when the Linux package manager exits with an error, even if the tools landed', () => {
+    have('gh');
+    // A failed dnf or apt-get can leave the package database half-configured.
+    stub(bin, 'dnf', `echo "dnf $*" >> "${log}"; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
+    const r = run(['--non-interactive', '--install-deps']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('installing tmux git curl failed (see the output above). Install them yourself and run this installer again.');
+    expect(r.err).not.toContain('going on');
+  });
+
   it('finds Homebrew outside PATH without garbling its own output', () => {
     have('git', 'curl');
     // brew in its usual folder but not on PATH, as in a fresh shell on a Mac.

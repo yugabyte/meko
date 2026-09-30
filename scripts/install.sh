@@ -20,7 +20,8 @@
 # Claude Code with Anthropic's installer from claude.ai over HTTPS (it publishes no checksum for
 # that script), into ~/.local/bin. The installer shows the exact commands and asks first; with
 # --non-interactive it installs only with --install-deps. With GITHUB_TOKEN set, a missing gh
-# is only installed with --install-deps; otherwise downloads use curl and the token.
+# is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
+# it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
 #
 # Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
 # GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
@@ -209,9 +210,11 @@ $claude_install && plan="$plan
 install_system_pkgs() {
   # shellcheck disable=SC2086 # intentional word splitting of package lists
   if [ "$platform" = darwin ]; then
-    if [ -n "$brew_new" ]; then brew install $brew_new </dev/null || return 1; fi
-    if [ -n "$brew_old" ]; then brew upgrade $brew_old </dev/null || return 1; fi
-    return 0
+    # Both run even if the first fails: it may have installed its tools anyway (see below).
+    brew_rc=0
+    if [ -n "$brew_new" ]; then brew install $brew_new </dev/null || brew_rc=1; fi
+    if [ -n "$brew_old" ]; then brew upgrade $brew_old </dev/null || brew_rc=1; fi
+    return $brew_rc
   fi
   # shellcheck disable=SC2086 # intentional word splitting of the sudo prefix and package list
   case $pm in
@@ -221,6 +224,17 @@ install_system_pkgs() {
     pacman) $sudo pacman -S --needed --noconfirm $pkgs ;;
     apk) $sudo apk add $pkgs ;;
   esac </dev/null
+}
+
+# The first tool in $pkgs that still isn't there (or is too old), if any.
+first_missing() {
+  for p in $pkgs; do
+    case $p in
+      tmux) tmux_new_enough ;;
+      git) git_ok ;;
+      *) command -v "$p" >/dev/null 2>&1 ;;
+    esac || { echo "$p"; return 0; }
+  done
 }
 
 # gh from its own GitHub release (the distro's repos often lack it), checksum-verified.
@@ -261,7 +275,31 @@ if [ -n "$plan" ]; then
       ;;
   esac
   if [ -n "$pkgs" ]; then
-    install_system_pkgs || die "installing$pkgs failed (see the output above). Install them yourself and run this installer again."
+    brew_failed=false
+    if ! install_system_pkgs; then
+      # On Linux a failed install can leave the package database half-configured: stop there.
+      [ "$platform" = darwin ] || die "installing$pkgs failed (see the output above). Install them yourself and run this installer again."
+      brew_failed=true
+    fi
+    hash -r 2>/dev/null || true
+    # Check the result, not the package manager's word for it: Homebrew can exit with an error
+    # after installing what it was asked for (on a macOS it no longer builds bottles for, it
+    # builds from source, and a dependency's step can fail without stopping tmux).
+    bad=$(first_missing)
+    if [ -n "$bad" ]; then
+      advice=""
+      case $bad in
+        tmux) problem="tmux $min_major.$min_minor or newer is still not on PATH (found: $(tmux_version | tr ' ' . || true))."
+          advice=" Your package manager's tmux may be too old; install a newer one yourself." ;;
+        *) problem="$bad is still not available after installing it." ;;
+      esac
+      if $brew_failed; then
+        case " $brew_old " in *" $bad "*) by_hand="brew upgrade $bad" ;; *) by_hand="brew install $bad" ;; esac
+        die "brew failed (see the output above: its error can be well before its last lines). $problem Run '$by_hand' yourself to see what went wrong, then run this installer again."
+      fi
+      die "$problem$advice"
+    fi
+    $brew_failed && warn "brew" "exited with an error, but$pkgs work: going on"
   fi
   if $gh_download; then
     install_gh || die "couldn't install gh from github.com/cli/cli. Install it yourself (https://cli.github.com) and run this installer again."
@@ -277,11 +315,8 @@ if [ -n "$plan" ]; then
   # gh and Claude Code land here; `agent-k-local install` (run below) needs them too.
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
   hash -r 2>/dev/null || true
-  # Check the result, not the package manager's word for it.
-  tmux_new_enough || die "tmux $min_major.$min_minor or newer is still not on PATH (found: $(tmux_version | tr ' ' . || true)). Your package manager's tmux may be too old; install a newer one yourself."
-  git_ok || die "git is still not available after installing it."
-  command -v curl >/dev/null 2>&1 || die "curl is still not available after installing it."
-  $gh_skipped || command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
+  # (Homebrew's gh was checked with the other packages.)
+  ! $gh_download || command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
   command -v claude >/dev/null 2>&1 || die "Claude Code is still not available after installing it."
   ok "Installed" "$missing"
 fi
