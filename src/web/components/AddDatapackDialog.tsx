@@ -7,7 +7,7 @@ import { Dialog, ErrorText, Field } from './common';
 
 /**
  * Gives a project without one its dedicated datapack: a new one, or one of yours (for a project
- * created without Meko, or at the plan's datapack limit). With `replacing`, switches the project's
+ * opened without Meko, or at the plan's datapack limit). With `replacing`, switches the project's
  * dedicated datapack to another one instead: the old one stays attached as shared, or is detached.
  * New sessions use it.
  */
@@ -46,7 +46,7 @@ export function AddDatapackDialog({
   const [atLimit, setAtLimit] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // The default name follows the repo, as in New project: adlc/proj/<repo>/<project>.
+  // The default name follows the repo, as in Open project: adlc/proj/<repo>/<project>.
   useEffect(() => {
     api
       .repos()

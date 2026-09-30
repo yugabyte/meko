@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -6,9 +6,8 @@ import { buildServer } from '../../src/server/server.js';
 import { issueSetupToken } from '../../src/server/auth.js';
 import { MekoError } from '../../src/server/meko.js';
 import { run } from '../../src/server/db.js';
-import { gitRepo, makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { gitRepo, makeEnv, pinFiles, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
 
-const pinFile = (projectId: string) => join(process.env.MEKO_WATERMARK_DIR!, `pin-claude_code_${projectId}.json`);
 
 describe('projects without a datapack, and without Meko', () => {
   let env: TestEnv;
@@ -28,10 +27,10 @@ describe('projects without a datapack, and without Meko', () => {
   it('creates a project with no datapack without asking Meko, and runs sessions in it', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Plain', datapack: { mode: 'none' } });
     expect(p.datapacks).toEqual([]);
-    expect(existsSync(pinFile(p.id))).toBe(false);
     expect(env.meko.calls.some((c) => c.name === 'createDatapack' || c.name === 'ensureConversation')).toBe(false);
     const s = await env.core.sessions.create(p.id, { name: 'Work', kind: 'quick' });
     expect(s.projectId).toBe(p.id);
+    expect(pinFiles()).toEqual([]);
     expect(await env.core.projects.search(p.id, 'anything')).toEqual([]);
   });
 
@@ -58,7 +57,7 @@ describe('projects without a datapack, and without Meko', () => {
       throw new MekoError('[FREE_TIER_DATAPACK_LIMIT] Upgrade to Standard to create a new datapack.');
     };
     await expect(env.core.projects.create({ repoPath: env.repo, name: 'Z', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/z' } }))
-      .rejects.toMatchObject({ status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Create the project without one/) });
+      .rejects.toMatchObject({ status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Open the project without one/) });
     expect(env.core.state().projects).toEqual([]);
   });
 
@@ -102,7 +101,8 @@ describe('projects without a datapack, and without Meko', () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Later', datapack: { mode: 'none' } });
     const withDp = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: 'adlc/proj/demo-repo/later' });
     expect(withDp.datapacks).toEqual([{ id: 'dp-adlc-proj-demo-repo-later', name: 'adlc/proj/demo-repo/later', role: 'dedicated' }]);
-    expect(JSON.parse(readFileSync(pinFile(p.id), 'utf8')).datapack_id).toBe('dp-adlc-proj-demo-repo-later');
+    const s = await env.core.sessions.create(p.id, { name: 'Work', kind: 'quick' });
+    expect(pinnedDatapack(env.core.sessions.row(s.id))).toBe('dp-adlc-proj-demo-repo-later');
     await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-2', name: 'other' }))
       .rejects.toMatchObject({ status: 409 });
   });
@@ -140,7 +140,7 @@ describe('projects without a datapack, and without Meko', () => {
       expect((await call('PUT', '/api/settings', { meko: { enabled: false } })).json().meko.enabled).toBe(false);
       const state = (await call('GET', '/api/state')).json();
       expect(state.meko).toMatchObject({ configured: false, sharing: null });
-      expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [] });
+      expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [], closed: [] });
       expect((await call('GET', '/api/meko/datapacks')).json()).toEqual([]);
 
       // Back on: the key is checked first.

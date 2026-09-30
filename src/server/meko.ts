@@ -16,8 +16,29 @@ export interface MekoDatapackRow extends MekoDatapack {
   ownerUserId: string | null;
 }
 
-/** Agent id used for a project's Meko memory bucket and datapack pin. */
-export function projectAgentId(projectId: string): string {
+/** Agent id of AgentK's own Meko calls: its service conversation, a project's conversation and search. */
+export const AGENTK_AGENT_ID = 'agent-k-local';
+
+/**
+ * Agent id of a session's Meko calls, capture and datapack pin: its slug, with a short hash of
+ * its id since a slug is only unique within its project. It doesn't name the project: Meko reads
+ * memories across agents within a datapack, so the id only says which session wrote one, and
+ * every session of the project sees what the others saved.
+ */
+export function sessionAgentId(session: { id: string; slug: string }): string {
+  return `claude_code:${session.slug}-${createHash('sha256').update(session.id).digest('hex').slice(0, 8)}`;
+}
+
+/**
+ * The agent id a session's Claude runs with, for AgentK's writes and conversation for it: its own,
+ * or for a session launched before sessions had their own, its project's, until it's launched again.
+ */
+export function launchedAgentId(r: { project_id: string; meko_agent_id: string | null }): string {
+  return r.meko_agent_id ?? legacyAgentId(r.project_id);
+}
+
+/** The project-wide agent id sessions ran with before they had their own. */
+export function legacyAgentId(projectId: string): string {
   return `claude_code:${projectId}`;
 }
 
@@ -191,7 +212,7 @@ export class MekoClient {
     const gen = this.gen;
     let id: string;
     try {
-      id = await this.ensureConversation('agent-k-local', null, SERVICE_KEY, 'AgentK Local service', timeoutMs);
+      id = await this.ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, 'AgentK Local service', timeoutMs);
     } catch (e) {
       if (!(e instanceof MekoError)) throw e; // Meko unreachable: try again next time
       id = createHash('sha256').update(SERVICE_KEY).digest('hex').slice(0, 32);

@@ -115,9 +115,9 @@ export const api = {
   declineInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/decline`),
   laterInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/later`),
 
-  createProject: (b: CreateProjectRequest) => post<Project>('/api/projects', b),
+  openProject: (b: CreateProjectRequest) => post<Project>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
-  deleteProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
+  closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
   branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
   attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
   setDedicatedDatapack: (id: string, b: SetDedicatedDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/dedicated-datapack`, b),

@@ -276,7 +276,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- datapacks shared with us ----
   app.post('/api/invites/check', async (): Promise<InviteCheck> => {
-    if (!core.mekoStatus.configured) return { datapacks: [], invites: [] };
+    if (!core.mekoStatus.configured) return { datapacks: [], invites: [], closed: [] };
     if (core.mekoStatus.sharing === null) await core.invites.checkMode();
     let rows: MekoDatapackRow[];
     try {
@@ -287,7 +287,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     } catch (e) {
       throw new HttpError(502, `Couldn't check Meko for datapacks and shares: ${errMsg(e)}`);
     }
-    return { datapacks: rows.map(toDatapack), invites: core.invites.open() };
+    return { datapacks: rows.map(toDatapack), invites: core.invites.open(), closed: core.projects.closed() };
   });
   app.post<{ Params: { id: string } }>('/api/invites/:id/accept', async (req, reply) => {
     await core.invites.accept(req.params.id);

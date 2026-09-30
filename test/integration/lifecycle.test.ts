@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
+import { sessionAgentId } from '../../src/server/meko.js';
 import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, tmux and the (fake) claude process are real.
@@ -133,6 +134,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(branches.trim()).toBe(''); // cleanup deletes the local branch
     const memory = env.meko.calls.find((c) => c.name === 'addMemory');
     expect(String(memory?.args[0])).toMatch(/Shipped in Demo: "Fix the thing" \(PR #7/);
+    expect(memory?.args[2]).toBe(sessionAgentId(row));
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
     // The PR's size, for the usage stats: extensions only, never the paths.
     const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
@@ -422,7 +424,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1\nmeko_conversation_id:conv-1')).toBe(true);
     expect(text).toContain('End the PR description with these lines, exactly as written');
     const conv = env.meko.calls.filter((c) => c.name === 'ensureConversation').at(-1);
-    expect(conv?.args.slice(0, 4)).toEqual([`claude_code:${row.project_id}`, 'dp-1', row.claude_session_id, 'Footer (Demo)']);
+    expect(conv?.args.slice(0, 4)).toEqual([sessionAgentId(row), 'dp-1', row.claude_session_id, 'Footer (Demo)']);
   });
 
   it("still opens the PR, with just the datapack line, when Meko can't name the conversation", async () => {

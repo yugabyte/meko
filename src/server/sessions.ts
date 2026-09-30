@@ -15,7 +15,7 @@ import { issueText } from './github.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
-import { projectAgentId } from './meko.js';
+import { launchedAgentId, sessionAgentId } from './meko.js';
 import { loadPrompt, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
@@ -263,10 +263,10 @@ export class SessionManager {
       const claimed = pool.claim(repo, id);
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, branch_reused,
-                      worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0)`,
+                      worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?)`,
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
-        randomBytes(24).toString('base64url'), kind, stage, task || null, now, now);
+        randomBytes(24).toString('base64url'), kind, stage, task || null, now, now, sessionAgentId({ id, slug }));
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -430,7 +430,7 @@ export class SessionManager {
       AK_HOOK_TOKEN: row.hook_token,
       AK_HOOK_SOCK: this.core.paths.hookSock,
       AK_DESIGN_FILE: this.designFile(row),
-      MEKO_AGENT_ID: projectAgentId(row.project_id),
+      MEKO_AGENT_ID: launchedAgentId(row),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
       // With capture off, the Meko plugin's checkpoint timer (started by its SessionStart hook on a
@@ -449,7 +449,7 @@ export class SessionManager {
       `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
     ];
     if (dedicated) {
-      lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${projectAgentId(row.project_id)}" on Meko calls that write.`);
+      lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${launchedAgentId(row)}" on Meko calls that write.`);
     }
     if (shared.length) {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
@@ -484,11 +484,16 @@ export class SessionManager {
   }
 
   /**
-   * Pins the project's dedicated datapack for its Meko agent id again (it may have been changed or
-   * removed), and records it as the one this launch uses (sessionDatapack), so AgentK's writes
-   * for the session stay with it after a switch, until the session is launched again.
+   * Pins the project's dedicated datapack for the session's Meko agent id (the project may have
+   * switched to another since the last launch), and records it as the one this launch uses
+   * (sessionDatapack), so AgentK's writes for the session stay with it after a switch, until the
+   * session is launched again. A session from before sessions had their own agent id gets one now.
    */
   private pinDatapack(row: SessionRow): void {
+    if (row.meko_agent_id === null) {
+      row.meko_agent_id = sessionAgentId(row);
+      run(this.db, 'UPDATE sessions SET meko_agent_id = ? WHERE id = ?', row.meko_agent_id, row.id);
+    }
     const dp = this.core.mekoStatus.configured ? dedicatedDatapack(this.db, row.project_id) : null;
     row.meko_datapack_id = dp?.id ?? null;
     row.meko_datapack_name = dp?.name ?? null;
@@ -496,9 +501,9 @@ export class SessionManager {
     // Meko off: AgentK pins nothing. Claude Code's own Meko setup, if any, is left as it is.
     if (!dp) return;
     try {
-      this.core.projects.writePin(row.project_id, dp);
+      this.core.projects.writePin(launchedAgentId(row), dp);
     } catch (e) {
-      this.core.log.warn(`could not pin the Meko datapack for ${row.project_id}`, errMsg(e));
+      this.core.log.warn(`could not pin the Meko datapack for ${row.id}`, errMsg(e));
     }
   }
 
@@ -1236,7 +1241,7 @@ export class SessionManager {
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
-    return this.core.meko.ensureConversation(projectAgentId(r.project_id), dp.id, r.claude_session_id, title);
+    return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
   }
 
   // ---- token usage ----

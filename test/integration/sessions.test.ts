@@ -2,7 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, pinFiles, pinnedDatapack, sessionPinFile, waitFor, type TestEnv } from '../helpers.js';
+import { AGENTK_AGENT_ID, legacyAgentId, sessionAgentId } from '../../src/server/meko.js';
+import { PIN_KEEP_MS } from '../../src/server/projects.js';
 import { postHook } from '../hook-client.js';
 import { get, run } from '../../src/server/db.js';
 import { usageOverview } from '../../src/server/usage.js';
@@ -50,14 +52,13 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     return env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
   }
 
-  it('lists repos and creates a project with a dedicated datapack and Meko pin', async () => {
+  it('lists repos and creates a project with a dedicated datapack, pinned only once a session starts', async () => {
     const repos = await env.core.projects.repos();
     expect(repos.repos.map((r) => r.name)).toEqual(['demo-repo']);
     const p = await newProject();
     expect(p.id).toBe('demo-repo');
     expect(p.datapacks).toEqual([{ id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }]);
-    const pin = JSON.parse(readFileSync(join(process.env.MEKO_WATERMARK_DIR!, 'pin-claude_code_demo-repo.json'), 'utf8'));
-    expect(pin.datapack_id).toBe('dp-agent-k-local-test-demo');
+    expect(pinFiles()).toEqual([]);
     expect((await env.core.projects.repos()).repos[0].projects).toEqual([{ id: 'demo-repo', name: 'Demo' }]);
   });
 
@@ -69,8 +70,6 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(second.id).toBe('demo-repo-release-tooling');
     expect(second.repoPath).toBe(first.repoPath);
     expect(second.datapacks).toEqual([{ id: 'dp-agent-k-local-test-release', name: 'agent-k-local/test/release', role: 'dedicated' }]);
-    const pin = JSON.parse(readFileSync(join(process.env.MEKO_WATERMARK_DIR!, 'pin-claude_code_demo-repo-release-tooling.json'), 'utf8'));
-    expect(pin.datapack_id).toBe('dp-agent-k-local-test-release');
     const repos = (await env.core.projects.repos()).repos;
     expect(repos).toHaveLength(1);
     expect(repos[0].projects).toEqual([{ id: 'demo-repo', name: 'Demo' }, { id: 'demo-repo-release-tooling', name: 'Release tooling' }]);
@@ -86,7 +85,11 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(a.worktreePath).not.toBe(b.worktreePath);
     expect(a.tmuxName).not.toBe(b.tmuxName);
     await waitFor(() => env.core.sessions.get(b.id).status, (st) => st === 'idle', 10000, 'second project session');
-    expect(argvLog(env).find((l) => l.env.MEKO_AGENT_ID === 'claude_code:demo-repo-release-tooling')?.env.MEKO_DATAPACK_ID)
+    // Each session has its own agent id and pin, for its own project's datapack.
+    const [rowA, rowB] = [env.core.sessions.row(a.id), env.core.sessions.row(b.id)];
+    expect(sessionAgentId(rowA)).not.toBe(sessionAgentId(rowB));
+    expect([pinnedDatapack(rowA), pinnedDatapack(rowB)]).toEqual(['dp-agent-k-local-test-demo', 'dp-agent-k-local-test-release']);
+    expect(argvLog(env).find((l) => l.env.MEKO_AGENT_ID === sessionAgentId(rowB))?.env.MEKO_DATAPACK_ID)
       .toBe('dp-agent-k-local-test-release');
 
     // Deleting one project leaves the other's session, worktree and branch alone. The deleted
@@ -121,7 +124,9 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const first = argvLog(env)[0];
     expect(first.args).toContain('--session-id');
     expect(first.args.at(-1)).toContain('do it');
-    expect(first.env).toEqual({ MEKO_AGENT_ID: 'claude_code:demo-repo', MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo' });
+    const agentId = sessionAgentId(env.core.sessions.row(s.id));
+    expect(agentId).toMatch(/^claude_code:fix-the-thing-[0-9a-f]{8}$/);
+    expect(first.env).toEqual({ MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo' });
 
     await env.core.sessions.submit(s.id, 'second turn');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
@@ -145,7 +150,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     // The session's Meko conversation was created once, titled after the session, keyed by its Claude session id.
     const named = env.meko.calls.filter((c) => c.name === 'ensureConversation' && c.args[2] === s.claudeSessionId);
-    expect(named.map((c) => c.args)).toEqual([['claude_code:demo-repo', 'dp-agent-k-local-test-demo', s.claudeSessionId, 'Fix the thing (Demo)']]);
+    expect(named.map((c) => c.args)).toEqual([[agentId, 'dp-agent-k-local-test-demo', s.claudeSessionId, 'Fix the thing (Demo)']]);
 
     await env.core.sessions.action(s.id, 'archive');
     expect(captureLog(env).length).toBeGreaterThan(capturedBeforeArchive); // final capture before Claude is stopped
@@ -189,7 +194,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'Fix the thing when the cache is cold', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const search = env.meko.calls.find((c) => c.name === 'search')!;
-    expect(search.args.slice(0, 3)).toEqual(['Fix the thing Fix the thing when the cache is cold', { id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }, 'claude_code:demo-repo']);
+    expect(search.args.slice(0, 3)).toEqual(['Fix the thing Fix the thing when the cache is cold', { id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }, AGENTK_AGENT_ID]);
     const started = sessionStarts(env);
     expect(started).toHaveLength(1);
     const ctx = JSON.parse(started[0].context).hookSpecificOutput;
@@ -860,12 +865,64 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(prompts.at(-1)).toBe('first one');
   });
 
-  it('re-pins the dedicated datapack when a session starts', async () => {
+  it("pins the dedicated datapack for the session's own agent id each time it starts", async () => {
     const p = await newProject();
-    const pin = join(process.env.MEKO_WATERMARK_DIR!, 'pin-claude_code_demo-repo.json');
-    rmSync(pin);
-    await env.core.sessions.create(p.id, { name: 'Pinned', prompt: 'hi', kind: 'quick' });
-    expect(JSON.parse(readFileSync(pin, 'utf8')).datapack_id).toBe('dp-agent-k-local-test-demo');
+    const s = await env.core.sessions.create(p.id, { name: 'Pinned', prompt: 'hi', kind: 'quick' });
+    const row = env.core.sessions.row(s.id);
+    expect(pinnedDatapack(row)).toBe('dp-agent-k-local-test-demo');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    // Gone (say, cleaned up by hand): resuming pins it again.
+    rmSync(sessionPinFile(row));
+    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).status;
+    }, (st) => st === 'exited', 10000, 'exited');
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => existsSync(sessionPinFile(row)), (x) => x, 10000, 'pin on resume');
+    expect(pinnedDatapack(row)).toBe('dp-agent-k-local-test-demo');
+  });
+
+  it('keeps a session from before per-session agent ids on its project-wide one until it is launched again', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Old one', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    // As a session launched before the upgrade: Claude runs with claude_code:<project id>.
+    run(env.core.db, 'UPDATE sessions SET meko_agent_id = NULL WHERE id = ?', s.id);
+    const dp = env.core.projects.get(p.id).datapacks[0];
+    env.meko.calls.length = 0;
+    await env.core.sessions.conversationId(env.core.sessions.row(s.id), dp);
+    expect(env.meko.calls.find((c) => c.name === 'ensureConversation')?.args[0]).toBe(legacyAgentId(p.id));
+
+    // Launched again, it gets its own.
+    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).status;
+    }, (st) => st === 'exited', 10000, 'exited');
+    const before = argvLog(env).length;
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => argvLog(env).length, (n) => n > before, 10000, 'resume launch');
+    const row = env.core.sessions.row(s.id);
+    expect(row.meko_agent_id).toBe(sessionAgentId(row));
+    expect(argvLog(env).at(-1)!.env.MEKO_AGENT_ID).toBe(sessionAgentId(row));
+  });
+
+  it("removes an archived session's pin a day later, and never a project-wide one", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Pinned', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const row = env.core.sessions.row(s.id);
+    // What sessions used before, and what the Meko plugin uses for plain Claude Code in a repo of that name.
+    const legacy = join(process.env.MEKO_WATERMARK_DIR!, `pin-claude_code_${p.id}.json`);
+    writeFileSync(legacy, '{"datapack_id":"mine"}');
+    await env.core.sessions.action(s.id, 'archive');
+    const archivedAt = env.core.sessions.row(s.id).archived_at!;
+    env.core.projects.prunePins(archivedAt + PIN_KEEP_MS - 1000);
+    expect(existsSync(sessionPinFile(row))).toBe(true);
+    env.core.projects.prunePins(archivedAt + PIN_KEEP_MS + 1000);
+    expect(existsSync(sessionPinFile(row))).toBe(false);
+    expect(existsSync(legacy)).toBe(true);
   });
 
   it('deleting a project keeps worktrees with uncommitted changes, archived or not', async () => {

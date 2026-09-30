@@ -94,12 +94,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 4. Data and Meko
 
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
-- [ ] Every project still has exactly one dedicated datapack; sessions get `MEKO_AGENT_ID` and the pin.
+- [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
-      (tmux names, pins, lookups) is keyed by project id, not repo path, and git work on the repo only
+      (tmux names, lookups) is keyed by project id, not repo path, and git work on the repo only
       touches the session's own branch. The one exception is idle worktrees, which belong to the repo
       (keyed by its real path) and are shared by all its projects: a claim is one SQLite write, so
-      two sessions never get the same worktree, and deleting a project leaves idle worktrees another
+      two sessions never get the same worktree, and closing a project leaves idle worktrees another
       project on the repo can use. A project's `repo_path` is the repo's real path (`repoKey()`), so
       repo matches are plain equality on it; no new code compares repos by the path as typed.
 - [ ] A session may work in another repo than its project's (`sessions.repo_path`). Git and `gh` work
@@ -122,7 +122,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       gives Claude stays short (capped items and total).
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
-- [ ] Share invites: a project created from an invite accepts it in Meko before writing anything
+- [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
       share notifies once. Sharing features work in both API and link mode.
 - [ ] Nothing that identifies a person or their work goes into the usage stats report

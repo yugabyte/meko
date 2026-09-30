@@ -77,6 +77,8 @@ export interface SessionRow {
   /** The dedicated datapack the session was last launched with (see sessionDatapack). */
   meko_datapack_id: string | null;
   meko_datapack_name: string | null;
+  /** The Meko agent id it was launched with (launchedAgentId); NULL from before sessions had their own. */
+  meko_agent_id: string | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {

@@ -1495,7 +1495,7 @@ a.icon-btn {
   top: 0;
 }
 
-/* New project dialog: the datapack section, then the repo section */
+/* Open project dialog: the datapack section, then the repo section */
 .np-section {
   display: flex;
   flex-direction: column;

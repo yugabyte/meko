@@ -115,7 +115,7 @@ function GeneralTab() {
     <form className="stack" onSubmit={save}>
       <div className="field">
         <span className="label">Repo folders</span>
-        <span className="hint">The New project dialog lists the git repos in these folders.</span>
+        <span className="hint">The Open project dialog lists the git repos in these folders.</span>
         {roots.map((r, i) => (
           <div className="filter-row" key={i}>
             <input

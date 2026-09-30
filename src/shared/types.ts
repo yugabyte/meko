@@ -304,7 +304,9 @@ export interface CallHomeDay {
   activeProjects: number;
   activeSessions: number;
   messages: number;
+  /** Projects opened: new ones, and closed ones opened again. */
   projectsCreated: number;
+  /** Projects closed, counting closes a later reopen undid. */
   projectsDeleted: number;
   sessionsCreated: Record<SessionKind, number>;
   sessionsArchived: number;
@@ -542,11 +544,20 @@ export interface DatapackInvite {
   firstSeenAt: number;
 }
 
-/** POST /api/invites/check: the datapack list it read, and the shares after syncing with it. */
+/** POST /api/invites/check: the datapack list it read, the shares after syncing with it, and the closed projects. */
 export interface InviteCheck {
   datapacks: MekoDatapack[];
   /** Open ones, the ones put off with Later included. */
   invites: DatapackInvite[];
+  /** Closed projects by their dedicated datapack (the latest closed per datapack): picking it opens one again. */
+  closed: ClosedProject[];
+}
+
+export interface ClosedProject {
+  datapackId: string;
+  id: string;
+  name: string;
+  repoPath: string;
 }
 
 /** Someone with access to a datapack (the owner included). */
@@ -956,13 +967,13 @@ export type TermServerMessage =
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
 //        The four above answer 409 in link mode (AppState.meko.sharing 'link').
-// POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the New project dialog's one read of Meko)
-// POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by creating the project)
+// POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the Open project dialog's one read of Meko)
+// POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
-// POST   /api/projects        CreateProjectRequest → Project
+// POST   /api/projects        CreateProjectRequest → Project   (opens a project)
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project
-// DELETE /api/projects/:id                     → 204
+// DELETE /api/projects/:id                     → 204   (closes it: the repo, branches and datapacks stay)
 // GET    /api/projects/:id/branches            → string[]
 // POST   /api/projects/:id/datapacks AttachDatapackRequest → Project
 // POST   /api/projects/:id/dedicated-datapack SetDedicatedDatapackRequest → Project   (a project without one gets its

@@ -526,13 +526,17 @@ function ProjectSettingsForm({
           {saved && <span className="muted small">Saved</span>}
           <span className="sp" />
           <ConfirmButton
-            label="Delete project"
-            confirmLabel="Delete project"
-            prompt="Stops its sessions and removes their worktrees, except ones with uncommitted changes. Your repo, branches and datapacks stay."
+            label="Close project"
+            confirmLabel="Close project"
+            prompt={`Stops its sessions and removes their worktrees, except ones with uncommitted changes. ${
+              project.datapacks.some((d) => d.role === 'dedicated')
+                ? 'Your repo, branches and datapacks stay, and opening its datapack again brings the project back.'
+                : 'Your repo and branches stay.'
+            }`}
             danger
             onConfirm={async () => {
               try {
-                await api.deleteProject(project.id);
+                await api.closeProject(project.id);
                 navigate({ view: 'root' });
               } catch (err) {
                 onError(errorMessage(err));

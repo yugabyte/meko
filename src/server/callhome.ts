@@ -157,11 +157,16 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
   // Projects.
   const projects = all<{ id: string; repo_path: string; created_at: number; deleted_at: number | null }>(db,
     'SELECT id, repo_path, created_at, deleted_at FROM projects');
+  // Opened: new projects, and closed ones opened again. Closed: every close, including ones since
+  // undone by a reopen (which clears deleted_at).
   for (const p of projects) {
     const c = dayOf(p.created_at);
     if (c) c.projectsCreated++;
-    const d = p.deleted_at != null ? dayOf(p.deleted_at) : undefined;
-    if (d) d.projectsDeleted++;
+  }
+  for (const e of all<{ kind: string; at: number }>(db, 'SELECT kind, at FROM project_events')) {
+    const d = dayOf(e.at);
+    if (d && e.kind === 'reopened') d.projectsCreated++;
+    else if (d) d.projectsDeleted++;
   }
   const current = projects.filter((p) => p.deleted_at == null);
   const currentIds = new Set(current.map((p) => p.id));

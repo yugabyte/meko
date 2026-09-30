@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG, type Config } from '../src/server/config.js';
 import { Core } from '../src/server/core.js';
 import { openDb } from '../src/server/db.js';
 import { silentLogger } from '../src/server/log.js';
-import type { MekoClient } from '../src/server/meko.js';
+import { pinSlug, sessionAgentId, type MekoClient } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import { getPaths } from '../src/server/paths.js';
@@ -131,6 +131,22 @@ export interface TestEnv {
 }
 
 let seq = 0;
+
+/** The Meko datapack pin file for a session's agent id. */
+export function sessionPinFile(session: { id: string; slug: string }): string {
+  return join(process.env.MEKO_WATERMARK_DIR!, `pin-${pinSlug(sessionAgentId(session))}.json`);
+}
+
+/** The datapack id a session's pin names. */
+export function pinnedDatapack(session: { id: string; slug: string }): string {
+  return JSON.parse(readFileSync(sessionPinFile(session), 'utf8')).datapack_id;
+}
+
+/** Every Meko datapack pin file written so far. */
+export function pinFiles(): string[] {
+  const dir = process.env.MEKO_WATERMARK_DIR!;
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.startsWith('pin-')) : [];
+}
 
 /**
  * A fresh temp dir by its real path. On macOS the temp dir is under /var, a symlink to

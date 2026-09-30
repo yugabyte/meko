@@ -7,13 +7,13 @@ import { deleteBranch, git, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
-import { projectAgentId } from './meko.js';
+import { launchedAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, SESSION_KINDS, STAGE_LABELS, type DatapackRef, type MoveSessionRequest, type ReviewerMode, type SessionKind, type Stage } from '../shared/types.js';
+import { KIND_LABELS, SESSION_KINDS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type SessionKind, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
-import { dedicatedDatapack, parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
+import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 import { WORKFLOW } from './sessions.js';
 
 const POLL_MS = 15000;
@@ -156,23 +156,12 @@ export class Lifecycle {
         sent: 'UPDATE designs SET html_version = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
     }
     if (!parts.length) return;
-    const conv = await this.mekoConversation(row, dp);
+    const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, projectAgentId(row.project_id), conv);
+      await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv);
       // The version is used; it's the current design only if nothing changed while it was sent.
       run(this.db, p.sent, p.version, p.text, id);
     }));
-  }
-
-  /**
-   * The Meko conversation AgentK's writes for a session go under: the project's, which lives in
-   * its dedicated datapack, or the session's own when the session still uses one the project
-   * switched away from (a conversation belongs to one datapack).
-   */
-  private mekoConversation(row: SessionRow, dp: DatapackRef): Promise<string> {
-    return dedicatedDatapack(this.db, row.project_id)?.id === dp.id
-      ? this.core.projects.ensureConversation(row.project_id)
-      : this.sessions.conversationId(row, dp);
   }
 
   /** After an Artifact tool call during Design: keeps the published page and its link as the design. */
@@ -931,14 +920,14 @@ export class Lifecycle {
     const shipped = !!get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'shipped'", row.id);
     if (p && dp && !shipped && this.core.mekoStatus.configured) {
       try {
-        const conv = await this.mekoConversation(row, dp);
+        const conv = await this.sessions.conversationId(row, dp);
         const body = st.body.trim().slice(0, 4000);
         this.sessions.ingestUsage(row.id);
         const u = this.sessions.runtime(row.id).usage;
         const tokens = `Token usage: ${u.output} output, ${u.input} input, ${u.cacheWrite} cache write, ${u.cacheRead} cache read tokens over ${u.messages} responses.`;
         await this.core.meko.addMemory(
           `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}. ${tokens}${body ? `\n\n${body}` : ''}`,
-          dp.id, projectAgentId(row.project_id), conv,
+          dp.id, launchedAgentId(row), conv,
           { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },
         );
         this.sessions.event(row.id, 'shipped', `Saved what shipped to ${dp.name}`);

@@ -14,7 +14,7 @@ your phone.
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/design-review.png" alt="Design stage: Claude's plan shown next to the terminal, with Approve design"><br><sub><b>Design review.</b> Claude's plan, rendered next to the terminal, waiting for your approval.</sub></td>
-    <td width="50%"><img src="docs/screenshots/new-project.png" alt="New project dialog listing the repos under ~/code"><br><sub><b>New project.</b> Pick a repo from your repos folder; a dedicated Meko datapack is created with it.</sub></td>
+    <td width="50%"><img src="docs/screenshots/new-project.png" alt="Open project dialog listing the repos under ~/code"><br><sub><b>Open project.</b> Pick a repo from your repos folder; a dedicated Meko datapack is created with it.</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/project-home.png" alt="Project home with datapacks, activity, token usage and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity, token usage by day, session and model, and settings.</sub></td>
@@ -60,6 +60,9 @@ your phone can connect.
 - **Projects** in a left rail: each is an effort to build or improve a feature, product or service,
   worked on in a git repo picked from your repos folder (`~/code` by default).
   A repo can back several projects, each with its own datapack, settings and sessions.
+  **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
+  branches and datapack stay: opening its datapack again brings the same project back, with its
+  sessions, settings and usage.
   New sessions start from the base branch after it's fast-forwarded to `origin`. Under
   **Advanced** a session can work in another of your repos, or on a branch you name, including an
   existing one no running session uses.
@@ -103,7 +106,7 @@ your phone can connect.
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
   people's by default, or every reviewer's, or only people's) and CI failures to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
-  subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, deleted ones
+  subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, and how many sessions had something from Meko in their first

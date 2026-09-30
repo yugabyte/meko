@@ -100,8 +100,10 @@ const SECRETS = ['Secret Project Zeta', 'zeta', 'alice', 'secret-branch', 'Secre
 
 function seeded(): Db {
   const db = openDb(':memory:');
-  const project = (id: string, name: string, repo: string, created: number, deleted: number | null = null) =>
+  const project = (id: string, name: string, repo: string, created: number, deleted: number | null = null) => {
     run(db, 'INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?)', id, name, repo, 'main', created, deleted);
+    if (deleted !== null) run(db, `INSERT INTO project_events(project_id, kind, at) VALUES (?, 'closed', ?)`, id, deleted);
+  };
   project('p1', 'Secret Project Zeta', '/home/alice/zeta-repo', at('2026-09-27T10:00:00Z'));
   project('p2', 'Other', '/home/alice/zeta-repo', at('2026-01-01T00:00:00Z'));
   project('p3', 'Gone for good', '/srv/gone', at('2026-01-01T00:00:00Z'), at('2026-09-26T05:00:00Z'));
@@ -253,6 +255,18 @@ describe('the usage stats report', () => {
     expect(day('2026-09-22')).toMatchObject({ messages: 0, prsOpened: 0, fileTypes: [], tokensByModel: [] });
     // The older PR is outside the window.
     expect(r.days.reduce((n, d) => n + d.prsOpened, 0)).toBe(1);
+  });
+
+  it('counts a close that a reopen undid, and the reopen as a project opened', () => {
+    const db = seeded();
+    // p3 was closed on the 26th and opened again on the 28th: deleted_at is cleared.
+    run(db, 'UPDATE projects SET deleted_at = NULL WHERE id = ?', 'p3');
+    run(db, `INSERT INTO project_events(project_id, kind, at) VALUES ('p3', 'reopened', ?)`, at('2026-09-28T09:00:00Z'));
+    const r = report(db);
+    const day = (d: string) => r.days.find((x) => x.day === d)!;
+    expect(day('2026-09-26').projectsDeleted).toBe(1);
+    expect(day('2026-09-28').projectsCreated).toBe(1);
+    expect(r.totals.projects).toMatchObject({ current: 3, deleted: 0 });
   });
 
   it('sends 30 days in a first report', () => {

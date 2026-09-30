@@ -55,6 +55,8 @@ const INVITE_SYNC_MS = 5 * 60 * 1000;
 const SHARING_CHECK_MS = 60 * 60 * 1000;
 /** How often idle worktrees unused for too long are removed. */
 const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
+/** How often archived sessions' Meko pins are cleared away. */
+const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
@@ -235,6 +237,7 @@ export class Core extends EventEmitter {
     await this.sessions.recover();
     void this.sessions.refreshDiffStats().catch(() => undefined);
     pruneSessionEvents(this.db);
+    this.prunePins();
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
@@ -242,6 +245,7 @@ export class Core extends EventEmitter {
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(SHARING_CHECK_MS, () => this.invites.checkMode());
+      this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.callHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
       void this.refreshSharing();
@@ -301,6 +305,14 @@ export class Core extends EventEmitter {
       this.hookCheck = null;
     });
     return this.hookCheck;
+  }
+
+  private prunePins(): void {
+    try {
+      this.projects.prunePins();
+    } catch (e) {
+      this.log.warn('removing old Meko datapack pins failed', errMsg(e));
+    }
   }
 
   private every(ms: number, fn: () => Promise<unknown> | unknown): void {

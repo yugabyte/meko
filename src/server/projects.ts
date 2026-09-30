@@ -1,17 +1,17 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
-  ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
+  ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
   SetDedicatedDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import { REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
-import { all, get, run, tx } from './db.js';
+import { all, get, run, tx, type Db } from './db.js';
 import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks.js';
 import { canonicalRemote, cloneRepo, defaultBranch, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos } from './git.js';
 import { errMsg } from './log.js';
-import { pinSlug, projectAgentId } from './meko.js';
+import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
 import { expandHome, repoKey } from './paths.js';
 import { repoRoots } from './config.js';
 import { projectUsage } from './usage.js';
@@ -21,6 +21,8 @@ import {
 
 /** How long the project home waits for each datapack's counts. */
 const DESCRIBE_TIMEOUT_MS = 5000;
+/** How long an archived session's Meko pin stays: the plugin's SessionEnd hook may still read it. */
+export const PIN_KEEP_MS = 24 * 60 * 60 * 1000;
 
 export class HttpError extends Error {
   /** `code`: a machine-readable reason the UI can act on (sent as `code` next to `error`). */
@@ -92,7 +94,7 @@ export class ProjectService {
     if (!name) throw new HttpError(400, 'Give the project a name.');
     if (!req.datapack) throw new HttpError(400, 'Choose a dedicated datapack, or no datapack.');
     if (!!req.repoPath === !!req.cloneUrl) throw new HttpError(400, 'Pick a repo or give a URL to clone.');
-    if (req.datapack.mode !== 'none') this.needMeko('the project can only be created without a datapack');
+    if (req.datapack.mode !== 'none') this.needMeko('the project can only be opened without a datapack');
 
     let repoPath: string;
     if (req.cloneUrl) {
@@ -127,17 +129,29 @@ export class ProjectService {
     this.creatingNames.add(claim);
     let id: string;
     let dp: { id: string; name: string } | null;
+    let reopened = false;
     try {
       // Datapack first: if Meko refuses, nothing is written locally.
       dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
       const branch = await defaultBranch(repoPath);
       const settings = { ...DEFAULT_SETTINGS };
       id = tx(this.db, () => {
+        const pos = (get<{ m: number | null }>(this.db, 'SELECT MAX(position) AS m FROM projects WHERE deleted_at IS NULL')?.m ?? -1) + 1;
+        // A closed project with this dedicated datapack opens again as itself: its id, settings,
+        // sessions, usage and attached datapacks carry on, under the name and repo given now.
+        const closed = dp && closedProjectWith(this.db, dp.id);
+        if (dp && closed) {
+          run(this.db, 'UPDATE projects SET name = ?, repo_path = ?, default_branch = ?, position = ?, deleted_at = NULL WHERE id = ?',
+            name, repoPath, branch, pos, closed);
+          run(this.db, 'UPDATE project_datapacks SET name = ? WHERE project_id = ? AND datapack_id = ?', dp.name, closed, dp.id);
+          run(this.db, `INSERT INTO project_events(project_id, kind, at) VALUES (?, 'reopened', ?)`, closed, Date.now());
+          reopened = true;
+          return closed;
+        }
         // The id and position are worked out in the write, so projects created meanwhile count. The
         // first project on a repo is named after it; later ones add their own name.
         const repoSlug = slugify(basename(repoPath) || name);
         const pid = this.uniqueId(this.siblings(repoPath).length ? slugify(`${repoSlug}-${slugify(name)}`, 60) : repoSlug);
-        const pos = (get<{ m: number | null }>(this.db, 'SELECT MAX(position) AS m FROM projects WHERE deleted_at IS NULL')?.m ?? -1) + 1;
         run(this.db, `INSERT INTO projects(id, name, repo_path, default_branch, position, settings_json, created_at)
                       VALUES (?, ?, ?, ?, ?, ?, ?)`, pid, name, repoPath, branch, pos, JSON.stringify(settings), Date.now());
         if (dp) run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, pid, dp.id, dp.name);
@@ -146,14 +160,11 @@ export class ProjectService {
     } finally {
       this.creatingNames.delete(claim);
     }
-    if (dp) {
-      this.writePin(id, dp);
-      this.core.invites.markUsed(dp.id);
-    }
+    if (dp) this.core.invites.markUsed(dp.id);
     // Trust the repo in Claude Code now, before any session of it starts.
     await this.core.sessions.trustRepo(repoPath);
     if (dp) this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
-    this.core.log.info(`project created: ${id} (${repoPath}) ${dp ? `datapack ${dp.name}` : 'without a datapack'}`);
+    this.core.log.info(`project ${reopened ? 'opened again' : 'opened'}: ${id} (${repoPath}) ${dp ? `datapack ${dp.name}` : 'without a datapack'}`);
     this.core.changed();
     return this.get(id);
   }
@@ -180,10 +191,10 @@ export class ProjectService {
       try {
         dp = await this.core.meko.createDatapack(dpName);
       } catch (e) {
-        // At the plan's limit: New project offers to go on without a datapack; an existing
+        // At the plan's limit: Open project offers to go on without a datapack; an existing
         // project can use one of the datapacks it already has access to.
         if (isDatapackLimit(e)) {
-          const fix = forExisting ? 'Pick one of your datapacks under Use an existing one' : 'Create the project without one';
+          const fix = forExisting ? 'Pick one of your datapacks under Use an existing one' : 'Open the project without one';
           throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). ${fix}, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
         }
         throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
@@ -259,7 +270,6 @@ export class ProjectService {
     } finally {
       this.addingDatapack.delete(id);
     }
-    this.writePin(id, dp);
     this.core.invites.markUsed(dp.id);
     this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
     this.core.log.info(old
@@ -279,7 +289,7 @@ export class ProjectService {
     const clash = this.siblings(repo).find((p) => p.id !== exceptId && nameKey(repo, p.name) === nameKey(repo, name));
     if (clash) throw new HttpError(409, `That repo already has a project named "${clash.name}". Pick another name.`);
     if (this.creatingNames.has(nameKey(repo, name))) {
-      throw new HttpError(409, `A project named "${name.trim()}" is being created on that repo. Pick another name.`);
+      throw new HttpError(409, `A project named "${name.trim()}" is being opened on that repo. Pick another name.`);
     }
   }
 
@@ -319,8 +329,12 @@ export class ProjectService {
   async delete(id: string): Promise<void> {
     this.row(id);
     await this.core.sessions.teardownProject(id);
-    run(this.db, 'UPDATE projects SET deleted_at = ? WHERE id = ?', Date.now(), id);
-    this.core.log.info(`project deleted: ${id}`);
+    const now = Date.now();
+    tx(this.db, () => {
+      run(this.db, 'UPDATE projects SET deleted_at = ? WHERE id = ?', now, id);
+      run(this.db, `INSERT INTO project_events(project_id, kind, at) VALUES (?, 'closed', ?)`, id, now);
+    });
+    this.core.log.info(`project closed: ${id}`);
     this.core.changed();
   }
 
@@ -360,7 +374,7 @@ export class ProjectService {
   }
 
   /**
-   * <key> when it's the real path of a repo the New project dialog lists (a main repo at most
+   * <key> when it's the real path of a repo the Open project dialog lists (a main repo at most
    * `depth` folders under a root, through no hidden folder or other repo), else a 400. Checks the
    * path's own folders instead of scanning the roots.
    */
@@ -428,8 +442,7 @@ export class ProjectService {
     const datapacks = this.core.mekoStatus.configured ? projectDatapacks(this.db, id) : [];
     if (!datapacks.length) return { results: [], searched: 0, failed: 0, error: null };
     const conv = await this.ensureConversation(id, timeoutMs);
-    const agentId = projectAgentId(id);
-    const settled = await Promise.allSettled(datapacks.map((d) => this.core.meko.search(query, d, agentId, conv, timeoutMs)));
+    const settled = await Promise.allSettled(datapacks.map((d) => this.core.meko.search(query, d, AGENTK_AGENT_ID, conv, timeoutMs)));
     const out = { results: [] as SearchResult[], searched: datapacks.length, failed: 0, error: null as unknown };
     settled.forEach((s, i) => {
       if (s.status === 'fulfilled') {
@@ -444,8 +457,8 @@ export class ProjectService {
   }
 
   /**
-   * Meko conversation for server-side writes on behalf of a project (stable per project). Calls
-   * made while it's being created share the one creation.
+   * The project's own Meko conversation (stable per project), for its searches; writes for a
+   * session go under the session's. Calls made while it's being created share the one creation.
    */
   async ensureConversation(id: string, timeoutMs?: number): Promise<string> {
     const r = this.row(id);
@@ -453,7 +466,7 @@ export class ProjectService {
     let p = this.creatingConversation.get(id);
     if (!p) {
       const dp = dedicatedDatapack(this.db, id);
-      p = this.core.meko.ensureConversation(projectAgentId(id), dp?.id ?? null, `agent-k-local-project-${id}`, `AgentK Local: ${r.name}`, timeoutMs)
+      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, `agent-k-local-project-${id}`, `AgentK Local: ${r.name}`, timeoutMs)
         .then((conv) => {
           run(this.db, 'UPDATE projects SET meko_conversation_id = ? WHERE id = ?', conv, id);
           return conv;
@@ -465,15 +478,45 @@ export class ProjectService {
   }
 
   /**
-   * Pins the dedicated datapack for the project's Meko agent id, so the Meko
-   * capture hooks (which honour MEKO_AGENT_ID) write into it.
+   * Removes the pins of sessions archived more than PIN_KEEP_MS ago (a restore pins again). Only
+   * per-session pins: the project-wide ones sessions used before (`claude_code:<project id>`) are
+   * left alone, since that's also the agent id the Meko plugin gives plain Claude Code in a repo
+   * of that name, so the pin may be the user's own.
    */
-  writePin(projectId: string, dp: { id: string; name: string }): void {
+  prunePins(now = Date.now()): void {
+    const dir = mekoCaptureDir();
+    const gone = all<{ a: string }>(this.db, `SELECT meko_agent_id AS a FROM sessions
+      WHERE meko_agent_id IS NOT NULL AND desired = 'archived' AND archived_at < ?`, now - PIN_KEEP_MS);
+    for (const { a } of gone) rmSync(join(dir, `pin-${pinSlug(a)}.json`), { force: true });
+  }
+
+  /** Closed projects by their dedicated datapack: the one create would open again for each. */
+  closed(): ClosedProject[] {
+    const rows = all<{ datapack_id: string; id: string; name: string; repo_path: string }>(this.db,
+      `SELECT d.datapack_id, p.id, p.name, p.repo_path FROM projects p JOIN project_datapacks d ON d.project_id = p.id
+        WHERE d.role = 'dedicated' AND p.deleted_at IS NOT NULL ORDER BY p.deleted_at DESC`);
+    const seen = new Set<string>();
+    return rows.filter((r) => !seen.has(r.datapack_id) && !!seen.add(r.datapack_id))
+      .map((r) => ({ datapackId: r.datapack_id, id: r.id, name: r.name, repoPath: r.repo_path }));
+  }
+
+  /**
+   * Pins a datapack for a Meko agent id (a session's), so the Meko capture hooks (which honour
+   * MEKO_AGENT_ID) write into it.
+   */
+  writePin(agentId: string, dp: { id: string; name: string }): void {
     const dir = mekoCaptureDir();
     mkdirSync(dir, { recursive: true });
-    const file = join(dir, `pin-${pinSlug(projectAgentId(projectId))}.json`);
+    const file = join(dir, `pin-${pinSlug(agentId)}.json`);
     const tmp = `${file}.tmp`;
     writeFileSync(tmp, JSON.stringify({ datapack_id: dp.id, datapack_name: dp.name, selected_at: new Date().toISOString() }, null, 2));
     renameSync(tmp, file);
   }
+}
+
+/** The most recently closed project whose dedicated datapack this is, if any (what create opens again). */
+function closedProjectWith(db: Db, datapackId: string): string | null {
+  return get<{ id: string }>(db, `SELECT p.id FROM projects p JOIN project_datapacks d ON d.project_id = p.id
+    WHERE d.datapack_id = ? AND d.role = 'dedicated' AND p.deleted_at IS NOT NULL
+    ORDER BY p.deleted_at DESC LIMIT 1`, datapackId)?.id ?? null;
 }

@@ -321,6 +321,19 @@ const MIGRATIONS: string[] = [
   );
   DELETE FROM usage_files;
   `,
+  // 20: the Meko agent id a session was launched with, set when it's created and at each launch.
+  // NULL for sessions from before sessions had their own: they run with claude_code:<project id>
+  // until they're launched again. And projects closing and opening again, for the usage stats
+  // (a reopen clears deleted_at); closes so far are carried over.
+  `
+  ALTER TABLE sessions ADD COLUMN meko_agent_id TEXT;
+  CREATE TABLE project_events (
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    kind TEXT NOT NULL CHECK (kind IN ('closed', 'reopened')),
+    at INTEGER NOT NULL
+  );
+  INSERT INTO project_events(project_id, kind, at) SELECT id, 'closed', deleted_at FROM projects WHERE deleted_at IS NOT NULL;
+  `,
 ];
 
 export function openDb(path: string): Db {

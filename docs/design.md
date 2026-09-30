@@ -18,12 +18,12 @@ from a browser.
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
 | Process host | tmux on a dedicated socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. |
-| New project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL. |
+| Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL. |
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
 | Datapacks | Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets). |
 | Meko | Optional. With a key, projects get a dedicated datapack (or start without one, when Meko is down or the plan's datapack limit is reached, and get one later). Without a key, or turned off in Settings, AgentK works without datapacks. |
-| Meko wiring | Sessions get `MEKO_AGENT_ID=claude_code:<project>`, and the project's datapack is pinned for that agent id. The Meko hooks already honour both, so no plugin change is needed. |
+| Meko wiring | Each session gets its own `MEKO_AGENT_ID=claude_code:<session slug>-<hash>`, and the project's datapack is pinned for that agent id when it starts. The Meko hooks already honour both, so no plugin change is needed. |
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
@@ -116,21 +116,23 @@ Session states, shown with a dot in the rail and on each tab:
 - **Recovered** after a restart
 - **Exited**
 
-### New project
+### Open project
 
-A new project starts from a repo you already have. The dialog lists every git repo directly under
+You open a project on a repo you already have, with a new datapack or one that exists (the
+datapack of a project you closed, say, which opens it again). The dialog is **Open project**, and so
+are the rail's and command palette's actions. It lists every git repo directly under
 your repos folder (`~/code` by default), with the most recently touched first. A repo can back
 several projects: one that already has a project is marked with its name (*In "infra"*, or *In 2
 projects*) and can still be picked. A project stores its repo's real path, so one reached through a
 symlink or another folder is the same repo (and its id comes from the real folder's name). Each
-project on a repo gets its own datapack, Meko agent id, settings, sessions and worktrees; project
-names must differ within a repo, and a name is taken from the moment its create starts, so two
-creates of the same name at once can't both succeed. Their session branches
+project on a repo gets its own datapack, settings, sessions and worktrees; project
+names must differ within a repo, and a name is taken from the moment its open starts, so two
+opens of the same name at once can't both succeed. Their session branches
 share the repo, so a branch name that another project already uses gets a number added
 (`ak/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
 the repo.
 
-![The New project dialog listing the git repos under ~/code](screenshots/new-project.png)
+![The Open project dialog listing the git repos under ~/code](screenshots/new-project.png)
 
 - **What the list shows.** For each repo: its folder name, the `origin` remote, the current
   branch, and when it was last touched. The scan also reads a fork's `upstream` remote, for naming
@@ -170,11 +172,24 @@ repo and the name you type (until you edit it), where `<repo>` is the upstream r
 fork, else the origin's, else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the
 repo was picked from the list or typed under Other folder; a name without the prefix gets a hint
 that people you share it with won't be offered it as a project. Choosing an invite changes the
-button to **Accept and create project**: the server accepts the invite in Meko first, and creates
+button to **Accept and open project**: the server accepts the invite in Meko first, and opens
 nothing if Meko refuses. The server refuses a viewer-only datapack as a project's own too (from the
 shares table's grant, else `datapack_describe`), not only the dialog.
 
-Once the project is created, the New session dialog opens for it, so you go straight on to its
+**Opening a closed project again.** When the chosen datapack was the dedicated datapack of a closed
+project (the most recently closed one, if several), that project opens again rather than a new
+one: same id, settings, sessions (archived), token usage, attached shared datapacks and Meko
+conversation, with the name and repo given in the dialog (the repo can be another clone; each
+session keeps its own `repo_path`). It's done in the same write that would add a new project, so
+two opens at once can't both take it. So a project is one thing across closes and opens, on the
+Usage page too. A new datapack, or **No datapack**, always opens a new project. The dialog knows
+the closed projects (`InviteCheck.closed`, the latest closed per datapack): their datapacks are
+tagged **Closed "*name*"**, choosing one fills in the project's name and repo (under Other folder
+when the repo isn't in the list), and a hint says the project opens again, and where it moves
+from when another repo is picked. The close dialog and **Close project** confirmation mention
+reopening only for a project with a dedicated datapack.
+
+Once the project is open, the New session dialog opens for it, so you go straight on to its
 first task. It waits for the project to arrive in the state push, which can come after the create
 reply. Closing it leaves the project's empty view with its **New session** button.
 
@@ -202,9 +217,9 @@ says why.
 **Advanced**, collapsed by default under the first prompt, holds the repo, the base branch and the
 branch; closed, it shows them on one line (`agent-k-local · from main · ak/fix-retry-backoff`).
 
-- **Repo.** The project's repo, or any other repo the New project dialog lists (the scanned repos
+- **Repo.** The project's repo, or any other repo the Open project dialog lists (the scanned repos
   only, loaded when Advanced first opens; `GET /api/repos/branches` gives a repo's branches and
-  default branch). A session in another repo still belongs to its project (datapack, Meko agent id,
+  default branch). A session in another repo still belongs to its project (datapack,
   settings, usage), but its worktree, branch, PR and cleanup are in that repo: `sessions.repo_path`
   holds it, and everything after create reads it from there. The session's system prompt names the
   repo, and its footer shows the repo's folder before the branch.
@@ -316,7 +331,7 @@ failed to register, say), the page shows the notification itself, and clicking i
 in that page. The service worker caches nothing and handles no requests.
 
 A project datapack shared with you also sends one notification (an `invite` event, once per
-datapack); clicking it opens the New project dialog for it. Tapped through the service worker, it
+datapack); clicking it opens the Open project dialog for it. Tapped through the service worker, it
 opens the dialog in an open window, or opens `/`, where the share's banner is waiting.
 
 ### On a phone
@@ -363,7 +378,7 @@ maintainer. See [Sharing a project](#sharing-a-project).
 A project without a dedicated datapack says so in its Datapacks box, with **Add a dedicated
 datapack** (a new one, or one of yours; `POST /api/projects/:id/dedicated-datapack`), or **Add a
 Meko API key** while Meko is off. A shared datapack already attached can become the dedicated one.
-The datapack is pinned then, and new sessions use it. Search is hidden for a project with no
+New sessions use it, each pinning it for its own agent id. Search is hidden for a project with no
 datapacks.
 
 The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
@@ -376,20 +391,21 @@ recovered): they keep the datapack they were launched with, and so keep writing 
 they're restarted. That covers Claude's own Meko calls (its prompt names the old one), capture (the
 Meko hook keeps the datapack in the session's watermark once the session has started) and AgentK's
 writes for the session: designs, the PR's Meko lines and what shipped go to the datapack recorded on
-the session at launch (`sessions.meko_datapack_id`), under the session's own Meko conversation there,
-since the project's conversation moves to the new datapack. New and resumed sessions get the new one
+the session at launch (`sessions.meko_datapack_id`), under the session's own Meko conversation there
+(AgentK's writes for a session always go under its own conversation). New and resumed sessions get the new one
 (a resumed session's Meko conversation is keyed by datapack, so its earlier turns stay in the old
 one). The request names the datapack it replaces
 (`replace`), so a switch made meanwhile in another tab is refused (409) rather than undone; the old
 row is demoted or detached in the same transaction as the new one is added, the project's
-server-side Meko conversation is made again in the new datapack, and the pin is rewritten.
+server-side Meko conversation (used for search) is made again in the new datapack. Pins are per session, so a running
+session's stays on the old datapack and the next one to start pins the new one.
 
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
-picked up from GitHub), a dialog offers **Delete project** (as on the project home; the repo and
-datapacks stay), **New session** or **Keep project**. It asks only on the project's session view,
+picked up from GitHub), a dialog offers **Close project** (as on the project home; the repo and
+datapacks stay), **New session** or **Keep it open**. It asks only on the project's session view,
 with no other dialog open, and in a visible page, so a background tab stays quiet; loading or
 switching to a project that has no sessions doesn't ask. It closes by itself when the project is
-deleted or gets an open session elsewhere.
+closed or gets an open session elsewhere.
 
 ## Projects, worktrees and sessions
 
@@ -423,7 +439,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
 # name = "work laptop"    # shown in the rail next to your user name; unset uses the machine's host name
 
 [repos]
-roots = ["~/code"]        # folders the New project dialog lists
+roots = ["~/code"]        # folders the Open project dialog lists
 depth = 1                 # 1 = only direct children
 clone_into = "~/code"     # where "Clone from URL" puts new repos
 
@@ -452,7 +468,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits for Claude to start first. |
 | Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
-| Delete project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project deleted. Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks. |
+| Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](#open-project)). |
 
 ```sql
 -- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.
@@ -465,6 +481,8 @@ CREATE TABLE project_datapacks (
   role TEXT CHECK (role IN ('dedicated','shared')),
   PRIMARY KEY (project_id, datapack_id));
 CREATE UNIQUE INDEX one_dedicated ON project_datapacks(project_id) WHERE role = 'dedicated';
+CREATE TABLE project_events (  -- closes and reopens, for the usage stats (a reopen clears deleted_at)
+  project_id TEXT REFERENCES projects, kind TEXT CHECK (kind IN ('closed','reopened')), at INTEGER);
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, name TEXT,
   claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
@@ -483,6 +501,8 @@ CREATE TABLE sessions (
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
   first_turn_end_at INTEGER,       -- when the first turn ended (from the transcript), for the Meko stats
+  meko_agent_id TEXT,              -- the MEKO_AGENT_ID it runs with, set at create and each launch
+                                   --   (NULL: launched before sessions had their own; claude_code:<project id> until relaunched)
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
 CREATE TABLE worktrees (       -- session worktrees; idle ones (session_id NULL) wait for the repo's next session
   path TEXT PRIMARY KEY, repo TEXT,  -- repo: the repo's real path, the pool key its projects share
@@ -539,11 +559,11 @@ and keeps its ignored files (`build/`, `node_modules/`, CMake caches) for the ne
 stays the same, which matters to build systems that record absolute source paths (CMake,
 `yb_build.sh`): a copied or moved build tree would break.
 
-- **Idle.** When a session ends (Archive, Discard, Merge & Close, Delete project) with a clean
+- **Idle.** When a session ends (Archive, Discard, Merge & Close, Close project) with a clean
   worktree (`git status --porcelain` empty), `git checkout --detach` frees its branch without
   changing a file, and the worktree's row in `worktrees` loses its session. Archive refuses, and
   Merge & Close is blocked, while there are uncommitted changes; a worktree that still has some (a PR merged on
-  GitHub, Delete project) stays the session's and is never handed on.
+  GitHub, Close project) stays the session's and is never handed on.
 - **Shared by the repo's projects.** Idle worktrees belong to the repo, keyed by its real path, so
   every project on it (a repo can have many at once) takes from the same pool. A session in another
   repo than its project's takes from and gives back to that repo's pool. New worktrees live
@@ -575,7 +595,7 @@ stays the same, which matters to build systems that record absolute source paths
 - **Recovery.** At startup, in the background, the server forgets idle worktrees whose folder is gone,
   marks stale the ones no longer clean and detached (and stale ones that are clean again usable),
   removes those of repos no live project uses (as its repo, or any of its sessions' repos) and those
-  unused too long, and trims to the cap. Deleting a project keeps a repo's idle worktrees while
+  unused too long, and trims to the cap. Closing a project keeps a repo's idle worktrees while
   another project uses the repo.
 - **What carries over.** Every ignored file, not only build outputs: `.env`, `CLAUDE.local.md`,
   `.claude/settings.local.json`, local databases and logs. Set the cap to 0 for fresh worktrees.
@@ -711,7 +731,7 @@ Each session is launched with this environment:
 
 ```sh
 MEKO_DATAPACK_ID=dp_7f3…                 # dedicated: capture + memory writes
-MEKO_AGENT_ID=claude_code:billing-api     # one memory bucket per project, not per worktree dir
+MEKO_AGENT_ID=claude_code:fix-retry-backoff-3f9c1a2e  # the session: its slug and a hash of its id
 MEKO_DATAPACK_IDS=dp_7f3…,dp_a01…,dp_c9e… # everything this session may read
 AK_SESSION=billing-api--fix-retry-backoff
 ```
@@ -727,10 +747,22 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 
 > **No Meko plugin change needed.** The Meko hooks already take `MEKO_AGENT_ID` over the folder
 > name, and they read the datapack pin from `~/.claude/meko-capture/pin-<agent id>.json` (with `:`
-> as `_`, e.g. `pin-claude_code_billing-api.json`). AgentK
-> Local sets `MEKO_AGENT_ID=claude_code:<project>` for every session and writes that pin when the
-> project is created and again each time a session starts. So every worktree of a project shares one memory bucket, and capture goes
-> into the dedicated datapack. The hooks read the pin when a session starts and keep it in the
+> as `_`, e.g. `pin-claude_code_fix-retry-backoff-3f9c1a2e.json`). AgentK
+> Local gives every session its own `MEKO_AGENT_ID` (`sessionAgentId()` in `meko.ts`: the slug,
+> plus 8 hex digits of a hash of the session id, since a slug is only unique within its project)
+> and writes that pin each time the session starts, so capture goes into the dedicated datapack.
+> The agent id doesn't name the project: Meko reads memories across agents within a datapack, so
+> it only says which session wrote a memory, and every session of a project, and the project
+> opened again after a close, sees them all. AgentK's own writes for a session (designs, the
+> shipped summary) go under the session's Meko conversation with the agent id the session runs
+> with (`launchedAgentId()`, recorded in `sessions.meko_agent_id`); the project's conversation
+> and its searches (the project home's, and the search at session start) use `agent-k-local`. A session launched before sessions had their own agent id keeps
+> `claude_code:<project id>` for all of that until it's launched again. A pin stays for a day after
+> its session is archived (the plugin's SessionEnd hook may still read it), then it's removed at
+> startup or on the 6-hourly sweep; a restore pins it again. The old project-wide pins
+> (`pin-claude_code_<project id>.json`) are never removed: the Meko plugin gives plain Claude Code
+> in a repo the agent id `claude_code:<repo folder>`, so for a project named after its repo that
+> file may be the user's own pin (one AgentK used to overwrite). The hooks read the pin when a session starts and keep it in the
 > session's watermark, so after a switch a running session's capture stays in the old datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
 
 > **Transcript capture can be turned off.** `[meko] capture_transcripts` in `config.toml`
@@ -789,7 +821,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   datapack** (`DatapackChoice` `{ mode: 'none' }`), the default while Meko is off.
 >   When Meko refuses a new datapack because the plan's datapack limit is reached (HTTP 402,
 >   `FREE_TIER_DATAPACK_LIMIT` / `STANDARD_TIER_DATAPACK_LIMIT`), the server answers 402 with code
->   `DATAPACK_LIMIT` and the dialog offers **Create without a datapack**. One can be added later
+>   `DATAPACK_LIMIT` and the dialog offers **Open without a datapack**. One can be added later
 >   from the project's home.
 > - **At session start:** every session gets `MEKO_AGENT_ID`, and `MEKO_DATAPACK_ID` when the
 >   project has a dedicated datapack. A project without one starts sessions like any other; design
@@ -858,12 +890,12 @@ failure is logged. Meko shows the
 description only once an invite is accepted, so a pending invite is matched to a repo by name.
 
 `InviteService` (`src/server/invites.ts`) keeps the shares in the `datapack_invites` table, one row
-per datapack, synced at startup, every 5 minutes, and whenever the New project dialog opens or you
+per datapack, synced at startup, every 5 minutes, and whenever the Open project dialog opens or you
 tap **Refresh**. The dialog makes one call, `POST /api/invites/check`, which lists the datapacks
 once and syncs with that same list. Only project datapacks count, and only ones no live project
 here uses. States: `invited` (waiting in Meko), `shared` (accepted, not yet a project), `later`
 (hidden here; an invite stays in Meko), `used` (a project here has used it; never offered again,
-even after that project is deleted, unless it's invited again), and `baseline`. The first sync
+even after that project is closed, unless it's invited again), and `baseline`. The first sync
 records the shares that already exist as `baseline`, without banners or notifications, so an
 upgrade doesn't bring a burst of them; they can still be picked in the dialog. Invites always show.
 An invite that disappears from Meko (revoked, or answered elsewhere) is removed; one accepted
@@ -879,7 +911,7 @@ check). Our Meko account id is only taken from a read that wasn't stale. A `data
 of an unexpected shape is an error, not an empty list, so it can't make every share look gone; and
 a share accepted here isn't taken for gone for 10 minutes while Meko's list catches up. An invite that was
 already accepted (by an earlier try whose project then failed, or in Meko) isn't accepted again,
-so **Accept and create project** can be retried. A change to the Meko URL or key may mean another
+so **Accept and open project** can be retried. A change to the Meko URL or key may mean another
 account: the rows other than `used` and the first-sync flag are dropped, so the new account's
 existing shares are recorded quietly.
 
@@ -1087,7 +1119,8 @@ report, so an install that is ahead of it still reports.
   direct pushes and their commits as on the Usage page, plus the commits and lines of merged PRs),
   file types, tokens, and idle worktrees.
 - *Each UTC day* of the last 7 (30 in an install's first report, as far back as session events are
-  kept): active projects and sessions, responses, projects created and deleted, sessions created
+  kept): active projects and sessions, responses, projects opened (new, or opened again) and closed
+  (from `project_events`, so a close a reopen undid still counts), sessions created
   by kind and archived, stage entries, PRs opened and merged with their commits and lines, direct
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
   resumes, reused worktrees, file types, and tokens by model.

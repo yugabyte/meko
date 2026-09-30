@@ -39,7 +39,7 @@ function pickWindow(windows, projectId, sessionId) {
   return byUse.find((w) => w.focused) || byUse.find((w) => w.visibilityState === 'visible') || byUse[0];
 }
 
-// Tapping a notification opens its session (or, for a shared datapack, the New project dialog for
+// Tapping a notification opens its session (or, for a shared datapack, the Open project dialog for
 // it): in an open AgentK window if there is one, else a new one (where the share's banner is waiting).
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

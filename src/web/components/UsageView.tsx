@@ -39,7 +39,7 @@ const modelValue = (m: ModelUsage, k: ModelKey): number | string =>
   k === 'model' ? m.model : k === 'output' ? m.usage.output : totalTokens(m.usage);
 
 /**
- * Usage across every project, deleted ones included: tokens and their cost by project, model and
+ * Usage across every project, closed ones included: tokens and their cost by project, model and
  * day, Meko use and its estimated savings, and what shipped (merged PRs, and commits pushed
  * straight to a base branch). `mekoConfigured`: Meko is on, so the Meko section shows before any call.
  */
@@ -77,7 +77,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
       {mobile && <TopBar onMenu={onMenu} title="Usage" />}
       <header className="home-hd">
         {!mobile && <h1>Usage</h1>}
-        <span className="muted small">Every project, deleted ones included. Tokens come from Claude Code transcripts, subagents included.</span>
+        <span className="muted small">Every project, closed ones included. Tokens come from Claude Code transcripts, subagents included.</span>
       </header>
       <div className="home-scroll">
         {error && <p className="error-text">{error}</p>}
@@ -148,7 +148,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                                   {p.name}
                                 </button>
                               )}{' '}
-                              {p.deleted && <span className="tag">deleted</span>}
+                              {p.deleted && <span className="tag">closed</span>}
                               <span className="muted small usage-when">
                                 <span className="mono" title={p.repoPath}>
                                   {repoFolder(p.repoPath)}

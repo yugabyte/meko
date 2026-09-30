@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
+import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
 import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
 } from '../../shared/datapacks';
@@ -33,6 +33,8 @@ interface DpOption {
   remote: string | null;
   /** Projects here that already use it. */
   usedBy: string[];
+  /** The closed project it was the dedicated datapack of: picking it opens that project again. */
+  closed: ClosedProject | null;
   group: 'invites' | 'shared' | 'yours';
 }
 
@@ -58,7 +60,7 @@ export function NewProjectDialog({
   onClose,
   onCreated,
 }: {
-  /** Meko is on (a key is set). Off, a project is created without a datapack. */
+  /** Meko is on (a key is set). Off, a project is opened without a datapack. */
   mekoConfigured: boolean;
   mekoWebUrl: string | null;
   sharing: SharingMode | null;
@@ -81,6 +83,7 @@ export function NewProjectDialog({
 
   const [datapacks, setDatapacks] = useState<MekoDatapack[] | null>(null);
   const [invites, setInvites] = useState<DatapackInvite[]>(initialInvite ? [initialInvite] : []);
+  const [closedProjects, setClosedProjects] = useState<ClosedProject[]>([]);
   const [dpError, setDpError] = useState<string | null>(null);
   const [dpLoading, setDpLoading] = useState(false);
   // With Meko off a datapack can't be had: the project starts without one.
@@ -118,6 +121,7 @@ export function NewProjectDialog({
       .then((r) => {
         setDatapacks(r.datapacks);
         setInvites(r.invites);
+        setClosedProjects(r.closed);
       })
       .catch((e) => setDpError(errorMessage(e)))
       .finally(() => setDpLoading(false));
@@ -169,6 +173,7 @@ export function NewProjectDialog({
   const options = useMemo<DpOption[]>(() => {
     const usedBy = new Map<string, string[]>();
     for (const p of projects) for (const d of p.datapacks) usedBy.set(d.id, [...(usedBy.get(d.id) ?? []), p.name]);
+    const closed = new Map(closedProjects.map((c) => [c.datapackId, c]));
     const out: DpOption[] = [];
     const seen = new Set<string>();
     for (const i of invites) {
@@ -176,7 +181,7 @@ export function NewProjectDialog({
       seen.add(i.datapackId);
       out.push({
         id: i.datapackId, name: i.name, grant: i.grant, owner: i.ownerName ?? i.ownerEmail, inviteId: i.inviteId,
-        remote: i.repoRemote, usedBy: usedBy.get(i.datapackId) ?? [], group: 'invites',
+        remote: i.repoRemote, usedBy: usedBy.get(i.datapackId) ?? [], closed: closed.get(i.datapackId) ?? null, group: 'invites',
       });
     }
     for (const d of datapacks ?? []) {
@@ -184,11 +189,11 @@ export function NewProjectDialog({
       const mine = !d.grant || d.grant === 'owner';
       out.push({
         id: d.id, name: d.name, grant: d.grant, owner: mine ? null : (d.ownerName ?? d.ownerEmail), inviteId: null,
-        remote: remoteFromDescription(d.description), usedBy: usedBy.get(d.id) ?? [], group: mine ? 'yours' : 'shared',
+        remote: remoteFromDescription(d.description), usedBy: usedBy.get(d.id) ?? [], closed: closed.get(d.id) ?? null, group: mine ? 'yours' : 'shared',
       });
     }
     return out;
-  }, [datapacks, invites, projects]);
+  }, [datapacks, invites, projects, closedProjects]);
 
   const dpShown = useMemo(() => {
     const q = dpFilter.trim().toLowerCase();
@@ -226,6 +231,22 @@ export function NewProjectDialog({
     if (!autoFill || !repos) return;
     const o = autoFill;
     setAutoFill(null);
+    // A closed project's datapack: its own name and repo.
+    if (o.closed) {
+      const c = o.closed;
+      setName(c.name);
+      const repo = repos.find((r) => r.path === c.repoPath);
+      if (repo) {
+        setSource('list');
+        setSelected(repo);
+        setFilter('');
+      } else {
+        setSource('folder');
+        setFolder(c.repoPath);
+      }
+      setAutoHint({ ok: true, text: `Name and repo set to those of “${c.name}”.` });
+      return;
+    }
     const parsed = parseProjectDatapack(o.name);
     if (!parsed) return;
     setName(parsed.project);
@@ -266,6 +287,12 @@ export function NewProjectDialog({
     return list.sort((a, b) => (sort === 'az' ? a.name.localeCompare(b.name) : b.lastTouchedAt - a.lastTouchedAt));
   }, [repos, filter, sort]);
 
+  // The repo picked, when it isn't the one the closed project being opened again was on.
+  const pickedRepo = source === 'list' ? (selected?.path ?? null) : source === 'folder' ? folder.trim().replace(/\/+$/, '') || null : null;
+  const movesFrom = dpMode === 'existing' && dpChosen?.closed && (source === 'clone' || (pickedRepo && pickedRepo !== dpChosen.closed.repoPath))
+    ? dpChosen.closed.repoPath
+    : null;
+
   const repoChosen =
     source === 'list' ? !!selected : source === 'clone' ? cloneUrl.trim().length > 0 : folder.trim().length > 0;
   const dpReady = dpMode === 'none' ? true : dpMode === 'create' ? dpName.trim().length > 0 : !!dpChosen;
@@ -283,7 +310,7 @@ export function NewProjectDialog({
           ? { mode: 'create', name: dpName.trim() }
           : { mode: 'existing', id: dpChosen!.id, name: dpChosen!.name, ...(dpChosen!.inviteId ? { inviteId: dpChosen!.inviteId } : {}) };
     try {
-      const p = await api.createProject({
+      const p = await api.openProject({
         repoPath: source === 'list' ? selected!.path : source === 'folder' ? folder.trim() : undefined,
         cloneUrl: source === 'clone' ? cloneUrl.trim() : undefined,
         name: name.trim(),
@@ -302,7 +329,7 @@ export function NewProjectDialog({
 
   return (
     <Dialog
-      title="New project"
+      title="Open project"
       wide
       onClose={onClose}
       aside={
@@ -336,10 +363,10 @@ export function NewProjectDialog({
                 ? 'Accepting…'
                 : source === 'clone'
                   ? 'Cloning…'
-                  : 'Creating…'
+                  : 'Opening…'
               : accepting
-                ? 'Accept and create project'
-                : 'Create project'}
+                ? 'Accept and open project'
+                : 'Open project'}
           </button>
         </>
       }
@@ -394,6 +421,12 @@ export function NewProjectDialog({
             {dpChosen.usedBy.length > 0 && (
               <p className="hint">Already used by {dpChosen.usedBy.map((n) => `“${n}”`).join(', ')} here.</p>
             )}
+            {dpChosen.closed && (
+              <p className="hint">
+                Opens the closed project “{dpChosen.closed.name}” again, with its sessions, settings and usage.
+                {movesFrom && ` It was on ${movesFrom}; it moves to the repo picked below, and its old sessions stay on the old one.`}
+              </p>
+            )}
           </>
         ) : (
           <div className="dp-picker">
@@ -433,6 +466,7 @@ export function NewProjectDialog({
                       <span className="radio" />
                       <span className="mono">{o.name}</span>
                       {o.usedBy.length > 0 && <span className="tag shared">In “{o.usedBy[0]}”</span>}
+                      {o.closed && <span className="tag shared">Closed “{o.closed.name}”</span>}
                       {tag && <span className={cx('tag', (o.group === 'yours' || viewer) && 'shared')}>{tag}</span>}
                       {viewer && (
                         <span className="dp-row-note">
@@ -524,7 +558,7 @@ export function NewProjectDialog({
             {selected && selected.projects.length > 0 && (
               <p className="hint repo-note">
                 This repo already has {selected.projects.length === 1 ? 'project' : 'projects'} {projectList(selected)}. The
-                new project gets its own datapack, sessions and worktrees. Branches share the repo, so a clashing
+                project you open gets its own datapack, sessions and worktrees. Branches share the repo, so a clashing
                 branch name gets a number added.
               </p>
             )}
@@ -584,7 +618,7 @@ export function NewProjectDialog({
             pickMode('none');
             void create('none');
           }}>
-            Create without a datapack
+            Open without a datapack
           </button>
         </div>
       )}

@@ -28,7 +28,7 @@ type Modal =
   /** `invite`: a share to open as the project (chosen as its datapack). */
   | { kind: 'new-project'; invite?: DatapackInvite }
   | { kind: 'new-session'; projectId: string }
-  /** The project on screen lost its last open session: offer to delete it. */
+  /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
   | { kind: 'palette' }
@@ -115,7 +115,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }).catch(() => undefined);
   }, []);
 
-  /** Opens the New project dialog for a share, found by its datapack in the latest state. */
+  /** Opens the Open project dialog for a share, found by its datapack in the latest state. */
   const openInvite = useCallback((datapackId: string) => {
     const invite = stateRef.current?.invites.find((i) => i.datapackId === datapackId);
     setModal({ kind: 'new-project', invite });
@@ -182,7 +182,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
-  // When the project on screen loses its last open session, offer to delete it. Only on the
+  // When the project on screen loses its last open session, offer to close it. Only on the
   // project's view, with no other dialog open, and in a visible page (a background tab stays quiet).
   const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
   const currentId = currentProject?.id ?? null;
@@ -315,8 +315,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }
   };
 
-  // A New session dialog whose project was deleted meanwhile closes. One opened for a project just
-  // created waits for its state push (until pendingProjectId gives up on it).
+  // A New session dialog whose project was closed meanwhile closes. One opened for a project just
+  // opened waits for its state push (until pendingProjectId gives up on it).
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
   // Gone once the session is archived (or its project deleted) under the dialog.
   const moveSession =
@@ -328,7 +328,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   useEffect(() => {
     if (state && modalKind === 'new-session' && !newSessionProject && !newSessionWaiting) setModal({ kind: 'none' });
   }, [state, modalKind, newSessionProject, newSessionWaiting]);
-  // The delete offer closes once its project is gone or has an open session again (say, from another tab).
+  // The close offer closes once its project is gone or has an open session again (say, from another tab).
   const closeProject = modal.kind === 'close-project' ? projects.find((p) => p.id === modal.projectId) : undefined;
   const closeProjectStale = !closeProject || liveSessions(closeProject).length > 0;
   useEffect(() => {
@@ -426,7 +426,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
                 A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
               </p>
               <button className="btn primary" onClick={() => setModal({ kind: 'new-project' })}>
-                New project
+                Open project
               </button>
             </div>
           </>
@@ -464,7 +464,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           project={closeProject}
           onClose={() => setModal({ kind: 'none' })}
           onNewSession={() => setModal({ kind: 'new-session', projectId: closeProject.id })}
-          onDeleted={() => {
+          onClosed={() => {
             setModal({ kind: 'none' });
             navigate({ view: 'root' });
           }}

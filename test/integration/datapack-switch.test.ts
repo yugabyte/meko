@@ -5,11 +5,10 @@ import type { FastifyInstance } from 'fastify';
 import type { Project } from '../../src/shared/types.js';
 import { buildServer } from '../../src/server/server.js';
 import { issueSetupToken } from '../../src/server/auth.js';
-import { MekoError } from '../../src/server/meko.js';
+import { MekoError, sessionAgentId } from '../../src/server/meko.js';
 import { get, run } from '../../src/server/db.js';
-import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
 
-const pinFile = (projectId: string) => join(process.env.MEKO_WATERMARK_DIR!, `pin-claude_code_${projectId}.json`);
 const OLD = { id: 'dp-adlc-proj-demo-repo-a', name: 'adlc/proj/demo-repo/a' };
 const NEW = { id: 'dp-adlc-proj-demo-repo-b', name: 'adlc/proj/demo-repo/b' };
 
@@ -30,15 +29,20 @@ describe('switching the dedicated datapack', () => {
   const creates = () => env.meko.calls.filter((c) => c.name === 'createDatapack').length;
 
   it('switches to a new datapack, keeping the old one attached as shared', async () => {
+    const before = await env.core.sessions.create(p.id, { name: 'Before', kind: 'quick' });
     const r = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id });
     expect(r.datapacks).toEqual([
       { ...NEW, role: 'dedicated' },
       { ...OLD, role: 'shared' },
     ]);
-    expect(JSON.parse(readFileSync(pinFile(p.id), 'utf8')).datapack_id).toBe(NEW.id);
+    // A session started before keeps its pin on the old one; a new session's pin is the new one.
+    const after = await env.core.sessions.create(p.id, { name: 'After', kind: 'quick' });
+    expect(pinnedDatapack(env.core.sessions.row(before.id))).toBe(OLD.id);
+    expect(pinnedDatapack(env.core.sessions.row(after.id))).toBe(NEW.id);
     // The conversation made in the old datapack is dropped, so a new one is made in the new one.
     await waitFor(() => conversation(), (c) => c === 'conv-1', 5000, 'a new conversation');
-    expect(env.meko.calls.find((c) => c.name === 'ensureConversation')?.args[1]).toBe(NEW.id);
+    const projectConv = env.meko.calls.find((c) => c.name === 'ensureConversation' && c.args[2] === `agent-k-local-project-${p.id}`);
+    expect(projectConv?.args[1]).toBe(NEW.id);
   });
 
   it('swaps roles with an attached shared datapack', async () => {
@@ -118,13 +122,14 @@ describe('switching the dedicated datapack', () => {
     const sentTo = async (id: string, slug: string) => {
       await env.core.lifecycle.saveDesign(id, { markdown: `# ${slug}` });
       const put = await waitFor(() => env.meko.calls.find((c) => c.name === 'putArtifact' && c.args[0] === `design-${slug}.md`), (c) => !!c, 5000, `${slug}'s design sent`);
+      // Under the session's own agent id and Meko conversation, in the datapack it was launched with.
+      const row = env.core.sessions.row(id);
+      expect(put!.args[4]).toBe(sessionAgentId(row));
+      expect(env.meko.calls.some((c) => c.name === 'ensureConversation' && c.args[0] === sessionAgentId(row) && c.args[1] === put!.args[3] && c.args[2] === row.claude_session_id)).toBe(true);
       return put!.args[3];
     };
     expect(await sentTo(before.id, 'before')).toBe(OLD.id);
     expect(await sentTo(after.id, 'after')).toBe(NEW.id);
-    // The old datapack has no project conversation any more: the session's own one is used there.
-    const claudeId = env.core.sessions.row(before.id).claude_session_id;
-    expect(env.meko.calls.some((c) => c.name === 'ensureConversation' && c.args[1] === OLD.id && c.args[2] === claudeId)).toBe(true);
   });
 
   describe('over HTTP', () => {

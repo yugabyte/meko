@@ -122,7 +122,7 @@ export function Rail({
           );
         })}
         <button className="rail-add" onClick={onNewProject}>
-          + New project
+          + Open project
         </button>
         <button
           className={cx('rail-add', 'rail-usage', usageOpen && 'sel')}
