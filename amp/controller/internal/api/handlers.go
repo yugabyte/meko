@@ -1380,19 +1380,18 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 // upgrade_endpoint child per endpoint and runs them itself
 // (architecture/ac-endpoint-upgrade.md §6).
 //
-// It validates only what is true of the REQUEST — a version is named, the knobs
-// are in range. Whether a given ENDPOINT can move is the planner's question,
-// answered once at Execute time when the answer is still true; asking it here
-// would be N reads of a fleet that moves in between. So there is no 404: an
-// unknown id and an endpoint already at the target are `skipped` lines in the
-// task result, never a refusal of the roll.
+// It validates only what is true of the REQUEST — the knobs are in range. Whether
+// a given ENDPOINT can move is the planner's question, answered once at Execute
+// time when the answer is still true; asking it here would be N reads of a fleet
+// that moves in between. So there is no 404: an unknown id and an endpoint
+// already at the target are `skipped` lines in the task result.
 //
-// The 409 is the exception, and it is about the ROLL rather than any endpoint: a
-// second concurrent roll is refused, because two rolls naming different versions
-// flip the fleet twice and the second caller would learn nothing until after it
-// happened. Refusing here is the fast path — the plan-time query it rests on is
-// racy on its own, and the no-wait `fleet:endpoints` lock the parent step takes
-// is what actually decides (ac-endpoint-upgrade.md §5.6).
+// There are two 409s, both about the whole roll rather than one endpoint. A
+// second concurrent roll is refused (`conflict`), because the second caller would
+// learn nothing until after the first moved the fleet; the plan-time query is the
+// fast path, and the no-wait `fleet:endpoints` lock the parent step takes is what
+// decides (ac-endpoint-upgrade.md §5.6). And a fleet already at this controller's
+// version is refused (`fleet_at_version`, §6.1): there is nothing to move.
 func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpointsRequestObject) (UpgradeEndpointsResponseObject, error) {
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
@@ -1431,6 +1430,41 @@ func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpo
 		}
 	}
 
+	// Only a controller upgrade moves the target, so a fleet recorded at it — and
+	// confirmed there, see EffectiveFleetVersion — has nothing a roll could change.
+	// An empty fleet with no record is let through: its roll plans nothing and
+	// records the pin.
+	recorded, err := c.backend.FleetVersion(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read fleet version: %w", err)
+	}
+	fleetVersion, err := core.EffectiveFleetVersion(ctx, c.backend, version)
+	if err != nil {
+		return nil, fmt.Errorf("read fleet version: %w", err)
+	}
+	atVersion := recorded == version && fleetVersion == version
+	if atVersion && len(endpointIDs) > 0 {
+		// The fleet is the addressed endpoints; a named roll also reaches an
+		// address-less one (a failed create) outside it, which may well be behind.
+		// So a named roll is refused only when every named endpoint that exists
+		// already records the version.
+		named, err := c.backend.EndpointDeploysByIDs(ctx, endpointIDs)
+		if err != nil {
+			return nil, fmt.Errorf("read the named endpoints: %w", err)
+		}
+		for _, d := range named {
+			if d.Version != version {
+				atVersion = false
+				break
+			}
+		}
+	}
+	if atVersion {
+		return UpgradeEndpoints409JSONResponse{ConflictJSONResponse(apiError("fleet_at_version",
+			"the endpoint fleet is already at "+version+", the version this controller deploys; "+
+				"upgrade the controller to move it"))}, nil
+	}
+
 	t, err := c.tasks.UpgradeEndpoints(ctx, task.UpgradeEndpointsInput{
 		Version:     version,
 		EndpointIDs: endpointIDs,
@@ -1459,6 +1493,32 @@ func (c *Controllers) UpgradeEndpoints(ctx context.Context, request UpgradeEndpo
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
+}
+
+// GetFleetVersion reports the fleet version beside the version this controller
+// deploys, and the roll moving one toward the other, if any.
+func (c *Controllers) GetFleetVersion(ctx context.Context, _ GetFleetVersionRequestObject) (GetFleetVersionResponseObject, error) {
+	var out GetFleetVersion200JSONResponse
+	pin := strings.TrimSpace(c.prov.EndpointVersion)
+	fleetVersion, err := core.EffectiveFleetVersion(ctx, c.backend, pin)
+	if err != nil {
+		return nil, fmt.Errorf("read fleet version: %w", err)
+	}
+	if fleetVersion != "" {
+		out.Version = &fleetVersion
+	}
+	if pin != "" {
+		out.TargetVersion = &pin
+	}
+	roll, err := c.tasks.ActiveEndpointUpgrade(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("look for an in-flight roll: %w", err)
+	}
+	if roll != nil {
+		r := taskToAPI(roll)
+		out.Roll = &r
+	}
+	return out, nil
 }
 
 // --- Tasks -----------------------------------------------------------------

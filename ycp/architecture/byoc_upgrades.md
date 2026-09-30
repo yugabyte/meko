@@ -261,8 +261,9 @@ a time" means.
   as `ycp/cmd/agent` does for the meko stack, because the controller is a Helm
   release with hooks and its own endpoint deploys already shell out to helm. The
   release name has to be configuration: the chart does not fix it. The agent's RBAC
-  has to cover the release's objects plus `escalate`/`bind` on its Roles and
-  RoleBindings, which is what k8s requires of anything that rewrites RBAC it does not
+  has to cover the release's objects plus `escalate` on its Roles and `bind` on the
+  release's own Roles (checked on the role a binding references, not on the
+  binding), which is what k8s requires of anything that rewrites RBAC it does not
   already hold — and which makes the agent at least as privileged as the
   controller. That is the real cost of this design and it is worth stating plainly
   wherever the chart is documented.

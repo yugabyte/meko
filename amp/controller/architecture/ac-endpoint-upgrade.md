@@ -1,7 +1,7 @@
 # ac — Endpoint upgrade (parent task, per-endpoint subtasks)
 
 **Status:** Draft — for review
-**Last updated:** 2026-09-01
+**Last updated:** 2026-09-25
 
 Move every deployed endpoint — or a caller-named subset — onto a target version in
 one call. The first, dev-facing slice of
@@ -669,10 +669,9 @@ the default parallelism.
 deploys — `--endpoint-image-tag`, or the tag of `--deploy-endpoint-image` — which is
 already what an endpoint created by this controller runs. Naming it as *the*
 endpoint version of an environment is what makes a fleet upgrade two steps in a
-fixed order: upgrade the controller, then roll. Nothing enforces the order because
-nothing needs to — rolling first finds every endpoint already at the unmoved pin and
-does nothing, and so does a second roll after a successful one. "Once per controller
-version" falls out of the filter the roll already has.
+fixed order: upgrade the controller, then roll. A roll once the fleet is recorded at
+the pin is refused (§6.1), so "once per controller version" is enforced rather than
+left to the skip filter.
 
 It is resolved **once, in the handler, and frozen into the task's args**
 (`api.Provisioning.EndpointVersion`). Reading it per child instead would let a
@@ -683,7 +682,8 @@ reclaimed by a newly upgraded controller finishes the roll it was planned for, a
 the next roll moves the rest.
 
 `202` + the `Task` + `Location`, like every other mutation. `400` for an
-out-of-range `max_parallel`; `409` while a roll is already in flight (§5.6); `501`
+out-of-range `max_parallel`; `409` while a roll is already in flight (§5.6, error
+code `conflict`) or the fleet is at the target (§6.1, `fleet_at_version`); `501`
 with no deployer, and also when the configured endpoint image is pinned to a digest
 — a digest names no version, and that is a fact about how the controller was
 configured rather than about the request.
@@ -710,6 +710,59 @@ so a fleet roll adds exactly one row to it however many endpoints it touches.
 
 The MCP server is a mechanical wrapper of the REST surface; adding the tool is a
 follow-up, not a design question.
+
+### 6.1 The fleet version
+
+```
+GET /api/v1/fleet-version  ->  {"version": "v1", "target_version": "v2", "roll": <Task>?}
+```
+
+The route takes no version, so without a record a caller cannot tell a fleet that
+still needs rolling from one that does not — which is what the YCP reconciler must
+know to declare a fleet version in desired state. `version` is that record, kept in
+`amp_registry.controller_settings` (migration 0009, one row per key) under
+`fleet_version`; `target_version` is the pin; `roll` is the non-terminal
+`upgrade_endpoints` task, if any.
+
+**The record may lag the endpoints.** Only the controller writes it:
+
+- **At startup** (`core.SeedFleetVersion`), when this controller has a pin. A fleet
+  with no endpoints is set to the pin — a controller upgraded over an empty fleet has
+  nothing to roll. Otherwise a recorded value is kept, and an unrecorded one (a
+  controller upgraded onto 0009 with endpoints running) is seeded from the
+  endpoints: their common `version`, or `mixed` when they differ or one records none.
+  Seeding the pin there would claim a roll that never happened.
+- **When a roll succeeds**, `plan_endpoint_upgrades` re-reads the fleet and records
+  its frozen target only if every endpoint is now at it. A named subset, or an
+  endpoint that appeared behind the roll, leaves it where it was — so a successful
+  roll can leave `version` behind `target_version`, which is exactly the signal that
+  more endpoints need rolling. The frozen target, not the current pin: a controller
+  upgraded mid-roll has already moved the pin past what this roll deployed.
+- **When an endpoint is created**, by the same check against the version it was
+  deployed at. This is what moves an empty fleet's record.
+
+**What the API reports is corrected on read** (`core.EffectiveFleetVersion`), because
+the record alone can claim what is not true:
+
+- **An empty fleet reads at the pin.** The startup seed writes the same, but a rollout
+  can start a pod of another version after the one that stays — a V1 pod superseded
+  mid-rollout by a V2 template seeds V1 last.
+- **A record equal to the pin reads `mixed` unless every endpoint is on it.** Record
+  X, upgrade to Y, create endpoints at Y, roll back to X: the record equals the pin
+  while the Y endpoints are not on it. Believing it would refuse the only roll that
+  moves them, and YCP's fleet row would read ready.
+
+A record that differs from the pin is reported as is: it may lag, which only ever
+lets a roll through.
+
+**While the record equals the pin and every endpoint is on it, `POST /endpoint-upgrades` is refused** with `409`
+`fleet_at_version`: only a controller upgrade moves the target. An `endpoint_ids`
+roll is refused only when every named endpoint already records the pin, because a
+named roll reaches address-less endpoints (failed creates) the fleet leaves out. Redeploying an endpoint without changing its version is
+`POST /endpoint-rerenders`. `mixed` never equals a pin, so it never blocks.
+
+There is no write route. A caller that could set `version` could make the refusal
+act on a claim nobody checked.
 
 ## 7. What [867](https://github.com/yugabyte/meko/pull/867) had that this drops
 

@@ -1034,9 +1034,17 @@ paths:
         (`--endpoint-image-tag`, or the tag of `--deploy-endpoint-image`), which
         is already what an endpoint created by this controller runs. So a fleet
         upgrade is two steps in a fixed order: upgrade the controller, then call
-        this. Running it twice does nothing the second time — every endpoint is
-        already at the target, so they are all skipped. The version it resolved
-        to is recorded in the task's params and result.
+        this. The version it resolved to is recorded in the task's params and
+        result.
+
+        A roll that succeeds and leaves every endpoint at the target records the
+        target as the fleet version (`GET /fleet-version`). While the fleet is
+        recorded at the target and every endpoint is on it, a roll is refused
+        with `409` and error code `fleet_at_version`: the fleet is where this
+        controller would move it, and only a controller upgrade moves the target.
+        An `endpoint_ids` roll is refused only when every named endpoint already
+        records the target, since a named one can be an address-less endpoint
+        (a failed create) outside the fleet.
 
         The task is one parent that owns a child per endpoint and runs them
         itself, at most `max_parallel` at a time, persisting the target version
@@ -1062,7 +1070,8 @@ paths:
         an id that no longer exists comes back as a `skipped` line, not a `404`,
         since a roll is never refused because one of its endpoints cannot move.
         `400` for an out-of-range `max_parallel`; `409` when a roll is already in
-        flight. Requires the endpoint deployer (`--deploy`); returns `501`
+        flight (error code `conflict`) or the fleet is at the target (error code
+        `fleet_at_version`). Requires the endpoint deployer (`--deploy`); returns `501`
         otherwise, and also when this controller's endpoint image is pinned to a
         digest, which names no version to roll to.
       requestBody:
@@ -1078,6 +1087,39 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /fleet-version:
+    get:
+      tags: [endpoints]
+      operationId: getFleetVersion
+      summary: Read the endpoint fleet's version
+      description: |
+        The version every live endpoint was last confirmed at, beside the version
+        this controller deploys (`target_version`). When they differ, endpoints
+        still need upgrading and `POST /endpoint-upgrades` rolls them; when they
+        match there is nothing to roll.
+
+        `version` is written only by the controller: seeded at startup, and
+        advanced when a roll succeeds and a re-read finds every endpoint at its
+        target. It can lag the endpoints — a fleet whose endpoints were at
+        different versions when it was seeded reads `mixed` until a roll brings
+        them together. A fleet with no endpoints reads at the target, and a
+        record equal to the target reads `mixed` unless every endpoint is on it,
+        so a matching `version` always means there is nothing to roll. (A roll
+        over an empty fleet with a stale record is still accepted, plans nothing,
+        and records the target.) `roll` is
+        the `upgrade_endpoints` task in flight, if any.
+      responses:
+        '200':
+          description: The fleet version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FleetVersion'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
         '500':
@@ -2765,6 +2807,24 @@ components:
         ycp_generation:
           $ref: '#/components/schemas/YCPGenerationApplied'
 
+    FleetVersion:
+      type: object
+      description: The endpoint fleet's version and the version this controller deploys.
+      properties:
+        version:
+          type: string
+          description: |
+            The version every live endpoint was last confirmed at, or `mixed`.
+            Absent when none is recorded — a controller with no endpoint version
+            configured records none.
+        target_version:
+          type: string
+          description: |
+            The endpoint version this controller release deploys, and so the
+            target of `POST /endpoint-upgrades`. Absent when this controller has
+            none configured.
+        roll:
+          $ref: '#/components/schemas/Task'
     UpgradeEndpointsRequest:
       type: object
       description: |

@@ -397,6 +397,13 @@ type Backend interface {
 	// across clusters and branches: what a rerender_endpoints task is planned
 	// over.
 	AllEndpointDeploys(ctx context.Context) ([]EndpointDeploy, error)
+	// EndpointDeploysByIDs returns the named endpoints' redeploy records, keeping an
+	// address-less one; ids with no live row are absent.
+	EndpointDeploysByIDs(ctx context.Context, ids []uuid.UUID) ([]EndpointDeploy, error)
+
+	// FleetVersion reads the recorded fleet version (controller_settings.go); ""
+	// when none is recorded.
+	FleetVersion(ctx context.Context) (string, error)
 
 	// SetEndpointAddress records an endpoint's client address and its tailnet
 	// address (tailnetAddress is "" when not tailnet-exposed). Idempotent

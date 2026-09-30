@@ -37,8 +37,9 @@ type MemBackend struct {
 	writers      map[branchKey]struct{} // at most one read_write endpoint per branch
 	// extensions an operator registered (the extensions.Store half); keyed by
 	// name, which is the identity in the schema too.
-	extensions map[string]extensions.Extension
-	now        func() time.Time
+	extensions   map[string]extensions.Extension
+	fleetVersion string // "" = none recorded
+	now          func() time.Time
 }
 
 // clusterNameKey makes a cluster name unique within its pool (the schema's

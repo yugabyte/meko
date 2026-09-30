@@ -140,6 +140,10 @@ type StateStore interface {
 	// that has not converged.
 	SetEndpointTargetVersion(ctx context.Context, endpointID uuid.UUID, version string) error
 
+	// SetFleetVersion records the version the whole fleet is confirmed at
+	// (core/controller_settings.go). Idempotent upsert.
+	SetFleetVersion(ctx context.Context, version string) error
+
 	// DeleteEndpoint removes an endpoint record (idempotent; absent row is a no-op).
 	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error
 

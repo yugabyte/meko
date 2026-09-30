@@ -81,10 +81,14 @@ the cluster-scoped RBAC it creates is namespace-prefixed so the copies do not co
   stock install does through `rbac.nodeRead`. **This is a real privilege
   increase and worth reading before you enable the agent**: the agent upgrades the
   release it is itself a member of (`ycp/architecture/byoc_upgrades.md`), which
-  means write access to every object in it plus `escalate`/`bind` on its Roles —
-  what Kubernetes requires of anything rewriting RBAC it does not already hold. So
-  an installed agent ends up at least as privileged as the controller. The two do
-  not share a ServiceAccount, so nothing else widens.
+  means write access to every object in it plus `escalate` on Roles and `bind` on
+  the release's own Roles — what Kubernetes requires of anything rewriting RBAC it
+  does not already hold — and create/watch on Jobs, for the telemetry preflight
+  hook every upgrade re-runs. So an installed agent ends up at least as privileged as the
+  controller, and since `escalate` is not pinned to names it can rewrite any Role
+  (and, with the cluster-scoped pair, any ClusterRole) — treat it as admin of the
+  namespace, or of the cluster. The two do not share a ServiceAccount, so nothing
+  else widens.
 - **Controller Deployment** `amp-controller` — one pod, container port `api`
   (8080: REST API + UI + `/healthz`/`/readyz`). Carries the full `AMP_*` env
   block; readiness

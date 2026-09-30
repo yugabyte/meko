@@ -52,6 +52,7 @@ type fakeStateStore struct {
 	existingWriterBranch   map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 	endpointVersions       map[uuid.UUID]string    // endpoint id -> running version last recorded
 	endpointTargetVersions map[uuid.UUID]string    // endpoint id -> target version last recorded
+	fleetVersion           string                  // last SetFleetVersion; "" = never written
 
 	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
 	// EndpointIDsForBranch / EndpointIDsForCluster can enumerate children and the
@@ -398,6 +399,13 @@ func (f *fakeStateStore) SetEndpointTargetVersion(_ context.Context, endpointID 
 		f.endpointTargetVersions = map[uuid.UUID]string{}
 	}
 	f.endpointTargetVersions[endpointID] = version
+	return nil
+}
+
+func (f *fakeStateStore) SetFleetVersion(_ context.Context, version string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fleetVersion = version
 	return nil
 }
 

@@ -1183,6 +1183,21 @@ type ExtensionList struct {
 	Total TotalCount `json:"total"`
 }
 
+// FleetVersion The endpoint fleet's version and the version this controller deploys.
+type FleetVersion struct {
+	Roll *Task `json:"roll,omitempty"`
+
+	// TargetVersion The endpoint version this controller release deploys, and so the
+	// target of `POST /endpoint-upgrades`. Absent when this controller has
+	// none configured.
+	TargetVersion *string `json:"target_version,omitempty"`
+
+	// Version The version every live endpoint was last confirmed at, or `mixed`.
+	// Absent when none is recorded — a controller with no endpoint version
+	// configured records none.
+	Version *string `json:"version,omitempty"`
+}
+
 // Migration A migration and its derived status.
 type Migration struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -2337,6 +2352,9 @@ type ClientInterface interface {
 
 	RegisterExtension(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetFleetVersion request
+	GetFleetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListMigrations request
 	ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2578,6 +2596,18 @@ func (c *Client) RegisterExtensionWithBody(ctx context.Context, extensionName Ex
 
 func (c *Client) RegisterExtension(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRegisterExtensionRequest(c.Server, extensionName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetFleetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetFleetVersionRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -3476,6 +3506,33 @@ func NewRegisterExtensionRequestWithBody(server string, extensionName ExtensionN
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetFleetVersionRequest generates requests for GetFleetVersion
+func NewGetFleetVersionRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/fleet-version")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -5508,6 +5565,9 @@ type ClientWithResponsesInterface interface {
 
 	RegisterExtensionWithResponse(ctx context.Context, extensionName ExtensionName, params *RegisterExtensionParams, body RegisterExtensionJSONRequestBody, reqEditors ...RequestEditorFn) (*RegisterExtensionResponse, error)
 
+	// GetFleetVersionWithResponse request
+	GetFleetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetFleetVersionResponse, error)
+
 	// ListMigrationsWithResponse request
 	ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error)
 
@@ -5848,6 +5908,38 @@ func (r RegisterExtensionResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r RegisterExtensionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetFleetVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *FleetVersion
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r GetFleetVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetFleetVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetFleetVersionResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -7212,6 +7304,15 @@ func (c *ClientWithResponses) RegisterExtensionWithResponse(ctx context.Context,
 	return ParseRegisterExtensionResponse(rsp)
 }
 
+// GetFleetVersionWithResponse request returning *GetFleetVersionResponse
+func (c *ClientWithResponses) GetFleetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetFleetVersionResponse, error) {
+	rsp, err := c.GetFleetVersion(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetFleetVersionResponse(rsp)
+}
+
 // ListMigrationsWithResponse request returning *ListMigrationsResponse
 func (c *ClientWithResponses) ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error) {
 	rsp, err := c.ListMigrations(ctx, params, reqEditors...)
@@ -7963,6 +8064,46 @@ func ParseRegisterExtensionResponse(rsp *http.Response) (*RegisterExtensionRespo
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetFleetVersionResponse parses an HTTP response from a GetFleetVersionWithResponse call
+func ParseGetFleetVersionResponse(rsp *http.Response) (*GetFleetVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetFleetVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest FleetVersion
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError

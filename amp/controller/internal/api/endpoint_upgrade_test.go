@@ -263,20 +263,188 @@ func TestUpgradeEndpointsRoll(t *testing.T) {
 		}
 	}
 
-	// Re-rolling converges on a no-op: the target is the controller's pin, which has
-	// not moved, so the whole-fleet filter skips every endpoint. This is what makes
-	// "a roll is once per controller version" fall out rather than need enforcing.
-	again, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
+	// The roll left every endpoint at the target, so the fleet version is advanced
+	// to it — and a second roll, whole-fleet or named, has nothing to move.
+	fv, err := client.GetFleetVersionWithResponse(ctx)
+	if err != nil || fv.JSON200 == nil {
+		t.Fatalf("GetFleetVersion: %v, body = %s", err, fv.Body)
+	}
+	if v := fv.JSON200.Version; v == nil || *v != testEndpointVersion {
+		t.Errorf("fleet version = %v, want %s", v, testEndpointVersion)
+	}
+	if fv.JSON200.Roll != nil {
+		t.Errorf("roll = %+v after the roll finished, want none", fv.JSON200.Roll)
+	}
+	ids := []uuid.UUID{list.JSON200.Endpoints[0].Id}
+	for name, body := range map[string]api.UpgradeEndpointsRequest{
+		"whole fleet": {}, "named": {EndpointIds: &ids},
+	} {
+		again, err := client.UpgradeEndpointsWithResponse(ctx, body)
+		if err != nil {
+			t.Fatalf("%s: UpgradeEndpoints (again): %v", name, err)
+		}
+		if again.StatusCode() != http.StatusConflict {
+			t.Fatalf("%s: second roll status = %d, want 409; body = %s", name, again.StatusCode(), again.Body)
+		}
+		if code := errorCode(t, again.Body); code != "fleet_at_version" {
+			t.Errorf("%s: error code = %q, want fleet_at_version", name, code)
+		}
+	}
+}
+
+// TestGetFleetVersion covers the read before any roll: the target is the
+// controller's pin, an empty fleet reads at it whatever is recorded — here a
+// version another controller left behind — and a planned roll shows up as `roll`.
+func TestGetFleetVersion(t *testing.T) {
+	client, backend, _ := newTestServer(t)
+	ctx := context.Background()
+	if err := backend.SetFleetVersion(ctx, "ep-v0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+
+	fv, err := client.GetFleetVersionWithResponse(ctx)
+	if err != nil || fv.JSON200 == nil {
+		t.Fatalf("GetFleetVersion: %v, body = %s", err, fv.Body)
+	}
+	if v := fv.JSON200.Version; v == nil || *v != testEndpointVersion {
+		t.Errorf("version = %v, want the pin %s for an empty fleet", v, testEndpointVersion)
+	}
+	if v := fv.JSON200.TargetVersion; v == nil || *v != testEndpointVersion {
+		t.Errorf("target_version = %v, want %s", v, testEndpointVersion)
+	}
+	if fv.JSON200.Roll != nil {
+		t.Errorf("roll = %+v, want none", fv.JSON200.Roll)
+	}
+
+	rolled, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
+	if err != nil || rolled.JSON202 == nil {
+		t.Fatalf("UpgradeEndpoints: %v, body = %s", err, rolled.Body)
+	}
+	fv, _ = client.GetFleetVersionWithResponse(ctx)
+	if fv.JSON200 == nil || fv.JSON200.Roll == nil || fv.JSON200.Roll.Id != rolled.JSON202.Id {
+		t.Errorf("roll = %+v, want the planned task %s", fv.JSON200, rolled.JSON202.Id)
+	}
+}
+
+// TestUpgradeEndpointsRefusedAtFleetVersion: a record at the pin over a fleet that
+// is at it — here an empty one, which reads at the pin, as the startup seed leaves
+// it — is refused, and plans nothing.
+func TestUpgradeEndpointsRefusedAtFleetVersion(t *testing.T) {
+	backend := core.NewMemBackend()
+	if err := backend.SetFleetVersion(context.Background(), testEndpointVersion); err != nil {
+		t.Fatal(err)
+	}
+	client, _, store := newTestServerWith(t, backend, api.Provisioning{Deployer: &fakeDeployer{}, EndpointVersion: testEndpointVersion})
+	ctx := context.Background()
+
+	resp, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
 	if err != nil {
-		t.Fatalf("UpgradeEndpoints (again): %v", err)
+		t.Fatalf("UpgradeEndpoints: %v", err)
 	}
-	drainTasks(t, store, backend, prov)
-	repeat, _ := client.GetTaskWithResponse(ctx, again.JSON202.Id)
-	if repeat.JSON200 == nil || repeat.JSON200.Result == nil {
-		t.Fatalf("second roll has no result; body = %s", repeat.Body)
+	if resp.StatusCode() != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body = %s", resp.StatusCode(), resp.Body)
 	}
-	if r := repeat.JSON200.Result.(map[string]any); r["skipped"] != float64(2) || r["upgraded"] != float64(0) {
-		t.Errorf("second roll = %v, want everything skipped", r)
+	if code := errorCode(t, resp.Body); code != "fleet_at_version" {
+		t.Errorf("error code = %q, want fleet_at_version", code)
+	}
+	if _, total, err := store.List(ctx, task.TaskFilter{}, 100, 0); err != nil {
+		t.Fatalf("list tasks: %v", err)
+	} else if total != 0 {
+		t.Errorf("a refused roll planned %d tasks", total)
+	}
+}
+
+// TestUpgradeEndpointsAllowedWhenTheRecordIsWrong: a record equal to the pin is
+// only believed when every endpoint is on it. After a rollback onto a version
+// recorded before an endpoint was created at another, refusing would leave that
+// endpoint with no way back.
+func TestUpgradeEndpointsAllowedWhenTheRecordIsWrong(t *testing.T) {
+	backend := core.NewMemBackend()
+	ctx := context.Background()
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(uuid.New(), core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	ep, err := backend.CreateEndpoint(ctx, clusterID, branchID, core.RoleReadWrite, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.SetEndpointAddress(ctx, ep.ID, "yb-ep.endpoints.svc:55433", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.SetEndpointVersion(ctx, ep.ID, "ep-v-newer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.SetFleetVersion(ctx, testEndpointVersion); err != nil {
+		t.Fatal(err)
+	}
+	client, _, _ := newTestServerWith(t, backend, api.Provisioning{Deployer: &fakeDeployer{}, EndpointVersion: testEndpointVersion})
+
+	fv, err := client.GetFleetVersionWithResponse(ctx)
+	if err != nil || fv.JSON200 == nil {
+		t.Fatalf("GetFleetVersion: %v", err)
+	}
+	if v := fv.JSON200.Version; v == nil || *v != core.FleetVersionMixed {
+		t.Errorf("version = %v, want %s", v, core.FleetVersionMixed)
+	}
+	resp, err := client.UpgradeEndpointsWithResponse(ctx, api.UpgradeEndpointsRequest{})
+	if err != nil {
+		t.Fatalf("UpgradeEndpoints: %v", err)
+	}
+	if resp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", resp.StatusCode(), resp.Body)
+	}
+}
+
+// TestUpgradeEndpointsNamedRollOfAnEndpointOutsideTheFleet: the fleet the refusal
+// checks is the addressed endpoints. A named roll also reaches an address-less one
+// (a failed create), which can be behind while the fleet is at the pin — so naming
+// it is let through, and naming only endpoints already at the pin is not.
+func TestUpgradeEndpointsNamedRollOfAnEndpointOutsideTheFleet(t *testing.T) {
+	backend := core.NewMemBackend()
+	ctx := context.Background()
+	clusterID := uuid.New()
+	mk := func(version, address string) uuid.UUID {
+		t.Helper()
+		branchID := uuid.New()
+		backend.SeedBranch(uuid.New(), core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "b-" + branchID.String()[:8], PgVersion: 18, IsDefault: true})
+		ep, err := backend.CreateEndpoint(ctx, clusterID, branchID, core.RoleReadWrite, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if address != "" {
+			if err := backend.SetEndpointAddress(ctx, ep.ID, address, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := backend.SetEndpointVersion(ctx, ep.ID, version); err != nil {
+			t.Fatal(err)
+		}
+		return ep.ID
+	}
+	current := mk(testEndpointVersion, "yb-ep.endpoints.svc:55433")
+	orphan := mk("ep-v-older", "")
+	if err := backend.SetFleetVersion(ctx, testEndpointVersion); err != nil {
+		t.Fatal(err)
+	}
+	client, _, _ := newTestServerWith(t, backend, api.Provisioning{Deployer: &fakeDeployer{}, EndpointVersion: testEndpointVersion})
+
+	// In this order: the accepted roll comes last, since any request after it would
+	// meet the in-flight 409 instead.
+	for _, tc := range []struct {
+		name string
+		body api.UpgradeEndpointsRequest
+		want int
+	}{
+		{"whole fleet", api.UpgradeEndpointsRequest{}, http.StatusConflict},
+		{"named, at the pin", api.UpgradeEndpointsRequest{EndpointIds: &[]uuid.UUID{current}}, http.StatusConflict},
+		{"named, address-less, behind", api.UpgradeEndpointsRequest{EndpointIds: &[]uuid.UUID{orphan}}, http.StatusAccepted},
+	} {
+		resp, err := client.UpgradeEndpointsWithResponse(ctx, tc.body)
+		if err != nil {
+			t.Fatalf("%s: UpgradeEndpoints: %v", tc.name, err)
+		}
+		if resp.StatusCode() != tc.want {
+			t.Errorf("%s: status = %d, want %d; body = %s", tc.name, resp.StatusCode(), tc.want, resp.Body)
+		}
 	}
 }
 

@@ -176,7 +176,8 @@ kubectl create clusterrolebinding amp-installer --clusterrole=amp-installer --us
 **The escalation rule is the catch.** Kubernetes refuses to let a principal create a
 Role granting permissions it does not itself hold. The release's Role grants `pods: *`
 and `pods/resize: patch`; the installer's Role above does not. So the installer must
-*additionally* hold everything in §2b — or hold `escalate` on `roles`/`clusterroles`,
+*additionally* hold everything in §2b — or hold `escalate` and `bind` on
+`roles`/`clusterroles` (`escalate` for the Roles, `bind` for the bindings to them),
 or simply be cluster-admin for the install. In practice: hand the install to a
 cluster-admin, or bind the installer to both its own Role and the release's.
 

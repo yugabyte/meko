@@ -196,6 +196,13 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		if err := s.state.SetEndpointVersion(ctx, s.EndpointID, deployed.Version); err != nil {
 			return Fail(fmt.Errorf("record endpoint version: %w", err))
 		}
+		// The first endpoint on an empty fleet sets the fleet version: its record
+		// may name whatever the last controller to start over the empty fleet
+		// deployed. Logged rather than failed — the endpoint is up, and a stale
+		// record only under-reports until the next roll.
+		if err := core.AdvanceFleetVersion(ctx, s.state, deployed.Version); err != nil {
+			logger.Warn("record fleet version after endpoint create", "error", err)
+		}
 	}
 
 	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress, "version", deployed.Version)

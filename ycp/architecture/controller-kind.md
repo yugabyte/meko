@@ -168,7 +168,8 @@ the consumer supplies only the `Parent` link.
 ## What it costs on the cluster
 
 The agent's Role gains write access to every object kind in the release, plus
-`escalate` and `bind` on its Roles and RoleBindings — which is what Kubernetes
+`escalate` on Roles and `bind` on the release's own Roles (Kubernetes checks `bind`
+on the role a binding references, not on the binding) — which is what Kubernetes
 requires of anything that rewrites RBAC it does not already hold, and the
 alternative (mirroring every verb the controller's Role grants) would hand the
 agent direct power over pods, PVCs and Jobs it has no reason to touch. A

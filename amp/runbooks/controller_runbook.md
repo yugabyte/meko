@@ -526,7 +526,14 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   amp_registry.endpoints where id = '<ep>'`). Pass an explicit `memory` (e.g.
   `"4Gi"`) with the resize.
 
-## `409` on `POST /endpoint-upgrades` — a fleet roll is already in flight
+## `409` on `POST /endpoint-upgrades` — a roll in flight, or nothing to roll
+
+The error code says which. **`fleet_at_version`** means every endpoint already runs
+the version this controller deploys (`GET /fleet-version` shows `version` equal to
+`target_version`), so there is nothing to roll — whole-fleet, or named endpoints
+that all already run it. Only a controller upgrade moves the target. To redeploy an endpoint at the version it
+already runs (to re-record an address, say), use `POST /endpoint-rerenders` with
+`endpoint_ids`. The rest of this section is **`conflict`**.
 
 At most one `upgrade_endpoints` task may be non-terminal at a time, and a second
 roll is **refused rather than queued**
@@ -543,7 +550,8 @@ curl -s "$BASE/tasks/$TASK/subtasks" \
 ```
 
 - **`running`** — it is being executed. Wait and re-run: a child inside `helm --wait`
-  can take minutes per endpoint, and the second roll skips whatever the first landed.
+  can take minutes per endpoint. The second roll skips whatever the first landed, or
+  is refused with `fleet_at_version` if the first landed all of it.
 - **`pending`** — nobody has claimed it. If it stays that way there is no worker to
   claim it (no controller up, or one running with the task worker off), and it
   **never reaches terminal**, so it blocks every later roll indefinitely. The resize
@@ -793,11 +801,11 @@ curl -sS -H "X-Meko-Admin-Secret: $SECRET" -H "X-Meko-Account-ID: $ACCOUNT" \
 ```
 
 **Recover.** Any controller-driven redeploy of that endpoint re-resolves and
-re-records the address. Roll just that endpoint — it is redeployed even when it is
-already at the target version, which is what makes this work as a trigger:
+re-records the address. Re-render just that endpoint — it is redeployed from its
+stored record, at the version it already runs:
 
 ```sh
-curl -sX POST "$AMP/endpoint-upgrades" -H 'Content-Type: application/json' \
+curl -sX POST "$AMP/endpoint-rerenders" -H 'Content-Type: application/json' \
   -d "{\"endpoint_ids\":[\"$EP\"]}"
 ```
 

@@ -71,7 +71,9 @@ POST /api/v1/endpoint-upgrades
 
 Omit `endpoint_ids` to roll the whole fleet, which on a shared deployment means other
 people's endpoints too. Named ids are never skipped, a fleet roll skips endpoints
-already at `version`. One roll at a time (`409` otherwise), fail-fast, each pod
+already at `version`. Once a roll leaves every endpoint at the controller's version,
+further rolls are refused (`409` `fleet_at_version`, `GET /api/v1/fleet-version`
+shows it). One roll at a time (`409` otherwise), fail-fast, each pod
 replaced so each endpoint is down about a minute. Nothing in the portal, the `yb` CLI
 or the MCP server calls this route; it is the controller API directly. Spec:
 `amp/controller/internal/api/openapi_spec.yaml`, https://github.com/yugabyte/meko/issues/809.

@@ -355,6 +355,15 @@ func runServe(args []string) error {
 	// operations the steps need.
 	prov.Recipes = recipeStore{s: regStore}
 
+	// Not fatal: an unseeded fleet version only means the upgrade route cannot
+	// tell a converged fleet from one that is not, and so does not refuse a roll.
+	// A controller with no endpoint version has no fleet version to seed.
+	if prov.EndpointVersion != "" {
+		if err := core.SeedFleetVersion(ctx, backend, prov.EndpointVersion); err != nil {
+			logger.Error("seed fleet version", "error", err)
+		}
+	}
+
 	// Now that the backend exists, give the extension service its store: the
 	// built-in catalog buildProvisioning made, plus the extensions an operator
 	// registered (amp_registry.extensions). Only when externalized extensions are

@@ -440,6 +440,11 @@ func (s *Service) noFleetRollInFlight(ctx context.Context) error {
 	return nil
 }
 
+// ActiveEndpointUpgrade returns the non-terminal upgrade_endpoints task, or nil.
+func (s *Service) ActiveEndpointUpgrade(ctx context.Context) (*Task, error) {
+	return s.store.ActiveByKind(ctx, KindUpgradeEndpoints.String())
+}
+
 func (s *Service) UpgradeEndpoints(ctx context.Context, in UpgradeEndpointsInput) (*Task, error) {
 	if err := s.noFleetRollInFlight(ctx); err != nil {
 		return nil, err

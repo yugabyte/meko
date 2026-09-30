@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 )
 
@@ -111,6 +112,36 @@ func TestCreateEndpointStepRecordsTheDeployedVersion(t *testing.T) {
 	}
 	if got := state.endpointVersions[epID]; got != "ep-v9" {
 		t.Errorf("recorded version = %q, want ep-v9", got)
+	}
+}
+
+// The first endpoint on an empty fleet sets the fleet version over whatever was
+// recorded; one created beside endpoints at another version leaves it alone.
+func TestCreateEndpointStepAdvancesTheFleetVersion(t *testing.T) {
+	for name, tc := range map[string]struct {
+		others []string // versions of endpoints already in the fleet
+		want   string
+	}{
+		"empty fleet":              {want: "ep-v9"},
+		"fleet at another version": {others: []string{"ep-v1"}, want: "ep-v1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state, dep := newFakeStateStore(), &fakeDeployer{}
+			state.fleetVersion = "ep-v1"
+			for _, v := range tc.others {
+				state.seedEndpointDeploy(uuid.New(), core.EndpointDeploy{ID: uuid.New(), BranchID: uuid.New(), Version: v})
+			}
+			step := NewCreateEndpointStep(CreateEndpointArgs{
+				EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: uuid.New(),
+				Role: "read_write", PgVersion: 18, Version: "ep-v9",
+			}, endpointDeps(state, newFakeRecipeStore(), dep))
+			if res := step.Execute(t.Context()); res.Failed() {
+				t.Fatalf("Execute: %v", res.Err)
+			}
+			if state.fleetVersion != tc.want {
+				t.Errorf("fleet version = %q, want %q", state.fleetVersion, tc.want)
+			}
+		})
 	}
 }
 

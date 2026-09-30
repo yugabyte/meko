@@ -13,6 +13,7 @@ package features
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -420,11 +421,20 @@ func (r *rollRun) roll(ctx context.Context, target string, checkConcurrent bool)
 // and not a failure, and it fans out to no child. True under both contracts —
 // a pinned controller ignores the version below and rolls to its own pin, and
 // the endpoint named still does not exist.
+//
+// Except when the fleet is already at the controller's version: then every roll
+// is refused with fleet_at_version before any endpoint is looked at, which is the
+// answer this phase accepts in that case.
 func (r *rollRun) unknownSkipped(ctx context.Context) error {
 	if r.version == "" {
 		return nil
 	}
 	task, loc, err := r.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{Version: r.version, EndpointIDs: []string{rollUnknownEndpoint}})
+	var apiErr *controller.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict && apiErr.Code == "fleet_at_version" {
+		r.a.f.logf("roll naming only the unknown endpoint %s: refused, the fleet is already at the controller's version", rollUnknownEndpoint)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("a roll naming only the unknown endpoint %s was refused (%v), want 202 with a skipped line", rollUnknownEndpoint, err)
 	}

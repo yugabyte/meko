@@ -44,6 +44,9 @@ type rollControl struct {
 	// inside Execute until it is closed.
 	failOn map[uuid.UUID]error
 	hold   chan struct{}
+	// state, when set, is where a succeeding child records the version it
+	// deployed, as the real upgrade_endpoint does.
+	state *fakeStateStore
 }
 
 func newRollControl() *rollControl {
@@ -104,6 +107,11 @@ func (s *rollStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(err)
 	}
+	if s.ctl.state != nil {
+		if err := s.ctl.state.SetEndpointVersion(ctx, id, s.args.Version); err != nil {
+			return Fail(err)
+		}
+	}
 	return Ok(mustResult(map[string]string{"endpoint_id": id.String(), "version": s.args.Version}))
 }
 
@@ -142,6 +150,7 @@ func newRollFixture(t *testing.T, ctl *rollControl, locks Locks, seed ...uuid.UU
 	w := testWorkerMax(store, locks, rollRegistry(ctl), 8)
 	parent := claimedParent(t, store, w.owner)
 	state := newFakeStateStore()
+	ctl.state = state
 	cluster, branch := uuid.New(), uuid.New()
 	for _, id := range seed {
 		state.seedEndpointDeploy(cluster, core.EndpointDeploy{ID: id, BranchID: branch, PgVersion: 18})
@@ -664,4 +673,41 @@ func mustByParent(t *testing.T, subs SubtaskStore, parentID uuid.UUID) []*Subtas
 		t.Fatalf("ByParent: %v", err)
 	}
 	return rows
+}
+
+// The fleet version (advanceFleetVersion) moves only when a re-read after the
+// roll finds every endpoint at the target.
+func TestFleetRollAdvancesTheFleetVersion(t *testing.T) {
+	for name, tc := range map[string]struct {
+		seed  []uuid.UUID
+		named []uuid.UUID
+		fail  bool
+		want  string
+	}{
+		"whole fleet":                {seed: []uuid.UUID{ep1, ep2}, want: "v2"},
+		"empty fleet":                {want: "v2"},
+		"named subset leaves one":    {seed: []uuid.UUID{ep1, ep2}, named: []uuid.UUID{ep1}, want: "v1"},
+		"named set covers the fleet": {seed: []uuid.UUID{ep1, ep2}, named: []uuid.UUID{ep1, ep2}, want: "v2"},
+		"failed child":               {seed: []uuid.UUID{ep1, ep2}, fail: true, want: "v1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctl := newRollControl()
+			if tc.fail {
+				ctl.failOn[ep2] = errors.New("helm --wait timed out")
+			}
+			f := newRollFixture(t, ctl, nil, tc.seed...)
+			for _, id := range tc.seed {
+				f.setVersion(id, "v1")
+			}
+			f.state.fleetVersion = "v1"
+
+			res := f.execute(t, PlanEndpointUpgradesArgs{Version: "v2", EndpointIDs: tc.named, MaxParallel: 4})
+			if res.Failed() != tc.fail {
+				t.Fatalf("roll failed = %v (%v), want %v", res.Failed(), res.Err, tc.fail)
+			}
+			if f.state.fleetVersion != tc.want {
+				t.Errorf("fleet version = %q, want %q", f.state.fleetVersion, tc.want)
+			}
+		})
+	}
 }

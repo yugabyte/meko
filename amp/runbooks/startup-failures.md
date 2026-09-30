@@ -104,19 +104,29 @@ PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
 if an `amp_storage` schema is expected and missing.
 
 ## B2. Migration: "no migration found for version N"
-The database was migrated under the controller's old numbering. The twenty migrations were
-folded into eight and renumbered ([#1490](https://github.com/yugabyte/meko/pull/1490)), and
-golang-migrate records only a version number, so a database migrated before that carries a
-number from the old scheme:
+The database is at a migration this controller build does not carry. Two causes, told
+apart by the number and by whether `amp_registry.controller_settings` exists (migration
+`0009`):
 ```bash
 PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
   "host=$YB_HOST port=$YB_PORT user=yugabyte dbname=$YB_DB sslmode=require" \
-  -c "SELECT version, dirty FROM controller.schema_migrations;"
+  -c "SELECT version, dirty FROM controller.schema_migrations;" \
+  -c "SELECT to_regclass('amp_registry.controller_settings');"
 ```
-Above 8 (an up-to-date old database is at 20), the controller refuses to start with this
-error. At 8 or below it starts, taking the database as already migrated with a schema that
-may not match. Either way the only fix is to **drop and recreate the controller's
-database**. That database also holds `amp_storage`, so every branch on it goes too.
+- **A controller rolled back below a migration it does not carry** — the current
+  numbering, with `controller_settings` present at 9 or above. The data is fine; the build
+  is too old for it. **Roll forward** to a build that carries the migration. To stay on the
+  older build instead, run the newer migrations' `.down.sql` in reverse order first (for
+  `0009` that drops only the fleet version, which the controller reseeds) and set
+  `schema_migrations.version` to match.
+- **The old numbering.** The twenty migrations were folded into eight and renumbered
+  ([#1490](https://github.com/yugabyte/meko/pull/1490)), and golang-migrate records only a
+  version number, so a database migrated before that carries a number from the old scheme:
+  above the current highest (an up-to-date old database is at 20), or 9 with no
+  `controller_settings`. The controller refuses to start, or — at or below the current
+  highest — starts taking the database as already migrated with a schema that may not
+  match. Either way the only fix is to **drop and recreate the controller's database**.
+  That database also holds `amp_storage`, so every branch on it goes too.
 
 Do not stamp the version to 8 instead. `0002` and `0003` were edited in place after they
 shipped, so a long-lived database can carry an older form of them that no version number

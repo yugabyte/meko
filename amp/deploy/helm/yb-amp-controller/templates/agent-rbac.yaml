@@ -43,17 +43,45 @@ rules:
   - apiGroups: ["apps"]
     resources: [deployments]
     verbs: [get, list, watch, create, update, patch, delete]
+  # The telemetry preflight is a post-upgrade hook Job with before-hook-creation,
+  # so every upgrade the agent runs deletes the last one, creates a new one and
+  # watches it to completion. Without these the upgrade ends `failed` at the hook,
+  # after the Deployments have already moved. create lets the agent run a pod as
+  # any ServiceAccount in the namespace — no more than its unscoped escalate on
+  # roles already allows. delete is pinned to the hook's own Job; create cannot
+  # be, and helm's watch needs the rest unpinned.
+  - apiGroups: ["batch"]
+    resources: [jobs]
+    verbs: [get, list, watch, create]
+  - apiGroups: ["batch"]
+    resources: [jobs]
+    verbs: [delete]
+    resourceNames:
+      - {{ include "yb-amp-controller.fullname" . }}-telemetry-preflight
   # escalate/bind, because the release contains Roles and RoleBindings: without
-  # them k8s refuses to let the agent write a Role granting anything the agent
-  # does not already hold, and the alternative — mirroring every verb the
-  # controller's Role grants — would hand the agent direct power over pods, PVCs
-  # and Jobs it has no reason to touch.
+  # them k8s refuses to let the agent write a Role, or a binding to one, granting
+  # anything the agent does not already hold, and the alternative — mirroring
+  # every verb the controller's Role grants — would hand the agent direct power
+  # over pods, PVCs and Jobs it has no reason to touch.
+  #
+  # bind is checked on the ROLE a binding references, never on the binding, so it
+  # is granted there, and only on the release's own Roles. Without it every binding
+  # in the release is refused as soon as a chart bump relabels it. The agent's own
+  # Role is listed because an upgrade that widens it patches the Role first, so the
+  # agent does not yet hold what its binding is about to grant.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [roles]
     verbs: [get, list, watch, create, update, patch, delete, escalate]
   - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles]
+    verbs: [bind]
+    resourceNames:
+      - {{ include "yb-amp-controller.controllerName" . }}
+      - {{ include "yb-amp-controller.agentName" . }}
+      - {{ include "yb-amp-controller.fullname" . }}-otel
+  - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [rolebindings]
-    verbs: [get, list, watch, create, update, patch, delete, bind]
+    verbs: [get, list, watch, create, update, patch, delete]
   # The otel collectors are release members too when the CRDs are installed.
   # Granted whenever the upgrade rights are: RBAC does not validate the group, so a
   # cluster without the operator is unaffected, and an install that adds it later
@@ -99,9 +127,18 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [clusterroles]
     verbs: [get, list, watch, create, update, patch, delete, escalate]
+  # bind on the release's own ClusterRoles only, for the reason in the Role above.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames:
+      - {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-nodes
+      - {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-namespaces
+      - {{ .Release.Namespace }}-{{ include "yb-amp-controller.fullname" . }}-otel
+      - {{ .Release.Namespace }}-{{ include "yb-amp-controller.agentName" . }}-release
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [clusterrolebindings]
-    verbs: [get, list, watch, create, update, patch, delete, bind]
+    verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

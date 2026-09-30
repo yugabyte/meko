@@ -168,16 +168,21 @@ func (c *taskCancelRun) cancelRoll(ctx context.Context) error {
 	c.eps = []controller.Endpoint{base, childEP}
 	ids := []string{base.ID, childEP.ID}
 
-	task, loc, err := c.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{EndpointIDs: ids, MaxParallel: 1})
+	// A re-render, not an upgrade: both endpoints already run the controller's
+	// version, so an upgrade roll is refused (fleet_at_version). A re-render is the
+	// same parent/child roll through the same cancel path, and it redeploys
+	// endpoints that are already current.
+	one := 1
+	task, loc, err := c.cl.RerenderEndpoints(ctx, controller.RerenderEndpointsRequest{EndpointIDs: ids, MaxParallel: &one})
 	if err != nil {
-		return fmt.Errorf("plan a roll of %v: %w", ids, err)
+		return fmt.Errorf("plan a re-render roll of %v: %w", ids, err)
 	}
 	ref := controller.TaskRef(task, loc)
-	stamped, err := c.requestCancel(ctx, ref, "endpoint upgrade roll")
+	stamped, err := c.requestCancel(ctx, ref, "endpoint re-render roll")
 	if err != nil {
 		return err
 	}
-	done, err := c.settle(ctx, ref, "endpoint upgrade roll")
+	done, err := c.settle(ctx, ref, "endpoint re-render roll")
 	if err != nil {
 		return err
 	}
@@ -197,7 +202,7 @@ func (c *taskCancelRun) cancelRoll(ctx context.Context) error {
 	case done.Status == controller.TaskSucceeded:
 		return fmt.Errorf("roll %s was cancelled at %v, before its first child could have finished, and still succeeded rolling %d children: the cancel was ignored", ref, stamped, len(subs.Subtasks))
 	}
-	if err := cancelledProperly(done, "endpoint upgrade roll"); err != nil {
+	if err := cancelledProperly(done, "endpoint re-render roll"); err != nil {
 		return err
 	}
 	if _, err := c.cl.CancelTask(ctx, ref); apiErrorStatus(err) != http.StatusConflict {
@@ -209,7 +214,7 @@ func (c *taskCancelRun) cancelRoll(ctx context.Context) error {
 		}
 	}
 
-	again, loc, err := c.cl.UpgradeEndpoints(ctx, controller.UpgradeEndpointsRequest{EndpointIDs: ids, MaxParallel: 1})
+	again, loc, err := c.cl.RerenderEndpoints(ctx, controller.RerenderEndpointsRequest{EndpointIDs: ids, MaxParallel: &one})
 	if err != nil {
 		return fmt.Errorf("a roll of the same endpoints after the cancelled one was refused (%w): a cancelled roll must not block the next", err)
 	}

@@ -55,8 +55,27 @@ tests:
             apiGroups: [""]
             resources: [secrets]
             verbs: [get, list, watch, create, update, patch, delete]
+      # The telemetry preflight hook Job is deleted, recreated and watched on every
+      # upgrade; delete is pinned to that Job.
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: ["batch"]
+            resources: [jobs]
+            verbs: [get, list, watch, create]
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: ["batch"]
+            resources: [jobs]
+            verbs: [delete]
+            resourceNames: [RELEASE-NAME-yb-amp-controller-telemetry-preflight]
       # Without escalate/bind k8s refuses to let the agent write the release's own
-      # Roles and RoleBindings.
+      # Roles and RoleBindings. bind is checked on the Role a binding references,
+      # so it sits on roles — pinned to the release's own — and not on rolebindings,
+      # where it grants nothing.
       - documentIndex: 1
         contains:
           path: rules
@@ -69,8 +88,16 @@ tests:
           path: rules
           content:
             apiGroups: ["rbac.authorization.k8s.io"]
+            resources: [roles]
+            verbs: [bind]
+            resourceNames: [amp-controller, amp-reconcile-agent, RELEASE-NAME-yb-amp-controller-otel]
+      - documentIndex: 1
+        contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
             resources: [rolebindings]
-            verbs: [get, list, watch, create, update, patch, delete, bind]
+            verbs: [get, list, watch, create, update, patch, delete]
 
   # A namespace-only install stays namespace-only: cluster-scoped rights appear
   # only once the release actually contains a cluster-scoped object. nodeRead has
@@ -117,6 +144,26 @@ tests:
         equal:
           path: metadata.name
           value: amp-acme-prod-amp-reconcile-agent-release
+      # bind on the release's own ClusterRoles only, never on the binding resource.
+      - documentIndex: 3
+        contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            resources: [clusterroles]
+            verbs: [bind]
+            resourceNames:
+              - amp-acme-prod-amp-controller-nodes
+              - amp-acme-prod-amp-controller-namespaces
+              - amp-acme-prod-RELEASE-NAME-yb-amp-controller-otel
+              - amp-acme-prod-amp-reconcile-agent-release
+      - documentIndex: 3
+        contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            resources: [clusterrolebindings]
+            verbs: [get, list, watch, create, update, patch, delete]
       - documentIndex: 4
         isKind:
           of: ClusterRoleBinding

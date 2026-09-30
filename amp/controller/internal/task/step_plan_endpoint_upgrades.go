@@ -124,6 +124,17 @@ func (s *planEndpointUpgradesStep) Execute(ctx context.Context) StepResult {
 		// per-endpoint detail stays durable in the children's own rows.
 		return Fail(rollFailure(s.Version, lines, counts))
 	}
+	// A roll that succeeded can still leave the fleet short — it rolled a named
+	// subset, or an endpoint appeared behind it — which AdvanceFleetVersion's re-read
+	// catches. The frozen target rather than the controller's current pin: a
+	// controller upgraded mid-roll has moved the pin past what this roll deployed.
+	//
+	// Logged, not failed: every endpoint did move, and failing would drop this
+	// report and tell every reader otherwise. A missed record only lags; the next
+	// roll, which skips every endpoint, records it.
+	if err := core.AdvanceFleetVersion(ctx, s.state, s.Version); err != nil {
+		logger.Warn("record fleet version after the roll", "version", s.Version, "error", err)
+	}
 	return Ok(report)
 }
 
