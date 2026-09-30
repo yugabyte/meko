@@ -42,7 +42,7 @@ jobs:
       tag: ${{ steps.p.outputs.tag }}
       ref: ${{ steps.p.outputs.ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -71,7 +71,7 @@ jobs:
     if: needs.plan.outputs.release == 'true' && needs.plan.outputs.rebuild == 'false'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -115,7 +115,7 @@ jobs:
             gcc-toolset-13-gcc-c++ make python3.11 git tar xz findutils which
           git config --global --add safe.directory '*'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
@@ -181,7 +181,7 @@ jobs:
       REF: ${{ needs.plan.outputs.ref }}
       AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
@@ -267,7 +267,7 @@ jobs:
       id-token: write # attest build provenance
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.ref }}
           fetch-depth: 0
