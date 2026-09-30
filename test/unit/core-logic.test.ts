@@ -86,14 +86,14 @@ describe('config and db', () => {
     expect(back.server.port).toBe(7777);
   });
 
-  it('keeps Meko transcript capture off unless config.toml turns it on', () => {
-    expect(DEFAULT_CONFIG.meko.captureTranscripts).toBe(false);
+  it('keeps Meko transcript capture on unless config.toml turns it off', () => {
+    expect(DEFAULT_CONFIG.meko.captureTranscripts).toBe(true);
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.captureTranscripts = true;
+    cfg.meko.captureTranscripts = false;
     saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = true');
-    expect(loadConfig(paths).meko.captureTranscripts).toBe(true);
+    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = false');
+    expect(loadConfig(paths).meko.captureTranscripts).toBe(false);
   });
 
   it('writes only settings that differ from the defaults', () => {

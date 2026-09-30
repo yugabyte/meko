@@ -434,7 +434,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
 # web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
-capture_transcripts = false  # send session transcripts to Meko conversations (off for now)
+# capture_transcripts = false  # stop sending session transcripts to Meko conversations; on by default
 
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
@@ -674,15 +674,16 @@ knows to pass the right `datapack_id` when it searches them.
 > into the dedicated datapack. The hooks read the pin when a session starts and keep it in the
 > session's watermark, so after a switch a running session's capture stays in the old datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
 
-> **Transcript capture is off for now.** Sending every session's transcript overloaded Meko, so
-> `[meko] capture_transcripts` in `config.toml` defaults to `false` (a restart applies a change).
-> While it's off, the server doesn't run the plugin's `capture.js checkpoint` after each turn, at
-> startup or when a session stops, and doesn't create a named conversation per session. Sessions
+> **Transcript capture can be turned off.** `[meko] capture_transcripts` in `config.toml`
+> defaults to `true`; set it to `false` to stop sending transcripts, for example while Meko can't
+> take the load (a restart applies a change). While it's off, the server doesn't run the plugin's
+> `capture.js checkpoint` after each turn, at startup or when a session stops, and doesn't create a named conversation per session. Sessions
 > also get `MEKO_CHECKPOINT_INTERVAL=2147483`, so the plugin's checkpoint timer, which its
 > SessionStart hook starts for a resumed session, never fires in practice: that's the longest
 > interval Node's `setInterval` honours, and a larger one would fire every millisecond. With
 > capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`. The
-> plugin's own SessionStart, PreCompact and SessionEnd hooks still run. The shipped summary
+> plugin's own SessionStart, PreCompact and SessionEnd hooks still run, so a running session shows
+> up in Meko's conversations only once it compacts or ends. The shipped summary
 > written at Merge & Close is a single memory, not a transcript, and is still sent.
 
 > **PRs point back at Meko.** When the project has a dedicated datapack and Meko is on, Open PR
