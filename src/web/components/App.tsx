@@ -8,8 +8,9 @@ import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
-import { liveSessions, modKey } from '../util';
+import { lastSessionClosed, liveSessions, modKey, type LiveCount } from '../util';
 import { Banners } from './Banners';
+import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
 import { NewProjectDialog } from './NewProjectDialog';
 import { NewSessionDialog } from './NewSessionDialog';
@@ -26,6 +27,8 @@ type Modal =
   /** `invite`: a share to open as the project (chosen as its datapack). */
   | { kind: 'new-project'; invite?: DatapackInvite }
   | { kind: 'new-session'; projectId: string }
+  /** The project on screen lost its last open session: offer to delete it. */
+  | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
   | { kind: 'palette' };
 
@@ -176,6 +179,21 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
+  // When the project on screen loses its last open session, offer to delete it. Only on the
+  // project's view, with no other dialog open, and in a visible page (a background tab stays quiet).
+  const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
+  const currentId = currentProject?.id ?? null;
+  const liveCount = live.length;
+  const modalKind = modal.kind;
+  useEffect(() => {
+    const prev = liveRef.current;
+    const next = { projectId: currentId, live: liveCount };
+    liveRef.current = next;
+    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !document.hidden) {
+      setModal({ kind: 'close-project', projectId: currentId });
+    }
+  }, [currentId, liveCount, route.view, modalKind]);
+
   useEffect(() => {
     if (pendingProjectId && projects.some((p) => p.id === pendingProjectId)) setPendingProjectId(null);
   }, [pendingProjectId, projects]);
@@ -244,7 +262,6 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   };
 
   // Global shortcuts; none while a dialog is open, except ⌘K to close the palette.
-  const modalKind = modal.kind;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (modalKind !== 'none' && modalKind !== 'palette') return;
@@ -295,11 +312,19 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }
   };
 
-  // A New session dialog whose project was deleted meanwhile closes.
+  // A New session dialog whose project was deleted meanwhile closes. One opened for a project just
+  // created waits for its state push (until pendingProjectId gives up on it).
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
+  const newSessionWaiting = modal.kind === 'new-session' && modal.projectId === pendingProjectId;
   useEffect(() => {
-    if (state && modalKind === 'new-session' && !newSessionProject) setModal({ kind: 'none' });
-  }, [state, modalKind, newSessionProject]);
+    if (state && modalKind === 'new-session' && !newSessionProject && !newSessionWaiting) setModal({ kind: 'none' });
+  }, [state, modalKind, newSessionProject, newSessionWaiting]);
+  // The delete offer closes once its project is gone or has an open session again (say, from another tab).
+  const closeProject = modal.kind === 'close-project' ? projects.find((p) => p.id === modal.projectId) : undefined;
+  const closeProjectStale = !closeProject || liveSessions(closeProject).length > 0;
+  useEffect(() => {
+    if (state && modalKind === 'close-project' && closeProjectStale) setModal({ kind: 'none' });
+  }, [state, modalKind, closeProjectStale]);
 
   if (!state) {
     return <div className="boot">{conn === 'closed' ? 'Reconnecting to the server…' : 'Loading your projects…'}</div>;
@@ -407,7 +432,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           initialInvite={modal.invite ?? null}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(p) => {
-            setModal({ kind: 'none' });
+            // Straight on to the project's first session.
+            setModal({ kind: 'new-session', projectId: p.id });
             setPendingProjectId(p.id);
             navigate({ view: 'project', projectId: p.id, sessionId: null });
           }}
@@ -420,6 +446,17 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onCreated={(s) => {
             setModal({ kind: 'none' });
             navigate({ view: 'project', projectId: s.projectId, sessionId: s.id });
+          }}
+        />
+      )}
+      {closeProject && !closeProjectStale && (
+        <CloseProjectDialog
+          project={closeProject}
+          onClose={() => setModal({ kind: 'none' })}
+          onNewSession={() => setModal({ kind: 'new-session', projectId: closeProject.id })}
+          onDeleted={() => {
+            setModal({ kind: 'none' });
+            navigate({ view: 'root' });
           }}
         />
       )}

@@ -15,6 +15,17 @@ export function liveSessions(p: ProjectWithSessions): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
 }
 
+/** The project on screen and how many open sessions it has, as App last rendered it. */
+export interface LiveCount {
+  projectId: string | null;
+  live: number;
+}
+
+/** The project on screen just lost its last open session (not a switch to a project without any). */
+export function lastSessionClosed(prev: LiveCount, next: LiveCount): boolean {
+  return !!next.projectId && prev.projectId === next.projectId && prev.live > 0 && next.live === 0;
+}
+
 export function aggregateStatus(p: ProjectWithSessions): SessionStatus {
   let best: SessionStatus = 'idle';
   for (const s of liveSessions(p)) if (URGENCY[s.status] > URGENCY[best]) best = s.status;

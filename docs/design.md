@@ -171,6 +171,10 @@ button to **Accept and create project**: the server accepts the invite in Meko f
 nothing if Meko refuses. The server refuses a viewer-only datapack as a project's own too (from the
 shares table's grant, else `datapack_describe`), not only the dialog.
 
+Once the project is created, the New session dialog opens for it, so you go straight on to its
+first task. It waits for the project to arrive in the state push, which can come after the create
+reply. Closing it leaves the project's empty view with its **New session** button.
+
 ### New session
 
 You give it a name, a session type and, optionally, a first prompt. A Plan & Implement or Quick
@@ -358,6 +362,13 @@ datapack** (a new one, or one of yours; `POST /api/projects/:id/dedicated-datapa
 Meko API key** while Meko is off. A shared datapack already attached can become the dedicated one.
 The datapack is pinned then, and new sessions use it. Search is hidden for a project with no
 datapacks.
+
+When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
+picked up from GitHub), a dialog offers **Delete project** (as on the project home; the repo and
+datapacks stay), **New session** or **Keep project**. It asks only on the project's session view,
+with no other dialog open, and in a visible page, so a background tab stays quiet; loading or
+switching to a project that has no sessions doesn't ask. It closes by itself when the project is
+deleted or gets an open session elsewhere.
 
 ## Projects, worktrees and sessions
 
