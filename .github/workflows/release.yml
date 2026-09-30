@@ -273,7 +273,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false # gh uses GH_TOKEN; nothing here pushes with git
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: tarball-*
           path: dist-release
