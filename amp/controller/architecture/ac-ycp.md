@@ -56,8 +56,8 @@ are singletons with a fixed name, so a second declaration is unambiguous drift.
 
 | Kind | Name | What the agent does |
 |------|------|--------------------|
-| `controller` | `controller` | `helm upgrade` of the release the agent itself is a member of, setting `controller.image.tag`, `agent.image.tag` and `controller.endpoint.image.tag` — the last is the pin new endpoints are created at, so an upgrade that skipped it would move the controller and nothing it deploys. Never `--wait`: the rollout replaces the pod running the client, and a client killed mid-wait leaves the release `pending-upgrade`, blocking every later upgrade. The release name is read off helm's own `meta.helm.sh/release-name` annotation rather than configured, since the chart does not fix it. |
-| `fleet-version` | `fleet` | `PUT /fleet/version` for the default new endpoints are created at, then `POST /endpoint-upgrades` to move the ones already running. The wave plan, its soaks and its approval gate ride in the spec and are executed by the controller. |
+| `controller` | `controller` | `helm upgrade` of the release the agent itself is a member of, setting `controller.image.tag`, `agent.image.tag` and `controller.endpoint.image.tag` — the last is the pin new endpoints are created at, so an upgrade that skipped it would move the controller and nothing it deploys. helm runs as a Job outside the release, not in the agent: the rollout replaces the agent's pod, and a client killed while helm waits on the release's hooks leaves it `pending-upgrade`, blocking every later upgrade. The release name is read off helm's own `meta.helm.sh/release-name` annotation rather than configured, since the chart does not fix it. |
+| `fleet-version` | `fleet` | `spec.version` is the version every endpoint should run. Once the controller deploys it (its pin), `POST /endpoint-upgrades` rolls the fleet onto it; the kind converges when `GET /fleet-version` reports the fleet at `spec.version` (`ac-endpoint-upgrade.md` §6.1). A running roll's done/total is reported as progress, so a long roll is not flagged stuck. |
 
 `Parent(fleet-version)` is `controller`, so a declared controller upgrade runs
 first and the roll waits until the controller is Ready at its version.
@@ -72,26 +72,27 @@ controller Deployment's pod template**, plus a completed rollout; `GET /api/v1/v
 is consulted only for whether the controller answers at all, because it reports the
 binary's ldflags stamp (`0.260714.0-199ec1a`) and a spec declares an image tag
 (`custom-28386c402c60`) — comparing those never converges. For `fleet-version` it is
-`GET /fleet` and each endpoint's recorded `version`.
+the fleet version on `GET /fleet-version`, which the controller advances only when
+every endpoint is at a roll's target.
 
-The roll itself is read from the task routes (`GET /tasks?kind=upgrade_endpoints`,
-then its subtasks for progress), not from `/fleet`, which reports settings only: the
-newest such task is the only one that can be in flight, because the controller
-refuses to plan a second while one is non-terminal.
+The roll in flight comes from the same `GET /fleet-version` (its `roll`), and its
+progress from that task's subtasks.
 
 Three properties keep them from destabilising the rest of the tick:
 
-- **The singleton rows are listed only when desired state declares them**, which the
-  engine supplies through `DesiredObserver` before each `List`. Emitted
-  unconditionally they would plan a delete every tick on every environment that never
-  opted in.
-- **A controller upgrade takes the controller down**, so a failed `List` of the amp
-  API returns the controller row with `reconcile.Partial` rather than an error. A
-  plain error aborts the whole tick, which would freeze reconciliation for exactly as
-  long as the upgrade it is supposed to be driving.
-- **A roll that is soaking or awaiting approval is progress, not a stall**, so those
-  states are exempt from `StuckAfter` in both of the engine's stuck paths. A roll
-  whose task nothing has claimed reports `queued` and stays eligible.
+- **Both rows are Preexisting**, so an undeclared one is reported and never deleted.
+  The controller row is listed on every tick; the fleet row only once a declaration
+  has reached this process (until then the engine plans a Create, which is the same
+  call), so an environment that declares no fleet never reads the route.
+- **A controller upgrade takes the controller down**, so neither row fails `List`: an
+  unreachable controller, or one too old to serve `GET /fleet-version`, is a
+  not-Ready row in state `upgrading`. A plain error aborts the whole tick, which would
+  freeze reconciliation for exactly as long as the upgrade it is supposed to be
+  driving.
+- **A running roll reports its done/total as `Actual.Progress`**, and a change
+  restarts both of the engine's stuck timers, so a long roll that keeps moving is not
+  flagged and one that stops is. A roll whose task nothing has claimed reports
+  `queued`, with no progress.
 
 ## Convergence status
 

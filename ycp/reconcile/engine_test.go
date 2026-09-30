@@ -458,6 +458,40 @@ func TestReconcilePendingTooLongIsStuck(t *testing.T) {
 	}
 }
 
+// A long update that is still moving — a fleet roll's done/total advancing — is not
+// stuck, on either timer: Progress restarts both. One that stops moving is flagged
+// again a StuckAfter later.
+func TestReconcileProgressRestartsTheStuckTimers(t *testing.T) {
+	f := newFake()
+	fl := key("fleet-version", "fleet")
+	f.pending[fl] = true
+	desired := []api.DesiredResource{d("fleet-version", "fleet", 2)}
+
+	now := time.Unix(0, 0)
+	e := New(f, Options{Now: func() time.Time { return now }, StuckAfter: time.Minute})
+	tick := func(progress string) Result {
+		t.Helper()
+		f.actual = []Actual{{Key: fl, ObservedGen: 1, State: "rolling", Progress: progress}}
+		res, err := e.Reconcile(context.Background(), desired, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	tick("0/4")
+	for _, p := range []string{"1/4", "2/4", "3/4"} {
+		now = now.Add(2 * time.Minute)
+		if res := tick(p); len(res.Stuck) != 0 {
+			t.Fatalf("progress %s: stuck=%v, want none while the roll moves", p, res.Stuck)
+		}
+	}
+	now = now.Add(2 * time.Minute)
+	if res := tick("3/4"); len(res.Stuck) != 1 {
+		t.Fatalf("no progress: stuck=%v, want the roll flagged", res.Stuck)
+	}
+}
+
 // The whole point of the echo, end to end through the engine, against a backend
 // that behaves like a real async one: it reports Pending when it issues, then the
 // task's failure, and the echo only advances once work actually lands.

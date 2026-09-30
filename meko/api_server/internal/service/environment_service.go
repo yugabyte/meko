@@ -391,6 +391,7 @@ func (s *EnvironmentService) Register(
 		if err := checkKinds(kind, *req.Desired); err != nil {
 			return nil, err
 		}
+		logFleetWithoutController(req.Name, *req.Desired)
 	}
 	placement := req.Placement
 	if placement == "" {
@@ -749,9 +750,26 @@ func (s *EnvironmentService) Entitlement() models.Entitlement {
 // storing a resource nothing converges.
 var resourceKinds = map[string][]string{
 	KindMeko: {"agent", "datapack"},
-	// "controller" is the odd one out: it moves software rather than resources —
-	// the version the environment's amp controller release itself runs.
-	KindAmp: {"storage-pool", "cluster", "branch", "endpoint", "controller"},
+	// "controller" and "fleet-version" are the odd ones out: they move software
+	// rather than resources — the version the amp controller release runs, and the
+	// version its endpoints are rolled onto.
+	KindAmp: {"storage-pool", "cluster", "branch", "endpoint", "controller", "fleet-version"},
+}
+
+// logFleetWithoutController reports a full desired set that declares a
+// fleet-version but no controller. Not refused, because nothing real declares one:
+// the fleet can only reach a version the controller deploys, so the agent would
+// wait on a controller nobody manages, and this log is the only trace of why.
+func logFleetWithoutController(envID string, res []models.DesiredResource) {
+	fleet, ctl := false, false
+	for _, r := range res {
+		fleet = fleet || r.Kind == "fleet-version"
+		ctl = ctl || r.Kind == "controller"
+	}
+	if fleet && !ctl {
+		slog.Error("desired state declares a fleet-version without a controller; the agent will wait on it indefinitely",
+			"env", envID)
+	}
 }
 
 // checkKinds refuses a declared set naming a kind this environment's agent does not
@@ -788,6 +806,7 @@ func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []
 	if err := checkKinds(e.Kind, res); err != nil {
 		return true, err
 	}
+	logFleetWithoutController(e.UUID, res)
 	return true, s.repo.ReplaceDesired(e.UUID, res)
 }
 

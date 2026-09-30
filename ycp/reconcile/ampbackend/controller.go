@@ -2,6 +2,7 @@ package ampbackend
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -51,7 +52,48 @@ type ControllerConfig struct {
 	Chart string
 	// Deployment is the controller's Deployment, whose rollout gates readiness.
 	Deployment string
+	// Upgrades runs the `helm upgrade` itself. Nil runs it in this process through
+	// Helm, which only a test should do: see Upgrader.
+	Upgrades Upgrader
 }
+
+// Upgrader runs a `helm upgrade` somewhere that outlives this process, and reports
+// on it afterwards.
+//
+// The agent is a member of the release it upgrades, so the upgrade replaces the
+// agent's own pod. helm waits for the release's hooks even without --wait, and a
+// client killed while it waits never records the revision, leaving the release in
+// pending-upgrade for good — which blocks every later upgrade. A run that is not
+// in this pod, and a record of it this pod's replacement can read, is what an
+// upgrade needs to finish.
+type Upgrader interface {
+	// Start runs `helm <args> -f <values>` as the run named name. Starting a name
+	// that is still running does nothing, so a retry after a crash is safe; one
+	// that already finished is run again — Start is only called when the release
+	// does not carry these values, so a finished run of them did not stick.
+	Start(ctx context.Context, name string, args []string, values []byte) error
+	// Latest is the newest run for this release, or the zero UpgradeRun when there
+	// is none.
+	Latest(ctx context.Context) (UpgradeRun, error)
+	// Remove deletes a run and its values.
+	Remove(ctx context.Context, name string) error
+}
+
+// UpgradeRun is one upgrade run as Upgrader.Latest reports it.
+type UpgradeRun struct {
+	Name string
+	// State is "running", "succeeded" or "failed"; "" when there is no run.
+	State string
+	// Message is what helm said on a failed run.
+	Message string
+}
+
+// Upgrade run states.
+const (
+	UpgradeRunning   = "running"
+	UpgradeSucceeded = "succeeded"
+	UpgradeFailed    = "failed"
+)
 
 // controllerState is the config plus the version last declared for it. Readiness
 // is "running what the spec asks", and List cannot see the spec, so the target is
@@ -193,6 +235,9 @@ func (b *Backend) updateController(ctx context.Context, r api.DesiredResource) e
 	}
 	b.setControllerTarget(version)
 
+	if err := b.priorUpgradeRun(ctx); err != nil {
+		return err
+	}
 	if err := b.priorRelease(ctx); err != nil {
 		return err
 	}
@@ -345,12 +390,14 @@ func isChartArchive(ref string) bool {
 	return strings.HasSuffix(ref, ".tgz") || strings.HasSuffix(ref, ".tar.gz")
 }
 
-// helmUpgrade moves the release, deliberately without --wait. This agent is a
-// member of the release it is upgrading, so its own rollout kills the helm client
-// mid-wait and leaves the release in pending-upgrade, which blocks every later
-// upgrade. helm returns once the manifests are submitted; the rollout moves both
-// pods and the next tick — quite possibly in the replacement pod — decides from
-// what it can observe.
+// helmUpgrade moves the release: through cfg.Upgrades, which runs helm outside
+// this pod (see Upgrader), or in this process when a test left it nil. Either
+// way without --wait: the rollout is read back on the next tick, quite possibly
+// by the replacement pod.
+//
+// Everything that varies goes in one values document rather than the argv; the
+// argv carries only the release, the chart and a declared chart_version, so no
+// declared value lands in a Job spec.
 func (b *Backend) helmUpgrade(ctx context.Context, version string, spec controllerSpec, deployed map[string]any) error {
 	cfg := b.ctl.cfg
 	args := []string{"upgrade", cfg.Release, cfg.Chart, "--namespace", cfg.Namespace}
@@ -359,33 +406,124 @@ func (b *Backend) helmUpgrade(ctx context.Context, version string, spec controll
 	if spec.ChartVersion != "" && !isChartArchive(cfg.Chart) {
 		args = append(args, "--version", spec.ChartVersion)
 	}
-	// The release's own user-supplied values, re-sent over the new chart, so the
-	// overrides the operator installed with (registry, storage class, the API key
-	// Secret) survive an upgrade the desired state does not restate.
-	//
-	// NOT --reuse-values, which reuses the last release's COMPUTED values and so
-	// masks every default the newer chart adds — aimed squarely at the one thing
-	// this kind does. `helm get values` returns the user-supplied set alone, so
-	// handing that back lets the new chart's defaults through underneath it.
-	vals, err := json.Marshal(deployed)
+	vals, err := upgradeValues(deployed, version, spec.Values)
 	if err != nil {
-		return fmt.Errorf("encode deployed values of %q: %w", cfg.Release, err)
+		return fmt.Errorf("build values for %q: %w", cfg.Release, err)
 	}
-	args = append(args, "-f", "-")
-	// The per-image tags, not the chart-global imageTag. imageTag is only the
-	// FALLBACK the chart resolves when an image has no tag of its own, so on an
-	// install that pins per-image tags — which the deployed environments do —
-	// setting it moves nothing and the upgrade succeeds without changing a pod.
-	// Setting the per-image keys works either way, since they win over the
-	// fallback.
+	doc, err := json.Marshal(vals)
+	if err != nil {
+		return fmt.Errorf("encode values for %q: %w", cfg.Release, err)
+	}
+	if cfg.Upgrades == nil {
+		if _, err := cfg.Helm.Run(ctx, doc, append(args, "-f", "-")...); err != nil {
+			return fmt.Errorf("helm upgrade %q: %w", cfg.Release, err)
+		}
+		return nil
+	}
+	name := upgradeRunName(cfg.Release, args, doc)
+	if err := cfg.Upgrades.Start(ctx, name, args, doc); err != nil {
+		return fmt.Errorf("start helm upgrade %q (%s): %w", cfg.Release, name, err)
+	}
+	return nil
+}
+
+// upgradeValues is the whole values document an upgrade sends.
+//
+// It starts from the release's own user-supplied values, so the overrides the
+// operator installed with (registry, storage class, the API key Secret) survive
+// an upgrade the desired state does not restate. NOT --reuse-values, which reuses
+// the last release's COMPUTED values and so masks every default the newer chart
+// adds; `helm get values` returns the user-supplied set alone, so handing that
+// back lets the new chart's defaults through underneath it.
+//
+// Onto that go the per-image tags, not the chart-global imageTag: imageTag is only
+// the FALLBACK for an image with no tag of its own, so on an install that pins
+// per-image tags — which the deployed environments do — setting it moves nothing.
+// Then the declared overrides, each merged into the subtree at its dotted key the
+// way --set-json merges, so declaring one key of a table keeps the rest of it.
+func upgradeValues(deployed map[string]any, version string, values map[string]json.RawMessage) (map[string]any, error) {
+	out := map[string]any{}
+	if len(deployed) > 0 {
+		raw, err := json.Marshal(deployed)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, err
+		}
+	}
 	for _, k := range controllerImageTagKeys {
-		args = append(args, "--set", k+"="+version)
+		mergeAt(out, strings.Split(k, "."), version)
 	}
-	for _, k := range sortedValueKeys(spec.Values) {
-		args = append(args, "--set-json", k+"="+string(spec.Values[k]))
+	for _, k := range sortedValueKeys(values) {
+		var v any
+		if err := json.Unmarshal(values[k], &v); err != nil {
+			return nil, reconcile.Rejected(fmt.Errorf("values.%s is not valid JSON: %w", k, err))
+		}
+		mergeAt(out, strings.Split(k, "."), v)
 	}
-	if _, err := cfg.Helm.Run(ctx, vals, args...); err != nil {
-		return fmt.Errorf("helm upgrade %q: %w", cfg.Release, err)
+	return out, nil
+}
+
+// mergeAt sets val at the path, creating tables on the way, and merges a table
+// into a table already there instead of replacing it.
+func mergeAt(dst map[string]any, path []string, val any) {
+	for _, seg := range path[:len(path)-1] {
+		next, _ := dst[seg].(map[string]any)
+		if next == nil {
+			next = map[string]any{}
+			dst[seg] = next
+		}
+		dst = next
+	}
+	leaf := path[len(path)-1]
+	if m, ok := val.(map[string]any); ok {
+		if into, ok := dst[leaf].(map[string]any); ok {
+			for k, v := range m {
+				mergeAt(into, []string{k}, v)
+			}
+			return
+		}
+	}
+	dst[leaf] = val
+}
+
+// upgradeRunName names a run by what it runs, so a restart that starts the same
+// upgrade again finds the one already there. Kept well under the 63 characters a
+// Job's name has to fit, because the Job controller stamps it into a label.
+func upgradeRunName(release string, args []string, doc []byte) string {
+	h := sha256.New()
+	h.Write([]byte(strings.Join(args, "\x00")))
+	h.Write([]byte{0})
+	h.Write(doc)
+	if len(release) > 40 {
+		release = release[:40]
+	}
+	return fmt.Sprintf("%s-upgrade-%x", strings.TrimRight(release, "-"), h.Sum(nil)[:5])
+}
+
+// priorUpgradeRun is the verdict on the upgrade last started — by this process or
+// the pod it replaced: Pending while it runs, and helm's own error, once, when it
+// failed. A failed run is removed after it is reported, so priorRelease speaks
+// for the release from then on. A finished one is left to expire.
+func (b *Backend) priorUpgradeRun(ctx context.Context) error {
+	cfg := b.ctl.cfg
+	if cfg.Upgrades == nil {
+		return nil
+	}
+	run, err := cfg.Upgrades.Latest(ctx)
+	if err != nil {
+		return fmt.Errorf("read the last helm upgrade of %q: %w", cfg.Release, err)
+	}
+	switch run.State {
+	case UpgradeRunning:
+		return reconcile.Pending(fmt.Errorf("helm upgrade of %q is running (%s)", cfg.Release, run.Name))
+	case UpgradeFailed:
+		if err := cfg.Upgrades.Remove(ctx, run.Name); err != nil {
+			return fmt.Errorf("helm upgrade of %q failed (%s: %s), and removing the run failed: %w",
+				cfg.Release, run.Name, run.Message, err)
+		}
+		return fmt.Errorf("helm upgrade of %q failed (%s): %s", cfg.Release, run.Name, run.Message)
 	}
 	return nil
 }

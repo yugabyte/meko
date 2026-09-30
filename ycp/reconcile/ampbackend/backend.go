@@ -61,6 +61,9 @@ const (
 	KindBranch     = "branch"
 	KindEndpoint   = "endpoint"
 	KindController = "controller"
+	// KindFleetVersion is the version the controller's endpoint fleet should run
+	// (fleet.go).
+	KindFleetVersion = "fleet-version"
 )
 
 // controllerName is the only name a controller resource may carry: one
@@ -87,6 +90,14 @@ type Backend struct {
 	// ctl is everything the controller kind needs that is not the REST API. See
 	// ControllerConfig.
 	ctl *controllerState
+	// fleetVersion is the fleet-version spec last handed to Update, guarded by mu.
+	// "" until one has been, which is what keeps the fleet row out of List (see
+	// fleetActual).
+	fleetVersion string
+	// lastProgress is the last done/total read for the roll lastProgressRoll,
+	// guarded by mu, so a subtask read that fails repeats it (see rollProgress).
+	lastProgressRoll openapi_types.UUID
+	lastProgress     string
 	// lastSeen is the key set the last successful tree read returned, guarded by
 	// mu. It is what lets a failed read name what it could not reach.
 	lastSeen []reconcile.ResourceKey
@@ -98,9 +109,10 @@ type Backend struct {
 // has its applied generation echoed by List — a kind that accepts updates without
 // the echo is the silent latch meko#985 is about.
 var updateFuncs = map[string]func(*Backend, context.Context, api.DesiredResource) error{
-	KindBranch:     (*Backend).updateBranch,
-	KindEndpoint:   (*Backend).updateEndpoint,
-	KindController: (*Backend).updateController,
+	KindBranch:       (*Backend).updateBranch,
+	KindEndpoint:     (*Backend).updateEndpoint,
+	KindController:   (*Backend).updateController,
+	KindFleetVersion: (*Backend).updateFleet,
 }
 
 // index maps a resource's hierarchical path to the controller UUIDs its
@@ -173,6 +185,10 @@ func (b *Backend) Parent(r api.DesiredResource) (reconcile.ResourceKey, bool) {
 		if len(segs) >= 4 {
 			return reconcile.ResourceKey{Kind: KindBranch, Name: join(segs[:3])}, true
 		}
+	case KindFleetVersion:
+		// The fleet can only reach a version the controller deploys, so the roll
+		// waits for the controller to be Ready at its declared version.
+		return reconcile.ResourceKey{Kind: KindController, Name: controllerName}, true
 	}
 	return reconcile.ResourceKey{}, false
 }
@@ -348,21 +364,22 @@ func endpointAttrs(ep ampclient.Endpoint) map[string]string {
 // dropped (reconcile.Actual.DiscoveryError): a short list would have the engine
 // create every endpoint again.
 func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
-	ctl, haveCtl := b.controllerActual(ctx)
+	var singletons []reconcile.Actual
+	if ctl, ok := b.controllerActual(ctx); ok {
+		singletons = append(singletons, ctl)
+	}
+	if fleet, ok := b.fleetActual(ctx); ok {
+		singletons = append(singletons, fleet)
+	}
 	out, idx, err := b.listTree(ctx)
 	if err != nil {
-		partial := b.unreadable(err)
-		if haveCtl {
-			partial = append(partial, ctl)
-		}
+		partial := append(b.unreadable(err), singletons...)
 		if len(partial) == 0 {
 			return nil, err
 		}
 		return partial, nil
 	}
-	if haveCtl {
-		out = append(out, ctl)
-	}
+	out = append(out, singletons...)
 	b.mu.Lock()
 	b.idx = idx
 	b.mu.Unlock()
@@ -597,6 +614,9 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 		// The release exists — this agent runs inside it — so a create is an update
 		// that has not seen a row yet.
 		return b.updateController(ctx, r)
+	case KindFleetVersion:
+		// Absent only because this process has not been handed a declaration yet.
+		return b.updateFleet(ctx, r)
 	}
 	return fmt.Errorf("create: unknown kind %q", r.Kind)
 }
@@ -1327,6 +1347,8 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 	case KindController:
 		return reconcile.Permanent(fmt.Errorf(
 			"delete controller %q: the controller is not deleted through desired state — it is the release this agent runs in", key.Name))
+	case KindFleetVersion:
+		return reconcile.Permanent(fmt.Errorf("delete fleet-version %q: the fleet is not deleted through desired state", key.Name))
 	}
 	return fmt.Errorf("delete: unknown kind %q", key.Kind)
 }

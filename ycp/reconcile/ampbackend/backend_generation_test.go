@@ -69,11 +69,25 @@ type genServer struct {
 	settingsStatus int
 	settingsError  string
 
-	resizes   []ampclient.ResizeEndpointRequest
-	extAdds   []ampclient.AddBranchExtensionsRequest
-	epPatches []ampclient.UpdateEndpointSettingsRequest
-	brPatches []ampclient.UpdateBranchSettingsRequest
-	taskGets  int
+	// fleetVersion / fleetPin are GET /fleet-version's version and target_version;
+	// fleetRoll, when set, is the status of the roll it reports in flight, and
+	// fleetRollDone / fleetRollTotal that roll's children.
+	fleetVersion   string
+	fleetPin       string
+	fleetRoll      string
+	fleetRollDone  int
+	fleetRollTotal int
+	// fleetSubtasksFail makes GET /tasks/{id}/subtasks answer 500.
+	fleetSubtasksFail bool
+	// fleetMissing makes GET /fleet-version 404, as a controller predating it does.
+	fleetMissing bool
+
+	fleetRolls int // POST /endpoint-upgrades calls
+	resizes    []ampclient.ResizeEndpointRequest
+	extAdds    []ampclient.AddBranchExtensionsRequest
+	epPatches  []ampclient.UpdateEndpointSettingsRequest
+	brPatches  []ampclient.UpdateBranchSettingsRequest
+	taskGets   int
 }
 
 func (g *genServer) start(t *testing.T) *Backend {
@@ -90,6 +104,37 @@ func (g *genServer) start(t *testing.T) *Backend {
 		switch {
 		case p == "/version":
 			io.WriteString(w, `{"version":"`+g.controllerVersion+`","git_commit":"abc1234","build_date":"2026-01-01T00:00:00Z"}`)
+		case p == "/fleet-version":
+			if g.fleetMissing {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"error":{"code":"not_found","message":"no such route"}}`)
+				return
+			}
+			body := map[string]any{"version": g.fleetVersion, "target_version": g.fleetPin}
+			if g.fleetRoll != "" {
+				body["roll"] = map[string]any{"id": genTaskID, "kind": "upgrade_endpoints", "status": g.fleetRoll,
+					"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		case p == "/endpoint-upgrades":
+			g.fleetRolls++
+			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/subtasks"):
+			if g.fleetSubtasksFail {
+				w.WriteHeader(http.StatusInternalServerError)
+				io.WriteString(w, `{"error":{"code":"internal","message":"store unavailable"}}`)
+				return
+			}
+			subs := []map[string]any{}
+			for i := 0; i < g.fleetRollTotal; i++ {
+				status := "pending"
+				if i < g.fleetRollDone {
+					status = "succeeded"
+				}
+				subs = append(subs, map[string]any{"id": genTaskID, "task_id": genTaskID, "kind": "upgrade_endpoint",
+					"status": status, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"count": len(subs), "subtasks": subs})
 		case strings.HasPrefix(p, "/tasks/"):
 			g.taskGets++
 			if g.taskStatus == "" {
@@ -467,19 +512,20 @@ func TestCreateConflictStaysSuccess(t *testing.T) {
 // A kind absent from allKinds, or in none of the three sets, fails the guard
 // below rather than going unasserted in either direction.
 var (
-	allKinds        = []string{KindPool, KindCluster, KindBranch, KindEndpoint, KindController}
-	observableKinds = map[string]bool{KindController: true}
+	allKinds        = []string{KindPool, KindCluster, KindBranch, KindEndpoint, KindController, KindFleetVersion}
+	observableKinds = map[string]bool{KindController: true, KindFleetVersion: true}
 )
 
 // A kind added to updateFuncs without the plumbing fails here rather than in
 // production.
 func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 	specs := map[string]api.DesiredResource{
-		KindPool:       {Kind: KindPool, Name: "pool-a", Generation: 4, Spec: json.RawMessage(`{}`)},
-		KindCluster:    {Kind: KindCluster, Name: "pool-a/recproj", Generation: 4, Spec: json.RawMessage(`{}`)},
-		KindBranch:     extRes(4),
-		KindEndpoint:   resizeRes(4),
-		KindController: controllerRes(4),
+		KindPool:         {Kind: KindPool, Name: "pool-a", Generation: 4, Spec: json.RawMessage(`{}`)},
+		KindCluster:      {Kind: KindCluster, Name: "pool-a/recproj", Generation: 4, Spec: json.RawMessage(`{}`)},
+		KindBranch:       extRes(4),
+		KindEndpoint:     resizeRes(4),
+		KindController:   controllerRes(4),
+		KindFleetVersion: fleetRes(4),
 	}
 	// Every kind this backend maps has to be here, or the guard below silently
 	// covers less than it claims — in either direction, since a kind absent from
@@ -497,7 +543,10 @@ func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 
 	for kind, res := range specs {
 		t.Run(kind, func(t *testing.T) {
-			g := &genServer{branchGen: gen64(1), endpointGen: gen64(1)}
+			// The fleet is behind a controller that already deploys the target, so the
+			// only thing left for the fleet-version kind to do is roll.
+			g := &genServer{branchGen: gen64(1), endpointGen: gen64(1),
+				fleetVersion: "0.260901.0-abc1234", fleetPin: controllerTargetVersion}
 			b := g.start(t)
 
 			err := b.Update(t.Context(), res)

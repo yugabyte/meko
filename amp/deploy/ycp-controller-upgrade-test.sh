@@ -23,8 +23,14 @@
 #      V2 endpoint image: that is the proof the upgrade moved the pin rather than
 #      only the controller.
 #
-# Endpoints already running stay on V1 on purpose. Rolling them is the endpoint
-# roll's job, a separate control; this test asserts the upgrade leaves them alone.
+#   5. desired state declares the fleet-version at CTL_V2. Every endpoint — the
+#      two left on V1 and the two created on V2 — must end up on the V2 image, and
+#      the fleet row must report ready.
+#   6. with CTL_V3 set, desired state moves the controller AND the fleet to CTL_V3
+#      in one write: the agent must upgrade the controller first and then roll.
+#
+# Endpoints already running stay on V1 through step 4 on purpose: the controller
+# upgrade rolls nothing, and moving them is the fleet-version kind's job.
 #
 # The fleet is one CLUSTER per endpoint, each endpoint alone on that cluster's own
 # default branch. Two things force that shape:
@@ -54,7 +60,8 @@
 #   - amp/deploy/up-gke.sh deployed the stack at TAG=$CTL_V1 with YCP_ENABLED=1
 #     and YCP_CONTROLLER_CHART pointing at a chart the agent can pull
 #     (ycp/test/local/controller-chart-publish.sh publishes one);
-#   - $CTL_V2 exists in the registry for the controller, endpoint and agent repos.
+#   - $CTL_V2 (and $CTL_V3, if set) exists in the registry for the controller,
+#     endpoint and agent repos.
 #
 # Prereqs: kubectl (pointed at the cluster), curl, jq, helm.
 #
@@ -68,6 +75,8 @@ YCP_ENV_ID="${YCP_ENV_ID:?YCP_ENV_ID is required}"
 YCP_ADMIN_KEY="${YCP_ADMIN_KEY:?YCP_ADMIN_KEY is required}"
 CTL_V1="${CTL_V1:?CTL_V1 (the image tag deployed now) is required}"
 CTL_V2="${CTL_V2:?CTL_V2 (the image tag to upgrade to) is required}"
+CTL_V3="${CTL_V3:-}"
+FLEET_V=""   # when set, desired_json also declares the fleet-version at it
 
 RELEASE="${RELEASE:-yb-amp-controller}"
 YCP_PF_PORT="${YCP_PF_PORT:-18094}"
@@ -130,9 +139,11 @@ desired_json() {
              {kind:"endpoint", name:($pool+"/"+$cl+"/main/"+$ep),
                spec:{role:"read_write", password:$pw}} ]')
   done
-  jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" --arg v "$version" --argjson tree "$tree" '
+  jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" --arg v "$version" --arg fv "$FLEET_V" --argjson tree "$tree" '
     [ {kind:"storage-pool", name:$pool,        spec:{owner_user_id:$uid}},
-      {kind:"controller",   name:"controller", spec:{version:$v}} ] + $tree'
+      {kind:"controller",   name:"controller", spec:{version:$v}} ]
+    + (if $fv == "" then [] else [{kind:"fleet-version", name:"fleet", spec:{version:$fv}}] end)
+    + $tree'
 }
 
 # wait_ready <timeout secs> <kind> <leaf...>
@@ -274,6 +285,56 @@ for e in "${LATER[@]}"; do
     *) bad "new endpoint $e (${id}) runs '${img:-none}', want the ${CTL_V2} pin" ;;
   esac
 done
+
+# --- 6. roll the fleet onto the controller's version ---
+# wait_fleet <version> <timeout secs>: the fleet row ready at <version>.
+wait_fleet() {
+  local deadline=$((SECONDS + $2))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ "$(res_state fleet-version fleet)" = ready ] && [ "$(res_attr fleet-version fleet version)" = "$1" ] && return 0
+    sleep 5
+  done
+  return 1
+}
+# check_fleet_images <version>: every endpoint's Deployment runs the <version> image.
+check_fleet_images() {
+  local e id img
+  for e in "${ALL[@]}"; do
+    id=$(res_attr endpoint "$e" id)
+    img=$(ep_deploy "$id" '.spec.template.spec.containers[0].image')
+    case "$img" in
+      *:"$1") ok "endpoint $e (${id}) runs the $1 image" ;;
+      *) bad "endpoint $e (${id}) runs '${img:-none}', want $1" ;;
+    esac
+  done
+}
+
+hdr "desired state: fleet-version@${CTL_V2}"
+FLEET_V="$CTL_V2"
+set_desired "$(desired_json "$CTL_V2" "${ALL[@]}")" && ok "fleet-version declared"   || bad "POST desired (fleet-version) failed — is fleet-version an allowed kind?"
+ROLL_START=$SECONDS
+if wait_fleet "$CTL_V2" 1200; then ok "fleet row reports ready at ${CTL_V2} after $((SECONDS - ROLL_START))s"
+else
+  bad "fleet did not reach ready@${CTL_V2} in 20m (state='$(res_state fleet-version fleet)', attrs: $(env_json | jq -c '.resources[]?|select(.kind=="fleet-version")|.attrs' 2>/dev/null))"
+  kubectl -n "$NS" logs deploy/amp-reconcile-agent --tail=40 2>/dev/null | sed 's/^/       /'
+fi
+check_fleet_images "$CTL_V2"
+if wait_ready 600 endpoint "${ALL[@]}"; then ok "all 4 endpoints report ready after the roll"
+else bad "endpoints not ready after the roll"; dump_inventory; fi
+
+# --- 7. controller and fleet in one write: upgrade, then roll ---
+if [ -n "$CTL_V3" ]; then
+  hdr "desired state: controller@${CTL_V3} + fleet-version@${CTL_V3} in one write"
+  FLEET_V="$CTL_V3"
+  set_desired "$(desired_json "$CTL_V3" "${ALL[@]}")" && ok "declared" || bad "POST desired (V3) failed"
+  UP_START=$SECONDS
+  if wait_fleet "$CTL_V3" 1800; then ok "fleet row reports ready at ${CTL_V3} after $((SECONDS - UP_START))s"
+  else bad "fleet did not reach ready@${CTL_V3} in 30m (state='$(res_state fleet-version fleet)')"; dump_inventory; fi
+  [ "$(deploy_tag amp-controller)" = "$CTL_V3" ] && ok "controller Deployment is at ${CTL_V3}"     || bad "controller Deployment is at '$(deploy_tag amp-controller)'"
+  check_fleet_images "$CTL_V3"
+else
+  note "CTL_V3 unset: skipping the one-write controller + fleet upgrade"
+fi
 
 hdr "result"
 printf '  %d passed, %d failed\n' "$pass" "$fail"

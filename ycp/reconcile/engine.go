@@ -65,6 +65,11 @@ type Actual struct {
 	// created. State is the backend's free-form status for reporting.
 	Ready bool
 	State string
+	// Progress is an optional marker of forward motion within State — a fleet
+	// roll's done/total, say. A change restarts the engine's stuck timers, so work
+	// that is long by design but still moving is not reported stuck; one that
+	// stops moving still is. Leave it empty for a kind whose State says it all.
+	Progress string
 	// Attrs are backend-observed, kind-specific details (pg_version, role,
 	// compute, extensions, fork_lsn, addresses) reported to YCP verbatim in the
 	// resource's status inventory. Nil when the backend has none.

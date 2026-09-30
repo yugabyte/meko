@@ -48,8 +48,9 @@ type failState struct {
 // stateStamp records the backend state a resource has held and since when, so
 // the engine can flag one that has sat non-Ready past StuckAfter.
 type stateStamp struct {
-	state string
-	since time.Time
+	state    string
+	progress string
+	since    time.Time
 }
 
 // updateMark records that a resource's update for generation gen is in flight in
@@ -298,6 +299,7 @@ func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int6
 	desired map[ResourceKey]api.DesiredResource) map[ResourceKey]time.Duration {
 	now := e.now()
 	seen := make(map[ResourceKey]bool, len(actual))
+	progressed := map[ResourceKey]bool{}
 	stuck := map[ResourceKey]time.Duration{}
 	for _, a := range actual {
 		seen[a.Key] = true
@@ -315,8 +317,11 @@ func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int6
 			continue
 		}
 		prev, ok := e.seenState[a.Key]
-		if !ok || prev.state != a.State {
-			e.seenState[a.Key] = stateStamp{state: a.State, since: now}
+		if !ok || prev.state != a.State || prev.progress != a.Progress {
+			e.seenState[a.Key] = stateStamp{state: a.State, progress: a.Progress, since: now}
+			if ok && prev.progress != a.Progress {
+				progressed[a.Key] = true
+			}
 			continue
 		}
 		if !a.Ready {
@@ -339,6 +344,11 @@ func (e *Engine) trackStuck(actual []Actual, plannedUpdates map[ResourceKey]int6
 		gen, planned := plannedUpdates[k]
 		if !seen[k] || !planned || gen != m.gen {
 			delete(e.updating, k)
+			continue
+		}
+		if progressed[k] {
+			m.since = now
+			e.updating[k] = m
 			continue
 		}
 		if age := now.Sub(m.since); age >= e.stuckAfter {

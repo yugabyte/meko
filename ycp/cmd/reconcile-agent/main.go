@@ -609,5 +609,6 @@ func controllerConfig(ctx context.Context, kc *k8s) ampbackend.ControllerConfig 
 		Namespace:  kc.ns,
 		Chart:      env("CONTROLLER_CHART", defaultControllerChart),
 		Deployment: defaultControllerDeployment,
+		Upgrades:   newJobUpgrader(kc, release),
 	}
 }

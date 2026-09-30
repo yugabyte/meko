@@ -57,7 +57,7 @@ func (f *fakeHelm) Run(_ context.Context, stdin []byte, args ...string) ([]byte,
 	case len(args) > 1 && args[0] == "get" && args[1] == "metadata":
 		return []byte(`{"version":"` + f.chartVersion + `"}`), nil
 	case args[0] == "upgrade":
-		f.applyUpgrade(args)
+		f.applyUpgrade(args, stdin)
 		return nil, nil
 	}
 	return nil, fmt.Errorf("unexpected helm invocation %v", args)
@@ -78,54 +78,29 @@ func (f *fakeHelm) upgradeStdin(n int) []byte {
 	return nil
 }
 
-// applyUpgrade folds an upgrade's overrides into the deployed values the way helm
-// does, so a second tick reads back what the first one asked for — the loop the
-// mid-rollout hazard is about. Two details are the point of the model rather than
-// decoration: a --set key is a PATH into the values tree, and the re-sent values MERGE
-// an override into what the release already carries instead of replacing it. A fake
-// that stored either flat would hide a comparison that can never match.
-func (f *fakeHelm) applyUpgrade(args []string) {
-	if f.values == nil {
-		f.values = map[string]any{}
+// applyUpgrade makes an upgrade's values document the release's user-supplied
+// values, as `helm upgrade -f` does, so a second tick reads back what the first
+// one asked for — the loop the mid-rollout hazard is about.
+func (f *fakeHelm) applyUpgrade(args []string, doc []byte) {
+	var vals map[string]any
+	if json.Unmarshal(doc, &vals) == nil {
+		f.values = vals
 	}
 	for i := 0; i < len(args)-1; i++ {
-		switch args[i] {
-		case "--set":
-			if k, v, ok := strings.Cut(args[i+1], "="); ok {
-				mergeInto(f.values, strings.Split(k, "."), v)
-			}
-		case "--set-json":
-			if k, v, ok := strings.Cut(args[i+1], "="); ok {
-				var val any
-				if json.Unmarshal([]byte(v), &val) == nil {
-					mergeInto(f.values, strings.Split(k, "."), val)
-				}
-			}
-		case "--version":
+		if args[i] == "--version" {
 			f.chartVersion = args[i+1]
 		}
 	}
 }
 
-func mergeInto(dst map[string]any, path []string, val any) {
-	for _, seg := range path[:len(path)-1] {
-		next, _ := dst[seg].(map[string]any)
-		if next == nil {
-			next = map[string]any{}
-			dst[seg] = next
-		}
-		dst = next
+// upgradeValues is the values document the Nth upgrade sent, decoded.
+func (f *fakeHelm) upgradeValues(t *testing.T, n int) map[string]any {
+	t.Helper()
+	var vals map[string]any
+	if err := json.Unmarshal(f.upgradeStdin(n), &vals); err != nil {
+		t.Fatalf("decode upgrade %d's values: %v", n, err)
 	}
-	leaf := path[len(path)-1]
-	if m, ok := val.(map[string]any); ok {
-		if into, ok := dst[leaf].(map[string]any); ok {
-			for k, v := range m {
-				mergeInto(into, []string{k}, v)
-			}
-			return
-		}
-	}
-	dst[leaf] = val
+	return vals
 }
 
 func (f *fakeHelm) upgrades() [][]string {
@@ -194,9 +169,7 @@ func TestControllerUpdateConvergedRunsNoUpgrade(t *testing.T) {
 }
 
 // The declared version is not the deployed one, so the release moves. The argv is
-// the assertion: --wait is absent deliberately — this agent is a member of the
-// release it is upgrading, so its own rollout kills the helm client mid-wait and
-// leaves the release pending-upgrade, blocking every later upgrade.
+// fixed and --wait is absent; everything that varies is in the values document.
 func TestControllerUpdateIssuesOneUpgradeWithoutWait(t *testing.T) {
 	f := &ctlServer{helm: deployedAt("0.260801.0-old"), ctlVersion: "0.260801.0-old"}
 	b := f.start(t)
@@ -210,27 +183,23 @@ func TestControllerUpdateIssuesOneUpgradeWithoutWait(t *testing.T) {
 		t.Fatalf("helm upgrades = %v, want exactly 1", ups)
 	}
 	argv := strings.Join(ups[0], " ")
-	for _, want := range []string{
-		"upgrade " + ctlRelease + " " + ctlChart,
-		"--namespace " + ctlNamespace,
-		"--version " + ctlChartVersion,
-		"-f", "-",
-		"--set controller.image.tag=" + ctlVersionTarget,
-		"--set agent.image.tag=" + ctlVersionTarget,
-		`--set-json imagePullSecrets=[{"name":"quay"}]`,
-	} {
-		if !strings.Contains(argv, want) {
-			t.Errorf("helm argv %q is missing %q", argv, want)
+	if want := "upgrade " + ctlRelease + " " + ctlChart + " --namespace " + ctlNamespace +
+		" --version " + ctlChartVersion + " -f -"; argv != want {
+		t.Errorf("helm argv = %q, want %q", argv, want)
+	}
+	sent := f.helm.upgradeValues(t, 0)
+	for _, k := range []string{"controller.image.tag", "agent.image.tag"} {
+		if got := valueAt(sent, k); got != ctlVersionTarget {
+			t.Errorf("values %s = %v, want %s", k, got, ctlVersionTarget)
 		}
 	}
-	if strings.Contains(argv, "--wait") {
-		t.Errorf("helm argv %q passes --wait: the agent's own rollout would kill the client and wedge the release", argv)
+	if got, _ := json.Marshal(valueAt(sent, "imagePullSecrets")); string(got) != `[{"name":"quay"}]` {
+		t.Errorf("values imagePullSecrets = %s, want the declared override", got)
 	}
 	// The chart-global imageTag is only the fallback for an image with no tag of
-	// its own, so on an install that pins one it moves nothing — and it is also the
-	// fallback for the endpoint image, which this kind deliberately does not move.
-	if strings.Contains(argv, "--set imageTag=") {
-		t.Errorf("helm argv %q sets the chart-global imageTag instead of the per-image tags", argv)
+	// its own, so on an install that pins one it moves nothing.
+	if got := valueAt(sent, "imageTag"); got != nil {
+		t.Errorf("values set the chart-global imageTag (%v) instead of the per-image tags", got)
 	}
 
 	// The next tick finds its own upgrade deployed and waits for the rollout
@@ -506,6 +475,9 @@ type ctlServer struct {
 	// pools are the storage pools the tree read returns, so a tick has something
 	// to remember and a later failed read has something to name.
 	pools []string
+	// upgrades, when set, runs the upgrade instead of helm in-process. An
+	// interface, so an unset one stays a nil Upgrader.
+	upgrades Upgrader
 }
 
 func poolRows(names []string) string {
@@ -564,6 +536,7 @@ func (f *ctlServer) start(t *testing.T) *Backend {
 		Namespace:  ctlNamespace,
 		Chart:      chart,
 		Deployment: "amp-controller",
+		Upgrades:   f.upgrades,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -146,11 +146,15 @@ rollout is complete, and the controller answers. An unreachable controller is
 
 **`Update`.** Deployed values are compared *before* helm runs, or a tick landing
 mid-rollout bumps the revision again and the rollout never settles. Then `helm
-upgrade`, **without `--wait`**: the agent is a member of the release it upgrades,
-so its own rollout kills the helm client mid-wait and leaves the release
-`pending-upgrade`, blocking every later upgrade. Helm returns once the manifests
-are submitted; the next tick — quite possibly in the replacement pod — decides from
-what it can observe.
+upgrade`, **run as a Job** (`cmd/reconcile-agent/helmjob.go`): the agent is a
+member of the release it upgrades, so its own rollout would kill an in-process
+helm client, and helm waits on the release's hooks even without `--wait` — a
+client killed there leaves the release `pending-upgrade`, blocking every later
+upgrade. The Job copies the agent's image, ServiceAccount and placement, reads the
+whole values document from a Secret it owns, and outlives the agent's pod; the
+next tick — quite possibly in the replacement pod — finds the newest such Job by
+label: running is Pending, failed is reported once with helm's error (the pod's
+termination message) and then deleted.
 
 It does not go through `applyUpdate`: helm is not a controller task, so there is no
 task id for the next tick to read. The verdict comes from the next tick's

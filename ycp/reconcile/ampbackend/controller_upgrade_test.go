@@ -24,10 +24,10 @@ func TestControllerUpgradeMovesTheEndpointPin(t *testing.T) {
 	if len(ups) != 1 {
 		t.Fatalf("helm upgrades = %v, want exactly one", ups)
 	}
-	argv := strings.Join(ups[0], " ")
+	sent := f.helm.upgradeValues(t, 0)
 	for _, key := range []string{"controller.image.tag", "agent.image.tag", "controller.endpoint.image.tag"} {
-		if !strings.Contains(argv, "--set "+key+"="+ctlVersionTarget) {
-			t.Errorf("helm argv does not move %s to %s: %s", key, ctlVersionTarget, argv)
+		if got := valueAt(sent, key); got != ctlVersionTarget {
+			t.Errorf("the upgrade does not move %s to %s: values carry %v", key, ctlVersionTarget, got)
 		}
 	}
 }

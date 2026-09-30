@@ -97,13 +97,17 @@ runs. So the only thing that moves an environment's endpoint version is upgradin
 its controller, and a fleet upgrade is two steps in a fixed order: move the
 controller, then roll the endpoints onto its pin.
 
-That is what makes the two kinds below small. An earlier draft of this document had
-the fleet carry its own version, which needed a persisted fleet default on the
-controller (an API, a singleton table, a migration) purely to answer "what version
-should a NEW endpoint be?" — a question the controller release already answers — and
-it allowed a fleet default of Y under a controller pinned at X, with nothing
-preventing it. The cost of the pin is that endpoint versions cannot move
-independently of the controller. That is the trade, taken deliberately.
+The cost of the pin is that endpoint versions cannot move independently of the
+controller. That is the trade, taken deliberately.
+
+**The controller records how far the fleet has got.** A roll takes no version, so
+without a record nothing outside the controller can tell a fleet that still needs
+rolling from one that does not. The controller keeps a **fleet version** — the version
+every endpoint was last confirmed at, `mixed` when they were seeded apart — which may
+lag the endpoints but never leads them, and refuses a roll while it equals the pin
+([`ac-endpoint-upgrade.md`](../../amp/controller/architecture/ac-endpoint-upgrade.md)
+§6.1). It is a record, not a default: new endpoints still take the pin, so it cannot
+disagree with the controller the way a settable fleet default could.
 
 ## 4. Kinds
 
@@ -142,13 +146,16 @@ path like the existing kinds — `<pool>/<cluster>` beside the environment-wide
   already converged — the upgrade would appear to succeed and move nothing.
   Setting it to the same tag as the controller image is also what makes the pin
   *predictable*: it is `spec.version`, which is what lets §4.2 compute Ready
-  without a read route for it. **Without `--wait`**. The reconciler is a component of that
-  chart, so the rollout replaces the pod running the upgrade; a client killed
-  mid-`--wait` leaves the release `pending-upgrade`, which blocks every later
-  upgrade. Helm returns once the manifests are submitted, the rollout moves both
-  pods, and the *new* reconciler decides on its next tick from `List`. Before
-  re-running helm the backend compares the release's deployed values to the spec,
-  so a tick that lands mid-rollout does not bump the revision again.
+  without a read route for it. **helm runs in a Job, not in the agent.** The
+  reconciler is a component of that chart, so the rollout replaces the pod running
+  the upgrade, and helm waits on the release's hooks (the telemetry preflight) even
+  without `--wait`: a client killed while it waits never records the revision, and
+  the release sits in `pending-upgrade`, blocking every later upgrade. So the agent
+  starts a Job outside the release, from its own image and ServiceAccount, with the
+  whole values document in a Secret the Job owns; the Job sees the hooks through,
+  and its status is what the *new* reconciler reads on its next tick. Before
+  starting one the backend compares the release's deployed values to the spec, so a
+  tick that lands mid-rollout does not bump the revision again.
 - **Rollback** is `spec.version` set back. Migrations are up-only at startup, so a
   downgrade past a schema change is not safe: a release's `metadata` carries its
   migration floor, and the reconciler reports a downgrade below it as `Permanent`
@@ -162,64 +169,48 @@ every endpoint. Measure before deciding whether the Deployment needs
 ### 4.2 `fleet-version`
 
 ```json
-{"kind": "fleet-version", "name": "fleet", "spec": {}}
+{"kind": "fleet-version", "name": "fleet", "spec": {"version": "0.260901.0-abc1234"}}
 ```
 
-**The spec is empty, and that is the whole point.** There is no version to name —
-the target is the controller's pin (§3) — and no wave plan, because staging is a
-later PR (§7). Declaring this kind means "the endpoints of this environment should
-match the controller", which is a perfectly good level-triggered declaration: it
-converges continuously, so an endpoint left behind by a failed roll is picked up on
-a later tick rather than needing a human to re-issue anything.
+The version every endpoint should run. It can only be reached once the controller
+deploys it, so the spec names the SRE's decision and the controller does the rest:
+declaring the controller and the fleet at X in one write upgrades and then rolls,
+declaring the fleet later rolls when the SRE chooses.
 
-- **Parent** is `controller`. The engine then orders a controller upgrade before the
-  roll and gates the roll on the controller being Ready at its version — the
-  top-down ordering for free, and the reason the two kinds are worth having
-  separately.
-- **Actual**: every live endpoint's `version`, read through the existing endpoint
-  routes, plus the roll read from the task routes
-  (`GET /api/v1/tasks?kind=upgrade_endpoints`). Converged when no roll is in flight
-  and every live endpoint's `version` equals the pin.
+- **Parent** is `controller`, so the engine orders a controller upgrade before the
+  roll and gates the roll on the controller being Ready at its version.
+- **Actual**: `GET /api/v1/fleet-version` — the controller's fleet version, its pin
+  and the roll in flight. Ready when the fleet version equals `spec.version` and no
+  roll is running; otherwise `rolling` (with the roll's done/total as progress, §6),
+  `queued` or `behind`. A controller that cannot answer, including one too old to
+  serve the route, reads `upgrading` rather than failing `List`. The row is listed
+  only once this agent has been handed a declaration; until then the engine plans a
+  Create, which is the same call.
+- **Update**: nil when the fleet version already equals the spec; Pending while a roll
+  is in flight or the pin has not reached the spec; otherwise
+  `POST /api/v1/endpoint-upgrades` with no body, tracked through `applyUpdate`. A
+  failed roll surfaces its task's error and is re-issued after the backoff, which
+  re-runs what it left behind. A spec the pin never reaches is Pending, not rejected
+  — the controller upgrade that moves the pin may be issued in the same tick — so it
+  shows up through the stuck timer.
+- **No echo.** The spec carries the version, so each upgrade is a new generation and
+  the engine's last-applied cache is correct as it stands: a fleet at X stays at X
+  until a roll moves it.
+- **Withdrawing** stops managing the fleet and cancels nothing: the row is
+  Preexisting, like the controller's, and keeps reporting against the last declared
+  version until the agent restarts. **Stopping a roll takes both**: cancel it
+  (`POST /tasks/{taskId}/cancel`) and withdraw or set back the declaration. A
+  cancelled roll ends `failed`, so while the declaration stands the agent reads it as
+  a failure and re-issues it after its backoff — the declaration is still the
+  instruction.
+- **Rollback** is the controller and the fleet both set back to W: the pin moves to W,
+  the fleet version is still X, and the roll walks the fleet to W. Bounded by the
+  controller's migration floor and, across a PG major, by `Policy`
+  ([meko#1140](https://github.com/yugabyte/meko/issues/1140)).
 
-  The pin itself is on **no read route** — it is `Provisioning.EndpointVersion`,
-  and nothing under `internal/api` puts it on the wire; `GET /api/v1/version`
-  reports the controller image's version, which is a different tag. So the
-  reconciler does not read the pin, it *knows* it: the controller upgrade above
-  sets the endpoint tag to `spec.version`, so the value to compare against is the
-  version this environment already declares. That holds only for as long as the
-  upgrade sets all three tags together — if that ever diverges, this kind needs the
-  pin exposed on a read route, and §5 would have to add it. Everything else here
-  is directly observable, so the kind needs **no applied-generation echo**: `upgrade_endpoint`
-  writes an endpoint's `version` only after the deploy reports back, and the
-  in-flight task id comes from the task log, not from the reconciler's memory.
-  (Branches needed the echo because their observable lies — the extension union
-  lands before any redeploy.)
-- **Update**: `POST /api/v1/endpoint-upgrades` with no body; `202` → `Pending`,
-  tracked through `applyUpdate` against the roll task. Re-issuing is safe without
-  any adopt machinery on the controller: a roll already in flight answers `409`,
-  which the reconciler reads as "in flight", and a roll issued after one has
-  finished enumerates nothing because every endpoint is already at the pin.
-- **Cancel** is withdrawing the resource: the reconciler cancels the roll in flight
-  (`POST /tasks/{taskId}/cancel`, §5) and stops managing the fleet. Children already
-  deploying finish, as under fail-fast.
-- **Rollback** is not expressed here at all. Moving the fleet back means moving the
-  **controller** back (§4.1), which changes the pin; the next roll then walks the
-  fleet to it. Bounded by the controller's migration floor and, across a PG major,
-  by `Policy` ([meko#1140](https://github.com/yugabyte/meko/issues/1140)).
-
-Inventory rows for both kinds carry `version`, and for the fleet the roll's
-`done/total` and state, so the console and Aeon see progress without a task API of
-their own. Endpoint rows gain `version` (from `Endpoint.version`).
-
-> **Open: is this a kind at all?** With an empty spec, "the endpoints should match
-> the controller" could just as well be part of what `controller` converging means
-> — one kind whose Ready is "the controller is at X and every endpoint is at X's
-> pin", which would delete the parent/child ordering between them. Kept separate for
-> now so a roll can be declared, cancelled and observed on its own, and because
-> per-cluster pinning ([meko#455](https://github.com/yugabyte/meko/issues/455)) would
-> give it a spec again. The name is already wrong, though — it carries no version;
-> `endpoint-roll` fits. Renaming is cheap now and expensive once anything has
-> declared it.
+Inventory rows for both kinds carry `version`; the fleet's also carries
+`endpoint_version` (the pin), `target_version` (the spec) and, while one runs, the
+roll's task id and progress.
 
 ## 5. Controller API changes
 
@@ -228,13 +219,13 @@ their own. Endpoint rows gain `version` (from `Endpoint.version`).
 | `POST /endpoint-upgrades` loses `version` — the body becomes optional, carrying at most `endpoint_ids` and `max_parallel` | the target is the controller's pin, so there is nothing for a caller to name, and no way to ask for an inconsistent fleet |
 | `POST /tasks/{taskId}/cancel` — the roll parent re-reads the flag between children, so a roll stops without finishing the fleet; running children finish, the task ends terminal with a cancel reason, its locks release | generic ([meko#1007](https://github.com/yugabyte/meko/issues/1007)), and the roll is its first consumer: cancel and rollback both need the roll terminal |
 | `plan_endpoint_upgrades` orders its work spread across clusters, read-only before read-write | the bound is `max_parallel`, and without ordering those are all one customer's endpoints |
+| a fleet version (`amp_registry.controller_settings`): seeded at startup, advanced when a roll leaves every endpoint at its target; `GET /fleet-version` reads it beside the pin; `POST /endpoint-upgrades` answers `409 fleet_at_version` while they are equal | the roll takes no version, so this is the only way the reconciler can tell a fleet that still needs rolling |
 
-What is **not** here, and was in an earlier draft: a persisted fleet default
-(`GET /fleet`, `PUT /fleet/version`) and its migration, wave and approval arguments
-on the roll, and adopt-in-flight so a re-issued roll could edit a running one. The
-pin removes the first and §7 defers the rest. No `ycp_generation` on the roll, and
-no stamp: the fleet converges on observation (§4.2), unlike the branch and endpoint
-updates that carry one.
+What is **not** here: a settable fleet default (the fleet version is written only by
+the controller), wave and approval arguments on the roll, and adopt-in-flight so a
+re-issued roll could edit a running one; §7 defers the last two. No `ycp_generation`
+on the roll, and no stamp: the fleet converges on observation (§4.2), unlike the
+branch and endpoint updates that carry one.
 
 Fail-fast: a failing child halts the roll and the task fails; nothing rolls back on
 its own. A cancelled roll ends the same way, minus the failed child — the parent's
@@ -244,14 +235,14 @@ a time" means.
 
 ## 6. Reconciler changes
 
-- `ampbackend`: `controller` and `fleet-version` in `allKinds` / `updateFuncs`;
-  `Parent(fleet-version) = controller`, claimed only where a controller is declared.
-  Both singletons exist on the controller whether or not anyone declared them, and
-  anything listed that desired state does not declare is deleted every tick — which
-  for the fleet means cancelling the roll — so the engine hands the backend each
-  tick's desired set and `List` emits a singleton only for a kind the environment
-  manages. The `Update` arms go through `applyUpdate`
-  so the task lookup and the verdict are not re-implemented. The table-driven test
+- `ampbackend`: `controller` and `fleet-version` in `allKinds` / `updateFuncs`, with
+  `Parent(fleet-version) = controller`. Both rows are Preexisting, so an undeclared
+  one is reported and never collected; the controller row is listed on every tick,
+  the fleet row once a declaration has reached this process. The fleet's `Update`
+  goes through `applyUpdate` so the task lookup and the verdict are not
+  re-implemented. The api-server logs an error for a desired set declaring a
+  `fleet-version` with no `controller` — the roll would wait on a parent nobody
+  manages — but does not refuse it. The table-driven test
   that holds every kind to "`Permanent` on `Update`, or echoes a generation" gains a
   third category — **observable** — for these two, each with the observation that
   stands in for the echo.
@@ -280,11 +271,11 @@ a time" means.
   displaces a working pod — is worth doing and is its own change, not part of the
   upgrade path. One day the two may split (independent cadence, a reconciler fix
   without a controller roll); not now.
-- **Long-running updates.** A roll in flight is not stuck. The engine does not time
-  a resource whose state says it is progressing by design, and a roll over a large
-  fleet takes as long as it takes. A live roll reads as `rolling`, which is exempt;
-  a roll whose task no worker has claimed reports `queued` instead — the case the
-  exemption must not swallow.
+- **Long-running updates.** A roll over a large fleet outlasts `StuckAfter`, so the
+  fleet row reports `Actual.Progress` — the running roll's done/total — and a change
+  restarts both of the engine's stuck timers. A roll that keeps moving is never
+  flagged; one that stops, or a roll no worker has claimed (`queued`, no progress),
+  still is.
 - **Charts have to come from somewhere the reconciler can pull**: publish the
   controller and reconciler charts as OCI to Quay (§10).
 

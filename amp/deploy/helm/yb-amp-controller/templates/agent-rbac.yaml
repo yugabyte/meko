@@ -43,21 +43,22 @@ rules:
   - apiGroups: ["apps"]
     resources: [deployments]
     verbs: [get, list, watch, create, update, patch, delete]
-  # The telemetry preflight is a post-upgrade hook Job with before-hook-creation,
-  # so every upgrade the agent runs deletes the last one, creates a new one and
-  # watches it to completion. Without these the upgrade ends `failed` at the hook,
-  # after the Deployments have already moved. create lets the agent run a pod as
-  # any ServiceAccount in the namespace — no more than its unscoped escalate on
-  # roles already allows. delete is pinned to the hook's own Job; create cannot
-  # be, and helm's watch needs the rest unpinned.
+  # Jobs, twice over. The agent runs each controller upgrade as a Job of its own,
+  # outside the release, because the upgrade replaces the agent's pod and a helm
+  # client that dies waiting on a hook leaves the release pending-upgrade for good
+  # (ycp/cmd/reconcile-agent/helmjob.go); it deletes a failed one after reporting
+  # it. And that helm, running as this ServiceAccount, deletes, recreates and
+  # watches the chart's telemetry preflight hook Job. create lets the agent run a
+  # pod as any ServiceAccount in the namespace — no more than its unscoped escalate
+  # on roles already allows.
   - apiGroups: ["batch"]
     resources: [jobs]
-    verbs: [get, list, watch, create]
-  - apiGroups: ["batch"]
-    resources: [jobs]
-    verbs: [delete]
-    resourceNames:
-      - {{ include "yb-amp-controller.fullname" . }}-telemetry-preflight
+    verbs: [get, list, watch, create, delete]
+  # Read-only: the agent copies its own pod's image, ServiceAccount and placement
+  # into the upgrade Job, and reads helm's error off the Job's pod.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
   # escalate/bind, because the release contains Roles and RoleBindings: without
   # them k8s refuses to let the agent write a Role, or a binding to one, granting
   # anything the agent does not already hold, and the alternative — mirroring

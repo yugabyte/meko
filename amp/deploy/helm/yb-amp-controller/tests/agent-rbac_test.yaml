@@ -55,23 +55,22 @@ tests:
             apiGroups: [""]
             resources: [secrets]
             verbs: [get, list, watch, create, update, patch, delete]
-      # The telemetry preflight hook Job is deleted, recreated and watched on every
-      # upgrade; delete is pinned to that Job.
+      # The upgrade Job the agent runs, and the telemetry preflight hook Job that
+      # helm, as this ServiceAccount, recreates on every upgrade.
       - documentIndex: 1
         contains:
           path: rules
           content:
             apiGroups: ["batch"]
             resources: [jobs]
-            verbs: [get, list, watch, create]
+            verbs: [get, list, watch, create, delete]
       - documentIndex: 1
         contains:
           path: rules
           content:
-            apiGroups: ["batch"]
-            resources: [jobs]
-            verbs: [delete]
-            resourceNames: [RELEASE-NAME-yb-amp-controller-telemetry-preflight]
+            apiGroups: [""]
+            resources: [pods]
+            verbs: [get, list]
       # Without escalate/bind k8s refuses to let the agent write the release's own
       # Roles and RoleBindings. bind is checked on the Role a binding references,
       # so it sits on roles — pinned to the release's own — and not on rolebindings,
