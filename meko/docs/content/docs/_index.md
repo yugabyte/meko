@@ -14,7 +14,7 @@ Meko is the agent-native data layer for multi-agent systems, with shared knowled
 
 Teams still fail when agents can't share state (36% of failures trace to inter-agent misalignment); Meko treats memory and knowledge as infrastructure so agent teams stay coordinated instead of collisional.
 
-&nbsp;
+{{< kapa-hero >}}
 
 **Works with**: [WorkbenchLM](guides/workbench-lm/) (in-portal chat) | <img class="docs-works-with-logo" src="/logos/integrations/claude.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Claude Code | <img class="docs-works-with-logo" src="/logos/integrations/cursor.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Cursor | <img class="docs-works-with-logo" src="/logos/integrations/codex.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Codex | <img class="docs-works-with-logo" src="/logos/integrations/claude.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Claude Desktop | Kiro | [...and more](integrations/)
 

@@ -2,6 +2,9 @@
   background-color: $dark;
 
   .navbar-nav {
+    // Equal space between Ask Meko, Discord, and Sign In / Sign Up.
+    gap: 12px;
+
     .nav-item {
       display: flex;
       align-items: center;
@@ -16,9 +19,20 @@
         transition: all 0.3s ease;
 
         .social-link {
-          width: 50px;
-          padding: 6px;
+          // FA Discord sits left in its em-box; a fixed slot plus a small
+          // nudge keeps the visible mark centered between Ask and Sign Up.
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 28px;
+          padding: 0;
+          overflow: visible;
           text-align: center;
+
+          i {
+            transform: translateX(6px);
+          }
         }
 
         i {
@@ -90,6 +104,7 @@
 
     &__logo {
       svg {
+        display: block;
         width: 140px;
         height: auto;
       }
@@ -148,10 +163,6 @@
     .navbar-nav {
       .nav-item {
         .nav-link {
-          .social-link {
-            width: 40px;
-          }
-
           i {
             font-size: 20px;
           }
@@ -161,6 +172,29 @@
 
     .td-navbar__main {
       padding-right: 30px;
+    }
+  }
+}
+
+// Below 400px the logo, Ask pill, Discord, and Sign In no longer fit beside
+// the menu button: Sign In is clipped, and the logo's byline gets cut off.
+@media (max-width: 399px) {
+  .td-navbar {
+    .navbar-brand__logo svg {
+      width: 84px;
+    }
+
+    .navbar-nav {
+      gap: 8px;
+
+      .nav-item:has(.fa-discord) {
+        display: none;
+      }
+
+      .nav-item .btn span {
+        padding: 5px 8px;
+        font-size: 11px;
+      }
     }
   }
 }

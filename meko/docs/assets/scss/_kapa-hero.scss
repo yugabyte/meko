@@ -1,0 +1,270 @@
+.kapa-hero {
+  margin: 0 0 32px;
+  padding: 40px 24px;
+  background: linear-gradient(
+    135deg,
+    $background-color-primary 0%,
+    $background-color-secondary 100%
+  );
+  border-radius: 12px;
+  border: 1px solid rgba($meko-purple, 0.35);
+
+  @media (max-width: 599px) {
+    padding: 24px 16px;
+    margin: 0 0 24px;
+  }
+}
+
+.kapa-hero__inner {
+  text-align: center;
+}
+
+.kapa-hero__chat-actions {
+  display: none;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.kapa-hero__new {
+  border: none;
+  background: transparent;
+  color: rgba($white, 0.7);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+
+  &:hover {
+    background: rgba($white, 0.08);
+    color: $white;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.kapa-hero__chat {
+  display: none;
+  text-align: left;
+  width: 100%;
+  max-height: 60vh;
+  min-height: 320px;
+  overflow-y: auto;
+  border: 1px solid rgba($white, 0.08);
+  border-radius: 12px;
+  background: rgba($black, 0.25);
+}
+
+.kapa-hero--chatting {
+  .kapa-hero__intro {
+    display: none;
+  }
+
+  .kapa-hero__chat-actions {
+    display: flex;
+  }
+
+  .kapa-hero__chat {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+.kapa-hero__headline {
+  font-size: 2rem;
+  font-weight: 600;
+  color: $white;
+  margin: 0 0 8px;
+  line-height: 1.2;
+
+  @media (max-width: 599px) {
+    font-size: 1.5rem;
+  }
+}
+
+.kapa-hero__subhead {
+  color: rgba($white, 0.7);
+  font-size: 1rem;
+  margin: 0 0 24px;
+}
+
+.kapa-hero__form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.kapa-hero__input-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+}
+
+.kapa-hero__input {
+  width: 100%;
+  padding: 14px 56px 14px 20px;
+  font-size: 1rem;
+  color: $white;
+  background: rgba($white, 0.08);
+  border: 1px solid rgba($white, 0.15);
+  border-radius: 999px;
+  outline: none;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+
+  &::placeholder {
+    color: rgba($white, 0.45);
+  }
+
+  &:focus {
+    border-color: $meko-purple;
+    background: rgba($white, 0.12);
+  }
+}
+
+.kapa-hero__submit {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(270deg, $meko-blue, $meko-purple);
+  color: $white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 150ms ease,
+    transform 150ms ease;
+
+  &:hover {
+    background:
+      linear-gradient(rgba($white, 0.1), rgba($white, 0.1)),
+      linear-gradient(270deg, $meko-blue, $meko-purple);
+    transform: translateY(-50%) scale(1.05);
+  }
+
+  &:active {
+    transform: translateY(-50%) scale(0.98);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: background 150ms ease;
+
+    &:hover,
+    &:active {
+      transform: translateY(-50%);
+    }
+  }
+}
+
+.kapa-hero__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: rgba($white, 0.7);
+  cursor: pointer;
+  user-select: none;
+
+  input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+}
+
+.kapa-hero__toggle-pill {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  background: rgba($white, 0.15);
+  border-radius: 999px;
+  transition: background 150ms ease;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: $white;
+    border-radius: 50%;
+    transition: transform 150ms ease;
+  }
+}
+
+.kapa-hero__toggle input:checked + .kapa-hero__toggle-pill {
+  background: linear-gradient(270deg, $meko-blue, $meko-purple);
+
+  &::after {
+    transform: translateX(14px);
+  }
+}
+
+.kapa-hero__prompts {
+  display: flex;
+  flex-flow: row wrap;
+  justify-content: center;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
+}
+
+.kapa-hero__prompt {
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  color: rgba($white, 0.85);
+  background: rgba($white, 0.06);
+  border: 1px solid rgba($white, 0.15);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease;
+
+  &:hover {
+    border-color: $meko-purple;
+    background: rgba($meko-purple, 0.12);
+    color: $white;
+  }
+}
+
+.kapa-hero__prompt--primary {
+  border-color: $meko-purple;
+  background: rgba($meko-purple, 0.15);
+  color: $white;
+
+  &:hover {
+    background: rgba($meko-purple, 0.25);
+  }
+}
+
+.kapa-hero__attribution {
+  font-size: 0.75rem;
+  color: rgba($white, 0.5);
+  margin: 0;
+
+  a {
+    color: rgba($white, 0.7);
+    text-decoration: underline;
+
+    &:hover {
+      color: $meko-blue;
+    }
+  }
+}

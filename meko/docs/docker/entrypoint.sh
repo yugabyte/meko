@@ -55,18 +55,20 @@ if [ -n "${HUGO_POLL:-}" ]; then
         echo "ERROR: Invalid HUGO_POLL value '${HUGO_POLL}'. Expected format: 700ms, 1s, etc."
         exit 1
     fi
-    # Move real binary out of the way, then create wrapper at the original path
-    mv /usr/local/bin/hugo /usr/local/bin/hugo-real
+    HUGO_REAL=$(command -v hugo)
+    HUGO_WRAPPER_DIR=/tmp/hugo-wrapper
+    mkdir -p "${HUGO_WRAPPER_DIR}"
     POLL_VAL="${HUGO_POLL}"
-    cat > /usr/local/bin/hugo <<WRAPPER
+    cat > "${HUGO_WRAPPER_DIR}/hugo" <<WRAPPER
 #!/usr/bin/env bash
 if [[ "\$*" == *"server"* ]]; then
-    exec /usr/local/bin/hugo-real "\$@" --poll "${POLL_VAL}"
+    exec "${HUGO_REAL}" "\$@" --poll "${POLL_VAL}"
 else
-    exec /usr/local/bin/hugo-real "\$@"
+    exec "${HUGO_REAL}" "\$@"
 fi
 WRAPPER
-    chmod +x /usr/local/bin/hugo
+    chmod +x "${HUGO_WRAPPER_DIR}/hugo"
+    export PATH="${HUGO_WRAPPER_DIR}:${PATH}"
     echo "==> File polling enabled (${HUGO_POLL})"
 fi
 
@@ -76,9 +78,20 @@ if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules/.package-lock.j
     npm install
 fi
 
-# Ensure Hugo modules (Docsy theme) are cached
+# Pin Docsy to the go.mod version. Bare `hugo mod get` upgrades to latest,
+# and Docsy 0.17 dropped the tabpane shortcode this site still uses.
 echo "==> Fetching Hugo modules..."
-hugo mod get
+DOCSY_VERSION=$(
+    awk '
+        $1 == "github.com/google/docsy" { print $2; exit }
+        $1 == "require" && $2 == "github.com/google/docsy" { print $3; exit }
+    ' go.mod
+)
+if [ -z "${DOCSY_VERSION}" ]; then
+    echo "ERROR: github.com/google/docsy is missing from go.mod"
+    exit 1
+fi
+hugo mod get "github.com/google/docsy@${DOCSY_VERSION}"
 
 echo "==> Starting docs server..."
 exec "$@"

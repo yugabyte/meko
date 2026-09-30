@@ -24,10 +24,9 @@ compose() {
 case "${1:-start}" in
     start)
         echo "Building and starting meko docs dev server..."
-        CRED_MOUNTS=$(build_credential_mounts)
-        # shellcheck disable=SC2086
-        docker compose -f "${COMPOSE_FILE}" run --rm --service-ports \
-            ${CRED_MOUNTS} docs
+        # `up` starts docs + kapa-proxy. `run docs` would leave the proxy off
+        # and the Ask Meko UI would fail to fetch from localhost:8787.
+        compose up --build
         ;;
     stop)
         compose down

@@ -1,0 +1,6 @@
+# Local dev overrides. Hugo picks these up when HUGO_ENVIRONMENT=development
+# (default for `hugo server`). The Docker compose stack runs a Node proxy on
+# localhost:8787 so the browser can reach the Kapa handler without needing
+# Netlify Functions locally.
+[kapa]
+  chat_endpoint = "http://localhost:8787/api/kapa/chat"

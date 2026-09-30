@@ -1,0 +1,229 @@
+// Docsy still mounts search-input in the mobile sidebar toggle form when
+// sidebar_search_disable is true. Keep Ask Meko in the header only.
+.td-sidebar .meko-nav-search {
+  display: none;
+}
+
+.meko-nav-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 10px;
+  background: rgba($white, 0.06);
+  border: 1px solid rgba($meko-purple, 0.55);
+  border-radius: 999px;
+  color: rgba($white, 0.85);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease;
+
+  &:hover {
+    border-color: $meko-purple;
+    background: rgba($meko-purple, 0.12);
+    color: $white;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $meko-purple;
+    outline-offset: 2px;
+  }
+
+  i {
+    font-size: 0.75rem;
+    color: rgba($white, 0.7);
+  }
+}
+
+.meko-nav-search__label {
+  @media (max-width: 767px) {
+    display: none;
+  }
+}
+
+.meko-nav-search__hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  font-size: 0.7rem;
+  color: rgba($white, 0.55);
+  background: rgba($white, 0.06);
+  border: 1px solid rgba($white, 0.15);
+  border-radius: 4px;
+
+  @media (max-width: 767px) {
+    display: none;
+  }
+}
+
+// ---------- Overlay (deep pages) ----------
+
+.kapa-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+}
+
+.kapa-overlay[hidden] {
+  display: none;
+}
+
+.kapa-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+
+  // Light scrim so the page stays visible. Keep alphas as 0-1 numbers:
+  // Hugo's Sass compiles a percentage alpha to fully opaque.
+  background: rgba($black, 0.4);
+  backdrop-filter: blur(2px);
+}
+
+.kapa-overlay__panel {
+  position: relative;
+  width: 100%;
+
+  // The docs content column's cap, so answers wrap the same way as the page.
+  max-width: 1080px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(
+    135deg,
+    $background-color-primary 0%,
+    $background-color-secondary 100%
+  );
+  border: 1px solid rgba($meko-purple, 0.45);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba($black, 0.6);
+}
+
+.kapa-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba($white, 0.08);
+}
+
+.kapa-overlay__title {
+  margin: 0;
+  font-size: 1rem;
+  color: $white;
+}
+
+.kapa-overlay__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kapa-overlay__new {
+  border: none;
+  background: transparent;
+  color: rgba($white, 0.7);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+
+  &:hover {
+    background: rgba($white, 0.08);
+    color: $white;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.kapa-overlay__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: rgba($white, 0.7);
+  cursor: pointer;
+  border-radius: 50%;
+
+  &:hover {
+    background: rgba($white, 0.08);
+    color: $white;
+  }
+}
+
+.kapa-overlay__body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kapa-overlay__intro {
+  padding: 16px 20px 0;
+  text-align: center;
+
+  &.kapa-overlay__intro--done {
+    display: none;
+  }
+}
+
+.kapa-overlay__headline {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  color: $white;
+}
+
+.kapa-overlay__sub {
+  margin: 0 0 14px;
+  color: rgba($white, 0.6);
+  font-size: 0.9rem;
+}
+
+.kapa-overlay__prompts {
+  display: flex;
+  flex-flow: row wrap;
+  justify-content: center;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+}
+
+.kapa-overlay__chat {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+  overflow: hidden;
+}
+
+.kapa-overlay__attribution {
+  margin: 0;
+  padding: 8px 16px 12px;
+  text-align: center;
+  font-size: 0.7rem;
+  color: rgba($white, 0.5);
+
+  a {
+    color: rgba($white, 0.7);
+    text-decoration: underline;
+
+    &:hover {
+      color: $meko-blue;
+    }
+  }
+}
+
+body.kapa-overlay-open {
+  overflow: hidden;
+}

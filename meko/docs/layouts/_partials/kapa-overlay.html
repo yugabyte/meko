@@ -1,0 +1,29 @@
+<div class="kapa-overlay" data-kapa-overlay hidden>
+  <div class="kapa-overlay__backdrop" data-kapa-overlay-close></div>
+  <div class="kapa-overlay__panel" role="dialog" aria-modal="true" aria-label="Ask Meko Docs">
+    <header class="kapa-overlay__header">
+      <h2 class="kapa-overlay__title">Ask Meko Docs</h2>
+      <div class="kapa-overlay__actions">
+        <button type="button" class="kapa-overlay__new" data-kapa-overlay-new hidden>New chat</button>
+        <button type="button" class="kapa-overlay__close" data-kapa-overlay-close aria-label="Close">
+          <i class="fa fa-times" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+    <div class="kapa-overlay__body" data-kapa-overlay-body>
+      <div class="kapa-overlay__intro">
+        <p class="kapa-overlay__headline">Ask anything about Meko</p>
+        <p class="kapa-overlay__sub">Instant answers pulled from the docs.</p>
+        <ul class="kapa-overlay__prompts">
+          <li><button type="button" class="kapa-hero__prompt kapa-hero__prompt--primary" data-kapa-overlay-prompt>How do I connect my agent to Meko?</button></li>
+          <li><button type="button" class="kapa-hero__prompt" data-kapa-overlay-prompt>What is a Datapack?</button></li>
+          <li><button type="button" class="kapa-hero__prompt" data-kapa-overlay-prompt>How does Meko manage collective memory?</button></li>
+        </ul>
+      </div>
+      <div class="kapa-overlay__chat" data-kapa-overlay-chat></div>
+    </div>
+    <p class="kapa-overlay__attribution">
+      Powered by <a href="https://www.kapa.ai" target="_blank" rel="noopener noreferrer">kapa.ai</a>
+    </p>
+  </div>
+</div>

@@ -1,0 +1,63 @@
+<section class="kapa-hero" data-kapa-hero>
+  <div class="kapa-hero__inner">
+    <div class="kapa-hero__intro">
+      <h1 class="kapa-hero__headline">Ask anything about Meko</h1>
+      <p class="kapa-hero__subhead">Get instant answers from the docs, powered by AI.</p>
+
+      <form class="kapa-hero__form" data-kapa-hero-form>
+        <div class="kapa-hero__input-wrap">
+          <input
+            type="text"
+            class="kapa-hero__input"
+            data-kapa-hero-input
+            placeholder="How do I connect my agent to Meko?"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <button type="submit" class="kapa-hero__submit" aria-label="Ask Meko">
+            <i class="fa fa-arrow-right" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <label class="kapa-hero__toggle">
+          <input type="checkbox" data-kapa-hero-deepthink>
+          <span class="kapa-hero__toggle-pill"></span>
+          <span class="kapa-hero__toggle-label">Deep thinking</span>
+        </label>
+      </form>
+
+      <ul class="kapa-hero__prompts">
+        <li>
+          <button
+            type="button"
+            class="kapa-hero__prompt kapa-hero__prompt--primary"
+            data-kapa-hero-prompt
+          >How do I connect my agent to Meko?</button>
+        </li>
+        <li>
+          <button
+            type="button"
+            class="kapa-hero__prompt"
+            data-kapa-hero-prompt
+          >What is a Datapack?</button>
+        </li>
+        <li>
+          <button
+            type="button"
+            class="kapa-hero__prompt"
+            data-kapa-hero-prompt
+          >How does Meko manage collective memory?</button>
+        </li>
+      </ul>
+    </div>
+
+    <div class="kapa-hero__chat-actions">
+      <button type="button" class="kapa-hero__new" data-kapa-hero-new hidden>New chat</button>
+    </div>
+    <div class="kapa-hero__chat" data-kapa-hero-chat></div>
+
+    <p class="kapa-hero__attribution">
+      Powered by <a href="https://www.kapa.ai" target="_blank" rel="noopener noreferrer">kapa.ai</a>
+    </p>
+  </div>
+</section>

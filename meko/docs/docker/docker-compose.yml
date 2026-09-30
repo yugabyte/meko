@@ -25,6 +25,26 @@ services:
     stdin_open: true
     tty: true
 
+  # Server-side Kapa proxy for local development. Holds the Kapa API key
+  # (passed from the host env) and forwards streaming chat requests from
+  # the browser at http://localhost:8787/api/kapa/chat.
+  kapa-proxy:
+    image: node:22-bookworm-slim
+    container_name: meko-kapa-proxy
+    ports:
+      - "8787:8787"
+    volumes:
+      - ../netlify:/app/netlify:ro
+    working_dir: /app
+    environment:
+      - PORT=8787
+      - KAPA_API_KEY=${KAPA_API_KEY:-}
+      - KAPA_PROJECT_ID=${KAPA_PROJECT_ID:-}
+      - KAPA_INTEGRATION_ID=${KAPA_INTEGRATION_ID:-}
+      - KAPA_SOURCE_GROUP_IDS=${KAPA_SOURCE_GROUP_IDS:-}
+    command: node netlify/functions/_server.mjs
+    restart: unless-stopped
+
 volumes:
   docs_node_modules:
   go_mod_cache:

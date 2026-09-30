@@ -2,6 +2,7 @@ body {
   .td-content {
     :not(pre) > code {
       overflow: hidden;
+
       // Monospace glyphs read larger than sans at the same em size; scale down
       // so inline code matches surrounding body text optically.
       font-size: 0.875em !important;

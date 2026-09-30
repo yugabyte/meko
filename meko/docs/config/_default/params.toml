@@ -9,7 +9,7 @@ github_repo = "https://github.com/yugabyte/meko"
   navbar_logo = true
   sidebar_menu_compact = true
   sidebar_menu_foldable = true
-  sidebar_search_disable = false
+  sidebar_search_disable = true
   sidebar_root_enabled = true
   ul_show = 1
 
@@ -21,3 +21,10 @@ github_repo = "https://github.com/yugabyte/meko"
   name = "Discord"
   url = "https://discord.gg/GWcSST7GqZ"
   icon = "fab fa-discord"
+
+[kapa]
+  # Client-facing URL of our server-side Kapa proxy. The Kapa API key and
+  # project/integration IDs live as env vars on the backend (Netlify
+  # Functions in prod, local proxy server in Docker) — never in params.toml.
+  # See docs/netlify/functions/kapa-chat.mjs for the server implementation.
+  chat_endpoint = "/api/kapa/chat"
