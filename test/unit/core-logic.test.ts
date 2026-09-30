@@ -528,13 +528,14 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 }
 
 describe('stages', () => {
-  it('ends with one Merge & Close step', () => {
-    expect(KIND_STAGES.plan).toEqual(['design', 'code', 'pr', 'review', 'merge']);
+  it('ends with one PR & Review step and one Merge & Close step', () => {
+    expect(KIND_STAGES.plan).toEqual(['design', 'code', 'review', 'merge']);
+    expect(STAGE_LABELS.review).toBe('PR & Review');
     expect(STAGE_LABELS.merge).toBe('Merge & Close');
   });
 
   it('skips Design in Quick Code and has only Explore in Exploration', () => {
-    expect(KIND_STAGES.quick).toEqual(['code', 'pr', 'review', 'merge']);
+    expect(KIND_STAGES.quick).toEqual(['code', 'review', 'merge']);
     expect(KIND_STAGES.explore).toEqual(['explore']);
   });
 });

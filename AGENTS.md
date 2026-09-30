@@ -6,8 +6,9 @@ should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and
 AgentK Local is a self-hosted web workbench for Claude Code. A project is an effort on a feature
 or product, worked on in a git repo. Each task is a session with its own git worktree and a
 tmux-hosted Claude process. Its type decides the stages:
-Plan & Implement goes Design → Code → PR → Review → Merge & Close, Quick Code skips Design, and
-Exploration stays in one Explore stage. Meko datapacks hold project memory (Meko is optional). The design
+Plan & Implement goes Design → Code → PR & Review → Merge & Close, Quick Code skips Design, and
+Exploration stays in one Explore stage. The user can change a session's type and move it between
+stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (Meko is optional). The design
 is in [docs/design.md](docs/design.md).
 
 **Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
@@ -34,7 +35,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/core.ts` | Wires config, db, tmux, Meko and the services; timers; `state()` snapshot for the UI. |
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
 | `src/server/sessions.ts` | Session lifecycle in tmux: create, launch, hook-driven status, recovery and auto-continue, archive. |
-| `src/server/lifecycle.ts` | Stages and gates, GitHub polling, the review watchers (by reviewer mode) and CI-fix watcher with their prompt queue, Merge & Close (merge, then cleanup). |
+| `src/server/lifecycle.ts` | Stages and gates, moves by hand (type and stage changes), GitHub polling, the review watchers (by reviewer mode) and CI-fix watcher with their prompt queue, Merge & Close (merge, then cleanup). |
+| `src/shared/stages.ts` | The rules for moving a session by hand: which type and stage go together, what can't be moved, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. |
 | `src/server/projects.ts` | Projects, repo scan, datapacks (create with the repo remote in the description, attach, pin; an invite is accepted in Meko before its project is created), project home and search. |
 | `src/server/prompts.ts` | Instructions sent to Claude at each stage (overridable per repo in `.agent-k/stages/`). |
 | `src/server/claude.ts` | Launcher scripts, the hooks settings file, the hook forwarder script, and the status line relay (reports plan limits, then runs the user's own status line, minus Meko's datapack suffix). |
@@ -65,7 +67,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal: startup steps from `Session.startup`, elapsed time, and the opening stage; after 90 s on the last steps, **Show terminal** hides it for that start. |
 | `src/web/components/SidePanel.tsx`, `DesignPanel.tsx`, `ChangesPanel.tsx` | Resizable right-hand panels: the design (also full page at `/p/:id/s/:sid/design`; Artifacts render in a sandboxed frame built by `src/web/design-frame.ts`) and the per-file diff of a session's changes with review comments and a Files menu (`src/web/diff.ts` parses the patches and re-anchors comments). |
 | `src/web/components/NewProjectDialog.tsx`, `ShareDialog.tsx`, `Banners.tsx` | New project (the dedicated datapack first, or No datapack, with a new datapack's name last, under the project name; invites and shares listed first, the repo and name filled in from the datapack), the Share dialog (API mode), and the banners, share invites included. |
-| `src/web/components/NewSessionDialog.tsx` | New session: name, type and first prompt, then **Advanced** (collapsed, with a one-line summary): the repo (the project's or another scanned one), the base branch, and the branch (typed as is, or named from the session). It opens by itself for a project just created. |
+| `src/web/components/NewSessionDialog.tsx` | New session: name, type and first prompt, then **Advanced** (collapsed, with a one-line summary): the repo (the project's or another scanned one), the base branch, and the branch (typed as is, or named from the session). It opens by itself for a project just created. The type cards (`KindPicker`) are in `common.tsx`. |
+| `src/web/components/MoveSessionDialog.tsx` | Change type or stage: the type cards, the stages the chosen type can move to, the task when the session has none, whether to send the new stage's prompt, and a line on what the move does. Opened from the stage bar (a stage, **Change type**, Explore's **Open PR…**), the ⋯ sheet and the command palette; hosted in `App.tsx`. |
 | `src/web/components/CloseProjectDialog.tsx` | Offered when the project on screen loses its last open session: Delete project, New session or Keep project (`lastSessionClosed()` in `src/web/util.ts` spots it). |
 | `src/web/components/MekoKeyDialog.tsx`, `AddDatapackDialog.tsx` | Turning Meko on with an API key, and giving a project without one its dedicated datapack, or switching it to another (the old one kept as shared or detached; both dialogs reached from the project home's Share and Datapacks box). |
 | `src/web/components/UsagePanel.tsx`, `UsageView.tsx`, `MekoUsageSection.tsx` | Token usage: the project home's panel (headline numbers with the estimated cost, 14-day chart with table view, per-session and per-model tables) and the all-projects Usage page at `/usage` (adds merged PRs, pushed commits and a per-project table; both its tables sort on any column through `src/web/sort.ts`). Both show the Meko section: lookups, saves and the estimated savings, under the Meko logo for the theme (`public/meko-black.png`, `meko-white.png`). |

@@ -71,8 +71,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): an Exploration session never leaves
-      Explore, and a Quick Code session never enters Design. Code that switches on `stage` handles
-      `explore`.
+      Explore, and a Quick Code session never enters Design, unless the user changes its type
+      (`Lifecycle.move`, rules in `src/shared/stages.ts`). Code that switches on `stage` handles
+      `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
+- [ ] A move by hand leaves the session consistent: a type and stage that go together, the Review
+      queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
+      out of Merge & Close or while AgentK is mid-turn.
 - [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is
       idle, never into a permission or question prompt; otherwise they're queued (the review prompt
       in `state.db`, so it survives a restart). Prompts to one session go one at a time.

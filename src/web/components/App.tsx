@@ -13,6 +13,7 @@ import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
 import { NewProjectDialog } from './NewProjectDialog';
+import { MoveSessionDialog, type MovePreset } from './MoveSessionDialog';
 import { NewSessionDialog } from './NewSessionDialog';
 import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
@@ -30,7 +31,9 @@ type Modal =
   /** The project on screen lost its last open session: offer to delete it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
-  | { kind: 'palette' };
+  | { kind: 'palette' }
+  /** Change type or stage of a session, starting from `preset` (a stage clicked in the stage bar). */
+  | { kind: 'move'; sessionId: string; preset?: MovePreset };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
@@ -315,6 +318,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   // A New session dialog whose project was deleted meanwhile closes. One opened for a project just
   // created waits for its state push (until pendingProjectId gives up on it).
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
+  // Gone once the session is archived (or its project deleted) under the dialog.
+  const moveSession =
+    modal.kind === 'move' ? projects.flatMap((p) => p.sessions).find((s) => s.id === modal.sessionId && s.desired === 'running') : undefined;
+  useEffect(() => {
+    if (state && modalKind === 'move' && !moveSession) setModal({ kind: 'none' });
+  }, [state, modalKind, moveSession]);
   const newSessionWaiting = modal.kind === 'new-session' && modal.projectId === pendingProjectId;
   useEffect(() => {
     if (state && modalKind === 'new-session' && !newSessionProject && !newSessionWaiting) setModal({ kind: 'none' });
@@ -403,6 +412,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             session={currentSession}
             mekoWebUrl={state.meko.webUrl}
             onNewSession={() => setModal({ kind: 'new-session', projectId: currentProject.id })}
+            onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}
             onMenu={openDrawer}
             onError={showToast}
           />
@@ -460,6 +470,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           }}
         />
       )}
+      {moveSession && (
+        <MoveSessionDialog
+          key={moveSession.id}
+          session={moveSession}
+          preset={modal.kind === 'move' ? modal.preset : undefined}
+          onClose={() => setModal({ kind: 'none' })}
+        />
+      )}
       {modal.kind === 'settings' && (
         <SettingsDialog auth={auth} update={state.update} meko={state.meko} onClose={() => setModal({ kind: 'none' })} />
       )}
@@ -467,9 +485,11 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         <CommandPalette
           projects={projects}
           currentProjectId={currentProject?.id ?? null}
+          currentSession={currentSession}
           onClose={() => setModal({ kind: 'none' })}
           onNewProject={() => setModal({ kind: 'new-project' })}
           onNewSession={(projectId) => setModal({ kind: 'new-session', projectId })}
+          onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
           onSettings={() => setModal({ kind: 'settings' })}
         />
       )}

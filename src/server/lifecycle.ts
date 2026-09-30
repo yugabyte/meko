@@ -11,8 +11,10 @@ import { projectAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import type { DatapackRef, ReviewerMode } from '../shared/types.js';
+import { KIND_LABELS, SESSION_KINDS, STAGE_LABELS, type DatapackRef, type MoveSessionRequest, type ReviewerMode, type SessionKind, type Stage } from '../shared/types.js';
+import { MOVE_TARGETS, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { dedicatedDatapack, parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
+import { WORKFLOW } from './sessions.js';
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
@@ -55,7 +57,7 @@ async function lacksLocalCommits(repo: string, branch: string, st: github.PrStat
 }
 
 /**
- * The task lifecycle: Design → Code → PR → Review → Merge → Cleanup.
+ * The task lifecycle: Design → Code → PR & Review → Merge & Close (merge, then cleanup).
  * Gates (approve design, open PR, merge) come from the user; everything else
  * is driven by hook events and by polling GitHub from the server, so waiting
  * on reviews and CI costs no Claude tokens.
@@ -249,31 +251,177 @@ export class Lifecycle {
   // ---- PR ----
 
   async openPr(row: SessionRow): Promise<void> {
-    this.checkOpenPr(row);
+    const check = (r: SessionRow) => {
+      if (r.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
+      this.checkPromptable(r);
+    };
+    check(row);
+    await this.sendPr(row, check);
+  }
+
+  /**
+   * Types the PR prompt (with a moved session's `moved` line first): the session goes to the PR
+   * stage, and back to where it was, as it was, if the prompt can't be typed. `check` runs again
+   * after waiting on GitHub and Meko, which gave Claude and the user time to move on.
+   */
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, move?: { kind: SessionKind; lead: string }): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     const footer = await this.prFooter(row);
-    // Waiting on GitHub or Meko gave Claude and the user time to move on: check again.
     const cur = this.sessions.row(row.id);
-    this.checkOpenPr(cur);
+    check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
+    if (move) this.applyKind(cur, move.kind);
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
     try {
-      await this.sessions.submit(row.id, [this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
+      await this.sessions.submit(row.id, [move?.lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, 'code', 'auto');
+      if (this.sessions.row(row.id).stage === 'pr') {
+        if (move) this.applyKind(this.sessions.row(row.id), cur.kind);
+        this.sessions.setStage(row.id, cur.stage, 'auto');
+      }
       throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
     }
   }
 
-  private checkOpenPr(row: SessionRow): void {
-    if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
+  /** Refuses while Claude can't take a prompt: mid-turn, waiting on the user (a ready design aside), or exited. */
+  private checkPromptable(row: SessionRow): void {
+    this.checkBetweenTurns(row);
+    if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
+    if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+  }
+
+  private checkBetweenTurns(row: SessionRow): void {
     if (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy) {
       throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     }
-    if (row.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
-    if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+  }
+
+  // ---- moves ----
+
+  /**
+   * Changes a session's type, its stage, or both, at the user's request. The rules for which
+   * moves exist are in src/shared/stages.ts, shared with the move dialog.
+   */
+  async move(row: SessionRow, req: MoveSessionRequest): Promise<void> {
+    const { kind, stage, prompt, task } = req ?? ({} as MoveSessionRequest);
+    if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
+    if (!MOVE_TARGETS.includes(stage)) throw new HttpError(400, `Pick a stage to move to: ${MOVE_TARGETS.join(', ')}.`);
+    if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
+    if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
+    await this.serial(row.id, () => this.doMove(row.id, kind, stage, prompt, (task ?? '').trim()));
+  }
+
+  private async doMove(id: string, kind: SessionKind, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
+    const cur = this.sessions.row(id);
+    if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    const blocked = moveBlockedIn(cur.stage);
+    if (blocked) throw new HttpError(409, blocked);
+    if (this.merging.has(id) || this.closing.has(id)) throw new HttpError(409, 'A merge is in progress.');
+    const bad = moveError(cur, { kind, stage });
+    if (bad) throw new HttpError(400, bad);
+    if (cur.stage === 'design' && cur.plan_mode) {
+      throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
+    }
+    this.checkBetweenTurns(cur);
+    if (stage === 'review' && movesStep(cur.stage, stage)) return this.moveToReview(cur, kind);
+
+    const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
+    if (send) {
+      this.checkPromptable(cur);
+      if (!cur.initial_prompt && !task) throw new HttpError(400, 'Give AgentK the task for this session.');
+    }
+    if (task && !cur.initial_prompt) this.sessions.update(id, { initial_prompt: task });
+    // Designs are written as markdown or an Artifact now; plan mode is only for older sessions.
+    if (stage === 'design') this.sessions.update(id, { plan_mode: 0 });
+    this.applyKind(cur, kind);
+    if (movesStep(cur.stage, stage)) {
+      if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
+      if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
+      this.sessions.setStage(id, stage, 'you');
+    }
+    if (!send) return;
+    const row = this.sessions.row(id);
+    const body = this.sessions.prompt(row, this.sessions.firstPrompt(row));
+    try {
+      await this.sessions.submit(id, `${this.movedLine(row)}\n\n${body}`);
+    } catch (e) {
+      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't type the ${STAGE_LABELS[stage]} prompt into Claude's terminal: ${errMsg(e)}. Ask AgentK in the terminal.`);
+    }
+  }
+
+  /**
+   * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
+   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does.
+   */
+  private async moveToReview(row: SessionRow, kind: SessionKind): Promise<void> {
+    const cwd = this.ghCwd(row);
+    const pr = await github.findPr(cwd, row.branch, row.created_at, true).catch(() => null);
+    let adopt = false;
+    if (pr?.state === 'OPEN') {
+      const st = await github.prStatus(cwd, pr.number).catch(() => null);
+      const repo = sessionRepo(this.db, row);
+      adopt = !!st && !!repo && !(await lacksLocalCommits(repo, row.branch, st))
+        && (!this.sessions.ownsWorktree(row) || (await uncommittedCount(row.worktree_path)) === 0);
+    }
+    // Recheck after the GitHub calls: Claude may have started a turn.
+    const cur = this.sessions.row(row.id);
+    const check = (r: SessionRow) => {
+      if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+      if (r.stage !== row.stage) throw new HttpError(409, `The session moved to ${STAGE_LABELS[r.stage]} meanwhile. Try again.`);
+    };
+    check(cur);
+    this.checkBetweenTurns(cur);
+    if (!adopt || !pr) {
+      await this.sendPr(cur, (r) => {
+        check(r);
+        this.checkPromptable(r);
+      }, kind === cur.kind && cur.stage === 'code' ? undefined : { kind, lead: this.movedLine({ ...cur, kind }, 'review') });
+      return;
+    }
+    this.applyKind(cur, kind);
+    if (cur.stage === 'design') this.leaveDesign(row.id, false);
+    await this.adoptPr(row.id, pr, 'you');
+  }
+
+  /** Sets the session's type, with an event when it changes. */
+  private applyKind(row: SessionRow, kind: SessionKind): void {
+    if (row.kind === kind) return;
+    this.sessions.update(row.id, { kind });
+    this.sessions.event(row.id, 'kind', `Changed type to ${KIND_LABELS[kind]}`);
+  }
+
+  /** The `moved` line: what the session is now, since Claude's system prompt still says what it was. */
+  private movedLine(row: SessionRow, stage: Stage = row.stage): string {
+    return this.sessions.prompt(row, 'moved', { kind: KIND_LABELS[row.kind], stage: STAGE_LABELS[stage], workflow: WORKFLOW[row.kind] });
+  }
+
+  /**
+   * Leaving Design by hand: a design waiting for approval no longer is, and the design (if any)
+   * goes to Meko as an approval would send it. `skipped`: straight to Code, past the approval.
+   */
+  private leaveDesign(id: string, skipped: boolean): void {
+    const row = this.sessions.row(id);
+    if (row.status === 'needs_input' && row.status_detail === DESIGN_READY) this.sessions.setStatus(id, 'idle');
+    if (skipped) this.sessions.event(id, 'design', 'Design approval skipped');
+    void this.sendDesign(id);
+  }
+
+  /**
+   * Leaving PR & Review by hand, between turns: the PR stays open and queued review and CI prompts
+   * wait for the session to come back (deliverNext only sends in Review). Prompts marked sent
+   * belong to a turn that's over, as onTurnEnd would have decided had the session stayed.
+   */
+  private leaveReview(id: string): void {
+    const q = this.queue(id);
+    for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
+    this.setQueue(id, q);
+    if (!q.review && !q['review-people'] && this.sessions.row(id).review_state === 'addressing') {
+      this.sessions.update(id, { review_state: 'addressed' });
+    }
+    this.ciFailSince.delete(id);
+    this.lastPoll.delete(id);
   }
 
   /**
@@ -430,10 +578,25 @@ export class Lifecycle {
     // A session on a branch that existed before it takes that branch's open PR, however old.
     const pr = await github.findPr(before.worktree_path, before.branch, before.created_at, !!before.branch_reused);
     if (!pr || sessionRow(this.db, id)?.stage !== 'pr') return;
-    this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting' });
-    const older = Date.parse(pr.createdAt) < before.created_at - github.CLOCK_SKEW_MS;
-    this.sessions.event(id, 'pr', older ? `Picked up PR #${pr.number}` : `Opened PR #${pr.number}`, { url: pr.url });
-    this.sessions.setStage(id, 'review', 'auto');
+    // The PR it had before a move back to Code, merged or closed since: wait for the new one.
+    if (pr.number === before.pr_number && pr.state !== 'OPEN') return;
+    await this.adoptPr(id, pr, 'auto');
+  }
+
+  /** The session works on this PR from now on: it goes to Review and the PR is polled right away. */
+  private async adoptPr(id: string, pr: github.PrRef, by: 'you' | 'auto'): Promise<void> {
+    const before = this.sessions.row(id);
+    if (before.pr_number === pr.number) {
+      // Back on a PR it had before a move: its review state carries on, and it's not another PR for the stats.
+      if (before.review_state === 'none') this.sessions.update(id, { review_state: 'waiting' });
+      this.sessions.event(id, 'pr-again', `Back on PR #${pr.number}`, { url: pr.url });
+    } else {
+      this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0 });
+      const older = by === 'you' || Date.parse(pr.createdAt) < before.created_at - github.CLOCK_SKEW_MS;
+      this.sessions.event(id, 'pr', older ? `Picked up PR #${pr.number}` : `Opened PR #${pr.number}`, { url: pr.url });
+    }
+    // Opening the PR and its review are one step in the UI: "Opened PR #7" already says the session moved on.
+    this.sessions.setStage(id, 'review', by, { event: before.stage !== 'pr' });
     await this.doPollReview(id);
   }
 
@@ -443,7 +606,8 @@ export class Lifecycle {
 
   private async doPollReview(id: string): Promise<void> {
     const before = sessionRow(this.db, id);
-    if (!before?.pr_number || before.stage === 'done') return;
+    // Only Review and Merge & Close follow the PR: a session moved back to Code keeps its PR unwatched.
+    if (!before?.pr_number || (before.stage !== 'review' && before.stage !== 'merge')) return;
     if (before.desired !== 'running' && before.stage !== 'merge') return;
     const p = projectRow(this.db, before.project_id);
     if (!p) return;

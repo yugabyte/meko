@@ -92,8 +92,10 @@ your phone can connect.
   question), and which are idle, with browser notifications.
 - **Three session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
   merge), *Plan & Implement* (the default) for the full lifecycle below, and *Quick Code* for small
-  tasks that go straight to code.
-- **Task lifecycle:** Design → Code → PR → Review (AgentK) → Merge & Close. Complex designs are
+  tasks that go straight to code. A session can change its type and move between stages, forward or
+  back, at any point between turns: an exploration that should ship becomes Quick Code and opens a PR
+  with **Open PR…**, and a session in review can go back to Code or Design.
+- **Task lifecycle:** Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and

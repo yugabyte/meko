@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  MekoDatapack, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
+  MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
@@ -325,6 +325,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
     return core.sessions.action(req.params.id, action);
   });
+  app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
+    core.sessions.move(req.params.id, req.body));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {

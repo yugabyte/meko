@@ -32,7 +32,7 @@ from a browser.
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts, with an estimate of what Meko searches saved. |
 | Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
-| Task lifecycle | Design → Code → PR → Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration sessions have none of it. More ADLC stages plug in later. |
+| Task lifecycle | Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration sessions have none of it. You can change a session's type and move its stage by hand. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
 | Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
@@ -185,12 +185,12 @@ one is for:
 | Type | For | Stages |
 |---|---|---|
 | **Exploration** (`explore`) | Investigating, answering questions, POCs and experiments | Explore only: no gates; you end it with Archive or Discard |
-| **Plan & Implement** (`plan`, the default) | Normal tasks | Design → Code → PR → Review → Merge & Close |
-| **Quick Code** (`quick`) | Small tasks | Code → PR → Review → Merge & Close |
+| **Plan & Implement** (`plan`, the default) | Normal tasks | Design → Code → PR & Review → Merge & Close |
+| **Quick Code** (`quick`) | Small tasks | Code → PR & Review → Merge & Close |
 
 The type is stored as `sessions.kind` and decides the first stage, the stages the stage bar shows,
 the first prompt (`explore`, `design` or `code`) and the workflow line of the system prompt Claude
-gets. `CreateSessionRequest.skipDesign: true` still works and means Quick Code. The server fetches the base from `origin` and fast-forwards your local base
+gets. It can be changed later (see [Moving a session](#moving-a-session)). `CreateSessionRequest.skipDesign: true` still works and means Quick Code. The server fetches the base from `origin` and fast-forwards your local base
 branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside
 it (or in an idle worktree of the repo: see [Worktree reuse](#worktree-reuse)), and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
 local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
@@ -469,7 +469,7 @@ CREATE TABLE sessions (
   branch_reused INTEGER,          -- 1: the branch existed when the session started
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
   status TEXT,                    -- starting | working | needs_input | idle | exited | recovered | archived
-  kind TEXT,                      -- explore | plan | quick (the session type)
+  kind TEXT,                      -- explore | plan | quick (the session type; the user can change it)
   stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
@@ -583,6 +583,12 @@ cleaned up. This first pipeline covers six stages of the development lifecycle. 
 defined as data, so later stages such as test, deploy and monitor can be added without reworking
 sessions.
 
+The PR stage (opening the PR) and the Review stage are one step in the UI, **PR & Review**:
+they stay separate stages in `sessions.stage`, `session_stages` and the usage stats, and the stage
+bar maps `pr` to the PR & Review step (`stepOf` in `src/shared/stages.ts`), with an *Opening PR…*
+pill in its gate until the PR is found. The automatic PR → Review move logs no second stage event,
+since "Opened PR #7" says it.
+
 There are three **gates** that only you can pass: approving the design, opening the PR, and
 merging. Everything between the gates runs on its own. A Quick Code session starts at Code, so it
 has only the last two gates. An Exploration session never enters this pipeline: it stays in the
@@ -601,7 +607,7 @@ stateDiagram-v2
   [*] --> Design
   Design --> Code : you approve the design
   Code --> PR : you click Open PR
-  PR --> Review : PR is open
+  PR --> Review : PR is open (both are the PR & Review step)
   Review --> Review : findings fixed, new round requested
   Review --> MergeClose : you click Merge & Close
   Review --> MergeClose : PR merged on GitHub
@@ -612,9 +618,9 @@ stateDiagram-v2
 |---|---|---|---|
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"). Quick Code sessions skip this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
-| 3 · PR | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 4 · Review | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt, reviews before CI. A queued CI prompt is dropped if the head moves or CI stops failing. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
-| 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
+| 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
+| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt, reviews before CI. A queued CI prompt is dropped if the head moves or CI stops failing. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
+| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
   **Request another round**, which posts `/agentk review` (**Request AgentK review** before AgentK
@@ -636,12 +642,55 @@ stateDiagram-v2
   changes or comments with a body.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `review`, `review-people`, `ci`, `continue`, `comments`) with `.agent-k/stages/<name>.md`. This lets a team
+  `review`, `review-people`, `ci`, `continue`, `comments`, `moved`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   and CI failures through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
   enforce a branch-name prefix with rulesets.
+
+### Moving a session
+
+Between turns you can change a session's type, move it to another stage, or both, from the
+**Change type or stage** dialog. On a desktop it opens from **Change type** next to the stages, from
+any other stage in the stage bar (each is a button: *Move back to Code*), and from an Exploration's
+**Open PR…** gate, which starts at Quick Code → PR & Review. On a phone it's in the ⋯ sheet, and the
+command palette has it too. `POST /api/sessions/:id/move` (`MoveSessionRequest`: kind, stage, and
+optionally prompt and task) runs `Lifecycle.move`, in the same per-session queue as the PR polls
+and merges. The rules are in `src/shared/stages.ts`, shared with the dialog:
+
+- **Targets.** Explore, Design, Code or PR & Review, as long as the type has that stage (Explore
+  only with Exploration, Design only with Plan & Implement). Merge & Close is reached only through
+  its gate, and a session in Merge & Close or Done can't be moved. A type change where the new type
+  has the current stage (Plan ↔ Quick Code in Code) changes only the type; a step the session never
+  went through, like Design for a Quick Code session made Plan & Implement, shows as skipped.
+- **Refused (409)** while AgentK is mid-turn or a gate action is in flight, during a merge, and for a
+  session that still designs in plan mode. A move that sends a prompt is also refused while Claude
+  is waiting on you (a design waiting for approval aside) or has exited.
+- **Prompts.** A move to Explore, Design or Code can send that stage's prompt (`explore`, `design`,
+  `code`), after the `moved` line saying what the session is now, since the running Claude's system
+  prompt still has the old workflow line (the next launch gets the new one). It's sent by default
+  for Design, and for Code from Explore or Design; not when going back to Code from PR & Review, or to
+  Explore. A session with no task yet (an Exploration started without a first prompt) is asked for
+  one, which becomes its task. If the prompt can't be typed, the move stays and the error says so.
+- **Side effects.** Entering Design clears `plan_mode`, so the edit guard is on and the design is
+  written as markdown or an Artifact; an earlier design is kept, and can be approved again or
+  revised. Leaving Design by hand clears *Design ready* and saves the design to Meko as an approval
+  would; straight to Code, it skips the approval ("Design approval skipped"). Leaving PR & Review
+  stops polling (only Review and Merge & Close follow the PR, and the footer stops showing its review
+  and CI state); the PR stays open and linked. Queued review and CI prompts wait in `state.db`, and
+  reviews that arrive meanwhile are picked up, when the session comes back; a CI prompt for a head
+  that moved on is dropped then, as usual.
+- **PR & Review** picks up the branch's open PR (any open PR from this repo) when there's nothing to
+  push: the branch tip is in the PR and the worktree is clean. The session goes straight to Review,
+  logged as "Picked up PR #7", or "Back on PR #7" for the PR it had before (not counted as another
+  PR, and its review state, an AgentK approval say, carries on). Otherwise it goes to the PR stage with the PR prompt, as **Open PR** does, and goes back to
+  where it was, type included, if the prompt can't be typed. The PR stage never takes the PR the
+  session had before if it's been merged or closed since: it waits for the new one. Moving back to
+  Code also gets a session out of a PR stage whose turn ended without a PR.
+
+Type changes are logged as `kind` events ("Changed type to Quick Code"), and moves as stage
+entries with `moved_by = 'you'`. The usage stats count a session under its current type.
 
 ## Datapacks
 

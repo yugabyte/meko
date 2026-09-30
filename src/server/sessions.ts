@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, MoveSessionRequest, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -25,11 +25,11 @@ import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
-/** What the appended system prompt says about the session's workflow, per kind. */
-const WORKFLOW: Record<SessionKind, string> = {
+/** What the appended system prompt (and a moved session's prompt) says about the session's workflow, per kind. */
+export const WORKFLOW: Record<SessionKind, string> = {
   explore: 'This is an Exploration session: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK Local runs no design, PR, review or merge stages for it; the user ends the session from the AgentK Local UI.',
-  plan: 'Stages: Design → Code → PR → Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.',
-  quick: 'Stages: Code → PR → Review → Merge & Close; the user approves opening the PR and merging from the AgentK Local UI.',
+  plan: 'Stages: Design → Code → PR & Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.',
+  quick: 'Stages: Code → PR & Review → Merge & Close; the user approves opening the PR and merging from the AgentK Local UI.',
 };
 
 /** Longest setInterval delay Node honours, in whole seconds (2^31-1 ms). */
@@ -206,14 +206,14 @@ export class SessionManager {
       id, r.project_id, kind, text, payload === undefined ? null : JSON.stringify(payload), Date.now());
   }
 
-  setStage(id: string, stage: Stage, by: 'you' | 'auto'): void {
+  setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
     const now = Date.now();
     tx(this.db, () => {
       run(this.db, 'UPDATE session_stages SET left_at = ? WHERE session_id = ? AND left_at IS NULL', now, id);
       run(this.db, 'INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, ?)', id, stage, now, by);
       run(this.db, 'UPDATE sessions SET stage = ? WHERE id = ?', stage, id);
     });
-    this.event(id, 'stage', stage === 'done' ? 'Done' : `Moved to ${STAGE_LABELS[stage]}`);
+    if (opts.event !== false) this.event(id, 'stage', stage === 'done' ? 'Done' : `Moved to ${STAGE_LABELS[stage]}`);
     this.core.changed();
   }
 
@@ -930,6 +930,12 @@ export class SessionManager {
       case 'discard': await this.archive(row, { keepBranch: false, force: true }); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
+    return this.get(id);
+  }
+
+  /** Changes the session's type, stage or both, at the user's request (see Lifecycle.move). */
+  async move(id: string, req: MoveSessionRequest): Promise<Session> {
+    await this.core.lifecycle.move(this.row(id), req);
     return this.get(id);
   }
 

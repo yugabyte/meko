@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   KIND_STAGES,
   STAGE_LABELS,
+  type MoveTarget,
   type ProjectWithSessions,
   type Session,
   type SessionAction,
+  type Stage,
 } from '../../shared/types';
+import { moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
@@ -14,6 +17,7 @@ import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, repoFolder, total
 import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
+import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
@@ -41,6 +45,7 @@ export function ProjectView({
   session,
   mekoWebUrl,
   onNewSession,
+  onMove,
   onMenu,
   onError,
 }: {
@@ -49,6 +54,8 @@ export function ProjectView({
   session: Session | null;
   mekoWebUrl: string | null;
   onNewSession: () => void;
+  /** Opens the Change type or stage dialog for the session on screen. */
+  onMove: (preset?: MovePreset) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onError: (msg: string) => void;
@@ -115,8 +122,11 @@ export function ProjectView({
   );
   const stageText = session && (
     <span>
-      {STAGE_LABELS[session.stage].toLowerCase()}
-      {session.prNumber ? ` · ${REVIEW_TEXT[session.reviewState]} · ${CI_TEXT[session.ciState]}` : ''}
+      {session.stage === 'pr' ? 'opening PR' : STAGE_LABELS[session.stage].toLowerCase()}
+      {/* Only Review and Merge & Close follow the PR; after a move back to Code its state would be stale. */}
+      {session.prNumber && (session.stage === 'review' || session.stage === 'merge' || session.stage === 'done')
+        ? ` · ${REVIEW_TEXT[session.reviewState]} · ${CI_TEXT[session.ciState]}`
+        : ''}
     </span>
   );
 
@@ -187,6 +197,7 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
+          onMove={onMove}
           acting={acting}
           actions={
             <>
@@ -198,6 +209,11 @@ export function ProjectView({
               <button className="btn small" onClick={goHome}>
                 Project home
               </button>
+              {session && !moveBlockedIn(session.stage) && (
+                <button className="btn small" onClick={() => onMove()} title="Change the session's type, or move it to another stage">
+                  Change type
+                </button>
+              )}
               {canDesign && (
                 <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
                   Design doc
@@ -262,7 +278,20 @@ export function ProjectView({
       {session && sheet && (
         <SessionSheet
           session={session}
-          stage={<StageBar session={session} project={project} onAct={act} acting={acting} actions={null} reasons />}
+          stage={
+            <StageBar
+              session={session}
+              project={project}
+              onAct={act}
+              onMove={(preset) => {
+                setSheet(false);
+                onMove(preset);
+              }}
+              acting={acting}
+              actions={null}
+              reasons
+            />
+          }
           canDesign={canDesign}
           acting={acting}
           info={
@@ -275,6 +304,7 @@ export function ProjectView({
           }
           onDesign={() => setPanel('design')}
           onHome={goHome}
+          onMove={() => onMove()}
           onAct={act}
           onClose={() => setSheet(false)}
         />
@@ -287,6 +317,7 @@ function StageBar({
   session,
   project,
   onAct,
+  onMove,
   acting = false,
   actions,
   reasons = false,
@@ -294,6 +325,7 @@ function StageBar({
   session: Session | null;
   project: ProjectWithSessions;
   onAct: (a: SessionAction) => Promise<void>;
+  onMove: (preset?: MovePreset) => void;
   /** A session action is in flight. */
   acting?: boolean;
   actions: ReactNode;
@@ -310,8 +342,10 @@ function StageBar({
       </div>
     );
   }
-  const stages = KIND_STAGES[session.kind];
-  const idx = session.stage === 'done' ? stages.length : stages.indexOf(session.stage);
+  const stages: Stage[] = KIND_STAGES[session.kind];
+  const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
+  // Other stages the session can be moved to open the move dialog.
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(session.kind);
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -319,6 +353,19 @@ function StageBar({
 
   let gate: ReactNode = null;
   switch (session.stage) {
+    case 'explore':
+      reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
+      gate = (
+        <button
+          className="gate"
+          disabled={blocked || !!reason}
+          title={reason ?? 'Turn this exploration into a Quick Code session and open a pull request'}
+          onClick={() => onMove({ kind: 'quick', stage: 'review' })}
+        >
+          Open PR…
+        </button>
+      );
+      break;
     case 'design': {
       reason = designApprovalBlocker(session);
       gate = (
@@ -395,15 +442,37 @@ function StageBar({
     <div className="stages-wrap">
       <div className="stages-row">
         <div className="stages" aria-label="Stages">
-          {stages.map((st, i) => (
-            <span key={st} className="stg-item">
-              {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
-              <span className={cx('stg', i < idx && 'done', i === idx && 'cur')} aria-current={i === idx ? 'step' : undefined}>
-                <span className="n">{i < idx ? <Check size={10} /> : i + 1}</span>
+          {stages.map((st, i) => {
+            const skipped = session.skippedStages.includes(st);
+            const cls = cx('stg', i < idx && !skipped && 'done', skipped && 'skipped', i === idx && 'cur');
+            const inner = (
+              <>
+                <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + 1}</span>
                 <span className="stg-label">{STAGE_LABELS[st]}</span>
+              </>
+            );
+            return (
+              <span key={st} className="stg-item">
+                {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
+                {i !== idx && targets.includes(st) ? (
+                  <button
+                    type="button"
+                    className={cx(cls, 'stg-btn')}
+                    disabled={blocked}
+                    title={`${skipped ? 'Skipped. ' : ''}${i < idx ? 'Move back' : 'Move'} to ${STAGE_LABELS[st]}`}
+                    aria-label={`${i < idx ? 'Move back' : 'Move'} to ${STAGE_LABELS[st]}`}
+                    onClick={() => onMove({ stage: st as MoveTarget })}
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <span className={cls} aria-current={i === idx ? 'step' : undefined} title={skipped ? 'Skipped' : undefined}>
+                    {inner}
+                  </span>
+                )}
               </span>
-            </span>
-          ))}
+            );
+          })}
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>{STAGE_LABELS[session.stage]}</b>

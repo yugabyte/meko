@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { STAGE_LABELS, type ProjectWithSessions } from '../../shared/types';
+import { STAGE_LABELS, type ProjectWithSessions, type Session } from '../../shared/types';
+import { moveBlockedIn } from '../../shared/stages';
 import { navigate } from '../router';
 import { STATUS_TEXT, cx, liveSessions } from '../util';
 import { StatusDot, trapTab } from './common';
@@ -16,16 +17,22 @@ interface Item {
 export function CommandPalette({
   projects,
   currentProjectId,
+  currentSession,
   onClose,
   onNewProject,
   onNewSession,
+  onMoveSession,
   onSettings,
 }: {
   projects: ProjectWithSessions[];
   currentProjectId: string | null;
+  /** The session on screen, if any. */
+  currentSession: Session | null;
   onClose: () => void;
   onNewProject: () => void;
   onNewSession: (projectId: string) => void;
+  /** Opens the Change type or stage dialog for the session on screen. */
+  onMoveSession: () => void;
   onSettings: () => void;
 }) {
   const [q, setQ] = useState('');
@@ -43,6 +50,15 @@ export function CommandPalette({
         hint: 'Action',
         keywords: 'new session task start',
         run: () => onNewSession(current.id),
+      });
+    }
+    if (currentSession && !moveBlockedIn(currentSession.stage)) {
+      out.push({
+        id: 'move-session',
+        label: `Change type or stage of ${currentSession.name}`,
+        hint: 'Action',
+        keywords: 'change type stage move exploration explore plan quick code design pr review',
+        run: onMoveSession,
       });
     }
     for (const p of projects) {
@@ -79,7 +95,7 @@ export function CommandPalette({
     out.push({ id: 'usage', label: 'Usage', hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: 'Settings', hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
-  }, [projects, currentProjectId, onNewProject, onNewSession, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onSettings]);
 
   const shown = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);

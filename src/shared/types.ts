@@ -56,19 +56,23 @@ export const KIND_HINTS: Record<SessionKind, string> = {
   quick: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
 };
 
-/** The stages shown in the stage bar for each kind, in order. `done` is terminal and not shown. */
-export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done'>[]> = {
+/**
+ * The steps shown in the stage bar for each kind, in order. `pr` (opening the PR) shows as part of
+ * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown.
+ */
+export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> = {
   explore: ['explore'],
-  plan: ['design', 'code', 'pr', 'review', 'merge'],
-  quick: ['code', 'pr', 'review', 'merge'],
+  plan: ['design', 'code', 'review', 'merge'],
+  quick: ['code', 'review', 'merge'],
 };
 
+/** `pr` and `review` are one step in the UI, so they share a label. */
 export const STAGE_LABELS: Record<Stage, string> = {
   explore: 'Explore',
   design: 'Design',
   code: 'Code',
-  pr: 'PR',
-  review: 'Review',
+  pr: 'PR & Review',
+  review: 'PR & Review',
   merge: 'Merge & Close',
   done: 'Done',
 };
@@ -361,6 +365,8 @@ export interface Session {
   statusDetail: string | null;
   kind: SessionKind;
   stage: Stage;
+  /** The session has a task (its first prompt, or its name); an Exploration started without a first prompt has none. */
+  hasTask: boolean;
   prNumber: number | null;
   prUrl: string | null;
   reviewState: ReviewState;
@@ -373,6 +379,11 @@ export interface Session {
   mergeBlockers: string[];
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
+  /**
+   * Steps before the current one that the session never went through, e.g. Design for a Quick
+   * Code session changed to Plan & Implement. The stage bar shows them as skipped.
+   */
+  skippedStages: Stage[];
   hasDesign: boolean;
   /** When the design was last written or republished; null before there is one. */
   designUpdatedAt: number | null;
@@ -836,6 +847,22 @@ export interface CreateSessionRequest {
   skipDesign?: boolean;
 }
 
+/** The stages a session can be moved to by hand. `review` is the PR & Review step. */
+export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
+
+/** Changes a session's type, its stage, or both (see `src/shared/stages.ts` for the rules). */
+export interface MoveSessionRequest {
+  kind: SessionKind;
+  stage: MoveTarget;
+  /**
+   * Send the new stage's prompt. Left out, it follows promptByDefault. Ignored for PR & Review,
+   * which picks up the branch's open PR, or sends the PR prompt when there's work to push.
+   */
+  prompt?: boolean;
+  /** The task, for a session that has none yet (an Exploration started without a first prompt). */
+  task?: string;
+}
+
 export type SessionAction =
   | 'approve-design'
   | 'open-pr'
@@ -929,6 +956,9 @@ export type TermServerMessage =
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind, a bad branch name or a
 //        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
+// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a type and stage that don't go together or a
+//        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
+//        502 when the move was made but its prompt couldn't be typed)
 // GET    /api/sessions/:id/design              → DesignDoc
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges

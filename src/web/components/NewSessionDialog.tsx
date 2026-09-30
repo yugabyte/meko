@@ -1,64 +1,14 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { KIND_HINTS, KIND_LABELS, KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../../shared/types';
+import { useEffect, useState } from 'react';
 import type { ProjectWithSessions, RepoInfo, Session, SessionKind } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { cx, repoFolder, slugify } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { repoFolder, slugify } from '../util';
+import { Dialog, ErrorText, Field, KindPicker } from './common';
 
 const NAME_PLACEHOLDER: Record<SessionKind, string> = {
   explore: 'why is CI slow on macOS',
   plan: 'fix retry backoff',
   quick: 'fix typo in README',
 };
-
-/** First and last stage, e.g. "Design → Merge & Close", or the only one. */
-function stageSpan(kind: SessionKind): string {
-  const st = KIND_STAGES[kind];
-  return st.length === 1 ? STAGE_LABELS[st[0]] : `${STAGE_LABELS[st[0]]} → ${STAGE_LABELS[st[st.length - 1]]}`;
-}
-
-/** The session types as boxes side by side, a radio group (arrow keys move the choice). */
-function KindPicker({ value, onChange }: { value: SessionKind; onChange: (k: SessionKind) => void }) {
-  const refs = useRef<Partial<Record<SessionKind, HTMLButtonElement | null>>>({});
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-    if (!step) return;
-    e.preventDefault();
-    const next = SESSION_KINDS[(SESSION_KINDS.indexOf(value) + step + SESSION_KINDS.length) % SESSION_KINDS.length];
-    onChange(next);
-    refs.current[next]?.focus();
-  };
-  return (
-    <div className="field">
-      <span className="label" id="ns-kind-label">
-        Session type
-      </span>
-      <div className="kinds" role="radiogroup" aria-labelledby="ns-kind-label" aria-describedby="ns-kind-hint" onKeyDown={onKey}>
-        {SESSION_KINDS.map((k) => (
-          <button
-            key={k}
-            id={`ns-kind-${k}`}
-            ref={(el) => {
-              refs.current[k] = el;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={k === value}
-            tabIndex={k === value ? 0 : -1}
-            className={cx('kind', k === value && 'on')}
-            onClick={() => onChange(k)}
-          >
-            <b>{KIND_LABELS[k]}</b>
-            <span className="kind-stages">{stageSpan(k)}</span>
-          </button>
-        ))}
-      </div>
-      <span className="hint" id="ns-kind-hint">
-        {KIND_HINTS[value]}
-      </span>
-    </div>
-  );
-}
 
 export function NewSessionDialog({
   project,
@@ -177,7 +127,7 @@ export function NewSessionDialog({
             autoFocus
           />
         </Field>
-        <KindPicker value={kind} onChange={setKind} />
+        <KindPicker id="ns-kind" value={kind} onChange={setKind} />
         <Field
           label="First prompt (optional)"
           hint={

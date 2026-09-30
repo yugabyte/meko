@@ -11,6 +11,7 @@ import type {
   InviteCheck,
   LoginRequest,
   MekoDatapack,
+  MoveSessionRequest,
   NewComment,
   Project,
   ProjectHome,
@@ -128,6 +129,7 @@ export const api = {
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
+  moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number) =>

@@ -7,10 +7,12 @@ import { get, type Db } from './db.js';
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
  * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
  * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}; `comments` also gets {{count}} and
- * {{comments}}, and `ci` gets {{sha}} and {{checks}}.
+ * {{comments}}, `ci` gets {{sha}} and {{checks}}, and `moved` gets {{kind}}, {{stage}} and
+ * {{workflow}}. `moved` goes before the new stage's prompt when the user moves a session by hand.
  */
 export type PromptName =
-  | 'explore' | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments';
+  | 'explore' | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments'
+  | 'moved';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   explore: `You are in an AgentK Local Exploration session.
@@ -83,6 +85,8 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
   comments: `The user reviewed your changes in AgentK Local and left {{count}}. Address each one: verify it against the code, make the change or say why you disagree, and run the repo's checks. If this branch has an open PR, commit and push the fixes. Finish with a short list: each comment and what you did.
 
 {{comments}}`,
+
+  moved: `AgentK Local moved this session: it's now a {{kind}} session in the {{stage}} stage. {{workflow}}`,
 };
 
 /**

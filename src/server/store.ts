@@ -5,7 +5,8 @@ import type {
   TokenUsage,
   CiState, DatapackRef, Project, ProjectSettings, ReviewState, Session, SessionKind, SessionStatus, Stage,
 } from '../shared/types.js';
-import { REVIEWER_LABELS } from '../shared/types.js';
+import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
+import { skippedSteps, stepOf } from '../shared/stages.js';
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
@@ -178,6 +179,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     statusDetail: r.status_detail,
     kind: r.kind,
     stage: r.stage,
+    hasTask: !!r.initial_prompt,
     prNumber: r.pr_number,
     prUrl: r.pr_url,
     reviewState: r.review_state,
@@ -186,6 +188,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
     busy: rt.busy,
+    skippedStages: skippedStages(db, r),
     hasDesign: !!design,
     designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
@@ -197,6 +200,16 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,
   };
+}
+
+/**
+ * Steps before the current one that the session never went through. Only a session past its
+ * type's first step can have one, so the stage history is read only then.
+ */
+function skippedStages(db: Db, r: SessionRow): Stage[] {
+  if (r.desired !== 'running' || (KIND_STAGES[r.kind] as Stage[]).indexOf(stepOf(r.stage)) <= 0) return [];
+  const visited = all<{ stage: Stage }>(db, 'SELECT DISTINCT stage FROM session_stages WHERE session_id = ?', r.id);
+  return skippedSteps(r.kind, r.stage, visited.map((x) => x.stage));
 }
 
 /** Lowercase, [a-z0-9-] only; the same rule Meko uses for agent ids. */

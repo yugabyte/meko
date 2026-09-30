@@ -420,7 +420,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(quick).toMatchObject({ kind: 'quick', stage: 'code' });
     await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch');
     const args = argvLog(env)[0].args;
-    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('Stages: Code → PR → Review → Merge & Close;');
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('Stages: Code → PR & Review → Merge & Close;');
     const legacy = await env.core.sessions.create(p.id, { name: 'Old client', prompt: 'hi', skipDesign: true });
     expect(legacy).toMatchObject({ kind: 'quick', stage: 'code' });
     await expect(env.core.sessions.create(p.id, { name: 'Odd', kind: 'yolo' as never })).rejects.toMatchObject({ status: 400 });

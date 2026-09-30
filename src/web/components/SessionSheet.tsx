@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DiscardCheck, Session, SessionAction } from '../../shared/types';
+import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
@@ -216,6 +217,7 @@ export function SessionSheet({
   info,
   onDesign,
   onHome,
+  onMove,
   onAct,
   onClose,
 }: {
@@ -229,6 +231,8 @@ export function SessionSheet({
   info: ReactNode;
   onDesign: () => void;
   onHome: () => void;
+  /** Opens the Change type or stage dialog. */
+  onMove: () => void;
   onAct: (a: SessionAction) => Promise<void>;
   onClose: () => void;
 }) {
@@ -253,6 +257,11 @@ export function SessionSheet({
         {session.prUrl && (
           <SheetItem href={session.prUrl} hint="↗" onClick={onClose}>
             PR #{session.prNumber} on GitHub
+          </SheetItem>
+        )}
+        {!moveBlockedIn(session.stage) && (
+          <SheetItem hint="›" onClick={then(onMove)}>
+            Change type or stage
           </SheetItem>
         )}
         <SheetItem hint="›" onClick={then(onHome)}>
