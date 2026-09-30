@@ -522,6 +522,8 @@ textarea.input {
   font-size: 15px;
   padding: 2px 8px 12px;
 }
+/* The list scrolls, which clips what's drawn outside its rows: the selected ring and the focus
+   outline (2px, 2px out). The padding leaves room for them; the margin keeps the rows in place. */
 .rail-list {
   display: flex;
   flex-direction: column;
@@ -529,6 +531,8 @@ textarea.input {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  padding: 4px;
+  margin: -4px;
 }
 .proj {
   display: grid;
