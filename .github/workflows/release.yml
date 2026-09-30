@@ -163,7 +163,7 @@ jobs:
           test "$v" = "$VERSION"
           /tmp/smoke/agent-k-local-*/bin/agent-k-local selftest
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tarball-linux-${{ matrix.arch }}
           path: out/*.tar.gz
@@ -249,7 +249,7 @@ jobs:
           test "$v" = "$VERSION"
           "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.check.outputs.supported == 'true'
         with:
           name: tarball-darwin-arm64
