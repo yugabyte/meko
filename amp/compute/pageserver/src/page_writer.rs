@@ -3082,6 +3082,54 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// #1598: a batch mixing LSNs reads each key at its own LSN, so P's image
+    /// at 300 (above P's 220, at Q's 300) cannot hide the image at 200. P and R
+    /// share a group of non-adjacent blocks, so it takes the scattered-set read.
+    #[tokio::test]
+    async fn scattered_query_reads_each_key_at_its_own_lsn() {
+        use crate::keyspace::KeySpace;
+        use crate::page_server::timeline::{VersionedKeySpaceQuery, read_chains};
+
+        let (store, schema) = make_store("scattered_lsn").await;
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
+        let (p, q, r) = (k(1), k(2), k(4));
+        w.put(&[
+            (r, Lsn(100), image()),
+            (p, Lsn(200), image()),
+            (p, Lsn(250), delta()),
+            (p, Lsn(300), image()),
+            (q, Lsn(300), image()),
+            (r, Lsn(300), image()),
+        ])
+        .await
+        .unwrap();
+        w.flush().await.unwrap();
+
+        let query = VersionedKeySpaceQuery::scattered(vec![
+            (Lsn(300), KeySpace::single(q..q.next())),
+            (
+                Lsn(220),
+                KeySpace {
+                    ranges: vec![p..p.next(), r..r.next()],
+                },
+            ),
+        ]);
+        let (chains, _) = read_chains(&w, &query).await.unwrap();
+        let (p_lsn, p_chain) = &chains[&p];
+        assert_eq!(*p_lsn, Lsn(220));
+        assert_eq!(p_chain.len(), 1);
+        assert!(p_chain[0].is_image);
+        assert_eq!(p_chain[0].lsn, Lsn(200));
+        let (r_lsn, r_chain) = &chains[&r];
+        assert_eq!(*r_lsn, Lsn(220));
+        assert_eq!(r_chain.len(), 1);
+        assert_eq!(r_chain[0].lsn, Lsn(100));
+        let (q_lsn, q_chain) = &chains[&q];
+        assert_eq!(*q_lsn, Lsn(300));
+        assert_eq!(q_chain[0].lsn, Lsn(300));
+        drop_schema(&store, &schema).await;
+    }
+
     #[tokio::test]
     async fn long_chain_without_image_round_trips() {
         // 100 deltas after a will_init delta — no image, no truncation.

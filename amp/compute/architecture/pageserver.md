@@ -418,12 +418,15 @@ slices *envelope* bytes — decode in the client instead.
 ## Read path: base-anchored chain reads
 
 `Timeline::get_vectored_impl` queries the row store via `PageWriter`
-(`page_server/timeline.rs`, `get_vectored_via_page_writer`):
+(`page_server/timeline.rs`, `read_chains`):
 
-1. Classify each requested key range by its start key: relation pages →
-   `pages`, SLRU blocks → `slru_pages`, everything else → `meta`
-   (payload returned directly, no walredo).
-2. Scattered single-block relation reads are bucketed by
+1. Each LSN group of the query (a `ScatteredLsn` batch can carry several)
+   is read at its own LSN, the groups concurrently: read higher, a key's
+   chain can stop at a base above its LSN and never reach the one it
+   needs. Within a group, classify each requested key range by its start
+   key: relation pages → `pages`, SLRU blocks → `slru_pages`, everything
+   else → `meta` (payload returned directly, no walredo).
+2. Within a group, scattered single-block relation reads are bucketed by
    (spcnode, dbnode, relnode, forknum); a bucket of ≥2 keys is fetched
    by ONE `scan_scattered_set` — its per-block reads ride one `Perform`,
    so the fold costs one round trip (plus any paging round) rather than a
@@ -1308,7 +1311,7 @@ The compute opens libpq connections to the pageserver per backend
 - `compute/pageserver/src/image_materializer.rs` — the background
   materialiser worker pipeline.
 - `compute/pageserver/src/page_server/timeline.rs` —
-  `get_vectored_via_page_writer`, `chain_to_value_reconstruct_state`,
+  `read_chains`, `chain_to_value_reconstruct_state`,
   the replay-quarantine latch, `force_flush`.
 - `compute/pageserver/src/page_server/timeline/walreceiver/` —
   safekeeper connection management and interpreted-WAL ingest.

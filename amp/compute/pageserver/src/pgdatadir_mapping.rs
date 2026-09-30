@@ -486,6 +486,17 @@ impl Timeline {
                     first_req_ctx.perf_follows_from(ctx);
                     slots_filled += 1;
                 }
+
+                // The row store leaves out a key with no row at or below its LSN.
+                for (key, key_slots) in keys_slots.drain() {
+                    for (slot, req_ctx) in key_slots {
+                        result_slots[slot].write(Err(PageReconstructError::from(anyhow::anyhow!(
+                            "base image for {key} not found"
+                        ))));
+                        req_ctx.perf_follows_from(ctx);
+                        slots_filled += 1;
+                    }
+                }
             }
             Err(err) => {
                 // this cannot really happen because get_vectored only errors globally on invalid LSN or too large batch size
