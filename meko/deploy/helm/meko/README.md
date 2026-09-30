@@ -230,13 +230,39 @@ issuer's own pages. What it serves is `/auth/oidc/login`, `/auth/oidc/callback`,
 are issued and validated by this server, whichever IdP is on.
 
 `values-byoc.yaml` runs the inference gateway on **bedrock** (which needs
-`dataPlaneSecrets.awsAccessKeyId` / `.awsSecretAccessKey`) and leaves the rag workers,
-langfuse and the provisioner off. Appending `-f charts/meko/values-byoc-full.yaml` —
+`dataPlaneSecrets.awsAccessKeyId` / `.awsSecretAccessKey`) and leaves the rag workers
+and the provisioner off. Appending `-f charts/meko/values-byoc-full.yaml` —
 later `-f` wins, which is the whole mechanism — switches the gateway to **openai** and
 adds the rag text worker, so it needs `--set dataPlaneSecrets.openaiApiKey=sk-...`,
 without which the render fails rather than installing a gateway that exits at startup.
-`langfuse` wants ClickHouse, a Valkey release and object storage; `provisioner` renders
-ClusterRoles and a CRD, which is the opposite of one namespace. Neither is a flag away.
+`provisioner` renders ClusterRoles and a CRD, which is the opposite of one namespace —
+not a flag away.
+
+`langfuse` is **on** in `values-byoc.yaml`, bundled the same way as the database: no
+ClickHouse anywhere (this fork's "tracing" backend is a `clickhouse`-named Postgres
+schema in the same YugabyteDB database, not a real ClickHouse deployment) and a bundled
+Valkey subchart (`langfuse.valkey.managed: true`). It needs seven
+`dataPlaneSecrets.langfuse*` values with no default — six are real cryptographic
+material, the seventh (`langfuseInitUserEmail`) is the seeded owner's login — so the
+render fails rather than shipping the exact demo password (`password123`) a HackerOne
+report already turned into an RCE:
+
+```bash
+--set dataPlaneSecrets.langfuseNextauthSecret=$(openssl rand -hex 16) \
+--set dataPlaneSecrets.langfuseSalt=$(openssl rand -hex 16) \
+--set dataPlaneSecrets.langfuseEncryptionKey=$(openssl rand -hex 32) \
+--set dataPlaneSecrets.langfuseAdminApiKey=$(openssl rand -hex 16) \
+--set dataPlaneSecrets.langfuseInitUserEmail=owner@your-domain \
+--set dataPlaneSecrets.langfuseInitUserPassword=$(openssl rand -hex 16) \
+--set dataPlaneSecrets.langfuseInitProjectSecretKey=$(openssl rand -hex 16)
+```
+
+**Generate these once and keep them** — in a values file of your own, or a password
+manager — rather than re-running the command above on a second `helm upgrade`.
+`dataplane-secrets.yaml` re-renders `langfuse-secrets` from whatever values it's given
+on every upgrade; it does not read back the live Secret. A fresh `openssl rand` on a
+second install silently rotates NextAuth/encryption keys that langfuse's own database
+already has data under, and resets the seeded owner's password.
 
 The agent enrolls, converges desired state, and reports status over **outbound HTTPS
 only**. It is data-plane-only — `ycp` mode never renders it. Its image comes from Quay

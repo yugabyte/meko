@@ -1,0 +1,15 @@
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") .Values.langfuse.migrate.enabled }}
+{{- $c := .Values.langfuse }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: langfuse-schema-sql
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+data:
+  yb_postgres_data.sql: |
+{{ .Files.Get "files/langfuse/yb_postgres_data.sql" | indent 4 }}
+  tracing_postgres_schema.sql: |
+{{ .Files.Get "files/langfuse/tracing_postgres_schema.sql" | indent 4 }}
+{{- end }}

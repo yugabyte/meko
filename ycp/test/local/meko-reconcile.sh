@@ -210,6 +210,18 @@ k -n "$NS" create secret generic meko-data-plane "${creds[@]}" \
 #
 # This is the install hint's command, with the local agent image substituted for the
 # Quay one and the pull secret named. If it drifts from the hint, the hint is wrong.
+#
+# values-byoc.yaml turns langfuse on with migrate.enabled, so — same as the hint —
+# this needs its seven dataPlaneSecrets.langfuse* values or the chart fails at
+# dataplane-secrets.yaml's own fail-fast guard. Generated fresh per run: nothing
+# here reads them back, unlike a real install where they must be kept (see the
+# chart README).
+LANGFUSE_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+LANGFUSE_NEXTAUTH_SECRET="$(openssl rand -hex 16)"
+LANGFUSE_SALT="$(openssl rand -hex 16)"
+LANGFUSE_ADMIN_API_KEY="$(openssl rand -hex 16)"
+LANGFUSE_INIT_USER_PASSWORD="$(openssl rand -hex 16)"
+LANGFUSE_INIT_PROJECT_SECRET_KEY="$(openssl rand -hex 16)"
 
 log "installing the stack and the reconcile-agent"
 helm --kube-context "$CTX" upgrade --install meko "$CHART" -n "$NS" \
@@ -217,6 +229,13 @@ helm --kube-context "$CTX" upgrade --install meko "$CHART" -n "$NS" \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \
+  --set-string dataPlaneSecrets.langfuseNextauthSecret="$LANGFUSE_NEXTAUTH_SECRET" \
+  --set-string dataPlaneSecrets.langfuseSalt="$LANGFUSE_SALT" \
+  --set-string dataPlaneSecrets.langfuseEncryptionKey="$LANGFUSE_ENCRYPTION_KEY" \
+  --set-string dataPlaneSecrets.langfuseAdminApiKey="$LANGFUSE_ADMIN_API_KEY" \
+  --set-string dataPlaneSecrets.langfuseInitUserEmail="e2e@meko-reconcile.test" \
+  --set-string dataPlaneSecrets.langfuseInitUserPassword="$LANGFUSE_INIT_USER_PASSWORD" \
+  --set-string dataPlaneSecrets.langfuseInitProjectSecretKey="$LANGFUSE_INIT_PROJECT_SECRET_KEY" \
   --set reconcileAgent.enabled=true \
   --set reconcileAgent.ycpUrl="http://meko-api-server.$CP_NS.svc.cluster.local:80$BASE/api/v1" \
   --set reconcileAgent.envName="$ENV_NAME" \

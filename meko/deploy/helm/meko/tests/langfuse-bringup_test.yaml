@@ -1,0 +1,286 @@
+# Three things a BYOC langfuse install depends on, each silent if it regresses:
+#
+#   1. The schema-init containers actually render and target the bundled
+#      database — no ClickHouse anywhere, since this fork's "tracing" backend
+#      is a `clickhouse`-named schema in the SAME YugabyteDB database.
+#   2. langfuse-secrets is chart-rendered with real crypto material, and FAILS
+#      the render rather than filling in a demo-shaped default — the exact
+#      failure mode a HackerOne report already turned into an RCE once.
+#   3. The bundled valkey subchart pulls from its own public registry, not
+#      whatever ECR/GCR path the cloud+env preset set for our own images —
+#      regression coverage for a real bug (Helm passes global.imageRegistry
+#      to every subchart unconditionally; valkey's own chart lets it override
+#      image.registry with no per-subchart escape hatch).
+#
+#   helm unittest charts/meko
+suite: langfuse bring-up
+templates:
+  - templates/langfuse/configmap.yaml
+  - templates/langfuse/schema-configmap.yaml
+  - templates/langfuse/deployment.yaml
+  - templates/dataplane-secrets.yaml
+  - charts/valkey/templates/deploy_valkey.yaml
+  - charts/valkey/templates/init_config.yaml
+set:
+  global.imageRegistry: 111111111111.dkr.ecr.us-east-2.amazonaws.com
+  apiServer.image.tag: t
+  langfuse.enabled: true
+  langfuse.web.image.tag: t
+  langfuse.worker.image.tag: t
+  # Unrelated to every case below; only here because dataplane-secrets.yaml is
+  # one file covering every component and ragAgent's own block would otherwise
+  # fail first (its base default is enabled:true with no database configured).
+  ragAgent.enabled: false
+  # dataplane-secrets.yaml fails langfuse.migrate.enabled outside singleNamespace
+  # (the schema-init containers reference apiServer's ConfigMap/Secret by name
+  # only, which resolves in-namespace) — unrelated to every case below.
+  global.singleNamespace: true
+tests:
+  - it: renders no schema-init containers when migrate is off
+    template: templates/langfuse/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+
+  - it: renders both schema-init containers, in order, against the bundled database
+    template: templates/langfuse/deployment.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: metadata-schema-init
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: tracing-schema-init
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].args[0]
+          pattern: "CREATE SCHEMA IF NOT EXISTS clickhouse"
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].args[0]
+          pattern: "(?i)clickhouse-client|clickhouse-server"
+
+  - it: fails the render when a required langfuse secret is missing
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled with dataPlaneSecrets.langfuseNextauthSecret unset — supply it at install time, e.g. --set dataPlaneSecrets.langfuseNextauthSecret=$(openssl rand -hex 16)."
+
+  - it: builds DATABASE_URL/TRACING_DATABASE_URL from the bundled database, password escaped
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    release:
+      namespace: acme
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: p@ss/word
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.DATABASE_URL
+          value: postgresql://yugabyte:p%40ss%2Fword@yb-tservers.acme.svc.cluster.local.:5433/langfuse
+      - equal:
+          path: stringData.TRACING_DATABASE_URL
+          value: postgresql://yugabyte:p%40ss%2Fword@yb-tservers.acme.svc.cluster.local.:5433/langfuse?schema=clickhouse
+      - equal:
+          path: stringData.REDIS_AUTH
+          value: ""
+
+  - it: fills NEXTAUTH_URL with a browser-reachable default, not the cluster-internal Service name
+    template: templates/langfuse/configmap.yaml
+    release:
+      # A non-default namespace, on purpose: NEXTAUTH_URL is what a browser is
+      # redirected to during sign-in, so it must NOT vary with the release
+      # namespace the way DB_HOST/MEKO_BASE_URL correctly do elsewhere in this
+      # chart — those are server-to-server and a Service DNS name resolves
+      # fine there; a browser can never resolve one.
+      namespace: acme
+    set:
+      langfuse.config.NEXTAUTH_URL: ""
+    asserts:
+      - equal:
+          path: data.NEXTAUTH_URL
+          value: http://localhost:3000
+
+  - it: leaves a literal NEXTAUTH_URL alone
+    template: templates/langfuse/configmap.yaml
+    asserts:
+      - equal:
+          path: data.NEXTAUTH_URL
+          value: http://localhost:5000
+
+  - it: bundled valkey pulls from its own registry once global.imageRegistry is reset (values-byoc.yaml's fix), not the suite's ECR path
+    template: charts/valkey/templates/deploy_valkey.yaml
+    set:
+      langfuse.valkey.managed: true
+      global.imageRegistry: ""
+      # Unrelated to this case; satisfies meko.image's own requirement for the
+      # other templates this suite loads now that global.imageRegistry (their
+      # fallback) is gone.
+      langfuse.web.image.registry: quay.io/yugabyte
+      langfuse.worker.image.registry: quay.io/yugabyte
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^docker\\.io/valkey/valkey:"
+
+  - it: retries the metadata import safely after a partial failure, instead of skipping on database-exists alone
+    template: templates/langfuse/deployment.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      # yb_postgres_data.sql has no IF NOT EXISTS guards (unlike the tracing
+      # schema), so a bare "does the database exist" check cannot tell a clean
+      # success from a crash halfway through the import. A completion marker,
+      # checked before skipping, is what makes a retry safe: drop and redo
+      # rather than leaving a half-built schema in place forever.
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: "_meko_schema_init_done"
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].args[0]
+          pattern: "DROP DATABASE langfuse"
+
+  - it: fails with a -hex 32 example for the encryption key specifically, not the -hex 16 every other field gets
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled with dataPlaneSecrets.langfuseEncryptionKey unset — supply it at install time, e.g. --set dataPlaneSecrets.langfuseEncryptionKey=$(openssl rand -hex 32)."
+
+  - it: fails the render when langfuse.migrate.enabled without apiServer.enabled
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      apiServer.enabled: false
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled requires apiServer.enabled — the schema-init containers read the bundled database's host/credentials from apiServer's ConfigMap/Secret."
+
+  - it: fails the render when langfuse.migrate.enabled outside global.singleNamespace
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      global.singleNamespace: false
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled outside global.singleNamespace: the schema-init containers reference apiServer's ConfigMap/Secret by name only, which resolves in the langfuse pod's OWN namespace and requires both components to share one."
+
+  - it: forces empty REDIS_AUTH for the bundled (managed) valkey
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      langfuse.valkey.managed: true
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseRedisAuth: should-be-ignored
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.REDIS_AUTH
+          value: ""
+
+  - it: passes through langfuseRedisAuth for an external, unmanaged valkey
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      langfuse.valkey.managed: false
+      yugabyte.enabled: true
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseRedisAuth: s3cr3t
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.REDIS_AUTH
+          value: s3cr3t

@@ -20,10 +20,26 @@ data:
   {{- if $.Values.yugabyte.enabled }}
   {{- $ybHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
   {{- end }}
+  {{- /* Same fill, for the langfuse bundled beside this database: left at the env
+         preset's hosted-dev values, a BYOC api-server provisions orgs/projects and
+         reads traces against the SHARED hosted langfuse instead of the one bundled
+         in this release. LANGFUSE_DB_HOST is the same YugabyteDB as DB_HOST — the
+         "langfuse" database lives in the same cluster, so it fills the same way.
+         LANGFUSE_HOST fills only when the langfuse component itself is actually
+         rendering here — filling it toward a Service that doesn't exist would be
+         worse than leaving it at whatever the values said. */}}
+  {{- $lfHost := "" }}
+  {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true" }}
+  {{- $lfNs := include "meko.ns" (dict "root" $ "ns" $.Values.langfuse.namespace) }}
+  {{- $lfHost = printf "http://langfuse-web.%s.svc.cluster.local.:3000" $lfNs }}
+  {{- end }}
   {{- range $k, $v := $c.config }}
   {{- $val := $v }}
-  {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST")) (not $v) }}
+  {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST") (eq $k "LANGFUSE_DB_HOST")) (not $v) }}
   {{- $val = $ybHost }}
+  {{- end }}
+  {{- if and $lfHost (eq $k "LANGFUSE_HOST") (not $v) }}
+  {{- $val = $lfHost }}
   {{- end }}
   {{ $k }}: {{ $val | quote }}
   {{- end }}

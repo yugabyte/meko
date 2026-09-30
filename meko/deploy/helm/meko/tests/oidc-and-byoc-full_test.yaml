@@ -23,6 +23,15 @@ tests:
       apiServer.oidc.issuerUrl: https://issuer.example/realms/meko
       apiServer.oidc.clientId: meko
       apiServer.oidc.redirectUrl: https://meko.example/api/v1/auth/oidc/callback
+      # values-byoc.yaml enables langfuse.migrate — unrelated to what this
+      # case asserts, but the render fails without these.
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
@@ -105,6 +114,13 @@ tests:
       apiServer.oidc.redirectUrl: https://meko.example/api/v1/auth/oidc/callback
       dataPlaneSecrets.enabled: true
       dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
     asserts:
       - notMatchRegex:
           path: metadata.name
@@ -130,6 +146,13 @@ tests:
       # Secret that exists with the wrong key turns a pod that never starts into
       # one that goes Ready and fails every call at runtime.
       dataPlaneSecrets.openaiApiKey: sk-test
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
     asserts:
       - equal:
           path: stringData.AWS_ACCESS_KEY_ID
@@ -155,6 +178,13 @@ tests:
       dataPlaneSecrets.enabled: true
       dataPlaneSecrets.dbPassword: pw
       dataPlaneSecrets.openaiApiKey: sk-test
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
     asserts:
       - equal:
           path: stringData.OPENAI_API_KEY
@@ -184,6 +214,13 @@ tests:
       # the database out of the DSN, and nothing fails until the first connection.
       dataPlaneSecrets.dbPassword: p@ss/word
       dataPlaneSecrets.openaiApiKey: sk-test
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
     asserts:
       - equal:
           path: stringData.YUGABYTEDB_CONNECTION_STRING

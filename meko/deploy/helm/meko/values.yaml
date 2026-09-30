@@ -572,6 +572,92 @@ dataPlaneSecrets:
   # plane authenticates against an OIDC issuer with a confidential client. Empty
   # is a public client, which relies on the PKCE the server always sends.
   oidcClientSecret: ""
+  # langfuse.secrets.existing.langfuse (rendered by templates/dataplane-secrets.yaml
+  # when langfuse.migrate.enabled — see that template). Four of these are real
+  # cryptographic material, not a shared/no-op value like dbPassword above (the
+  # bundled YugabyteDB runs with YSQL auth off, so that one guards nothing;
+  # these do). None has a default in values-byoc.yaml — the chart FAILS the
+  # render when BOTH dataPlaneSecrets.enabled and langfuse.migrate.enabled are
+  # true and one of the seven fields in this section (see below for the other
+  # three) is empty, rather than letting a demo password ship:
+  # LANGFUSE_INIT_USER_PASSWORD, unset, is the exact credential a HackerOne
+  # report (4037821) already used for an RCE against this same default, in the
+  # equivalent kustomize deploy path.
+  langfuseNextauthSecret: ""
+  langfuseSalt: ""
+  langfuseEncryptionKey: ""
+  langfuseAdminApiKey: ""
+  # Creates the org/project/user LANGFUSE_INIT_ORG_ID et al. (in langfuse.config)
+  # seed on first boot — see meko-langfuse/web/src/initialize.ts. The operator
+  # supplies both at install time:
+  #   --set dataPlaneSecrets.langfuseInitUserEmail=owner@<your-domain> \
+  #   --set dataPlaneSecrets.langfuseInitUserPassword=$(openssl rand -hex 16)
+  langfuseInitUserEmail: ""
+  langfuseInitUserPassword: ""
+  # The seeded project's own API secret key (sk-...). LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+  # is public and lives in langfuse.config; this is its pair and was missing from
+  # every values file before this — the seeded project had a public key and no
+  # working secret key to call the API with.
+  langfuseInitProjectSecretKey: ""
+  # S3 for Langfuse's own event/media/batch-export uploads — a THIRD S3
+  # credential surface, distinct from apiServer's (s3AccessKey above) and
+  # ragAgent's. Verified against meko-langfuse's StorageService.ts: one
+  # principal, reused across all three LANGFUSE_S3_*_ACCESS_KEY_ID env vars
+  # (langfuse's schema allows three independent pairs; nothing here uses that).
+  # IAM policy needed, scoped to langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET:
+  #   { "Effect": "Allow", "Action": "s3:ListBucket",
+  #     "Resource": "arn:aws:s3:::<bucket>" }
+  #   { "Effect": "Allow",
+  #     "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject","s3:AbortMultipartUpload"],
+  #     "Resource": "arn:aws:s3:::<bucket>/*" }
+  # Optional, unlike the seven above: the langfuse Deployment takes the whole
+  # Secret through a bare envFrom.secretRef, so a missing pair just means these
+  # two keys are absent from it — uploads fail at the point of use rather than
+  # the pod failing to start, matching apiServer's own S3 credential.
+  langfuseS3AccessKey: ""
+  langfuseS3SecretKey: ""
+  # REDIS_AUTH for an external, authenticated Valkey (langfuse.valkey.managed:
+  # false). Unused — and forced to "" instead — when the bundled Valkey is
+  # managed, since that one runs with auth off (see the top-level valkey:
+  # block's auth.enabled).
+  langfuseRedisAuth: ""
+
+# ---------------------------------------------------------------------------
+# valkey — langfuse's job queue + cache, as a subchart (mirrors how yugabyte is
+# bundled below). Only rendered when langfuse.valkey.managed is true; hosted
+# dev/prod point langfuse.config.REDIS_HOST at a Valkey release they already
+# run outside this chart, and this block is inert for them.
+# ---------------------------------------------------------------------------
+valkey:
+  # Keeps the bundled Service named "valkey" regardless of the release name —
+  # langfuse.config.REDIS_HOST: "valkey" must resolve the same way whether
+  # Valkey came from this subchart or the hosted envs' separate release.
+  fullnameOverride: valkey
+  # NOT overridable from here: a cloud preset's global.imageRegistry reaches
+  # this subchart too (Helm passes global.* down unconditionally), and
+  # charts/valkey's common.image helper lets it win over image.registry with
+  # no per-subchart escape hatch — confirmed empirically, `--set
+  # valkey.global.imageRegistry=...` has no effect regardless of value or
+  # precedence. values-byoc.yaml resets global.imageRegistry itself instead
+  # (see its comment) since our own components don't depend on it either way.
+  auth:
+    # Bundled, in-namespace, unreachable outside this release — same "auth
+    # guards nothing a network boundary doesn't already" reasoning as the
+    # bundled YugabyteDB's dbPassword.
+    enabled: false
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  dataStorage:
+    # Standalone (non-replica) persistence. The worker uses this as a BullMQ
+    # job queue, not just a cache, so the chart's own emptyDir default would
+    # drop in-flight ingestion jobs on every pod restart. Sized off the
+    # resources block above (Valkey's disk use is its AOF/RDB rewrite of the
+    # in-memory dataset, not an independent number) rather than picked
+    # separately — roughly 5x the memory limit covers a rewrite running
+    # alongside the file it is replacing.
+    enabled: true
+    requestedSize: 5Gi
 
 # ---------------------------------------------------------------------------
 # meko-ui
@@ -890,12 +976,25 @@ langfuse:
     enabled: true
     type: LoadBalancer
     annotations: {}              # per-cloud (NLB on AWS)
+  # Mirrors apiServer.migrate.enabled: off by default (hosted dev/prod apply the
+  # langfuse schema as an explicit Jenkins step, same as api-server's), on in
+  # values-byoc.yaml. Gates the metadata-schema-init/tracing-schema-init init
+  # containers on the langfuse Deployment (templates/langfuse/deployment.yaml).
+  # Reuses apiServer.migrate.extensionsImage — same ysqlsh-carrying YugabyteDB
+  # image, nothing langfuse-specific to pin separately.
+  migrate:
+    enabled: false
   # §5 SECURITY FIX (flagged for confirmation): these keys carried secrets in
   # the ConfigMap today — DATABASE_URL/TRACING_DATABASE_URL embed the YB
   # password, and the S3 *_ACCESS_KEY_ID keys are AWS creds. The chart does NOT
   # put them in langfuse-config; Jenkins must add them to langfuse-secrets.env
   # instead (they arrive as env via the existing secretRef). Prod also had a
   # placeholder (<change-me>) password gap that this closes.
+  # BYOC (migrate.enabled) composes DATABASE_URL/TRACING_DATABASE_URL itself
+  # from dataPlaneSecrets.dbPassword and the bundled YugabyteDB's Service, the
+  # same pattern meko-mcp-server's configmap already uses for DB_HOST/MEKO_BASE_URL
+  # — see templates/dataplane-secrets.yaml. Hosted dev/prod still supply these
+  # two literally in their own langfuse-secrets.env, unchanged.
   # MEKO-650: LANGFUSE_INIT_USER_EMAIL/PASSWORD create the Langfuse org
   # owner account (see meko-langfuse's web/src/initialize.ts) and are just
   # as sensitive as DATABASE_URL below -- their plaintext defaults
@@ -926,6 +1025,10 @@ langfuse:
     LANGFUSE_S3_BATCH_EXPORT_BUCKET: "langfuse-meko-bucket"
     LANGFUSE_S3_BATCH_EXPORT_PREFIX: "exports/"
     LANGFUSE_S3_BATCH_EXPORT_REGION: "us-east-2"
+    # BYOC leaves this empty: templates/langfuse/configmap.yaml fills it with
+    # this release's own langfuse-web Service when unset, the same "auto-fill
+    # from the release" treatment MEKO_BASE_URL/INFERENCE_MCP_ENDPOINT already
+    # get elsewhere in this chart. Hosted dev/prod keep this literal value.
     NEXTAUTH_URL: "http://localhost:5000"
     LANGFUSE_EE_LICENSE_KEY: "langfuse_ee_local_dev"
     TELEMETRY_ENABLED: "false"
@@ -949,9 +1052,17 @@ langfuse:
     QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED: "true"
   secrets:
     existing:
+      # Rendered by templates/dataplane-secrets.yaml when migrate.enabled — see
+      # dataPlaneSecrets.langfuseNextauthSecret et al. above for what goes in
+      # it and why none of those have a default. Hosted dev/prod still create
+      # this out-of-band (migrate.enabled stays false there), unchanged.
       langfuse: langfuse-secrets
   valkey:
-    managed: false               # Valkey stays a separate helm release
+    # Wires the Chart.yaml `condition: langfuse.valkey.managed` dependency —
+    # true bundles the top-level valkey: subchart in-namespace (BYOC); false
+    # (the default) keeps pointing config.REDIS_HOST at a Valkey release
+    # deployed separately, unchanged from before this existed.
+    managed: false
 
 # ---------------------------------------------------------------------------
 # provisioner (operator + CRD + per-tenant mcp-proxy)

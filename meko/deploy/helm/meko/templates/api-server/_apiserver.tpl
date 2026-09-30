@@ -112,7 +112,17 @@ byte-identically to the pre-mode chart.
 {{- end }}
 {{- else }}
 - "--langfuse-host=$(LANGFUSE_HOST)"
+{{- /* Bundled langfuse (langfuse.migrate.enabled — this release seeded the admin
+       key itself, into langfuse-secrets) reads its own generated key rather than
+       the static default, which is never right for it: it would call the
+       bundled langfuse with a key that doesn't match the one just seeded. Hosted
+       dev/prod provision langfuse's admin key out of band and keep the static
+       staticArgs value. */}}
+{{- if $.Values.langfuse.migrate.enabled }}
+- "--langfuse-admin-api-key=$(LANGFUSE_ADMIN_API_KEY)"
+{{- else }}
 - "--langfuse-admin-api-key={{ $c.staticArgs.langfuseAdminApiKey }}"
+{{- end }}
 - "--s3-auth-mode={{ $c.staticArgs.s3AuthMode }}"
 - "--s3-access-key=$(S3_ACCESS_KEY)"
 - "--s3-secret-key=$(S3_SECRET_KEY)"
@@ -257,6 +267,10 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: LANGFUSE_DB_HOST } }
 - name: LANGFUSE_DB_SSL_MODE
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: LANGFUSE_DB_SSL_MODE } }
+{{- if $.Values.langfuse.migrate.enabled }}
+- name: LANGFUSE_ADMIN_API_KEY
+  valueFrom: { secretKeyRef: { name: {{ $.Values.langfuse.secrets.existing.langfuse }}, key: ADMIN_API_KEY } }
+{{- end }}
 - name: SES_FROM_ADDRESS
   value: {{ $c.ses.fromAddress | quote }}
 - name: SES_REGION

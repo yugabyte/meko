@@ -46,9 +46,10 @@ type DataPlaneRelease struct {
 // prints one tag each. values-byoc.yaml now enables the inference gateway, so its tag
 // has to be passed or the gateway falls through to the env preset's ECR tag under
 // quay.io/yugabyte. RAGWorker is still carried unprinted — values-byoc disables the
-// RAG worker, langfuse and the provisioner — and Database is read by nothing at all,
-// the chart owning that image. Wiring those up or deleting them is
-// https://github.com/yugabyte/meko/issues/1319.
+// RAG worker and the provisioner (langfuse is on, but its images come from the
+// operator's own dataPlaneSecrets/image --set flags, not a pinned release tag here) —
+// and Database is read by nothing at all, the chart owning that image. Wiring those up
+// or deleting them is https://github.com/yugabyte/meko/issues/1319.
 var pinnedDataPlaneRelease = DataPlaneRelease{
 	// Mirrored to Quay by meko/jenkins/scripts/mirror-database-image.sh rather than
 	// built: it is a YugabyteDB release artifact carrying MAGE and pg_dist_rag, and a

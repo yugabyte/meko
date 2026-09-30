@@ -48,6 +48,12 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		"--set-string inferenceGateway.image.tag=",
 		"--set dataPlaneSecrets.awsAccessKeyId=",
 		"--set dataPlaneSecrets.awsSecretAccessKey=",
+		// values-byoc.yaml also turns langfuse on with migrate.enabled, so a
+		// fresh install needs its seven dataPlaneSecrets.langfuse* values or it
+		// fails at dataplane-secrets.yaml's own fail-fast guard.
+		"LANGFUSE_OWNER_EMAIL=",
+		`--set-string dataPlaneSecrets.langfuseInitUserEmail="${LANGFUSE_OWNER_EMAIL}"`,
+		`--set-string dataPlaneSecrets.langfuseEncryptionKey="$(openssl rand -hex 32)"`,
 		// The footnote for the configurations that do need a token — either
 		// identity provider, not just Cognito.
 		"identity provider ON (Cognito or OIDC)",
@@ -67,6 +73,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		if strings.HasPrefix(line, "TAG=") || strings.HasPrefix(line, "AGENT_TAG=") ||
 			strings.HasPrefix(line, "QUAY_USER=") || strings.HasPrefix(line, "QUAY_TOKEN=") ||
 			strings.HasPrefix(line, "BEDROCK_KEY=") || strings.HasPrefix(line, "BEDROCK_SECRET=") ||
+			strings.HasPrefix(line, "LANGFUSE_OWNER_EMAIL=") ||
 			strings.Contains(line, "--from-literal=") {
 			continue
 		}
@@ -74,7 +81,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 	}
 }
 
-// values-byoc.yaml leaves the rag workers, langfuse and the provisioner off, and an
+// values-byoc.yaml leaves the rag workers and the provisioner off, and an
 // overlay passed AFTER it is the only thing that turns one back on — helm's last-wins
 // ordering is the whole mechanism. The hint is where an operator is told that, so the slot has to be in
 // the pasted command and not just in the prose.

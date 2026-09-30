@@ -18,9 +18,117 @@ spec:
       labels:
         {{- include "meko.selectorLabels" (dict "app" "langfuse-web-worker") | nindent 8 }}
       annotations:
-        {{- include "meko.configChecksum" (dict "root" $ "files" (list "langfuse/configmap.yaml")) | nindent 8 }}
+        {{- $checksumFiles := list "langfuse/configmap.yaml" }}
+        {{- if $c.migrate.enabled }}
+        {{- $checksumFiles = append $checksumFiles "langfuse/schema-configmap.yaml" }}
+        {{- end }}
+        {{- include "meko.configChecksum" (dict "root" $ "files" $checksumFiles) | nindent 8 }}
     spec:
       {{- include "meko.imagePullSecrets" . }}
+      {{- if $c.migrate.enabled }}
+      {{- /* Mirrors api-server's ensure-extensions in spirit, not literally: the
+             tracing schema (tracing_postgres_schema.sql) really is IF NOT EXISTS
+             throughout, safe on every restart. The metadata schema
+             (yb_postgres_data.sql, langfuse's own Prisma-generated dump) is NOT —
+             no IF NOT EXISTS anywhere in it — so metadata-schema-init instead
+             tracks completion with its own marker table and drops+recreates the
+             database on a retry after an incomplete previous attempt, rather
+             than silently leaving a half-imported schema in place forever (the
+             failure a bare "does the database exist" check cannot tell apart
+             from a clean success). Two containers because the two schemas live
+             in the SAME database (`langfuse` — this fork's "tracing" backend is
+             a `clickhouse`-named Postgres schema in it, never a real ClickHouse
+             deployment) and tracing-schema-init depends on metadata-schema-init
+             having created that database first.
+
+             Known gap, not attempted here: LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED
+             (values.yaml) means the running app never self-migrates, so a langfuse
+             image bump that ships new Prisma migrations has no path to an existing
+             BYOC release — only a fresh install gets the current schema. Closing
+             that needs langfuse's own migration CLI vendored as a forward-migration
+             step, which is a separate piece of work from this container. */}}
+      initContainers:
+        - name: metadata-schema-init
+          image: {{ $.Values.apiServer.migrate.extensionsImage }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PGPASSWORD="$DB_PASSWORD"
+              YSQL="/home/yugabyte/bin/ysqlsh -h $DB_HOST -p $DB_PORT -U $DB_USER_NAME"
+              until $YSQL -d yugabyte -tAc 'select 1' >/dev/null 2>&1; do
+                echo "waiting for ysql at $DB_HOST:$DB_PORT ..."
+                sleep 5
+              done
+              db_exists="$($YSQL -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname='langfuse'" | tr -d '[:space:]')"
+              import_done="0"
+              if [ "$db_exists" = "1" ]; then
+                import_done="$($YSQL -d langfuse -tAc "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='_meko_schema_init_done'" 2>/dev/null | tr -d '[:space:]')"
+              fi
+              if [ "$import_done" = "1" ]; then
+                echo "metadata schema already imported; skipping"
+              else
+                if [ "$db_exists" = "1" ]; then
+                  # A previous attempt got as far as CREATE DATABASE but not the
+                  # completion marker below — yb_postgres_data.sql has no IF NOT
+                  # EXISTS guards, so re-running the import against a half-built
+                  # schema would fail on the first already-created relation.
+                  # Drop and start clean instead of leaving it half-built forever.
+                  echo "previous metadata import did not complete; dropping and recreating langfuse database"
+                  $YSQL -d yugabyte -c "DROP DATABASE langfuse"
+                fi
+                echo "creating database langfuse"
+                $YSQL -d yugabyte -c "CREATE DATABASE langfuse"
+                echo "importing yb_postgres_data.sql"
+                $YSQL -d langfuse -v ON_ERROR_STOP=1 -f /schema/yb_postgres_data.sql
+                $YSQL -d langfuse -c "CREATE TABLE _meko_schema_init_done (done boolean)"
+              fi
+          env:
+            - name: DB_HOST
+              valueFrom: { configMapKeyRef: { name: meko-api-server-config, key: DB_HOST } }
+            - name: DB_PORT
+              valueFrom: { configMapKeyRef: { name: meko-api-server-config, key: DB_PORT } }
+            - name: DB_USER_NAME
+              valueFrom: { configMapKeyRef: { name: meko-api-server-config, key: DB_USER_NAME } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $.Values.apiServer.secrets.existing.db }}, key: db-password } }
+          volumeMounts:
+            - name: schema-files
+              mountPath: /schema
+              readOnly: true
+        - name: tracing-schema-init
+          image: {{ $.Values.apiServer.migrate.extensionsImage }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PGPASSWORD="$DB_PASSWORD"
+              YSQL="/home/yugabyte/bin/ysqlsh -h $DB_HOST -p $DB_PORT -U $DB_USER_NAME"
+              echo "creating clickhouse schema"
+              $YSQL -d langfuse -c "CREATE SCHEMA IF NOT EXISTS clickhouse"
+              echo "importing tracing_postgres_schema.sql"
+              PGOPTIONS="-c search_path=clickhouse,public" \
+                $YSQL -d langfuse -v ON_ERROR_STOP=1 -f /schema/tracing_postgres_schema.sql
+          env:
+            - name: DB_HOST
+              valueFrom: { configMapKeyRef: { name: meko-api-server-config, key: DB_HOST } }
+            - name: DB_PORT
+              valueFrom: { configMapKeyRef: { name: meko-api-server-config, key: DB_PORT } }
+            - name: DB_USER_NAME
+              valueFrom: { configMapKeyRef: { name: meko-api-server-config, key: DB_USER_NAME } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $.Values.apiServer.secrets.existing.db }}, key: db-password } }
+          volumeMounts:
+            - name: schema-files
+              mountPath: /schema
+              readOnly: true
+      volumes:
+        - name: schema-files
+          configMap:
+            name: langfuse-schema-sql
+      {{- end }}
       containers:
         - name: langfuse-web
           image: {{ include "meko.image" (dict "image" $c.web.image "global" $.Values.global) }}

@@ -124,6 +124,10 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>\n")
 	fmt.Fprintf(&b, "QUAY_USER=<robot name>         # e.g. yugabyte+something\n")
 	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n")
+	// The one langfuse field a chart cannot invent for itself: everything else
+	// required below is real cryptographic material this shell can generate on
+	// the spot (openssl rand), but the seeded owner needs an actual mailbox.
+	fmt.Fprintf(&b, "LANGFUSE_OWNER_EMAIL=<you@your-domain>        # bundled langfuse's seeded owner login\n")
 	// Worth a line of its own rather than a footnote: without it the stack comes up
 	// entirely green and remembers nothing, which reads as a bug rather than a
 	// missing credential. The refs are optional, so empty installs fine.
@@ -163,6 +167,18 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "  --set-string inferenceGateway.image.tag=\"${GW_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
+	// values-byoc.yaml turns langfuse on with migrate.enabled — a fresh install
+	// fails at dataplane-secrets.yaml's own fail-fast guard without these seven.
+	// Six are generated inline (openssl rand, once, at paste time — see the
+	// README for why these must NOT be regenerated on a later upgrade); the
+	// seventh is the header var above, since a chart cannot invent an email.
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseNextauthSecret=\"$(openssl rand -hex 16)\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseSalt=\"$(openssl rand -hex 16)\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseEncryptionKey=\"$(openssl rand -hex 32)\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseAdminApiKey=\"$(openssl rand -hex 16)\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitUserEmail=\"${LANGFUSE_OWNER_EMAIL}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitUserPassword=\"$(openssl rand -hex 16)\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitProjectSecretKey=\"$(openssl rand -hex 16)\" \\\n")
 	fmt.Fprintf(&b, "  --set reconcileAgent.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set reconcileAgent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "  --set reconcileAgent.envName=%s \\\n", envID)

@@ -34,6 +34,14 @@ data:
          basePath is trimmed of a trailing slash so it cannot yield //api/v1. */}}
   {{- $apiBase = printf "http://meko-api-server-service.%s.svc.cluster.local.:%v%s/api/v1" $apiNs $.Values.apiServer.service.port (trimSuffix "/" $.Values.apiServer.basePath) }}
   {{- end }}
+  {{- /* Same fill as the api-server's LANGFUSE_HOST (templates/api-server/configmap.yaml):
+         left at the env preset's hosted-dev value, this MCP server's own langfuse
+         calls go to the SHARED hosted instance instead of the one bundled here. */}}
+  {{- $lfHost := "" }}
+  {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true" }}
+  {{- $lfNs := include "meko.ns" (dict "root" $ "ns" $.Values.langfuse.namespace) }}
+  {{- $lfHost = printf "http://langfuse-web.%s.svc.cluster.local.:3000" $lfNs }}
+  {{- end }}
   {{- range $k, $v := $c.config }}
   {{- $val := $v }}
   {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST")) (not $v) }}
@@ -41,6 +49,9 @@ data:
   {{- end }}
   {{- if and $apiBase (eq $k "MEKO_BASE_URL") (not $v) }}
   {{- $val = $apiBase }}
+  {{- end }}
+  {{- if and $lfHost (eq $k "LANGFUSE_HOST") (not $v) }}
+  {{- $val = $lfHost }}
   {{- end }}
   {{ $k }}: {{ $val | quote }}
   {{- end }}

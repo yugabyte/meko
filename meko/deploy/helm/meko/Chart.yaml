@@ -27,6 +27,14 @@ dependencies:
     version: "2025.2.5"
     repository: https://charts.yugabyte.com
     condition: yugabyte.enabled
+  # Langfuse's job queue + cache. Off by default — hosted dev/prod already run
+  # their own long-lived Valkey release (langfuse.valkey.managed: false, the
+  # existing behavior). A BYOC data plane has nothing else to point at, so it
+  # bundles this the same way it bundles YugabyteDB.
+  - name: valkey
+    version: "0.9.3"
+    repository: https://valkey.io/valkey-helm/
+    condition: langfuse.valkey.managed
 
 maintainers:
   - name: Meko DevOps

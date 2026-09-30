@@ -2,5 +2,8 @@ dependencies:
 - name: yugabyte
   repository: https://charts.yugabyte.com
   version: 2025.2.5
-digest: sha256:63358cc08c6fbe9038614b6817a8d705515043b24417490f9342b4e5f7576fa9
-generated: "2026-07-30T20:38:43.707504-07:00"
+- name: valkey
+  repository: https://valkey.io/valkey-helm/
+  version: 0.9.3
+digest: sha256:d093f8066718aa5f5705043ac781d06881a86fc6e5842b298a3aa4d2909a21ce
+generated: "2026-09-29T11:15:04.395538-04:00"

@@ -12,14 +12,19 @@
 #     -f charts/meko/values-byoc.yaml \
 #     --set-string apiServer.image.tag=$TAG
 #
-# No storage class to pass, on purpose. The bundled database's volumes are the ONLY
-# PVCs in a BYOC release — controlPlaneDb and langfuse are off, and the rag-agent
-# workers claim none — so there is nothing for them to be consistent WITH, and in a
-# customer's cluster we cannot know the class names anyway. Its default class is both
-# the right answer and the only one we can rely on being appropriate there.
-# `global.storageClassName` from the cloud preset governs nothing here: it cannot
-# reach a subchart's values (Helm resolves values before rendering), which is what
-# acceptClusterDefault below acknowledges rather than pretends away.
+# No storage class to pass, on purpose. Two subcharts claim PVCs in a BYOC release
+# — the bundled YugabyteDB and, now, bundled Valkey (langfuse.valkey.managed) — and
+# neither names one: controlPlaneDb is off and the rag-agent workers claim none, so
+# there is nothing else for them to be consistent WITH, and in a customer's cluster
+# we cannot know the class names anyway. The cluster's default class is both the
+# right answer and the only one we can rely on being appropriate there.
+# `global.storageClassName` from the cloud preset governs neither: it cannot reach a
+# subchart's values (Helm resolves values before rendering). YugabyteDB's own guard
+# (acceptClusterDefault below, templates/yugabyte-storage-guard.yaml) fails the
+# install loudly if the cluster has no default class; Valkey's upstream chart has no
+# equivalent, so a cluster with no default class leaves its PVC quietly Pending
+# instead — pin valkey.dataStorage.className explicitly if that cluster is a
+# possibility.
 #
 # The chart does still refuse to install when the cluster has NO default class,
 # because then the PVCs sit Pending forever and the StatefulSet never becomes ready
@@ -58,6 +63,22 @@ global:
   # pod. Named here rather than left to the caller so this preset installs on its own;
   # the install hint creates a Secret under this name.
   imagePullSecrets: [quay-registry-creds]
+  # The cloud+env preset composed before this one sets this to OUR ECR/GCR path —
+  # meaningless to every component that actually deploys here, since each already
+  # names its own quay.io/yugabyte registry explicitly (meko.image: component
+  # registry beats global). It is NOT meaningless to the valkey subchart: Helm
+  # always passes global.* down to every subchart, valkey's own common.image
+  # helper lets global.imageRegistry override its image.registry UNCONDITIONALLY
+  # (no per-component escape hatch the way our own components have), and a
+  # customer's cluster has no credential for our ECR/GCR either way. Resetting
+  # it here is what lets valkey fall through to its own public docker.io
+  # default instead of a path that 404s.
+  #
+  # The one component this also affects: ecrCredentialRefresh (off by default,
+  # below) falls back to global.imageRegistry for its own ecrServer when unset.
+  # With this reset, turning it on needs ecrCredentialRefresh.ecrServer set
+  # explicitly — see the comment there.
+  imageRegistry: ""
 
 yugabyte:
   # Its own database. Requires the Meko build and the mage gflag — see values.yaml.
@@ -179,12 +200,24 @@ apiServer:
     # In-namespace traffic to a database this release owns.
     DB_SSL_MODE: disable
     SYSTEM_DB_SSL_MODE: disable
+    # Emptied for the same reason as DB_HOST above: the env preset points these
+    # at hosted dev's own langfuse (its ELB) and its own YugabyteDB, and left
+    # that way a BYOC api-server provisions orgs/projects and reads traces
+    # against the SHARED hosted instance instead of the one bundled here. The
+    # ConfigMap fills both with this release's own langfuse-web Service and its
+    # own YugabyteDB when yugabyte.enabled and these are empty.
+    LANGFUSE_HOST: ""
+    LANGFUSE_DB_HOST: ""
+    # In-namespace traffic to a database this release owns, same as DB_SSL_MODE.
+    LANGFUSE_DB_SSL_MODE: disable
 
 mekoMcpServer:
   image:
     registry: quay.io/yugabyte
     repository: meko-mcp-server
   config:
+    # Same fill and same reason as apiServer.config.LANGFUSE_HOST above.
+    LANGFUSE_HOST: ""
     # Skip every tier check in the MCP tools: the per-metric quota and the
     # free-tier feature gates on the DB and vector-index tools. Stated here for
     # the same reason as apiServer.enableByoc — this preset is composed LAST,
@@ -246,10 +279,18 @@ mekoUi:
 #                 (ragAgent.gpu.enabled=false) rather than needing one. What still
 #                 isn't chart-rendered for a BYOC install: rag-agent-secret and the
 #                 KB S3 bucket credential, unlike dataPlaneSecrets' other Secrets.
-#   langfuse    — NOT a flag away: v3 wants ClickHouse, a Valkey release of its own
-#                 (valkey.managed: false) and object storage beside it.
 #   provisioner — deliberately not: it renders ClusterRoles and a CRD, and manages
 #                 per-tenant namespaces, which is the opposite of one namespace.
+#
+# langfuse is ON, bundled the same way as the database: valkey.managed=true adds the
+# valkey subchart in-namespace, and migrate.enabled=true runs its schema-init the
+# same install (no ClickHouse anywhere — this fork's "tracing" backend is a
+# `clickhouse`-named Postgres schema in the SAME YugabyteDB database, not a real
+# ClickHouse deployment; see templates/langfuse/deployment.yaml). What it still
+# needs from the installer: an image tag for web/worker, an S3 bucket for
+# event/media/export uploads (optional — degrades to failed uploads, not a blocked
+# pod), and the required dataPlaneSecrets.langfuse* crypto fields below, none of
+# which has a default.
 #
 # Image coordinates are carried here whether or not a component is on, so enabling
 # one is a flag and not a flag plus two image values: meko.image falls back to
@@ -283,15 +324,35 @@ ragAgent:
   conversations: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
   pdf: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
 langfuse:
-  enabled: false
+  enabled: true
+  # The chart default (values.yaml) is an internet-facing LoadBalancer on both
+  # cloud presets (aws-load-balancer-scheme: internet-facing / GKE l4-rbs) —
+  # exactly what this preset otherwise keeps a BYOC release from getting
+  # (mekoUi.ingress.enabled/apiServer.ingress.enabled are both off below, for
+  # the same reason). Left on, every BYOC install gets a public endpoint in
+  # front of a freshly-seeded owner account and its ADMIN_API_KEY.
+  # scripts/deploy-gke.sh already sets this; the preset itself didn't.
+  lb:
+    enabled: false
+  valkey:
+    managed: true
+  migrate:
+    enabled: true
   web: { image: { registry: quay.io/yugabyte, repository: meko-langfuse-web } }
   worker: { image: { registry: quay.io/yugabyte, repository: meko-langfuse-worker } }
+  config:
+    # Emptied for the same reason as apiServer's LANGFUSE_HOST/LANGFUSE_DB_HOST
+    # below: the env preset points this at hosted dev's own langfuse, and the
+    # ConfigMap fills it with this release's own langfuse-web Service when empty.
+    NEXTAUTH_URL: ""
 provisioner:
   enabled: false
   image: { registry: quay.io/yugabyte, repository: meko-provisioner }
 
 # The refresher keeps the ECR pull Secret alive (tokens last ~12h) but needs AWS
 # credentials of its own. Off by default here; turn it on with
-# ecrCredentialRefresh.awsCredentialsSecret or awsRoleArn set.
+# ecrCredentialRefresh.awsCredentialsSecret or awsRoleArn set — and, since
+# global.imageRegistry is reset to "" above, also ecrCredentialRefresh.ecrServer
+# (its own default falls back to global.imageRegistry, which is empty here).
 ecrCredentialRefresh:
   enabled: false

@@ -10,7 +10,23 @@ metadata:
 data:
   # §5: secret-bearing keys ({{ join ", " $c.secretKeys }}) are intentionally
   # NOT here — they live in the langfuse-secrets Secret (see values.yaml).
+  {{- /* NEXTAUTH_URL is where NextAuth sends the BROWSER for sign-in callbacks and
+         redirects — unlike DB_HOST/MEKO_BASE_URL elsewhere in this chart, which are
+         server-to-server and can point at an in-cluster Service DNS name. A browser
+         can never resolve one of those, so this does not get the same treatment:
+         filling it with the cluster-internal Service name would make every sign-in
+         redirect to a host outside the cluster cannot reach, port-forward included.
+         The one access pattern this chart can assume without an Ingress/domain
+         override is `kubectl port-forward svc/langfuse-web 3000:3000`, so that
+         is the default —
+         override langfuse.config.NEXTAUTH_URL explicitly when fronting this with a
+         real Ingress or LoadBalancer hostname. */}}
+  {{- $nextauthUrl := "http://localhost:3000" }}
   {{- range $k, $v := $c.config }}
-  {{ $k }}: {{ $v | quote }}
+  {{- $val := $v }}
+  {{- if and (eq $k "NEXTAUTH_URL") (not $v) }}
+  {{- $val = $nextauthUrl }}
+  {{- end }}
+  {{ $k }}: {{ $val | quote }}
   {{- end }}
 {{- end }}
