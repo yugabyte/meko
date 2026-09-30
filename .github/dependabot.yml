@@ -1,0 +1,64 @@
+# Dependabot version updates, assigned to the maintainer.
+#
+# Commit prefixes follow the release rules (scripts/release-notes.sh). Every npm bump is
+# `fix(deps)` or `fix(deps-dev)`, so it cuts a release once merged to main: the web UI's
+# libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
+# release. Action bumps are `ci(deps)` and ship with the next release.
+# test/unit/dependabot.test.ts checks this against the release script.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    assignees:
+      - hari90
+    commit-message:
+      prefix: fix
+      prefix-development: fix
+      include: scope
+    ignore:
+      # Types track the Node major we run on (engines, .nvmrc, the bundled runtime).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    # A package goes into the first group it matches. Packages that must move together
+    # (peer ranges) share a group for every update type, majors included, so a stuck bump
+    # only holds back its own family. Everything else: one PR per dependency type for minor
+    # and patch bumps, and one PR per major.
+    groups:
+      fastify:
+        patterns: ["fastify", "@fastify/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      xterm:
+        patterns: ["@xterm/*"]
+      vite:
+        patterns: ["vite", "@vitejs/*", "vitest"]
+      typescript:
+        patterns: ["typescript", "typescript-eslint"]
+      eslint:
+        patterns: ["eslint", "@eslint/*", "eslint-plugin-*"]
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    assignees:
+      - hari90
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      # Minor and patch bumps together; each major gets its own PR.
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

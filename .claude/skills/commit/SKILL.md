@@ -30,7 +30,8 @@ become the release notes. So the subject line must follow `type(scope): summary`
 
 - Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`.
 - A breaking change uses `feat!:` / `fix!:`, or a `BREAKING CHANGE:` footer.
-- Scopes (optional): `server`, `web`, `auth`, `tmux`, `worktree`, `meko`, `update`, `release`.
+- Scopes (optional): `server`, `web`, `auth`, `tmux`, `worktree`, `meko`, `update`, `release`;
+  `deps` and `deps-dev` are Dependabot's (`.github/dependabot.yml`).
 - Subject: imperative mood, lowercase, no trailing period, ≤ 72 chars.
 - Body (optional): explain *why*, wrapped at 72 columns.
 

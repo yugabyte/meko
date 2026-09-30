@@ -46,6 +46,19 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:
 `docs:`, …). The release workflow reads them to decide whether to release and to write the notes.
 See `.claude/skills/commit/SKILL.md` for the full rules, including: no agent attribution.
 
+## Dependencies
+
+Dependabot (`.github/dependabot.yml`) checks npm packages and GitHub Actions every Monday and
+assigns its PRs to the maintainer. Packages that must move together (fastify, react, xterm,
+vite, typescript with typescript-eslint, eslint) come in one PR per family, majors included.
+Other minor and patch bumps come grouped (runtime, dev, actions), and each other major bump
+gets its own PR. `@types/node` stays on the Node major we ship (22). Its commit subjects follow
+the release rules: every npm bump is `fix(deps): …` or `fix(deps-dev): …` and releases once
+merged (the web UI's libraries are devDependencies bundled into the release), while
+`ci(deps): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
+breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
+`release.yml`) is bumped by hand.
+
 ## Releases
 
 Versions are `0.YYYYMMDD.N`: the UTC date of the release, and `N` counting up from 0 for each
