@@ -434,6 +434,12 @@ type UpgradeEndpointsRequest struct {
 	MaxParallel int      `json:"max_parallel,omitempty"`
 }
 
+// MaxParallel is a pointer so a test can send an out-of-range value, 0 included.
+type RerenderEndpointsRequest struct {
+	EndpointIDs []string `json:"endpoint_ids,omitempty"`
+	MaxParallel *int     `json:"max_parallel,omitempty"`
+}
+
 // RollTargetIsPinned reports which POST /endpoint-upgrades contract this
 // controller serves. Two are in the field:
 //
@@ -851,6 +857,12 @@ func (c *Client) ListAllEndpoints(ctx context.Context, poolID, clusterID, branch
 // non-terminal, 501 on a controller without the endpoint deployer.
 func (c *Client) UpgradeEndpoints(ctx context.Context, req UpgradeEndpointsRequest) (Task, string, error) {
 	return c.async(ctx, http.MethodPost, c.apiURL+"/endpoint-upgrades", req)
+}
+
+// RerenderEndpoints shares the fleet lock with UpgradeEndpoints: either in
+// flight makes the other a 409.
+func (c *Client) RerenderEndpoints(ctx context.Context, req RerenderEndpointsRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.apiURL+"/endpoint-rerenders", req)
 }
 
 // ListSubtasks returns every child of a fan-out task, oldest first.

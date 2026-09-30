@@ -33,7 +33,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint credentials and client address: a writer create without a password, with one under 8 characters, a read_only create carrying one, and a with_writer cluster create without one are refused with 400. A writer answers to exactly the password it was created with (a wrong one and the old well-known cloud_admin are refused), a read_only endpoint answers to its writer's password, a fork's writer sets its own password without changing the parent's, and neither plaintext appears in the endpoint, task or pod/ConfigMap/Secret objects. Each cluster_ip endpoint records its Service DNS as its address, and that address and the password both survive a compute restart and an add_branch_extensions redeploy.",
+		Description: "Endpoint credentials and client address: a writer create without a password, with one under 8 characters, a read_only create carrying one, and a with_writer cluster create without one are refused with 400. A writer answers to exactly the password it was created with (a wrong one and the old well-known cloud_admin are refused), a read_only endpoint answers to its writer's password, a fork's writer sets its own password without changing the parent's, and neither plaintext appears in the endpoint, task or pod/ConfigMap/Secret objects, and the writer stores a SCRAM-SHA-256 verifier with password_encryption scram-sha-256. Each cluster_ip endpoint records its Service DNS as its address, and that address and the password both survive a compute restart and an add_branch_extensions redeploy.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     50 * time.Minute,
 		Run:         runAmpEndpointClientAccess,
@@ -57,6 +57,7 @@ func runAmpEndpointClientAccess(t *core.T) error {
 		return []phase{
 			{"password_validation", r.validation},
 			{"writer_password", r.writerPassword},
+			{"verifier_is_scram", r.verifierIsSCRAM},
 			{"fork_sets_its_own_password", r.forkPassword},
 			{"no_plaintext_at_rest", r.noPlaintext},
 			{"address_survives_restart", r.survivesRestart},
@@ -267,6 +268,22 @@ func (r *clientAccessRun) noPlaintext(ctx context.Context) error {
 		return fmt.Errorf("list the cluster's tasks: %w", err)
 	}
 	return scan("GET /tasks for the cluster", string(tasks))
+}
+
+func (r *clientAccessRun) verifierIsSCRAM(ctx context.Context) error {
+	a, err := r.auth(r.writer, r.pwMain)
+	if err != nil {
+		return err
+	}
+	out, err := ampstack.EndpointPsql(ctx, r.kube, r.writer.ID, a,
+		"select split_part(rolpassword, '$', 1) || ' ' || current_setting('password_encryption') from pg_authid where rolname = current_user")
+	if err != nil {
+		return fmt.Errorf("read the writer's stored verifier: %w", err)
+	}
+	if got := strings.TrimSpace(out); got != "SCRAM-SHA-256 scram-sha-256" {
+		return fmt.Errorf("the writer stores its password as %q (verifier scheme, then password_encryption), want \"SCRAM-SHA-256 scram-sha-256\": an md5 verifier is a replayable hash of the password", got)
+	}
+	return nil
 }
 
 func (r *clientAccessRun) survivesRestart(ctx context.Context) error {

@@ -1651,6 +1651,43 @@ stress:
     # resume_duration is the post-kill write window proving COMMIT works again.
     resume_duration: "30s"
     payload_bytes: 256
+  # sync_commit_levels: one session per synchronous_commit level, all writing at
+  # once. local_txn sets local with SET LOCAL inside each transaction.
+  sync_commit_levels:
+    levels: ["on", "local", "remote_write", "remote_apply", "local_txn", "off"]
+    baseline_duration: "20s"
+    # The safekeeper is frozen freeze_lead into the round for freeze_duration;
+    # compute_ctl is killed kill_lead before the thaw. Writes issued within
+    # freeze_grace of the freeze may already have been durable.
+    freeze_lead: "5s"
+    freeze_duration: "10s"
+    freeze_grace: "1s"
+    kill_lead: "3s"
+    # The plain crash lands crash_lead into a crash_lead + crash_tail window.
+    crash_lead: "10s"
+    crash_tail: "20s"
+    settle_timeout: "10m"
+    resume_duration: "20s"
+    payload_bytes: 256
+  # wal_segment_switch: first a safekeeper kill on top of one record larger than
+  # its 64 MiB anchor scan window (large_record_bytes, 0 = skip that round), then
+  # pg_switch_wal on a timer and a restart per round: safekeeper, compute_ctl, then
+  # safekeeper again after the amp_storage.wals tablets are split
+  # (split_wal_tablets).
+  wal_segment_switch:
+    tenants: 1
+    baseline_duration: "20s"
+    rounds: 3
+    round_duration: "30s"
+    switch_interval: "3s"
+    # post_switch_writes is how long acked commits pile up above the last
+    # switch's padding before the kill.
+    post_switch_writes: "2s"
+    large_record_bytes: 83886080
+    split_wal_tablets: true
+    settle_timeout: "10m"
+    resume_duration: "30s"
+    payload_bytes: 256
   # partition: shared by the two partition tests below. The rules are inserted in
   # the TARGET pod's network namespace by a privileged, hostPID helper pod on the
   # same node (nsenter + iptables), because neither the endpoint image nor the YB
