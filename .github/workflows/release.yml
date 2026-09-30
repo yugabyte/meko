@@ -308,7 +308,7 @@ jobs:
       - name: Attest build provenance
         # Artifact attestations need GitHub Enterprise Cloud for internal repos.
         continue-on-error: true
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist-release/*.tar.gz
 
