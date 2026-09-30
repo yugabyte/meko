@@ -488,7 +488,9 @@ truncate at the first `will_init` anchor. The one-forknum multi-block
 scans — a contiguous `scan_range` and a scattered `scan_scattered_set`
 alike, which share `scan_one_fork_thin` — issue one bound single-block read
 per block, batched onto one `Perform`, so each stops at its own anchor
-(`ChainCollector`); the paging
+(`ChainCollector`). A relation chain read fetches `image_chain_limit + 1`
+rows per round (a fixed default with the count trigger off). A read stops at the
+base, so a chain within the materialiser's bound takes one round; the paging
 envelope pins every continuation to the first page's snapshot (`read_time_ht`), and paging
 must run until a reader signals stop or the range is exhausted — a scan
 cut short mid-chain drops the base image and reconstructs a partial page

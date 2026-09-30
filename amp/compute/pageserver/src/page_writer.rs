@@ -2660,11 +2660,8 @@ mod tests {
         let store = SHARED_STORE
             .get_or_init(|| async {
                 let cfg = PageStoreConfig {
-                    yb: test_yb_config(),
                     schema: PROD_SCHEMA.to_string(),
-                    scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
-                    payload_compression:
-                        pageserver_api::config::defaults::DEFAULT_YB_PAYLOAD_COMPRESSION,
+                    ..PageStoreConfig::new(test_yb_config())
                 };
                 let store = PageStore::connect(cfg, "pw_test", true)
                     .await

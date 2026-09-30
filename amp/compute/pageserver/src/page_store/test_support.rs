@@ -70,11 +70,8 @@ pub(super) async fn make_store(_suffix: &str) -> (PageStore, String) {
     let store = SHARED_STORE
         .get_or_init(|| async {
             let cfg = PageStoreConfig {
-                yb: test_yb_config(),
                 schema: PROD_SCHEMA.to_string(),
-                scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
-                payload_compression:
-                    pageserver_api::config::defaults::DEFAULT_YB_PAYLOAD_COMPRESSION,
+                ..PageStoreConfig::new(test_yb_config())
             };
             PageStore::connect(cfg, "page_store_test", true)
                 .await

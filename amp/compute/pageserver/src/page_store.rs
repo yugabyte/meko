@@ -460,6 +460,9 @@ pub struct PageStoreConfig {
     /// reads decode whatever tag each row carries. Plumbed through from
     /// `PageServerConf::yb_payload_compression`.
     pub payload_compression: PayloadCompression,
+    /// Sizes each chain-read round (see [`page_chain_read_limit`]). Plumbed through from
+    /// `YbPageWriterConfig::image_chain_limit`.
+    pub image_chain_limit: u32,
 }
 
 impl PageStoreConfig {
@@ -469,7 +472,14 @@ impl PageStoreConfig {
             schema: DEFAULT_SCHEMA.to_string(),
             scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
             payload_compression: pageserver_api::config::defaults::DEFAULT_YB_PAYLOAD_COMPRESSION,
+            image_chain_limit: pageserver_api::config::YbPageWriterConfig::unscaled_defaults()
+                .image_chain_limit,
         }
+    }
+
+    pub fn with_image_chain_limit(mut self, image_chain_limit: u32) -> Self {
+        self.image_chain_limit = image_chain_limit;
+        self
     }
 
     pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
@@ -493,6 +503,8 @@ pub struct PageStore {
     /// codec tag, so a chain may freely mix rows written under different
     /// settings and a config change needs no migration.
     payload_codec: payload_codec::Codec,
+    /// Row limit of each relation chain-read round, from [`page_chain_read_limit`].
+    page_chain_read_limit: u64,
     /// The hot-path lane: `yb_thin_client` handles over the
     /// `libyb_thin_client` C++ shim for the tables this store owns, batching
     /// reads/writes into one Perform per call. Opened and health-checked at
@@ -877,13 +889,17 @@ fn normalize_chain<T>(
     chain
 }
 
-/// Rows per fetched page on direct-RPC single-key chain reads. Sized so
-/// the common case (chain bounded by `image_chain_limit` = 20 plus a
-/// little materialiser lag) is one round trip.
-const DIRECT_CHAIN_PAGE_ROWS: u64 = 32;
+/// Rows per round on a direct-RPC relation chain read: a chain at the materialiser's bound plus its base.
+fn page_chain_read_limit(image_chain_limit: u32) -> u64 {
+    match image_chain_limit {
+        // Count trigger off: chains are unbounded, and n + 1 would page per row.
+        0 => 32,
+        n => u64::from(n) + 1,
+    }
+}
 
 /// Rows per fetched page on direct-RPC single-key SLRU chain reads. Taller
-/// than [`DIRECT_CHAIN_PAGE_ROWS`]: SLRU deltas are tiny and
+/// than [`page_chain_read_limit`]: SLRU deltas are tiny and
 /// `image_chain_limit_slru` allows chains up to ~1000 rows, so this sizes
 /// the common case to one round trip.
 const DIRECT_SLRU_CHAIN_PAGE_ROWS: u64 = 1024;
@@ -1563,6 +1579,7 @@ impl PageStore {
                 PayloadCompression::None => payload_codec::Codec::Raw,
                 PayloadCompression::Lz4 => payload_codec::Codec::Lz4,
             },
+            page_chain_read_limit: page_chain_read_limit(config.image_chain_limit),
             thinclient,
         })
     }
@@ -1747,7 +1764,7 @@ impl PageStore {
         let read = page_chain_read(pages, &branch_id.to_bytes(), sp, db, rel, fork, blk)?
             .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
-            .limit(DIRECT_CHAIN_PAGE_ROWS);
+            .limit(self.page_chain_read_limit);
         let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
         let raw = fetch_chain_rows_thin(&p.client, pages, read, 2)
             .await
@@ -1798,7 +1815,7 @@ impl PageStore {
                             pages,
                             &["blknum", "lsn", "is_image", "will_init", "payload"],
                         )?
-                        .limit(DIRECT_CHAIN_PAGE_ROWS),
+                        .limit(self.page_chain_read_limit),
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -3557,6 +3574,12 @@ mod payload_envelope_tests {
         assert!(decode_payload(&Bytes::new(), || "pages row").is_err());
     }
 
+    #[test]
+    fn page_chain_read_limit_covers_a_full_chain_and_its_base() {
+        assert_eq!(page_chain_read_limit(20), 21);
+        assert_eq!(page_chain_read_limit(0), 32);
+    }
+
     /// Deltas dominate the row count and are mostly a few bytes; they must
     /// stay raw so the hot write path spends nothing on them.
     #[test]
@@ -4072,7 +4095,7 @@ mod tests {
     /// 2MB stretch boundary must still find every block, and each block must
     /// trim at its OWN anchor rather than the range's shallowest.
     ///
-    /// Each block carries pre-anchor history deeper than `DIRECT_CHAIN_PAGE_ROWS`,
+    /// Each block carries 40 rows of pre-anchor history,
     /// so a stop predicate that fired before the anchor would return a short
     /// chain here. It does NOT distinguish stopping from reading on and
     /// discarding — that is a fetch-side property with no API-visible effect.
@@ -4090,8 +4113,7 @@ mod tests {
             "range must straddle a stretch boundary for this test to mean anything"
         );
 
-        // Per block: 40 shadowed rows below the anchor (deeper than the 32-row
-        // page, so the anchor is not reachable in one fetch), the anchor image,
+        // Per block: 40 shadowed rows below the anchor, the anchor image,
         // then blk-lo+1 deltas above it — a different depth per block.
         let mut rows = Vec::new();
         for blk in lo..hi {
@@ -6614,7 +6636,7 @@ mod tests {
     }
 
     /// A batch above `ROWS_PER_INSERT` must land fully via multiple
-    /// Performs, and a paged chain read (> one 32-row page) must walk the
+    /// Performs, and a chain read longer than one round must walk the
     /// paging envelope on one snapshot.
     #[tokio::test]
     async fn thin_lane_chunks_and_pages() {
@@ -6630,7 +6652,7 @@ mod tests {
             rows.push(page_row(k, 10, true, true, format!("b{blk}").as_bytes()));
         }
         // Plus one deep chain on a single block: an image at 10 under
-        // 60 deltas — deeper than DIRECT_CHAIN_PAGE_ROWS, so the chain
+        // 60 deltas — deeper than a chain-read round, so the chain
         // read must follow the paging state.
         let deep = page_key(1663, 5, 16385, 1, 0);
         rows.push(page_row(deep.clone(), 10, true, true, b"deep-img"));
@@ -6652,7 +6674,7 @@ mod tests {
             assert_eq!(chain[0].payload.as_ref(), format!("b{blk}").as_bytes());
         }
         // The paged deep-chain read: image at 10 plus all 60 deltas above
-        // it, newest first, walked across several 32-row pages.
+        // it, newest first, walked across several rounds.
         let chain = pg.read_chain(branch, &deep, Lsn(1000)).await.unwrap();
         assert_eq!(chain.len(), 61);
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
