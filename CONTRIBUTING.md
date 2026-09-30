@@ -52,7 +52,10 @@ Dependabot (`.github/dependabot.yml`) checks npm packages and GitHub Actions eve
 assigns its PRs to the maintainer. Packages that must move together (fastify, react, xterm,
 vite, typescript with typescript-eslint, eslint) come in one PR per family, majors included.
 Other minor and patch bumps come grouped (runtime, dev, actions), and each other major bump
-gets its own PR. `@types/node` stays on the Node major we ship (22). Its commit subjects follow
+gets its own PR. `@types/node` stays on the Node major we ship (22). `typescript` stays on 6
+until typescript-eslint supports TypeScript 7
+([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
+so its majors don't come at all; drop that `ignore` rule once it lands. Dependabot's commit subjects follow
 the release rules: every npm bump is `fix(deps): …` or `fix(deps-dev): …` and releases once
 merged (the web UI's libraries are devDependencies bundled into the release), while
 `ci(deps): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
