@@ -363,6 +363,19 @@ Meko API key** while Meko is off. A shared datapack already attached can become 
 The datapack is pinned then, and new sessions use it. Search is hidden for a project with no
 datapacks.
 
+The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
+**Switch the dedicated datapack**, to make a new datapack or one of yours the dedicated one; attached
+shared datapacks are listed first, and a new one's default name gets `-2` (or the next free number)
+when the usual name is taken. The old datapack stays attached as shared, so its memories can still
+be searched, unless **Detach *old* from this project** is checked. Nothing is deleted in Meko. The
+dialog warns how many of the project's sessions are running (starting, working, needs you, idle):
+they keep the datapack they were launched with, and so keep writing to the old one until they're
+restarted. New and resumed sessions get the new one (a resumed session's Meko conversation is keyed
+by datapack, so its earlier turns stay in the old one). The request names the datapack it replaces
+(`replace`), so a switch made meanwhile in another tab is refused (409) rather than undone; the old
+row is demoted or detached in the same transaction as the new one is added, the project's
+server-side Meko conversation is made again in the new datapack, and the pin is rewritten.
+
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
 picked up from GitHub), a dialog offers **Delete project** (as on the project home; the repo and
 datapacks stay), **New session** or **Keep project**. It asks only on the project's session view,
@@ -627,7 +640,9 @@ stateDiagram-v2
 
 - **Dedicated datapack (one per project).** It's created with the project, named
   `adlc/proj/<repo>/<project_name>` by default, or you can pick an existing one. It is the only
-  place session transcripts and extracted memories are written.
+  place session transcripts and extracted memories are written. It can be switched to another
+  datapack from the project's home; the old one then stays attached as shared, or is detached, and
+  what was written to it stays there.
 - **Shared datapacks (zero or more).** These are attached from your `datapack_list`: a team
   knowledge base, org conventions, another project's memory. They are read-only from this
   project's point of view, and one datapack can be attached to many projects.

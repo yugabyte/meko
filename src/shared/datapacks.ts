@@ -27,6 +27,14 @@ export function defaultProjectDatapackName(repoName: string, projectName: string
   return `${PROJECT_DATAPACK_PREFIX}${part(repoName, 'repo')}/${part(projectName, 'project')}`;
 }
 
+/** `name`, or `name-2`, `name-3`, … if it's taken (datapack names are unique across Meko). */
+export function freeDatapackName(name: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(name)) return name;
+  let i = 2;
+  while (taken.has(`${name}-${i}`)) i++;
+  return `${name}-${i}`;
+}
+
 /** Lowercase, [a-z0-9-] only, dashes collapsed: how repo folder names compare with the datapack's repo part. */
 export function slugPart(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');

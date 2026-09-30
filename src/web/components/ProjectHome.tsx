@@ -2,6 +2,7 @@ import { UsagePanel } from './UsagePanel';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   REVIEWER_LABELS,
+  type DatapackRef,
   type MekoDatapack,
   type ProjectHome,
   type ProjectSettings,
@@ -55,8 +56,12 @@ export function ProjectHomeView({
   const mobile = useIsMobile();
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  /** The open dialog: sharing, adding a Meko key, or adding a dedicated datapack (with why it's asked for). */
-  const [dialog, setDialog] = useState<{ kind: 'share' | 'key' | 'datapack'; reason?: string } | null>(null);
+  /**
+   * The open dialog: sharing, adding a Meko key, adding a dedicated datapack (with why it's asked
+   * for), or switching it (from the one shown when Switch was tapped, so a switch made meanwhile in
+   * another tab is refused rather than undone).
+   */
+  const [dialog, setDialog] = useState<{ kind: 'share' | 'key' | 'datapack' | 'switch'; reason?: string; replacing?: DatapackRef } | null>(null);
   const datapacks = home?.datapacks ?? project.datapacks.map((d) => ({ ...d, memoryCount: null, knowledgeCount: null, grant: null }));
   // Which datapack is dedicated comes from the live project (another tab may have just added one);
   // its counts, grant and owner from the home page's read.
@@ -188,6 +193,10 @@ export function ProjectHomeView({
                         }
                       }}
                     />
+                  ) : mekoConfigured ? (
+                    <button className="link-btn" onClick={() => setDialog({ kind: 'switch', replacing: { id: d.id, name: d.name, role: d.role } })}>
+                      Switch
+                    </button>
                   ) : (
                     <span />
                   )}
@@ -256,6 +265,15 @@ export function ProjectHomeView({
       {dialog?.kind === 'key' && <MekoKeyDialog reason={dialog.reason} mekoWebUrl={mekoWebUrl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'datapack' && (
         <AddDatapackDialog project={project} reason={dialog.reason} onClose={() => setDialog(null)} onAdded={() => load()} />
+      )}
+      {dialog?.kind === 'switch' && dialog.replacing && (
+        <AddDatapackDialog
+          project={project}
+          replacing={dialog.replacing}
+          sessions={project.sessions}
+          onClose={() => setDialog(null)}
+          onAdded={() => load()}
+        />
       )}
     </div>
   );

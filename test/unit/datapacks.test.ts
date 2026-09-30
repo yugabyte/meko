@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, normaliseRemote, parseProjectDatapack, projectDatapackDescription, remoteFromDescription, remoteRepoName,
+  canonicalRepoName, defaultProjectDatapackName, freeDatapackName, isProjectDatapack, matchRepo, normaliseRemote, parseProjectDatapack, projectDatapackDescription, remoteFromDescription, remoteRepoName,
   shortRemote, withoutCredentials,
 } from '../../src/shared/datapacks.js';
 
@@ -22,6 +22,12 @@ describe('project datapack names', () => {
     expect(parseProjectDatapack('adlc/proj/repo/')).toBeNull();
     expect(isProjectDatapack('adlc/proj/a/b')).toBe(true);
     expect(isProjectDatapack('adlc/project/a/b')).toBe(false);
+  });
+
+  it('numbers a name that is taken', () => {
+    expect(freeDatapackName('adlc/proj/r/p', new Set())).toBe('adlc/proj/r/p');
+    expect(freeDatapackName('adlc/proj/r/p', new Set(['adlc/proj/r/p']))).toBe('adlc/proj/r/p-2');
+    expect(freeDatapackName('adlc/proj/r/p', new Set(['adlc/proj/r/p', 'adlc/proj/r/p-2', 'adlc/proj/r/p-3']))).toBe('adlc/proj/r/p-4');
   });
 });
 
