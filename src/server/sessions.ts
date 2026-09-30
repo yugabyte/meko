@@ -474,15 +474,22 @@ export class SessionManager {
     if (busy()) throw new HttpError(409, 'This session is still starting. Try again in a moment.');
   }
 
-  /** Pins the project's dedicated datapack for its Meko agent id again (it may have been changed or removed). */
-  private pinDatapack(projectId: string): void {
-    const dp = dedicatedDatapack(this.db, projectId);
+  /**
+   * Pins the project's dedicated datapack for its Meko agent id again (it may have been changed or
+   * removed), and records it as the one this launch uses (sessionDatapack), so AgentK's writes
+   * for the session stay with it after a switch, until the session is launched again.
+   */
+  private pinDatapack(row: SessionRow): void {
+    const dp = this.core.mekoStatus.configured ? dedicatedDatapack(this.db, row.project_id) : null;
+    row.meko_datapack_id = dp?.id ?? null;
+    row.meko_datapack_name = dp?.name ?? null;
+    run(this.db, 'UPDATE sessions SET meko_datapack_id = ?, meko_datapack_name = ? WHERE id = ?', row.meko_datapack_id, row.meko_datapack_name, row.id);
     // Meko off: AgentK pins nothing. Claude Code's own Meko setup, if any, is left as it is.
-    if (!dp || !this.core.mekoStatus.configured) return;
+    if (!dp) return;
     try {
-      this.core.projects.writePin(projectId, dp);
+      this.core.projects.writePin(row.project_id, dp);
     } catch (e) {
-      this.core.log.warn(`could not pin the Meko datapack for ${projectId}`, errMsg(e));
+      this.core.log.warn(`could not pin the Meko datapack for ${row.project_id}`, errMsg(e));
     }
   }
 
@@ -494,7 +501,7 @@ export class SessionManager {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
     const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
-    this.pinDatapack(row.project_id);
+    this.pinDatapack(row);
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
     const script = writeLauncher(this.core.paths, {

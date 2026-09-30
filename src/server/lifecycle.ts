@@ -11,8 +11,8 @@ import { projectAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import type { ReviewerMode } from '../shared/types.js';
-import { dedicatedDatapack, parseSettings, projectRow, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
+import type { DatapackRef, ReviewerMode } from '../shared/types.js';
+import { dedicatedDatapack, parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
@@ -138,7 +138,7 @@ export class Lifecycle {
 
   private async sendDesignNow(id: string): Promise<void> {
     const row = sessionRow(this.db, id);
-    const dp = row && dedicatedDatapack(this.db, row.project_id);
+    const dp = row && sessionDatapack(this.db, row);
     // No datapack, or Meko is off: the design stays here until it can be sent.
     if (!row || !dp || !this.core.mekoStatus.configured) return;
     const d = get<{ markdown: string; html: string | null; md_version: number; md_sent: number; html_version: number; html_sent: number }>(
@@ -154,12 +154,23 @@ export class Lifecycle {
         sent: 'UPDATE designs SET html_version = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
     }
     if (!parts.length) return;
-    const conv = await this.core.projects.ensureConversation(row.project_id);
+    const conv = await this.mekoConversation(row, dp);
     await Promise.all(parts.map(async (p) => {
       await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, projectAgentId(row.project_id), conv);
       // The version is used; it's the current design only if nothing changed while it was sent.
       run(this.db, p.sent, p.version, p.text, id);
     }));
+  }
+
+  /**
+   * The Meko conversation AgentK's writes for a session go under: the project's, which lives in
+   * its dedicated datapack, or the session's own when the session still uses one the project
+   * switched away from (a conversation belongs to one datapack).
+   */
+  private mekoConversation(row: SessionRow, dp: DatapackRef): Promise<string> {
+    return dedicatedDatapack(this.db, row.project_id)?.id === dp.id
+      ? this.core.projects.ensureConversation(row.project_id)
+      : this.sessions.conversationId(row, dp);
   }
 
   /** After an Artifact tool call during Design: keeps the published page and its link as the design. */
@@ -272,7 +283,7 @@ export class Lifecycle {
    * to finish on its own rather than cut short, which would close the Meko connection others share.
    */
   private async prFooter(row: SessionRow): Promise<string> {
-    const dp = dedicatedDatapack(this.db, row.project_id);
+    const dp = sessionDatapack(this.db, row);
     if (!dp || !this.core.mekoStatus.configured) return '';
     const lookup = this.sessions.conversationId(row, dp).catch((e: unknown): null => {
       this.core.log.warn(`looking up the Meko conversation for ${row.id} failed`, errMsg(e));
@@ -750,13 +761,13 @@ export class Lifecycle {
    */
   async cleanup(row: SessionRow, st: github.PrStatus): Promise<void> {
     const p = projectRow(this.db, row.project_id);
-    const dp = dedicatedDatapack(this.db, row.project_id);
+    const dp = sessionDatapack(this.db, row);
     // Once per session: a cleanup a restart cut short, or one that waited for Claude's turn while
     // the user archived by hand, may run again.
     const shipped = !!get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'shipped'", row.id);
     if (p && dp && !shipped && this.core.mekoStatus.configured) {
       try {
-        const conv = await this.core.projects.ensureConversation(row.project_id);
+        const conv = await this.mekoConversation(row, dp);
         const body = st.body.trim().slice(0, 4000);
         this.sessions.ingestUsage(row.id);
         const u = this.sessions.runtime(row.id).usage;

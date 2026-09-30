@@ -91,7 +91,7 @@ describe('switching the dedicated datapack', () => {
       throw new MekoError('[FREE_TIER_DATAPACK_LIMIT] Upgrade to Standard to create a new datapack.');
     };
     await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: true }))
-      .rejects.toMatchObject({ status: 402, code: 'DATAPACK_LIMIT' });
+      .rejects.toMatchObject({ status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Pick one of your datapacks under Use an existing one/) });
     expect(env.core.projects.get(p.id).datapacks).toEqual([{ ...OLD, role: 'dedicated' }]);
     expect(conversation()).toBe('conv-in-old');
   });
@@ -106,6 +106,25 @@ describe('switching the dedicated datapack', () => {
     const prompt = launched[0].args.join(' ');
     expect(prompt).toContain(`dedicated datapack is "${NEW.name}" (datapack_id ${NEW.id})`);
     expect(prompt).toMatch(new RegExp(`Shared datapacks you may search.*"${OLD.name}" \\(${OLD.id}\\)`));
+  });
+
+  it("keeps a running session's designs in the datapack it was launched with", async () => {
+    const before = await env.core.sessions.create(p.id, { name: 'Before', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(before.id).status, (st) => st === 'idle', 10000, 'the first session to start');
+    await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: true });
+    const after = await env.core.sessions.create(p.id, { name: 'After', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(after.id).status, (st) => st === 'idle', 10000, 'the second session to start');
+
+    const sentTo = async (id: string, slug: string) => {
+      await env.core.lifecycle.saveDesign(id, { markdown: `# ${slug}` });
+      const put = await waitFor(() => env.meko.calls.find((c) => c.name === 'putArtifact' && c.args[0] === `design-${slug}.md`), (c) => !!c, 5000, `${slug}'s design sent`);
+      return put!.args[3];
+    };
+    expect(await sentTo(before.id, 'before')).toBe(OLD.id);
+    expect(await sentTo(after.id, 'after')).toBe(NEW.id);
+    // The old datapack has no project conversation any more: the session's own one is used there.
+    const claudeId = env.core.sessions.row(before.id).claude_session_id;
+    expect(env.meko.calls.some((c) => c.name === 'ensureConversation' && c.args[1] === OLD.id && c.args[2] === claudeId)).toBe(true);
   });
 
   describe('over HTTP', () => {

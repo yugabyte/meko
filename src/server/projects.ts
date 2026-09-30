@@ -167,7 +167,9 @@ export class ProjectService {
    * The dedicated datapack a choice names: a new one created in Meko (with the repo's remote in
    * its description), or an existing one we can write to (an invite to it accepted first).
    */
-  private async resolveDatapack(choice: Exclude<DatapackChoice, { mode: 'none' }>, repoPath: string, projectName: string): Promise<{ id: string; name: string }> {
+  private async resolveDatapack(
+    choice: Exclude<DatapackChoice, { mode: 'none' }>, repoPath: string, projectName: string, forExisting = false,
+  ): Promise<{ id: string; name: string }> {
     if (choice.mode === 'create') {
       const dpName = choice.name.trim();
       if (!dpName) throw new HttpError(400, 'Give the new datapack a name.');
@@ -175,9 +177,11 @@ export class ProjectService {
       try {
         dp = await this.core.meko.createDatapack(dpName);
       } catch (e) {
-        // At the plan's limit: the UI offers to go on without a datapack.
+        // At the plan's limit: New project offers to go on without a datapack; an existing
+        // project can use one of the datapacks it already has access to.
         if (isDatapackLimit(e)) {
-          throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). Create the project without one, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
+          const fix = forExisting ? 'Pick one of your datapacks under Use an existing one' : 'Create the project without one';
+          throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). ${fix}, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
         }
         throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
       }
@@ -207,7 +211,8 @@ export class ProjectService {
    * Gives a project without one its dedicated datapack (for a project created without Meko, or at
    * the plan's datapack limit), or with `replace` switches it to another one: the old one stays
    * attached as shared, or is detached with `detachOld`. A datapack already attached as shared
-   * becomes the dedicated one. New sessions use it; running ones keep what they started with.
+   * becomes the dedicated one. New and resumed sessions use it; running ones keep the one they
+   * were launched with (sessionDatapack), for their own Meko calls, capture and AgentK's writes.
    */
   async setDedicatedDatapack(id: string, req: SetDedicatedDatapackRequest): Promise<Project> {
     const r = this.row(id);
@@ -234,7 +239,7 @@ export class ProjectService {
     let old: DatapackRef | null;
     try {
       this.needMeko('a datapack can\'t be added');
-      dp = await this.resolveDatapack(req, r.repo_path, r.name);
+      dp = await this.resolveDatapack(req, r.repo_path, r.name, true);
       old = tx(this.db, () => {
         const was = check();
         // The old one goes first: a project can't have two dedicated datapacks (one_dedicated).
