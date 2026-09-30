@@ -7,8 +7,8 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackChoice, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  MekoDatapack, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetupRequest,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
+  MekoDatapack, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
@@ -311,7 +311,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/branches', async (req) => core.projects.branches(req.params.id));
   app.post<{ Params: { id: string }; Body: AttachDatapackRequest }>('/api/projects/:id/datapacks', async (req) => core.projects.attachDatapack(req.params.id, req.body));
-  app.post<{ Params: { id: string }; Body: DatapackChoice }>('/api/projects/:id/dedicated-datapack', async (req) =>
+  app.post<{ Params: { id: string }; Body: SetDedicatedDatapackRequest }>('/api/projects/:id/dedicated-datapack', async (req) =>
     core.projects.setDedicatedDatapack(req.params.id, req.body));
   app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
   app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));

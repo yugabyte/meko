@@ -73,6 +73,9 @@ export interface SessionRow {
   /** CI-fix prompts for consecutive failing heads since CI was last green. */
   ci_fixes: number;
   agentk_seen: number;
+  /** The dedicated datapack the session was last launched with (see sessionDatapack). */
+  meko_datapack_id: string | null;
+  meko_datapack_name: string | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {
@@ -127,6 +130,16 @@ export function sessionRow(db: Db, id: string): SessionRow | undefined {
  */
 export function sessionRepo(db: Db, r: SessionRow): string | null {
   return r.repo_path ?? get<{ repo_path: string }>(db, 'SELECT repo_path FROM projects WHERE id = ?', r.project_id)?.repo_path ?? null;
+}
+
+/**
+ * The datapack AgentK writes to for a session: the dedicated one it was launched with, which it
+ * keeps until it's launched again (a switch leaves running sessions on the old one), else the
+ * project's dedicated datapack.
+ */
+export function sessionDatapack(db: Db, r: SessionRow): DatapackRef | null {
+  if (r.meko_datapack_id && r.meko_datapack_name) return { id: r.meko_datapack_id, name: r.meko_datapack_name, role: 'dedicated' };
+  return dedicatedDatapack(db, r.project_id);
 }
 
 export function sessionRows(db: Db, projectId?: string): SessionRow[] {

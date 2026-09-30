@@ -15,6 +15,17 @@ export function liveSessions(p: ProjectWithSessions): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
 }
 
+/**
+ * Statuses where Claude is up, so the session still has the Meko datapack it was launched with.
+ * `recovered` counts: it's set once Claude was relaunched after a restart.
+ */
+const RUNNING: ReadonlySet<SessionStatus> = new Set(['starting', 'working', 'needs_input', 'idle', 'recovered']);
+
+/** Sessions whose Claude is running now (not exited or archived). */
+export function runningSessions(sessions: Session[]): Session[] {
+  return sessions.filter((s) => s.desired !== 'archived' && RUNNING.has(s.status));
+}
+
 /** The project on screen and how many open sessions it has, as App last rendered it. */
 export interface LiveCount {
   projectId: string | null;

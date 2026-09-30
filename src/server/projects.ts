@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
-  ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
-  UpdateProjectRequest,
+  ActivityItem, AttachDatapackRequest, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
+  SetDedicatedDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import { REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
@@ -167,7 +167,9 @@ export class ProjectService {
    * The dedicated datapack a choice names: a new one created in Meko (with the repo's remote in
    * its description), or an existing one we can write to (an invite to it accepted first).
    */
-  private async resolveDatapack(choice: Exclude<DatapackChoice, { mode: 'none' }>, repoPath: string, projectName: string): Promise<{ id: string; name: string }> {
+  private async resolveDatapack(
+    choice: Exclude<DatapackChoice, { mode: 'none' }>, repoPath: string, projectName: string, forExisting = false,
+  ): Promise<{ id: string; name: string }> {
     if (choice.mode === 'create') {
       const dpName = choice.name.trim();
       if (!dpName) throw new HttpError(400, 'Give the new datapack a name.');
@@ -175,9 +177,11 @@ export class ProjectService {
       try {
         dp = await this.core.meko.createDatapack(dpName);
       } catch (e) {
-        // At the plan's limit: the UI offers to go on without a datapack.
+        // At the plan's limit: New project offers to go on without a datapack; an existing
+        // project can use one of the datapacks it already has access to.
         if (isDatapackLimit(e)) {
-          throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). Create the project without one, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
+          const fix = forExisting ? 'Pick one of your datapacks under Use an existing one' : 'Create the project without one';
+          throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). ${fix}, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
         }
         throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);
       }
@@ -205,29 +209,49 @@ export class ProjectService {
 
   /**
    * Gives a project without one its dedicated datapack (for a project created without Meko, or at
-   * the plan's datapack limit). A datapack already attached as shared becomes the dedicated one.
-   * New sessions use it; running ones keep what they started with.
+   * the plan's datapack limit), or with `replace` switches it to another one: the old one stays
+   * attached as shared, or is detached with `detachOld`. A datapack already attached as shared
+   * becomes the dedicated one. New and resumed sessions use it; running ones keep the one they
+   * were launched with (sessionDatapack), for their own Meko calls, capture and AgentK's writes.
    */
-  async setDedicatedDatapack(id: string, choice: DatapackChoice): Promise<Project> {
+  async setDedicatedDatapack(id: string, req: SetDedicatedDatapackRequest): Promise<Project> {
     const r = this.row(id);
-    const has = () => {
-      if (dedicatedDatapack(this.db, id)) throw new HttpError(409, 'This project already has a dedicated datapack.');
+    if (!req || req.mode === 'none') throw new HttpError(400, 'Choose a datapack, or give a name for a new one.');
+    const replace = req.replace;
+    if (replace !== undefined && (typeof replace !== 'string' || !replace)) throw new HttpError(400, 'Name the dedicated datapack to replace.');
+    if (req.detachOld !== undefined && typeof req.detachOld !== 'boolean') throw new HttpError(400, 'detachOld must be true or false.');
+    if (req.detachOld && !replace) throw new HttpError(400, 'Only a datapack being replaced can be detached.');
+    if (replace && req.mode === 'existing' && req.id === replace) throw new HttpError(400, 'That\'s already the dedicated datapack.');
+    // Checked again inside the transaction: another tab may have added or switched one meanwhile.
+    const check = () => {
+      const current = dedicatedDatapack(this.db, id);
+      if (!replace && current) throw new HttpError(409, 'This project already has a dedicated datapack.');
+      if (replace && current?.id !== replace) {
+        throw new HttpError(409, 'The dedicated datapack changed in another tab. Reload and try again.');
+      }
+      return current;
     };
-    has();
-    if (!choice || choice.mode === 'none') throw new HttpError(400, 'Choose a datapack, or give a name for a new one.');
+    check();
     // One at a time per project: two tabs adding at once would make two datapacks in Meko.
     if (this.addingDatapack.has(id)) throw new HttpError(409, 'A datapack is already being added to this project.');
     this.addingDatapack.add(id);
     let dp: { id: string; name: string };
+    let old: DatapackRef | null;
     try {
       this.needMeko('a datapack can\'t be added');
-      dp = await this.resolveDatapack(choice, r.repo_path, r.name);
-      tx(this.db, () => {
-        has();
+      dp = await this.resolveDatapack(req, r.repo_path, r.name, true);
+      old = tx(this.db, () => {
+        const was = check();
+        // The old one goes first: a project can't have two dedicated datapacks (one_dedicated).
+        if (was) {
+          if (req.detachOld) run(this.db, 'DELETE FROM project_datapacks WHERE project_id = ? AND datapack_id = ?', id, was.id);
+          else run(this.db, `UPDATE project_datapacks SET role = 'shared' WHERE project_id = ? AND datapack_id = ?`, id, was.id);
+        }
         run(this.db, 'DELETE FROM project_datapacks WHERE project_id = ? AND datapack_id = ?', id, dp.id);
         run(this.db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, id, dp.id, dp.name);
-        // Its server-side conversation was made without this datapack (for a search): make a new one.
+        // Its server-side conversation was made in the old datapack, or without one (for a search): make a new one.
         run(this.db, 'UPDATE projects SET meko_conversation_id = NULL WHERE id = ?', id);
+        return was;
       });
     } finally {
       this.addingDatapack.delete(id);
@@ -235,7 +259,9 @@ export class ProjectService {
     this.writePin(id, dp);
     this.core.invites.markUsed(dp.id);
     this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
-    this.core.log.info(`project ${id} now has datapack ${dp.name}`);
+    this.core.log.info(old
+      ? `project ${id} switched datapack ${old.name} → ${dp.name}${req.detachOld ? ` (${old.name} detached)` : ''}`
+      : `project ${id} now has datapack ${dp.name}`);
     this.core.changed();
     return this.get(id);
   }

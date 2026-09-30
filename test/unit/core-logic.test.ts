@@ -16,7 +16,7 @@ import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
 import { pinSlug, projectAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import { render } from '../../src/server/prompts.js';
-import { parseSettings, slugify } from '../../src/server/store.js';
+import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { repoFolder } from '../../src/server/worktrees.js';
 import { mekoDatapackShareUrl, mekoDatapackUrl } from '../../src/web/util.js';
@@ -218,6 +218,28 @@ describe('config and db', () => {
     expect(() => add('api-tools')).not.toThrow();
   });
 
+  it("uses the project's dedicated datapack for sessions launched before schema 18", () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+      VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV18(db);
+    db.exec(`PRAGMA user_version = ${version - 1}`);
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    const row = sessionRow(db, 's1')!;
+    expect(row.meko_datapack_id).toBeNull();
+    expect(sessionDatapack(db, row)).toEqual({ id: 'dp-1', name: 'adlc/proj/api/api', role: 'dedicated' });
+    // Once launched, the session keeps the datapack it was launched with.
+    run(db, `UPDATE sessions SET meko_datapack_id = 'dp-old', meko_datapack_name = 'adlc/proj/api/old' WHERE id = 's1'`);
+    expect(sessionDatapack(db, sessionRow(db, 's1')!)).toEqual({ id: 'dp-old', name: 'adlc/proj/api/old', role: 'dedicated' });
+    db.close();
+  });
+
   it('moves sessions left in the old Cleanup stage to Merge & Close', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
@@ -232,6 +254,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -264,6 +287,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -301,6 +325,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -321,6 +346,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -346,6 +372,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -373,6 +400,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -395,6 +423,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     run(db, "INSERT INTO pushes(session_id, range, ref, at, commits) VALUES ('s', 'a..b', 'main', 1, 2)");
@@ -421,6 +450,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV18(db);
     dropV17(db);
     dropV16(db);
     dropV15(db);
@@ -451,6 +481,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 18 (the datapack a session was launched with), for tests that rewind the schema. */
+function dropV18(db: ReturnType<typeof openDb>) {
+  db.exec('ALTER TABLE sessions DROP COLUMN meko_datapack_id; ALTER TABLE sessions DROP COLUMN meko_datapack_name');
+}
 
 /** Undoes migration 17 (Meko calls, and 1-hour cache writes), for tests that rewind the schema. */
 function dropV17(db: ReturnType<typeof openDb>) {

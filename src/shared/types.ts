@@ -786,6 +786,17 @@ export type DatapackChoice =
   /** `inviteId`: an invite to accept in Meko before the project is created. */
   | { mode: 'existing'; id: string; name: string; inviteId?: string };
 
+/**
+ * POST /api/projects/:id/dedicated-datapack. Without `replace` the project must have no dedicated
+ * datapack yet. With it, the choice replaces that one (a switch): `replace` names the dedicated
+ * datapack the user saw, so a switch made meanwhile in another tab isn't undone.
+ */
+export type SetDedicatedDatapackRequest = DatapackChoice & {
+  replace?: string;
+  /** Switch only: detach the replaced datapack instead of keeping it attached as shared. */
+  detachOld?: boolean;
+};
+
 export interface CreateProjectRequest {
   /** Exactly one of repoPath / cloneUrl. */
   repoPath?: string;
@@ -907,8 +918,10 @@ export type TermServerMessage =
 // DELETE /api/projects/:id                     → 204
 // GET    /api/projects/:id/branches            → string[]
 // POST   /api/projects/:id/datapacks AttachDatapackRequest → Project
-// POST   /api/projects/:id/dedicated-datapack DatapackChoice → Project   (a project without one gets its
-//        dedicated datapack; 409 if it has one or Meko is off, 402 with code DATAPACK_LIMIT at the plan's limit)
+// POST   /api/projects/:id/dedicated-datapack SetDedicatedDatapackRequest → Project   (a project without one gets its
+//        dedicated datapack; 409 if it has one or Meko is off, 402 with code DATAPACK_LIMIT at the plan's limit.
+//        With `replace` it switches: the old one stays attached as shared, or is detached with `detachOld`;
+//        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
 // GET    /api/usage                            → UsageOverview

@@ -298,6 +298,14 @@ const MIGRATIONS: string[] = [
   CREATE INDEX usage_messages_agent_at ON usage_messages(session_id, agent, at);
   DELETE FROM usage_files;
   `,
+  // 18: the dedicated datapack a session was launched with, so AgentK's writes for it (designs,
+  // the PR's Meko lines, what shipped) keep going there after the project switches datapacks,
+  // as its own Meko calls and capture do. NULL for sessions launched before this, or with no
+  // datapack: those use the project's dedicated datapack.
+  `
+  ALTER TABLE sessions ADD COLUMN meko_datapack_id TEXT;
+  ALTER TABLE sessions ADD COLUMN meko_datapack_name TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

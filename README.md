@@ -67,7 +67,9 @@ your phone can connect.
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
   shared ones. Designs, session transcripts and a summary of each merged PR are saved there, so
-  the whole team, and its agents, start from the same context.
+  the whole team, and its agents, start from the same context. **Switch** on the project's home
+  moves the project to another dedicated datapack; the old one stays attached to search, or is
+  detached.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.

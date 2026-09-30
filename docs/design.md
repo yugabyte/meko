@@ -363,6 +363,24 @@ Meko API key** while Meko is off. A shared datapack already attached can become 
 The datapack is pinned then, and new sessions use it. Search is hidden for a project with no
 datapacks.
 
+The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
+**Switch the dedicated datapack**, to make a new datapack or one of yours the dedicated one; attached
+shared datapacks are listed first, and a new one's default name gets `-2` (or the next free number)
+when the usual name is taken. The old datapack stays attached as shared, so its memories can still
+be searched, unless **Detach *old* from this project** is checked. Nothing is deleted in Meko. The
+dialog warns how many of the project's sessions are running (starting, working, needs you, idle,
+recovered): they keep the datapack they were launched with, and so keep writing to the old one until
+they're restarted. That covers Claude's own Meko calls (its prompt names the old one), capture (the
+Meko hook keeps the datapack in the session's watermark once the session has started) and AgentK's
+writes for the session: designs, the PR's Meko lines and what shipped go to the datapack recorded on
+the session at launch (`sessions.meko_datapack_id`), under the session's own Meko conversation there,
+since the project's conversation moves to the new datapack. New and resumed sessions get the new one
+(a resumed session's Meko conversation is keyed by datapack, so its earlier turns stay in the old
+one). The request names the datapack it replaces
+(`replace`), so a switch made meanwhile in another tab is refused (409) rather than undone; the old
+row is demoted or detached in the same transaction as the new one is added, the project's
+server-side Meko conversation is made again in the new datapack, and the pin is rewritten.
+
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
 picked up from GitHub), a dialog offers **Delete project** (as on the project home; the repo and
 datapacks stay), **New session** or **Keep project**. It asks only on the project's session view,
@@ -459,6 +477,8 @@ CREATE TABLE sessions (
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
+  meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
+                                   --   writes for the session go (NULL: launched before this or without one; the project's is used)
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
 CREATE TABLE worktrees (       -- session worktrees; idle ones (session_id NULL) wait for the repo's next session
   path TEXT PRIMARY KEY, repo TEXT,  -- repo: the repo's real path, the pool key its projects share
@@ -627,7 +647,9 @@ stateDiagram-v2
 
 - **Dedicated datapack (one per project).** It's created with the project, named
   `adlc/proj/<repo>/<project_name>` by default, or you can pick an existing one. It is the only
-  place session transcripts and extracted memories are written.
+  place session transcripts and extracted memories are written. It can be switched to another
+  datapack from the project's home; the old one then stays attached as shared, or is detached, and
+  what was written to it stays there.
 - **Shared datapacks (zero or more).** These are attached from your `datapack_list`: a team
   knowledge base, org conventions, another project's memory. They are read-only from this
   project's point of view, and one datapack can be attached to many projects.
@@ -649,7 +671,8 @@ knows to pass the right `datapack_id` when it searches them.
 > as `_`, e.g. `pin-claude_code_billing-api.json`). AgentK
 > Local sets `MEKO_AGENT_ID=claude_code:<project>` for every session and writes that pin when the
 > project is created and again each time a session starts. So every worktree of a project shares one memory bucket, and capture goes
-> into the dedicated datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
+> into the dedicated datapack. The hooks read the pin when a session starts and keep it in the
+> session's watermark, so after a switch a running session's capture stays in the old datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
 
 > **Transcript capture is off for now.** Sending every session's transcript overloaded Meko, so
 > `[meko] capture_transcripts` in `config.toml` defaults to `false` (a restart applies a change).
