@@ -150,6 +150,22 @@ export interface MekoUsage {
 }
 
 /**
+ * Whether sessions had something from Meko in their first turn: Claude searched before the turn
+ * ended, or AgentK's search at session start found something to hand it (`src/server/recall.ts`).
+ * Only sessions in projects with datapacks count.
+ */
+export interface MekoFirstTurn {
+  /** Sessions whose first turn has ended. */
+  sessions: number;
+  /** …where Claude (or a subagent) made a Meko lookup before it ended. */
+  searched: number;
+  /** …where AgentK's search at session start found something. */
+  preloaded: number;
+  /** …with either one; `searched` and `preloaded` can overlap. */
+  either: number;
+}
+
+/**
  * An estimate of what Meko saved: each search that found something is credited with the exploring
  * it most likely replaced, by a fixed formula (`src/server/mekosavings.ts`).
  */
@@ -182,6 +198,7 @@ export interface ProjectUsage {
   total: TokenUsage;
   cost: UsageCost;
   meko: MekoUsage;
+  mekoFirstTurn: MekoFirstTurn;
   byModel: ModelUsage[];
   /** Every session with usage, archived ones included, largest first. */
   bySession: SessionUsage[];
@@ -213,6 +230,7 @@ export interface UsageOverview {
   total: TokenUsage;
   cost: UsageCost;
   meko: MekoUsage;
+  mekoFirstTurn: MekoFirstTurn;
   mergedPrs: number;
   directPushes: number;
   directCommits: number;
@@ -586,6 +604,8 @@ export interface ProjectHome {
 }
 
 export interface SearchResult {
+  /** Meko's id for the item, when it has one. */
+  id?: string;
   source: 'memory' | 'knowledge_base' | 'conversation';
   text: string;
   score: number | null;

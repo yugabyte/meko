@@ -55,6 +55,20 @@ exit 0
 `;
 
 /**
+ * SessionStart hook: asks the server for context to start the session with (what AgentK's Meko
+ * search found, see recall.ts) and prints it for Claude Code. Like the guard, it prints nothing
+ * when the server can't be reached or has nothing, and never fails or holds up Claude for long.
+ */
+const CONTEXT_SCRIPT = `#!/bin/sh
+# Written by agent-k-local. Asks the server for context to start the session with.
+[ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -sf --max-time 4 --unix-socket "$AK_HOOK_SOCK" \\
+  -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+  --data-binary @- http://localhost/context 2>/dev/null
+exit 0
+`;
+
+/**
  * Status line: Claude Code runs it with a JSON description of the session, which includes
  * the plan usage limits (5-hour and weekly) on Pro and Max plans. It passes those to the
  * server in the background, then runs the user's own status line command with the same
@@ -83,6 +97,10 @@ export const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
 export function guardScriptPath(paths: Paths): string {
   return join(paths.run, 'guard.sh');
+}
+
+export function contextScriptPath(paths: Paths): string {
+  return join(paths.run, 'context.sh');
 }
 
 export function hookScriptPath(paths: Paths): string {
@@ -167,6 +185,9 @@ export function writeHookFiles(paths: Paths): void {
   const guard = guardScriptPath(paths);
   writeFileSync(guard, GUARD_SCRIPT);
   chmodSync(guard, 0o755);
+  const context = contextScriptPath(paths);
+  writeFileSync(context, CONTEXT_SCRIPT);
+  chmodSync(context, 0o755);
   const statusLine = statusLineScriptPath(paths);
   writeFileSync(statusLine, STATUSLINE_SCRIPT);
   chmodSync(statusLine, 0o755);
@@ -190,7 +211,8 @@ export function writeHookFiles(paths: Paths): void {
       ...(typeof mine?.refreshInterval === 'number' ? { refreshInterval: mine.refreshInterval } : {}),
     },
     hooks: {
-      SessionStart: all,
+      // The second hook prints what AgentK's Meko search found for the task (recall.ts).
+      SessionStart: [{ hooks: [cmd, { type: 'command', command: context, timeout: 5 }] }],
       UserPromptSubmit: all,
       PreToolUse: [
         // ExitPlanMode carries the design text for sessions that still design in plan mode.

@@ -121,18 +121,20 @@ function mekoSearch() {
   // A second before the response that follows it, as a real tool call would be.
   const at = new Date(Date.now() - 1000).toISOString();
   writeFileSync(transcript,
-    JSON.stringify({ type: 'assistant', timestamp: at, message: { id, model: 'claude-fake-1', usage, content: [call] } }) + '\n' +
+    JSON.stringify({ type: 'assistant', timestamp: at, message: { id, model: 'claude-fake-1', stop_reason: 'tool_use', usage, content: [call] } }) + '\n' +
     JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: found }] } }) + '\n',
     { flag: 'a' });
 }
 
-// Like Claude Code: one response is written as several lines sharing a message id.
+// Like Claude Code: one response is written as several lines sharing a message id; the last one
+// says it ended the turn.
 let responses = 0;
 function respond() {
   const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
   const usage = { input_tokens: 3, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 };
-  const entry = JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', usage } }) + '\n';
-  writeFileSync(transcript, entry + entry, { flag: 'a' });
+  const entry = (stop_reason) =>
+    JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', stop_reason, usage } }) + '\n';
+  writeFileSync(transcript, entry(null) + entry('end_turn'), { flag: 'a' });
 }
 
 // Claude's TUI enables bracketed paste at startup; tmux only wraps pastes when it's on.
@@ -152,7 +154,12 @@ if (existsSync(join(dir, 'trust-prompt'))) {
 }
 
 writeFileSync(transcript, '', { flag: 'a' });
-hook('SessionStart', { source: opt('--resume') ? 'resume' : 'startup' });
+{
+  // Like Claude Code, the first prompt runs after the SessionStart hooks; what they print is context.
+  const source = opt('--resume') ? 'resume' : 'startup';
+  const context = hook('SessionStart', { source });
+  appendFileSync(join(dir, 'session-start.jsonl'), JSON.stringify({ sessionId, source, context }) + '\n');
+}
 if (prompt) await turn(prompt);
 
 let buf = '';

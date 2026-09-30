@@ -45,6 +45,9 @@ describe('projects without a datapack, and without Meko', () => {
     const launched = readFileSync(argv, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; env: Record<string, string> });
     expect(launched[0].env.MEKO_DATAPACK_ID).toBe('');
     expect(launched[0].args.join(' ')).not.toContain('dp-adlc-proj-demo-repo-has');
+    // No search at start, and no Meko lines in the prompts.
+    expect(env.meko.calls.some((c) => c.name === 'search')).toBe(false);
+    expect(launched[0].args.join(' ')).not.toMatch(/Meko/);
     await expect(env.core.projects.create({ repoPath: env.repo, name: 'X', datapack: { mode: 'create', name: 'adlc/proj/x/y' } }))
       .rejects.toMatchObject({ status: 409, code: 'MEKO_OFF' });
     expect((await env.core.projects.create({ repoPath: env.repo, name: 'Y', datapack: { mode: 'none' } })).datapacks).toEqual([]);

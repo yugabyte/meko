@@ -10,11 +10,13 @@ import {
   BranchGoneError, addWorktree, checkedOutAt, defaultBranch, discardChanges, existingBranch, git, gitRaw, isIdleWorktree, removeWorktree,
   restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult,
 } from './git.js';
-import type { GuardDecision, HookPayload } from './hooks.js';
+import type { GuardDecision, HookContext, HookPayload } from './hooks.js';
+import { issueText } from './github.js';
+import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { projectAgentId } from './meko.js';
-import { loadPrompt, render, type PromptName } from './prompts.js';
+import { loadPrompt, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
@@ -116,6 +118,8 @@ export class SessionManager {
    * arrives, reconcile sets working or idle from the transcript.
    */
   private hookless = new Set<string>();
+  /** Each new session's Meko search on its task, until its SessionStart hook takes what it found. */
+  private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
 
   setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
     const prev = this.startup.get(id);
@@ -270,6 +274,7 @@ export class SessionManager {
     this.creating.add(id);
     try {
       this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+      this.startRecall(this.row(id), task);
       const naming = this.nameConversation(this.row(id));
       const made = await this.makeWorktree(id, repo, worktree, reused, branch, base, !!where);
       this.event(id, 'created', startedText(branch, base, made.sync, !!where) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''),
@@ -324,6 +329,7 @@ export class SessionManager {
       return { sync: await addWorktree(repo, current, branch, base, fromOrigin), reused: false };
     } catch (e) {
       this.startup.delete(id);
+      this.recall.drop(id);
       pool.drop(current);
       run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
       this.core.changed();
@@ -393,7 +399,8 @@ export class SessionManager {
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
     const p = projectRow(this.db, row.project_id);
     const settings = p ? parseSettings(p.settings_json) : null;
-    return render(loadPrompt(this.db, name, row.worktree_path), {
+    const recall = this.sessionDatapacks(row.project_id).length ? mekoRecallLine(name) : '';
+    const text = render(loadPrompt(this.db, name, row.worktree_path), {
       task: row.initial_prompt ?? '',
       branch: row.branch,
       base: row.base_branch,
@@ -404,6 +411,7 @@ export class SessionManager {
       designFile: this.designFile(row),
       ...extra,
     });
+    return recall ? `${text.trimEnd()}\n\n${recall}` : text;
   }
 
   /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */
@@ -446,6 +454,7 @@ export class SessionManager {
     if (shared.length) {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
+    if (dps.length) lines.push(mekoRecallSystemLine());
     return lines.join('\n');
   }
 
@@ -597,6 +606,18 @@ export class SessionManager {
           `Publish the design as an Artifact, or write it to ${this.designFile(row)}.`,
       },
     };
+  }
+
+  /**
+   * Context for a new session's SessionStart hook: what AgentK's Meko search found for the task,
+   * waiting briefly for a search still running. Only for a fresh start: on a resume it's already
+   * in the transcript, and after /clear the user has moved on.
+   */
+  async context(token: string, p: HookPayload): Promise<HookContext> {
+    const row = this.byToken(token);
+    if (!row || row.desired !== 'running' || p.source !== 'startup') return null;
+    const text = await this.recall.take(row.id, HOOK_WAIT_MS);
+    return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : null;
   }
 
   /** A status line run: only its plan usage limits are kept. */
@@ -1021,6 +1042,7 @@ export class SessionManager {
     // A session still starting would bring its worktree back, or start Claude after the kill.
     await this.settle(row.id);
     row = this.row(row.id);
+    this.recall.drop(row.id);
     // Archiving again (a cleanup finishing after the user archived by hand) keeps the first time.
     const wasArchived = row.desired === 'archived';
     this.stopping.add(row.id);
@@ -1156,6 +1178,31 @@ export class SessionManager {
   }
 
   // ---- Meko conversation ----
+
+  /**
+   * Starts searching the project's datapacks for a new session's task, in the background: Claude
+   * gets what it finds through its SessionStart hook (context()). Skipped when Meko is off, the
+   * project has no datapacks or there's no task; never throws, and nothing waits for it. The
+   * project's Meko conversation (needed for the search) is looked up while the issues are read.
+   */
+  private startRecall(r: SessionRow, task: string): void {
+    // A session that reuses the id of one that failed to start mustn't get that one's results.
+    this.recall.drop(r.id);
+    if (!task || !this.sessionDatapacks(r.project_id).length) return;
+    const pid = r.project_id;
+    const cwd = sessionRepo(this.db, r) ?? r.worktree_path;
+    this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
+    const work = runRecall(r.name, task, {
+      issue: (n) => issueText(cwd, n),
+      search: async (q) => {
+        const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
+        if (s.searched && s.failed === s.searched) throw s.error;
+        return s.results;
+      },
+    });
+    work.catch((e) => this.core.log.warn(`the Meko search at start failed for ${r.id}`, errMsg(e)));
+    this.recall.start(r.id, work);
+  }
 
   /** Sends the session's new turns to its Meko conversation. Never throws. */
   captureTranscript(id: string): Promise<void> {

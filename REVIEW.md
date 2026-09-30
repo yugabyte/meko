@@ -116,6 +116,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
       false) means no Meko calls at all.
+- [ ] The Meko search at session start (`recall.ts`) never holds up a session: `create()` doesn't
+      wait for it, the SessionStart context hook answers within its limit and prints nothing when
+      there's no result or no server, and there's no search with Meko off or no datapacks. What it
+      gives Claude stays short (capped items and total).
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project created from an invite accepts it in Meko before writing anything

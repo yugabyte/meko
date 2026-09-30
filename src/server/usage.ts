@@ -3,7 +3,9 @@ import { basename, dirname, join } from 'node:path';
 import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
-import { mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult } from './mekousage.js';
+import {
+  firstTurnMeko, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult,
+} from './mekousage.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -77,6 +79,56 @@ export function parseUsageLine(line: string): UsageRow | null {
   };
 }
 
+/**
+ * A line of the main transcript that tells where the first turn ended: a response that ended its
+ * turn (`stop_reason: "end_turn"`) or an API error Claude Code wrote in the model's place
+ * (`<synthetic>`), or something the user sent (a prompt, a command, "[Request interrupted by
+ * user]"), which ends the turn before it once there's been a response. Meta lines (skill text,
+ * caveats), compaction summaries and tool results don't count.
+ */
+export interface TurnMark {
+  kind: 'end' | 'user';
+  at: number;
+}
+
+export function parseTurnMark(line: string): TurnMark | null {
+  if (!line.includes('"assistant"') && !line.includes('"user"')) return null;
+  let d: {
+    type?: string; timestamp?: string; isMeta?: unknown; isCompactSummary?: unknown;
+    message?: { model?: unknown; stop_reason?: unknown; content?: unknown };
+  };
+  try {
+    d = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const t = d.timestamp ? Date.parse(d.timestamp) : NaN;
+  if (!Number.isFinite(t) || !d.message) return null;
+  if (d.type === 'assistant') {
+    return d.message.stop_reason === 'end_turn' || d.message.model === '<synthetic>' ? { kind: 'end', at: t } : null;
+  }
+  if (d.type !== 'user' || d.isMeta === true || d.isCompactSummary === true) return null;
+  const c = d.message.content;
+  const said = typeof c === 'string'
+    ? !!c.trim()
+    : Array.isArray(c) && c.length > 0 && !(c as { type?: unknown }[]).some((b) => b?.type === 'tool_result');
+  return said ? { kind: 'user', at: t } : null;
+}
+
+/**
+ * Sets when a session's first turn ended, once: the first mark that ends a turn, where a user mark
+ * counts only after a response in the main transcript (the first prompt starts the turn).
+ */
+function setFirstTurnEnd(db: Db, sessionId: string, marks: TurnMark[]): void {
+  const s = get<{ at: number | null }>(db, 'SELECT first_turn_end_at AS at FROM sessions WHERE id = ?', sessionId);
+  if (!s || s.at !== null) return;
+  for (const m of marks) {
+    if (m.kind === 'user' && !get(db, 'SELECT 1 AS x FROM usage_messages WHERE session_id = ? AND agent IS NULL AND at < ? LIMIT 1', sessionId, m.at)) continue;
+    run(db, 'UPDATE sessions SET first_turn_end_at = ? WHERE id = ? AND first_turn_end_at IS NULL', m.at, sessionId);
+    return;
+  }
+}
+
 /** A push to a session's base branch: git's `old..new  src -> dst` line from a Bash tool result. */
 export interface PushRow {
   /** `old..new`, what `git rev-list --count` takes. */
@@ -119,7 +171,9 @@ export function parsePushLine(line: string, baseBranch: string): PushRow[] {
 /**
  * Reads new lines from a session's transcripts (from the last byte offset
  * seen) and records one row per model response, pushes to the base branch,
- * and Meko calls with their results. A response spans several transcript
+ * Meko calls with their results, and when the first turn ended (see
+ * TurnMark; after a /clear, a transcript read again from the start is only
+ * the current conversation's). A response spans several transcript
  * lines with the same message id, so rows are keyed by it.
  * Returns true if anything new was recorded.
  */
@@ -146,6 +200,7 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
       const pushes: PushRow[] = [];
       const calls: MekoCall[] = [];
       const results: MekoResult[] = [];
+      const marks: TurnMark[] = [];
       // Split on newline bytes and decode whole lines only, so a multi-byte
       // character across a chunk boundary is never cut in half.
       let carry: Buffer = Buffer.alloc(0);
@@ -165,6 +220,10 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
         for (const line of data.subarray(0, lastNl).toString('utf8').split('\n')) {
           const r = parseUsageLine(line);
           if (r) rows.push(r);
+          if (agent === null) {
+            const m = parseTurnMark(line);
+            if (m) marks.push(m);
+          }
           if (baseBranch) pushes.push(...parsePushLine(line, baseBranch));
           for (const c of parseMekoCalls(line)) {
             calls.push(c);
@@ -200,6 +259,8 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
           run(db, 'UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ? WHERE session_id = ? AND tool_use_id = ?',
             r.outcome, r.results, r.resultChars, sessionId, r.toolUseId);
         }
+        // After this read's responses are in: a user mark needs a response before it.
+        if (marks.length) setFirstTurnEnd(db, sessionId, marks);
         run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
                  ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, sessionId, path, consumed);
       });
@@ -297,7 +358,7 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
     `SELECT ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.project_id = ? GROUP BY u.model`, projectId));
 
   const daily = dailyUsage(db, days, now, projectId);
-  return { total, cost, meko: summarizeMeko(calls), byModel, bySession, daily };
+  return { total, cost, meko: summarizeMeko(calls), mekoFirstTurn: firstTurnMeko(db, projectId), byModel, bySession, daily };
 }
 
 /** Daily totals for the last `days` days (in the server's time zone), for one project or all of them. */
@@ -380,6 +441,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now()): UsageOvervie
     total: toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages`)),
     cost: toCost(all<CostRow>(db, `SELECT ${COST_SUMS} FROM usage_messages u GROUP BY u.model`)),
     meko: summarizeMeko(calls),
+    mekoFirstTurn: firstTurnMeko(db),
     mergedPrs: sum((p) => p.mergedPrs),
     directPushes: sum((p) => p.directPushes),
     directCommits: sum((p) => p.directCommits),

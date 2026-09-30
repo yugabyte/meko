@@ -69,7 +69,9 @@ your phone can connect.
   shared ones. Designs, session transcripts and a summary of each merged PR are saved there, so
   the whole team, and its agents, start from the same context. **Switch** on the project's home
   moves the project to another dedicated datapack; the old one stays attached to search, or is
-  detached.
+  detached. When a session starts, AgentK searches the project's datapacks for its task (and the
+  GitHub issues it names) and gives Claude what Meko already knows, and the prompts ask Claude to
+  search Meko before reading code.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
@@ -103,8 +105,9 @@ your phone can connect.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, deleted ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
-- **Meko usage**: the Meko lookups and saves each session made, and an estimate of the tokens and
-  cost that Meko searches saved, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
+- **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
+  cost that Meko searches saved, and how many sessions had something from Meko in their first
+  turn, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
 - **Usage stats:** once a day AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.

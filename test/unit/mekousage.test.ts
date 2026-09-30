@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { classifyResult, mekoTool, parseMekoCalls, parseMekoResults } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
-import { ingestSessionUsage, projectUsage, usageOverview } from '../../src/server/usage.js';
+import { recordPreload } from '../../src/server/recall.js';
+import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
 
 const usage = { input_tokens: 2, output_tokens: 100, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 998 };
 
@@ -35,8 +36,10 @@ function result(id: string, content: unknown, isError = false): string {
 const wrapped = (v: unknown) => JSON.stringify({ result: JSON.stringify(v) });
 const found = wrapped({ results: [{ id: 'm1', memory: 'x'.repeat(4000) }] });
 
-function reply(msgId: string, at?: string): string {
-  return JSON.stringify({ type: 'assistant', timestamp: at ?? new Date().toISOString(), message: { id: msgId, model: 'claude-opus-5-5', usage } }) + '\n';
+function reply(msgId: string, at?: string, stopReason: string | null = null): string {
+  return JSON.stringify({
+    type: 'assistant', timestamp: at ?? new Date().toISOString(), message: { id: msgId, model: 'claude-opus-5-5', stop_reason: stopReason, usage },
+  }) + '\n';
 }
 
 function setup() {
@@ -150,14 +153,17 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 18 (sessions.meko_datapack_*) and 17 (Meko calls), then upgrade again.
+    // Back to schema 16: undo 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*) and 17 (Meko calls), then upgrade again.
+    db.exec('DROP TABLE meko_preloads; ALTER TABLE sessions DROP COLUMN first_turn_end_at');
     db.exec('ALTER TABLE sessions DROP COLUMN meko_datapack_id; ALTER TABLE sessions DROP COLUMN meko_datapack_name');
-    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 2}`);
+    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 3}`);
     db.close();
     db = openDb(path);
     expect(schemaVersion(db)).toBe(v);
     expect(all(db, 'SELECT * FROM usage_files')).toEqual([]);
     expect(all(db, 'SELECT * FROM meko_calls')).toEqual([]);
+    expect(all(db, 'SELECT * FROM meko_preloads')).toEqual([]);
+    expect(all(db, 'SELECT first_turn_end_at FROM sessions')).toEqual([{ first_turn_end_at: null }]);
     db.close();
   });
 
@@ -227,5 +233,100 @@ describe('what Meko saved', () => {
     expect(projectUsage(db, 'p').meko).toEqual({
       calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, tokens: 0, usd: 0, unpricedSearches: 0 },
     });
+  });
+});
+
+describe('Meko in the first turn', () => {
+  const at = (s: number) => new Date(Date.UTC(2026, 8, 30, 12, 0, s)).toISOString();
+  const endAt = (db: ReturnType<typeof openDb>, id = 's1') =>
+    all<{ first_turn_end_at: number | null }>(db, 'SELECT first_turn_end_at FROM sessions WHERE id = ?', id)[0].first_turn_end_at;
+  /** Something the user sent, as Claude Code writes it. */
+  const said = (content: unknown, s: number, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'user', timestamp: at(s), message: { role: 'user', content }, ...extra }) + '\n';
+  const synthetic = (s: number) =>
+    JSON.stringify({ type: 'assistant', timestamp: at(s), message: { id: 'e1', model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } }) + '\n';
+
+  function addSession(db: ReturnType<typeof openDb>, id: string, project = 'p') {
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at) VALUES (?, ?, ?, ?, ?, 'b', 'main', '/w', ?, ?, 'running', 'idle', 'code', 0)`,
+      id, project, id, id, `c-${id}`, `t-${id}`, `tok-${id}`);
+  }
+  const addDatapack = (db: ReturnType<typeof openDb>, project = 'p') =>
+    run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES (?, ?, ?, 'dedicated')`, project, `dp-${project}`, `adlc/proj/${project}`);
+
+  it('reads the lines that tell where a turn ended', () => {
+    expect(parseTurnMark(reply('m1', at(0), 'end_turn'))).toEqual({ kind: 'end', at: Date.parse(at(0)) });
+    expect(parseTurnMark(synthetic(1))).toEqual({ kind: 'end', at: Date.parse(at(1)) });
+    expect(parseTurnMark(reply('m1', at(0), 'tool_use'))).toBeNull();
+    expect(parseTurnMark(reply('m1', at(0)))).toBeNull();
+    expect(parseTurnMark(said('Fix the thing', 2))).toEqual({ kind: 'user', at: Date.parse(at(2)) });
+    expect(parseTurnMark(said([{ type: 'text', text: '[Request interrupted by user]' }], 3))).toEqual({ kind: 'user', at: Date.parse(at(3)) });
+    expect(parseTurnMark(said([{ type: 'tool_result', tool_use_id: 't', content: 'ok' }], 4))).toBeNull();
+    expect(parseTurnMark(said([{ type: 'text', text: 'Base directory for this skill: …' }], 5, { isMeta: true }))).toBeNull();
+    expect(parseTurnMark(said('This session is being continued…', 6, { isCompactSummary: true }))).toBeNull();
+    expect(parseTurnMark(said('  ', 7))).toBeNull();
+  });
+
+  it("keeps when the main transcript's first turn ended, once, and ignores subagents", () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    const sub = join(dir, 'c', 'subagents');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, 'agent-a1.jsonl'), reply('x1', at(1), 'end_turn'));
+    writeFileSync(main, said('Fix the thing', 0) + call('m1', [['t', 'Read']], { at: at(1) }) + reply('m2', at(2), 'end_turn'));
+    ingestSessionUsage(db, 's1', main);
+    expect(endAt(db)).toBe(Date.parse(at(2)));
+    appendFileSync(main, said('Now the next thing', 5) + reply('m3', at(9), 'end_turn'));
+    ingestSessionUsage(db, 's1', main);
+    expect(endAt(db)).toBe(Date.parse(at(2)));
+  });
+
+  it('ends an interrupted first turn at the interruption, and one that failed at its API error', () => {
+    const { dir, db } = setup();
+    addSession(db, 's2');
+    const main = join(dir, 'c.jsonl');
+    // The first prompt starts the turn (no response before it); the interruption, read later, ends it.
+    writeFileSync(main, said('Fix the thing', 0) + call('m1', [['t', 'Read']], { at: at(1) }));
+    ingestSessionUsage(db, 's1', main);
+    expect(endAt(db)).toBeNull();
+    appendFileSync(main, said([{ type: 'text', text: '[Request interrupted by user]' }], 3) + said('Try again', 4) + reply('m2', at(9), 'end_turn'));
+    ingestSessionUsage(db, 's1', main);
+    expect(endAt(db)).toBe(Date.parse(at(3)));
+
+    const other = join(dir, 's2.jsonl');
+    writeFileSync(other, said('Fix the thing', 0) + synthetic(2) + said('again', 5) + reply('m9', at(8), 'end_turn'));
+    ingestSessionUsage(db, 's2', other);
+    expect(endAt(db, 's2')).toBe(Date.parse(at(2)));
+  });
+
+  it('counts sessions that searched before the first turn ended, found something at start, or either', () => {
+    const { dir, db } = setup();
+    addDatapack(db);
+    for (const id of ['s2', 's3', 's4', 's5']) addSession(db, id);
+    // A project with no datapack had no Meko to search: its sessions don't count.
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
+    addSession(db, 'q1', 'q');
+    const write = (id: string, text: string) => {
+      const f = join(dir, `${id}.jsonl`);
+      writeFileSync(f, text);
+      ingestSessionUsage(db, id, f);
+    };
+    // s1: a search in the first turn. s2: a search only after it. s3: nothing, but AgentK's search
+    // found something. s4: both. s5: its first turn hasn't ended.
+    write('s1', call('m1', [['a', 'mcp__meko__context_search']], { at: at(0) }) + result('a', found) + reply('m2', at(1), 'end_turn'));
+    write('s2', reply('m1', at(0), 'end_turn') + call('m2', [['b', 'mcp__meko__context_search']], { at: at(5) }) + result('b', found));
+    write('s3', reply('m1', at(0), 'end_turn'));
+    write('s4', call('m1', [['c', 'mcp__meko__memory_search']], { at: at(0) }) + result('c', found) + reply('m2', at(1), 'end_turn'));
+    write('s5', call('m1', [['d', 'mcp__meko__memory_search']], { at: at(0) }) + result('d', found));
+    write('q1', call('m1', [['e', 'mcp__meko__memory_search']], { at: at(0) }) + result('e', found) + reply('m2', at(1), 'end_turn'));
+    recordPreload(db, 's3', { outcome: 'found', results: 2, chars: 300, ms: 900 });
+    recordPreload(db, 's4', { outcome: 'found', results: 1, chars: 100, ms: 900 });
+    recordPreload(db, 's2', { outcome: 'late', results: 1, chars: 100, ms: 9000 });
+    recordPreload(db, 's1', { outcome: 'empty', results: 0, chars: 0, ms: 900 });
+
+    const want = { sessions: 4, searched: 2, preloaded: 2, either: 3 };
+    expect(projectUsage(db, 'p').mekoFirstTurn).toEqual(want);
+    expect(projectUsage(db, 'q').mekoFirstTurn).toEqual({ sessions: 0, searched: 0, preloaded: 0, either: 0 });
+    expect(usageOverview(db).mekoFirstTurn).toEqual(want);
   });
 });

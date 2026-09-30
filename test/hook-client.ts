@@ -12,3 +12,18 @@ export function postHook(sock: string, path: string, token: string | null, body:
     req.end(JSON.stringify(body));
   });
 }
+
+/** Like postHook, but resolves to the status code and the response body. */
+export function postHookFull(sock: string, path: string, token: string | null, body: unknown): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const headers = { 'Content-Type': 'application/json', ...(token ? { 'X-AK-Token': token } : {}) };
+    const req = request({ socketPath: sock, path, method: 'POST', headers }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}

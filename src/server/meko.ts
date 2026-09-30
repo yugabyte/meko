@@ -252,21 +252,24 @@ export class MekoClient {
     };
   }
 
-  async search(query: string, datapack: { id: string; name: string }, agentId: string, conversationId: string): Promise<SearchResult[]> {
+  async search(
+    query: string, datapack: { id: string; name: string }, agentId: string, conversationId: string, timeoutMs = 30000,
+  ): Promise<SearchResult[]> {
     const r = (await this.call('context_search', {
       query,
       conversation_id: conversationId,
       datapack_id: datapack.id,
       agent_id: agentId,
       limit: 8,
-    })) as Json;
+    }, timeoutMs)) as Json;
     const results = (r.results ?? {}) as Json;
     const out: SearchResult[] = [];
     const push = (source: SearchResult['source'], items: unknown) => {
       if (!Array.isArray(items)) return;
       for (const it of items as Json[]) {
         const text = pickText(it);
-        if (text) out.push({ source, text, score: pickScore(it), datapackName: datapack.name });
+        const id = typeof it.id === 'string' && it.id ? { id: it.id } : {};
+        if (text) out.push({ ...id, source, text, score: pickScore(it), datapackName: datapack.name });
       }
     };
     push('memory', results.memory);

@@ -1,12 +1,15 @@
-import type { MekoSavings, MekoUsage } from '../../shared/types';
+import type { MekoFirstTurn, MekoSavings, MekoUsage } from '../../shared/types';
 import { cx, formatCost, formatTokens } from '../util';
 
 const ESTIMATE =
   'Estimate: each Meko search that found something is credited with the exploring it most likely replaced ' +
   '(3 tool calls, each re-reading the context and adding about 2,000 tokens). Anthropic API list prices.';
 
-/** Meko lookups and saves Claude made, and what they're estimated to have saved: the project home and the Usage page. */
-export function MekoUsageSection({ meko }: { meko: MekoUsage }) {
+/**
+ * Meko lookups and saves Claude made, what they're estimated to have saved, and how many sessions had something from
+ * Meko in their first turn: the project home and the Usage page.
+ */
+export function MekoUsageSection({ meko, firstTurn }: { meko: MekoUsage; firstTurn: MekoFirstTurn }) {
   const f = (n: number) => n.toLocaleString();
   return (
     <div className="meko-usage">
@@ -33,6 +36,7 @@ export function MekoUsageSection({ meko }: { meko: MekoUsage }) {
           <span className="usage-lbl">Tokens found</span>
         </div>
         <SavedStat savings={meko.savings} />
+        <FirstTurnStat firstTurn={firstTurn} />
       </div>
     </div>
   );
@@ -59,6 +63,33 @@ function SavedStat({ savings: s }: { savings: MekoSavings }) {
           $ leaves out {s.unpricedSearches} unpriced {s.unpricedSearches === 1 ? 'search' : 'searches'}
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * Sessions with something from Meko in their first turn, split into Claude's own searches and what
+ * AgentK's search at session start found. The split is a label line, since tooltips aren't seen on touch.
+ */
+function FirstTurnStat({ firstTurn: t }: { firstTurn: MekoFirstTurn }) {
+  const f = (n: number) => n.toLocaleString();
+  if (t.sessions === 0) {
+    return (
+      <div className="usage-stat" title="No session has finished its first turn yet.">
+        <span className="usage-num muted">—</span>
+        <span className="usage-lbl">Meko in 1st turn</span>
+      </div>
+    );
+  }
+  const title =
+    `Sessions whose first turn had something from Meko, out of ${f(t.sessions)} that finished a first turn: ` +
+    `Claude searched Meko before the turn ended in ${f(t.searched)}, and AgentK's search at session start found something in ` +
+    `${f(t.preloaded)}. A session can count in both.`;
+  return (
+    <div className="usage-stat" title={title}>
+      <span className="usage-num">{f(t.either)} / {f(t.sessions)}</span>
+      <span className="usage-lbl">Meko in 1st turn</span>
+      <span className="usage-lbl">Claude searched {f(t.searched)} · found at start {f(t.preloaded)}</span>
     </div>
   );
 }

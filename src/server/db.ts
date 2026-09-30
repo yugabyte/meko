@@ -306,6 +306,21 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN meko_datapack_id TEXT;
   ALTER TABLE sessions ADD COLUMN meko_datapack_name TEXT;
   `,
+  // 19: when each session's first turn ended (TurnMark in usage.ts), and
+  // AgentK's Meko search at session start (recall.ts), for the first-turn Meko stats. Clearing the
+  // read offsets reads every transcript again, so older sessions get first_turn_end_at too.
+  `
+  ALTER TABLE sessions ADD COLUMN first_turn_end_at INTEGER;
+  CREATE TABLE meko_preloads (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    at INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('found', 'empty', 'error', 'late')),
+    results INTEGER NOT NULL,
+    chars INTEGER NOT NULL,
+    ms INTEGER NOT NULL
+  );
+  DELETE FROM usage_files;
+  `,
 ];
 
 export function openDb(path: string): Db {

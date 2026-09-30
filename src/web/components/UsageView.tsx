@@ -112,7 +112,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
 
             {showMeko && (
               <section className="box">
-                <MekoUsageSection meko={usage.meko} />
+                <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} />
               </section>
             )}
 

@@ -49,6 +49,9 @@ export class ProjectService {
   /** Names of projects being created right now, per repo (nameKey): taken until their row is written. */
   private creatingNames = new Set<string>();
 
+  /** Project Meko conversations being created, so concurrent callers share one. */
+  private creatingConversation = new Map<string, Promise<string>>();
+
   constructor(private core: Core) {}
 
   private get db() {
@@ -412,28 +415,53 @@ export class ProjectService {
   async search(id: string, query: string): Promise<SearchResult[]> {
     const q = (query ?? '').trim();
     if (!q) return [];
-    const project = this.get(id);
-    // Nothing to search: no datapacks, or Meko is off.
-    if (!project.datapacks.length || !this.core.mekoStatus.configured) return [];
-    const conv = await this.ensureConversation(id);
-    const agentId = projectAgentId(id);
-    const results = await Promise.all(
-      project.datapacks.map((d) => this.core.meko.search(q, d, agentId, conv).catch((e) => {
-        this.core.log.warn(`search in ${d.name} failed`, errMsg(e));
-        return [] as SearchResult[];
-      })),
-    );
-    return results.flat();
+    this.get(id);
+    return (await this.searchDatapacks(id, q)).results;
   }
 
-  /** Meko conversation for server-side writes on behalf of a project (stable per project). */
-  async ensureConversation(id: string): Promise<string> {
+  /**
+   * Searches each of the project's datapacks (the project home's search, and the search at session
+   * start). A datapack whose search fails is logged and skipped; `failed` says how many did. Nothing
+   * is searched with no datapacks or Meko off.
+   */
+  async searchDatapacks(id: string, query: string, timeoutMs?: number): Promise<{ results: SearchResult[]; searched: number; failed: number; error: unknown }> {
+    const datapacks = this.core.mekoStatus.configured ? projectDatapacks(this.db, id) : [];
+    if (!datapacks.length) return { results: [], searched: 0, failed: 0, error: null };
+    const conv = await this.ensureConversation(id, timeoutMs);
+    const agentId = projectAgentId(id);
+    const settled = await Promise.allSettled(datapacks.map((d) => this.core.meko.search(query, d, agentId, conv, timeoutMs)));
+    const out = { results: [] as SearchResult[], searched: datapacks.length, failed: 0, error: null as unknown };
+    settled.forEach((s, i) => {
+      if (s.status === 'fulfilled') {
+        out.results.push(...s.value);
+        return;
+      }
+      this.core.log.warn(`search in ${datapacks[i].name} failed`, errMsg(s.reason));
+      out.failed++;
+      out.error ??= s.reason;
+    });
+    return out;
+  }
+
+  /**
+   * Meko conversation for server-side writes on behalf of a project (stable per project). Calls
+   * made while it's being created share the one creation.
+   */
+  async ensureConversation(id: string, timeoutMs?: number): Promise<string> {
     const r = this.row(id);
     if (r.meko_conversation_id) return r.meko_conversation_id;
-    const dp = dedicatedDatapack(this.db, id);
-    const conv = await this.core.meko.ensureConversation(projectAgentId(id), dp?.id ?? null, `agent-k-local-project-${id}`, `AgentK Local: ${r.name}`);
-    run(this.db, 'UPDATE projects SET meko_conversation_id = ? WHERE id = ?', conv, id);
-    return conv;
+    let p = this.creatingConversation.get(id);
+    if (!p) {
+      const dp = dedicatedDatapack(this.db, id);
+      p = this.core.meko.ensureConversation(projectAgentId(id), dp?.id ?? null, `agent-k-local-project-${id}`, `AgentK Local: ${r.name}`, timeoutMs)
+        .then((conv) => {
+          run(this.db, 'UPDATE projects SET meko_conversation_id = ? WHERE id = ?', conv, id);
+          return conv;
+        })
+        .finally(() => this.creatingConversation.delete(id));
+      this.creatingConversation.set(id, p);
+    }
+    return p;
   }
 
   /**

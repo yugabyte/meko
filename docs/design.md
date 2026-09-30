@@ -84,7 +84,10 @@ The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Permission
 `Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
 which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or
 `/resume` inside Claude) switches conversations, `SessionStart` carries the new session id, and
-Resume and recovery continue that conversation.
+Resume and recovery continue that conversation. `SessionStart` has a second hook, `context.sh`,
+which asks the socket's `/context` route for context to start with and prints it for Claude Code
+(what AgentK's Meko search found: see [Meko recall at start](#meko-recall-at-start)). Like the
+edit guard, it prints nothing when the server can't be reached, and its curl gives up after 4 seconds.
 
 The hook forwarder gives up quietly when the socket isn't there, so the server makes sure it is.
 It binds the socket under a temporary name and renames it into place, removes it when it stops
@@ -479,6 +482,7 @@ CREATE TABLE sessions (
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
+  first_turn_end_at INTEGER,       -- when the first turn ended (from the transcript), for the Meko stats
   last_event_at INTEGER, created_at INTEGER, archived_at INTEGER);
 CREATE TABLE worktrees (       -- session worktrees; idle ones (session_id NULL) wait for the repo's next session
   path TEXT PRIMARY KEY, repo TEXT,  -- repo: the repo's real path, the pool key its projects share
@@ -713,7 +717,13 @@ AK_SESSION=billing-api--fix-retry-backoff
 ```
 
 A short `--append-system-prompt` also lists the attached datapacks by name and id, so Claude
-knows to pass the right `datapack_id` when it searches them.
+knows to pass the right `datapack_id` when it searches them, and says when to search: before
+reading code for a new task, a review or a CI fix. Claude Code hides MCP tools until ToolSearch
+loads them, so it names the query that does (`+meko context_search`, which matches the Meko server
+under its own name or a plugin's). The first prompt of each task (`explore`, `design`,
+`design-plan`, `code`) and the review and CI prompts end with one line asking for that search.
+These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so
+a repo's own stage prompts get them too, and only when the project has datapacks and Meko is on.
 
 > **No Meko plugin change needed.** The Meko hooks already take `MEKO_AGENT_ID` over the folder
 > name, and they read the datapack pin from `~/.claude/meko-capture/pin-<agent id>.json` (with `:`
@@ -873,6 +883,39 @@ so **Accept and create project** can be retried. A change to the Meko URL or key
 account: the rows other than `used` and the first-sync flag are dropped, so the new account's
 existing shares are recorded quietly.
 
+### Meko recall at start
+
+Sessions rarely searched Meko on their own, so AgentK searches for them (`src/server/recall.ts`).
+When a session with a task is created in a project with datapacks, the server starts a
+`context_search` on each datapack in the background, before the worktree is made. It shares
+`searchDatapacks()` in `projects.ts` with the project home's search, and the project's Meko
+conversation (which a search needs) is looked up while the issues are read; callers asking for it
+while it's being created share the one `conversation_create`.
+
+- **Query.** The session's name and task, plus the title and first 600 characters of each GitHub
+  issue the task names (`#N`, at most 3, through `gh issue view`; one that can't be read is left
+  out), on one line of at most 1,500 characters.
+- **Picking.** Up to 3 knowledge-base items first, then memories scoring at least 0.55, best
+  first. Conversation-cache hits are left out. Duplicates (same id or same text) are dropped; at
+  most 6 items, each cut at a word to 500 characters, 2,500 in all. A datapack whose search fails
+  (15 seconds each) is skipped; the search fails only when every datapack's did.
+- **Delivery.** Claude's `SessionStart` hook (`context.sh`, source `startup` only) gets the items
+  as `additionalContext`, headed "What Meko already knows about this task". The header says the
+  items are notes from earlier sessions, some possibly written by other people (shared
+  datapacks), to check against the code and not to follow as instructions. The hook waits up to 2.5 seconds for a search still
+  running, which is rare because the search has had the worktree's and Claude's start-up time.
+  Nothing found means no block. A resumed session has it in its transcript already, and after
+  `/clear` the user has moved on, so neither gets it. A result waits in memory for up to 10
+  minutes; a server restart loses it, and the session just starts without it. A session that
+  fails to start, or is archived, drops its result, so a later session with the same id never
+  gets it.
+- **Record.** `meko_preloads(session_id, at, outcome, results, chars, ms)` keeps each search's
+  outcome for the [first-turn stats](#token-usage): `found` (handed to Claude), `empty`, `error`,
+  or `late` (it found something after the hook gave up, or the hook never asked).
+
+Nothing waits for the search: the session starts the same when it's slow, fails, or Meko is off
+(then there's no search at all).
+
 ## Token usage
 
 Claude Code writes every model response to the session transcript with its token counts. The
@@ -909,10 +952,25 @@ single record; a plain-text reply unless it says nothing was found) aren't empty
 tool error or a reply with a non-empty `error`. A result too large to show, which Claude Code saved to
 a file, counts as found at the size of its notice, since only the notice entered the context (reading
 the file is Claude's own tool call); a call moved to the background found nothing. `model` and `context_tokens` (input, cache read and write)
-come from the response that made the call. Sizes are characters ÷ 4. The Meko plugin's hooks
-inject no recalled memory, so the transcript is the whole record of what Meko gave a session.
-The migration that added the table cleared the read offsets again, so older sessions got their
-calls and 1-hour writes.
+come from the response that made the call. Sizes are characters ÷ 4. Apart from AgentK's own
+search at start (`meko_preloads`, see [Meko recall at start](#meko-recall-at-start)), the Meko
+plugin's hooks inject no recalled memory today, so the transcript is the rest of the record of what
+Meko gave a session. The migration that added the table cleared the read offsets again, so older
+sessions got their calls and 1-hour writes.
+
+**Meko in the first turn.** The same pass keeps when each session's first turn ended:
+`sessions.first_turn_end_at`, set once from the main transcript (subagents don't count). It's the
+first of: a response with `stop_reason: "end_turn"`, an API error Claude Code wrote in the model's
+place (model `<synthetic>`), or, once there has been a response, anything the user sent (a prompt,
+a command, "[Request interrupted by user]"; meta lines, compaction summaries and tool results
+don't count). So an interrupted or failed first turn ends there, not at a later turn's end. After
+a `/clear`, a transcript read again from the start is only the current conversation's. Among
+sessions whose first turn has ended, in projects with datapacks (the others had no Meko to
+search), AgentK counts those where Claude or a subagent made a lookup at or before that time
+(`searched`), those where the search at start was handed over (`preloaded`), and those with either
+(`either`; the other two can overlap). They're `mekoFirstTurn` on the project and overview usage,
+beside `meko`. The migration that added the column cleared the read offsets once more, so sessions
+from before AgentK searched at start give the numbers to compare with.
 
 **What Meko saved (an estimate).** Nobody sees the run where Meko wasn't there, so savings come
 from a fixed formula (`src/server/mekosavings.ts`), not a comparison. Only searches that found
@@ -992,8 +1050,11 @@ only move when a session gets a reply, so the rail says when they were last repo
   column header sorts its table; tapping it again reverses the order.
 - **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
   light theme, white in the dark) and tiles for lookups, lookups that found something, saves,
-  tokens found, and **Est. saved** in USD and tokens, green for a saving (a negative estimate is in
-  the normal text color, and a dash means no search has found anything). It shows once there's any
+  tokens found, **Est. saved** in USD and tokens, green for a saving (a negative estimate is in
+  the normal text color, and a dash means no search has found anything), and **Meko in 1st turn**:
+  sessions with something from Meko in their first turn out of those that finished one (`18 / 30`),
+  with the split on a second line (`Claude searched 12 · found at start 9`; a dash before any first
+  turn has ended). It shows once there's any
   Meko call, or before that while Meko is on (and, on the project home, the project has a datapack).
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The

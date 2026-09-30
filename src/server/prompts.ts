@@ -90,6 +90,40 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 };
 
 /**
+ * The ToolSearch query that loads the Meko search tool, under the Meko server's own name
+ * (`mcp__meko__…`) or a plugin's (`mcp__plugin_…_meko__…`).
+ */
+export const MEKO_TOOLSEARCH = '+meko context_search';
+
+/**
+ * The system prompt's line on when to search Meko, for sessions whose project has datapacks.
+ * Claude Code hides MCP tools until ToolSearch loads them, so it names the query that does.
+ */
+export function mekoRecallSystemLine(): string {
+  return `Before reading code for a new task, a review or a CI fix, search Meko for earlier designs, decisions and gotchas about it (context_search with each datapack_id above). If the Meko tools aren't loaded, load them with the ToolSearch query "${MEKO_TOOLSEARCH}".`;
+}
+
+/**
+ * A stage prompt's recall step, added (in code, so an overridden prompt gets it too) when the
+ * session's project has datapacks; '' for prompts that don't start new work.
+ */
+export function mekoRecallLine(name: PromptName): string {
+  switch (name) {
+    case 'explore':
+    case 'design':
+    case 'design-plan':
+    case 'code':
+      return 'Before reading code, search Meko for earlier designs, decisions and gotchas about this task. If AgentK already listed what Meko knows, search only for what that doesn\'t cover.';
+    case 'review':
+    case 'review-people':
+    case 'ci':
+      return 'Before changing code, search Meko for gotchas about the code each finding (or failure) is in.';
+    default:
+      return '';
+  }
+}
+
+/**
  * Added to the PR prompt when the project has a Meko datapack: the lines that end the PR
  * description, so the PR points back at the datapack and at the session's Meko conversation.
  */

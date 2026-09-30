@@ -5,8 +5,26 @@ import type { CiState, MergeMethod } from '../shared/types.js';
 const exec = promisify(execFile);
 
 async function gh(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('gh', args, { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' } });
+  return ghWithin(cwd, 0, ...args);
+}
+
+/** `gh` with a time limit (0: none). */
+async function ghWithin(cwd: string, timeoutMs: number, ...args: string[]): Promise<string> {
+  const { stdout } = await exec('gh', args, {
+    cwd, maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' },
+  });
   return stdout.trim();
+}
+
+export interface IssueText {
+  title: string;
+  body: string;
+}
+
+/** An issue's (or PR's) title and body, for a Meko search on a task that names it. */
+export async function issueText(cwd: string, number: number, timeoutMs = 5000): Promise<IssueText> {
+  const r = JSON.parse(await ghWithin(cwd, timeoutMs, 'issue', 'view', String(number), '--json', 'title,body')) as { title?: unknown; body?: unknown };
+  return { title: typeof r.title === 'string' ? r.title : '', body: typeof r.body === 'string' ? r.body : '' };
 }
 
 export interface PrRef {

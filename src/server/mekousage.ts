@@ -1,5 +1,5 @@
-import type { MekoUsage, SessionUsage } from '../shared/types.js';
-import { all, type Db } from './db.js';
+import type { MekoFirstTurn, MekoUsage, SessionUsage } from '../shared/types.js';
+import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 
 export type MekoKind = 'lookup' | 'save' | 'other';
@@ -243,6 +243,25 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
   }
   u.savings.usd = priced > 0 || u.savings.searches === 0 ? usd : null;
   return u;
+}
+
+/**
+ * Sessions whose first turn has ended, for one project or all of them, and how many had something
+ * from Meko in it: Claude's own lookups (from any agent) up to the turn's end, AgentK's search at
+ * start that found something, or either one. Only sessions in projects with datapacks count, since
+ * the others had no Meko to search.
+ */
+export function firstTurnMeko(db: Db, projectId?: string): MekoFirstTurn {
+  const r = get<{ [K in keyof MekoFirstTurn]: number | null }>(db,
+    `SELECT COUNT(*) AS sessions, SUM(searched) AS searched, SUM(preloaded) AS preloaded, SUM(MAX(searched, preloaded)) AS either
+     FROM (SELECT
+             EXISTS (SELECT 1 FROM meko_calls c WHERE c.session_id = s.id AND c.kind = 'lookup' AND c.at <= s.first_turn_end_at) AS searched,
+             EXISTS (SELECT 1 FROM meko_preloads p WHERE p.session_id = s.id AND p.outcome = 'found') AS preloaded
+           FROM sessions s
+           WHERE s.first_turn_end_at IS NOT NULL
+             AND EXISTS (SELECT 1 FROM project_datapacks d WHERE d.project_id = s.project_id)${projectId ? ' AND s.project_id = ?' : ''})`,
+    ...(projectId ? [projectId] : []));
+  return { sessions: r?.sessions ?? 0, searched: r?.searched ?? 0, preloaded: r?.preloaded ?? 0, either: r?.either ?? 0 };
 }
 
 /** Calls grouped by a key (session or project), each summarized. */

@@ -268,6 +268,7 @@ export class Core extends EventEmitter {
       },
       (token, payload) => this.sessions.guard(token, payload),
       (token, input) => this.sessions.onStatusLine(token, input),
+      (token, payload) => this.sessions.context(token, payload),
     );
     this.hookSockId = socketId(this.paths.hookSock);
   }

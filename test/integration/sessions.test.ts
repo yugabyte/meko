@@ -26,6 +26,12 @@ function detached(dir: string): boolean {
   }
 }
 
+/** What the fake Claude's SessionStart hooks printed, per start. */
+function sessionStarts(env: TestEnv): { sessionId: string; source: string; context: string }[] {
+  const f = join(env.fakeDir, 'session-start.jsonl');
+  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+}
+
 function captureLog(env: TestEnv): { args: string[]; input: { transcript_path: string }; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'capture.jsonl');
   return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
@@ -169,6 +175,102 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     const u = await env.core.sessions.create(p.id, { name: 'Unnamed', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
+  });
+
+  it("searches Meko for the task when a session is created, and gives Claude what it found at SessionStart", async () => {
+    const p = await newProject();
+    env.meko.search = async (...args: unknown[]) => {
+      env.meko.calls.push({ name: 'search', args });
+      return [
+        { id: 'm1', source: 'memory', text: 'The thing lives in src/thing.ts; it breaks when the cache is cold.', score: 0.7, datapackName: 'agent-k-local/test/demo' },
+        { id: 'm2', source: 'memory', text: 'Unrelated note.', score: 0.3, datapackName: 'agent-k-local/test/demo' },
+      ];
+    };
+    const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'Fix the thing when the cache is cold', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const search = env.meko.calls.find((c) => c.name === 'search')!;
+    expect(search.args.slice(0, 3)).toEqual(['Fix the thing Fix the thing when the cache is cold', { id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }, 'claude_code:demo-repo']);
+    const started = sessionStarts(env);
+    expect(started).toHaveLength(1);
+    const ctx = JSON.parse(started[0].context).hookSpecificOutput;
+    expect(ctx.hookEventName).toBe('SessionStart');
+    expect(ctx.additionalContext).toContain('## What Meko already knows about this task');
+    expect(ctx.additionalContext).toContain('src/thing.ts');
+    expect(ctx.additionalContext).not.toContain('Unrelated note.');
+    expect(get(env.core.db, 'SELECT outcome, results FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found', results: 1 });
+    // The first turn is over, and something from Meko was in it.
+    const home = await waitFor(() => env.core.projects.home(p.id), (h) => h.usage.mekoFirstTurn.sessions === 1, 10000, 'the first turn');
+    expect(home.usage.mekoFirstTurn).toEqual({ sessions: 1, searched: 0, preloaded: 1, either: 1 });
+
+    // The prompts ask for a Meko search and say how to load the tools.
+    const argv = argvLog(env)[0].args;
+    const sys = argv[argv.indexOf('--append-system-prompt') + 1];
+    expect(sys).toContain('ToolSearch query "+meko context_search"');
+    expect(argv[argv.length - 1]).toMatch(/search Meko for earlier designs, decisions and gotchas about this task/);
+
+    // A resumed session starts without it.
+    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).status;
+    }, (st) => st === 'exited', 10000, 'exited');
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => sessionStarts(env).length, (n) => n === 2, 10000, 'the resume');
+    expect(sessionStarts(env)[1]).toMatchObject({ source: 'resume', context: '' });
+  });
+
+  it('searches every datapack at start, skips one whose search fails, and records a search that failed everywhere', async () => {
+    const p = await newProject();
+    env.core.projects.attachDatapack(p.id, { id: 'dp-kb', name: 'team/kb' });
+    let down = new Set(['dp-kb']);
+    env.meko.search = async (...args: unknown[]) => {
+      const dp = args[1] as { id: string; name: string };
+      env.meko.calls.push({ name: 'search', args });
+      if (down.has(dp.id)) throw new Error(`${dp.name} is down`);
+      return [{ id: 'm1', source: 'memory', text: 'A gotcha about the cold cache in src/thing.ts.', score: 0.7, datapackName: dp.name }];
+    };
+    const s = await env.core.sessions.create(p.id, { name: 'One down', prompt: 'the cold cache', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    expect(env.meko.calls.filter((c) => c.name === 'search').map((c) => (c.args[1] as { id: string }).id).sort())
+      .toEqual(['dp-agent-k-local-test-demo', 'dp-kb']);
+    expect(get(env.core.db, 'SELECT outcome FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found' });
+
+    down = new Set(['dp-kb', 'dp-agent-k-local-test-demo']);
+    const u = await env.core.sessions.create(p.id, { name: 'All down', prompt: 'the cold cache', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn');
+    await waitFor(() => get(env.core.db, 'SELECT outcome FROM meko_preloads WHERE session_id = ?', u.id), (r) => !!r, 5000, 'the failed search');
+    expect(get(env.core.db, 'SELECT outcome FROM meko_preloads WHERE session_id = ?', u.id)).toEqual({ outcome: 'error' });
+    expect(sessionStarts(env).at(-1)).toMatchObject({ source: 'startup', context: '' });
+    // The project home's search still answers, with nothing.
+    expect(await env.core.projects.search(p.id, 'cold cache')).toEqual([]);
+  });
+
+  it("creates a project's Meko conversation once when several callers ask at the same time", async () => {
+    const p = await newProject();
+    run(env.core.db, 'UPDATE projects SET meko_conversation_id = NULL WHERE id = ?', p.id);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let creates = 0;
+    env.meko.ensureConversation = async () => {
+      creates++;
+      await gate;
+      return 'conv-project';
+    };
+    const both = Promise.all([env.core.projects.ensureConversation(p.id), env.core.projects.ensureConversation(p.id)]);
+    release();
+    expect(await both).toEqual(['conv-project', 'conv-project']);
+    expect(creates).toBe(1);
+    expect(await env.core.projects.ensureConversation(p.id)).toBe('conv-project');
+    expect(creates).toBe(1);
+  });
+
+  it("never holds up a session for a slow Meko search", async () => {
+    const p = await newProject();
+    env.meko.search = () => new Promise(() => undefined);
+    const s = await env.core.sessions.create(p.id, { name: 'Slow', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    expect(sessionStarts(env)).toEqual([expect.objectContaining({ source: 'startup', context: '' })]);
+    expect(get(env.core.db, 'SELECT 1 AS x FROM meko_preloads WHERE session_id = ?', s.id)).toBeUndefined();
   });
 
   it('counts the Meko searches Claude makes and estimates what they saved', async () => {
