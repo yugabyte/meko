@@ -86,6 +86,9 @@ Options:
                       --cache (buildx docker-container builder + a registry login
                       required; see deploy/extensions/build.sh)
   --keep              leave the cluster + db up for postmortem (default: tear down)
+  --no-pull           use a --registered image already in the local docker store
+                      instead of pulling it (e.g. one built locally and not yet in
+                      any registry). Whatever copy is local wins, stale or not.
   -h, --help          show this help
 
 Honoured env vars: YB_HOST, YB_PORT (default 127.0.0.1:5433),
@@ -112,6 +115,7 @@ REGISTRY_OVERRIDE=""
 CACHE=0
 KEEP=0
 REGRESS=0
+NO_PULL=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --ext) EXT_NAME="$2"; EXT_EXPLICIT=1; shift ;;
@@ -120,6 +124,7 @@ while [[ $# -gt 0 ]]; do
         --registry) REGISTRY_OVERRIDE="$2"; shift ;;
         --cache) CACHE=1 ;;
         --keep) KEEP=1 ;;
+        --no-pull) NO_PULL=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
     esac
@@ -263,7 +268,9 @@ if not d.get("image"):
     sys.exit("%s: no \"image\"" % sys.argv[1])
 layout = d.get("layout") or {}
 env_paths = layout.get("env_paths") or {}
-print("\t".join([
+# \x1f, not a tab: tab is IFS whitespace, so `read` would collapse the empty
+# fields an optional layout key leaves and shift every later one left.
+print("\x1f".join([
     name,
     d["image"],
     d.get("control") or name,
@@ -282,7 +289,7 @@ for _f in "${REGISTERED_FILES[@]:-}"; do
     # nameable as `ext_fixtures/postgis.json`.
     [[ -f "$_f" ]] || _f="$REPO/test/integration/compute/$_f"
     [[ -f "$_f" ]] || { echo "no such --registered file: $_f" >&2; exit 2; }
-    IFS=$'\t' read -r _n _img _ctrl _pre _share _lib _libpath _envpaths _abi < <(read_registered "$_f")
+    IFS=$'\x1f' read -r _n _img _ctrl _pre _share _lib _libpath _envpaths _abi < <(read_registered "$_f")
     EXT_NAMES+=("$_n"); EXT_VERSIONS+=(""); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
     # Parallel to EXT_CONTROLS, so the preload below indexes both lists the same
     # way. A registration carries no separate library name: it preloads under
@@ -323,8 +330,14 @@ for _i in "${!EXT_NAMES[@]}"; do
     if [[ -n "${EXT_PREBUILT[$_i]}" ]]; then
         # Registered: a prebuilt image, so there is nothing to compile. The
         # endpoint's ImageVolume would pull the same reference.
-        echo ">>> pulling registered extension image ($_n): $_img"
-        docker pull "$_img"
+        if [[ $NO_PULL == 1 ]]; then
+            echo ">>> --no-pull: using the local registered extension image ($_n): $_img"
+            docker image inspect "$_img" >/dev/null 2>&1 \
+                || { echo "--no-pull: $_img is not in the local docker store" >&2; exit 1; }
+        else
+            echo ">>> pulling registered extension image ($_n): $_img"
+            docker pull "$_img"
+        fi
     else
         echo ">>> building extension image ($_n) via deploy/extensions/build.sh"
         BUILD_ARGS=()
