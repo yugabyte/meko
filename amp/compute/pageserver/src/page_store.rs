@@ -851,44 +851,6 @@ pub(crate) fn slru_blknum(blk: u32) -> Result<i16> {
     i16::try_from(blk).with_context(|| format!("SLRU blknum {blk} is not a page within a segment"))
 }
 
-/// Normalize a chain fetched in DocDB storage order into SQL result
-/// order and trim it to the served prefix.
-///
-/// The pages/slru PKs cluster `(lsn DESC, will_init DESC)`, matching the SQL
-/// readers' `ORDER BY lsn DESC, will_init DESC` (base first on a tie).
-/// The stable sort re-establishes that for any caller whose rows arrived
-/// otherwise,
-/// then the walk mirrors the SQL readers: validate order per step
-/// ([`assert_chain_step`]) and stop at the first `will_init` row — an
-/// equal-LSN delta sorted after its image, and everything below the
-/// anchor, is shadowed and dropped.
-fn normalize_chain<T>(
-    mut rows: Vec<T>,
-    meta: impl Fn(&T) -> (Lsn, bool /* is_image */, bool /* will_init */),
-    where_: &str,
-) -> Vec<T> {
-    rows.sort_by(|a, b| {
-        let (a_lsn, _, a_init) = meta(a);
-        let (b_lsn, _, b_init) = meta(b);
-        b_lsn.cmp(&a_lsn).then(b_init.cmp(&a_init))
-    });
-    let mut chain = Vec::with_capacity(rows.len());
-    let mut order_check: Vec<(Lsn, bool, bool)> = Vec::with_capacity(rows.len());
-    for row in rows {
-        let m = meta(&row);
-        order_check.push(m);
-        let anchor = m.2;
-        chain.push(row);
-        if anchor {
-            break;
-        }
-    }
-    // Validate once over the collected prefix — a violation in any prefix
-    // shows up here too, so per-iteration checks were needlessly O(N²).
-    assert_chain_step(&order_check, where_);
-    chain
-}
-
 /// Rows per round on a direct-RPC relation chain read: a chain at the materialiser's bound plus its base.
 fn page_chain_read_limit(image_chain_limit: u32) -> u64 {
     match image_chain_limit {
@@ -1032,35 +994,49 @@ where
 
 /// Decode the raw rows of a single-key chain fetch (targets
 /// `[.., lsn, is_image, will_init, payload]` starting at `off`) into
-/// [`PageRow`]s for `key`, normalize storage order into SQL result
-/// order, and trim at the anchor.
+/// [`PageRow`]s for `key`. The collectors hand them over in PK order, cut at the base, so a row
+/// out of that order is a decode bug and fails the read.
 fn assemble_page_chain<R: RowCells>(
     key: Key,
     raw: Vec<R>,
     off: usize,
     where_: &str,
 ) -> Result<Vec<Arc<PageRow>>> {
-    let rows = raw
-        .into_iter()
-        .map(|r| {
-            let lsn = Lsn(r.cell_i64(off)? as u64);
-            Ok(PageRow {
+    let mut last_row = None;
+    raw.into_iter()
+        .map(|row| {
+            let lsn = Lsn(row.cell_i64(off)? as u64);
+            let will_init = row.cell_bool(off + 2)?;
+            check_chain_step(&mut last_row, lsn, will_init, || {
+                format!("pages key={key} ({where_})")
+            })?;
+            Ok(Arc::new(PageRow {
                 key,
                 lsn,
-                is_image: r.cell_bool(off + 1)?,
-                will_init: r.cell_bool(off + 2)?,
-                payload: decode_payload(&r.cell_bytes(off + 3)?, || {
+                is_image: row.cell_bool(off + 1)?,
+                will_init,
+                payload: decode_payload(&row.cell_bytes(off + 3)?, || {
                     format!("pages row key={key} lsn={lsn} ({where_})")
                 })?,
-            })
+            }))
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(
-        normalize_chain(rows, |r| (r.lsn, r.is_image, r.will_init), where_)
-            .into_iter()
-            .map(Arc::new)
-            .collect(),
-    )
+        .collect()
+}
+
+/// Fail if a decoded chain row breaks `lsn DESC, will_init DESC` order after `last_row`, then
+/// make it the new `last_row`.
+fn check_chain_step<C: std::fmt::Display>(
+    last_row: &mut Option<(Lsn, bool)>,
+    lsn: Lsn,
+    will_init: bool,
+    what: impl FnOnce() -> C,
+) -> Result<()> {
+    if let Some(prev_row) = last_row.replace((lsn, will_init)) {
+        if let Some(violation) = chain_step_error(prev_row, (lsn, will_init)) {
+            bail!("{}: {violation}", what());
+        }
+    }
+    Ok(())
 }
 
 /// [`assemble_page_chain`] for SLRU rows.
@@ -1072,18 +1048,22 @@ fn assemble_slru_chain<R: RowCells>(
     off: usize,
     where_: &str,
 ) -> Result<Vec<SlruPageRow>> {
-    let rows = raw
-        .into_iter()
-        .map(|r| {
-            let lsn = Lsn(r.cell_i64(off)? as u64);
+    let mut last_row = None;
+    raw.into_iter()
+        .map(|row| {
+            let lsn = Lsn(row.cell_i64(off)? as u64);
+            let will_init = row.cell_bool(off + 2)?;
+            check_chain_step(&mut last_row, lsn, will_init, || {
+                format!("slru_pages kind={kind:?} segno={segno} blknum={blknum} ({where_})")
+            })?;
             Ok(SlruPageRow {
                 kind,
                 segno,
                 blknum,
                 lsn,
-                is_image: r.cell_bool(off + 1)?,
-                will_init: r.cell_bool(off + 2)?,
-                payload: decode_payload(&r.cell_bytes(off + 3)?, || {
+                is_image: row.cell_bool(off + 1)?,
+                will_init,
+                payload: decode_payload(&row.cell_bytes(off + 3)?, || {
                     format!(
                         "slru_pages row kind={kind:?} segno={segno} \
                              blknum={blknum} lsn={lsn} ({where_})"
@@ -1091,12 +1071,7 @@ fn assemble_slru_chain<R: RowCells>(
                 })?,
             })
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(normalize_chain(
-        rows,
-        |r| (r.lsn, r.is_image, r.will_init),
-        where_,
-    ))
+        .collect()
 }
 
 /// Feed one fetched page of a multi-block scan (targets
@@ -3132,92 +3107,28 @@ fn assert_chain_step(chain: &[(Lsn, bool /* is_image */, bool /* will_init */)],
     if n < 2 {
         return;
     }
-    let (plsn, _, pwill_init) = chain[n - 2];
+    let (prev_lsn, _, prev_will_init) = chain[n - 2];
     let (lsn, _, will_init) = chain[n - 1];
-    if lsn > plsn {
-        panic!(
-            "{where_}: chain row {} lsn {lsn} > prev lsn {plsn} (must be DESC)",
-            n - 1
-        );
-    }
-    if lsn == plsn && !pwill_init && will_init {
-        panic!(
-            "{where_}: chain has a base at lsn {lsn} after a non-base at the same lsn (need ORDER BY ..., will_init DESC tiebreaker)",
-        );
+    if let Some(violation) = chain_step_error((prev_lsn, prev_will_init), (lsn, will_init)) {
+        panic!("{where_}: chain row {}: {violation}", n - 1);
     }
 }
 
-#[cfg(test)]
-mod normalize_chain_tests {
-    //! [`normalize_chain`] re-establishes the SQL readers' result order
-    //! (`lsn DESC, will_init DESC`, base before non-base on a tie) and
-    //! trims at the anchor.
-    use super::*;
-
-    fn walk(rows: &[(u64, bool, bool)]) -> Vec<(u64, bool, bool)> {
-        normalize_chain(
-            rows.to_vec(),
-            |&(lsn, img, init)| (Lsn(lsn), img, init),
-            "test",
-        )
-        .into_iter()
-        .collect()
+/// The `lsn DESC, will_init DESC` rule `(lsn, will_init)` breaks by following
+/// `(prev_lsn, prev_will_init)`, if any.
+fn chain_step_error(
+    (prev_lsn, prev_will_init): (Lsn, bool),
+    (lsn, will_init): (Lsn, bool),
+) -> Option<String> {
+    if lsn > prev_lsn {
+        return Some(format!("lsn {lsn} > prev lsn {prev_lsn} (must be DESC)"));
     }
-
-    #[test]
-    fn trims_at_image_anchor() {
-        // storage order: deltas at 90/80, image at 70, older history below.
-        let rows = [
-            (90, false, false),
-            (80, false, false),
-            (70, true, true),
-            (60, false, false),
-            (50, true, true),
-        ];
-        assert_eq!(
-            walk(&rows),
-            vec![(90, false, false), (80, false, false), (70, true, true)]
-        );
+    if lsn == prev_lsn && !prev_will_init && will_init {
+        return Some(format!(
+            "base at lsn {lsn} after a non-base at the same lsn (need ORDER BY ..., will_init DESC tiebreaker)"
+        ));
     }
-
-    #[test]
-    fn equal_lsn_tie_serves_image_and_drops_the_delta() {
-        // Whatever order the two arrive in, the base sorts first and the
-        // reader anchors there, dropping the tied delta. The materialiser
-        // stamps its image at the folded delta's LSN, so this shape is
-        // common; see #1153.
-        let rows = [
-            (90, false, false),
-            (70, false, false), // folded delta, arrives first in storage order
-            (70, true, true),   // image at the same LSN
-        ];
-        assert_eq!(walk(&rows), vec![(90, false, false), (70, true, true)]);
-    }
-
-    /// Both rows are `is_image=false`, so only a `will_init` comparator
-    /// sorts the base first and drops the delta its page shadows.
-    #[test]
-    fn equal_lsn_tie_serves_the_init_record_and_drops_the_delta() {
-        let rows = [(90, false, false), (70, false, false), (70, false, true)];
-        assert_eq!(walk(&rows), vec![(90, false, false), (70, false, true)]);
-    }
-
-    #[test]
-    fn init_delta_anchors_without_image() {
-        let rows = [(90, false, false), (40, false, true), (30, false, false)];
-        assert_eq!(walk(&rows), vec![(90, false, false), (40, false, true)]);
-    }
-
-    #[test]
-    fn no_anchor_returns_full_chain() {
-        let rows = [(90, false, false), (80, false, false)];
-        assert_eq!(walk(&rows), rows.to_vec());
-    }
-
-    #[test]
-    fn empty_chain() {
-        assert!(walk(&[]).is_empty());
-    }
+    None
 }
 
 #[cfg(test)]
@@ -3264,11 +3175,6 @@ mod chain_collector_tests {
             collect(2, &[(80, true), (80, false), (40, false)]),
             vec![80]
         );
-        // Out of PK order, a tied delta before the base is kept; `normalize_chain` trims it.
-        assert_eq!(
-            collect(3, &[(80, false), (80, true), (40, false)]),
-            vec![80, 80]
-        );
     }
 
     /// The op binds one block, so a row for another block means the server
@@ -3285,10 +3191,72 @@ mod chain_collector_tests {
 }
 
 #[cfg(test)]
+mod assemble_chain_tests {
+    //! `assemble_page_chain` / `assemble_slru_chain` reject a chain whose decoded rows are out of
+    //! `lsn DESC, will_init DESC` order.
+    use super::test_support::page_key;
+    use super::*;
+
+    /// `(lsn, is_image, will_init)` with a raw-codec payload, at offset 0.
+    struct Cells(i64, bool, bool);
+
+    impl RowCells for Cells {
+        fn cell_i64(&self, i: usize) -> Result<i64> {
+            anyhow::ensure!(i == 0, "cell {i} is not an i64");
+            Ok(self.0)
+        }
+        fn cell_bool(&self, i: usize) -> Result<bool> {
+            match i {
+                1 => Ok(self.1),
+                2 => Ok(self.2),
+                _ => anyhow::bail!("cell {i} is not a bool"),
+            }
+        }
+        fn cell_bytes(&self, _i: usize) -> Result<Bytes> {
+            Ok(Bytes::from_static(b"\x00p"))
+        }
+    }
+
+    fn page(rows: Vec<Cells>) -> Result<Vec<Arc<PageRow>>> {
+        assemble_page_chain(Key::from_slice(&page_key(1663, 5, 16384, 0, 1)), rows, 0, "test")
+    }
+
+    fn slru(rows: Vec<Cells>) -> Result<Vec<SlruPageRow>> {
+        assemble_slru_chain(SlruKind::Clog, 0, 1, rows, 0, "test")
+    }
+
+    fn error<T: std::fmt::Debug>(result: Result<T>) -> String {
+        format!("{:#}", result.unwrap_err())
+    }
+
+    #[test]
+    fn accepts_pk_order() {
+        let rows = || vec![Cells(90, false, false), Cells(70, true, true)];
+        assert_eq!(page(rows()).unwrap().len(), 2);
+        assert_eq!(slru(rows()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rejects_ascending_lsn() {
+        let rows = || vec![Cells(70, false, false), Cells(90, true, true)];
+        for err in [error(page(rows())), error(slru(rows()))] {
+            assert!(err.contains("must be DESC"), "{err}");
+        }
+    }
+
+    #[test]
+    fn rejects_base_after_a_tied_delta() {
+        let rows = || vec![Cells(70, false, false), Cells(70, true, true)];
+        for err in [error(page(rows())), error(slru(rows()))] {
+            assert!(err.contains("after a non-base at the same lsn"), "{err}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod chain_order_tests {
     //! Unit tests for [`assert_chain_step`], the per-row chain-order guard
-    //! run inside `read_chain` / `scan_range` / `read_slru_chain` /
-    //! `scan_slru_range`. [`check`] mirrors the production usage — push
+    //! run by the cross-fork YSQL scan. [`check`] mirrors the production usage — push
     //! rows one at a time and validate the new tail each step — so a
     //! regression in the SQL `ORDER BY` clause or in the row-to-PageRow
     //! decode is caught without needing a live YB.
@@ -3432,7 +3400,7 @@ mod chain_order_tests {
         );
     }
 
-    /// Equal LSNs are fine; only an increase panics (`lsn > plsn`, not
+    /// Equal LSNs are fine; only an increase panics (`lsn > prev_lsn`, not
     /// `>=`). Two same-LSN deltas trip neither the DESC nor the base check.
     #[test]
     fn equal_lsn_does_not_trigger_desc_panic() {

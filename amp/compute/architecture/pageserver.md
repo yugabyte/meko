@@ -482,12 +482,10 @@ is rare in practice.
 On the direct-RPC lane, the single-key readers —
 `read_chain`, `read_slru_chain`, `read_meta` — run as paged clustered
 scans from the target LSN downward that stop at the anchor client-side
-(`ChainFetchState`); `normalize_chain` re-orders equal-LSN base/delta
-ties into the SQL result order (`lsn DESC, will_init DESC`, base
-first). It relies
-on the `lsn DESC` clustering, so a forward scan surfaces the newest
-version first — `read_meta` takes just `limit(1)`, and the chain readers
-truncate at the first `will_init` anchor. The one-forknum multi-block
+(`fetch_chain_rows_thin`). They rely on the PK's `lsn DESC, will_init DESC`
+clustering, so a forward scan surfaces the newest version first and a base
+heads its equal-LSN tie group — `read_meta` takes just `limit(1)`, and the
+chain readers stop at the first `will_init` row, with no re-sort. The one-forknum multi-block
 scans — a contiguous `scan_range` and a scattered `scan_scattered_set`
 alike, which share `scan_one_fork_thin` — issue one bound single-block read
 per block, batched onto one `Perform`, so each stops at its own anchor
@@ -511,13 +509,18 @@ Per-op latency is split by lane in
 
 ### Chain invariants
 
-Every chain is validated as it is assembled (`assert_chain_step`):
-LSN non-increasing, image-before-delta on ties, nothing below a
-`will_init` anchor. A batched block scan adds one more, before the rows
-are a chain at all: each op binds one block, so `ChainCollector` refuses
-a row whose `blknum` is not the one its op asked for. Both the `pages`
-and `slru_pages` readers rely on that — accepting such a row would file
-one block's chain under another's key and serve it as that page.
+Every chain is checked as it is assembled (`chain_step_error`): LSN
+non-increasing, and a base never after a non-base at the same LSN. The
+thin-lane assemblers (`assemble_page_chain`, `assemble_slru_chain`) fail
+that read on a violation, since the PK already guarantees the order and a
+violation means a decode bug; the cross-fork YSQL scan panics
+(`assert_chain_step`). Readers stop at the first `will_init` row, so
+nothing below the anchor is returned. A batched block scan adds one more,
+before the rows are a chain at all: each op binds one block, so
+`ChainCollector` refuses a row whose `blknum` is not the one its op asked
+for. Both the `pages` and `slru_pages` readers rely on that — accepting
+such a row would file one block's chain under another's key and serve it
+as that page.
 
 Blends of cache + YB rows are deduplicated by LSN
 (`dedup_page_chain_by_lsn`); two same-LSN collisions are legitimate (a
