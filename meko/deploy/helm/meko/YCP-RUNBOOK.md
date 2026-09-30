@@ -119,6 +119,7 @@ helm upgrade --install ycp charts/meko -n $NS \
   -f charts/meko/values-ycp.yaml \
   "${SECRET_ARGS[@]}" \
   --set-string apiServer.image.tag=$TAG \
+  --set-string apiServer.config.MEKO_BYOC_METRICS_URL=$BYOC_METRICS_URL \
   --wait --timeout=300s
 ```
 
@@ -127,8 +128,13 @@ Drop `"${SECRET_ARGS[@]}"` if you took Option B. Everything else that used to be
 (`ycp-system`, which `controlPlaneDb` inherits) and turns Cognito off, and
 `values-aws.yaml` names a storage class that exists on our EKS clusters.
 
-One thing still bites:
+Two things still bite:
 
+- **`BYOC_METRICS_URL` is the fleet's BYOC metrics door**, and nothing stops you
+  leaving it out: the binary then defaults to the devcloud door, prints it in every
+  install hint, and marks environments shipping to their own fleet's door DEGRADED.
+  Devcloud is `https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics`, prod
+  `https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics`.
 - **`values-ycp.yaml` must come last.** Helm merges `-f` files left to right, and the
   env presets set `apiServer.migrate.scope` and the `SYSTEM_DB_`/`DB_` endpoints for a
   data plane. Put the mode preset earlier and those win — the release comes up
@@ -172,7 +178,7 @@ tokens and session storage carry over — set `apiServer.basePath`:
 
 ```bash
 helm upgrade --install ... --set apiServer.basePath=/ycp
-# or, with scripts/deploy-ycp-ybm.sh:  BASE_PATH=/ycp ./deploy-ycp-ybm.sh
+# or, with scripts/deploy-ycp-ybm.sh:  BASE_PATH=/ycp BYOC_METRICS_URL=... ./deploy-ycp-ybm.sh
 ```
 
 Everything moves under the prefix: console at `/ycp/`, fleet API at
@@ -283,6 +289,7 @@ tailnet — chart-managed, so it survives upgrades:
 helm upgrade --install ycp charts/meko -n $NS \
   -f charts/meko/values-aws.yaml -f charts/meko/values-dev.yaml -f charts/meko/values-ycp.yaml \
   --set-string apiServer.image.tag=$TAG \
+  --set-string apiServer.config.MEKO_BYOC_METRICS_URL=$BYOC_METRICS_URL \
   --set-string apiServer.service.annotations."tailscale\.com/expose"=true \
   --set-string apiServer.service.annotations."tailscale\.com/hostname"=ycp \
   --set-string apiServer.service.annotations."tailscale\.com/tags"=tag:k8s-meko

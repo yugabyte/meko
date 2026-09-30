@@ -123,7 +123,8 @@ apiServer:
     # only ever be told to ship here.
     #
     # Devcloud is the default because a control plane never told which fleet it serves
-    # is far more likely to be a dev one. Every other deployment must override it, or
+    # is far more likely to be a dev one. scripts/deploy-ycp-ybm.sh requires it
+    # (BYOC_METRICS_URL); any other deploy path must override it too, or
     # it prints the devcloud door in its install hints and marks every environment
     # that ships to its own fleet's door DEGRADED:
     #   MEKO_BYOC_METRICS_URL: https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics   # prod

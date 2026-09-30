@@ -184,7 +184,7 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
        terms as MEKO_METRICS_URL above. Unlike it, the binary DEFAULTS this (to the
        devcloud door), so leaving it out is a real choice rather than a disabled
        route — a prod or srecloud control plane that omits it hands out the devcloud
-       door and then refuses its own agents. */}}
+       door and marks its own agents DEGRADED. */}}
 {{- if $c.config.MEKO_BYOC_METRICS_URL }}
 - name: MEKO_BYOC_METRICS_URL
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: MEKO_BYOC_METRICS_URL } }

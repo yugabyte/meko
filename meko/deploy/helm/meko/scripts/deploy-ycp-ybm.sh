@@ -36,6 +36,15 @@
 #                 through UNSTRIPPED — with it set, the internal LB serves the
 #                 console at $LB_IP/ycp/ and 404s at /. Needs an API_TAG with
 #                 --base-path support.
+#   BYOC_METRICS_URL  REQUIRED — the BYOC OTLP metrics door of the fleet this YCP
+#                 serves, printed in every amp install hint and the one an
+#                 environment's telemetry is judged against. No default here: the
+#                 binary's own default is the devcloud door, which a prod or
+#                 srecloud YCP must not inherit.
+#                   devcloud  https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics
+#                   prod      https://byoc.cloud.yugabyte.com/api/v1/otlp/metrics
+#   METRICS_URL   Prometheus query API behind GET /environments/{id}/metrics (that
+#                 fleet's Thanos). Empty (default) = the route answers 503.
 #   DRY_RUN=false  preview only (kubectl client dry-run + helm --dry-run; no AWS/DB).
 #   WAIT_LB=true   poll for the internal LB IP at the end.
 # =============================================================================
@@ -59,6 +68,8 @@ DB_SSL_MODE="${DB_SSL_MODE:-require}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 ADMIN_API_KEY="${ADMIN_API_KEY:-}"
 MCP_INTERNAL_SECRET="${MCP_INTERNAL_SECRET:-}"
+BYOC_METRICS_URL="${BYOC_METRICS_URL:?set BYOC_METRICS_URL (the BYOC metrics door of the fleet this YCP serves; see the header)}"
+METRICS_URL="${METRICS_URL:-}"
 DRY_RUN="${DRY_RUN:-false}"
 WAIT_LB="${WAIT_LB:-true}"
 
@@ -82,7 +93,7 @@ GEN_ADMIN=false
 [ -z "$ADMIN_API_KEY" ] && { ADMIN_API_KEY="$(rand 24)"; GEN_ADMIN=true; }
 [ -z "$MCP_INTERNAL_SECRET" ] && MCP_INTERNAL_SECRET="$(rand 24)"
 
-log "Target: context=$CONTEXT ns=$NS release=$RELEASE mode=ycp db=$DB_USER@${DB_HOST:-<dry-run>}:$DB_PORT api_tag=$API_TAG base_path=${BASE_PATH:-<root>}"
+log "Target: context=$CONTEXT ns=$NS release=$RELEASE mode=ycp db=$DB_USER@${DB_HOST:-<dry-run>}:$DB_PORT api_tag=$API_TAG base_path=${BASE_PATH:-<root>} byoc_metrics_url=$BYOC_METRICS_URL"
 [ "$DRY_RUN" != "true" ] || log "DRY_RUN: preview only — nothing will be created or modified"
 [ "$DRY_RUN" = "true" ] || $K cluster-info >/dev/null
 
@@ -136,6 +147,8 @@ apiServer:
     SYSTEM_DB_USER_NAME: ${DB_USER}
     SYSTEM_DB_NAME: ${DB_NAME}
     SYSTEM_DB_SSL_MODE: ${DB_SSL_MODE}
+    MEKO_BYOC_METRICS_URL: ${BYOC_METRICS_URL}
+${METRICS_URL:+    MEKO_METRICS_URL: ${METRICS_URL}}
 ecrCredentialRefresh:
   namespace: ${NS}
   namespaces: ["${NS}"]

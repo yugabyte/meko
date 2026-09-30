@@ -221,8 +221,8 @@ func run() error {
 	// prod door by default is the worse mistake of the two. Nothing refuses either
 	// way — an agent reporting a different door enrols and is marked DEGRADED — so
 	// this decides which door the install hint prints and which one an environment is
-	// judged against, not whether anything comes up. The prod and srecloud
-	// deployments set it explicitly.
+	// judged against, not whether anything comes up. Every non-devcloud YCP must
+	// set it; deploy-ycp-ybm.sh refuses to run without it.
 	byocMetricsURL := flag.String("byoc-metrics-url",
 		envOrDefault("MEKO_BYOC_METRICS_URL", "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"),
 		"OTLP/HTTP metrics door a BYOC data plane ships to. Printed in the install hint; an "+
