@@ -24,7 +24,8 @@ export const CALL_OUTPUT_TOKENS = 240;
 export const CARRY_TURNS = 10;
 
 /** The Meko tools that count: searches, not fetches by id. */
-export const SEARCH_TOOLS = new Set(['memory_search', 'knowledgebase_search', 'context_search']);
+export const SEARCH_TOOL_NAMES = ['memory_search', 'knowledgebase_search', 'context_search'] as const;
+export const SEARCH_TOOLS: ReadonlySet<string> = new Set(SEARCH_TOOL_NAMES);
 
 export interface FoundSearch {
   /** Input, cache read and cache write of the response that made the call. */

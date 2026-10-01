@@ -37,7 +37,7 @@ export const SEND_AFTER_MS = 23 * 3600 * 1000;
 export const FIRST_CHECK_MS: [number, number] = [10 * 60 * 1000, 60 * 60 * 1000];
 /**
  * The largest body the collector takes. A busy install's 30-day first report can be bigger (every
- * day's file types and models full); 7 days always fit.
+ * day's file types and models full); a report over it drops its oldest days until it fits.
  */
 export const MAX_REPORT_BYTES = 64 * 1024;
 const SEND_TIMEOUT_MS = 15_000;
@@ -57,6 +57,16 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
  * can't spell a name.
  */
 export const VERSION_RE = /^v?[0-9]{1,9}(\.[0-9]{1,9}){0,3}[a-z]?(-(alpha|beta|rc|pre|dev|canary|nightly|next|[0-9]{1,9})(\.[0-9]{1,9}){0,3})?(\+[0-9]{1,14})?$/;
+
+/**
+ * A version as the report sends it: as is when the collector keeps it, else its leading dotted
+ * numbers (a Node nightly `24.0.0-nightly20250101abc` gives `24.0.0`, a build `0.20261001.1-3-gabc`
+ * gives `0.20261001.1`), else `0.0.0`.
+ */
+export function reportVersion(v: string): string {
+  if (VERSION_RE.test(v)) return v;
+  return /^v?[0-9]{1,9}(\.[0-9]{1,9}){0,3}/.exec(v)?.[0] ?? '0.0.0';
+}
 
 /** The UTC day of a time, as YYYY-MM-DD. */
 export function utcDay(ms: number): string {
@@ -120,7 +130,7 @@ function capModels(rows: (CallHomeTokens & { model: string })[]): (CallHomeToken
 function callHomeMeko(u: MekoUsage, byTool: CallHomeMeko['byTool'], starts: MekoStart[]): CallHomeMeko {
   const s: CallHomeMeko['starts'] = { found: 0, empty: 0, error: 0, late: 0, ms: 0 };
   for (const r of starts) {
-    if (r.outcome === 'found' || r.outcome === 'empty' || r.outcome === 'error' || r.outcome === 'late') s[r.outcome]++;
+    s[r.outcome]++;
     s.ms += n(r.ms);
   }
   return {
@@ -289,7 +299,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
   for (const st of starts) mekoDay(st.at)?.starts.push(st);
   for (const [day, m] of dayMeko) days.get(day)!.meko = callHomeMeko(summarizeMeko(m.calls), toolCounts(m.calls), m.starts);
 
-  const overview = usageOverview(db, 1, now);
+  const overview = usageOverview(db, 1, now, calls);
   return {
     schema: 1,
     installId: o.installId,
@@ -314,7 +324,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
       fileTypes: sumFileTypes(allFiles),
       tokens: { ...overview.total },
       worktrees: { idle: get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM worktrees WHERE session_id IS NULL')?.n ?? 0 },
-      meko: callHomeMeko(summarizeMeko(calls), toolCounts(calls), starts),
+      meko: callHomeMeko(overview.meko, toolCounts(calls), starts),
       mekoFirstTurn: overview.mekoFirstTurn,
     },
     days: [...days.values()],
@@ -362,11 +372,11 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   ]);
   const meko = mekoConfigured(o.config);
   return {
-    version: VERSION_RE.test(o.version) ? o.version : '0.0.0',
+    version: reportVersion(o.version),
     channel: o.config.update.channel,
     platform: process.platform,
     arch: process.arch,
-    node: process.versions.node,
+    node: reportVersion(process.versions.node),
     tmux,
     claudeCode,
     access: isLoopback(o.config.server.bind) ? 'local' : 'remote',
@@ -453,8 +463,11 @@ export class CallHomeService {
     return id;
   }
 
-  /** The report the next send carries. */
-  async report(): Promise<CallHomeReport> {
+  /**
+   * The body the next send carries. One over the collector's limit would be refused every hour from
+   * then on, so it drops its oldest days until it fits (the totals don't depend on the days).
+   */
+  async body(): Promise<string> {
     const now = this.now();
     let firstDay = kvGet(this.o.db, KV_FIRST_DAY);
     if (!firstDay) {
@@ -464,10 +477,10 @@ export class CallHomeService {
     const install = await installFacts({ config: this.o.config(), version: this.o.version, meko: this.o.meko(), firstDay, probe: this.o.probe });
     const first = !kvGet(this.o.db, KV_LAST_SENT);
     const r = buildReport(this.o.db, { installId: this.installId(), install, days: first ? FIRST_REPORT_DAYS : REPORT_DAYS, now });
-    // A first report the collector would refuse would be refused every hour from then on. The
-    // totals don't depend on the days, so the last 7 are the 7-day report.
-    if (first && Buffer.byteLength(JSON.stringify(r)) > (this.o.maxReportBytes ?? MAX_REPORT_BYTES)) return { ...r, days: r.days.slice(-REPORT_DAYS) };
-    return r;
+    const max = this.o.maxReportBytes ?? MAX_REPORT_BYTES;
+    let body = JSON.stringify(r);
+    for (let drop = 1; Buffer.byteLength(body) > max && drop <= r.days.length; drop++) body = JSON.stringify({ ...r, days: r.days.slice(drop) });
+    return body;
   }
 
   /** Sends a report if one is due. Never throws; true when one was sent. */
@@ -485,7 +498,7 @@ export class CallHomeService {
     const last = Number(kvGet(this.o.db, KV_LAST_SENT) ?? 0);
     if (last && this.now() - last < SEND_AFTER_MS) return false;
     try {
-      const body = JSON.stringify(await this.report());
+      const body = await this.body();
       // Turned off while the report was being built.
       if (!this.enabled()) return false;
       const res = await this.fetchImpl(url, {

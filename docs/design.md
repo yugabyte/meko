@@ -1125,8 +1125,9 @@ reports.
 
 - *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
   hosts sharing a home count once), the version and update channel, platform, CPU, Node, tmux and
-  Claude Code versions (`tmux -V`, `claude --version`; `''` when they can't be read), local or
-  remote access, the service manager, whether Meko is on (and where its key comes from, and the
+  Claude Code versions (`tmux -V`, `claude --version`; `''` when they can't be read; our version or
+  Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
+  cut to its leading numbers, else `0.0.0`), local or remote access, the service manager, whether Meko is on (and where its key comes from, and the
   sharing mode; `none` when Meko is off or the mode isn't known), and the UTC day of the first
   report.
 - *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
@@ -1161,9 +1162,10 @@ account number) are sent as `other`.
 
 **Sending.** An hourly check (the first one 10 to 60 minutes after start, at random, so a release
 doesn't make every install report at once) sends a report when the last one went out 23 hours ago
-or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. A first report
-over the collector's 64 KB (a busy install, with every day's file types and models full) is sent
-with 7 days instead of 30, since the collector would refuse it every hour from then on. It POSTs the JSON
+or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. A report over the
+collector's 64 KB (a busy install's 30-day first report, with every day's file types and models
+full) drops its oldest days until it fits, since the collector would refuse it every hour from then
+on. It POSTs the JSON
 to the collector's report URL, as given, with a 15-second timeout; a failure is logged once and tried again an hour
 later, and nothing else waits on it. The collector upserts each day on `(installId, day)`, so a
 resend changes nothing and a missed day is filled in by the next report. The URL is

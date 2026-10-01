@@ -388,7 +388,8 @@ function dailyUsage(db: Db, days: number, now: number, projectId?: string): Dail
 }
 
 /** Usage across every project, deleted ones included: tokens, merged PRs and direct pushes. */
-export function usageOverview(db: Db, days = 14, now = Date.now()): UsageOverview {
+/** `calls` is `mekoCalls(db)`, for a caller that has it already. */
+export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoCalls(db)): UsageOverview {
   const byUsage = usageByProject(db);
   const counts = <T extends { project_id: string }>(sql: string) => new Map(all<T>(db, sql).map((r) => [r.project_id, r]));
   const sessions = counts<{ project_id: string; n: number }>('SELECT project_id, COUNT(*) AS n FROM sessions GROUP BY project_id');
@@ -410,7 +411,6 @@ export function usageOverview(db: Db, days = 14, now = Date.now()): UsageOvervie
     `SELECT s.project_id, ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id GROUP BY s.project_id, u.model`)) {
     costRows.set(r.project_id, [...(costRows.get(r.project_id) ?? []), r]);
   }
-  const calls = mekoCalls(db);
   const meko = mekoBy(calls, (r) => r.project_id);
 
   const byProject: ProjectUsageSummary[] = all<{ id: string; name: string; repo_path: string; deleted_at: number | null }>(db,

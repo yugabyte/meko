@@ -1,16 +1,23 @@
 import type { CallHomeMekoTool, MekoFirstTurn, MekoUsage, SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
-import { CARRY_TURNS, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
+import { CARRY_TURNS, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 
 export type MekoKind = 'lookup' | 'save' | 'other';
 export type MekoOutcome = 'found' | 'empty' | 'error' | 'ok';
 
 /** The Meko MCP server's tools, under its own name or a plugin's (`mcp__plugin_x_meko__…`). */
 const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__([a-z_]+)$/;
-const LOOKUPS = new Set([...SEARCH_TOOLS, 'memory_get_all', 'memory_get_by_id', 'conversation_get', 'artifact_get']);
-const SAVES = new Set(['memory_add', 'memory_update', 'memory_promote', 'artifact_put', 'conversation_add_message']);
+// Each one is a `CallHomeMekoTool`, so a tool added here must be added to the report's type too.
+const LOOKUP_TOOLS = [
+  ...SEARCH_TOOL_NAMES, 'memory_get_all', 'memory_get_by_id', 'conversation_get', 'artifact_get',
+] as const satisfies readonly CallHomeMekoTool[];
+const SAVE_TOOLS = [
+  'memory_add', 'memory_update', 'memory_promote', 'artifact_put', 'conversation_add_message',
+] as const satisfies readonly CallHomeMekoTool[];
+const LOOKUPS: ReadonlySet<string> = new Set(LOOKUP_TOOLS);
+const SAVES: ReadonlySet<string> = new Set(SAVE_TOOLS);
 /** The tools the usage stats report names (`CallHomeMekoTool`): the lookups and saves. */
-export const REPORTED_TOOLS = [...LOOKUPS, ...SAVES] as CallHomeMekoTool[];
+export const REPORTED_TOOLS: readonly CallHomeMekoTool[] = [...LOOKUP_TOOLS, ...SAVE_TOOLS];
 
 /** The Meko tool a tool name calls, or null for any other tool. */
 export function mekoTool(name: string): string | null {
@@ -301,12 +308,16 @@ export function firstTurnMeko(db: Db, projectId?: string): MekoFirstTurn {
   };
 }
 
-/** Calls by tool, as the usage stats report names them; tools with no calls are left out, and seeds aren't calls. */
+/**
+ * Calls by tool, as the usage stats report names them; tools with no calls are left out, and seeds
+ * aren't calls. A call counts by the kind stored with it, as in summarizeMeko, so the lookups and
+ * saves here add up to its counts even for a call stored before its tool was a lookup or a save.
+ */
 export function toolCounts(rows: CallRow[]): Partial<Record<CallHomeMekoTool, number>> {
   const out: Partial<Record<CallHomeMekoTool, number>> = {};
   for (const r of rows) {
     if (r.kind === 'seed') continue;
-    const t = mekoKind(r.tool) === 'other' ? 'other' : (r.tool as CallHomeMekoTool);
+    const t = r.kind !== 'other' && REPORTED_TOOLS.includes(r.tool as CallHomeMekoTool) ? (r.tool as CallHomeMekoTool) : 'other';
     out[t] = (out[t] ?? 0) + 1;
   }
   return out;

@@ -285,6 +285,9 @@ describe('Meko calls for the usage stats', () => {
     // Admin tools are `other`; seeds aren't calls.
     expect(toolCounts(rows)).toEqual({ memory_search: 2, memory_add: 1, other: 1 });
     expect(toolCounts([])).toEqual({});
+    // A call stored before its tool was a lookup counts as it was stored, as summarizeMeko does.
+    run(db, `UPDATE meko_calls SET kind = 'other' WHERE tool = 'memory_add'`);
+    expect(toolCounts(mekoCalls(db))).toEqual({ memory_search: 2, other: 2 });
   });
 
   it('names exactly the lookups and saves', () => {

@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MekoStatus, CallHomeInstall, CallHomeReport } from '../../src/shared/types.js';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type Config } from '../../src/server/config.js';
-import { kvGet, openDb, run, type Db } from '../../src/server/db.js';
+import { kvGet, kvSet, openDb, run, type Db } from '../../src/server/db.js';
 import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, sumFileTypes } from '../../src/server/filetypes.js';
 import type { Logger } from '../../src/server/log.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, REPORT_DAYS, SEND_AFTER_MS, VERSION_RE, CallHomeService, bakedCallHomeUrl, buildReport,
+  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, REPORT_DAYS, SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport,
   installFacts, utcDay, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
@@ -438,6 +438,15 @@ describe('what the report says about the install', () => {
     for (const v of ['1.2.3-alice', '1.2.3-foo.1', '3.2-next-x', 'next-3.4', '1.2.3.4.5', '']) expect(VERSION_RE.test(v), v).toBe(false);
   });
 
+  it('cuts a version the collector would not keep to its leading numbers', () => {
+    expect(reportVersion('0.20261001.1')).toBe('0.20261001.1');
+    expect(reportVersion('24.0.0-nightly20250101abc')).toBe('24.0.0');
+    expect(reportVersion('0.20261001.1-3-gabc1234')).toBe('0.20261001.1');
+    expect(reportVersion('1.2.3.4.5')).toBe('1.2.3.4');
+    expect(reportVersion('not a version!')).toBe('0.0.0');
+    for (const v of ['24.0.0-nightly20250101abc', '0.20261001.1-3-gabc1234', '1.2.3.4.5', 'x']) expect(VERSION_RE.test(reportVersion(v)), v).toBe(true);
+  });
+
   it('leaves out versions it cannot read, and Meko details when Meko is off', async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     const facts = await installFacts({ config: cfg, version: 'not a version!', meko, firstDay: '2026-09-28', probe: probe({ tmux: new Error('ENOENT'), claude: 'no digits here' }) });
@@ -522,11 +531,32 @@ describe('sending the report', () => {
     expect(second.install.firstDay).toBe('2026-09-28');
   });
 
-  it('sends 7 days in a first report that 30 days would make too big for the collector', async () => {
+  it('drops the oldest days of a report too big for the collector until it fits', async () => {
     const size = (days: number) => JSON.stringify(report(seeded(), days)).length;
-    const t = setup({ maxReportBytes: Math.round((size(REPORT_DAYS) + size(FIRST_REPORT_DAYS)) / 2) });
+    const max = Math.round((size(REPORT_DAYS) + size(FIRST_REPORT_DAYS)) / 2);
+    const t = setup({ maxReportBytes: max });
     expect(await t.service().tick()).toBe(true);
-    expect(t.body(0).days).toEqual(report(seeded(), REPORT_DAYS).days);
+    const sent = String(t.calls[0].init.body);
+    const days = t.body(0).days;
+    const all = report(seeded(), FIRST_REPORT_DAYS).days;
+    expect(Buffer.byteLength(sent)).toBeLessThanOrEqual(max);
+    expect(days.length).toBeGreaterThan(REPORT_DAYS);
+    expect(days.length).toBeLessThan(FIRST_REPORT_DAYS);
+    // The newest days, as many as fit: one more wouldn't have.
+    expect(days).toEqual(all.slice(-days.length));
+    expect(Buffer.byteLength(JSON.stringify({ ...t.body(0), days: all.slice(-days.length - 1) }))).toBeGreaterThan(max);
+
+    // A later report too: a byte over drops its oldest day.
+    const sendLater = async (maxReportBytes?: number) => {
+      const s = setup({ maxReportBytes });
+      kvSet(s.db, 'call_home_last_sent', String(NOW - SEND_AFTER_MS));
+      expect(await s.service().tick()).toBe(true);
+      return s;
+    };
+    const full = await sendLater();
+    expect(full.body(0).days).toHaveLength(REPORT_DAYS);
+    const later = await sendLater(Buffer.byteLength(String(full.calls[0].init.body)) - 1);
+    expect(later.body(0).days).toEqual(full.body(0).days.slice(1));
   });
 
   it("doesn't send again after a restart", async () => {
