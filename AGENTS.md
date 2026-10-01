@@ -77,7 +77,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/notifyLeader.ts`, `public/sw.js` | Which open page shows browser notifications (the one used last, through a Web Lock it steals on focus), and the service worker that shows them and, on a click, switches to the tab already showing the session. |
 | `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52, ⌘C/Ctrl+C, and the key bar's select mode on touch screens, via `clipboard.ts`), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input, reconnecting (backoff, and the login screen on a 4401 close via `checkLogin()` in `api.ts`) and releasing phone terminals that are hidden or off screen. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
 | `src/web/hooks/useMedia.ts`, `components/TopBar.tsx`, `SessionSheet.tsx`, `TermKeys.tsx` | The phone layout: breakpoint hooks and `--app-h`/`--app-top` (pin the app and the dialog and sheet overlays to the visible viewport, above the on-screen keyboard), the app bar (on the session screen it holds the session tabs), the ⋯ session sheet (which also holds the stage bar), and the terminal key bar and compose box. `src/web/keys.ts` holds the key sequences, bracketed paste and wheel reports they send. |
-| `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, CI and releases (Linux and macOS), and Dependabot (`dependabot.yml`). |
+| `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, CI and releases (Linux and macOS), and Dependabot (`dependabot.yml`). `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release-notes.sh` decides which types release; their type lists are the ones the tests check (the docs and the commit skill repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`. |
 | `test/` | Unit tests, and integration tests against real tmux and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 
 ## Invariants (don't break these)
@@ -135,8 +135,10 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
   (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
   `CLAUDE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
-- Commits: Conventional Commits, **no agent attribution** (see `.claude/skills/commit/SKILL.md`).
-  `feat`/`fix`/`perf` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`.
+- Commits and PR titles: `<type>[(<component>)][!]: <summary>` with one of nine types, checked by
+  `scripts/check-title.sh`, and **no agent attribution** (see `.claude/skills/commit/SKILL.md`).
+  `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
+  `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject.
 
 ## Keep the docs current
 

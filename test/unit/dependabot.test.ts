@@ -5,10 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 
-// Dependabot's commit subjects decide whether merging its PRs cuts a release, so check the
-// prefixes in .github/dependabot.yml against the real scripts/release-notes.sh.
+// Dependabot's commit subjects become its PR titles and decide whether merging its PRs cuts a
+// release, so check the prefixes in .github/dependabot.yml against the real
+// scripts/check-title.sh and scripts/release-notes.sh.
 const CONFIG = readFileSync(fileURLToPath(new URL('../../.github/dependabot.yml', import.meta.url)), 'utf8');
 const NOTES = fileURLToPath(new URL('../../scripts/release-notes.sh', import.meta.url));
+const CHECK = fileURLToPath(new URL('../../scripts/check-title.sh', import.meta.url));
 
 interface Group {
   name: string;
@@ -88,6 +90,8 @@ function commit(msg: string) {
   execFileSync('git', ['commit', '-q', '--allow-empty', '-m', msg], { cwd: repo });
 }
 const notes = () => spawnSync('sh', [NOTES], { cwd: repo, encoding: 'utf8' });
+// Dependabot's subjects run past the 72-character limit, so it's exempt from that one rule.
+const checkTitle = (title: string) => spawnSync('sh', [CHECK, '--no-length', title], { encoding: 'utf8' });
 
 describe('dependabot config', () => {
   it('covers npm and GitHub Actions, assigns every PR, and sets its commit prefixes', () => {
@@ -98,6 +102,18 @@ describe('dependabot config', () => {
       expect(u.prefix, u.ecosystem).toBeTruthy();
     }
     expect(byEcosystem('npm').prefixDev).toBeTruthy();
+  });
+
+  it('writes subjects that pass the title rules', () => {
+    for (const u of updates()) {
+      // A scope would add (deps) to the type, e.g. deps(deps): ...
+      expect(u.scope, u.ecosystem).toBe(false);
+      for (const dev of u.ecosystem === 'npm' ? [false, true] : [false]) {
+        const s = subject(u, dev, 'bump the production group across 1 directory with 12 updates');
+        const r = checkTitle(s);
+        expect(r.status, `${s}\n${r.stderr}`).toBe(0);
+      }
+    }
   });
 
   it('keeps packages with peer ranges on each other in one group', () => {
@@ -128,7 +144,7 @@ describe('dependabot config', () => {
     commit(subject(npm, false, 'bump fastify from 5.12.5 to 5.13.0'));
     let r = notes();
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain('### Fixes');
+    expect(r.stdout).toContain('### Dependencies');
     expect(r.stdout).toContain('bump fastify from 5.12.5 to 5.13.0');
 
     execFileSync('git', ['tag', 'v0.20260101.1'], { cwd: repo });

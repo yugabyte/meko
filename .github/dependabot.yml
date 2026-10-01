@@ -1,10 +1,11 @@
 # Dependabot version updates, assigned to the maintainer.
 #
-# Commit prefixes follow the release rules (scripts/release-notes.sh). Every npm bump is
-# `fix(deps)` or `fix(deps-dev)`, so it cuts a release once merged to main: the web UI's
-# libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
-# release. Action bumps are `ci(deps)` and ship with the next release.
-# test/unit/dependabot.test.ts checks this against the release script.
+# Commit prefixes follow the title rules (scripts/check-title.sh) and the release rules
+# (scripts/release-notes.sh). Every npm bump is `deps: ...`, so it cuts a release once merged
+# to main: the web UI's libraries (react, xterm, marked, dompurify) are devDependencies that
+# Vite bundles into the release. Action bumps are `ci: ...` and ship with the next release.
+# No `include: scope`: it would add `(deps)`, giving `deps(deps): ...`.
+# test/unit/dependabot.test.ts checks this against both scripts.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -16,9 +17,8 @@ updates:
     assignees:
       - hari90
     commit-message:
-      prefix: fix
-      prefix-development: fix
-      include: scope
+      prefix: deps
+      prefix-development: deps
     ignore:
       # Types track the Node major we run on (engines, .nvmrc, the bundled runtime).
       - dependency-name: "@types/node"
@@ -61,7 +61,6 @@ updates:
       - hari90
     commit-message:
       prefix: ci
-      include: scope
     groups:
       # Minor and patch bumps together; each major gets its own PR.
       actions:

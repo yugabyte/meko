@@ -42,9 +42,19 @@ CI runs all of these on Linux and macOS for every push and pull request (`.githu
 
 ## Commits
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `perf:`,
-`docs:`, …). The release workflow reads them to decide whether to release and to write the notes.
-See `.claude/skills/commit/SKILL.md` for the full rules, including: no agent attribution.
+Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
+[Conventional Commits](https://www.conventionalcommits.org/) but with exactly these types:
+
+- Release: `feat`, `fix`, `perf`, `deps`.
+- Don't release: `ci`, `test`, `docs`, `nit` (comment-only changes, typos, formatting, refactors
+  with no behavior change), `chore`.
+
+The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
+and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
+PR title as the commit subject, so the title is what the release workflow reads: pick the type
+for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`.
+Nothing on GitHub enforces the rules; the commit skill does. See
+`.claude/skills/commit/SKILL.md` for the full rules, including: no agent attribution.
 
 ## Dependencies
 
@@ -55,10 +65,10 @@ Other minor and patch bumps come grouped (runtime, dev, actions), and each other
 gets its own PR. `@types/node` stays on the Node major we ship (22). `typescript` stays on 6
 until typescript-eslint supports TypeScript 7
 ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
-so its majors don't come at all; drop that `ignore` rule once it lands. Dependabot's commit subjects follow
-the release rules: every npm bump is `fix(deps): …` or `fix(deps-dev): …` and releases once
-merged (the web UI's libraries are devDependencies bundled into the release), while
-`ci(deps): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
+so its majors don't come at all; drop that `ignore` rule once it lands. Dependabot's commit subjects (and so its PR
+titles) follow the title and release rules: every npm bump is `deps: …` and releases once merged
+(the web UI's libraries are devDependencies bundled into the release, so dev-tool bumps release
+too), while `ci: …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
 breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
 `release.yml`) is bumped by hand.
 
@@ -68,10 +78,11 @@ Versions are `0.YYYYMMDD.N`: the UTC date of the release, and `N` counting up fr
 release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, so newer always
 sorts higher.
 
-1. Push to `main`. If there are `feat`, `fix` or `perf` commits since the last release tag, the
+1. Push to `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
    `scripts/next-version.sh`, and writes notes with `scripts/release-notes.sh`. Pushes with only
-   `docs`/`chore`/`ci`/`test`/`refactor` commits don't release.
+   `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,
+   performance and dependency changes.
 2. It builds self-contained tarballs in an AlmaLinux 8 container (glibc 2.28, so they run on
    RHEL 8) for `linux-x64` and `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`
    (node-pty built from source with Xcode's clang). Each bundles Node 22, the compiled server and
@@ -94,7 +105,7 @@ collector of your own, set `[call_home] url` in the dev home's `config.toml`
 (`.dev-home/config.toml`). The collector (`services/ak-local-call-home` in yugabyte/agent-k) has
 its own copy of `docs/call-home-report.schema.json`; change both together.
 
-Run the Release workflow by hand with **force** to release without feat/fix/perf commits, or with
+Run the Release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
 a **tag** to rebuild the assets of an existing release (a tag from before macOS support gets its
 Linux tarballs only).
 

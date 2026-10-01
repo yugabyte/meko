@@ -148,5 +148,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
-- [ ] Commit subjects follow Conventional Commits, and there's no agent attribution.
-      `feat`/`fix`/`perf` will ship a release; make sure that's intended.
+- [ ] The PR title (the squash-merge commit subject) passes `scripts/check-title.sh`, and its type
+      fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
+      `chore` don't. Comment-only changes are `nit`. Nothing on GitHub checks the title, so check
+      it here. There's no agent attribution.

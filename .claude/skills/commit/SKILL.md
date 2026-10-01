@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create a git commit in the agent-k-local repo. Use whenever committing, amending, or writing a commit message or PR description in this repo. Commits carry no agent attribution and use Conventional Commits so the release workflow can cut releases.
+description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Commits carry no agent attribution, and subjects and PR titles use `<type>[(<component>)]: <summary>` so the release workflow can cut releases.
 ---
 
 # Committing in agent-k-local
@@ -21,34 +21,80 @@ Meko datapack, not at an agent. Keep them.
 Use the git identity already configured (`git config user.name` / `user.email`). Never
 pass `--author` or change the identity.
 
-## Message format: Conventional Commits
+## Subject format
 
-The release workflow reads commit subjects: a push to `main` with any `feat`, `fix` or
-`perf` commit since the last release cuts a new version (`0.YYYYMMDD.N`), and those subjects
-become the release notes. So the subject line must follow `type(scope): summary`, and
-`docs`/`chore`/`ci`/`test`/`refactor` commits on their own don't trigger a release.
+```
+<type>[(<component>)][!]: <summary>
+```
 
-- Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`.
-- A breaking change uses `feat!:` / `fix!:`, or a `BREAKING CHANGE:` footer.
-- Scopes (optional): `server`, `web`, `auth`, `tmux`, `worktree`, `meko`, `update`, `release`;
-  `deps` and `deps-dev` are Dependabot's (`.github/dependabot.yml`).
-- Subject: imperative mood, lowercase, no trailing period, ≤ 72 chars.
+The release workflow reads commit subjects: a push to `main` with any `feat`, `fix`, `perf` or
+`deps` commit since the last release cuts a new version (`0.YYYYMMDD.N`), and those subjects
+become the release notes. Every other type lands without a release. Use exactly one of these
+nine types:
+
+| Type | Releases? | Use for |
+|---|---|---|
+| `feat` | yes | New user-visible behavior |
+| `fix` | yes | Bug fixes, including build or packaging fixes that change what ships |
+| `perf` | yes | Faster, same behavior |
+| `deps` | yes | Dependency bumps (Dependabot's npm PRs use it too) |
+| `ci` | no | Workflows, Dependabot config, GitHub Actions bumps |
+| `test` | no | Tests only |
+| `docs` | no | Markdown docs: README, CONTRIBUTING, AGENTS, REVIEW, `docs/` |
+| `nit` | no | Comment-only changes, typos, formatting, pure renames or refactors with no behavior change |
+| `chore` | no | Anything else that doesn't change what ships |
+
+There is no `refactor`, `build`, `style` or `revert`:
+
+- A refactor with no behavior change is `nit` (or `chore` when it's large).
+- A build or packaging change is `fix` when it changes the release, `chore` otherwise.
+- A revert takes the type of what it does for users: reverting a broken `feat` is a `fix`.
+  Rename GitHub's default `Revert "…"` title.
+- A change that only touches code comments is `nit`, even in a file that ships: it must not cut
+  a release.
+
+The rest of the subject:
+
+- `(<component>)` is optional: any lowercase name (letters, digits, dashes) for the part of the
+  code it touches, e.g. `server`, `web`, `auth`, `tmux`, `worktree`, `meko`, `update`,
+  `release`, `install`.
+- `!` after the type or component marks a breaking change (`feat!:`, `fix(web)!:`), or add a
+  `BREAKING CHANGE:` footer. Only `feat`, `fix`, `perf` and `deps` can be breaking: a breaking
+  change ships, so it needs a releasing type.
+- Summary: imperative mood, lowercase except proper nouns (Homebrew, Meko), no trailing period
+  or space. The whole subject is ≤ 72 characters, not counting a ` (#123)` PR number.
 - Body (optional): explain *why*, wrapped at 72 columns.
+
+Check a subject before using it; it prints what's wrong and the rules:
+
+```sh
+sh scripts/check-title.sh "fix(tmux): recreate sessions after a host reboot"
+```
 
 Example:
 
 ```
-feat(tmux): recreate sessions with claude --resume after host reboot
+fix(tmux): recreate sessions with claude --resume after host reboot
 
 The server now reconciles state.db against the tmux socket on boot and
 relaunches any session whose pane is gone, so a devserver crash no longer
 loses open work.
 ```
 
+## PR titles
+
+PRs are squash-merged with the PR title as the commit subject on `main`, so **the PR title is
+the subject the release workflow reads**. Give it the same format: pick the type for the PR's
+change as a whole (a PR that adds a feature and its docs and tests is `feat`), and run
+`sh scripts/check-title.sh "<title>"` before `gh pr create --title` or `gh pr edit --title`.
+When later commits change what a PR does, retitle it to match. Nothing on GitHub checks the
+title, so getting it right here is what keeps a fix from missing its release.
+
 ## Steps
 
 1. `git status` and `git diff --staged` (and unstaged `git diff`) to see what's changing.
 2. Stage only the files that belong to this change. Never stage secrets, `.env`, `state.db`,
    certificates, or anything under `~/.agent-k-local`.
-3. Write the message per the rules above and commit with a heredoc so formatting is preserved:
-   `git commit -F- <<'EOF' ... EOF`.
+3. Write the message per the rules above and check its subject with
+   `sh scripts/check-title.sh "<subject>"`.
+4. Commit with a heredoc so formatting is preserved: `git commit -F- <<'EOF' ... EOF`.

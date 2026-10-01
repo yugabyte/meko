@@ -1,11 +1,16 @@
 #!/bin/sh
-# Release notes from Conventional Commit subjects since the previous release tag.
+# Release notes from commit subjects (<type>[(<component>)][!]: <summary>, see
+# scripts/check-title.sh) since the previous release tag.
 #
 #   scripts/release-notes.sh [<from-ref>]      # default: the latest v0.* tag
 #
 # Also used to decide whether a push is worth releasing: exits 3 when there
-# are no feat/fix/perf commits in the range.
+# are no feat/fix/perf/deps commits in the range. The other types don't
+# release, not even with a breaking-change marker.
 set -eu
+
+# The types that release; each one has a section below.
+RELEASE='feat|fix|perf|deps'
 
 from=${1:-$(git tag -l 'v0.*' --sort=-v:refname | head -n 1)}
 range=${from:+$from..}HEAD
@@ -20,7 +25,15 @@ section() {
 }
 
 notes=$(
-  breaking=$(git log --no-merges --format='%s%n%b' "$range" | grep -E '^[a-z]+(\([^)]*\))?!: |^BREAKING CHANGE: ' || true)
+  # A `!` subject or a BREAKING CHANGE: footer, from releasing commits only.
+  breaking=$(
+    for h in $(git log --no-merges --format=%H "$range"); do
+      s=$(git log -1 --format=%s "$h")
+      printf '%s\n' "$s" | grep -qE "^($RELEASE)(\([^)]*\))?!?: " || continue
+      printf '%s\n' "$s" | grep -E "^($RELEASE)(\([^)]*\))?!: " || true
+      git log -1 --format=%b "$h" | grep -E '^BREAKING CHANGE: ' || true
+    done
+  )
   if [ -n "$breaking" ]; then
     printf '### Breaking changes\n\n'
     printf '%s\n' "$breaking" | sed 's/^/- /'
@@ -29,6 +42,7 @@ notes=$(
   section 'Features' 'feat'
   section 'Fixes' 'fix'
   section 'Performance' 'perf'
+  section 'Dependencies' 'deps'
 )
 
 if [ -z "$notes" ]; then

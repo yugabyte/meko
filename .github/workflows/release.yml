@@ -1,7 +1,7 @@
 name: Release
 
 # Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day.
-# A push to main cuts a release when it contains feat/fix/perf commits since the last
+# A push to main cuts a release when it contains feat/fix/perf/deps commits since the last
 # release tag and the tests pass. Run the workflow by hand to force a release, or to
 # rebuild the assets of an existing tag.
 
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Release even if there are no feat/fix/perf commits
+        description: Release even if there are no feat/fix/perf/deps commits
         type: boolean
         default: false
       tag:
@@ -62,7 +62,7 @@ jobs:
             echo "Releasing $version"
             { echo "release=true"; echo "rebuild=false"; echo "tag=v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
           else
-            echo "Nothing to release: no feat/fix/perf commits since the last release."
+            echo "Nothing to release: no feat/fix/perf/deps commits since the last release."
             echo "release=false" >> "$GITHUB_OUTPUT"
           fi
 
