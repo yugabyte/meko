@@ -103,7 +103,7 @@ sorts higher.
 `CALL_HOME_URL`. Without the variable, releases send nothing. To try the report against a
 collector of your own, set `[call_home] url` in the dev home's `config.toml`
 (`.dev-home/config.toml`). The collector (`services/ak-local-call-home` in yugabyte/agent-k) has
-its own copy of `docs/call-home-report.schema.json`; change both together.
+an identical copy of `docs/call-home-report.schema.json`; change both together.
 
 Run the Release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
 a **tag** to rebuild the assets of an existing release (a tag from before macOS support gets its

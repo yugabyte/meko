@@ -5,13 +5,14 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   SESSION_KINDS,
-  type FileTypeCount, type MekoStatus, type SessionKind, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeReport,
-  type CallHomeTokens,
+  type FileTypeCount, type MekoStatus, type MekoUsage, type SessionKind, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
+  type CallHomeReport, type CallHomeTokens,
 } from '../shared/types.js';
 import { isLoopback, mekoConfigured, resolveMekoWithSource, type Config } from './config.js';
 import { all, get, kvGet, kvSet, type Db } from './db.js';
 import { readFileTypes, sumFileTypes } from './filetypes.js';
 import { errMsg, type Logger } from './log.js';
+import { mekoCalls, mekoStarts, summarizeMeko, toolCounts, type MekoStart } from './mekousage.js';
 import { usageOverview } from './usage.js';
 
 // Anonymous usage stats ("Call Home"). Once a day each install sends counts to a collector run
@@ -34,6 +35,11 @@ export const CHECK_EVERY_MS = 3600 * 1000;
 export const SEND_AFTER_MS = 23 * 3600 * 1000;
 /** The first check after start waits a random time in this range, so a release doesn't make every install report at once. */
 export const FIRST_CHECK_MS: [number, number] = [10 * 60 * 1000, 60 * 60 * 1000];
+/**
+ * The largest body the collector takes. A busy install's 30-day first report can be bigger (every
+ * day's file types and models full); 7 days always fit.
+ */
+export const MAX_REPORT_BYTES = 64 * 1024;
 const SEND_TIMEOUT_MS = 15_000;
 const PROBE_TIMEOUT_MS = 10_000;
 /** tokensByModel keeps this many models; the rest are summed into `other`. */
@@ -45,8 +51,12 @@ const KV_FIRST_DAY = 'call_home_first_day';
 
 /** Plain model ids (`claude-opus-5-5`), as the collector's schema has them. Anything else is `other`. */
 export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
-/** Versions (ours, Node's, tmux's `3.2a`, Claude Code's), as the collector's schema has them. */
-export const VERSION_RE = /^v?[0-9]+(\.[0-9A-Za-z]+){0,3}([-+][0-9A-Za-z.-]{1,24})?$/;
+/**
+ * Versions (ours, Node's, tmux's `3.2a`, Claude Code's), as the collector's schema has them: dotted
+ * numbers, one letter after them, and a prerelease that is a lane word or a number, so a version
+ * can't spell a name.
+ */
+export const VERSION_RE = /^v?[0-9]{1,9}(\.[0-9]{1,9}){0,3}[a-z]?(-(alpha|beta|rc|pre|dev|canary|nightly|next|[0-9]{1,9})(\.[0-9]{1,9}){0,3})?(\+[0-9]{1,14})?$/;
 
 /** The UTC day of a time, as YYYY-MM-DD. */
 export function utcDay(ms: number): string {
@@ -104,6 +114,29 @@ function capModels(rows: (CallHomeTokens & { model: string })[]): (CallHomeToken
     other.messages += r.messages;
   }
   return [...keep, other];
+}
+
+/** Meko use as the report has it: counts only, calls by tool, the dollars in whole cents, nothing below 0. */
+function callHomeMeko(u: MekoUsage, byTool: CallHomeMeko['byTool'], starts: MekoStart[]): CallHomeMeko {
+  const s: CallHomeMeko['starts'] = { found: 0, empty: 0, error: 0, late: 0, ms: 0 };
+  for (const r of starts) {
+    if (r.outcome === 'found' || r.outcome === 'empty' || r.outcome === 'error' || r.outcome === 'late') s[r.outcome]++;
+    s.ms += n(r.ms);
+  }
+  return {
+    calls: u.calls, lookups: u.lookups, found: u.found, empty: u.empty, errors: u.errors, saves: u.saves, foundTokens: u.foundTokens,
+    byTool,
+    savings: {
+      searches: u.savings.searches,
+      seeds: u.savings.seeds,
+      // A very large result can make a saving negative; the schema takes counts.
+      tokens: Math.max(0, Math.round(u.savings.tokens)),
+      usdCents: Math.max(0, Math.round((u.savings.usd ?? 0) * 100)),
+      unpricedSearches: u.savings.unpricedSearches,
+      unpricedSeeds: u.savings.unpricedSeeds,
+    },
+    starts: s,
+  };
 }
 
 export interface ReportOptions {
@@ -240,6 +273,22 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
   }
   for (const [day, lists] of dayFiles) days.get(day)!.fileTypes = sumFileTypes(lists);
 
+  // Meko: calls and seeds on the day they were made, searches at start on the day they ran. A day
+  // with neither leaves `meko` out.
+  const calls = mekoCalls(db);
+  const starts = mekoStarts(db);
+  const dayMeko = new Map<string, { calls: typeof calls; starts: MekoStart[] }>();
+  const mekoDay = (at: number) => {
+    const d = dayOf(at);
+    if (!d) return undefined;
+    let m = dayMeko.get(d.day);
+    if (!m) dayMeko.set(d.day, (m = { calls: [], starts: [] }));
+    return m;
+  };
+  for (const c of calls) mekoDay(c.at)?.calls.push(c);
+  for (const st of starts) mekoDay(st.at)?.starts.push(st);
+  for (const [day, m] of dayMeko) days.get(day)!.meko = callHomeMeko(summarizeMeko(m.calls), toolCounts(m.calls), m.starts);
+
   const overview = usageOverview(db, 1, now);
   return {
     schema: 1,
@@ -265,6 +314,8 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
       fileTypes: sumFileTypes(allFiles),
       tokens: { ...overview.total },
       worktrees: { idle: get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM worktrees WHERE session_id IS NULL')?.n ?? 0 },
+      meko: callHomeMeko(summarizeMeko(calls), toolCounts(calls), starts),
+      mekoFirstTurn: overview.mekoFirstTurn,
     },
     days: [...days.values()],
   };
@@ -362,6 +413,8 @@ export interface CallHomeOptions {
   bakedUrl?: () => string;
   probe?: Probe;
   random?: () => number;
+  /** MAX_REPORT_BYTES, for tests. */
+  maxReportBytes?: number;
 }
 
 /** Sends the daily report while `[call_home] enabled` is on and there is a collector URL. */
@@ -410,7 +463,11 @@ export class CallHomeService {
     }
     const install = await installFacts({ config: this.o.config(), version: this.o.version, meko: this.o.meko(), firstDay, probe: this.o.probe });
     const first = !kvGet(this.o.db, KV_LAST_SENT);
-    return buildReport(this.o.db, { installId: this.installId(), install, days: first ? FIRST_REPORT_DAYS : REPORT_DAYS, now });
+    const r = buildReport(this.o.db, { installId: this.installId(), install, days: first ? FIRST_REPORT_DAYS : REPORT_DAYS, now });
+    // A first report the collector would refuse would be refused every hour from then on. The
+    // totals don't depend on the days, so the last 7 are the 7-day report.
+    if (first && Buffer.byteLength(JSON.stringify(r)) > (this.o.maxReportBytes ?? MAX_REPORT_BYTES)) return { ...r, days: r.days.slice(-REPORT_DAYS) };
+    return r;
   }
 
   /** Sends a report if one is due. Never throws; true when one was sent. */

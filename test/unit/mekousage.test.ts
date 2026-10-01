@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { classifyResult, mekoTool, parseMekoCalls, parseMekoResults } from '../../src/server/mekousage.js';
+import { REPORTED_TOOLS, classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
 import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
@@ -261,6 +261,46 @@ describe('what Meko saved', () => {
     // A search at start that found nothing, or came too late, passed nothing.
     run(db, `UPDATE meko_preloads SET outcome = 'late'`);
     expect(projectUsage(db, 'p').meko.savings).toMatchObject({ seeds: 0, tokens: 0 });
+  });
+});
+
+describe('Meko calls for the usage stats', () => {
+  it('keeps when each call and seed was made, and counts calls by the tools the report names', () => {
+    const { dir, db } = setup();
+    const at = (s: number) => new Date(Date.UTC(2026, 8, 29, 12, 0, s)).toISOString();
+    recordPreload(db, 's1', { outcome: 'found', results: 1, chars: 400, ms: 700 }, Date.UTC(2026, 8, 29, 11, 59));
+    const main = join(dir, 'c.jsonl');
+    writeFileSync(main,
+      reply('m0', at(0)) +
+      call('m1', [['a', 'mcp__meko__memory_search'], ['b', 'mcp__plugin_x_meko__memory_search'], ['c', 'mcp__meko__datapack_list'],
+        ['d', 'mcp__meko__memory_add']], { at: at(1) }) +
+      result('a', found) + result('b', wrapped({ results: [] })) + result('c', wrapped({ datapacks: [] })) + result('d', wrapped({ id: 'x' })));
+    ingestSessionUsage(db, 's1', main);
+    const rows = mekoCalls(db);
+    expect(rows.map((r) => [r.tool, r.at]).sort()).toEqual([
+      ['datapack_list', Date.parse(at(1))], ['memory_add', Date.parse(at(1))], ['memory_search', Date.parse(at(1))], ['memory_search', Date.parse(at(1))],
+      // The seed is dated by the search at start, not the first response it's credited against.
+      ['seed', Date.UTC(2026, 8, 29, 11, 59)],
+    ]);
+    // Admin tools are `other`; seeds aren't calls.
+    expect(toolCounts(rows)).toEqual({ memory_search: 2, memory_add: 1, other: 1 });
+    expect(toolCounts([])).toEqual({});
+  });
+
+  it('names exactly the lookups and saves', () => {
+    expect([...REPORTED_TOOLS].sort()).toEqual([
+      'artifact_get', 'artifact_put', 'context_search', 'conversation_add_message', 'conversation_get', 'knowledgebase_search',
+      'memory_add', 'memory_get_all', 'memory_get_by_id', 'memory_promote', 'memory_search', 'memory_update',
+    ]);
+  });
+
+  it('lists the searches at start', () => {
+    const { db } = setup();
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at) VALUES ('s2', 'p', 's2', 'S2', 'c', 'b2', 'main', '/w2', 't2', 'tok2', 'running', 'idle', 'code', 0)`);
+    recordPreload(db, 's1', { outcome: 'late', results: 0, chars: 0, ms: 5000 }, 1000);
+    recordPreload(db, 's2', { outcome: 'empty', results: 0, chars: 0, ms: 300 }, 2000);
+    expect(mekoStarts(db).sort((a, b) => a.at - b.at)).toEqual([{ at: 1000, outcome: 'late', ms: 5000 }, { at: 2000, outcome: 'empty', ms: 300 }]);
   });
 });
 

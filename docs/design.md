@@ -1110,11 +1110,14 @@ Each install sends a small report of counts once a day to a collector run by the
 so we know how many installs are active and how much work goes through them. The collector is a
 separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
 `CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](call-home-report.schema.json)
-is the collector's copy of the same contract, kept identical to the one in that repo. A unit test
-checks the reports the server builds against the schema. `schema` in the report goes up when a
+is the same contract as a JSON Schema. The collector keeps an identical copy
+(`internal/report/contract/call-home-report.schema.json`), and its tests tie that copy to its
+types, enums, patterns and caps; change both together. A unit test here checks the reports the
+server builds against the schema. `schema` in the report goes up when a
 field changes meaning or is removed; adding a field doesn't change it. The collector stores an
-enum value, model id, extension or version it doesn't know as `other` rather than refusing the
-report, so an install that is ahead of it still reports.
+enum value, model id, extension or version it doesn't know as `other`, and drops (only counting)
+fields it doesn't know, rather than refusing the report, so an install that is ahead of it still
+reports.
 
 **What's in it** (`src/server/callhome.ts`, `buildReport`):
 
@@ -1127,13 +1130,14 @@ report, so an install that is ahead of it still reports.
 - *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
   attached, distinct repos), sessions (by kind, open ones by stage), what shipped (merged PRs,
   direct pushes and their commits as on the Usage page, plus the commits and lines of merged PRs),
-  file types, tokens, and idle worktrees.
+  file types, tokens, idle worktrees, Meko use (below), and the tokens Meko brought into first
+  turns (the Usage page's numbers).
 - *Each UTC day* of the last 7 (30 in an install's first report, as far back as session events are
   kept): active projects and sessions, responses, projects opened (new, or opened again) and closed
   (from `project_events`, so a close a reopen undid still counts), sessions created
   by kind and archived, stage entries, PRs opened and merged with their commits and lines, direct
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
-  resumes, reused worktrees, file types, and tokens by model.
+  resumes, reused worktrees, file types, tokens by model, and Meko use (left out of a day with none).
 - *File types* are counts per file extension: files changed, lines added and deleted, from merged
   PRs and direct pushes. When a PR is merged, one `gh pr view <url> --json
   commits,additions,deletions,files` call adds its size to the `merged` event's payload; for a
@@ -1141,15 +1145,23 @@ report, so an install that is ahead of it still reports.
   (`src/server/filetypes.ts`): the last dot-suffix, lowercased; `none` for no suffix or a
   dotfile; `other` for a suffix that isn't 1 to 10 letters and digits. Each list keeps the 25
   largest and sums the rest into `other`. GitHub lists up to 100 files per PR.
+- *Meko use* is the Usage page's Meko numbers (`src/server/mekousage.ts`): calls, lookups that
+  found something, came back empty or failed, saves, the tokens found lookups brought in, and the
+  estimated savings (searches and seeds credited, tokens, and dollars in whole cents). It adds calls
+  by tool, naming only the lookup and save tools (every other Meko tool counts as `other`), and
+  AgentK's searches at session start by outcome with the milliseconds they took in all. Calls go on
+  the day they were made, seeds and searches at start on the day the search ran.
 
 Never sent: project, session, repo, branch, datapack or file names, paths, prompts, designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and
-the server name, and Meko keys or ids. Model ids that aren't plain ids (a Bedrock ARN carries an
+the server name, Meko keys or ids, and Meko queries, results and tool inputs. Model ids that aren't plain ids (a Bedrock ARN carries an
 account number) are sent as `other`.
 
 **Sending.** An hourly check (the first one 10 to 60 minutes after start, at random, so a release
 doesn't make every install report at once) sends a report when the last one went out 23 hours ago
-or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. It POSTs the JSON
+or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. A first report
+over the collector's 64 KB (a busy install, with every day's file types and models full) is sent
+with 7 days instead of 30, since the collector would refuse it every hour from then on. It POSTs the JSON
 to the collector's report URL, as given, with a 15-second timeout; a failure is logged once and tried again an hour
 later, and nothing else waits on it. The collector upserts each day on `(installId, day)`, so a
 resend changes nothing and a missed day is filled in by the next report. The URL is

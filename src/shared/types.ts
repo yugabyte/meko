@@ -249,8 +249,8 @@ export interface UsageOverview {
 // ---- usage stats (Call Home) ----
 //
 // The report each install sends once a day to the usage stats collector (yugabyte/agent-k,
-// services/ak-local-call-home). docs/call-home-report.schema.json is the collector's copy of this
-// contract; keep the two in step.
+// services/ak-local-call-home). docs/call-home-report.schema.json is the same contract as a JSON
+// Schema, and the collector keeps an identical copy; change all three together.
 // Only counts, enums, version strings, model ids and file extensions: never a name, path, prompt
 // or anything else that says who someone is or what they work on.
 
@@ -287,6 +287,33 @@ export interface CallHomeInstall {
   firstDay: string;
 }
 
+/**
+ * A Meko tool the report names by name: the searches, fetches and saves Usage counts. Every other
+ * Meko tool (datapacks, conversations, deletes) is `other`.
+ */
+export type CallHomeMekoTool =
+  | 'memory_search' | 'knowledgebase_search' | 'context_search'
+  | 'memory_get_all' | 'memory_get_by_id' | 'conversation_get' | 'artifact_get'
+  | 'memory_add' | 'memory_update' | 'memory_promote' | 'artifact_put' | 'conversation_add_message'
+  | 'other';
+
+/** Meko use, all time or on one day: `MekoUsage` as counts, plus calls by tool and the searches at session start. */
+export interface CallHomeMeko {
+  calls: number;
+  lookups: number;
+  found: number;
+  empty: number;
+  errors: number;
+  saves: number;
+  foundTokens: number;
+  /** Calls by tool; tools with none are left out. */
+  byTool: Partial<Record<CallHomeMekoTool, number>>;
+  /** `MekoSavings`, with the dollars in whole cents (0 when nothing was priced) and never below 0. */
+  savings: { searches: number; seeds: number; tokens: number; usdCents: number; unpricedSearches: number; unpricedSeeds: number };
+  /** AgentK's search at session start, by outcome, and the milliseconds they took in all (for an average). */
+  starts: { found: number; empty: number; error: number; late: number; ms: number };
+}
+
 export interface CallHomeTotals {
   projects: { current: number; deleted: number; withDatapack: number; sharedDatapacks: number; repos: number };
   sessions: {
@@ -301,6 +328,8 @@ export interface CallHomeTotals {
   fileTypes: FileTypeCount[];
   tokens: CallHomeTokens;
   worktrees: { idle: number };
+  meko: CallHomeMeko;
+  mekoFirstTurn: MekoFirstTurn;
 }
 
 /** One UTC day. Days are sent again in later reports; the latest report for a day wins. */
@@ -331,6 +360,8 @@ export interface CallHomeDay {
   worktreesReused: number;
   fileTypes: FileTypeCount[];
   tokensByModel: (CallHomeTokens & { model: string })[];
+  /** Left out of a day with no Meko calls or searches at session start. */
+  meko?: CallHomeMeko;
 }
 
 export interface CallHomeReport {

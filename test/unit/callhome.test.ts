@@ -10,21 +10,22 @@ import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, s
 import type { Logger } from '../../src/server/log.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_REPORT_DAYS, REPORT_DAYS, SEND_AFTER_MS, CallHomeService, bakedCallHomeUrl, buildReport,
+  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, REPORT_DAYS, SEND_AFTER_MS, VERSION_RE, CallHomeService, bakedCallHomeUrl, buildReport,
   installFacts, utcDay, type Probe,
 } from '../../src/server/callhome.js';
+import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
 import { usageOverview } from '../../src/server/usage.js';
 import { tempDir } from '../helpers.js';
 
 const SCHEMA = JSON.parse(readFileSync(fileURLToPath(new URL('../../docs/call-home-report.schema.json', import.meta.url)), 'utf8')) as Schema;
 
 // ---- a small JSON Schema checker for the keywords docs/call-home-report.schema.json uses ----
-// (The schema is the collector's copy, from yugabyte/agent-k services/ak-local-call-home.)
+// (The collector, yugabyte/agent-k services/ak-local-call-home, has an identical copy.)
 
 type Schema = { [k: string]: unknown };
 const KEYWORDS = new Set([
   '$schema', '$id', 'title', 'description', '$defs', '$ref', 'type', 'const', 'enum', 'pattern', 'format', 'minimum', 'maximum',
-  'properties', 'propertyNames', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'anyOf',
+  'properties', 'propertyNames', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'maxProperties', 'anyOf',
 ]);
 
 /** Every keyword in the schema, so the checker below is known to cover all of them. */
@@ -68,6 +69,7 @@ function validate(v: unknown, s: Schema, at = '$', root: Schema = s): string[] {
     const o = v as Record<string, unknown>;
     const props = (s.properties ?? {}) as Record<string, Schema>;
     for (const r of (s.required as string[]) ?? []) if (!(r in o)) errs.push(`${at}: missing ${r}`);
+    if (typeof s.maxProperties === 'number' && Object.keys(o).length > s.maxProperties) errs.push(`${at}: more than ${s.maxProperties} properties`);
     for (const [k, val] of Object.entries(o)) {
       if (s.propertyNames) errs.push(...validate(k, s.propertyNames as Schema, `${at}{${k}}`, root));
       if (props[k]) errs.push(...validate(val, props[k], `${at}.${k}`, root));
@@ -159,6 +161,22 @@ function seeded(): Db {
   usage('s2', 'm3', 'claude-opus-5-5', '2026-09-28T00:10:00Z', [2, 20, 200, 10]);
   usage('s3', 'm4', 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc', '2026-09-26T09:00:00Z', [3, 30, 300, 0]);
   usage('s4', 'm5', 'claude-opus-5-5', '2026-01-02T00:00:00Z', [4, 40, 400, 0]);
+  const meko = (s: string, id: string, tool: string, kind: string, iso: string, outcome: string, resultChars: number | null, model: string | null, context: number | null) =>
+    run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, outcome, results, input_chars, result_chars, model, context_tokens)
+             VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, 40, ?, ?, ?)`, s, id, tool, kind, at(iso), outcome, resultChars, model, context);
+  meko('s1', 'tu1', 'context_search', 'lookup', '2026-09-27T14:00:00Z', 'found', 4000, 'claude-opus-5-5', 10_000);
+  meko('s1', 'tu2', 'memory_search', 'lookup', '2026-09-27T14:10:00Z', 'empty', 20, 'claude-opus-5-5', 10_000);
+  meko('s1', 'tu3', 'memory_add', 'save', '2026-09-27T14:20:00Z', 'ok', 30, 'claude-opus-5-5', 10_000);
+  meko('s1', 'tu4', 'datapack_list', 'other', '2026-09-27T14:30:00Z', 'ok', 30, 'claude-opus-5-5', 10_000);
+  meko('s2', 'tu5', 'memory_get_by_id', 'lookup', '2026-09-28T02:00:00Z', 'error', 10, 'claude-opus-5-5', 5000);
+  // Before the window, on a model with no known price.
+  meko('s3', 'tu6', 'knowledgebase_search', 'lookup', '2026-01-05T10:00:00Z', 'found', 1000, null, 5000);
+  const preload = (s: string, iso: string, outcome: string, chars: number, ms: number) =>
+    run(db, 'INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)', s, at(iso), outcome, chars ? 2 : 0, chars, ms);
+  preload('s1', '2026-09-27T11:00:00Z', 'found', 800, 1200);
+  preload('s2', '2026-09-20T09:00:00Z', 'empty', 0, 300);
+  preload('s3', '2026-09-26T09:00:00Z', 'late', 0, 5000);
+  run(db, 'UPDATE sessions SET first_turn_end_at = ? WHERE id = ?', at('2026-09-27T15:30:00Z'), 's1');
   run(db, 'INSERT INTO worktrees(path, repo, session_id, created_at) VALUES (?, ?, NULL, ?)', '/home/alice/wt-2', '/home/alice/zeta-repo', NOW);
   run(db, 'INSERT INTO worktrees(path, repo, session_id, created_at) VALUES (?, ?, ?, ?)', '/home/alice/wt-1', '/home/alice/zeta-repo', 's1', NOW);
   return db;
@@ -294,9 +312,60 @@ describe('the usage stats report', () => {
       ],
       tokens: overview.total,
       worktrees: { idle: 1 },
+      meko: r.totals.meko,
+      mekoFirstTurn: firstTurnMeko(db),
     });
     expect(r.totals.shipped).toMatchObject({ mergedPrs: overview.mergedPrs, directPushes: overview.directPushes, directCommits: overview.directCommits });
     expect(r).toMatchObject({ schema: 1, installId: INSTALL_ID, sentAt: '2026-09-28T12:00:00.000Z', install: INSTALL });
+  });
+
+  it('counts Meko use, all time and on the day of each call and search at start', () => {
+    const db = seeded();
+    const r = report(db);
+    const saved = usageOverview(db).meko.savings;
+    // Credited: the found context_search, the found knowledgebase_search (no price) and s1's seed.
+    expect(saved).toMatchObject({ searches: 2, seeds: 1, unpricedSearches: 1, unpricedSeeds: 0 });
+    expect(r.totals.meko).toEqual({
+      calls: 6, lookups: 4, found: 2, empty: 1, errors: 1, saves: 1, foundTokens: 1250,
+      byTool: { context_search: 1, memory_search: 1, memory_add: 1, other: 1, memory_get_by_id: 1, knowledgebase_search: 1 },
+      savings: {
+        searches: 2, seeds: 1, tokens: Math.round(saved.tokens), usdCents: Math.round(saved.usd! * 100), unpricedSearches: 1, unpricedSeeds: 0,
+      },
+      starts: { found: 1, empty: 1, error: 0, late: 1, ms: 6500 },
+    });
+    expect(r.totals.meko.savings.usdCents).toBeGreaterThan(0);
+    expect(r.totals.mekoFirstTurn).toEqual({ sessions: 1, startSearches: 1, searchedTokens: 1000, seedTokens: 200 });
+
+    const day = (d: string) => r.days.find((x) => x.day === d)!;
+    expect(day('2026-09-27').meko).toMatchObject({
+      calls: 4, lookups: 2, found: 1, empty: 1, errors: 0, saves: 1, foundTokens: 1000,
+      byTool: { context_search: 1, memory_search: 1, memory_add: 1, other: 1 },
+      savings: { searches: 1, seeds: 1, unpricedSearches: 0 },
+      starts: { found: 1, empty: 0, error: 0, late: 0, ms: 1200 },
+    });
+    expect(day('2026-09-28').meko).toEqual({
+      calls: 1, lookups: 1, found: 0, empty: 0, errors: 1, saves: 0, foundTokens: 0, byTool: { memory_get_by_id: 1 },
+      savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
+      starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
+    });
+    expect(day('2026-09-26').meko).toMatchObject({ calls: 0, byTool: {}, starts: { late: 1, ms: 5000 } });
+    // A day with no Meko activity leaves it out.
+    expect(r.days.filter((d) => d.meko).map((d) => d.day)).toEqual(['2026-09-26', '2026-09-27', '2026-09-28']);
+    // The 30-day report reaches the search at start on the 20th; the January call is in no day.
+    const first = report(db, FIRST_REPORT_DAYS);
+    expect(first.days.find((d) => d.day === '2026-09-20')!.meko).toMatchObject({ calls: 0, starts: { empty: 1, ms: 300 } });
+    expect(first.days.reduce((n, d) => n + (d.meko?.calls ?? 0), 0)).toBe(5);
+  });
+
+  it('counts no Meko use without any', () => {
+    const r = report(openDb(':memory:'));
+    expect(r.days.some((d) => d.meko)).toBe(false);
+    expect(r.totals.meko).toEqual({
+      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, byTool: {},
+      savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
+      starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
+    });
+    expect(r.totals.mekoFirstTurn).toEqual({ sessions: 0, startSearches: 0, searchedTokens: 0, seedTokens: 0 });
   });
 
   it('never carries a name, path or URL', () => {
@@ -316,6 +385,31 @@ describe('the usage stats report', () => {
     const { worktrees, ...totals } = r.totals;
     expect(validate({ ...r, totals: { ...totals, worktree: worktrees } }, SCHEMA)).toEqual(['$.totals: missing worktrees', '$.totals: unexpected worktree']);
     expect(validate({ ...r, install: { ...r.install, platform: 'Alice’s Mac' } }, SCHEMA)).toHaveLength(1);
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, query: 1 } } }, SCHEMA)).toEqual(['$.totals.meko: unexpected query']);
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, byTool: { 'alice/zeta': 1 } } } }, SCHEMA)).toHaveLength(1);
+    // The schema names exactly the tools the report does.
+    const tools = (SCHEMA.$defs as Record<string, Schema>).toolCounts.propertyNames as { enum: string[] };
+    expect([...tools.enum].sort()).toEqual([...REPORTED_TOOLS, 'other'].sort());
+  });
+
+  it('fits the collector\'s 64 KB in 7 days with every list full', () => {
+    const r = report(seeded(), REPORT_DAYS);
+    const big = 123_456_789_012;
+    const meko = {
+      ...r.totals.meko, calls: big, lookups: big, found: big, empty: big, errors: big, saves: big, foundTokens: big,
+      byTool: Object.fromEntries([...REPORTED_TOOLS, 'other'].map((t) => [t, big])),
+      savings: { searches: big, seeds: big, tokens: big, usdCents: big, unpricedSearches: big, unpricedSeeds: big },
+      starts: { found: big, empty: big, error: big, late: big, ms: big },
+    };
+    r.totals.fileTypes = Array.from({ length: 26 }, (_, i) => ({ ext: `ext${i}`, files: big, additions: big, deletions: big }));
+    r.totals.meko = meko;
+    for (const d of r.days) {
+      d.fileTypes = Array.from({ length: 26 }, (_, i) => ({ ext: `ext${i}`, files: big, additions: big, deletions: big }));
+      d.tokensByModel = Array.from({ length: 20 }, (_, i) => ({ model: `claude-model-${i}-5`, input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }));
+      d.meko = meko;
+    }
+    expect(validate(r, SCHEMA)).toEqual([]);
+    expect(JSON.stringify(r).length).toBeLessThan(MAX_REPORT_BYTES);
   });
 });
 
@@ -337,6 +431,11 @@ describe('what the report says about the install', () => {
       version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
       tmux: '3.2a', claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'link' }, firstDay: '2026-09-28',
     });
+  });
+
+  it('takes only versions the collector keeps: numbers, one letter after them, and a lane or number as prerelease', () => {
+    for (const v of ['0.20261001.1', 'v0.20261001.1', '0.0.0-dev', '1.2.3-beta.2', '22.18.0', '3.2a', '2.4.1', '1.0.0+20261001']) expect(VERSION_RE.test(v), v).toBe(true);
+    for (const v of ['1.2.3-alice', '1.2.3-foo.1', '3.2-next-x', 'next-3.4', '1.2.3.4.5', '']) expect(VERSION_RE.test(v), v).toBe(false);
   });
 
   it('leaves out versions it cannot read, and Meko details when Meko is off', async () => {
@@ -377,7 +476,7 @@ describe('[call_home] in config.toml', () => {
 describe('sending the report', () => {
   afterEach(() => vi.useRealTimers());
 
-  function setup(o: { url?: string; baked?: string; status?: number } = {}) {
+  function setup(o: { url?: string; baked?: string; status?: number; maxReportBytes?: number } = {}) {
     const db = seeded();
     const cfg: Config = structuredClone(DEFAULT_CONFIG);
     cfg.callHome.url = o.url ?? 'https://collector.test/v1/report';
@@ -394,6 +493,7 @@ describe('sending the report', () => {
     const service = () => new CallHomeService({
       db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: null }), log,
       fetch: fetchImpl, now: () => clock.now, bakedUrl: () => o.baked ?? '', probe: async () => { throw new Error('no probes in tests'); },
+      maxReportBytes: o.maxReportBytes,
     });
     const body = (i: number) => JSON.parse(String(calls[i].init.body)) as CallHomeReport;
     return { db, cfg, clock, calls, answer, logs, service, body };
@@ -420,6 +520,13 @@ describe('sending the report', () => {
     expect(second.days).toHaveLength(REPORT_DAYS);
     expect(second.installId).toBe(first.installId);
     expect(second.install.firstDay).toBe('2026-09-28');
+  });
+
+  it('sends 7 days in a first report that 30 days would make too big for the collector', async () => {
+    const size = (days: number) => JSON.stringify(report(seeded(), days)).length;
+    const t = setup({ maxReportBytes: Math.round((size(REPORT_DAYS) + size(FIRST_REPORT_DAYS)) / 2) });
+    expect(await t.service().tick()).toBe(true);
+    expect(t.body(0).days).toEqual(report(seeded(), REPORT_DAYS).days);
   });
 
   it("doesn't send again after a restart", async () => {

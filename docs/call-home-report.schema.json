@@ -40,7 +40,7 @@
     "totals": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["projects", "sessions", "shipped", "fileTypes", "tokens", "worktrees"],
+      "required": ["projects", "sessions", "shipped", "fileTypes", "tokens", "worktrees", "meko", "mekoFirstTurn"],
       "properties": {
         "projects": {
           "type": "object",
@@ -94,7 +94,9 @@
           "properties": {
             "idle": { "$ref": "#/$defs/count" }
           }
-        }
+        },
+        "meko": { "$ref": "#/$defs/meko" },
+        "mekoFirstTurn": { "$ref": "#/$defs/mekoFirstTurn" }
       }
     },
     "days": {
@@ -128,7 +130,8 @@
           "resumes": { "$ref": "#/$defs/count" },
           "worktreesReused": { "$ref": "#/$defs/count" },
           "fileTypes": { "type": "array", "maxItems": 26, "items": { "$ref": "#/$defs/fileType" } },
-          "tokensByModel": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/modelTokens" } }
+          "tokensByModel": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/modelTokens" } },
+          "meko": { "$ref": "#/$defs/meko" }
         }
       }
     }
@@ -136,16 +139,18 @@
   "$defs": {
     "count": { "type": "integer", "minimum": 0, "maximum": 9007199254740992 },
     "day": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
-    "version": { "type": "string", "pattern": "^v?[0-9]+(\\.[0-9A-Za-z]+){0,3}([-+][0-9A-Za-z.-]{1,24})?$" },
-    "optionalVersion": { "type": "string", "pattern": "^$|^v?[0-9]+(\\.[0-9A-Za-z]+){0,3}([-+][0-9A-Za-z.-]{1,24})?$" },
+    "version": { "type": "string", "pattern": "^v?[0-9]{1,9}(\\.[0-9]{1,9}){0,3}[a-z]?(-(alpha|beta|rc|pre|dev|canary|nightly|next|[0-9]{1,9})(\\.[0-9]{1,9}){0,3})?(\\+[0-9]{1,14})?$" },
+    "optionalVersion": { "type": "string", "pattern": "^$|^v?[0-9]{1,9}(\\.[0-9]{1,9}){0,3}[a-z]?(-(alpha|beta|rc|pre|dev|canary|nightly|next|[0-9]{1,9})(\\.[0-9]{1,9}){0,3})?(\\+[0-9]{1,14})?$" },
     "kindCounts": {
       "type": "object",
       "propertyNames": { "enum": ["explore", "plan", "quick"] },
+      "maxProperties": 16,
       "additionalProperties": { "$ref": "#/$defs/count" }
     },
     "stageCounts": {
       "type": "object",
       "propertyNames": { "enum": ["explore", "design", "code", "pr", "review", "merge", "done"] },
+      "maxProperties": 16,
       "additionalProperties": { "$ref": "#/$defs/count" }
     },
     "fileType": {
@@ -170,6 +175,63 @@
         "cacheRead": { "$ref": "#/$defs/count" },
         "cacheWrite": { "$ref": "#/$defs/count" },
         "messages": { "$ref": "#/$defs/count" }
+      }
+    },
+    "toolCounts": {
+      "type": "object",
+      "propertyNames": { "enum": ["memory_search", "knowledgebase_search", "context_search", "memory_get_all", "memory_get_by_id", "conversation_get", "artifact_get", "memory_add", "memory_update", "memory_promote", "artifact_put", "conversation_add_message", "other"] },
+      "maxProperties": 16,
+      "additionalProperties": { "$ref": "#/$defs/count" }
+    },
+    "meko": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls", "lookups", "found", "empty", "errors", "saves", "foundTokens", "byTool", "savings", "starts"],
+      "properties": {
+        "calls": { "$ref": "#/$defs/count" },
+        "lookups": { "$ref": "#/$defs/count" },
+        "found": { "$ref": "#/$defs/count" },
+        "empty": { "$ref": "#/$defs/count" },
+        "errors": { "$ref": "#/$defs/count" },
+        "saves": { "$ref": "#/$defs/count" },
+        "foundTokens": { "$ref": "#/$defs/count" },
+        "byTool": { "$ref": "#/$defs/toolCounts" },
+        "savings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["searches", "seeds", "tokens", "usdCents", "unpricedSearches", "unpricedSeeds"],
+          "properties": {
+            "searches": { "$ref": "#/$defs/count" },
+            "seeds": { "$ref": "#/$defs/count" },
+            "tokens": { "$ref": "#/$defs/count" },
+            "usdCents": { "$ref": "#/$defs/count" },
+            "unpricedSearches": { "$ref": "#/$defs/count" },
+            "unpricedSeeds": { "$ref": "#/$defs/count" }
+          }
+        },
+        "starts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["found", "empty", "error", "late", "ms"],
+          "properties": {
+            "found": { "$ref": "#/$defs/count" },
+            "empty": { "$ref": "#/$defs/count" },
+            "error": { "$ref": "#/$defs/count" },
+            "late": { "$ref": "#/$defs/count" },
+            "ms": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    },
+    "mekoFirstTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessions", "startSearches", "searchedTokens", "seedTokens"],
+      "properties": {
+        "sessions": { "$ref": "#/$defs/count" },
+        "startSearches": { "$ref": "#/$defs/count" },
+        "searchedTokens": { "$ref": "#/$defs/count" },
+        "seedTokens": { "$ref": "#/$defs/count" }
       }
     }
   }

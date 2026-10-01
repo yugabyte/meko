@@ -1,4 +1,4 @@
-import type { MekoFirstTurn, MekoUsage, SessionUsage } from '../shared/types.js';
+import type { CallHomeMekoTool, MekoFirstTurn, MekoUsage, SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 
@@ -9,6 +9,8 @@ export type MekoOutcome = 'found' | 'empty' | 'error' | 'ok';
 const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__([a-z_]+)$/;
 const LOOKUPS = new Set([...SEARCH_TOOLS, 'memory_get_all', 'memory_get_by_id', 'conversation_get', 'artifact_get']);
 const SAVES = new Set(['memory_add', 'memory_update', 'memory_promote', 'artifact_put', 'conversation_add_message']);
+/** The tools the usage stats report names (`CallHomeMekoTool`): the lookups and saves. */
+export const REPORTED_TOOLS = [...LOOKUPS, ...SAVES] as CallHomeMekoTool[];
 
 /** The Meko tool a tool name calls, or null for any other tool. */
 export function mekoTool(name: string): string | null {
@@ -196,6 +198,8 @@ interface CallRow {
   context_tokens: number | null;
   /** For searches that found something, and seeds: responses after the call (or the first response), up to CARRY_TURNS. */
   later: number | null;
+  /** When the call was made, or the search at start ran. */
+  at: number;
 }
 
 const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
@@ -209,7 +213,7 @@ const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
 export function mekoCalls(db: Db, projectId?: string): CallRow[] {
   const where = projectId ? ' WHERE s.project_id = ?' : '';
   return all<CallRow>(db,
-    `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.model, c.context_tokens,
+    `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.model, c.context_tokens, c.at,
        CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) THEN
          (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
           WHERE u.session_id = c.session_id AND u.agent IS c.agent AND u.at > c.at LIMIT ?))
@@ -217,7 +221,7 @@ export function mekoCalls(db: Db, projectId?: string): CallRow[] {
      FROM meko_calls c JOIN sessions s ON s.id = c.session_id${where}
      UNION ALL
      SELECT s.project_id, p.session_id, 'seed', 'seed', 'found', p.chars, f.model,
-       MAX(0, f.input + f.cache_read + f.cache_write - ROUND(p.chars / 4.0)),
+       MAX(0, f.input + f.cache_read + f.cache_write - ROUND(p.chars / 4.0)), p.at,
        (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
         WHERE u.session_id = p.session_id AND u.agent IS NULL AND u.at > f.at LIMIT ?))
      FROM meko_preloads p JOIN sessions s ON s.id = p.session_id
@@ -295,6 +299,28 @@ export function firstTurnMeko(db: Db, projectId?: string): MekoFirstTurn {
   return {
     sessions: r?.sessions ?? 0, startSearches: r?.startSearches ?? 0, searchedTokens: r?.searchedTokens ?? 0, seedTokens: r?.seedTokens ?? 0,
   };
+}
+
+/** Calls by tool, as the usage stats report names them; tools with no calls are left out, and seeds aren't calls. */
+export function toolCounts(rows: CallRow[]): Partial<Record<CallHomeMekoTool, number>> {
+  const out: Partial<Record<CallHomeMekoTool, number>> = {};
+  for (const r of rows) {
+    if (r.kind === 'seed') continue;
+    const t = mekoKind(r.tool) === 'other' ? 'other' : (r.tool as CallHomeMekoTool);
+    out[t] = (out[t] ?? 0) + 1;
+  }
+  return out;
+}
+
+export interface MekoStart {
+  at: number;
+  outcome: 'found' | 'empty' | 'error' | 'late';
+  ms: number;
+}
+
+/** AgentK's searches at session start (`src/server/recall.ts`). */
+export function mekoStarts(db: Db): MekoStart[] {
+  return all<MekoStart>(db, 'SELECT at, outcome, ms FROM meko_preloads');
 }
 
 /** Calls grouped by a key (session or project), each summarized. */
