@@ -1072,6 +1072,35 @@ apps:
     ysql_port: 5433
     ycql_port: 9042
 
+  # apps/sqlancer: SQLancer (yugabyte fork) installed in a client pod from its
+  # master-yb release and run through its amp provider. The release is deleted
+  # and recreated on every push to master-yb, so the tag moves: the install
+  # step records the commit it pointed at and the tarball's sha256, and fails
+  # (env_failed) if the tag moved during the download. The tarball is ~430 MB.
+  sqlancer:
+    image: "eclipse-temurin:21-jre"
+    release_repo: "yugabyte/sqlancer"
+    release_tag: "sqlancer_2.0.0-yb"
+    release_asset: "sqlancer-2.0.0-yb.tar.gz"
+    install_dir: "/opt/ampqa/sqlancer"
+    install_timeout: "20m"
+    # threads is --num-threads; each thread fuzzes a database of its own.
+    # SKIP_LOCKED opens 2 connections per thread, so 16 stays well under an
+    # endpoint's max_connections of 100.
+    threads: 16
+    # time_per_oracle is --timeout-seconds for each oracle run.
+    time_per_oracle: "10m"
+    max_heap: "4g"
+    poll_interval: "5s"
+    # collect_max_bytes caps EACH collected file; a capped file is its tail.
+    collect_max_bytes: 10485760
+    # extra_args are appended to SQLancer's global options, before `amp`.
+    # --num-queries is how many queries a thread issues before it builds a new
+    # database. SQLancer's default of 100000 kept each thread on one schema for
+    # most of an oracle (0.00 dbs/s in run e9ec2452); 5000 is a new schema
+    # every 10-50 s.
+    extra_args: ["--num-queries", "5000"]
+
   # apps/benchbase: the BenchBase benchmark suite (yugabyte fork), run against the
   # backing YSQL. TPC-C default with small load params so a real run stays cheap.
   # For TPC-C the warehouse count IS the scalefactor; scalefactor 0 → warehouses.
@@ -1529,6 +1558,49 @@ stress:
     # endpoints served normally). Any 500 during the window fails outright
     # (meko#886: an unreachable store is a 503, never a 500).
     control_plane_recovery_max: "2m"
+  # sqlancer: SQLancer's logic-bug oracles against amp endpoints, `endpoints`
+  # oracles at once, one endpoint each (suites/stress/sqlancer.go). NOTHING faults the stack:
+  # SQLancer counts any exception a thread throws as a bug, a dropped connection
+  # included. A finding is a reproducer log in the sqlancer/<oracle>/
+  # attachments; it does not stop the remaining oracles.
+  sqlancer:
+    # Opt-in until it has a green run against a real amp endpoint: the test is
+    # tagged stress, so enabling it puts ~3h on the daily-stress schedule.
+    enabled: false
+    # oracles are queued in this order; empty -> every oracle the amp provider
+    # accepts (apps/sqlancer.Oracles). 16 oracles at time_per_oracle 10m over 4
+    # endpoints is about 40m.
+    oracles: []
+    # endpoints is how many oracles run at once, each on an endpoint of its own.
+    endpoints: 4
+    # endpoint_cpu / endpoint_memory size each tenant endpoint (default: the
+    # fleet's 500m / 4Gi). Memory must be at least 8Gi per vCPU.
+    endpoint_cpu: "2"
+    endpoint_memory: "16Gi"
+    # Storage pressure: SQLancer's databases are a few MB, and an endpoint gives
+    # shared_buffers half its memory plus a local file cache, so without these
+    # no query ever reads a page from the pageserver and amp's own storage path
+    # is never under test. 2MB is 256 buffers: enough pins for 32 connections
+    # (SKIP_LOCKED doubles 16 threads) without "no unpinned buffers available".
+    # file_cache_size_limit 0 turns the local file cache off.
+    endpoint_pg_settings:
+      shared_buffers: "2MB"
+      yb_amp.file_cache_size_limit: "0"
+    # GC as aggressive as suites/features/amp_gc_reclaim.go runs it, so history
+    # is trimmed under the reads above. Keys are the controller's dotted paths.
+    endpoint_pageserver_settings:
+      tenant_config.enable_gc: true
+      tenant_config.gc_candidate_every_n_bases: 1
+      tenant_config.gc_period: "1s"
+      tenant_config.gc_queue_floor_reset_interval: "5s"
+      tenant_config.pitr_interval: "0s"
+      tenant_config.gc_horizon: 1024
+      tenant_config.lsn_lease_length: "2s"
+    # qpg_oracles get --qpg-enable true (Query Plan Guidance: mutate the tables
+    # until a query yields no new plan). Only an oracle that implements
+    # getLastQueryString can run under QPG; in the YSQL provider that is NoREC.
+    # The TLP oracles throw "Not supported!" on their first query (run 3ae29420).
+    qpg_oracles: ["NOREC"]
   # fault_metrics: the last step of wal_tail_nemesis, backing_node_partition and
   # control_plane_nemesis (suites/stress/fault_metrics_helper.go). It samples the
   # product's OWN prometheus exposition across the fault and holds each named

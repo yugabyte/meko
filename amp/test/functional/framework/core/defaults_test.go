@@ -30,6 +30,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/netshape"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sampleapp"
+	"github.com/yugabyte/amp/test/functional/framework/apps/sqlancer"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
@@ -1073,6 +1074,26 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 			sacfg.YSQLPort, sacfg.YCQLPort, sampleapp.DefaultYSQLPort, sampleapp.DefaultYCQLPort)
 	}
 
+	// --- apps.sqlancer (SQLancer driver): the YAML mirrors the Default* consts ---
+	sqcfg := sqlancer.FromConfig(cfg)
+	for key, pair := range map[string][2]any{
+		"image":             {sqcfg.Image, sqlancer.DefaultImage},
+		"release_repo":      {sqcfg.ReleaseRepo, sqlancer.DefaultReleaseRepo},
+		"release_tag":       {sqcfg.ReleaseTag, sqlancer.DefaultReleaseTag},
+		"release_asset":     {sqcfg.ReleaseAsset, sqlancer.DefaultReleaseAsset},
+		"install_dir":       {sqcfg.InstallDir, sqlancer.DefaultInstallDir},
+		"install_timeout":   {sqcfg.InstallTimeout, sqlancer.DefaultInstallTimeout},
+		"threads":           {sqcfg.Threads, sqlancer.DefaultThreads},
+		"time_per_oracle":   {sqcfg.TimePerOracle, sqlancer.DefaultTimePerOracle},
+		"max_heap":          {sqcfg.MaxHeap, sqlancer.DefaultMaxHeap},
+		"poll_interval":     {sqcfg.PollInterval, sqlancer.DefaultPollInterval},
+		"collect_max_bytes": {sqcfg.CollectMaxBytes, sqlancer.DefaultCollectMaxBytes},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("apps.sqlancer.%s = %v, want %v (sqlancer.Default*)", key, pair[0], pair[1])
+		}
+	}
+
 	// --- apps.benchbase (BenchBase benchmark driver) ---
 	bbcfg := benchbase.FromConfig(cfg)
 	if bbcfg.Benchmark != benchbase.DefaultBenchmark {
@@ -1276,6 +1297,21 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if cfg.GetBool("stress.combined.enabled", true) {
 		t.Errorf("stress.combined.enabled = true, want false (opt-in)")
+	}
+	// On, it puts every oracle on the daily-stress schedule.
+	if cfg.GetBool("stress.sqlancer.enabled", true) {
+		t.Errorf("stress.sqlancer.enabled = true, want false (opt-in)")
+	}
+	// The dotted keys must survive as keys: the controller takes them as paths,
+	// and a loader that split them would send nested maps it rejects.
+	if got := cfg.GetMap("stress.sqlancer.endpoint_pg_settings", nil)["shared_buffers"]; got != "2MB" {
+		t.Errorf("stress.sqlancer.endpoint_pg_settings.shared_buffers = %v, want 2MB", got)
+	}
+	if got := cfg.GetMap("stress.sqlancer.endpoint_pg_settings", nil)["yb_amp.file_cache_size_limit"]; got != "0" {
+		t.Errorf("stress.sqlancer.endpoint_pg_settings[yb_amp.file_cache_size_limit] = %v, want \"0\"", got)
+	}
+	if got := cfg.GetMap("stress.sqlancer.endpoint_pageserver_settings", nil)["tenant_config.gc_period"]; got != "1s" {
+		t.Errorf("stress.sqlancer.endpoint_pageserver_settings[tenant_config.gc_period] = %v, want 1s", got)
 	}
 	stressInts := map[string]int{
 		"stress.combined.rf":                              3,

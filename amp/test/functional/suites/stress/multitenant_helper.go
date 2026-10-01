@@ -117,7 +117,11 @@ type tenantFleet struct {
 	// compute sized for them.
 	EndpointCPU    string
 	EndpointMemory string
-	Tenants        []tenant
+	// EndpointPgSettings and EndpointPageserverSettings are create-time
+	// overrides for every tenant endpoint; nil leaves the product defaults.
+	EndpointPgSettings         map[string]string
+	EndpointPageserverSettings map[string]any
+	Tenants                    []tenant
 }
 
 func newTenantFleet(t *core.T, env ampTenantEnv, logf func(string, ...any)) (*tenantFleet, error) {
@@ -152,8 +156,10 @@ func (f *tenantFleet) Create(t *core.T, n int) error {
 		})
 		if _, err := f.cl.CreateEndpointAndWait(t.Context, f.poolID, cluster.ID, cluster.DefaultBranch.BranchID,
 			controller.CreateEndpointRequest{
-				Role:      tenantRole,
-				Resources: f.endpointResources(),
+				Role:               tenantRole,
+				Resources:          f.endpointResources(),
+				PgSettings:         f.EndpointPgSettings,
+				PageserverSettings: f.EndpointPageserverSettings,
 			}); err != nil {
 			return fmt.Errorf("tenant %d: create endpoint: %w", i, err)
 		}

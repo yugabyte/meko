@@ -6,7 +6,7 @@ untagged and run on demand — see the Perf bullet):
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — all nineteen `suites/stress` scenarios: `load_sustain` (workloadgen
+- **`stress`** — all twenty `suites/stress` scenarios: `load_sustain` (workloadgen
   soak), `combined_load` (four parallel workloads under chaos on a co-located YB
   backing), `backing_maintenance` (workloads through a rolling restart, a gflag
   change, a data move and a YugabyteDB upgrade), `backing_backup_restore`
@@ -21,7 +21,8 @@ untagged and run on demand — see the Perf bullet):
   lease and resumed),
   `bulk_load_kill` (one large write killed mid-flight) and
   `backing_disk_full` (the backing's data disks filled, every INSERT held to an
-  answer, then freed), plus the two `suites/features` tests below: twenty-one in all.
+  answer, then freed), `sqlancer` (SQLancer's logic-bug oracles on a quiet
+  stack), plus the two `suites/features` tests below: twenty-two in all.
   Every `suites/stress` test that drives amp runs on a stack of its own
   (`Shape: DedicatedStack`: its own YugabyteDB and amp control plane, torn
   down with the test), so a fault one injects, or a wedge it leaves behind,
@@ -123,6 +124,12 @@ tests need (a single run would demand every cloud credential at once):
   `fence_stall_supervisor` take nothing away: they stall the writer of a branch
   past its write lease (the whole pod through cgroup v2, or the supervisor alone
   under SIGSTOP), attempt a second writer while it is stalled, and resume it.
+  `sqlancer` installs yugabyte/sqlancer from its `master-yb` release in a
+  client pod and runs each oracle through its amp provider for 10 minutes,
+  4 oracles at once on 4 endpoints (`stress.sqlancer.endpoints`), with 16
+  threads each. Nothing faults the stack, because SQLancer reports a
+  dropped connection as a bug. The install step records the commit the release
+  was built from and the tarball's sha256. Opt-in (`stress.sqlancer.enabled`).
   The tier also carries the two `suites/features` failed-create reclaim tests,
   which are here for their runtime rather than for any fault they inject.
   `backing_node_partition_multi_region` is `backing_node_partition` with the
