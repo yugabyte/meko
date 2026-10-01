@@ -9,7 +9,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
-  ShareDatapackRequest, UpdateProjectRequest,
+  ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs,
 } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
 import {
@@ -31,7 +31,9 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 
 /** A browser with this much unsent data skips state snapshots until it catches up. */
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
-const ACTIONS: SessionAction[] = ['approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard'];
+const ACTIONS: SessionAction[] = [
+  'approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
+];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 
 export interface ServerOptions {
@@ -229,6 +231,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get('/api/state', async () => core.state());
   app.get('/api/repos', async () => core.projects.repos());
   app.get<{ Querystring: { path?: string } }>('/api/repos/branches', async (req) => core.projects.repoBranches(req.query.path));
+  app.post<{ Body: CloneRepoRequest }>('/api/repos/clone', async (req): Promise<RepoInfo> => core.prReview.clone(req.body?.url));
   /** A datapack_list row for the browser: without the owner's account id. */
   const toDatapack = ({ ownerUserId: _, ...d }: MekoDatapackRow): MekoDatapack => d;
   app.get('/api/meko/datapacks', async (): Promise<MekoDatapack[]> => {
@@ -267,6 +270,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!SHARE_GRANTS.includes(grant)) throw new HttpError(400, 'Access must be contributor, maintainer or viewer.');
     await sharing(req.params.id, () => core.invites.api.share(req.params.id, email, grant));
     core.log.info(`invited ${email} to datapack ${req.params.id} as ${grant}`);
+    // Shared with a PR's reviewer: their email comes up for them next time.
+    if (req.body.login != null) core.prReview.rememberEmail(req.body.login, email);
     return peopleAfter(req.params.id);
   });
   app.post<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId/resend', async (req): Promise<DatapackPeople> =>
@@ -315,6 +320,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.projects.setDedicatedDatapack(req.params.id, req.body));
   app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
   app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));
+  app.get<{ Params: { id: string } }>('/api/projects/:id/pr-reviewers', async (req): Promise<PrReviewers[]> => core.prReview.reviewers(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/review-prs', async (req): Promise<ReviewablePrs> =>
+    core.prReview.reviewable(req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
   app.get('/api/usage', async () => usageOverview(core.db));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 

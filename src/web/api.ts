@@ -5,6 +5,7 @@ import type {
   ChangeSide,
   CreateProjectRequest,
   CreateSessionRequest,
+  CloneRepoRequest,
   DatapackPeople,
   DesignDoc,
   DiscardCheck,
@@ -18,6 +19,9 @@ import type {
   UsageOverview,
   RepoBranches,
   ReposResponse,
+  PrReviewers,
+  RepoInfo,
+  ReviewablePrs,
   ReviewComment,
   SearchResult,
   SendCommentsResult,
@@ -103,6 +107,7 @@ export const api = {
   state: () => get<AppState>('/api/state'),
   repos: () => get<ReposResponse>('/api/repos'),
   repoBranches: (path: string) => get<RepoBranches>(`/api/repos/branches?path=${enc(path)}`),
+  cloneRepo: (b: CloneRepoRequest) => post<RepoInfo>('/api/repos/clone', b),
   datapacks: () => get<MekoDatapack[]>('/api/meko/datapacks'),
   datapackPeople: (id: string) => get<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`),
   shareDatapack: (id: string, b: ShareDatapackRequest) => post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`, b),
@@ -124,6 +129,10 @@ export const api = {
   detachDatapack: (id: string, dpId: string) =>
     request<Project>('DELETE', `/api/projects/${enc(id)}/datapacks/${enc(dpId)}`),
   home: (id: string) => get<ProjectHome>(`/api/projects/${enc(id)}/home`),
+  prReviewers: (id: string) => get<PrReviewers[]>(`/api/projects/${enc(id)}/pr-reviewers`),
+  /** The project's PRs to review, or with `pr` the one PR typed (a bare number in `repoPath`). */
+  reviewPrs: (id: string, q: { pr?: string; repoPath?: string } = {}) =>
+    get<ReviewablePrs>(`/api/projects/${enc(id)}/review-prs${q.pr ? `?pr=${enc(q.pr)}${q.repoPath ? `&repoPath=${enc(q.repoPath)}` : ''}` : ''}`),
   usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>

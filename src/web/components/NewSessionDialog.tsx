@@ -1,27 +1,40 @@
-import { useEffect, useState } from 'react';
-import type { ProjectWithSessions, RepoInfo, Session, SessionKind } from '../../shared/types';
+import { useCallback, useEffect, useState } from 'react';
+import type { ProjectWithSessions, RepoInfo, ReviewablePr, ReviewablePrs, Session, SessionKind } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { repoFolder, slugify } from '../util';
 import { Dialog, ErrorText, Field, KindPicker } from './common';
+import { ReviewPrPicker } from './ReviewPrPicker';
 
 const NAME_PLACEHOLDER: Record<SessionKind, string> = {
   explore: 'why is CI slow on macOS',
   plan: 'fix retry backoff',
   quick: 'fix typo in README',
+  'review-pr': 'review #21',
 };
+
+/** A review's default name, from its PR. */
+const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
 
 export function NewSessionDialog({
   project,
+  fresh = false,
   onClose,
   onCreated,
 }: {
   project: ProjectWithSessions;
+  /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
+  fresh?: boolean;
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
   const [name, setName] = useState('');
+  const [nameEdited, setNameEdited] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [kind, setKind] = useState<SessionKind>('plan');
+  const review = kind === 'review-pr';
+  const [prList, setPrList] = useState<ReviewablePrs | null>(null);
+  const [prListError, setPrListError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<ReviewablePr | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [reposError, setReposError] = useState<string | null>(null);
@@ -57,6 +70,40 @@ export function NewSessionDialog({
     };
   }, [project.id, project.defaultBranch, repoPath, inProjectRepo]);
 
+  // The project's PRs to review: looked for when Review a PR is picked, or right away for a project
+  // just opened, where they decide the type it starts on.
+  const loadPrs = useCallback(() => {
+    setPrListError(null);
+    api
+      .reviewPrs(project.id)
+      .then((r) => {
+        setPrList(r);
+        return r;
+      })
+      .catch((e) => {
+        setPrListError(errorMessage(e));
+        return null;
+      })
+      .then((r) => {
+        if (fresh && r?.prs.length) setKind((k) => (k === 'plan' ? 'review-pr' : k));
+      });
+  }, [project.id, fresh]);
+  const wantPrs = review || fresh;
+  useEffect(() => {
+    if (wantPrs && !prList && !prListError) loadPrs();
+  }, [wantPrs, prList, prListError, loadPrs]);
+
+  const pick = (pr: ReviewablePr | null) => {
+    setPicked(pr);
+    if (pr?.localRepo) setRepoPath(pr.localRepo);
+    if (pr && !nameEdited) setName(reviewName(pr));
+  };
+  // A list that comes in after the type was switched to Review a PR starts on its newest PR.
+  useEffect(() => {
+    if (review && !picked && prList?.prs.length) pick(prList.prs[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pick only when the list or type changes
+  }, [review, prList]);
+
   // The scanned repos load the first time Advanced opens.
   useEffect(() => {
     if (!advanced || repos || reposError) return;
@@ -73,6 +120,10 @@ export function NewSessionDialog({
       .filter((r) => r.path !== project.repoPath && !r.projects.some((x) => x.id === project.id))
       .map((r) => ({ path: r.path, label: r.name })),
   ];
+  // A review's repo is the PR's clone, which may not be listed yet (Advanced never opened, or just cloned).
+  if (!repoChoices.some((r) => r.path === repoPath)) repoChoices.push({ path: repoPath, label: repoFolder(repoPath) });
+  const reviewBranch = picked ? `${project.settings.branchPrefix}review-pr-${picked.number}` : '';
+  const canStart = review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches;
   const chooseRepo = (path: string) => {
     setRepoPath(path);
     if (path === project.repoPath) setBaseBranch(project.defaultBranch);
@@ -82,14 +133,25 @@ export function NewSessionDialog({
     setError(null);
     setBusy(true);
     try {
-      const s = await api.createSession(project.id, {
-        name: name.trim(),
-        prompt: prompt.trim() || undefined,
-        baseBranch,
-        kind,
-        repoPath: inProjectRepo ? undefined : repoPath,
-        branch: branch.trim() || undefined,
-      });
+      const s = await api.createSession(
+        project.id,
+        review && picked
+          ? {
+            name: name.trim(),
+            prompt: prompt.trim() || undefined,
+            kind,
+            repoPath: inProjectRepo ? undefined : repoPath,
+            pr: { repo: picked.repo, number: picked.number },
+          }
+          : {
+            name: name.trim(),
+            prompt: prompt.trim() || undefined,
+            baseBranch,
+            kind,
+            repoPath: inProjectRepo ? undefined : repoPath,
+            branch: branch.trim() || undefined,
+          },
+      );
       onCreated(s);
     } catch (e) {
       setError(errorMessage(e));
@@ -104,8 +166,8 @@ export function NewSessionDialog({
       onClose={onClose}
       footer={
         <>
-          <button className="btn primary" disabled={!name.trim() || busy || !branches} onClick={create}>
-            {busy ? 'Starting…' : 'Start session'}
+          <button className="btn primary" disabled={!canStart} onClick={create}>
+            {busy ? 'Starting…' : review ? 'Start review' : 'Start session'}
           </button>
         </>
       }
@@ -114,7 +176,7 @@ export function NewSessionDialog({
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
-          if (name.trim() && !busy && branches) create();
+          if (canStart) create();
         }}
       >
         <Field label="Name">
@@ -123,27 +185,48 @@ export function NewSessionDialog({
             className="input"
             placeholder={NAME_PLACEHOLDER[kind]}
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameEdited(true);
+            }}
             autoFocus
           />
         </Field>
         <KindPicker id="ns-kind" value={kind} onChange={setKind} />
+        {review && (
+          <ReviewPrPicker
+            project={project}
+            list={prList}
+            listError={prListError}
+            onReload={() => {
+              // The effect above looks again once the list is cleared.
+              setPrList(null);
+              setPrListError(null);
+            }}
+            picked={picked}
+            onPick={pick}
+            lookupRepo={repoPath}
+          />
+        )}
         <Field
-          label="First prompt (optional)"
+          label={review ? 'Notes for AgentK (optional)' : 'First prompt (optional)'}
           hint={
-            kind === 'explore'
-              ? 'What should AgentK do? You can also type it in the terminal.'
-              : 'What should AgentK do? Left empty, AgentK starts on the name as the task.'
+            review
+              ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
+              : kind === 'explore'
+                ? 'What should AgentK do? You can also type it in the terminal.'
+                : 'What should AgentK do? Left empty, AgentK starts on the name as the task.'
           }
         >
           <textarea
             id="ns-prompt"
             className="input"
-            rows={5}
+            rows={review ? 2 : 5}
+            placeholder={review ? 'e.g. the migration and the polling' : undefined}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && name.trim() && !busy && branches) {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canStart) {
                 e.preventDefault();
                 create();
               }
@@ -165,7 +248,9 @@ export function NewSessionDialog({
             <b>Advanced</b>
             {!advanced && (
               <span className="advanced-summary mono">
-                {repoFolder(repoPath)} · from {baseBranch || 'its default branch'} · {branch.trim() || autoBranch}
+                {review
+                  ? `${repoFolder(repoPath)}${picked ? ` · PR #${picked.number} · ${reviewBranch}` : ''}`
+                  : `${repoFolder(repoPath)} · from ${baseBranch || 'its default branch'} · ${branch.trim() || autoBranch}`}
               </span>
             )}
           </button>
@@ -189,37 +274,47 @@ export function NewSessionDialog({
                   ))}
                 </select>
               </Field>
-              <Field label="Base branch">
-                <select
-                  id="ns-base"
-                  className="input"
-                  value={baseBranch}
-                  disabled={!branches}
-                  onChange={(e) => setBaseBranch(e.target.value)}
-                >
-                  {(branches ?? [baseBranch]).map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                  {branches?.length === 0 && <option value="">The repo's default branch</option>}
-                </select>
-              </Field>
-              <Field
-                label="Branch"
-                hint="Left empty, AgentK names it from the session name. An existing branch is picked up as it is, unless a running session uses it."
-              >
-                <input
-                  id="ns-branch"
-                  className="input mono"
-                  placeholder={autoBranch}
-                  value={branch}
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(e) => setBranch(e.target.value)}
-                />
-              </Field>
+              {review && (
+                <p className="hint">
+                  The base and the branch come from the PR: AgentK checks out its latest commit on {reviewBranch || 'a review branch'}, with
+                  nowhere to push to.
+                </p>
+              )}
+              {!review && (
+                <>
+                  <Field label="Base branch">
+                    <select
+                      id="ns-base"
+                      className="input"
+                      value={baseBranch}
+                      disabled={!branches}
+                      onChange={(e) => setBaseBranch(e.target.value)}
+                    >
+                      {(branches ?? [baseBranch]).map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                      {branches?.length === 0 && <option value="">The repo's default branch</option>}
+                    </select>
+                  </Field>
+                  <Field
+                    label="Branch"
+                    hint="Left empty, AgentK names it from the session name. An existing branch is picked up as it is, unless a running session uses it."
+                  >
+                    <input
+                      id="ns-branch"
+                      className="input mono"
+                      placeholder={autoBranch}
+                      value={branch}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      onChange={(e) => setBranch(e.target.value)}
+                    />
+                  </Field>
+                </>
+              )}
             </div>
           )}
         </div>

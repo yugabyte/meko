@@ -301,8 +301,8 @@ describe('the usage stats report', () => {
     expect(r.totals).toEqual({
       projects: { current: 2, deleted: 1, withDatapack: 1, sharedDatapacks: 1, repos: 1 },
       sessions: {
-        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1 },
-        openByStage: { explore: 1, design: 0, code: 0, pr: 0, review: 1, merge: 0, done: 0 },
+        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1, 'review-pr': 0 },
+        openByStage: { explore: 1, design: 0, code: 0, pr: 0, review: 1, merge: 0, done: 0, 'reviewing-pr': 0 },
       },
       shipped: { mergedPrs: 2, directPushes: 2, directCommits: 2, prCommits: 3, prAdditions: 100, prDeletions: 20 },
       fileTypes: [

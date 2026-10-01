@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/shared/types.js';
 import {
-  ITEM_CHARS, MAX_ITEMS, QUERY_MAX, RecallStore, TOTAL_CHARS, clip, formatRecall, issueRefs, pickResults, recallQuery, runRecall,
+  ITEM_CHARS, MAX_ITEMS, QUERY_MAX, RecallStore, TOTAL_CHARS, clip, formatRecall, issueRefs, pickResults, recallQuery, runRecall, withoutMekoLines,
   type PreloadRecord, type RecallRun,
 } from '../../src/server/recall.js';
 
@@ -199,5 +199,13 @@ describe('RecallStore', () => {
     });
     failing.start('gone', Promise.resolve({ text: null, results: 0 }));
     await new Promise((r) => setTimeout(r, 0));
+  });
+});
+
+describe("a PR's description in a search", () => {
+  it('drops the Meko lines AgentK ends it with, and keeps everything else', () => {
+    const body = 'Adds the widget.\n\nSee meko:// docs.\nmeko://0f1e2d3c-1111-4222-8333-444455556666\nmeko_conversation_id:abc123\n';
+    expect(withoutMekoLines(body)).toBe('Adds the widget.\n\nSee meko:// docs.');
+    expect(withoutMekoLines('https://example.com/a')).toBe('https://example.com/a');
   });
 });

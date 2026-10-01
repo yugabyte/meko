@@ -10,6 +10,7 @@ export function stepOf(stage: Stage): Stage {
 
 /** Why a session in this stage can't be moved by hand, or null when it can. */
 export function moveBlockedIn(stage: Stage): string | null {
+  if (stage === 'reviewing-pr') return "A Review a PR session can't change type or stage.";
   if (stage === 'merge') return "This session is merging and closing, so it can't be moved.";
   if (stage === 'done') return "This session is done, so it can't be moved.";
   return null;
@@ -29,6 +30,7 @@ export function defaultStage(kind: SessionKind, current: Stage): MoveTarget {
 
 /** Why this kind and stage don't make a valid move from where the session is, or null. */
 export function moveError(from: { kind: SessionKind; stage: Stage }, to: { kind: SessionKind; stage: MoveTarget }): string | null {
+  if (to.kind === 'review-pr') return 'A session can\'t become a Review a PR session. Start a new session and pick the PR.';
   if (!moveTargets(to.kind).includes(to.stage)) return `${KIND_LABELS[to.kind]} sessions have no ${STAGE_LABELS[to.stage]} stage.`;
   if (from.kind === to.kind && stepOf(from.stage) === to.stage) return `Nothing to change: this ${KIND_LABELS[to.kind]} session is already in ${STAGE_LABELS[to.stage]}.`;
   return null;

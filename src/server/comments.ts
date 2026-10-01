@@ -16,8 +16,8 @@ const EXCERPT_CHARS = 4000;
 /** Longer excerpt lines are cut to this many characters plus '…'. */
 export const EXCERPT_LINE_CHARS = 1000;
 const PATH_MAX = 4096;
-/** Stages in which Claude works on the diff, so queued comments can go to it. */
-const COMMENT_STAGES: Stage[] = ['explore', 'code', 'review'];
+/** Stages in which Claude works on the diff (or helps review it), so queued comments can go to it. */
+const COMMENT_STAGES: Stage[] = ['explore', 'code', 'review', 'reviewing-pr'];
 
 interface CommentRow {
   id: string;
@@ -192,8 +192,8 @@ export class CommentService {
   }
 
   /**
-   * Pastes queued comments into Claude when it's waiting at its prompt in the Explore, Code or
-   * Review stage (never while it shows a permission or question prompt). Returns how many went out.
+   * Pastes queued comments into Claude when it's waiting at its prompt in the Explore, Code,
+   * Review or Reviewing PR stage (never while it shows a permission or question prompt). Returns how many went out.
    */
   async deliver(sessionId: string): Promise<number> {
     if (this.delivering.has(sessionId)) return 0;
@@ -206,7 +206,9 @@ export class CommentService {
     this.delivering.add(sessionId);
     try {
       const count = `${queued.length} comment${queued.length === 1 ? '' : 's'}`;
-      await this.core.sessions.submit(sessionId, this.core.sessions.prompt(row, 'comments', { count, comments: formatComments(queued) }));
+      // In a Review a PR session they're the user's review comments on someone else's PR, not changes to make.
+      const prompt = row.kind === 'review-pr' ? 'review-pr-comments' : 'comments';
+      await this.core.sessions.submit(sessionId, this.core.sessions.prompt(row, prompt, { count, comments: formatComments(queued) }));
       const now = Date.now();
       tx(this.db, () => {
         for (const c of queued) run(this.db, `UPDATE review_comments SET state = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   KIND_STAGES,
   STAGE_LABELS,
+  type MekoStatus,
   type MoveTarget,
   type ProjectWithSessions,
   type Session,
@@ -13,12 +14,13 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, repoFolder, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, mekoDatapackShareUrl, repoFolder, totalTokens, usageTitle } from '../util';
 import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
+import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
 
@@ -44,6 +46,7 @@ export function ProjectView({
   sessions,
   session,
   mekoWebUrl,
+  meko,
   onNewSession,
   onMove,
   onMenu,
@@ -53,6 +56,7 @@ export function ProjectView({
   sessions: Session[];
   session: Session | null;
   mekoWebUrl: string | null;
+  meko: MekoStatus;
   onNewSession: () => void;
   /** Opens the Change type or stage dialog for the session on screen. */
   onMove: (preset?: MovePreset) => void;
@@ -65,10 +69,12 @@ export function ProjectView({
   const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
   const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
   const [sheet, setSheet] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPanel(null);
     setSheet(false);
+    setSharing(false);
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
   // During Design, show the design as soon as it's written, and again whenever it's revised.
@@ -99,8 +105,15 @@ export function ProjectView({
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
+  const rv = session?.reviewingPr ?? null;
   // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you.
-  const gateReady = !!session && !session.busy && ((session.stage === 'design' && session.hasDesign) || (session.stage === 'review' && session.canMerge));
+  const gateReady = !!session && !session.busy && (
+    (session.stage === 'design' && session.hasDesign)
+    || (session.stage === 'review' && session.canMerge)
+    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)));
+  // Sharing the project with a PR's reviewers is sharing its dedicated datapack (Meko on, and a share mode known).
+  const shareUrl = dedicated && meko.sharing === 'link' ? mekoDatapackShareUrl(mekoWebUrl, dedicated.id) : null;
+  const canShare = !!dedicated && meko.configured && (meko.sharing === 'api' || !!shareUrl);
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -123,6 +136,18 @@ export function ProjectView({
   const stageText = session && (
     <span>
       {session.stage === 'pr' ? 'opening PR' : STAGE_LABELS[session.stage].toLowerCase()}
+      {rv && session.stage === 'reviewing-pr' && (
+        <>
+          {` · at ${rv.reviewSha.slice(0, 7)}`}
+          {rv.prState !== 'OPEN' ? (
+            ` · PR ${rv.prState === 'MERGED' ? 'merged' : 'closed'}`
+          ) : rv.headSha !== rv.reviewSha ? (
+            <span className="warn-text"> · {newCommitsText(rv.newCommits)}</span>
+          ) : (
+            ''
+          )}
+        </>
+      )}
       {/* Only Review and Merge & Close follow the PR; after a move back to Code its state would be stale. */}
       {session.prNumber && (session.stage === 'review' || session.stage === 'merge' || session.stage === 'done')
         ? ` · ${REVIEW_TEXT[session.reviewState]} · ${CI_TEXT[session.ciState]}`
@@ -198,12 +223,13 @@ export function ProjectView({
           project={project}
           onAct={act}
           onMove={onMove}
+          onShare={canShare ? () => setSharing(true) : undefined}
           acting={acting}
           actions={
             <>
               {session?.prUrl && (
-                <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer">
-                  PR #{session.prNumber}
+                <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer" title={session.prUrl}>
+                  {rv ? `${rv.repo.split('/')[1] ?? rv.repo} #${session.prNumber}` : `PR #${session.prNumber}`}
                 </a>
               )}
               <button className="btn small" onClick={goHome}>
@@ -287,6 +313,14 @@ export function ProjectView({
                 setSheet(false);
                 onMove(preset);
               }}
+              onShare={
+                canShare
+                  ? () => {
+                    setSheet(false);
+                    setSharing(true);
+                  }
+                  : undefined
+              }
               acting={acting}
               actions={null}
               reasons
@@ -309,8 +343,24 @@ export function ProjectView({
           onClose={() => setSheet(false)}
         />
       )}
+      {session && sharing && dedicated && (
+        <ShareDialog
+          projectId={project.id}
+          projectName={project.name}
+          datapack={dedicated}
+          focusSessionId={session.id}
+          shareUrl={shareUrl}
+          onClose={() => setSharing(false)}
+        />
+      )}
     </div>
   );
+}
+
+/** "3 new commits", or what a force-push means for the review. */
+function newCommitsText(n: number | null): string {
+  if (n === null) return 'PR force-pushed';
+  return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
 function StageBar({
@@ -318,6 +368,7 @@ function StageBar({
   project,
   onAct,
   onMove,
+  onShare,
   acting = false,
   actions,
   reasons = false,
@@ -326,6 +377,8 @@ function StageBar({
   project: ProjectWithSessions;
   onAct: (a: SessionAction) => Promise<void>;
   onMove: (preset?: MovePreset) => void;
+  /** Opens the Share dialog at the PR's reviewers; absent when the project can't be shared from here. */
+  onShare?: () => void;
   /** A session action is in flight. */
   acting?: boolean;
   actions: ReactNode;
@@ -399,6 +452,11 @@ function StageBar({
     case 'review':
       gate = (
         <span className="gate-group">
+          {onShare && session.prNumber && (
+            <button className="btn small" onClick={onShare} title="Share this project with the PR's reviewers, so they can review it with AgentK">
+              Share with reviewers
+            </button>
+          )}
           {session.reviewState === 'refused' && (
             <ConfirmButton
               className="btn small"
@@ -436,6 +494,44 @@ function StageBar({
     case 'done':
       gate = <span className="gate-pill done">Done</span>;
       break;
+    case 'reviewing-pr': {
+      const rv = session.reviewingPr;
+      const gone = !!rv && rv.prState !== 'OPEN';
+      const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
+      reason = midTurn
+        ? 'Wait for AgentK to finish its turn.'
+        : session.status === 'needs_input'
+          ? 'AgentK is waiting on you in the terminal.'
+          : session.status === 'exited'
+            ? 'Resume the session first.'
+            : null;
+      gate = (
+        <span className="gate-group">
+          <span className={cx('pr-pill', moved && 'moved', gone && 'gone')}>
+            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : 'up to date'}
+          </span>
+          {moved && (
+            <button
+              className="gate"
+              disabled={blocked || !!reason}
+              title={reason ?? "Check out the PR's latest commits; AgentK sums up what changed"}
+              onClick={() => onAct('update-pr')}
+            >
+              Update to latest
+            </button>
+          )}
+          <ConfirmButton
+            className={moved ? 'btn small' : 'gate'}
+            label="Close review"
+            confirmLabel="Close review"
+            prompt="The session is archived and its review branch deleted."
+            onConfirm={() => onAct('close-review')}
+            disabled={blocked || midTurn}
+          />
+        </span>
+      );
+      break;
+    }
   }
 
   return (

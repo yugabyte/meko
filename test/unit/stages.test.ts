@@ -68,6 +68,17 @@ describe('stage moves', () => {
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'review')).toMatch(/^AgentK picks up the branch's open PR/);
   });
 
+  it('keeps a Review a PR session in its one stage, and makes no session one by a move', () => {
+    expect(KIND_STAGES['review-pr']).toEqual(['reviewing-pr']);
+    expect(STAGE_LABELS['reviewing-pr']).toBe('Reviewing PR');
+    expect(stepOf('reviewing-pr')).toBe('reviewing-pr');
+    expect(moveTargets('review-pr')).toEqual([]);
+    expect(moveBlockedIn('reviewing-pr')).toBe("A Review a PR session can't change type or stage.");
+    for (const from of ['explore', 'code', 'review'] as Stage[]) {
+      expect(moveError({ kind: 'quick', stage: from }, { kind: 'review-pr', stage: 'code' })).toMatch(/can't become a Review a PR session/);
+    }
+  });
+
   it('marks steps the session never went through as skipped', () => {
     expect(skippedSteps('plan', 'code', ['code'])).toEqual(['design']);
     expect(skippedSteps('plan', 'code', ['design', 'code'])).toEqual([]);

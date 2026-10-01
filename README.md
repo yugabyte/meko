@@ -78,6 +78,13 @@ your phone can connect.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
+  Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
+  (in every repo its sessions work in) with their emails, to share with in one click.
+- **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
+  of a project shared with you, checks one out on a branch with nowhere to push, and has AgentK sum
+  it up for you, using the author's design and decisions from Meko. Then AgentK waits and helps with
+  what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
+  the author's new commits and sums up what changed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
   can still attach from iTerm: `tmux -L agentk attach -t ak-<project>--<session>` (sessions created
@@ -95,9 +102,9 @@ your phone can connect.
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
-- **Three session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
-  merge), *Plan & Implement* (the default) for the full lifecycle below, and *Quick Code* for small
-  tasks that go straight to code. A session can change its type and move between stages, forward or
+- **Four session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
+  merge), *Plan & Implement* (the default) for the full lifecycle below, *Quick Code* for small
+  tasks that go straight to code, and *Review a PR* (above). A session other than a review can change its type and move between stages, forward or
   back, at any point between turns: an exploration that should ship becomes Quick Code and opens a PR
   with **Open PR…**, and a session in review can go back to Code or Design.
 - **Task lifecycle:** Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are

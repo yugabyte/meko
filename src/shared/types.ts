@@ -35,18 +35,21 @@ export interface StartupState {
 /**
  * `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup.
  * `explore` is an Exploration session's only stage: no gates, it ends when the user archives it.
+ * `reviewing-pr` is a Review a PR session's only stage: the user reviews someone else's PR, with
+ * AgentK assisting, until they close the review.
  */
-export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done';
+export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr';
 
 /** What a session is for, picked when it's created. It decides the stages it goes through. */
-export type SessionKind = 'explore' | 'plan' | 'quick';
+export type SessionKind = 'explore' | 'plan' | 'quick' | 'review-pr';
 
-export const SESSION_KINDS: SessionKind[] = ['explore', 'plan', 'quick'];
+export const SESSION_KINDS: SessionKind[] = ['explore', 'plan', 'quick', 'review-pr'];
 
 export const KIND_LABELS: Record<SessionKind, string> = {
   explore: 'Exploration',
   plan: 'Plan & Implement',
   quick: 'Quick Code',
+  'review-pr': 'Review a PR',
 };
 
 /** One line on what each kind is for, shown under the choice in the New session dialog. */
@@ -54,6 +57,7 @@ export const KIND_HINTS: Record<SessionKind, string> = {
   explore: 'Investigate, answer questions, build POCs and run experiments. No design, PR or merge.',
   plan: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
   quick: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
+  'review-pr': "Review someone else's PR. AgentK checks it out, sums it up for you, then helps with whatever you ask. It posts to GitHub only when you say.",
 };
 
 /**
@@ -64,6 +68,7 @@ export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> =
   explore: ['explore'],
   plan: ['design', 'code', 'review', 'merge'],
   quick: ['code', 'review', 'merge'],
+  'review-pr': ['reviewing-pr'],
 };
 
 /** `pr` and `review` are one step in the UI, so they share a label. */
@@ -75,6 +80,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   review: 'PR & Review',
   merge: 'Merge & Close',
   done: 'Done',
+  'reviewing-pr': 'Reviewing PR',
 };
 
 export type ReviewState =
@@ -447,6 +453,8 @@ export interface Session {
   diffStat: { added: number; removed: number } | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
+  /** The PR a Review a PR session reviews; null for other kinds. */
+  reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
   /** Set while status is `starting`. */
   startup: StartupState | null;
@@ -454,6 +462,21 @@ export interface Session {
   createdAt: number;
   archivedAt: number | null;
   recoveredAt: number | null;
+}
+
+/** What a Review a PR session knows about the PR it reviews, from its last look at GitHub. */
+export interface ReviewingPr {
+  /** The PR's repo on GitHub, `owner/name`. */
+  repo: string;
+  title: string;
+  author: string;
+  /** The commit checked out in the worktree: the PR's head when the review started, or at the last Update to latest. */
+  reviewSha: string;
+  /** The PR's head on GitHub. */
+  headSha: string;
+  /** Commits on the PR since reviewSha; null when the PR's history was rewritten (a force-push). */
+  newCommits: number | null;
+  prState: 'OPEN' | 'CLOSED' | 'MERGED';
 }
 
 export interface ProjectWithSessions extends Project {
@@ -623,6 +646,63 @@ export interface DatapackPeople {
 export interface ShareDatapackRequest {
   email: string;
   grant: ShareGrant;
+  /** The GitHub login this email is for (sharing with a PR's reviewer): the email is remembered for it. */
+  login?: string;
+}
+
+/** A person who reviews, or is asked to review, one of the project's PRs. */
+export interface PrReviewer {
+  login: string;
+  name: string | null;
+  /** An email typed for this login before, else the public one on their GitHub profile, else null. */
+  email: string | null;
+  emailFrom: 'remembered' | 'github' | null;
+}
+
+/** A PR of one of the project's running sessions, and who reviews it. */
+export interface PrReviewers {
+  sessionId: string;
+  /** `owner/name` on GitHub. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  reviewers: PrReviewer[];
+  /** Teams asked to review (`org/slug`); their members are invited by email. */
+  teams: string[];
+  /** Why GitHub couldn't be read for this PR, if it couldn't. */
+  error?: string;
+}
+
+/** An open PR a Review a PR session can be started on. */
+export interface ReviewablePr {
+  /** `owner/name` on GitHub. */
+  repo: string;
+  number: number;
+  title: string;
+  author: string;
+  url: string;
+  createdAt: string;
+  /** A local clone of the PR's repo (a fork whose upstream it is first), or null when there's none. */
+  localRepo: string | null;
+  /** What to clone when there's no local clone. */
+  cloneUrl: string;
+  /**
+   * A typed PR only: a datapack its description names (AgentK's Meko lines) that isn't one of the
+   * project's, so the author's design can be had by attaching it. Null otherwise.
+   */
+  otherDatapackId: string | null;
+}
+
+/** GET /api/projects/:id/review-prs: the open PRs whose description names one of the project's datapacks, or the one asked for. */
+export interface ReviewablePrs {
+  prs: ReviewablePr[];
+  /** Set when GitHub couldn't be searched (the list is then empty). */
+  error?: string;
+}
+
+export interface CloneRepoRequest {
+  url: string;
 }
 
 export interface ActivityItem {
@@ -912,6 +992,11 @@ export interface CreateSessionRequest {
   kind?: SessionKind;
   /** Deprecated: use `kind: 'quick'`. True starts a Quick Code session when `kind` is unset. */
   skipDesign?: boolean;
+  /**
+   * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
+   * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for AgentK.
+   */
+  pr?: { repo: string; number: number };
 }
 
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
@@ -938,7 +1023,11 @@ export type SessionAction =
   | 'force-review'
   | 'resume'
   | 'archive'
-  | 'discard';
+  | 'discard'
+  /** Review a PR: check out the PR's latest head and have AgentK sum up what changed. */
+  | 'update-pr'
+  /** Review a PR: end the review (archives the session and deletes its local review branch). */
+  | 'close-review';
 
 export interface TotpEnrollResponse {
   secret: string;
@@ -997,9 +1086,12 @@ export type TermServerMessage =
 // GET    /api/state                            → AppState
 // GET    /api/repos                            → ReposResponse
 // GET    /api/repos/branches?path=             → RepoBranches   (400 unless the path is a scanned repo or a project's)
+// POST   /api/repos/clone     CloneRepoRequest → RepoInfo   (clones a network remote into the repos folder; an existing
+//        clone of the same remote there is returned as it is, anything else there is a 409)
 // GET    /api/meko/datapacks                   → MekoDatapack[]
 // GET    /api/meko/datapacks/:id/people        → DatapackPeople   (the datapack must be in a project here)
-// POST   /api/meko/datapacks/:id/people ShareDatapackRequest → DatapackPeople   (invites by email; Meko emails them)
+// POST   /api/meko/datapacks/:id/people ShareDatapackRequest → DatapackPeople   (invites by email; Meko emails them;
+//        with `login`, the email is remembered for that GitHub login)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
 //        The four above answer 409 in link mode (AppState.meko.sharing 'link').
@@ -1018,10 +1110,15 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
+// GET    /api/projects/:id/pr-reviewers        → PrReviewers[]   (the open PRs of the project's running sessions)
+// GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
+//        project's datapacks, in any repo; with `pr` (a number, #number, owner/name#number or PR link) that one PR,
+//        a bare number looked up in `repoPath` (default: the project's repo); 400 for a PR that can't be found)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind, a bad branch name or a
-//        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has)
+//        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
+//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a type and stage that don't go together or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;

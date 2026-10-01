@@ -7,16 +7,17 @@ import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addWorktree, checkedOutAt, defaultBranch, discardChanges, existingBranch, git, gitRaw, isIdleWorktree, removeWorktree,
-  restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount, worktreeClean, type SyncResult,
+  BranchGoneError, addReviewWorktree, addWorktree, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, existingBranch, fetchPrHead, git,
+  gitRaw, isIdleWorktree, prRef, remoteFor, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount,
+  worktreeClean, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload } from './hooks.js';
-import { issueText } from './github.js';
-import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall } from './recall.js';
+import { isRepoName, issueText, prInfo, type PrInfo } from './github.js';
+import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { loadPrompt, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
+import { loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
@@ -32,7 +33,15 @@ export const WORKFLOW: Record<SessionKind, string> = {
   explore: 'This is an Exploration session: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK Local runs no design, PR, review or merge stages for it; the user ends the session from the AgentK Local UI.',
   plan: 'Stages: Design → Code → PR & Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.',
   quick: 'Stages: Code → PR & Review → Merge & Close; the user approves opening the PR and merging from the AgentK Local UI.',
+  'review-pr': "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK Local UI.",
 };
+
+/** The PR a new Review a PR session checks out: what GitHub says about it, the remote it's on, and the head fetched. */
+interface ReviewTarget {
+  repo: string;
+  info: PrInfo;
+  sha: string;
+}
 
 /** Longest setInterval delay Node honours, in whole seconds (2^31-1 ms). */
 export const MAX_TIMER_SECS = Math.floor((2 ** 31 - 1) / 1000);
@@ -236,20 +245,26 @@ export class SessionManager {
     for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch'] as const) {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
-    const name = (req.name ?? '').trim();
-    if (!name) throw new HttpError(400, 'Give the session a name.');
     const settings = parseSettings(p.settings_json);
-    const repo = this.core.projects.sessionRepo(p, req.repoPath);
     const kind: SessionKind = req.kind ?? (req.skipDesign ? 'quick' : 'plan');
     if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
-    // A task session with no first prompt works on its name; an exploration waits for you.
-    const task = (req.prompt ?? '').trim() || (kind === 'explore' ? '' : name);
+    const repo = this.core.projects.sessionRepo(p, req.repoPath);
+    // A review checks out the PR's head now, so a PR that can't be had starts nothing.
+    const review = kind === 'review-pr' ? await this.reviewTarget(repo, req.pr) : null;
+    const name = (req.name ?? '').trim() || (review ? `Review #${review.info.number} ${review.info.title}`.slice(0, 100).trim() : '');
+    if (!name) throw new HttpError(400, 'Give the session a name.');
+    const notes = review ? (req.prompt ?? '').trim() : '';
+    // A task session with no first prompt works on its name; an exploration waits for you. A
+    // review's task is the PR (the user's notes are kept apart, for its prompt).
+    const task = review
+      ? `Review PR #${review.info.number} of ${review.repo}: ${review.info.title}`
+      : (req.prompt ?? '').trim() || (kind === 'explore' ? '' : name);
     const stage: Stage = KIND_STAGES[kind][0];
-    const wanted = (req.branch ?? '').trim();
+    const wanted = review ? '' : (req.branch ?? '').trim();
     const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
-    const base = (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
+    const base = review?.info.baseRefName || (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
 
-    const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, slugify(name));
+    const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
     const branch = wanted || `${settings.branchPrefix}${slug}`;
     const id = `${projectId}--${slug}`;
     const now = Date.now();
@@ -263,10 +278,13 @@ export class SessionManager {
       const claimed = pool.claim(repo, id);
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, branch_reused,
-                      worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?)`,
+                      worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, review_notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
-        randomBytes(24).toString('base64url'), kind, stage, task || null, now, now, sessionAgentId({ id, slug }));
+        randomBytes(24).toString('base64url'), kind, stage, task || null, now, now, sessionAgentId({ id, slug }),
+        review?.info.number ?? null, review?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null, review?.info.author ?? null,
+        review?.sha ?? null, review?.sha ?? null, review ? 0 : null, review ? 'OPEN' : null, notes || null);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -274,11 +292,15 @@ export class SessionManager {
     this.creating.add(id);
     try {
       this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
-      this.startRecall(this.row(id), task);
+      // A review searches on the PR: its title and description (where the author's design is
+      // summed up), and the user's notes.
+      this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), notes].filter(Boolean).join('\n') : task);
       const naming = this.nameConversation(this.row(id));
-      const made = await this.makeWorktree(id, repo, worktree, reused, branch, base, !!where);
-      this.event(id, 'created', startedText(branch, base, made.sync, !!where) + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''),
-        { reused: made.reused });
+      const made = await this.makeWorktree(id, repo, worktree, reused, branch, base, !!where, review?.sha);
+      const started = review
+        ? `Checked out PR #${review.info.number} of ${review.repo} at ${review.sha.slice(0, 7)} on ${branch} (base ${base})`
+        : startedText(branch, base, made.sync, !!where);
+      this.event(id, 'created', started + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''), { reused: made.reused });
 
       const row = this.row(id);
       const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
@@ -306,13 +328,23 @@ export class SessionManager {
    * or a new one. A claimed worktree that can't be reused is dropped from the pool and the
    * session gets a new one, so reuse never makes a start fail. On failure the session is deleted.
    */
-  private async makeWorktree(id: string, repo: string, path: string, claimed: boolean, branch: string, base: string, fromOrigin: boolean): Promise<{ sync: SyncResult | null; reused: boolean }> {
+  private async makeWorktree(
+    id: string, repo: string, path: string, claimed: boolean, branch: string, base: string, fromOrigin: boolean, at?: string,
+  ): Promise<{ sync: SyncResult | null; reused: boolean }> {
     const pool = this.core.worktrees;
     let current = path;
+    // A review's branch starts at the PR's head; any other at the base (or is the existing branch).
+    const add = async (wt: string, reuse: boolean): Promise<SyncResult | null> => {
+      if (at) {
+        await addReviewWorktree(repo, wt, branch, at, reuse);
+        return null;
+      }
+      return reuse ? reuseWorktree(repo, wt, branch, base, fromOrigin) : addWorktree(repo, wt, branch, base, fromOrigin);
+    };
     try {
       if (claimed) {
         try {
-          return { sync: await reuseWorktree(repo, path, branch, base, fromOrigin), reused: true };
+          return { sync: await add(path, true), reused: true };
         } catch (e) {
           if (await isIdleWorktree(repo, path)) {
             // The worktree is fine; what failed was the branch or base. It goes back to the pool,
@@ -326,7 +358,7 @@ export class SessionManager {
           this.update(id, { worktree_path: current });
         }
       }
-      return { sync: await addWorktree(repo, current, branch, base, fromOrigin), reused: false };
+      return { sync: await add(current, false), reused: false };
     } catch (e) {
       this.startup.delete(id);
       this.recall.drop(id);
@@ -384,6 +416,34 @@ export class SessionManager {
     if (s) throw new HttpError(409, `Branch ${branch} is in use by the session "${s.name}" in ${s.project}. Archive that session first, or pick another branch.`);
   }
 
+  /**
+   * The PR a new Review a PR session is for: it must be open, and <repo> a clone of its repo (its
+   * upstream, for a fork). Fetches the PR's head, so a PR that can't be had starts nothing.
+   */
+  private async reviewTarget(repo: string, pr: CreateSessionRequest['pr']): Promise<ReviewTarget> {
+    if (!pr || typeof pr !== 'object' || !isRepoName(pr.repo) || !Number.isInteger(pr.number) || pr.number <= 0) {
+      throw new HttpError(400, 'Pick the pull request to review.');
+    }
+    const remote = await remoteFor(repo, pr.repo);
+    if (!remote) {
+      throw new HttpError(400, `${basename(repo)} isn't a clone of ${pr.repo}, where PR #${pr.number} is. Pick a clone of ${pr.repo} under Advanced, or clone it first.`);
+    }
+    let info: PrInfo;
+    try {
+      info = await prInfo(repo, pr.repo, pr.number);
+    } catch (e) {
+      throw new HttpError(400, `Couldn't read PR #${pr.number} of ${pr.repo} from GitHub: ${errMsg(e)}`);
+    }
+    if (info.state !== 'OPEN') {
+      throw new HttpError(400, `PR #${pr.number} of ${pr.repo} is ${info.state === 'MERGED' ? 'merged' : 'closed'}, so there's nothing to review.`);
+    }
+    try {
+      return { repo: pr.repo, info, sha: await fetchPrHead(repo, remote, pr.number, info.baseRefName) };
+    } catch (e) {
+      throw new HttpError(400, `Couldn't fetch PR #${pr.number} from ${remote}: ${errMsg(e)}`);
+    }
+  }
+
   /** Where Claude writes a markdown design during the Design stage (outside the repo). */
   designFile(row: SessionRow): string {
     return join(this.core.paths.designs, row.id, 'design.md');
@@ -392,6 +452,7 @@ export class SessionManager {
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
     if (row.stage === 'explore') return 'explore';
+    if (row.stage === 'reviewing-pr') return 'review-pr';
     if (row.stage !== 'design') return 'code';
     return row.plan_mode ? 'design-plan' : 'design';
   }
@@ -399,7 +460,17 @@ export class SessionManager {
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
     const p = projectRow(this.db, row.project_id);
     const settings = p ? parseSettings(p.settings_json) : null;
-    const recall = this.sessionDatapacks(row.project_id).length ? mekoRecallLine(name) : '';
+    const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name)].filter(Boolean) : [];
+    // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the fork.
+    const review = row.kind === 'review-pr'
+      ? {
+        repo: row.pr_repo ?? '{owner}/{repo}',
+        title: row.pr_title ?? '',
+        author: row.pr_author ?? 'its author',
+        sha: row.review_sha ?? '',
+        notes: row.review_notes ? `The user's notes for you: ${row.review_notes}\n` : '',
+      }
+      : {};
     const text = render(loadPrompt(this.db, name, row.worktree_path), {
       task: row.initial_prompt ?? '',
       branch: row.branch,
@@ -409,9 +480,10 @@ export class SessionManager {
       reviewer: settings?.reviewerLogin ?? 'the reviewer',
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
+      ...review,
       ...extra,
     });
-    return recall ? `${text.trimEnd()}\n\n${recall}` : text;
+    return meko.length ? `${text.trimEnd()}\n\n${meko.join('\n\n')}` : text;
   }
 
   /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */
@@ -446,7 +518,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
+      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
     ];
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${launchedAgentId(row)}" on Meko calls that write.`);
@@ -455,6 +527,7 @@ export class SessionManager {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
     if (dps.length) lines.push(mekoRecallSystemLine());
+    if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
     return lines.join('\n');
   }
 
@@ -954,6 +1027,8 @@ export class SessionManager {
         await this.archive(row, { keepBranch: true });
         break;
       case 'discard': await this.archive(row, { keepBranch: false, force: true }); break;
+      case 'update-pr': await lc.updatePr(row); break;
+      case 'close-review': await this.closeReview(row); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
@@ -963,6 +1038,22 @@ export class SessionManager {
   async move(id: string, req: MoveSessionRequest): Promise<Session> {
     await this.core.lifecycle.move(this.row(id), req);
     return this.get(id);
+  }
+
+  /**
+   * Ends a review: archives the session (which drops the PR's head ref) and deletes its review
+   * branch, kept when it has commits of the user's own. Refused while the worktree has uncommitted files.
+   */
+  private async closeReview(row: SessionRow): Promise<void> {
+    if (row.kind !== 'review-pr' || !row.pr_number) throw new HttpError(409, 'Only a Review a PR session can close a review.');
+    await this.refuseUncommitted(row, 'Commit them, or Discard the session to throw them away.');
+    const repo = sessionRepo(this.db, row);
+    const own = repo ? await commitsBeyond(repo, row.branch, row.pr_head_sha ?? row.review_sha ?? 'HEAD') : 0;
+    const { worktreeFreed } = await this.archive(row, { keepBranch: own > 0 });
+    this.setStage(row.id, 'done', 'you', { event: false });
+    this.event(row.id, 'review-closed', own > 0 && worktreeFreed
+      ? `Closed the review of PR #${row.pr_number}; branch ${row.branch} kept, since it has ${own === 1 ? 'a commit' : `${own} commits`} of yours`
+      : `Closed the review of PR #${row.pr_number}`);
   }
 
   private resume(row: SessionRow): Promise<void> {
@@ -1062,6 +1153,8 @@ export class SessionManager {
       const worktree: WorktreeFate = repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
       const worktreeFreed = FREED.includes(worktree);
       if (repo && worktreeFreed && !opts.keepBranch) await tryGit(repo, 'branch', '-D', row.branch);
+      // A review's copy of the PR's head (fetched again by any later review of it).
+      if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       this.busy.delete(row.id);
       this.planPending.delete(row.id);

@@ -1,5 +1,8 @@
 import { useState } from 'react';
-import { STAGE_LABELS, type MoveTarget, type Session, type SessionKind } from '../../shared/types';
+import { SESSION_KINDS, STAGE_LABELS, type MoveTarget, type Session, type SessionKind } from '../../shared/types';
+
+/** A session can be moved between these; a Review a PR is only ever started as one. */
+const MOVE_KINDS = SESSION_KINDS.filter((k) => k !== 'review-pr');
 import { defaultStage, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
@@ -90,7 +93,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
           void move();
         }}
       >
-        <KindPicker id="mv-kind" value={kind} onChange={pickKind} current={session.kind} />
+        <KindPicker id="mv-kind" value={kind} onChange={pickKind} current={session.kind} kinds={MOVE_KINDS} />
         <div className="field">
           <span className="label" id="mv-stage-label">
             Stage

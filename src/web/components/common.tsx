@@ -210,25 +210,28 @@ function stageSpan(kind: SessionKind): string {
 
 /**
  * The session types as boxes side by side, a radio group (arrow keys move the choice). `id`
- * prefixes the element ids; `current` marks the session's type when changing it.
+ * prefixes the element ids; `current` marks the session's type when changing it; `kinds` limits
+ * the choice (a session can't be changed into a Review a PR, say).
  */
 export function KindPicker({
   id,
   value,
   onChange,
   current,
+  kinds = SESSION_KINDS,
 }: {
   id: string;
   value: SessionKind;
   onChange: (k: SessionKind) => void;
   current?: SessionKind;
+  kinds?: SessionKind[];
 }) {
   const refs = useRef<Partial<Record<SessionKind, HTMLButtonElement | null>>>({});
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const next = SESSION_KINDS[(SESSION_KINDS.indexOf(value) + step + SESSION_KINDS.length) % SESSION_KINDS.length];
+    const next = kinds[(kinds.indexOf(value) + step + kinds.length) % kinds.length];
     onChange(next);
     refs.current[next]?.focus();
   };
@@ -237,8 +240,8 @@ export function KindPicker({
       <span className="label" id={`${id}-label`}>
         Session type
       </span>
-      <div className="kinds" role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} onKeyDown={onKey}>
-        {SESSION_KINDS.map((k) => (
+      <div className={cx('kinds', kinds.length === 4 && 'four')} role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} onKeyDown={onKey}>
+        {kinds.map((k) => (
           <button
             key={k}
             id={`${id}-${k}`}

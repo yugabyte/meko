@@ -227,3 +227,142 @@ export async function ghAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+// ---- Review a PR ----
+
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** True for an `owner/name` GitHub repo. */
+export function isRepoName(s: unknown): s is string {
+  return typeof s === 'string' && REPO_RE.test(s) && !s.split('/').some((p) => p === '.' || p === '..');
+}
+
+/**
+ * A PR the user typed: `21`, `#21`, `owner/name#21`, or a PR link
+ * (`https://github.com/owner/name/pull/21`, with anything after the number). A bare number has
+ * no repo (null). Null for anything else.
+ */
+export function parsePrInput(input: string): { repo: string | null; number: number } | null {
+  const s = input.trim();
+  let m = /^#?(\d{1,7})$/.exec(s);
+  if (m) return Number(m[1]) > 0 ? { repo: null, number: Number(m[1]) } : null;
+  m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d{1,7})$/.exec(s);
+  if (!m) m = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d{1,7})(?:[/?#].*)?$/i.exec(s);
+  if (!m || !isRepoName(m[1]) || Number(m[2]) <= 0) return null;
+  return { repo: m[1], number: Number(m[2]) };
+}
+
+/** `owner/name` and the number from a PR's URL, or null. */
+export function prFromUrl(url: string | null): { repo: string; number: number } | null {
+  const p = url ? parsePrInput(url) : null;
+  return p?.repo ? { repo: p.repo, number: p.number } : null;
+}
+
+export interface PrInfo {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  author: string;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  baseRefName: string;
+  headRefOid: string;
+  createdAt: string;
+}
+
+/** A PR of any repo, by its `owner/name` and number. */
+export async function prInfo(cwd: string, repo: string, number: number): Promise<PrInfo> {
+  const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--repo', repo, '--json',
+    'number,url,title,body,author,state,baseRefName,headRefOid,createdAt')) as Omit<PrInfo, 'author'> & { author: Author | null };
+  return { ...r, author: r.author?.login ?? '' };
+}
+
+export interface FoundPr {
+  repo: string;
+  number: number;
+  title: string;
+  author: string;
+  url: string;
+  createdAt: string;
+}
+
+/**
+ * Open PRs, in any repo the user can read, whose description has <text> in it (a datapack id),
+ * newest first. GitHub's search lags new PRs by a minute or so.
+ */
+export async function searchOpenPrs(cwd: string, text: string, limit = 20): Promise<FoundPr[]> {
+  const out = await ghWithin(cwd, 20_000, 'search', 'prs', `"${text.replace(/"/g, '')}"`, '--match', 'body', '--state', 'open',
+    '--json', 'repository,number,title,author,url,createdAt', '--limit', String(limit));
+  const rows = JSON.parse(out || '[]') as { repository?: { nameWithOwner?: string }; number: number; title: string; author?: Author | null; url: string; createdAt: string }[];
+  return rows
+    .filter((r) => isRepoName(r.repository?.nameWithOwner))
+    .map((r) => ({ repo: r.repository!.nameWithOwner!, number: r.number, title: r.title, author: r.author?.login ?? '', url: r.url, createdAt: r.createdAt }));
+}
+
+/** What a Review a PR session follows on its PR. */
+export interface PrWatch {
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  headRefOid: string;
+  /** The PR's commits, oldest first (GitHub lists up to 250). */
+  commits: string[];
+  reviews: PrReview[];
+}
+
+export async function prWatch(cwd: string, repo: string, number: number): Promise<PrWatch> {
+  const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--repo', repo, '--json', 'state,headRefOid,commits,reviews')) as {
+    state: PrWatch['state'];
+    headRefOid: string;
+    commits?: { oid?: string }[] | null;
+    reviews?: PrReview[] | null;
+  };
+  return {
+    state: r.state,
+    headRefOid: r.headRefOid,
+    commits: (r.commits ?? []).map((c) => c.oid ?? '').filter(Boolean),
+    reviews: r.reviews ?? [],
+  };
+}
+
+/** The login `gh` is signed in as. */
+export async function viewerLogin(cwd: string): Promise<string> {
+  return gh(cwd, 'api', 'user', '--jq', '.login');
+}
+
+export interface PrPeople {
+  title: string;
+  author: string;
+  /** People asked to review, and people who have reviewed: GitHub users, bots left out. */
+  users: string[];
+  /** Teams asked to review, as `org/slug`. */
+  teams: string[];
+}
+
+/** Who reviews a PR, from GitHub's REST API (which says which accounts are bots). */
+export async function prPeople(cwd: string, repo: string, number: number): Promise<PrPeople> {
+  const [pr, requested, reviews] = await Promise.all([
+    gh(cwd, 'api', `repos/${repo}/pulls/${number}`, '--jq', '{title: .title, author: .user.login}'),
+    gh(cwd, 'api', `repos/${repo}/pulls/${number}/requested_reviewers`),
+    gh(cwd, 'api', '--paginate', `repos/${repo}/pulls/${number}/reviews?per_page=100`, '--jq', '.[] | {login: .user.login, type: .user.type}'),
+  ]);
+  const head = JSON.parse(pr) as { title?: string; author?: string };
+  const req = JSON.parse(requested || '{}') as { users?: { login?: string; type?: string }[]; teams?: { slug?: string }[] };
+  const reviewed = reviews.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as { login?: string; type?: string });
+  const users: string[] = [];
+  for (const u of [...(req.users ?? []), ...reviewed]) {
+    if (!u.login || u.type === 'Bot' || /\[bot\]$/i.test(u.login) || users.includes(u.login)) continue;
+    users.push(u.login);
+  }
+  const org = repo.split('/')[0];
+  return {
+    title: head.title ?? '',
+    author: head.author ?? '',
+    users,
+    teams: (req.teams ?? []).map((t) => (t.slug ? `${org}/${t.slug}` : '')).filter(Boolean),
+  };
+}
+
+/** A GitHub user's display name and public email (null when they don't show one). */
+export async function userProfile(cwd: string, login: string): Promise<{ name: string | null; email: string | null }> {
+  const r = JSON.parse(await gh(cwd, 'api', `users/${login}`, '--jq', '{name: .name, email: .email}')) as { name?: string | null; email?: string | null };
+  return { name: r.name || null, email: r.email || null };
+}

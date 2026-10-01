@@ -98,24 +98,7 @@ export class ProjectService {
 
     let repoPath: string;
     if (req.cloneUrl) {
-      const dest = join(expandHome(this.core.config.repos.cloneInto), repoNameFromUrl(req.cloneUrl));
-      if (existsSync(dest)) {
-        // A clone of this same URL (one an earlier try made before Meko refused its datapack) is
-        // used as it is; anything else there is left alone.
-        const origin = isMainRepo(dest) ? (await readRemotes(dest)).origin : null;
-        const want = normaliseRemote(req.cloneUrl);
-        const same = !!origin && (origin === req.cloneUrl.trim() || (!!want && normaliseRemote(origin) === want));
-        if (!same) {
-          throw new HttpError(409, `${dest} already exists. Pick it from the list instead.`);
-        }
-      } else {
-        try {
-          await cloneRepo(req.cloneUrl, dest);
-        } catch (e) {
-          throw new HttpError(400, `Clone failed: ${errMsg(e)}`);
-        }
-      }
-      repoPath = dest;
+      repoPath = await this.clone(req.cloneUrl);
     } else {
       repoPath = resolve(expandHome(req.repoPath!));
     }
@@ -167,6 +150,28 @@ export class ProjectService {
     this.core.log.info(`project ${reopened ? 'opened again' : 'opened'}: ${id} (${repoPath}) ${dp ? `datapack ${dp.name}` : 'without a datapack'}`);
     this.core.changed();
     return this.get(id);
+  }
+
+  /**
+   * Clones <url> into the repos folder (`[repos] clone_into`) and returns where. A clone of this
+   * same URL already there (one an earlier try made, say) is used as it is; anything else there is
+   * left alone (409).
+   */
+  async clone(url: string): Promise<string> {
+    const dest = join(expandHome(this.core.config.repos.cloneInto), repoNameFromUrl(url));
+    if (existsSync(dest)) {
+      const origin = isMainRepo(dest) ? (await readRemotes(dest)).origin : null;
+      const want = normaliseRemote(url);
+      const same = !!origin && (origin === url.trim() || (!!want && normaliseRemote(origin) === want));
+      if (!same) throw new HttpError(409, `${dest} already exists. Pick it from the list instead.`);
+      return dest;
+    }
+    try {
+      await cloneRepo(url, dest);
+    } catch (e) {
+      throw new HttpError(400, `Clone failed: ${errMsg(e)}`);
+    }
+    return dest;
   }
 
   /**

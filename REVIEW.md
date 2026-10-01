@@ -90,6 +90,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
 - [ ] Merge waits for AgentK only once AgentK is active on the PR, and never in *People only*.
+- [ ] A Review a PR session only gets ready and sums up on its own: its prompts and workflow line
+      never have Claude review, post on GitHub, commit or push unless the user asks, and nothing
+      is sent to it by itself (new commits wait for **Update to latest**). Its review branch has
+      no upstream, Update to latest and Close review never throw away the user's uncommitted
+      files or own commits, and its `gh` calls name the PR's repo (`--repo`), not the clone's.
+- [ ] Anything about a session's PR (reviewers, a review's PR) uses that session's repo and the
+      PR's own `owner/name`, never the project's repo: a project's PRs can be in several repos.
 
 ## 4. Data and Meko
 

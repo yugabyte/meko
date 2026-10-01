@@ -27,7 +27,8 @@ type Modal =
   | { kind: 'none' }
   /** `invite`: a share to open as the project (chosen as its datapack). */
   | { kind: 'new-project'; invite?: DatapackInvite }
-  | { kind: 'new-session'; projectId: string }
+  /** `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review. */
+  | { kind: 'new-session'; projectId: string; fresh?: boolean }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
@@ -411,6 +412,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             sessions={live}
             session={currentSession}
             mekoWebUrl={state.meko.webUrl}
+            meko={state.meko}
             onNewSession={() => setModal({ kind: 'new-session', projectId: currentProject.id })}
             onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}
             onMenu={openDrawer}
@@ -443,7 +445,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(p) => {
             // Straight on to the project's first session.
-            setModal({ kind: 'new-session', projectId: p.id });
+            setModal({ kind: 'new-session', projectId: p.id, fresh: true });
             setPendingProjectId(p.id);
             navigate({ view: 'project', projectId: p.id, sessionId: null });
           }}
@@ -452,6 +454,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {newSessionProject && (
         <NewSessionDialog
           project={newSessionProject}
+          fresh={modal.kind === 'new-session' && !!modal.fresh}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
             setModal({ kind: 'none' });

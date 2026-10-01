@@ -7,6 +7,7 @@ import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
 import { CommentService } from './comments.js';
+import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
@@ -77,6 +78,7 @@ export class Core extends EventEmitter {
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
   readonly comments: CommentService;
+  readonly prReview: PrReviewService;
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
   readonly mekoTools: MekoTools;
@@ -121,6 +123,7 @@ export class Core extends EventEmitter {
     this.sessions = new SessionManager(this);
     this.lifecycle = new Lifecycle(this);
     this.comments = new CommentService(this);
+    this.prReview = new PrReviewService(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
     this.callHome = new CallHomeService({

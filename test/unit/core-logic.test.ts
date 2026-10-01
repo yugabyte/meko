@@ -15,7 +15,9 @@ import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
-import { DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from '../../src/server/prompts.js';
+import {
+  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName,
+} from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { repoFolder } from '../../src/server/worktrees.js';
@@ -226,10 +228,11 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 3}`);
+    db.exec(`PRAGMA user_version = ${version - 4}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -249,8 +252,9 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 1}`);
+    db.exec(`PRAGMA user_version = ${version - 2}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -275,6 +279,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -310,6 +315,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -350,6 +356,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -373,6 +380,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -401,6 +409,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -431,6 +440,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -456,6 +466,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -485,6 +496,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
@@ -518,6 +530,13 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 21 (Review a PR sessions), for tests that rewind the schema. */
+function dropV21(db: ReturnType<typeof openDb>) {
+  for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'review_notes']) {
+    db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+  }
+}
 
 /** Undoes migration 20 (a session's Meko agent id, and project closes and reopens), for tests that rewind the schema. */
 function dropV20(db: ReturnType<typeof openDb>) {
@@ -590,7 +609,7 @@ describe('stages', () => {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'design', 'design-plan', 'explore', 'review', 'review-people']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'design', 'design-plan', 'explore', 'review', 'review-people', 'review-pr']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
   });
@@ -598,6 +617,26 @@ describe('Meko recall in prompts', () => {
   it('names the ToolSearch query that loads the Meko tools under any server name', () => {
     expect(mekoRecallSystemLine()).toContain(`ToolSearch query "${MEKO_TOOLSEARCH}"`);
     expect(MEKO_TOOLSEARCH).toBe('+meko context_search');
+  });
+
+  it('asks a Review a PR session to search Meko on every why-question, not only at the start', () => {
+    const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoQuestionLine(n));
+    expect(asking.sort()).toEqual(['review-pr', 'review-pr-comments']);
+    expect(mekoQuestionLine('review-pr')).toMatch(/^For every question about why something is the way it is/);
+    expect(mekoQuestionLine('review-pr')).toMatch(/Say which parts of your answer came from Meko and which from the code/);
+    expect(mekoQuestionSystemLine()).toMatch(/search Meko before answering questions about why/);
+  });
+
+  it('fills in every placeholder of the Review a PR prompts', () => {
+    const vars = { pr: 7, prUrl: 'https://github.com/acme/demo/pull/7', repo: 'acme/demo', title: 'T', author: 'dana', sha: 'abc', branch: 'ak/review-pr-7', base: 'main', notes: '', oldSha: 'old', count: '2 new commits', comments: 'c' };
+    for (const n of ['review-pr', 'review-pr-update', 'review-pr-comments'] as PromptName[]) {
+      expect(render(DEFAULT_PROMPTS[n], vars), n).not.toMatch(/\{\{\w+\}\}/);
+    }
+    // It assists; the review is the user's.
+    expect(DEFAULT_PROMPTS['review-pr']).toMatch(/Your job is to help them, not to review the PR yourself/);
+    expect(DEFAULT_PROMPTS['review-pr']).toMatch(/Then stop and wait for the user to ask you something/);
+    expect(DEFAULT_PROMPTS['review-pr-update']).toMatch(/Without reviewing/);
+    expect(DEFAULT_PROMPTS['review-pr-comments']).toMatch(/Don't add comments of your own/);
   });
 
   it("isn't in the default prompts, which reach sessions with Meko off too", () => {

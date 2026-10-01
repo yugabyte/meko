@@ -260,7 +260,7 @@ export function ProjectHomeView({
         <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
       </div>
       {dialog?.kind === 'share' && dedicated && (
-        <ShareDialog projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
+        <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
       )}
       {dialog?.kind === 'key' && <MekoKeyDialog reason={dialog.reason} mekoWebUrl={mekoWebUrl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'datapack' && (

@@ -334,6 +334,20 @@ const MIGRATIONS: string[] = [
   );
   INSERT INTO project_events(project_id, kind, at) SELECT id, 'closed', deleted_at FROM projects WHERE deleted_at IS NOT NULL;
   `,
+  // 21: Review a PR sessions. The PR's repo on GitHub (owner/name), title and author; the commit
+  // checked out for the review (review_sha) and the PR's head at the last look (pr_head_sha), with
+  // the commits since review_sha (NULL when the history was rewritten); the PR's state; and the
+  // user's notes for AgentK. All NULL for other kinds.
+  `
+  ALTER TABLE sessions ADD COLUMN pr_repo TEXT;
+  ALTER TABLE sessions ADD COLUMN pr_title TEXT;
+  ALTER TABLE sessions ADD COLUMN pr_author TEXT;
+  ALTER TABLE sessions ADD COLUMN review_sha TEXT;
+  ALTER TABLE sessions ADD COLUMN pr_head_sha TEXT;
+  ALTER TABLE sessions ADD COLUMN pr_new_commits INTEGER;
+  ALTER TABLE sessions ADD COLUMN pr_state TEXT;
+  ALTER TABLE sessions ADD COLUMN review_notes TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {
