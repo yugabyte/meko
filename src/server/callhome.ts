@@ -23,7 +23,7 @@ import { usageOverview } from './usage.js';
 
 const execFileP = promisify(execFile);
 
-const STAGES: Stage[] = ['explore', 'design', 'code', 'pr', 'review', 'merge', 'done'];
+const STAGES: Stage[] = ['explore', 'design', 'code', 'pr', 'review', 'merge', 'done', 'reviewing-pr'];
 const DAY_MS = 24 * 3600 * 1000;
 
 /** Days in a report: the first one an install sends goes back as far as session events are kept. */
@@ -73,7 +73,7 @@ export function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-const byKind = (): Record<SessionKind, number> => ({ explore: 0, plan: 0, quick: 0 });
+const byKind = (): Record<SessionKind, number> => ({ explore: 0, plan: 0, quick: 0, 'review-pr': 0 });
 const byStage = (): Record<Stage, number> => Object.fromEntries(STAGES.map((s) => [s, 0])) as Record<Stage, number>;
 
 function emptyDay(day: string): CallHomeDay {

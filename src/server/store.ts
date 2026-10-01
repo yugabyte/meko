@@ -3,7 +3,7 @@ import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
-  CiState, DatapackRef, Project, ProjectSettings, ReviewState, Session, SessionKind, SessionStatus, Stage,
+  CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionKind, SessionStatus, Stage,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { skippedSteps, stepOf } from '../shared/stages.js';
@@ -79,6 +79,22 @@ export interface SessionRow {
   meko_datapack_name: string | null;
   /** The Meko agent id it was launched with (launchedAgentId); NULL from before sessions had their own. */
   meko_agent_id: string | null;
+  // Review a PR sessions only (NULL otherwise): see ReviewingPr.
+  /** The PR's repo on GitHub, `owner/name`. */
+  pr_repo: string | null;
+  pr_title: string | null;
+  pr_author: string | null;
+  /** The commit checked out for the review. */
+  review_sha: string | null;
+  /** The PR's head at the last look at GitHub. */
+  pr_head_sha: string | null;
+  /** Commits on the PR since review_sha; NULL when its history was rewritten. */
+  pr_new_commits: number | null;
+  pr_state: 'OPEN' | 'CLOSED' | 'MERGED' | null;
+  /** The clone's remote the PR is fetched from (`origin`, or `upstream` for a fork). */
+  pr_remote: string | null;
+  /** The user's notes for AgentK, given when the review started. */
+  review_notes: string | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {
@@ -195,12 +211,27 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
     comments: commentCounts(db, r.id),
+    reviewingPr: reviewingPr(r),
     usage: rt.usage,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,
+  };
+}
+
+/** A Review a PR session's PR, or null for other kinds (and a row missing the PR, never expected). */
+function reviewingPr(r: SessionRow): ReviewingPr | null {
+  if (r.kind !== 'review-pr' || !r.pr_repo || !r.review_sha) return null;
+  return {
+    repo: r.pr_repo,
+    title: r.pr_title ?? '',
+    author: r.pr_author ?? '',
+    reviewSha: r.review_sha,
+    headSha: r.pr_head_sha ?? r.review_sha,
+    newCommits: r.pr_new_commits,
+    prState: r.pr_state ?? 'OPEN',
   };
 }
 

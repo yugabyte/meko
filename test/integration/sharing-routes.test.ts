@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -5,6 +6,7 @@ import { buildServer } from '../../src/server/server.js';
 import { issueSetupToken } from '../../src/server/auth.js';
 import type { MekoDatapackRow } from '../../src/server/meko.js';
 import { makeEnv, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
+import { all } from '../../src/server/db.js';
 
 describe('HTTP API: sharing, invites and Meko settings', () => {
   let env: TestEnv;
@@ -41,9 +43,24 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
       ['POST', '/api/invites/dp-1/decline'],
       ['POST', '/api/invites/dp-1/later'],
       ['POST', '/api/settings/meko/claude-setup'],
+      ['GET', '/api/projects/p/pr-reviewers'],
+      ['GET', '/api/projects/p/review-prs'],
+      ['POST', '/api/repos/clone'],
     ] as const) {
       expect((await app.inject({ method, url })).statusCode, `${method} ${url}`).toBe(401);
     }
+  });
+
+  it('clones a PR\'s repo only from a network remote, and finds a clone of it already there', async () => {
+    expect((await call('POST', '/api/repos/clone', { url: '/tmp/x.git' })).statusCode).toBe(400);
+    expect((await call('POST', '/api/repos/clone', {})).statusCode).toBe(400);
+    // Something else is at the folder the clone would go to.
+    const taken = await call('POST', '/api/repos/clone', { url: 'https://github.com/acme/demo-repo.git' });
+    expect(taken.statusCode).toBe(409);
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/demo-repo.git'], { cwd: env.repo });
+    const found = await call('POST', '/api/repos/clone', { url: 'git@github.com:acme/demo-repo.git' });
+    expect(found.statusCode).toBe(200);
+    expect(found.json()).toMatchObject({ name: 'demo-repo', remote: 'github.com/acme/demo-repo' });
   });
 
   it("shares only datapacks in a project here, only in API mode, and passes on Meko's errors", async () => {
@@ -77,6 +94,10 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     const shared = await call('POST', '/api/meko/datapacks/dp-1/people', { email: ' bob@example.com ', grant: 'contributor' });
     expect(shared.statusCode).toBe(200);
     expect(env.mekoApi.calls.find((c) => c.path === '/datapacks/dp-1/share')?.body).toEqual({ recipient_email: 'bob@example.com', grant: 'contributor' });
+    // Shared with a PR's reviewer: the email is remembered for their GitHub login (and only a login).
+    expect((await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'bob@example.com', grant: 'contributor', login: 'Bob-1' })).statusCode).toBe(200);
+    expect((await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'eve@example.com', grant: 'contributor', login: '../x' })).statusCode).toBe(200);
+    expect(all(env.core.db, "SELECT key, value FROM kv WHERE key LIKE 'reviewer-email:%'")).toEqual([{ key: 'reviewer-email:bob-1', value: 'bob@example.com' }]);
     // Meko's own refusals keep their status; a server error is a 502.
     shareStatus = 409;
     const refused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'bob@example.com', grant: 'contributor' });

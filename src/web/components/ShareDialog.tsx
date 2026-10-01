@@ -5,6 +5,7 @@ import { isProjectDatapack } from '../../shared/datapacks';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
 import { Dialog, ErrorText } from './common';
+import { ShareReviewers } from './ShareReviewers';
 
 const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
   contributor: { title: 'Contributor', text: 'Runs sessions and adds their own memories.' },
@@ -12,8 +13,28 @@ const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
   viewer: { title: 'Viewer', text: 'Read only. They can attach it to a project but can’t open it as one.' },
 };
 
-/** Invite people to a project's dedicated datapack through Meko's share API (API mode). */
-export function ShareDialog({ projectName, datapack, onClose }: { projectName: string; datapack: DatapackRef; onClose: () => void }) {
+/**
+ * Invite people to a project's dedicated datapack through Meko's share API (API mode), the
+ * reviewers of the project's open PRs first. In link mode (`shareUrl` set) only the reviewers are
+ * listed, with their emails to copy, and sharing happens on Meko's Share page.
+ */
+export function ShareDialog({
+  projectId,
+  projectName,
+  datapack,
+  focusSessionId = null,
+  shareUrl = null,
+  onClose,
+}: {
+  projectId: string;
+  projectName: string;
+  datapack: DatapackRef;
+  /** The session the dialog was opened from: its PR's reviewers come first. */
+  focusSessionId?: string | null;
+  /** Link mode: Meko's Share page for the datapack. */
+  shareUrl?: string | null;
+  onClose: () => void;
+}) {
   const [people, setPeople] = useState<DatapackPeople | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [email, setEmail] = useState('');
@@ -25,11 +46,12 @@ export function ShareDialog({ projectName, datapack, onClose }: { projectName: s
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
+    if (shareUrl) return; // link mode: Meko's share API isn't ours to call
     api
       .datapackPeople(datapack.id)
       .then(setPeople)
       .catch((e) => setLoadError(errorMessage(e)));
-  }, [datapack.id]);
+  }, [datapack.id, shareUrl]);
 
   /** Runs one change and shows the lists it returns; false when it failed (the error is shown). */
   const run = async (key: string, fn: () => Promise<DatapackPeople>, done?: string): Promise<boolean> => {
@@ -61,10 +83,31 @@ export function ShareDialog({ projectName, datapack, onClose }: { projectName: s
     });
   };
 
+  const shareReviewer = (login: string, to: string, g: ShareGrant) =>
+    run(`reviewer-${login}`, () => api.shareDatapack(datapack.id, { email: to, grant: g, login }), `Invited ${to}. Meko emails them the invite.`);
+
+  if (shareUrl) {
+    return (
+      <Dialog title={`Share “${projectName}”`} onClose={onClose}>
+        <div className="stack">
+          <span className="mono small muted share-dp">{datapack.name}</span>
+          <ShareReviewers projectId={projectId} focusSessionId={focusSessionId} people={null} busy={false} />
+          <p className="hint">This Meko shares datapacks on its own Share page. Invite the people above there.</p>
+          <div className="share-actions">
+            <a className="btn primary" href={shareUrl} target="_blank" rel="noreferrer">
+              Share in Meko ↗
+            </a>
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog title={`Share “${projectName}”`} onClose={onClose}>
       <form className="stack" onSubmit={invite}>
         <span className="mono small muted share-dp">{datapack.name}</span>
+        <ShareReviewers projectId={projectId} focusSessionId={focusSessionId} people={people} onShare={shareReviewer} busy={busy !== null} />
         {!isProjectDatapack(datapack.name) && (
           <p className="hint">
             This datapack’s name doesn’t start with adlc/proj/, so AgentK won’t offer it to them as a project. They can still

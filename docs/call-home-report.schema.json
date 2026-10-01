@@ -143,13 +143,13 @@
     "optionalVersion": { "type": "string", "pattern": "^$|^v?[0-9]{1,9}(\\.[0-9]{1,9}){0,3}[a-z]?(-(alpha|beta|rc|pre|dev|canary|nightly|next|[0-9]{1,9})(\\.[0-9]{1,9}){0,3})?(\\+[0-9]{1,14})?$" },
     "kindCounts": {
       "type": "object",
-      "propertyNames": { "enum": ["explore", "plan", "quick"] },
+      "propertyNames": { "enum": ["explore", "plan", "quick", "review-pr"] },
       "maxProperties": 16,
       "additionalProperties": { "$ref": "#/$defs/count" }
     },
     "stageCounts": {
       "type": "object",
-      "propertyNames": { "enum": ["explore", "design", "code", "pr", "review", "merge", "done"] },
+      "propertyNames": { "enum": ["explore", "design", "code", "pr", "review", "merge", "done", "reviewing-pr"] },
       "maxProperties": 16,
       "additionalProperties": { "$ref": "#/$defs/count" }
     },

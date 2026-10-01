@@ -408,3 +408,81 @@ export async function cloneRepo(url: string, dest: string): Promise<void> {
 export function repoNameFromUrl(url: string): string {
   return remoteRepoName(url) || 'repo';
 }
+
+// ---- Review a PR ----
+
+/**
+ * The remote of <repo> that is GitHub's <ghRepo> (`owner/name`): `upstream` first (a fork whose
+ * PRs are upstream), then `origin`. Null when neither is.
+ */
+export async function remoteFor(repo: string, ghRepo: string): Promise<'upstream' | 'origin' | null> {
+  const remotes = await readRemotes(repo);
+  const want = ghRepo.toLowerCase();
+  if (githubRepo(remotes.upstream)?.toLowerCase() === want) return 'upstream';
+  if (githubRepo(remotes.origin)?.toLowerCase() === want) return 'origin';
+  return null;
+}
+
+/** Where a Review a PR session keeps the PR's head in its repo (outside refs/heads, so no branch list shows it). */
+export function prRef(number: number): string {
+  return `refs/agentk/pr/${number}`;
+}
+
+/**
+ * Fetches PR <number>'s head from <remote> (a fork's PR too: GitHub keeps refs/pull/N/head on the
+ * PR's repo) into prRef(), and the PR's <base> with it, so the diff has its merge base. Returns the head.
+ */
+export async function fetchPrHead(repo: string, remote: string, number: number, base: string): Promise<string> {
+  await checkBranchName(repo, base);
+  await git(repo, 'fetch', '--quiet', remote, `+refs/pull/${number}/head:${prRef(number)}`);
+  await tryGit(repo, 'fetch', '--quiet', remote, base);
+  const sha = await revParse(repo, prRef(number));
+  if (!sha) throw new Error(`git fetched PR #${number} from ${remote} but left nothing at ${prRef(number)}`);
+  return sha;
+}
+
+/** The push remote a review branch gets: no remote has this name, so a bare `git push` fails. */
+export const NO_PUSH_REMOTE = 'agentk-review-no-push';
+
+/**
+ * Puts a new review branch at <sha>, in a new worktree at <path> or (<reuse>) in an idle worktree
+ * of <repo>, which must be clean on a detached HEAD. The branch has no upstream, and its
+ * `pushRemote` is a remote that doesn't exist, so a bare `git push` fails whatever the push config
+ * (`push.default=current` and `push.autoSetupRemote` included); `git branch -D` drops the setting.
+ */
+export async function addReviewWorktree(repo: string, path: string, branch: string, sha: string, reuse: boolean): Promise<void> {
+  await checkBranchName(repo, branch);
+  if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`"${sha}" isn't a commit id.`);
+  if (reuse) {
+    if (!(await isIdleWorktree(repo, path))) throw new Error(`${path} isn't a clean worktree of ${repo} with a detached HEAD`);
+    await git(path, 'checkout', '--quiet', '--no-track', '-b', branch, sha);
+  } else {
+    await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, sha);
+  }
+  await git(repo, 'config', `branch.${branch}.pushRemote`, NO_PUSH_REMOTE);
+}
+
+/**
+ * Commits on <branch> that <ref> lacks: the user's own on a review branch. Null when git can't tell
+ * (either is missing), which callers take as "there may be some".
+ */
+export async function commitsBeyond(repo: string, branch: string, ref: string): Promise<number | null> {
+  const n = await tryGit(repo, 'rev-list', '--count', `${ref}..refs/heads/${branch}`);
+  return n && /^\d+$/.test(n) ? Number(n) : null;
+}
+
+/** Commits from <from> to <to> when <to> follows on from <from>, or null when it doesn't (a rewritten history). */
+export async function commitsBetween(repo: string, from: string, to: string): Promise<number | null> {
+  if ((await tryGit(repo, 'merge-base', '--is-ancestor', from, to)) === null) return null;
+  const n = await tryGit(repo, 'rev-list', '--count', `${from}..${to}`);
+  return n && /^\d+$/.test(n) ? Number(n) : null;
+}
+
+/**
+ * Moves a clean review worktree's branch to <sha> (`reset --keep`, which refuses to lose local
+ * changes). Callers check first that the branch has no commits of the user's own.
+ */
+export async function moveReviewBranch(worktree: string, sha: string): Promise<void> {
+  if (!/^[0-9a-f]{7,64}$/.test(sha)) throw new Error(`"${sha}" isn't a commit id.`);
+  await git(worktree, 'reset', '--quiet', '--keep', sha);
+}

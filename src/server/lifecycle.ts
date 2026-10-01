@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
+import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
-import { deleteBranch, git, tryGit, uncommittedCount } from './git.js';
+import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -34,7 +35,22 @@ export const DESIGN_READY = 'Design ready for your approval';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'ci'] as const;
-type QueuedPrompt = (typeof QUEUE_ORDER)[number];
+/** The one prompt queued in a Review a PR session: the summary after Update to latest. */
+const REVIEWING_ORDER = ['review-pr-update'] as const;
+type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
+
+/** The prompts that may go out in a stage, in order: none outside Review and Reviewing PR. */
+function queueOrder(stage: Stage): readonly QueuedPrompt[] {
+  return stage === 'review' ? QUEUE_ORDER : stage === 'reviewing-pr' ? REVIEWING_ORDER : [];
+}
+
+/** Commits on the PR after <sha> (its commits oldest first), or null when <sha> isn't one of them (a force-push). */
+export function commitsAfter(commits: string[], sha: string | null): number | null {
+  const i = sha ? commits.indexOf(sha) : -1;
+  return i < 0 ? null : commits.length - 1 - i;
+}
+
+const REVIEW_VERBS: Record<string, string> = { APPROVED: 'approved', CHANGES_REQUESTED: 'requested changes on', COMMENTED: 'commented on' };
 /** `sessions.pending_prompts`: kept across restarts; a prompt is `sent` until the turn that got it ends. */
 type Queue = Partial<Record<QueuedPrompt, { state: 'queued' | 'sent'; vars?: Record<string, string> }>>;
 
@@ -79,6 +95,8 @@ export class Lifecycle {
   private designSends = new Map<string, Promise<void>>();
   /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
   private ciFailSince = new Map<string, { head: string; at: number }>();
+  /** The GitHub login gh is signed in as, once known (whose reviews a Review a PR session logs). */
+  private ghLogin: string | null = null;
 
   constructor(private core: Core) {}
 
@@ -474,6 +492,16 @@ export class Lifecycle {
     } else if (row.stage === 'merge') {
       // A merge that landed while Claude was working: close now that the turn is over.
       await this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
+    } else if (row.stage === 'reviewing-pr') {
+      await this.serial(id, async () => {
+        // The turn that got the update summary is over.
+        const q = this.queue(id);
+        if (q['review-pr-update']?.state === 'sent') {
+          delete q['review-pr-update'];
+          this.setQueue(id, q);
+        }
+        await this.doPollReviewedPr(id);
+      }).catch((e) => this.warn(id, 'PR status failed', e));
     }
     // Review comments go after anything above that already gave Claude its next turn.
     await this.core.comments.deliver(id).catch((e) => this.warn(id, 'Sending review comments', e));
@@ -539,6 +567,8 @@ export class Lifecycle {
           await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
         } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
+        } else if (row.stage === 'reviewing-pr' && due) {
+          await this.pollReviewedPr(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         }
         // Prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.
         await this.serial(row.id, () => this.deliverNext(row.id)).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
@@ -759,16 +789,18 @@ export class Lifecycle {
 
   /**
    * Types the first queued prompt (reviews first, then CI) into Claude when it's between turns
-   * in the Review stage. One at a time: the next waits until the turn that got one has ended.
+   * in the Review stage, or a Review a PR session's update summary in Reviewing PR. One at a time:
+   * the next waits until the turn that got one has ended.
    */
   private async deliverNext(id: string): Promise<void> {
     const q = this.queue(id);
-    const name = QUEUE_ORDER.find((n) => q[n]?.state === 'queued');
-    if (!name) return;
     const row = this.sessions.row(id);
-    if (row.desired !== 'running' || row.stage !== 'review' || (row.status !== 'idle' && row.status !== 'recovered')) return;
+    const order = queueOrder(row.stage);
+    const name = order.find((n) => q[n]?.state === 'queued');
+    if (!name) return;
+    if (row.desired !== 'running' || (row.status !== 'idle' && row.status !== 'recovered')) return;
     if (this.sessions.runtime(id).busy) return;
-    const sent = QUEUE_ORDER.filter((n) => q[n]?.state === 'sent');
+    const sent = order.filter((n) => q[n]?.state === 'sent');
     if (sent.length) {
       // The status goes idle a moment before the turn's Stop is handled, and that clears it.
       if (row.status !== 'recovered') return;
@@ -823,6 +855,133 @@ export class Lifecycle {
       this.sessions.update(row.id, { review_state: 'waiting', agentk_seen: 1 });
       this.sessions.event(row.id, 'review', force ? 'Forced an AgentK review' : 'Requested another AgentK review');
       this.lastPoll.delete(row.id);
+    });
+  }
+
+  // ---- Review a PR ----
+
+  pollReviewedPr(row: SessionRow): Promise<void> {
+    return this.serial(row.id, () => this.doPollReviewedPr(row.id));
+  }
+
+  /**
+   * A Review a PR session's look at its PR: new commits on it (once per head, with a notification),
+   * the PR merged, closed or reopened, and reviews the user posted. Nothing goes to Claude by
+   * itself; the summary after Update to latest goes out from here once Claude is between turns.
+   */
+  private async doPollReviewedPr(id: string): Promise<void> {
+    const before = sessionRow(this.db, id);
+    if (!before || before.kind !== 'review-pr' || before.stage !== 'reviewing-pr' || before.desired !== 'running') return;
+    if (!before.pr_number || !before.pr_repo) return;
+    this.lastPoll.set(id, Date.now());
+    const cwd = this.ghCwd(before);
+    const st = await github.prWatch(cwd, before.pr_repo, before.pr_number);
+    const me = await this.viewerLogin(cwd);
+    // Read the row again: Update to latest runs in the same serial queue, but an archive or Close
+    // review doesn't, and may have ended the session during the calls above.
+    const row = sessionRow(this.db, id);
+    if (!row || row.stage !== 'reviewing-pr' || row.desired !== 'running') return;
+    const n = row.pr_number;
+    const fields: Partial<Record<keyof SessionRow, string | number | null>> = {};
+    if (st.state !== row.pr_state) {
+      fields.pr_state = st.state;
+      if (st.state === 'MERGED' || st.state === 'CLOSED') {
+        const what = st.state === 'MERGED' ? 'merged' : 'closed';
+        this.sessions.event(id, 'pr-state', `PR #${n} was ${what}`);
+        this.sessions.notifyUser(id, `PR ${what}`, `PR #${n} was ${what}. Close the review when you're done with it.`);
+      } else if (row.pr_state) {
+        this.sessions.event(id, 'pr-state', `PR #${n} was reopened`);
+      }
+    }
+    if (st.headRefOid && st.headRefOid !== row.pr_head_sha) {
+      fields.pr_head_sha = st.headRefOid;
+      if (st.headRefOid === row.review_sha) {
+        fields.pr_new_commits = 0;
+      } else {
+        const count = commitsAfter(st.commits, row.review_sha);
+        fields.pr_new_commits = count;
+        const what = count === null ? 'was force-pushed' : `has ${count === 1 ? 'a new commit' : `${count} new commits`}`;
+        this.sessions.event(id, 'pr-update', `PR #${n} ${what}`, { sha: st.headRefOid });
+        this.sessions.notifyUser(id, 'New commits', `PR #${n} ${what}. Update to latest when you're ready.`);
+      }
+    }
+    const seen = new Set(JSON.parse(row.seen_review_ids) as string[]);
+    for (const r of me ? st.reviews.filter((r) => github.isLogin(r.author, me) && !seen.has(r.id)) : []) {
+      seen.add(r.id);
+      const verb = REVIEW_VERBS[r.state];
+      // Replies on threads are empty COMMENTED reviews; reviews from before the session aren't news.
+      if (!verb || (r.state === 'COMMENTED' && !r.body.trim()) || Date.parse(r.submittedAt) < row.created_at - github.CLOCK_SKEW_MS) continue;
+      this.sessions.event(id, 'review', `You ${verb} PR #${n}`);
+    }
+    fields.seen_review_ids = JSON.stringify([...seen]);
+    this.sessions.update(id, fields);
+    await this.deliverNext(id).catch((e) => this.warn(id, 'Sending a queued prompt', e));
+    this.core.changed();
+  }
+
+  /** gh's login, looked up once; null (and asked again next time) when gh can't say. */
+  private async viewerLogin(cwd: string): Promise<string | null> {
+    if (this.ghLogin) return this.ghLogin;
+    try {
+      this.ghLogin = (await github.viewerLogin(cwd)) || null;
+    } catch (e) {
+      this.core.log.warn('looking up the GitHub login failed', errMsg(e));
+    }
+    return this.ghLogin;
+  }
+
+  /**
+   * Update to latest: checks out the PR's head in a Review a PR session and has AgentK sum up what
+   * changed since the commit reviewed so far (queued until Claude is between turns). Refused while
+   * AgentK is busy, the worktree has uncommitted files, or the branch has commits of the user's own.
+   */
+  async updatePr(row: SessionRow): Promise<void> {
+    if (row.kind !== 'review-pr' || row.stage !== 'reviewing-pr' || !row.pr_number || !row.pr_repo || !row.review_sha) {
+      throw new HttpError(409, "Only a Review a PR session can update to its PR's latest commits.");
+    }
+    await this.serial(row.id, async () => {
+      const cur = this.sessions.row(row.id);
+      if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+      if (cur.status === 'working' || cur.status === 'starting' || this.sessions.runtime(cur.id).busy) throw new HttpError(409, 'Wait for AgentK to finish its turn.');
+      if (cur.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
+      if (cur.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+      const n = cur.pr_number!;
+      const old = cur.review_sha!;
+      const repo = sessionRepo(this.db, cur);
+      if (!repo || !this.sessions.ownsWorktree(cur) || !existsSync(cur.worktree_path)) throw new HttpError(409, "This session's worktree is gone.");
+      const remote = await remoteFor(repo, cur.pr_repo!);
+      if (!remote) throw new HttpError(409, `${basename(repo)} has no remote for ${cur.pr_repo} any more, so PR #${n} can't be fetched.`);
+      const dirty = await uncommittedCount(cur.worktree_path);
+      if (dirty) {
+        throw new HttpError(409, `The worktree has ${dirty === 1 ? '1 uncommitted file' : `${dirty} uncommitted files`}. Commit or discard ${dirty === 1 ? 'it' : 'them'}, then update.`);
+      }
+      const own = await commitsBeyond(repo, cur.branch, old);
+      if (own === null) throw new HttpError(409, `Couldn't tell whether ${cur.branch} has commits of yours on top of the PR, so it wasn't moved.`);
+      if (own) {
+        throw new HttpError(409, `${cur.branch} has ${own === 1 ? 'a commit' : `${own} commits`} of yours on top of the PR. Move ${own === 1 ? 'it' : 'them'} to another branch, or drop ${own === 1 ? 'it' : 'them'}, then update.`);
+      }
+      let sha: string;
+      try {
+        sha = await fetchPrHead(repo, remote, n, cur.base_branch);
+        if (remote !== cur.pr_remote) this.sessions.update(cur.id, { pr_remote: remote });
+      } catch (e) {
+        throw new HttpError(502, `Couldn't fetch PR #${n} from ${remote}: ${errMsg(e)}`);
+      }
+      if (sha === old) {
+        this.sessions.update(cur.id, { pr_head_sha: sha, pr_new_commits: 0 });
+        return;
+      }
+      const count = await commitsBetween(repo, old, sha);
+      await moveReviewBranch(cur.worktree_path, sha);
+      this.sessions.update(cur.id, { review_sha: sha, pr_head_sha: sha, pr_new_commits: 0 });
+      this.sessions.event(cur.id, 'pr-update', `Updated to PR #${n} at ${sha.slice(0, 7)}`, { sha });
+      this.enqueue(cur.id, 'review-pr-update', {
+        oldSha: old,
+        sha,
+        count: count === null ? 'its history was rewritten, a force-push' : `${count === 1 ? '1 new commit' : `${count} new commits`}`,
+      });
+      await this.deliverNext(cur.id);
+      void this.sessions.refreshDiff(cur.id).catch(() => undefined);
     });
   }
 

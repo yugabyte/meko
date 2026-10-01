@@ -49,6 +49,18 @@ export function issueRefs(task: string): number[] {
   return out;
 }
 
+/**
+ * A PR description without the Meko lines AgentK ends it with (`<host>://<datapack id>`,
+ * `meko_conversation_id:<id>`, see mekoPrFooter), which mean nothing to a search.
+ */
+export function withoutMekoLines(body: string): string {
+  return body
+    .split('\n')
+    .filter((l) => !/^\s*[a-z][\w.+-]*:\/\/[0-9a-f][0-9a-f-]{7,}\s*$/i.test(l) && !/^\s*meko_conversation_id:\S+\s*$/i.test(l))
+    .join('\n')
+    .trim();
+}
+
 /** Cuts text to at most `max` characters, at a word when there is one near the end. */
 export function clip(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim();

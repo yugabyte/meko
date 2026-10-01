@@ -3477,3 +3477,145 @@ a.icon-btn {
     transition: none;
   }
 }
+
+/* ---- Review a PR ---- */
+/* Four session types: side by side on a desktop, two by two on a phone. */
+.kinds.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 760px) {
+  .kinds.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* The PR picker in the New session dialog. */
+.pr-pick {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.pr-pick-item {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--rule);
+}
+.pr-pick-row {
+  align-items: flex-start;
+  border-bottom: 0;
+}
+.pr-pick-row .radio {
+  margin-top: 3px;
+}
+.pr-pick-item .pr-pick-note {
+  margin: 0 10px 8px 34px;
+}
+.pr-pick-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.pr-pick-title {
+  overflow-wrap: anywhere;
+}
+.pr-pick-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  font-size: 12px;
+}
+.pr-pick-empty {
+  margin: 0;
+  padding: 10px;
+  font-size: 12.5px;
+}
+.pr-pick-other {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border-top: 1px solid var(--rule);
+}
+.pr-pick-other-row {
+  display: flex;
+  gap: 6px;
+}
+.pr-pick-other-row .input {
+  flex: 1;
+  min-width: 0;
+}
+/* The PR's state in a Review a PR session's stage bar, by shape as well as color. */
+.pr-pill {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.pr-pill.moved {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: transparent;
+}
+.pr-pill.moved::before {
+  content: '● ';
+}
+.pr-pill.gone {
+  color: var(--ok);
+  border-style: solid;
+}
+.warn-text {
+  color: var(--warn);
+}
+/* The Share dialog's reviewers, grouped by PR. */
+.share-pr {
+  display: flex;
+  flex-direction: column;
+}
+.share-pr + .share-pr {
+  border-top: 1px solid var(--rule);
+}
+.share-pr-head {
+  padding: 7px 10px;
+  background: var(--sunk);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.share-pr > .hint {
+  padding: 6px 10px;
+  margin: 0;
+}
+.share-reviewer .share-person-btns {
+  flex-wrap: wrap;
+}
+.share-reviewer .input.small {
+  width: 190px;
+  max-width: 100%;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.share-reviewer select.input.small {
+  width: auto;
+}
+@media (max-width: 760px) {
+  .share-reviewer {
+    flex-wrap: wrap;
+  }
+  /* 16 px, so iOS doesn't zoom the sheet when one is focused. */
+  .share-reviewer .input.small {
+    width: 100%;
+    font-size: 16px;
+  }
+}
+@media (pointer: coarse) {
+  .share-reviewer .input.small {
+    min-height: 36px;
+  }
+}

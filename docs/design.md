@@ -25,14 +25,15 @@ from a browser.
 | Meko | Optional. With a key, projects get a dedicated datapack (or start without one, when Meko is down or the plan's datapack limit is reached, and get one later). Without a key, or turned off in Settings, AgentK works without datapacks. |
 | Meko wiring | Each session gets its own `MEKO_AGENT_ID=claude_code:<session slug>-<hash>`, and the project's datapack is pinned for that agent id when it starts. The Meko hooks already honour both, so no plugin change is needed. |
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
-| Project sharing | A project is shared by sharing its dedicated datapack in Meko. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
+| Project sharing | A project is shared by sharing its dedicated datapack in Meko, from the project home or, for a PR's reviewers, from its PR & Review step. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
+| Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with Meko searched for the design and decisions behind it. It posts to GitHub only when the user says. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
 | Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts, with an estimate of what Meko searches saved. |
 | Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
-| Task lifecycle | Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration sessions have none of it. You can change a session's type and move its stage by hand. More ADLC stages plug in later. |
+| Task lifecycle | Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration and Review a PR sessions have none of it. You can change a session's type and move its stage by hand (not a Review a PR's). More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
 | Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
@@ -197,18 +198,19 @@ reply. Closing it leaves the project's empty view with its **New session** butto
 
 You give it a name, a session type and, optionally, a first prompt. A Plan & Implement or Quick
 Code session with no first prompt uses its name as the task; an Exploration without one starts at
-an empty prompt. The three types sit side by side, with a line under them saying what the selected
-one is for:
+an empty prompt. The four types sit side by side (two by two on a phone), with a line under them
+saying what the selected one is for:
 
 | Type | For | Stages |
 |---|---|---|
 | **Exploration** (`explore`) | Investigating, answering questions, POCs and experiments | Explore only: no gates; you end it with Archive or Discard |
 | **Plan & Implement** (`plan`, the default) | Normal tasks | Design → Code → PR & Review → Merge & Close |
 | **Quick Code** (`quick`) | Small tasks | Code → PR & Review → Merge & Close |
+| **Review a PR** (`review-pr`) | Reviewing someone else's PR, with AgentK assisting | Reviewing PR only: you end it with **Close review** (see [Reviewing a PR](#reviewing-a-pr)) |
 
 The type is stored as `sessions.kind` and decides the first stage, the stages the stage bar shows,
-the first prompt (`explore`, `design` or `code`) and the workflow line of the system prompt Claude
-gets. It can be changed later (see [Moving a session](#moving-a-session)). `CreateSessionRequest.skipDesign: true` still works and means Quick Code. The server fetches the base from `origin` and fast-forwards your local base
+the first prompt (`explore`, `design`, `code` or `review-pr`) and the workflow line of the system prompt Claude
+gets. It can be changed later (see [Moving a session](#moving-a-session)), except a Review a PR's. `CreateSessionRequest.skipDesign: true` still works and means Quick Code. The server fetches the base from `origin` and fast-forwards your local base
 branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside
 it (or in an idle worktree of the repo: see [Worktree reuse](#worktree-reuse)), and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
 local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
@@ -492,11 +494,16 @@ CREATE TABLE sessions (
   branch_reused INTEGER,          -- 1: the branch existed when the session started
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
   status TEXT,                    -- starting | working | needs_input | idle | exited | recovered | archived
-  kind TEXT,                      -- explore | plan | quick (the session type; the user can change it)
-  stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done
+  kind TEXT,                      -- explore | plan | quick | review-pr (the session type; the user can change it, but not review-pr)
+  stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done | reviewing-pr
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
+  pr_repo TEXT, pr_title TEXT, pr_author TEXT,  -- Review a PR only: the PR's owner/name on GitHub, title and author
+  review_sha TEXT, pr_head_sha TEXT,  -- Review a PR: the commit checked out; the PR's head at the last look
+  pr_new_commits INTEGER, pr_state TEXT,  -- commits on the PR since review_sha (NULL: rewritten); OPEN | CLOSED | MERGED
+  pr_remote TEXT,                  -- Review a PR: the clone's remote the PR is fetched from (origin, or upstream for a fork)
+  review_notes TEXT,               -- Review a PR: the user's notes for AgentK
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'ci' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'ci' | 'review-pr-update' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
@@ -620,7 +627,9 @@ merging. Everything between the gates runs on its own. A Quick Code session star
 has only the last two gates. An Exploration session never enters this pipeline: it stays in the
 Explore stage, where Claude gets the `explore` prompt (investigate, build POCs, run experiments,
 push experimental branches if useful), edits aren't guarded, and review comments from the Changes panel still
-reach Claude. It ends when you archive or discard it.
+reach Claude. It ends when you archive or discard it. A Review a PR session doesn't enter it
+either: it stays in Reviewing PR, on someone else's PR, until you close the review (see
+[Reviewing a PR](#reviewing-a-pr)).
 
 In the UI, the one doing the work in these stages is **AgentK** ("AgentK writes a design…",
 "Wait for AgentK to finish its turn"). "Claude" is kept for the Claude Code process and its
@@ -668,12 +677,90 @@ stateDiagram-v2
   changes or comments with a body.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `review`, `review-people`, `ci`, `continue`, `comments`, `moved`) with `.agent-k/stages/<name>.md`. This lets a team
+  `review`, `review-people`, `ci`, `continue`, `comments`, `moved`, `review-pr`, `review-pr-update`,
+  `review-pr-comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   and CI failures through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
   enforce a branch-name prefix with rulesets.
+
+### Reviewing a PR
+
+The other side of sharing a project: someone the author shared it with (see
+[Sharing a project](#sharing-a-project)) opens its datapack as a project, from the invite's
+banner, and reviews the PR with their own AgentK. The New session dialog opens by itself for a
+project just opened, and starts on **Review a PR** when an open PR names the project's datapack.
+
+**Picking the PR.** Picking **Review a PR** swaps the first prompt for a **Pull request** picker
+and **Notes for AgentK** (optional: what to focus on). The picker lists, newest first and at most
+20, the open PRs in any repo you can read whose description names one of the project's datapacks
+(`gh search prs "<datapack id>" --match body`, once per datapack: the PRs its sessions open end
+with that id, see the PR stage below). A project's sessions can work in several repos, so the PRs
+can be in several repos too, and each row names its repo. **Another PR** takes any other one: a
+number (looked up in the repo picked under Advanced), `owner/name#number`, or a PR link. GitHub's
+search lags new PRs by a minute or so, so a PR missing from the list can be typed, and
+**Refresh** searches again. `GET /api/projects/:id/review-prs` serves both (`src/server/prreview.ts`).
+Each PR's repo is matched to a local clone among the scanned repos (and the project's and its
+sessions' repos) with the rules the Open project dialog uses for a datapack's remote
+(`matchRepo()`): a fork whose `upstream` is the PR's repo first, then a clone whose `origin` is,
+never a name alone. A PR whose repo isn't cloned here shows **Clone** (`POST /api/repos/clone`,
+which clones into the repos folder as Open project does). A typed PR whose description names a
+datapack the project doesn't have offers **Attach it**, as a shared datapack, so its design can be
+searched. The name fills in as `Review #21 <title>` until you edit it, and **Advanced** shows the
+repo (the PR's clone, changeable to another clone of it); the base and branch come from the PR.
+
+**Starting.** `CreateSessionRequest.pr` names the PR (`{ repo: 'owner/name', number }`), with
+`repoPath` its clone. The server checks that the clone's `upstream` or `origin` is the PR's repo
+and that the PR is open (400 otherwise, with nothing started), fetches `refs/pull/<n>/head` from
+that remote into `refs/agentk/pr/<n>` (a fork's PR too) along with the PR's base, and puts the
+branch `<prefix>review-pr-<n>` (numbered like any session's, so PR #7 of two repos never collide)
+at that commit, in a new or idle worktree, with no upstream and a `pushRemote` naming a remote
+that doesn't exist, so a bare `git push` fails whatever the push config (`push.default=current`
+and `push.autoSetupRemote` included); an explicit `git push <remote>` still works when the user
+asks for one. The base is the PR's base, so the footer diff and the Changes panel show the PR's
+diff, and the prompts compare with the remote's branch the review fetched (`upstream/main` in a
+fork), never the local one, which may follow the fork, lag behind or not exist. The
+session keeps the PR's repo, title, author, the commit checked out (`review_sha`) and the PR's
+head and state at the last look (`Session.reviewingPr`). The search at start
+([Meko recall](#meko-recall-at-start)) uses the PR's title and description, without its Meko
+lines, and the notes.
+
+**AgentK assists; the user reviews.** The `review-pr` prompt tells Claude to get ready without
+reviewing: read the PR description, the reviews and threads and CI's state, look at the shape of
+the diff, then show a short summary (what the PR does and why, the main changes and where to start
+reading, the review so far, what the author asked reviewers to look at) and wait. It lists no
+problems and gives no verdict on its own; it answers what the user asks (explain code, trace a
+path, check a suspicion, run a test, draft a comment in their words). Every `gh` command names the
+PR's repo (`--repo owner/name`), since the clone may be a fork. With datapacks, the prompt starts
+with a Meko search for the design and decisions, and a second line (`mekoQuestionLine()`, added in
+code like the other Meko lines, and to a repo's own `.agent-k/stages/review-pr.md` too) asks for
+a Meko search before every answer about why the code is the way it is, saying which parts came
+from Meko and which from the code. The system prompt's workflow line says the same, so it holds
+after a resume or `/clear`. Nothing goes to GitHub, and nothing is committed or pushed, until the
+user asks; then Claude posts one review with their comments inline
+(`gh api repos/<owner>/<name>/pulls/<n>/reviews`), with the verdict they give. Comments left in
+the Changes panel go out through the `review-pr-comments` template: they're the user's review
+comments, to answer or draft as review comments, never changes to make or comments of Claude's own.
+
+**Keeping up with the PR.** The session is polled like a PR & Review one (every 45 seconds and at
+each turn end, `prWatch`), and nothing is sent to Claude by itself, so waiting costs no tokens.
+New commits on the PR show in the footer and the stage bar (*3 new commits*, or *PR force-pushed*
+when the commit reviewed is no longer in it), with one notification per new head. **Update to
+latest** fetches the head, moves the review branch there (`reset --keep`) and sends the
+`review-pr-update` prompt: a short summary of what changed since the commit reviewed so far and of
+the threads that got replies, again without reviewing. It's refused while AgentK is mid-turn or
+waiting on you, while the worktree has uncommitted files, or while the branch has commits of your
+own on top of the commit reviewed (move them to another branch first); queued in
+`pending_prompts` if Claude is busy. A review
+you post is logged ("You requested changes on PR #21"). When the PR is merged or closed, a
+notification says so, and **Close review** becomes the main button. It archives the session,
+deletes the review branch (kept when it has commits of yours on top of the commit reviewed, or
+when git can't tell) and `refs/agentk/pr/<n>`, and is refused while the worktree has uncommitted
+files. Discard works as for any session; its warning counts only your own commits, not the
+author's, which are on GitHub. A closed review ends in Done with someone else's PR, so the usage
+counts never take it for one of your merged PRs. A Review a PR
+session can't be moved to another type or stage, and no session can be moved into one.
 
 ### Moving a session
 
@@ -743,8 +830,10 @@ knows to pass the right `datapack_id` when it searches them, and says when to se
 reading code for a new task, a review or a CI fix. Claude Code hides MCP tools until ToolSearch
 loads them, so it names the query that does (`+meko context_search`, which matches the Meko server
 under its own name or a plugin's). The first prompt of each task (`explore`, `design`,
-`design-plan`, `code`) and the review and CI prompts end with one line asking for that search.
-These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so
+`design-plan`, `code`, `review-pr`) and the review and CI prompts end with one line asking for that search.
+A Review a PR session's prompts (`review-pr`, `review-pr-comments`) and system prompt also ask for a
+search before every answer about why the code is the way it is (`mekoQuestionLine()`,
+`mekoQuestionSystemLine()`). These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so
 a repo's own stage prompts get them too, and only when the project has datapacks and Meko is on.
 
 > **No Meko plugin change needed.** The Meko hooks already take `MEKO_AGENT_ID` over the folder
@@ -877,9 +966,25 @@ message; a 401 there also switches to link mode; anything else is a 502.
 
 | | API mode | Link mode (today) |
 |---|---|---|
-| Share | The Share dialog: email, role, the people with access and pending invites (Resend, Revoke). Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). | **Share in Meko ↗** opens `<web app>/datapacks/<id>/share`. |
+| Share | The Share dialog: the reviewers of the project's open PRs (below), email, role, the people with access and pending invites (Resend, Revoke). Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). | **Share in Meko ↗** opens `<web app>/datapacks/<id>/share`. From a session's **Share with reviewers**, a dialog lists the reviewers with **Copy email**, then links there. |
 | An invite for you | A banner (and a notification) from `incoming-shares`: **Open as project** (creating the project accepts it), **Decline**, **Later**. A viewer invite gets **Accept** instead of Open as project. | Meko emails you and shows it in its notification bell; you accept it there. |
 | A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). | Same. |
+
+**Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
+reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko is
+on. It opens the Share dialog with a **Reviewers on the project's open PRs** section above the
+email form: for each open PR of the project's running sessions (in PR & Review or Merge & Close),
+each in its own session's repo, the people asked to review and the people who have reviewed,
+without bots, the PR's author or you, and the teams asked (whose members are invited by email);
+the session's own PR comes first, and a person on several PRs is listed once
+(`GET /api/projects/:id/pr-reviewers`, from GitHub's REST API, which says which accounts are
+bots). Each person's email is the one you shared with for their GitHub login before (kept in `kv`
+as `reviewer-email:<login>`, written when a share names `login`), else the public email on their
+GitHub profile (read once an hour at most), else typed. Each row has the access (Contributor by
+default: a viewer can't open the datapack as a project of their own) and **Share**, and shows
+**✓ has access** when the email is a member's or has a pending invite. The project home's
+**Share** opens the same dialog. The reviewer then opens it as a project and starts a
+[Review a PR](#reviewing-a-pr) session.
 
 When AgentK creates a datapack for a new project, it sets the datapack's description (MCP
 `datapack_update`) to `AgentK Local project "<name>" · repo <remote>`, so whoever it's shared

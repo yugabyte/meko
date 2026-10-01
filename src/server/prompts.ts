@@ -9,10 +9,13 @@ import { get, type Db } from './db.js';
  * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}; `comments` also gets {{count}} and
  * {{comments}}, `ci` gets {{sha}} and {{checks}}, and `moved` gets {{kind}}, {{stage}} and
  * {{workflow}}. `moved` goes before the new stage's prompt when the user moves a session by hand.
+ * The Review a PR prompts (`review-pr`, `review-pr-update`, `review-pr-comments`) get {{repo}} as
+ * the PR's `owner/name`, {{title}}, {{author}}, {{sha}} (the commit checked out) and {{notes}};
+ * `review-pr-update` also gets {{oldSha}} and {{count}}, and `review-pr-comments` {{count}} and {{comments}}.
  */
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments'
-  | 'moved';
+  | 'moved' | 'review-pr' | 'review-pr-update' | 'review-pr-comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   explore: `You are in an AgentK Local Exploration session.
@@ -87,6 +90,29 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 {{comments}}`,
 
   moved: `AgentK Local moved this session: it's now a {{kind}} session in the {{stage}} stage. {{workflow}}`,
+
+  'review-pr': `You're assisting the user while they review PR #{{pr}} ({{prUrl}}) by {{author}}: "{{title}}".
+The user is the reviewer. Your job is to help them, not to review the PR yourself.
+Its head ({{sha}}) is checked out here on {{branch}}; the base is {{base}}.
+{{notes}}
+Get ready, without reviewing:
+1. Read the PR description, the existing reviews and threads, and CI's state (\`gh pr view {{pr}} --repo {{repo}} --comments\`, \`gh pr checks {{pr}} --repo {{repo}}\`, \`gh api repos/{{repo}}/pulls/{{pr}}/comments --paginate\`).
+2. Look at the shape of the diff against {{base}} (\`git diff --stat {{base}}...HEAD\`) and skim enough of it to know where things are.
+
+Then show a short summary to get the user oriented, at most about 15 lines:
+- What the PR does and why, in two or three sentences (from the design, when you found one).
+- The main changes by area, largest first, with the files to start reading.
+- The review so far: who has reviewed, open threads, CI.
+- Anything the PR description or design asks reviewers to look at.
+Don't list problems, rate the code or suggest a verdict, and don't run tests or other tools beyond reading. Then stop and wait for the user to ask you something.
+
+When the user asks, help with exactly that: explain code, trace a path, check a suspicion against the code, run a test, or draft a comment in their words. Don't commit, push or post anything on GitHub unless they ask. When they ask you to post, post ONE review with their comments inline: \`gh api -X POST repos/{{repo}}/pulls/{{pr}}/reviews --input review.json\`, with "event" COMMENT, REQUEST_CHANGES or APPROVE as the user says, "commit_id" {{sha}}, and each comment's path, line and side. The verdict is always the user's.`,
+
+  'review-pr-update': `PR #{{pr}} ({{prUrl}}) moved from {{oldSha}} to {{sha}} ({{count}}); this worktree is now at {{sha}}. Without reviewing, show a short summary of what changed since {{oldSha}} (\`git log --oneline {{oldSha}}..{{sha}}\` and \`git diff --stat {{oldSha}}..{{sha}}\`; after a force-push, compare with \`git range-diff\` or the diff against {{base}}) and which review threads got replies or were resolved (\`gh api repos/{{repo}}/pulls/{{pr}}/comments --paginate\`). Then wait for the user.`,
+
+  'review-pr-comments': `The user left {{count}} on PR #{{pr}}'s diff in AgentK Local. These are their review comments. Answer any question in them, and draft the rest as review comments (path, line, and their point in clear words). Don't add comments of your own. Show the drafts, and post them as one review on the PR only when the user says so: \`gh api -X POST repos/{{repo}}/pulls/{{pr}}/reviews --input review.json\`, with "event" COMMENT, REQUEST_CHANGES or APPROVE as the user says, "commit_id" {{sha}}, and each comment's path, line and side.
+
+{{comments}}`,
 };
 
 /**
@@ -118,9 +144,25 @@ export function mekoRecallLine(name: PromptName): string {
     case 'review-people':
     case 'ci':
       return 'Before changing code, search Meko for gotchas about the code each finding (or failure) is in.';
+    case 'review-pr':
+      return 'Before the summary, search Meko for the design (design-*.md) and the decisions behind this PR. A `meko_conversation_id:` line at the end of the PR description names the author\'s session there.';
     default:
       return '';
   }
+}
+
+/**
+ * A Review a PR prompt's line on searching Meko for each of the user's questions, not only at the
+ * start; added in code like mekoRecallLine, and only when the session's project has datapacks.
+ */
+export function mekoQuestionLine(name: PromptName): string {
+  if (name !== 'review-pr' && name !== 'review-pr-comments') return '';
+  return 'For every question about why something is the way it is, what was decided or tried, or what the author meant, search Meko first (context_search on the datapacks in the system prompt: the design, decisions, gotchas and the author\'s sessions), then check it against the code. Say which parts of your answer came from Meko and which from the code, and say so when Meko had nothing.';
+}
+
+/** The system prompt's line for Review a PR sessions whose project has datapacks: the same rule, kept across /clear and resumes. */
+export function mekoQuestionSystemLine(): string {
+  return 'In this Review a PR session, search Meko before answering questions about why the code is the way it is or what was decided.';
 }
 
 /**

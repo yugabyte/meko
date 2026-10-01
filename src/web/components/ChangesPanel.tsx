@@ -313,7 +313,11 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <button
             className="btn small primary"
             disabled={sending || exited}
-            title="Send your draft comments to AgentK"
+            title={
+              session.kind === 'review-pr'
+                ? 'Send your draft comments to AgentK, which drafts them as your review comments and posts nothing until you say'
+                : 'Send your draft comments to AgentK'
+            }
             onClick={send}
           >
             {sending ? 'Sending…' : `Send ${plural(drafts, 'comment')}`}
@@ -327,13 +331,19 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <span className="mobile-only">← Back</span>
         </button>
       </div>
+      {session.kind === 'review-pr' && drafts > 0 && !queued && !note && !exited && (
+        <div className="chg-bar">AgentK drafts these as your review comments on the PR, and posts nothing until you say.</div>
+      )}
       {(note || queued > 0 || (exited && drafts > 0)) && (
         <div className="chg-bar" role="status">
           {exited && drafts > 0 && <span>Claude has exited. Resume the session to send your comments.</span>}
           {queued > 0 && (
             <span>
               {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to AgentK when it finishes its turn
-              {session.stage !== 'explore' && session.stage !== 'code' && session.stage !== 'review' ? ' in the Code or Review stage' : ''}.
+              {session.stage !== 'explore' && session.stage !== 'code' && session.stage !== 'review' && session.stage !== 'reviewing-pr'
+                ? ' in the Code or Review stage'
+                : ''}
+              .
             </span>
           )}
           {note && <span>{note}</span>}
