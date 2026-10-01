@@ -401,13 +401,14 @@ metrics:
     extraArgs: []
     # -- Sidecar resources. Set request == limit (cpu + memory) so the sidecar
     # is Guaranteed-QoS like the endpoint container; otherwise the whole pod
-    # drops to Burstable (enforced by tests/guaranteed-qos.sh).
+    # drops to Burstable (enforced by tests/guaranteed-qos.sh). At 100m the
+    # sidecar was CFS-throttled in up to 45% of its periods under the 15s scrape.
     resources:
       requests:
-        cpu: "100m"
+        cpu: "250m"
         memory: "128Mi"
       limits:
-        cpu: "100m"
+        cpu: "250m"
         memory: "128Mi"
     # -- In-place resize policy for the sidecar, mirroring the endpoint
     # container's so a pod-wide resize never trips over it (QoS is pod-level).
