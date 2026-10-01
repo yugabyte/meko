@@ -37,6 +37,45 @@ export function lastSessionClosed(prev: LiveCount, next: LiveCount): boolean {
   return !!next.projectId && prev.projectId === next.projectId && prev.live > 0 && next.live === 0;
 }
 
+const LAST_OPEN_KEY = 'ak-last-session';
+
+/** The session last open in each project in this browser, by project id. */
+function readLastOpen(): Record<string, string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(LAST_OPEN_KEY) ?? '{}');
+    return v && typeof v === 'object' ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function lastOpenSession(projectId: string): string | undefined {
+  return readLastOpen()[projectId];
+}
+
+/** Remembers the session open in a project, so switching back to the project reopens it. */
+export function rememberOpenSession(projectId: string, sessionId: string) {
+  const all = readLastOpen();
+  if (all[projectId] === sessionId) return;
+  all[projectId] = sessionId;
+  try {
+    localStorage.setItem(LAST_OPEN_KEY, JSON.stringify(all));
+  } catch {
+    /* storage blocked: the project opens its most recently active session instead */
+  }
+}
+
+/**
+ * The session to open when switching to a project: the one last open there while it's still
+ * open, else the one with the most recent activity.
+ */
+export function sessionToOpen(live: Session[], lastOpenId: string | undefined): Session | undefined {
+  return (
+    live.find((s) => s.id === lastOpenId) ??
+    [...live].sort((a, b) => (b.lastEventAt ?? b.createdAt) - (a.lastEventAt ?? a.createdAt))[0]
+  );
+}
+
 export function aggregateStatus(p: ProjectWithSessions): SessionStatus {
   let best: SessionStatus = 'idle';
   for (const s of liveSessions(p)) if (URGENCY[s.status] > URGENCY[best]) best = s.status;
