@@ -32,6 +32,11 @@ const UNDERLINE_TAB_TRIGGER_CLASS =
   "gap-2 rounded-none border-b-2 border-transparent px-3 py-2 " +
   "data-[state=active]:border-emerald-400 data-[state=active]:bg-transparent " +
   "data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:ring-0";
+import {
+  deepLinkTabFingerprint,
+  deepLinkWantsPromotedMemories,
+  type DeepLinkSignals,
+} from "./knowledgeSummaryTab";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { CollectiveMemoryPanel } from "@/features/datapacks/components/collective-memory/CollectiveMemoryPanel";
 import { KnowledgeSummaryHeader } from "@/features/datapacks/components/knowledge-documents/KnowledgeSummaryHeader";
@@ -184,18 +189,28 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
       ? "promoted-memories"
       : "files";
   const [activeTab, setActiveTab] = useState(initialTab);
-  // Re-apply when the deep-link changes while the page is already mounted.
+  // Re-apply the deep-link to Promoted memories ONCE per unique signal.
+  // Fingerprint the three inputs and only switch when it changes — a
+  // user's own tab click doesn't touch any of them, so clicking Files
+  // after arriving on ?tab=promoted-memories sticks (MEKO-737). The
+  // sibling effect below that strips promotedMemoryId / flashFiles /
+  // highlightDocId also changes the fingerprint and re-runs this, but
+  // the decision is idempotent. See knowledgeSummaryTab.test.ts for
+  // the full matrix of covered transitions.
+  const lastAppliedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
-    const nextTab =
-      state?.tab === "promoted-memories" ||
-      searchParams.get("tab") === "promoted-memories" ||
-      promotedMemoryId
-        ? "promoted-memories"
-        : "files";
-    if (nextTab !== activeTab) {
-      setActiveTab(nextTab);
+    const signals: DeepLinkSignals = {
+      stateTab: state?.tab,
+      queryTab: searchParams.get("tab"),
+      promotedMemoryId,
+    };
+    const fingerprint = deepLinkTabFingerprint(signals);
+    if (fingerprint === lastAppliedDeepLinkRef.current) return;
+    lastAppliedDeepLinkRef.current = fingerprint;
+    if (deepLinkWantsPromotedMemories(signals)) {
+      setActiveTab("promoted-memories");
     }
-  }, [state?.tab, searchParams, promotedMemoryId, activeTab]);
+  }, [state?.tab, searchParams, promotedMemoryId]);
 
   // Strip the flash-once params from the URL right after capturing them
   // above -- `replace: true` so this doesn't add a history entry, and so

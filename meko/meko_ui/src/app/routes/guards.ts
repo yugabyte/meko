@@ -3,6 +3,10 @@ import { safeReturnTo } from "@/features/auth/returnTo";
 
 type GuardInput = {
   location: string;
+  /** Current search string (including leading "?"). Used to carry a
+   *  deep-link's pathname+search into the return_to= query when the
+   *  guard sends an unauthenticated user to sign-in. */
+  search?: string;
   authLoading: boolean;
   authenticated: boolean;
   hasCompletedOnboarding: boolean;
@@ -59,7 +63,15 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   }
 
   if (!authenticated && onProtectedRoute) {
-    return ROUTES.login;
+    // Carry the deep-link into /signin directly (NOT /login — that route
+    // is a <Navigate> which drops the query). SignInPage reads
+    // ?return_to= via safeReturnTo. Mirrors the branch in App.tsx; both
+    // navigations race because the guard's effect and the parent's
+    // <Navigate> both fire on this state — whichever lands last, the
+    // query is preserved either way.
+    const returnTo = `${location}${input.search ?? ""}`;
+    const qs = new URLSearchParams({ return_to: returnTo }).toString();
+    return `${ROUTES.signin}?${qs}`;
   }
 
   return null;

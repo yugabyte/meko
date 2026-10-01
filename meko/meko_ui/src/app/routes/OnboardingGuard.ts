@@ -23,6 +23,7 @@ export function useOnboardingGuard({
     const returnTo = new URLSearchParams(search).get("return_to");
     const redirect = resolveGuardRedirect({
       location,
+      search,
       authLoading,
       authenticated,
       hasCompletedOnboarding,

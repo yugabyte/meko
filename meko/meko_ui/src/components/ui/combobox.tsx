@@ -66,8 +66,15 @@ export function Combobox({
             <CommandGroup>
               {options.map((o) => (
                 <CommandItem
+                  // cmdk keys items by the string passed as `value`, so
+                  // two options with the same label would collapse into
+                  // one row (keyboard arrows can't move past the first,
+                  // Enter always selects the first). Use the stable
+                  // option.value as the cmdk key and keep the label as
+                  // a search `keyword` so type-to-filter still matches.
                   key={o.value}
-                  value={o.label}
+                  value={o.value}
+                  keywords={[o.label]}
                   onSelect={() => {
                     onChange(o.value);
                     setOpen(false);

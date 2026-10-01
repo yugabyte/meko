@@ -79,6 +79,15 @@ export function datapackDetailUrlOpenConnect(datapackId: string): string {
   return `${datapackDetailPath(datapackId)}?${q.toString()}`;
 }
 
+/** WorkbenchLM URL pre-selecting a datapack. WorkbenchLMPage reads
+ *  DATAPACK_ID_QUERY_PARAM on mount and skips the hybrid-storage
+ *  fallback when present, so the deep-link always wins. */
+export function workbenchLmUrlForDatapack(datapackId: string): string {
+  const q = new URLSearchParams();
+  q.set(DATAPACK_ID_QUERY_PARAM, datapackId);
+  return `${ROUTES.workbenchLm}?${q.toString()}`;
+}
+
 /**
  * Query param + values used when the conversation viewer is reached via a
  * deep-link from another summary page. The viewer reads this to render an

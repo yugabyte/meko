@@ -43,6 +43,7 @@ import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { resetTelemetry, trackEvent } from "@/lib/telemetry/rudderstack";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
+import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
 import { isByocEnabled } from "@/lib/byoc";
@@ -88,6 +89,11 @@ export default function Sidebar() {
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
   const showBillingNav = useBillingNavFlag();
+  // Observe nav: hidden by default (MEKO-737 — most users don't need it);
+  // latch on with ?observe=true. The /observe-hub route itself still
+  // mounts, so a direct URL navigation keeps working for internal review
+  // without needing the flag.
+  const showObserveNav = useFeatureFlag("observeNav");
   // BYOC data plane: the customer runs this in their own account, so Feedback
   // goes through their support contract rather than an in-app form.
   //
@@ -557,95 +563,101 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Observe */}
+        {/* Observe — hidden by default (featureFlags.observeNav). */}
+        {showObserveNav && (
+          <NavLink
+            to={ROUTES.observeHub}
+            onClick={expandSidebar}
+            className={cn(
+              "flex items-center rounded-md text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              location.pathname === ROUTES.observeHub ||
+                location.pathname.startsWith(`${ROUTES.observeHub}/`)
+                ? "bg-foreground/10 text-foreground"
+                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            )}
+            title={isCollapsed ? "Observe" : undefined}
+          >
+            <Activity className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">Observe</span>}
+          </NavLink>
+        )}
+
+      </div>
+
+      {/* Account-scoped nav — Settings / Usage / Billing. Lives OUTSIDE the
+          flex-1 scrollable region above so it stays visible even when a
+          long Datapacks list wants more height than the viewport can
+          give it (MEKO-737: users with many datapacks lost access to
+          Settings — and their API keys with it — because the account
+          group scrolled below the fold). Pinned alongside the Docs /
+          Feedback / Sign out block below. */}
+      <div
+        className={cn(
+          "px-3 pt-2 border-t border-border/40 flex flex-col gap-0.5",
+          isCollapsed ? "items-center" : "",
+        )}
+      >
+        {/* Usage — live consumed-vs-cap tracker, promoted out of Settings
+            so quota visibility is one click away. Sits above Settings. */}
         <NavLink
-          to={ROUTES.observeHub}
+          to={ROUTES.usage}
           onClick={expandSidebar}
           className={cn(
             "flex items-center rounded-md text-sm font-medium transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-            location.pathname === ROUTES.observeHub ||
-              location.pathname.startsWith(`${ROUTES.observeHub}/`)
+            location.pathname === ROUTES.usage ||
+              location.pathname.startsWith(`${ROUTES.usage}/`)
               ? "bg-foreground/10 text-foreground"
               : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
           )}
-          title={isCollapsed ? "Observe" : undefined}
+          title={isCollapsed ? "Usage" : undefined}
         >
-          <Activity className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Observe</span>}
+          <Gauge className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Usage</span>}
         </NavLink>
 
-        {/* Account-scoped nav — Settings & Billing live here (previously
-            Settings was in the top header). Grouped below the workspace
-            items with a thin spacer so they read as "your account" rather
-            than "the workspace". */}
-        <div
+        <NavLink
+          to={ROUTES.settings}
+          onClick={expandSidebar}
           className={cn(
-            "mt-2 pt-2 border-t border-border/40 flex flex-col gap-0.5",
-            isCollapsed ? "items-center" : "",
+            "flex items-center rounded-md text-sm font-medium transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+            location.pathname === ROUTES.settings ||
+              location.pathname.startsWith(`${ROUTES.settings}/`)
+              ? "bg-foreground/10 text-foreground"
+              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
           )}
+          title={isCollapsed ? "Settings" : undefined}
         >
-          {/* Usage — live consumed-vs-cap tracker, promoted out of Settings
-              so quota visibility is one click away. Sits above Settings. */}
+          <SettingsIcon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Settings</span>}
+        </NavLink>
+
+        {/* Plans & billing — pre-GA, gated behind ?showPaymentOptions=true
+            query-param unlock. Hidden by default; visible once the
+            flag has been latched in localStorage. The route itself
+            still mounts so direct URL navigation works for testers. */}
+        {showBillingNav ? (
           <NavLink
-            to={ROUTES.usage}
+            to={ROUTES.billing}
             onClick={expandSidebar}
             className={cn(
               "flex items-center rounded-md text-sm font-medium transition-colors",
               isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.usage ||
-                location.pathname.startsWith(`${ROUTES.usage}/`)
+              location.pathname === ROUTES.billing ||
+                location.pathname.startsWith(`${ROUTES.billing}/`)
                 ? "bg-foreground/10 text-foreground"
                 : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
             )}
-            title={isCollapsed ? "Usage" : undefined}
+            title={isCollapsed ? "Plans & billing" : undefined}
           >
-            <Gauge className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Usage</span>}
-          </NavLink>
-
-          <NavLink
-            to={ROUTES.settings}
-            onClick={expandSidebar}
-            className={cn(
-              "flex items-center rounded-md text-sm font-medium transition-colors",
-              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.settings ||
-                location.pathname.startsWith(`${ROUTES.settings}/`)
-                ? "bg-foreground/10 text-foreground"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            <CreditCard className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && (
+              <span className="animate-in fade-in truncate">Plans &amp; billing</span>
             )}
-            title={isCollapsed ? "Settings" : undefined}
-          >
-            <SettingsIcon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Settings</span>}
           </NavLink>
-
-          {/* Plans & billing — pre-GA, gated behind ?showPaymentOptions=true
-              query-param unlock. Hidden by default; visible once the
-              flag has been latched in localStorage. The route itself
-              still mounts so direct URL navigation works for testers. */}
-          {showBillingNav ? (
-            <NavLink
-              to={ROUTES.billing}
-              onClick={expandSidebar}
-              className={cn(
-                "flex items-center rounded-md text-sm font-medium transition-colors",
-                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-                location.pathname === ROUTES.billing ||
-                  location.pathname.startsWith(`${ROUTES.billing}/`)
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              )}
-              title={isCollapsed ? "Plans & billing" : undefined}
-            >
-              <CreditCard className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-              {!isCollapsed && (
-                <span className="animate-in fade-in truncate">Plans &amp; billing</span>
-              )}
-            </NavLink>
-          ) : null}
-        </div>
+        ) : null}
       </div>
 
       <div className="p-3 flex flex-col gap-1">

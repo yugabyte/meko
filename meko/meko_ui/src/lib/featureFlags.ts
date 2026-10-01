@@ -24,6 +24,16 @@ export const FEATURE_FLAGS = {
     storageKey: "meko:show_collections",
     queryParam: "collections",
   },
+  /**
+   * Observe nav entry (the Activity-icon link under the Datapacks list). Hidden by
+   * default — most users should not see it yet. Visit `?observe=true` to latch it on,
+   * `?observe=false` to clear. The `/observe-hub` route itself still mounts so a
+   * direct URL navigation keeps working for internal review.
+   */
+  observeNav: {
+    storageKey: "meko:show_observe_nav",
+    queryParam: "observe",
+  },
 } as const;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

@@ -161,7 +161,25 @@ function AppRouter() {
 
   if (!authenticated) {
     if (isProtectedRoute(location.pathname)) {
-      return <Navigate to={ROUTES.login} replace />;
+      // Preserve the deep-link so sign-in can hop back to it. We navigate
+      // straight to /signin, NOT /login, because /login is itself a
+      // <Navigate to={/signin}> in PublicRoutes which drops the query
+      // string. SignInPage reads `?return_to=` via safeReturnTo (which
+      // blocks open-redirect payloads). OIDC/Cognito redirects round-trip
+      // their own `state`, not our query — a sessionStorage stash in
+      // useAuthBootstrap is the follow-up for that path.
+      //
+      // The sibling useOnboardingGuard above also redirects on this
+      // state; it reads `?return_to=` the same way and routes to
+      // /signin directly (see resolveGuardRedirect), so whichever
+      // navigation runs second doesn't drop the query.
+      const returnTo = `${location.pathname}${location.search}`;
+      return (
+        <Navigate
+          to={`${ROUTES.signin}?return_to=${encodeURIComponent(returnTo)}`}
+          replace
+        />
+      );
     }
     return <PublicRoutes />;
   }

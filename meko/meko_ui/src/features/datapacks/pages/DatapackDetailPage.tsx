@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Settings, Share2, Trash2, Upload } from "lucide-react";
+import { Pencil, PlayCircle, Settings, Share2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -28,8 +28,10 @@ import {
   datapackLearningsPath,
   datapackMemorySummaryPath,
   datapackSharePath,
+  workbenchLmUrlForDatapack,
 } from "@/app/routes/paths";
 import {
+  isDatapackGrantEligibleForWorkbenchLM,
   isDatapackGrantEligibleToAddKnowledgeBase,
   isDatapackGrantEligibleToDelete,
   isDatapackGrantEligibleToEdit,
@@ -385,6 +387,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const isDefaultDatapack = displayDatapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
   const showDatapackActionsDropdown =
+    isDatapackGrantEligibleForWorkbenchLM({ grant: datapackGrant }) ||
     isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) ||
     isDatapackGrantEligibleToEdit({ grant: datapackGrant }) ||
     isDatapackGrantEligibleToDelete({ grant: datapackGrant });
@@ -496,6 +499,19 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[14rem] bg-card border-border text-foreground">
+                    {/* Open in WorkbenchLM: first item (what you most want
+                        to DO with the datapack), gated on the same grant
+                        check WorkbenchLM itself uses so viewers never see
+                        a link that lands them on an unusable page. */}
+                    {isDatapackGrantEligibleForWorkbenchLM({ grant: datapackGrant }) && (
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer focus:bg-muted/20"
+                        onSelect={() => navigate(workbenchLmUrlForDatapack(routeDatapackId))}
+                      >
+                        <PlayCircle className="h-4 w-4 shrink-0" aria-hidden />
+                        Open WorkbenchLM
+                      </DropdownMenuItem>
+                    )}
                     {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
                       // Free-tier KB-storage cap: disable the item when the
                       // user has hit the byte limit. We can't render a
