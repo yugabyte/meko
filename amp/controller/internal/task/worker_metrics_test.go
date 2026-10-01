@@ -1,19 +1,23 @@
 package task
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // fakeRecorder captures the task-lifecycle events the worker emits, so a test
 // can assert instrumentation without pulling in the metrics package.
 type fakeRecorder struct {
-	mu       sync.Mutex
-	started  int
-	finished []finishedEvent
-	retried  []string
+	mu        sync.Mutex
+	started   int
+	finished  []finishedEvent
+	retried   []string
+	reclaimed int
 }
 
 type finishedEvent struct {
@@ -25,6 +29,19 @@ func (r *fakeRecorder) TaskStarted() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.started++
+}
+
+func (r *fakeRecorder) TaskReclaimed() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reclaimed++
+}
+
+// reclaims reads the count under the lock, for a worker running on another goroutine.
+func (r *fakeRecorder) reclaims() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reclaimed
 }
 
 func (r *fakeRecorder) StepRetried(kind string) {
@@ -84,6 +101,70 @@ func TestWorkerRecordsFailedTaskMetrics(t *testing.T) {
 
 	if len(rec.finished) != 1 || rec.finished[0].status != "failed" {
 		t.Fatalf("finished events = %+v, want one with status failed", rec.finished)
+	}
+}
+
+// Only work another process left running is a reclaim. The MemStore models no
+// difference between a lease that lapsed and one released by a graceful stop, and
+// neither does the worker: both are a takeover and both count.
+func TestWorkerCountsATakeoverAsAReclaim(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status Status
+		owner  func(w *Worker) *string
+		want   int
+	}{
+		{"pending", StatusPending, func(*Worker) *string { return nil }, 0},
+		{"left running by another process", StatusRunning, func(*Worker) *string { o := "dead-owner"; return &o }, 1},
+		{"left running by this process", StatusRunning, func(w *Worker) *string { return &w.owner }, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemStore()
+			w := testWorker(store, regWith(&fakeStep{kind: "k0"}))
+			w.metrics = &fakeRecorder{}
+
+			id, s0 := uuid.New(), uuid.New()
+			store.Seed(
+				&Task{ID: id, Kind: "test", Status: tc.status, Owner: tc.owner(w), CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0}},
+				[]*StepRecord{{ID: s0, TaskID: id, Kind: "k0", Status: StatusPending}},
+			)
+
+			if rec := runViaRecorder(t, w); rec.reclaimed != tc.want {
+				t.Errorf("TaskReclaimed calls = %d, want %d", rec.reclaimed, tc.want)
+			}
+		})
+	}
+}
+
+// staleCandidates reports every candidate as still pending and unowned, the view
+// a worker gets when another process claimed and released the task between its
+// candidate read and its acquire.
+type staleCandidates struct{ *MemStore }
+
+func (s staleCandidates) Candidates(ctx context.Context, limit int) ([]*Task, error) {
+	cands, err := s.MemStore.Candidates(ctx, limit)
+	for _, c := range cands {
+		c.Status, c.Owner = StatusPending, nil
+	}
+	return cands, err
+}
+
+// A lease given back on SIGTERM frees the task at once, so the candidate can be
+// out of date without any lease lapsing. The takeover still counts.
+func TestWorkerCountsATakeoverTheCandidateReadMissed(t *testing.T) {
+	mem := NewMemStore()
+	w := testWorkerMax(staleCandidates{mem}, mem.Locks(ownerID()), regWith(&fakeStep{kind: "k0"}), 8)
+	w.metrics = &fakeRecorder{}
+
+	id, s0 := uuid.New(), uuid.New()
+	owner := "released-owner"
+	mem.Seed(
+		&Task{ID: id, Kind: "test", Status: StatusRunning, Owner: &owner, CreatedAt: time.Now(), StepIDs: []uuid.UUID{s0}},
+		[]*StepRecord{{ID: s0, TaskID: id, Kind: "k0", Status: StatusPending}},
+	)
+
+	if rec := runViaRecorder(t, w); rec.reclaimed != 1 {
+		t.Errorf("TaskReclaimed calls = %d, want 1", rec.reclaimed)
 	}
 }
 

@@ -298,7 +298,7 @@ func TestServiceUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
 		t.Fatalf("a second roll against a PENDING one failed with %v, want ErrFleetRollInProgress", err)
 	}
 
-	if _, err := store.Claim(t.Context(), first.ID, "owner-1"); err != nil {
+	if _, _, err := store.Claim(t.Context(), first.ID, "owner-1"); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	if _, err := roll("v3"); !errors.Is(err, ErrFleetRollInProgress) {

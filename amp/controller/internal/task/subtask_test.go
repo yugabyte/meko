@@ -19,7 +19,7 @@ func claimedParent(t *testing.T, store *MemStore, owner string) *Task {
 	t.Helper()
 	parent, _ := pendingTask()
 	store.Seed(parent, nil)
-	claimed, err := store.Claim(t.Context(), parent.ID, owner)
+	claimed, _, err := store.Claim(t.Context(), parent.ID, owner)
 	if err != nil || claimed == nil {
 		t.Fatalf("claim parent: task=%v err=%v", claimed, err)
 	}
@@ -157,7 +157,7 @@ func TestSubtaskTransitionsAreOwnerFenced(t *testing.T) {
 	}
 
 	// The parent is reclaimed; owner-a's writes are now stale.
-	if claimed, err := store.Claim(t.Context(), parent.ID, "owner-b"); err != nil || claimed == nil {
+	if claimed, _, err := store.Claim(t.Context(), parent.ID, "owner-b"); err != nil || claimed == nil {
 		t.Fatalf("reclaim: task=%v err=%v", claimed, err)
 	}
 	for _, tc := range []struct {

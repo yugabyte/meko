@@ -90,6 +90,9 @@ type MetricsRecorder interface {
 	// status is one of "succeeded", "failed", or "interrupted"; dur is the
 	// execution wall-clock time.
 	TaskFinished(kind, status string, dur time.Duration)
+	// TaskReclaimed counts one task claimed from another process that left it
+	// running — crashed, lost its lease, or shut down with it in flight.
+	TaskReclaimed()
 	// StepRetried counts one re-run of a step after it lost a write interlock.
 	// stepKind is the task_step.kind (e.g. record_branch_recipe), NOT the task
 	// kind — they are different name spaces.
@@ -246,7 +249,7 @@ func (w *Worker) claim(ctx context.Context) (*Task, Lease, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("acquire task lease: %w", err)
 		}
-		t, err := w.store.Claim(ctx, c.ID, w.owner)
+		t, prior, err := w.store.Claim(ctx, c.ID, w.owner)
 		if err != nil || t == nil {
 			// Either the write failed or the task moved on between the candidate read
 			// and now. Give the lease back so the key is free immediately rather than
@@ -257,9 +260,29 @@ func (w *Worker) claim(ctx context.Context) (*Task, Lease, error) {
 			}
 			continue
 		}
+		w.noteReclaim(t, prior)
 		return t, lease, nil
 	}
 	return nil, nil, nil
+}
+
+// noteReclaim logs and counts a claim that took over another process's work. It
+// goes by what Claim overwrote, not by the candidate, which can be stale: a lease
+// given back on SIGTERM or after a failed step write frees the task at once, so
+// another process can claim and release it between the candidate read and the
+// acquire.
+//
+// A running task this process owns is not a takeover: a failed step write leaves
+// the task running with its lease released, and the next poll picks it back up.
+func (w *Worker) noteReclaim(t *Task, prior Prior) {
+	if prior.Status != StatusRunning || prior.Owner == w.owner {
+		return
+	}
+	w.logger.Info("reclaimed a task another process left running",
+		applog.KeyTaskID, t.ID.String(), "kind", t.Kind, "previous_owner", prior.Owner)
+	if w.metrics != nil {
+		w.metrics.TaskReclaimed()
+	}
 }
 
 // drainInFlight waits for in-flight task goroutines to finish, up to the

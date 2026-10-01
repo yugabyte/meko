@@ -407,14 +407,14 @@ func (s *Sampler) WithLogf(f func(string, ...any)) *Sampler {
 // sampling goroutine is rooted in context.Background(), not ctx: it must outlive
 // the call that started it and is released solely by Stop (AGENTS.md §5).
 func (s *Sampler) Start(ctx context.Context) error {
-	targets := s.discover(ctx)
+	targets, listedAt := s.discover(ctx)
 	if len(targets) == 0 {
 		return fmt.Errorf("no pods matched %s in namespace %q", s.selectors(), s.kube.Namespace())
 	}
 	bg, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.done = make(chan struct{})
-	go s.loop(bg, targets)
+	go s.loop(bg, targets, listedAt)
 	return nil
 }
 
@@ -445,25 +445,29 @@ func (s *Sampler) Stop() []Series {
 }
 
 // discover lists the pods behind each role's label selector. A role whose
-// selector errors or matches nothing contributes nothing.
-func (s *Sampler) discover(ctx context.Context) []target {
-	var out []target
+// selector errors or matches nothing contributes nothing. listedAt holds, per
+// role tag, when a listing that succeeded was started; a failed one is absent,
+// since it says nothing about which pods existed.
+func (s *Sampler) discover(ctx context.Context) (out []target, listedAt map[string]time.Time) {
+	listedAt = map[string]time.Time{}
 	for _, r := range s.roles {
+		at := time.Now()
 		names, err := s.kube.GetSelector(ctx, "pod", r.selector, "{.items[*].metadata.name}")
 		if err != nil {
 			s.logf("metrics: list pods %s: %v", r.selector, err)
 			continue
 		}
+		listedAt[r.tag] = at
 		for _, name := range strings.Fields(names) {
 			out = append(out, target{pod: name, role: r})
 		}
 	}
-	return out
+	return out, listedAt
 }
 
 // loop samples immediately (establishing the counter baselines) then every
 // interval until ctx is cancelled.
-func (s *Sampler) loop(ctx context.Context, targets []target) {
+func (s *Sampler) loop(ctx context.Context, targets []target, listedAt map[string]time.Time) {
 	defer close(s.done)
 	states := make(map[string]*podState, len(targets))
 	for _, tg := range targets {
@@ -472,38 +476,51 @@ func (s *Sampler) loop(ctx context.Context, targets []target) {
 	tick := time.NewTicker(s.cfg.SampleInterval)
 	defer tick.Stop()
 	s.sampleAll(ctx, targets, states)
-	for n := 1; ; n++ {
+	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			if n%rediscoverEvery == 0 {
-				targets = s.rediscover(ctx, targets, states)
-			}
+			targets = s.rediscover(ctx, targets, states, listedAt)
 			s.sampleAll(ctx, targets, states)
 		}
 	}
 }
 
-// A fault that deletes a pod gives its replacement a name Start never saw.
-const rediscoverEvery = 12
-
+// rediscover picks up pods that appeared since the last listing: a fault that
+// deletes a pod gives its replacement a name Start never saw. Every tick, because
+// a replacement found late may already have done the work the fault is judged on
+// — a replacement controller reclaims its predecessor's tasks as soon as their
+// leases lapse, within one lease TTL of the kill.
+//
 // Departed pods stay: dropping one discards the lines it already contributed.
-func (s *Sampler) rediscover(ctx context.Context, have []target, states map[string]*podState) []target {
+func (s *Sampler) rediscover(ctx context.Context, have []target, states map[string]*podState, listedAt map[string]time.Time) []target {
 	seen := make(map[string]bool, len(have))
 	for _, tg := range have {
 		seen[tg.role.tag+"/"+tg.pod] = true
 	}
-	for _, tg := range s.discover(ctx) {
+	// Bounded like a tick's probes (sampleAll): the listing runs in front of them
+	// every tick, and a kubectl get against an apiserver the fault is degrading
+	// would otherwise stall sampling for the window being judged. A listing cut
+	// short counts as failed, so it leaves listedAt alone.
+	lctx, cancel := context.WithTimeout(ctx, s.cfg.SampleInterval)
+	defer cancel()
+	found, listed := s.discover(lctx)
+	for _, tg := range found {
 		key := tg.role.tag + "/" + tg.pod
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
 		if states[tg.pod] == nil {
-			states[tg.pod] = newPodState()
+			st := newPodState()
+			st.newSince = listedAt[tg.role.tag]
+			states[tg.pod] = st
 		}
 		have = append(have, tg)
+	}
+	for tag, at := range listed {
+		listedAt[tag] = at
 	}
 	return have
 }
@@ -680,6 +697,11 @@ type podState struct {
 	cgroup layout
 	cpu    cpuSample
 	prom   map[string]promSample
+
+	// newSince is when the last listing that did NOT include this pod started, so
+	// its process began after it and every counter on it counted up from zero.
+	// Zero for a pod that was already running when sampling began.
+	newSince time.Time
 }
 
 func newPodState() *podState { return &podState{prom: map[string]promSample{}} }

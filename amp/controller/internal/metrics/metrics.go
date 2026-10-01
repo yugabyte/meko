@@ -35,15 +35,16 @@ const statusInterrupted = "interrupted"
 type Metrics struct {
 	reg *prometheus.Registry
 
-	httpRequests  *prometheus.CounterVec
-	httpDuration  *prometheus.HistogramVec
-	tasksTotal    *prometheus.CounterVec
-	taskDuration  *prometheus.HistogramVec
-	tasksInflight prometheus.Gauge
-	stepRetries   *prometheus.CounterVec
-	gcOrphans     *prometheus.CounterVec
-	gcSweeps      prometheus.Counter
-	gcSweepDur    prometheus.Histogram
+	httpRequests   *prometheus.CounterVec
+	httpDuration   *prometheus.HistogramVec
+	tasksTotal     *prometheus.CounterVec
+	taskDuration   *prometheus.HistogramVec
+	tasksInflight  prometheus.Gauge
+	tasksReclaimed prometheus.Counter
+	stepRetries    *prometheus.CounterVec
+	gcOrphans      *prometheus.CounterVec
+	gcSweeps       prometheus.Counter
+	gcSweepDur     prometheus.Histogram
 }
 
 // New builds the registry, registers the Go runtime and process collectors and
@@ -78,6 +79,13 @@ func New() *Metrics {
 			Namespace: namespace, Subsystem: "tasks", Name: "inflight",
 			Help: "Tasks the worker is currently executing.",
 		}),
+		// Unlabelled so the series exists at 0 from startup: a vec has none until
+		// its first increment, and a series that appears only once something has
+		// gone wrong cannot be alerted on.
+		tasksReclaimed: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Subsystem: "tasks", Name: "reclaimed_total",
+			Help: "Tasks taken over from another controller process that left them running: it died holding their leases, or shut down with them in flight.",
+		}),
 		stepRetries: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace, Subsystem: "tasks", Name: "step_retries_total",
 			Help: "Step re-runs after losing a write interlock (SQLSTATE 40001). Labelled by task_step.kind, deliberately NOT `kind` like tasks_total — a step kind and a task kind are different name spaces and joining them yields nonsense. Contention, not breakage.",
@@ -106,6 +114,7 @@ func New() *Metrics {
 		m.tasksTotal,
 		m.taskDuration,
 		m.tasksInflight,
+		m.tasksReclaimed,
 		m.stepRetries,
 		m.gcOrphans,
 		m.gcSweeps,
@@ -147,6 +156,15 @@ func (m *Metrics) TaskStarted() {
 		return
 	}
 	m.tasksInflight.Inc()
+}
+
+// TaskReclaimed counts one task taken over from another process that left it
+// running.
+func (m *Metrics) TaskReclaimed() {
+	if m == nil {
+		return
+	}
+	m.tasksReclaimed.Inc()
 }
 
 // StepRetried counts one re-run of a step after it lost a write interlock.

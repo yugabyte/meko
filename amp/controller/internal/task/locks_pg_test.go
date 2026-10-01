@@ -68,13 +68,13 @@ type controller struct {
 
 // startController runs a worker against the shared store, as a separate instance
 // would. Nothing here is shared with another controller except the database.
-func startController(t *testing.T, pool *db.Pool, reg *Registry) *controller {
+func startController(t *testing.T, pool *db.Pool, reg *Registry, opts ...Option) *controller {
 	t.Helper()
 	locks, err := NewPgLocks(pool, testLeaseLogger(), pgTestTTL, pgTestRenewEvery, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewPgLocks: %v", err)
 	}
-	w := NewWorker(NewPgStore(pool), NewPgSubtasks(pool), reg, locks, pgTestConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	w := NewWorker(NewPgStore(pool), NewPgSubtasks(pool), reg, locks, pgTestConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	c := &controller{locks: locks, w: w, stop: cancel, done: make(chan struct{})}
 	go func() { w.Run(ctx); close(c.done) }()
@@ -344,7 +344,7 @@ func TestPgCrashedControllerHoldsItsTaskUntilTheLeaseLapses(t *testing.T) {
 	// the lease and nothing renews it.
 	died := time.Now()
 	killController(t, pool, "dead-controller-a", taskLockKey(task.ID))
-	if _, err := store.Claim(context.WithoutCancel(t.Context()), task.ID, "dead-controller-a"); err != nil {
+	if _, _, err := store.Claim(context.WithoutCancel(t.Context()), task.ID, "dead-controller-a"); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
@@ -365,7 +365,8 @@ func TestPgCrashedControllerHoldsItsTaskUntilTheLeaseLapses(t *testing.T) {
 	// Measured from killController, not from here: the dead controller's lease clock
 	// started there, and the Claim, Candidates and NewPgLocks calls in between would
 	// otherwise be charged against the margin (the skew grace is only 500ms).
-	startController(t, pool, pgReg(step))
+	rec := &fakeRecorder{}
+	startController(t, pool, pgReg(step), WithMetrics(rec))
 	waitForStatus(t, store, task.ID, StatusSucceeded, pgTestTTL+pgReclaimSlack)
 	took := time.Since(died)
 
@@ -374,6 +375,9 @@ func TestPgCrashedControllerHoldsItsTaskUntilTheLeaseLapses(t *testing.T) {
 	}
 	if got := step.runCount(); got != 1 {
 		t.Errorf("the step ran %d time(s) across the restart, want 1", got)
+	}
+	if got := rec.reclaims(); got != 1 {
+		t.Errorf("the successor counted %d reclaim(s), want 1", got)
 	}
 }
 
@@ -408,9 +412,14 @@ func TestPgGracefulRestartHandsTheTaskOverAtOnce(t *testing.T) {
 		t.Errorf("after a graceful stop the task lease is still held by %q, want released", holder)
 	}
 
-	startController(t, pool, pgReg(step))
+	rec := &fakeRecorder{}
+	startController(t, pool, pgReg(step), WithMetrics(rec))
 	// Well inside one lease: the successor did not have to wait for anything.
 	waitForStatus(t, store, task.ID, StatusSucceeded, pgTestTTL)
+	// A handover is still a takeover, and is counted as one.
+	if got := rec.reclaims(); got != 1 {
+		t.Errorf("the successor counted %d reclaim(s), want 1", got)
+	}
 }
 
 // TestPgEndpointLockSurvivesAControllerRestart is the scenario end to end:
@@ -438,7 +447,7 @@ func TestPgEndpointLockSurvivesAControllerRestart(t *testing.T) {
 	// resize proceeding against an endpoint whose create never finished.
 	killController(t, pool, "dead-controller-a",
 		taskLockKey(create.ID), EndpointLock(endpoint).Key())
-	if _, err := store.Claim(context.WithoutCancel(t.Context()), create.ID, "dead-controller-a"); err != nil {
+	if _, _, err := store.Claim(context.WithoutCancel(t.Context()), create.ID, "dead-controller-a"); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 

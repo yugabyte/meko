@@ -77,7 +77,7 @@ func TestClaimRefusesATerminalTask(t *testing.T) {
 			task.Status = status
 			store.Seed(task, steps)
 
-			got, err := store.Claim(t.Context(), task.ID, "me")
+			got, _, err := store.Claim(t.Context(), task.ID, "me")
 			if err != nil {
 				t.Fatalf("Claim: %v", err)
 			}
@@ -96,8 +96,40 @@ func TestClaimRefusesATerminalTask(t *testing.T) {
 // claim costs one skipped candidate rather than a claim-loop backoff.
 func TestClaimOnAMissingTaskIsNotAnError(t *testing.T) {
 	store := NewMemStore()
-	got, err := store.Claim(t.Context(), uuid.New(), "me")
+	got, _, err := store.Claim(t.Context(), uuid.New(), "me")
 	if err != nil || got != nil {
 		t.Errorf("Claim on a missing task = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+// What Claim overwrote is how the worker tells a takeover from a fresh claim, so
+// it must be the row as it stood before the claim, not the one it writes.
+// TestPgClaimReportsWhatItOverwrote runs the same against PgStore.
+func TestClaimReportsWhatItOverwrote(t *testing.T) {
+	store := NewMemStore()
+	task, steps := pendingTask("k0")
+	store.Seed(task, steps)
+	assertClaimReportsWhatItOverwrote(t, store, task.ID)
+}
+
+func assertClaimReportsWhatItOverwrote(t *testing.T, store Store, id uuid.UUID) {
+	t.Helper()
+	for _, tc := range []struct {
+		owner string
+		want  Prior
+	}{
+		{"owner-a", Prior{Status: StatusPending}},
+		{"owner-b", Prior{Status: StatusRunning, Owner: "owner-a"}},
+	} {
+		claimed, prior, err := store.Claim(t.Context(), id, tc.owner)
+		if err != nil || claimed == nil {
+			t.Fatalf("Claim as %s: task=%v err=%v", tc.owner, claimed, err)
+		}
+		if prior != tc.want {
+			t.Errorf("Claim as %s reported %+v overwritten, want %+v", tc.owner, prior, tc.want)
+		}
+		if claimed.Owner == nil || *claimed.Owner != tc.owner {
+			t.Errorf("Claim as %s returned owner %v, want the new one", tc.owner, claimed.Owner)
+		}
 	}
 }

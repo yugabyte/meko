@@ -150,6 +150,38 @@ func TestDeriveSkipsCounterReset(t *testing.T) {
 	}
 }
 
+// A pod that appeared after sampling began started counting from zero, so its
+// first sample is measured from there rather than only seeding the delta. The
+// reset rule is unchanged: a sum over label sets can drop with no restart.
+func TestDeriveMeasuresANewPodsFirstCounterSampleFromZero(t *testing.T) {
+	e := normalize(Entry{Match: `^tasks_reclaimed_total$`, Title: "Tasks reclaimed", Kind: KindCounter})
+	t0 := time.Unix(1730000000, 0)
+	st := newPodState()
+	st.newSince = t0
+
+	rd, ok := derive("tasks_reclaimed_total", 20, e, t0.Add(10*time.Second), st)
+	if !ok || rd.value != 2 {
+		t.Fatalf("first sample on a new pod = %+v (ok %v), want 2 /s since the listing before it", rd, ok)
+	}
+	if _, ok := derive("tasks_reclaimed_total", 5, e, t0.Add(20*time.Second), st); ok {
+		t.Errorf("counter reset on a new pod produced a reading")
+	}
+}
+
+func TestDerivePairMeasuresANewPodsFirstSampleFromZero(t *testing.T) {
+	entries := compiled(t, Entry{Match: `^q_(count|sum)$`, Title: "Q", Kind: KindLatency, LatencyTitle: "Q latency", SumUnit: "s"})
+	// 20 calls in the 10s since the pod was last listed without it, 0.1s in all → 5 ms each.
+	ex := &fakeRunner{out: []execpkg.Result{{Stdout: "q_count 20\nq_sum 0.1\n"}}}
+	st := newPodState()
+	t0 := time.Unix(1730000000, 0)
+	st.newSince = t0
+
+	got := samplePrometheus(context.Background(), ex, 9898, pageserverPromPath, entries, st, t0.Add(10*time.Second), func(string, ...any) {})
+	if len(got) != 2 || math.Abs(got[0].value-2) > 1e-9 || math.Abs(got[1].value-5) > 1e-9 {
+		t.Fatalf("first scrape of a new pod = %+v, want 2 /s at 5 ms", got)
+	}
+}
+
 // The headline derivation: a _count/_sum pair becomes throughput AND a mean
 // latency in ms — NOT two raw rates. The µs → ms conversion is what makes the
 // latency number readable.

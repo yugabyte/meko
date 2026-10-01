@@ -157,17 +157,21 @@ func (s *MemStore) Candidates(_ context.Context, limit int) ([]*Task, error) {
 	return page(out, limit, 0), nil
 }
 
-func (s *MemStore) Claim(_ context.Context, taskID uuid.UUID, owner string) (*Task, error) {
+func (s *MemStore) Claim(_ context.Context, taskID uuid.UUID, owner string) (*Task, Prior, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tasks[taskID]
 	if t == nil || (t.Status != StatusPending && t.Status != StatusRunning) {
-		return nil, nil
+		return nil, Prior{}, nil
+	}
+	prior := Prior{Status: t.Status}
+	if t.Owner != nil {
+		prior.Owner = *t.Owner
 	}
 	t.Status = StatusRunning
 	t.Owner = &owner
 	t.UpdatedAt = s.now()
-	return cloneTask(t), nil
+	return cloneTask(t), prior, nil
 }
 
 func (s *MemStore) Steps(_ context.Context, taskID uuid.UUID) ([]StepRecord, error) {

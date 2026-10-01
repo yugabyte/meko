@@ -48,7 +48,7 @@ func TestPgTaskCancel(t *testing.T) {
 
 	// Claimed by somebody else, and still writable: the caller is never the owner.
 	const owner = "TestPgTaskCancel"
-	if claimed, err := s.Claim(ctx, tk.ID, owner); err != nil || claimed == nil {
+	if claimed, _, err := s.Claim(ctx, tk.ID, owner); err != nil || claimed == nil {
 		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
 	}
 	if err := s.RequestCancel(ctx, tk.ID); err != nil {

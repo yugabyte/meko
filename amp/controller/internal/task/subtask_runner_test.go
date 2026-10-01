@@ -183,7 +183,7 @@ func TestSubtaskRunIsFencedOutByAReclaim(t *testing.T) {
 	sub := f.create(t, KindNoop)
 	stale := f.owner
 
-	if claimed, err := f.store.Claim(t.Context(), f.parent.ID, "another-instance"); err != nil || claimed == nil {
+	if claimed, _, err := f.store.Claim(t.Context(), f.parent.ID, "another-instance"); err != nil || claimed == nil {
 		t.Fatalf("reclaim the parent: task=%v err=%v", claimed, err)
 	}
 	if err := f.runner.Run(t.Context(), sub, stale); err != nil {

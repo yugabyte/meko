@@ -49,7 +49,7 @@ func TestPgSubtasks(t *testing.T) {
 		t.Fatalf("create parent task: %v", err)
 	}
 	const owner = "TestPgSubtasks"
-	if claimed, err := tasks.Claim(ctx, parent.ID, owner); err != nil || claimed == nil {
+	if claimed, _, err := tasks.Claim(ctx, parent.ID, owner); err != nil || claimed == nil {
 		t.Fatalf("claim parent: task=%v err=%v", claimed, err)
 	}
 

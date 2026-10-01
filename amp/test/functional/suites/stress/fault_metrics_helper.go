@@ -94,7 +94,7 @@ func controllerFaultMetrics(t *core.T) (metrics.Source, []faultMetricSpec) {
 	}
 	return src, []faultMetricSpec{
 		{Title: "Tasks reclaimed", Raw: "amp_controller_tasks_reclaimed_total",
-			Means: "tasks a surviving controller took over from a worker that died holding them"},
+			Means: "tasks a controller took over from a predecessor that died or shut down while running them"},
 	}
 }
 

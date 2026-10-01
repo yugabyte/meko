@@ -232,8 +232,13 @@ func samplePrometheus(
 
 // derive turns one scraped gauge or counter value into a reading, updating the
 // pod's memory of the series. A counter yields a per-second rate, so it produces
-// nothing on its first sample or across a reset (the value went backwards); a
-// gauge passes through.
+// nothing without a base to measure from (see counterBase) or across a reset (the
+// value went backwards); a gauge passes through.
+//
+// A reset is not re-based on zero the way Prometheus's rate() does it, because the
+// value here is a SUM over label sets: a tserver's per-tablet counters drop when a
+// tablet moves off it, with no restart, and re-basing that would read the whole
+// remaining total as one interval's work.
 func derive(name string, v float64, e Entry, now time.Time, st *podState) (reading, bool) {
 	prev, seen := st.prom[name]
 	st.prom[name] = promSample{value: v, at: now}
@@ -242,11 +247,12 @@ func derive(name string, v float64, e Entry, now time.Time, st *podState) (readi
 		rd.value = v / e.DivideBy
 		return rd, true
 	}
-	if !seen {
+	base, ok := counterBase(prev, seen, st)
+	if !ok {
 		return reading{}, false
 	}
-	dt := now.Sub(prev.at).Seconds()
-	delta := v - prev.value
+	dt := now.Sub(base.at).Seconds()
+	delta := v - base.value
 	if dt <= 0 || delta < 0 {
 		return reading{}, false
 	}
@@ -254,13 +260,27 @@ func derive(name string, v float64, e Entry, now time.Time, st *podState) (readi
 	return rd, true
 }
 
+// counterBase is the sample a counter's delta is measured from: the previous one
+// or, on a pod that appeared after sampling began, zero as of podState.newSince —
+// otherwise a replacement's first interval, often the one a fault test is judging,
+// is lost. A pod already running when sampling began has neither, so its first
+// sample only seeds.
+func counterBase(prev promSample, seen bool, st *podState) (promSample, bool) {
+	if seen {
+		return prev, true
+	}
+	if !st.newSince.IsZero() {
+		return promSample{at: st.newSince}, true
+	}
+	return promSample{}, false
+}
+
 // derivePair turns a histogram's _count/_sum into the two series a human
 // actually reads: throughput = Δcount/Δt, and MEAN LATENCY = Δsum/Δcount
 // converted to milliseconds. Reporting the two raw rates instead (what a naive
 // include list does) hands the reader a "sum per second" that means nothing.
-// Both need a delta, so the first scrape only seeds the baselines; a counter
-// reset or an idle interval (no calls) yields no latency point rather than a
-// division by zero.
+// Both need a base to measure from (see counterBase); a counter reset or an idle
+// interval (no calls) yields no latency point rather than a division by zero.
 func derivePair(p *histPair, now time.Time, st *podState) []reading {
 	if p == nil || !p.haveCount || !p.haveSum {
 		return nil
@@ -269,12 +289,14 @@ func derivePair(p *histPair, now time.Time, st *podState) []reading {
 	prevSum, seenSum := st.prom[p.sumName]
 	st.prom[p.countName] = promSample{value: p.count, at: now}
 	st.prom[p.sumName] = promSample{value: p.sum, at: now}
-	if !seenCount || !seenSum {
+	baseCount, okCount := counterBase(prevCount, seenCount, st)
+	baseSum, okSum := counterBase(prevSum, seenSum, st)
+	if !okCount || !okSum {
 		return nil
 	}
-	dt := now.Sub(prevCount.at).Seconds()
-	dCount := p.count - prevCount.value
-	dSum := p.sum - prevSum.value
+	dt := now.Sub(baseCount.at).Seconds()
+	dCount := p.count - baseCount.value
+	dSum := p.sum - baseSum.value
 	if dt <= 0 || dCount < 0 || dSum < 0 {
 		return nil
 	}

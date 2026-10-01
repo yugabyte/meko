@@ -914,7 +914,12 @@ clears on its own. **Nothing needs reclaiming by hand**: the in-flight tasks are
 left `running` with lapsed leases, and the restarted controller (or another
 instance) picks each up once its lease has lapsed — up to one `--task-lease-ttl`
 (30s) plus the skew grace per task, and the ones that had renewed most recently
-wait longest. Steps are idempotent, so the replay converges.
+wait longest. Steps are idempotent, so the replay converges. Each takeover logs one
+line naming the process it took over from:
+
+```bash
+kubectl -n "$NS" logs deploy/amp-controller | grep 'reclaimed a task'
+```
 
 To see what is still held, and by whom:
 

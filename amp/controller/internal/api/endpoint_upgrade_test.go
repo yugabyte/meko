@@ -103,7 +103,7 @@ func TestUpgradeEndpointsRefusesASecondRoll(t *testing.T) {
 
 	// The refusal lasts exactly as long as the roll does. Driven through the store
 	// rather than the worker: what is asserted is the plan-time gate, not a roll.
-	if _, err := store.Claim(ctx, first.JSON202.Id, "owner-1"); err != nil {
+	if _, _, err := store.Claim(ctx, first.JSON202.Id, "owner-1"); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	if err := store.CompleteTask(ctx, first.JSON202.Id, "owner-1"); err != nil {

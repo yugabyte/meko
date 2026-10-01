@@ -101,7 +101,7 @@ func TestPgTaskLocks(t *testing.T) {
 			// here: this is about the index, and Claim is what stamps the owner the
 			// completion is fenced on.
 			const owner = "TestPgTaskLocks"
-			if claimed, err := s.Claim(ctx, first.ID, owner); err != nil || claimed == nil {
+			if claimed, _, err := s.Claim(ctx, first.ID, owner); err != nil || claimed == nil {
 				t.Fatalf("claim the in-flight %s task %s: claimed=%v err=%v", kind, first.ID, claimed, err)
 			}
 			if err := s.CompleteTask(ctx, first.ID, owner); err != nil {
@@ -166,7 +166,7 @@ func TestPgActiveByKind(t *testing.T) {
 	// Claimed, and still the answer: a roll being executed is exactly what a second
 	// caller must be refused against.
 	const owner = "TestPgActiveByKind"
-	if claimed, err := s.Claim(ctx, roll.ID, owner); err != nil || claimed == nil {
+	if claimed, _, err := s.Claim(ctx, roll.ID, owner); err != nil || claimed == nil {
 		t.Fatalf("claim the roll %s: claimed=%v err=%v", roll.ID, claimed, err)
 	}
 	got = active(KindUpgradeEndpoints.String())
@@ -300,6 +300,17 @@ func migratedPool(t *testing.T) (*db.Pool, context.Context) {
 		t.Fatalf("connect: %v", err)
 	}
 	return pool, ctx
+}
+
+// PgStore's half of TestClaimReportsWhatItOverwrote: the CTE has to read the
+// row as it stood before the UPDATE.
+func TestPgClaimReportsWhatItOverwrote(t *testing.T) {
+	pool, _ := migratedPool(t)
+	t.Cleanup(pool.Close)
+	resetTasks(t, pool)
+	store := NewPgStore(pool)
+	task := seedTask(t, store, Kind{"test", "", "", nil}, "work", "")
+	assertClaimReportsWhatItOverwrote(t, store, task.ID)
 }
 
 // TestPgListChangeFeed covers the updated_since feed against real SQL, where the

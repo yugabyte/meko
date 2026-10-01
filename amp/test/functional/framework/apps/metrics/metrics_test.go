@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -419,6 +420,98 @@ func TestSamplerStartCollectsAndStopIsDrainOnce(t *testing.T) {
 	// again from teardown, and the second call must emit nothing.
 	if again := s.Stop(); again != nil {
 		t.Errorf("second Stop returned %d series, want none", len(again))
+	}
+}
+
+// The control-plane nemesis shape: the pod is force-deleted and its replacement
+// has already counted what the test is looking for by the time it is first
+// scraped. That first reading has to land as a point; seeding the delta from it
+// would make the replacement's work invisible.
+func TestSamplerCountsAReplacementPodsFirstScrape(t *testing.T) {
+	var mu sync.Mutex
+	pods := "ctl-a"
+	run := func(_ context.Context, _ io.Reader, argv []string) (execpkg.Result, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		joined := strings.Join(argv, " ")
+		switch {
+		case strings.Contains(joined, "get pod -l app=ctl"):
+			return execpkg.Result{Stdout: pods}, nil
+		case strings.Contains(joined, "exec ctl-a ") && strings.Contains(joined, "localhost:8080/metrics"):
+			return execpkg.Result{Stdout: "tasks_reclaimed_total 0\n"}, nil
+		case strings.Contains(joined, "exec ctl-b ") && strings.Contains(joined, "localhost:8080/metrics"):
+			return execpkg.Result{Stdout: "tasks_reclaimed_total 3\n"}, nil
+		}
+		return execpkg.Result{}, nil
+	}
+	s := NewSources(k8s.New(k8s.Config{Namespace: "ns"}).WithRunner(run),
+		Config{SampleInterval: 5 * time.Millisecond, MaxPoints: 1000},
+		Source{Tag: "controller", Selector: "app=ctl", Container: "controller", Port: 8080, Path: "/metrics",
+			Collect: []Entry{{Match: `^tasks_reclaimed_total$`, Title: "Tasks reclaimed", Kind: KindCounter}}})
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop()
+
+	line := func(pod string) []Point { return seriesLine(s, "[controller] Tasks reclaimed", pod) }
+	waitUntil(t, "the original pod to report a rate", func() bool { return len(line("ctl-a")) > 0 })
+	mu.Lock()
+	pods = "ctl-b"
+	mu.Unlock()
+	waitUntil(t, "the replacement to report a rate", func() bool { return len(line("ctl-b")) > 0 })
+
+	if first := line("ctl-b")[0]; first.Value <= 0 {
+		t.Errorf("the replacement's first point = %v, want the 3 it counted before its first scrape as a positive rate", first.Value)
+	}
+}
+
+// Pods are listed in front of every tick's probes, so a listing that hangs — an
+// apiserver the fault is degrading — must give up rather than stop the sampling.
+func TestSamplerKeepsSamplingThroughAHungPodListing(t *testing.T) {
+	var listings atomic.Int32
+	run := func(ctx context.Context, _ io.Reader, argv []string) (execpkg.Result, error) {
+		joined := strings.Join(argv, " ")
+		switch {
+		case strings.Contains(joined, "get pod -l app=ctl"):
+			if listings.Add(1) == 1 {
+				return execpkg.Result{Stdout: "ctl-a"}, nil
+			}
+			<-ctx.Done()
+			return execpkg.Result{}, ctx.Err()
+		case strings.Contains(joined, "localhost:8080/metrics"):
+			return execpkg.Result{Stdout: "tasks_reclaimed_total 0\n"}, nil
+		}
+		return execpkg.Result{}, nil
+	}
+	s := NewSources(k8s.New(k8s.Config{Namespace: "ns"}).WithRunner(run),
+		Config{SampleInterval: 5 * time.Millisecond, MaxPoints: 1000},
+		Source{Tag: "controller", Selector: "app=ctl", Container: "controller", Port: 8080, Path: "/metrics",
+			Collect: []Entry{{Match: `^tasks_reclaimed_total$`, Title: "Tasks reclaimed", Kind: KindCounter}}})
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop()
+
+	waitUntil(t, "points to keep arriving while every listing hangs", func() bool {
+		return len(seriesLine(s, "[controller] Tasks reclaimed", "ctl-a")) >= 5
+	})
+}
+
+func seriesLine(s *Sampler, key, pod string) []Point {
+	for _, ser := range s.snapshot() {
+		if ser.Key == key {
+			return ser.Lines[pod]
+		}
+	}
+	return nil
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
 	}
 }
 

@@ -134,13 +134,14 @@ type Store interface {
 	Candidates(ctx context.Context, limit int) ([]*Task, error)
 
 	// Claim transitions a task to running under owner, after the caller has taken
-	// its lease. It returns nil when the task is no longer claimable — it reached
-	// a terminal status or was deleted between the candidate read and now.
+	// its lease, and reports the status and owner it overwrote. It returns a nil
+	// task when the task is no longer claimable — it reached a terminal status or
+	// was deleted between the candidate read and now.
 	//
 	// Re-stamping owner is what fences out a previous owner's writes, so this is
 	// also the reclaim path: a running task whose lease lapsed is claimed the same
 	// way a pending one is.
-	Claim(ctx context.Context, taskID uuid.UUID, owner string) (*Task, error)
+	Claim(ctx context.Context, taskID uuid.UUID, owner string) (*Task, Prior, error)
 
 	// Steps returns a task's step records in execution order (task.step_ids).
 	Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error)
@@ -199,6 +200,15 @@ type Store interface {
 	// `pending` has not been claimed, so it holds no lease at all and a probe
 	// would miss it entirely.
 	ActiveByKind(ctx context.Context, kind string) (*Task, error)
+}
+
+// Prior is a task's status and owner as Claim found them. Read in the statement
+// that overwrote them, it is the one read of them that cannot be stale: under the
+// lease nothing else writes either.
+type Prior struct {
+	Status Status
+	// Owner is "" for a task nobody had claimed.
+	Owner string
 }
 
 // TaskFilter narrows a List query. Zero-value fields are unfiltered: an empty
@@ -363,18 +373,30 @@ func (s *PgStore) Candidates(ctx context.Context, limit int) ([]*Task, error) {
 	return out, rows.Err()
 }
 
-func (s *PgStore) Claim(ctx context.Context, taskID uuid.UUID, owner string) (*Task, error) {
+// Claim reads the prior status and owner through a CTE, because every part of a
+// WITH statement sees one snapshot: prev is the row as it stood before the UPDATE.
+func (s *PgStore) Claim(ctx context.Context, taskID uuid.UUID, owner string) (*Task, Prior, error) {
 	row := s.pool.QueryRow(ctx,
-		`UPDATE tasks
+		`WITH prev AS (SELECT status::text AS status, owner FROM tasks WHERE id = $1::uuid)
+		 UPDATE tasks
 		 SET status = 'running', owner = $2, updated_at = now()
 		 WHERE id = $1::uuid AND status IN ('pending', 'running')
-		 RETURNING `+taskColumns,
+		 RETURNING `+taskColumns+`, (SELECT status FROM prev), (SELECT owner FROM prev)`,
 		taskID.String(), owner)
-	t, err := scanTask(row)
+	var prevStatus string
+	var prevOwner *string
+	t, err := scanTask(trailing{row, []any{&prevStatus, &prevOwner}})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, Prior{}, nil
 	}
-	return t, err
+	if err != nil {
+		return nil, Prior{}, err
+	}
+	prior := Prior{Status: Status(prevStatus)}
+	if prevOwner != nil {
+		prior.Owner = *prevOwner
+	}
+	return t, prior, nil
 }
 
 func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error) {
@@ -599,6 +621,15 @@ func (s *PgStore) ActiveByKind(ctx context.Context, kind string) (*Task, error) 
 type row interface {
 	Scan(dest ...any) error
 }
+
+// trailing scans the columns a statement returns after taskColumns into extra,
+// so scanTask can read a projection that carries more than the task.
+type trailing struct {
+	row
+	extra []any
+}
+
+func (t trailing) Scan(dest ...any) error { return t.row.Scan(append(dest, t.extra...)...) }
 
 // scanTask scans the taskColumns projection (uuid columns cast to text).
 func scanTask(r row) (*Task, error) {

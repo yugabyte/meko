@@ -97,7 +97,7 @@ func TestWorkerStopsRetryingOnCancellation(t *testing.T) {
 	store.Seed(task, steps)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	claimed, err := store.Claim(ctx, task.ID, w.owner)
+	claimed, _, err := store.Claim(ctx, task.ID, w.owner)
 	if err != nil || claimed == nil {
 		t.Fatalf("Claim: task=%v err=%v", claimed, err)
 	}

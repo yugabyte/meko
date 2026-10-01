@@ -333,6 +333,10 @@ successful renewal. Then:
    skip the `succeeded` ones, and re-run the one left `running` on the step
    idempotency contract.
 
+Either way the successor counts the takeover in
+`amp_controller_tasks_reclaimed_total` and logs it at Info with the previous owner,
+which names the pod ([`ac-metrics.md`](ac-metrics.md)).
+
 **Reclaim latency after a fenced-out exit is up to one full TTL, for every
 in-flight task** — not only the one whose lease lapsed. `AbortProcess` fires on
 the first lease to hit its deadline while the other 49 may have renewed more

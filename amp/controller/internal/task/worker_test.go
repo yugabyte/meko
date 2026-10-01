@@ -197,7 +197,7 @@ func TestWorkerLeavesTaskReclaimableOnCancellation(t *testing.T) {
 
 	task, steps := pendingTask("k0")
 	store.Seed(task, steps)
-	claimed, err := store.Claim(t.Context(), task.ID, w.owner)
+	claimed, _, err := store.Claim(t.Context(), task.ID, w.owner)
 	if err != nil || claimed == nil {
 		t.Fatalf("Claim: %v (claimed=%v)", err, claimed)
 	}
@@ -496,7 +496,7 @@ func TestMemStoreMutationsAreOwnerFenced(t *testing.T) {
 	store.Seed(task, steps)
 	stepID := steps[0].ID
 
-	claimed, err := store.Claim(t.Context(), task.ID, "owner-a")
+	claimed, _, err := store.Claim(t.Context(), task.ID, "owner-a")
 	if err != nil || claimed == nil {
 		t.Fatalf("Claim: %v (claimed=%v)", err, claimed)
 	}
