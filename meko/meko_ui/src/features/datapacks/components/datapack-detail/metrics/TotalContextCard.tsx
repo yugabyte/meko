@@ -1,4 +1,4 @@
-// "Total Context by Tokens" and "…by Size" — the same card twice, differing
+// "Context Size - by token count" and "…by raw data size" — the same card twice, differing
 // only in which measure it totals, so it takes the three already-computed
 // parts rather than knowing about either unit.
 

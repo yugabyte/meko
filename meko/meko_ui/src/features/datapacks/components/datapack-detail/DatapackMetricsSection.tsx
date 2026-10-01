@@ -61,7 +61,7 @@ export function DatapackMetricsSection({
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <TotalContextCard
           id={METRIC_ANCHOR.contextSize}
-          title="Total Context by Tokens"
+          title="Context Size - by token count"
           subtitle="Estimated token footprint of all stored content"
           breakdown={d.tokens}
           format={formatTokens}
@@ -69,7 +69,7 @@ export function DatapackMetricsSection({
           emptyLabel="No context loaded yet."
         />
         <TotalContextCard
-          title="Total Context by Size"
+          title="Context Size - by raw data size"
           subtitle="Actual storage footprint of indexed content"
           breakdown={d.bytes}
           format={formatFileSize}

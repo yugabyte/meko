@@ -194,10 +194,10 @@ describe("ReviewCostStage", () => {
       />,
     );
     expect(screen.getByRole("tab", { name: "Cost" })).toBeTruthy();
-    expect(screen.queryByText("Total Context by Tokens")).toBeNull();
+    expect(screen.queryByText("Context Size - by token count")).toBeNull();
 
     // Radix activates a tab on mousedown, not click.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Metrics" }));
-    expect(screen.getByText("Total Context by Tokens")).toBeTruthy();
+    expect(screen.getByText("Context Size - by token count")).toBeTruthy();
   });
 });

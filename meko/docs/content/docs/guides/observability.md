@@ -85,8 +85,8 @@ Observe reflects MCP and gateway activity Langfuse records. It is not a separate
 
 In the portal you can view:
 
-- **Overview tab**: Open a datapack. This tab shows counts of conversations, memories, learnings, and knowledge sources, and, once content is indexed, **Total Context** (estimated tokens across the knowledge base, memory, and conversations), **Context Efficiency** (share of tokens saved per query against an unfiltered baseline), and **Context Quality** (share of High and Mid matches). Select a tile to open the **Analytics** tab.
-- **Analytics tab**: **Total Context by Tokens** and **Total Context by Size** split that footprint across the knowledge base, memory, and conversations. **Context Queries** charts retrieval over time. Under **Retrieval & Efficiency**, **Context Efficiency** shows tokens sent versus the baseline, and **Context Match Quality** splits results into High, Mid, and Low.
+- **Overview tab**: Open a datapack. This tab shows counts of conversations, memories, learnings, and knowledge sources, and, once content is indexed, **Context Size** (estimated tokens across the knowledge base, memory, and conversations), **Context Efficiency** (share of tokens saved per query against an unfiltered baseline), and **Context Quality** (share of High and Mid matches). Select a tile to open the **Analytics** tab.
+- **Analytics tab**: **Context Size - by token count** and **Context Size - by raw data size** split that footprint across the knowledge base, memory, and conversations. **Context Queries** charts retrieval over time. Under **Retrieval & Efficiency**, **Context Efficiency** shows tokens sent versus the baseline, and **Context Match Quality** splits results into High, Mid, and Low.
 - **Conversation list and headers**: Messages, memories extracted, and LLM calls per session (when Langfuse has indexed them).
 - **Assistant message footers**: Per-turn latency, memories extracted, and LLM call count (WorkbenchLM and Conversations).
 - **Observe / Langfuse**: Token usage and span latency inside individual traces — not rolled up as account-wide dashboards.
