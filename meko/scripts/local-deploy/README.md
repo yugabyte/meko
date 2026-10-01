@@ -2,16 +2,19 @@
 
 One-command local deployment of the full Meko stack. YugabyteDB runs **natively** via `yugabyted`; every other component runs in Docker, wired together by a single `docker-compose.yml`:
 
-| # | Component | Source | Runs as |
-|---|---|---|---|
-| 1 | Langfuse (web + worker) | `meko-langfuse/` | containers `meko-langfuse-web`, `meko-langfuse-worker` |
-| 2 | mem0 | `meko-mem0/mem0/` | Python **library** inside the MCP server (bind-mounted) |
-| 3 | MCP server | `meko-mcp-server/` | container `meko-mcp-server` (`:8000`) |
-| 4 | Meko UI | `meko/meko/meko_ui/` | container `meko-ui` behind nginx |
-| 5 | Inference gateway | `meko/meko/inference_gateway/` | container `meko-inference-gateway` (`:8088`) |
-| 6 | API server | `meko/meko/api_server/` | container `meko-api-server` (`:25433`) + one-shot `meko-api-server-migrate` |
-| 7 | RAG agent | `yugabyte-db/python/ai/rag_agent/` | containers `meko-rag-agent` (text) and `meko-rag-agent-pdf` (PDF), one image, work-queue pollers |
-| — | Infra | — | `meko-redis`, `meko-minio`, `meko-proxy` (nginx), 2 one-shot Langfuse schema-init jobs |
+| # | Component | Source | Runs as | Idle RAM · image (measured) |
+|---|---|---|---|---|
+| 1 | Langfuse (web + worker) | `meko-langfuse/` | containers `meko-langfuse-web`, `meko-langfuse-worker` | ~520 MiB + ~285 MiB · 0.9 GB + 1.7 GB; the image build peaks at ~8 GB RAM |
+| 2 | mem0 | `meko-mem0/mem0/` | Python **library** inside the MCP server (bind-mounted) | counted in the MCP server |
+| 3 | MCP server | `meko-mcp-server/` | container `meko-mcp-server` (`:8000`) | ~400 MiB · 11.3 GB |
+| 4 | Meko UI | `meko/meko/meko_ui/` | container `meko-ui` behind nginx | ~60 MiB · 0.3 GB |
+| 5 | Inference gateway | `meko/meko/inference_gateway/` | container `meko-inference-gateway` (`:8088`) | ~140 MiB · 0.4 GB |
+| 6 | API server | `meko/meko/api_server/` | container `meko-api-server` (`:25433`) + one-shot `meko-api-server-migrate` | ~10 MiB · 0.1 GB |
+| 7 | RAG agent | `yugabyte-db/python/ai/rag_agent/` | containers `meko-rag-agent` (text) and `meko-rag-agent-pdf` (PDF), one image, work-queue pollers | ~800 MiB + ~690 MiB · 9.3 GB (shared) |
+| — | Infra | — | `meko-redis`, `meko-minio`, `meko-proxy` (nginx), 2 one-shot Langfuse schema-init jobs | ~20 + ~175 + ~5 MiB · 0.6 GB |
+| — | YugabyteDB | `MEKO_YB_HOME` | native `yugabyted` (master + tserver + YSQL) | ~2.4 GiB for master + tserver, plus the YSQL backends; ~3 GB data dir after migrations |
+
+Measured with the stack up and idle on a 4 vCPU / 15 GiB RAM Linux host (AlmaLinux 8), where it used ~9 GiB of host RAM in total. These are a floor, not sizing under load. The stack runs on that host, though under 16 GB `start.sh` warns that yugabyted's tserver may run close to its memory limit. Disk: the images total ~24 GB and a first build leaves ~41 GB of images + build cache, hence the ≥ 120 GB in §1.
 
 All databases live on **one** YugabyteDB instance on `:5433` — `yugabyte` DB (meko_system schema, datapacks, mem0 pgvector, pg_dist_rag work queue) and `langfuse` DB (Langfuse metadata + tracing under a `clickhouse` schema). No ClickHouse, no Neo4j.
 
@@ -22,7 +25,7 @@ All databases live on **one** YugabyteDB instance on `:5433` — `yugabyte` DB (
 | What | Details |
 |---|---|
 | **Docker** | Docker Desktop (macOS) or Docker Engine with the Compose v2 plugin (Linux); `docker info` must succeed. Podman's `docker` shim is refused: its builds cap open files at 1024, which breaks the UI and Langfuse builds. Docker Desktop → Resources: **≥ 12 GB RAM** and **≥ 120 GB disk** (first build downloads ~20 GB of layers; the Langfuse Next.js build alone peaks at ~8 GB RAM). On Linux, images and build cache (~41 GB after a first build) share the host disk with yugabyted. |
-| **Repo layout** | `meko/`, `meko-mem0/`, `meko-mcp-server/`, `meko-langfuse/`, `yugabyte-db/` checked out as **siblings** under one parent directory — the default layout. You don't have to clone the `meko-*` siblings yourself: **`start.sh` auto-clones any missing one** (over HTTPS from `github.com/yugabyte/*`, checking out `patch/date-aware-extraction` for `meko-mem0`; the others track their default branch) — you just need access to the internal repos. They're private, so HTTPS clones need git credentials for github.com (e.g. `gh auth login && gh auth setup-git`), or set `MEKO_GIT_BASE=git@github.com:yugabyte` to clone over SSH. Override the host with `MEKO_GIT_BASE` or opt out with `MEKO_NO_CLONE=1`. Only `yugabyte-db` must be provided manually (next row). To point a component at a non-default checkout, set its `MEKO_*_DIR` var in `.env` (see below). |
+| **Repo layout** | `meko/`, `meko-mem0/`, `meko-mcp-server/`, `meko-langfuse/`, `yugabyte-db/` checked out as **siblings** under one parent directory — the default layout. You don't have to clone the `meko-*` siblings yourself: **`start.sh` auto-clones any missing one** (over HTTPS from `github.com/yugabyte/*`, checking out `meko-mem0-2.0` for `meko-mem0`; the others track their default branch) — you just need access to the internal repos. They're private, so HTTPS clones need git credentials for github.com (e.g. `gh auth login && gh auth setup-git`), or set `MEKO_GIT_BASE=git@github.com:yugabyte` to clone over SSH. Override the host with `MEKO_GIT_BASE` or opt out with `MEKO_NO_CLONE=1`. Only `yugabyte-db` must be provided manually (next row). To point a component at a non-default checkout, set its `MEKO_*_DIR` var in `.env` (see below). |
 | **`yugabyted` with the required extensions** | A YugabyteDB distribution that ships the `mage`, `vector`, and `pg_dist_rag` extensions. Obtain it one of two ways: **(a)** clone the source from GitHub (`git clone https://github.com/yugabyte/yugabyte-db.git`, `master` branch) and build it with `./yb_build.sh`; or **(b)** use a provided YugabyteDB release tarball for your OS and architecture that already includes the extensions. Either way, point `MEKO_YB_HOME` in `.env` at the resulting tree. |
 | **Cognito user** (mekodev AWS account) | See §2. No signup flow needed — the user is created directly in Cognito. |
 | **OpenAI API key** | For mem0's LLM + embeddings (`LLM_PROVIDER`/`EMBEDDER_PROVIDER` default to `openai`). |

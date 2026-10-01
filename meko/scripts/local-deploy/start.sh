@@ -687,13 +687,16 @@ ensure_repo() {  # $1 = dir var name (already resolved), $2 = repo name, $3 = op
   ok "cloned ${repo}"
 }
 
+# The branch meko-mcp-server's meko-mem0 pin is released from. Named explicitly
+# because the repo's GitHub default (main) is the 1.0.x line; move it with the pin.
+MEKO_MEM0_BRANCH=meko-mem0-2.0
+
 # Auto-clone only for a full deploy — reload/update act on existing checkouts and
 # must never clone anything.
 if [ -z "${RELOAD_TARGETS}${UPDATE_TARGETS}" ]; then
   ensure_repo MEKO_LANGFUSE_DIR   meko-langfuse
   ensure_repo MEKO_MCP_SERVER_DIR meko-mcp-server
-  # mem0 builds from a feature branch, not main.
-  ensure_repo MEKO_MEM0_DIR       meko-mem0 patch/date-aware-extraction
+  ensure_repo MEKO_MEM0_DIR       meko-mem0 "${MEKO_MEM0_BRANCH}"
 fi
 
 # ─── Rudderstack analytics toggle ──────────────────────────────────────────
@@ -860,7 +863,7 @@ mem0_pin="$(grep -oE 'meko-mem0>=[0-9.]+,<[0-9.]+' "${MEKO_MCP_SERVER_DIR}/pypro
 if [[ "${mem0_ver}" =~ ^[0-9.]+$ ]] && [ -n "${mem0_pin}" ]; then
   mem0_lo="${mem0_pin#meko-mem0>=}"; mem0_lo="${mem0_lo%%,*}"; mem0_hi="${mem0_pin##*,<}"
   if ver_lt "${mem0_ver}" "${mem0_lo}" || ! ver_lt "${mem0_ver}" "${mem0_hi}"; then
-    warn "meko-mem0 checkout is ${mem0_ver}, but meko-mcp-server pins ${mem0_pin#meko-mem0}; the checkout is what runs."
+    warn "meko-mem0 checkout is ${mem0_ver}, but meko-mcp-server pins ${mem0_pin#meko-mem0}; the checkout is what runs. To switch: git -C ${MEKO_MEM0_DIR} fetch origin && git -C ${MEKO_MEM0_DIR} switch ${MEKO_MEM0_BRANCH} && git -C ${MEKO_MEM0_DIR} pull"
   fi
 fi
 
