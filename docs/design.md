@@ -346,8 +346,10 @@ you, and the sheet says why a closed gate is closed. Dialogs open as bottom shee
 the overlay behind a dialog or sheet, are pinned to the visible viewport (its height and, where iOS
 pans the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
 covering the prompt or a dialog's fields; while you type, the terminal stays scrolled to its newest line. On
-touch screens the terminal gets a key bar (Tab, a sticky Ctrl, arrows, Ctrl+C, Enter, select mode
-and typing mode; with Ctrl lit, the next letter typed in the compose box or in typing mode goes to
+touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
+and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,
+Home, End, Page Up and Page Down; the row stays open until ▾ is tapped again, and ▾ stays lit while
+Ctrl is armed with the row closed; with Ctrl lit, the next letter typed in the compose box or in typing mode goes to
 Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape) and a compose box (it grows with its text to about a fifth
 of the visible screen, then scrolls) whose text goes in as one bracketed
 paste (with any Escape characters removed), then Enter; if the terminal isn't connected, the text

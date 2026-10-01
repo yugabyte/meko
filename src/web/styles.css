@@ -2979,6 +2979,11 @@ a.icon-btn {
   background: var(--term);
   border-top: 1px solid #1f2622;
 }
+/* The row of more keys the ▾ key opens, under the bar. */
+.keybar + .keybar {
+  padding-top: 0;
+  border-top: 0;
+}
 /* Keys share the width so the whole bar fits a phone; it scrolls sideways only if it can't. The bar
    only shows on touch screens, so keys are 40 px tall, the touch size for icon buttons like ⌨. */
 .key {

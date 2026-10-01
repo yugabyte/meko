@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, useState, type SyntheticEvent } from 'react';
-import { BAR_KEYS, insertedChar } from '../keys';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { BAR_KEYS, MORE_KEYS, insertedChar, type BarKey } from '../keys';
 import type { SessionTerminal } from '../terminals';
 import { cx } from '../util';
 
@@ -27,12 +27,33 @@ const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnect
 /** Keeps focus (and the on-screen keyboard) where it is when a bar button is tapped. */
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
+/** A bar key that sends its bytes to the terminal. */
+function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKey; label: string; title: string }; disabled: boolean }) {
+  return (
+    <button
+      className="key"
+      title={k.title}
+      aria-label={k.title}
+      disabled={disabled}
+      onPointerDown={keepFocus}
+      onMouseDown={keepFocus}
+      onClick={() => {
+        if (!term.sendKey(k.key)) term.showNotice(NOT_CONNECTED, 3000);
+      }}
+    >
+      {k.label}
+    </button>
+  );
+}
+
 /**
  * For touch screens: keys a phone keyboard lacks, and a compose box that gets the phone's
  * autocorrect, dictation and paste. The terminal font size is in the session sheet.
  */
 export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal; sessionId: string; disabled: boolean }) {
   const [text, setText] = useState(() => readDraft(sessionId));
+  /** The row of more keys (Ctrl, Esc, Shift+Tab…) is open. */
+  const [more, setMore] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => saveDraft(sessionId, text), [sessionId, text]);
@@ -59,41 +80,8 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
   return (
     <div className="term-keys">
       <div className="keybar" role="toolbar" aria-label="Terminal keys">
-        {BAR_KEYS.map((k, i) => (
-          <Fragment key={k.key}>
-            <button
-              className="key"
-              title={k.title}
-              aria-label={k.title}
-              disabled={disabled}
-              onPointerDown={keepFocus}
-              onMouseDown={keepFocus}
-              onClick={() => {
-                if (!term.sendKey(k.key)) term.showNotice(NOT_CONNECTED, 3000);
-              }}
-            >
-              {k.label}
-            </button>
-            {i === 0 && (
-              <button
-                className={cx('key', term.ctrl && 'on')}
-                aria-pressed={term.ctrl}
-                title="Ctrl: the next letter you type is sent with Ctrl, as in Ctrl+O or Ctrl+R"
-                aria-label="Ctrl for the next letter you type"
-                disabled={disabled}
-                onPointerDown={keepFocus}
-                onMouseDown={keepFocus}
-                onClick={() => {
-                  const on = !term.ctrl;
-                  term.setCtrl(on);
-                  // Bring the keyboard up for the letter, unless the terminal already has it.
-                  if (on && !term.typing) box.current?.focus();
-                }}
-              >
-                ctrl
-              </button>
-            )}
-          </Fragment>
+        {BAR_KEYS.map((k) => (
+          <SendKey key={k.key} term={term} k={k} disabled={disabled} />
         ))}
         <button
           className={cx('key', term.selecting && 'on')}
@@ -124,7 +112,49 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
             <path d="M6 10h.01 M10 10h.01 M14 10h.01 M18 10h.01 M7 14h10" />
           </svg>
         </button>
+        <button
+          // Lit while its row is open, or while Ctrl is armed with the row closed.
+          className={cx('key', (more || term.ctrl) && 'on')}
+          aria-expanded={more}
+          // The row is only in the page while it's open.
+          aria-controls={more ? `more-keys-${sessionId}` : undefined}
+          title={more ? 'Fewer keys' : 'More keys: Ctrl, Esc, Shift+Tab…'}
+          aria-label="More keys"
+          // Its keys can't be used while the session is stopped, but an open row can still be closed.
+          disabled={disabled && !more}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={() => setMore(!more)}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d={more ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} />
+          </svg>
+        </button>
       </div>
+      {more && (
+        <div id={`more-keys-${sessionId}`} className="keybar" role="toolbar" aria-label="More terminal keys">
+          <button
+            className={cx('key', term.ctrl && 'on')}
+            aria-pressed={term.ctrl}
+            title="Ctrl: the next letter you type is sent with Ctrl, as in Ctrl+O or Ctrl+R"
+            aria-label="Ctrl for the next letter you type"
+            disabled={disabled}
+            onPointerDown={keepFocus}
+            onMouseDown={keepFocus}
+            onClick={() => {
+              const on = !term.ctrl;
+              term.setCtrl(on);
+              // Bring the keyboard up for the letter, unless the terminal already has it.
+              if (on && !term.typing) box.current?.focus();
+            }}
+          >
+            ctrl
+          </button>
+          {MORE_KEYS.map((k) => (
+            <SendKey key={k.key} term={term} k={k} disabled={disabled} />
+          ))}
+        </div>
+      )}
       <form
         className="compose"
         onSubmit={(e) => {

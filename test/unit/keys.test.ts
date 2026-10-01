@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pasteText, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pasteText, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
@@ -18,8 +18,19 @@ describe('terminal key bar', () => {
     expect(keySequence('tab', true)).toBe('\t');
   });
 
-  it('has a sequence for every key on the bar', () => {
-    for (const k of BAR_KEYS) expect(keySequence(k.key)).not.toBe('');
+  it('sends the more keys the ▾ row holds', () => {
+    expect(keySequence('esc')).toBe('\x1b');
+    expect(keySequence('shift-tab')).toBe('\x1b[Z');
+    expect(keySequence('pgup')).toBe('\x1b[5~');
+    expect(keySequence('pgdn')).toBe('\x1b[6~');
+    // Home and End follow the cursor-key mode, like the arrows.
+    expect([keySequence('home'), keySequence('end')]).toEqual(['\x1b[H', '\x1b[F']);
+    expect([keySequence('home', true), keySequence('end', true)]).toEqual(['\x1bOH', '\x1bOF']);
+    expect(keySequence('esc', true)).toBe('\x1b');
+  });
+
+  it('has a sequence for every key on the bar and in the ▾ row', () => {
+    for (const k of [...BAR_KEYS, ...MORE_KEYS]) expect(keySequence(k.key)).not.toBe('');
   });
 });
 
@@ -65,8 +76,9 @@ describe('sticky Ctrl', () => {
     expect(insertedChar('teh', 'thex')).toBeNull(); // autocorrect rewrote it
   });
 
-  it('is not on the bar as a key that sends bytes', () => {
+  it('is not on the bar or in the ▾ row as a key that sends bytes', () => {
     expect(BAR_KEYS.map((k) => k.label)).toEqual(['tab', '↑', '↓', '←', '→', '^C', '⏎']);
+    expect(MORE_KEYS.map((k) => k.label)).toEqual(['esc', '⇧tab', 'home', 'end', 'pgup', 'pgdn']);
   });
 });
 

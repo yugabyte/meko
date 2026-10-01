@@ -1,8 +1,10 @@
 // What the terminal key bar and compose box send, as terminal input. Pure, so it's unit-tested.
 
-export type BarKey = 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter';
+export type BarKey =
+  | 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter'
+  | 'esc' | 'shift-tab' | 'home' | 'end' | 'pgup' | 'pgdn';
 
-/** The key bar, in order. The sticky Ctrl key sits after the first one (see TermKeys). */
+/** The key bar, in order. The ▾ key at its far right opens MORE_KEYS (see TermKeys). */
 export const BAR_KEYS: { key: BarKey; label: string; title: string }[] = [
   { key: 'tab', label: 'tab', title: 'Tab' },
   { key: 'up', label: '↑', title: 'Up' },
@@ -13,15 +15,33 @@ export const BAR_KEYS: { key: BarKey; label: string; title: string }[] = [
   { key: 'enter', label: '⏎', title: 'Enter' },
 ];
 
-const ARROWS: Partial<Record<BarKey, string>> = { up: 'A', down: 'B', right: 'C', left: 'D' };
+/** The row the ▾ key opens, in order. The sticky Ctrl key comes first (see TermKeys). */
+export const MORE_KEYS: { key: BarKey; label: string; title: string }[] = [
+  { key: 'esc', label: 'esc', title: 'Escape' },
+  { key: 'shift-tab', label: '⇧tab', title: 'Shift+Tab' },
+  { key: 'home', label: 'home', title: 'Home' },
+  { key: 'end', label: 'end', title: 'End' },
+  { key: 'pgup', label: 'pgup', title: 'Page Up' },
+  { key: 'pgdn', label: 'pgdn', title: 'Page Down' },
+];
+
+// Arrows, Home and End follow the cursor-key mode.
+const ARROWS: Partial<Record<BarKey, string>> = { up: 'A', down: 'B', right: 'C', left: 'D', home: 'H', end: 'F' };
 
 const FIXED: Partial<Record<BarKey, string>> = {
   tab: '\t',
   'ctrl-c': '\x03',
   enter: '\r',
+  esc: '\x1b',
+  'shift-tab': '\x1b[Z',
+  pgup: '\x1b[5~',
+  pgdn: '\x1b[6~',
 };
 
-/** The bytes a key sends. Arrows follow the terminal's cursor-key mode (DECCKM), like a real keyboard. */
+/**
+ * The bytes a key sends. Arrows, Home and End follow the terminal's cursor-key mode (DECCKM), like a
+ * real keyboard.
+ */
 export function keySequence(key: BarKey, applicationCursor = false): string {
   const arrow = ARROWS[key];
   if (arrow) return `${applicationCursor ? '\x1bO' : '\x1b['}${arrow}`;
