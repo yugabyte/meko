@@ -178,7 +178,7 @@ tests:
     asserts:
       - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements"
+          value: "yb_amp,pg_stat_statements,pgsentinel"
       - equal:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           value: "{}"
@@ -194,7 +194,7 @@ tests:
       # A non-preload extension does not touch shared_preload_libraries.
       - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements"
+          value: "yb_amp,pg_stat_statements,pgsentinel"
       # The two path GUCs are prepended with the PG18 defaults, then the mount.
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
@@ -220,7 +220,7 @@ tests:
     asserts:
       - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements,pg_documentdb_core,pg_documentdb"
+          value: "yb_amp,pg_stat_statements,pgsentinel,pg_documentdb_core,pg_documentdb"
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"cron.database_name":"documentdb"'
@@ -306,7 +306,7 @@ tests:
     asserts:
       - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements,pg_cron"
+          value: "yb_amp,pg_stat_statements,pgsentinel,pg_cron"
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '/extensions/pg_cron/share/postgresql:/extensions/vector/share/postgresql'

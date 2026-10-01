@@ -30,11 +30,14 @@ use crate::spec_apply::PerDatabasePhase::{
 };
 
 /// Extensions whose SQL objects a preloaded library needs, keyed by the library
-/// name in `shared_preload_libraries`. `pg_stat_statements` is the only one today:
-/// the library is loaded at postmaster start, the view it exposes comes from the
-/// extension, and both `/insights` and the postgres_exporter statement collector
-/// read `public.pg_stat_statements`.
-const PRELOADED_EXTENSIONS: &[&str] = &["pg_stat_statements"];
+/// name in `shared_preload_libraries`. Both are preloaded on every endpoint: the
+/// library is loaded at postmaster start and the views it exposes come from the
+/// extension. `/insights` and the postgres_exporter statement collector read
+/// `public.pg_stat_statements`; `pg_active_session_history` is pgsentinel's.
+/// `yb_amp` is not here: its library needs no SQL objects to do its job, so the
+/// extension is created only where a spec installs it (`HandleYbAmpExtension`)
+/// and `handle_yb_amp_extension_upgrade` upgrades it where it exists.
+const PRELOADED_EXTENSIONS: &[&str] = &["pg_stat_statements", "pgsentinel"];
 
 /// `CREATE EXTENSION` for every [`PRELOADED_EXTENSIONS`] entry the spec's effective
 /// `shared_preload_libraries` names. Idempotent, so a restart re-runs it harmlessly.
@@ -1284,6 +1287,14 @@ mod tests {
         assert!(extension_queries("yb_amp").is_empty());
         // A substring match would fire on this; the list is comma-separated names.
         assert!(extension_queries("yb_amp,pg_stat_statements_foo").is_empty());
+        // Output follows the allow-list, not the order the libraries are preloaded in.
+        assert_eq!(
+            extension_queries("yb_amp,pgsentinel,pg_stat_statements"),
+            vec![
+                "CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA public",
+                "CREATE EXTENSION IF NOT EXISTS pgsentinel WITH SCHEMA public",
+            ]
+        );
     }
 
     /// `pg_documentdb` is the key that brings the database. The image ships two

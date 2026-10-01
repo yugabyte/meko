@@ -122,21 +122,21 @@ pg_tree_build() {
 # dependency tracking, since that install is configured --enable-depend, so there
 # the wipe is belt-and-braces rather than the only thing that would catch it.
 pg_tree_rebuild_ext_if_stale() {
-    local ext_so="$PG_TREE_INSTALL_VERSION_DIR/lib/postgresql/yb_amp.so"
     local ext_stamp="$PG_TREE_BUILD_DIR/.yb_amp_ext.stamp"
     # The stamp records the cargo profile, not just the time: the .so statically
     # links libcommunicator.a, which follows $PROFILE. One build type per tree
     # makes that agree by construction — but POSTGRES_INSTALL_DIR can be
     # overridden to point both at one directory, and then a stale .so linked
     # against the other profile's library would look fresh.
-    if [[ -f $ext_so && -f $ext_stamp ]] \
+    if pg_tree_has_pgxn_libs && [[ -f $ext_stamp ]] \
         && [[ "$(cat "$ext_stamp" 2>/dev/null)" == "$PROFILE" ]] \
         && [[ -z "$(find "$REPO/compute/pgxn" -type f \
-                \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) \
+                \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \
+                   -o -name '*.sql' -o -name '*.control' \) \
                 -newer "$ext_stamp" -print -quit)" ]]; then
         return 0
     fi
-    echo ">>> yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding" >&2
+    echo ">>> compute extensions are stale (sources changed, a library is missing, or not yet built): clean-rebuilding" >&2
     rm -rf "$PG_TREE_BUILD_DIR/pgxn-v18"
     # BUILD_TYPE="$PROFILE" so the Rust half of the extension (libcommunicator.a,
     # linked into the .so) follows the caller's profile like every other binary.
@@ -153,6 +153,20 @@ pg_tree_rebuild_ext_if_stale() {
         "BUILD_TYPE=$PROFILE" yb-amp-pg-ext-v18
     mkdir -p "$PG_TREE_BUILD_DIR"
     printf '%s\n' "$PROFILE" > "$ext_stamp"
+}
+
+# The libraries yb-amp-pg-ext installs. Every compute preloads them (the
+# supervisor's DEFAULT_SHARED_PRELOAD_LIBRARIES), so a tree built before one
+# joined the list would stop the postmaster rather than run stale.
+PG_TREE_PGXN_LIBS="yb_amp pgsentinel"
+
+pg_tree_has_pgxn_libs() {
+    local lib dlsuffix=.so
+    # PostgreSQL's DLSUFFIX (src/template/darwin).
+    [[ $(uname -s) == Darwin ]] && dlsuffix=.dylib
+    for lib in $PG_TREE_PGXN_LIBS; do
+        [[ -f $PG_TREE_INSTALL_VERSION_DIR/lib/postgresql/$lib$dlsuffix ]] || return 1
+    done
 }
 
 # Report which PostgreSQL the run actually got. Cheap half of the fix above: a

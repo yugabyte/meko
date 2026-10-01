@@ -84,9 +84,10 @@ use supervise::{Outcome, Policy, Supervisor};
 
 /// What a compute preloads when the chart passes nothing: the storage extension it
 /// cannot run without, plus `pg_stat_statements`, which feeds the postgres_exporter
-/// statement collector and compute_ctl's `/insights` and can only be loaded at
-/// postmaster start.
-const DEFAULT_SHARED_PRELOAD_LIBRARIES: &str = "yb_amp,pg_stat_statements";
+/// statement collector and compute_ctl's `/insights`, and `pgsentinel`, which
+/// samples active session history. All three can only be loaded at postmaster
+/// start.
+const DEFAULT_SHARED_PRELOAD_LIBRARIES: &str = "yb_amp,pg_stat_statements,pgsentinel";
 
 pub(crate) fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())

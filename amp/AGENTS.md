@@ -134,9 +134,10 @@ Code anchors:
 - `./build.sh` is the single build entry point: no flag = debug, `--release`
   = release, `--release-tar` = release + shippable tarball, `--headers` =
   install just the PG headers (for `cargo check` / IDE). It checks out the
-  `compute/vendor/postgres-v18` submodule and rebuilds PostgreSQL (and the compute
-  extensions) whenever the installed PG no longer matches the checked-out
-  submodule commit, so prefer it over a bare `make`/`cargo build`. The logic
+  `compute/vendor/postgres-v18` and `compute/pgxn/vendor/pgsentinel` submodules
+  and rebuilds PostgreSQL (and the compute extensions) whenever the installed PG
+  no longer matches the checked-out submodule commit, so prefer it over a bare
+  `make`/`cargo build`. The logic
   lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin shim
   (`--pg-only` does just the PostgreSQL step, which `run.sh` reuses).
 - **`BUILD_TYPE` picks the cargo profile AND the PostgreSQL build.** `debug`

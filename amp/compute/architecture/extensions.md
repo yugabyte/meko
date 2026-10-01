@@ -13,9 +13,10 @@ it — see "[Registering an extension image](#registering-an-extension-image)".
 ## Why not bake them into the endpoint image
 
 The yb-amp endpoint image ([`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile))
-ships **only** PG18 — including the in-tree contrib modules installed by
-[`postgres.mk`](../../postgres.mk) (`pg_trgm`, `btree_gin`, …) — plus the
-`yb_amp` extension. Everything else is externalized:
+ships **only** PG18, including the contrib modules installed by
+[`postgres.mk`](../../postgres.mk) (`pg_trgm`, `btree_gin`, …), plus the
+extensions built from [`compute/pgxn`](../pgxn), which are `yb_amp` and the
+vendored `pgsentinel`. Everything else is externalized:
 
 - **Licensing forces it.** GPL extensions (e.g. **PostGIS**) can't be baked into
   our image; they must be built and shipped independently, then downloaded and
@@ -35,6 +36,37 @@ ships **only** PG18 — including the in-tree contrib modules installed by
   + two GUCs, not an endpoint-image rebuild.
 - **ABI safety by construction.** Every extension is compiled against the *exact*
   forked PostgreSQL v18 the endpoint runs (see "The ABI-anchor base", below).
+
+## What gets baked instead
+
+The dividing line is **default-on**, not first-party-vs-third-party.
+`shared_preload_libraries` is fixed at postmaster start, and a name in it whose
+library is missing does not degrade: the postmaster refuses to boot. A library
+every endpoint preloads by default therefore has to be in the image, because the
+ImageVolume mount is per-branch opt-in and the endpoints that did not opt in
+would be the ones that fail to start.
+
+`pgsentinel` (active session history, 1.5.1) is baked for that reason
+alone, even though it is third-party. It comes in as a submodule at
+`compute/pgxn/vendor/pgsentinel` (`vendor/` holds third-party modules; the rest
+of `compute/pgxn` is ours) from
+[yugabyte/amp-pgsentinel](https://github.com/yugabyte/amp-pgsentinel), a fork of
+upstream carrying the fixes amp needs, and an upgrade is a gitlink bump.
+`yb-amp-pg-ext` installs it into `pg_install` beside `yb_amp`, and
+[`spec_apply.rs`](../compute_tools/src/spec_apply.rs)'s `PRELOADED_EXTENSIONS`
+has compute_ctl create the extension after start. The sampler reads only
+`pg_stat_activity`, but the `queryid` it records is core's, which under the
+default `compute_query_id = auto` is computed only because `pg_stat_statements`
+is also preloaded. Without that, pgsentinel hashes the query text itself
+and the join below does not match.
+
+Upstream's GUC defaults are kept. `pgsentinel_ash.max_entries` (1000,
+`PGC_POSTMASTER`) caps rows, not seconds: each 1 Hz tick writes one row per
+active session, so the history reaches back about 1000/N seconds for N active
+sessions, 16 minutes with one and under two with ten. Query text is not stored:
+the fork's `pgsentinel_ash.yb_track_query_text` is off by default, so `query` and
+`top_level_query` are NULL and `queryid` joins to `pg_stat_statements`
+([#1448](https://github.com/yugabyte/meko/issues/1448)).
 
 ## The two GUCs
 
@@ -58,10 +90,10 @@ name (`pgvector` ships `vector.control`, so `CREATE EXTENSION vector`).
 
 `shared_preload_libraries` is separate: an extension that must be preloaded
 (e.g. `pg_cron`) has its library name appended to the base
-`shared_preload_libraries` (`yb_amp,pg_stat_statements`, both image-baked). It
-must contain **only** libraries that are actually mounted, or the postmaster fails
-to start — so the controller/chart only add a preload entry for an extension it is
-also mounting.
+`shared_preload_libraries` (`yb_amp,pg_stat_statements,pgsentinel`, all
+image-baked). It must contain **only** libraries that are actually mounted, or the
+postmaster fails to start, so the controller/chart only add a preload entry for an
+extension it is also mounting.
 
 `pg_cron`'s scheduler binds to one database via `cron.database_name`, and
 `CREATE EXTENSION pg_cron` is refused in any other. It defaults to `postgres`,

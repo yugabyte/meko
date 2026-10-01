@@ -147,10 +147,10 @@ fi
 #    nothing. CI relies on that — it runs this straight after run.sh in the same
 #    job, on exactly what that step built. Its profile was settled in 0).
 if [[ $NO_BUILD == 1 ]]; then
-    [[ -x "$PGINST/bin/postgres" && -f "$PGINST/lib/postgresql/yb_amp.so" ]] || {
-        echo "--no-build: $PGINST has no postgres or no yb_amp.so." >&2
+    if [[ ! -x "$PGINST/bin/postgres" ]] || ! pg_tree_has_pgxn_libs; then
+        echo "--no-build: $PGINST has no postgres or lacks one of: $PG_TREE_PGXN_LIBS." >&2
         exit 1
-    }
+    fi
     YB_AMP="$REPO/target/$_PROFILE_DIR/yb_amp_local"
     echo ">>> reusing the existing $_PROFILE_DIR build (--no-build)"
     pg_tree_report

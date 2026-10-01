@@ -40,6 +40,11 @@ PostgreSQL submodule handling (every mode):
     produced it (.pg_makefiles — Makefile + postgres.mk). Without the second, a
     contrib module added to postgres.mk, or a configure flag edited into either
     file, ships a stale Postgres.
+
+    The `compute/pgxn/vendor/pgsentinel` submodule is kept at its gitlink the
+    same way; yb-amp-pg-ext rebuilds it every time, so it has no cache to key.
+    To build a commit checked out by hand in either submodule, `git add` it
+    first: the re-sync checks out the staged gitlink.
 """
 
 import argparse
@@ -55,17 +60,18 @@ from pathlib import Path
 # Repo root = parent of this script's scripts/ dir, so the build works no
 # matter where it's invoked from.
 ROOT = Path(__file__).resolve().parent.parent
-SUBMODULE = "compute/vendor/postgres-v18"
+PG_SUBMODULE = "compute/vendor/postgres-v18"
+PGSENTINEL_SUBMODULE = "compute/pgxn/vendor/pgsentinel"
 
 
-def submodule_in_tree():
-    """SUBMODULE as git's object tree records it, i.e. relative to the repo root.
+def submodule_in_tree(path):
+    """`path` as git's object tree records it, i.e. relative to the repo root.
 
     git submodule pathspecs and `git -C` are relative to the cwd, but `HEAD:<path>`
     never is. When the amp tree is a subdirectory of a larger repo the two differ, so
     ask git for the prefix rather than assuming either layout.
     """
-    return (git_out("rev-parse", "--show-prefix") or "") + SUBMODULE
+    return (git_out("rev-parse", "--show-prefix") or "") + path
 
 
 PG_VERSION = "v18"
@@ -230,7 +236,7 @@ def built_pg_commit(pg):
 
 def record_pg_commit(pg):
     """Stamp the install with the submodule commit it was just built from."""
-    have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
+    have = git_out("-C", PG_SUBMODULE, "rev-parse", "HEAD")
     if have:
         pg.commit_stamp.write_text(have + "\n")
 
@@ -245,7 +251,7 @@ def pg_install_matches_commit(pg):
     if not (pg.install / "bin" / "postgres").is_file():
         say(f"{pg} missing — building PostgreSQL from source...")
         return False
-    have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
+    have = git_out("-C", PG_SUBMODULE, "rev-parse", "HEAD")
     built = built_pg_commit(pg)
     if built != have:
         say(f"{pg} was built from {(built or 'unknown')[:12]} but the "
@@ -255,16 +261,17 @@ def pg_install_matches_commit(pg):
 
 
 def ensure_submodule():
-    """Check compute/vendor/postgres-v18 out if it isn't already at the gitlink.
+    """Check each submodule out if it isn't already at its gitlink.
 
     Self-guarding, so callers need not work out whether a checkout is due.
     """
-    if git_out("rev-parse", f"HEAD:{submodule_in_tree()}") == git_out(
-        "-C", SUBMODULE, "rev-parse", "HEAD"
-    ):
-        return
-    say(f"Syncing {SUBMODULE}...")
-    run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
+    for path in (PG_SUBMODULE, PGSENTINEL_SUBMODULE):
+        if git_out("rev-parse", f"HEAD:{submodule_in_tree(path)}") == git_out(
+            "-C", path, "rev-parse", "HEAD"
+        ):
+            continue
+        say(f"Syncing {path}...")
+        run(["git", "submodule", "update", "--init", "--recursive", "--", path])
 
 
 def make_env(*, cached):
@@ -347,7 +354,8 @@ def stage_and_package(target_dir, pg):
     for lib in RUNTIME_LIBS:
         shutil.copy2(f"/usr/lib64/{lib}", bundle / "pg_install" / "v18" / "lib" / lib)
 
-    pg_commit = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
+    pg_commit = git_out("-C", PG_SUBMODULE, "rev-parse", "HEAD")
+    pgsentinel_commit = git_out("-C", PGSENTINEL_SUBMODULE, "rev-parse", "HEAD")
     head = git_out("rev-parse", "HEAD")
     subject = git_out("log", "-1", "--pretty=%s")
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -356,7 +364,8 @@ def stage_and_package(target_dir, pg):
         f"Build date: {now}\n"
         f"Commit:     {head}\n"
         f"Subject:    {subject}\n"
-        f"PG commit:  {pg_commit}\n\n"
+        f"PG commit:  {pg_commit}\n"
+        f"pgsentinel: {pgsentinel_commit}\n\n"
         "yb_amp_local launches pageserver (see local_env.rs::pageserver_bin).\n"
     )
 
@@ -484,7 +493,7 @@ def main():
         rebuild_pg = True
 
     if not rebuild_pg:
-        say(f"{SUBMODULE} up to date — reusing cached {pg}")
+        say(f"{PG_SUBMODULE} up to date — reusing cached {pg}")
 
     # Build (or rebuild) PostgreSQL in release *before* cargo: postgres_ffi's
     # build script generates bindings from the installed server headers

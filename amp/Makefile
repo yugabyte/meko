@@ -265,9 +265,9 @@ controller-generate:
 # Output: $(CONTROLLER_BUNDLE_DIR)/controller.
 CONTROLLER_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/controller-bundle
 
-# Initialize submodules (currently just compute/vendor/postgres-v18). Idempotent: a no-op
-# when they are already present and at the recorded commit, so it is safe to run
-# on every build.
+# Initialize submodules (compute/vendor/postgres-v18 and
+# compute/pgxn/vendor/pgsentinel). Idempotent: a no-op when they are already
+# present and at the recorded commit, so it is safe to run on every build.
 .PHONY: submodules
 submodules:
 	git submodule update --init --recursive --depth 2 --progress .

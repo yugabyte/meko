@@ -400,7 +400,7 @@ gated on `SUPERVISOR_HTTP_PORT`), which a controller-driven install always sets.
 The richest perf signal (per-normalized statement `calls`, total/mean/max exec
 time, rows, block hits vs reads, WAL bytes) comes from the exporter's built-in
 `stat_statements` collector, **on by default**. Three pieces hang off one value,
-`endpoint.sharedPreloadLibraries` (`yb_amp,pg_stat_statements`):
+`endpoint.sharedPreloadLibraries` (`yb_amp,pg_stat_statements,pgsentinel`):
 
 1. The library is preloaded from the first boot. It is loadable only at postmaster
    start, so leaving it out costs a compute restart to add later.

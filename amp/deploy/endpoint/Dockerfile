@@ -4,7 +4,8 @@
 # Ships, in one image, every process that makes up a yb-amp endpoint:
 #   - pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
-#   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
+#   - compute_ctl + postgres v18 + the contrib modules postgres.mk installs and
+#                          the compute/pgxn extensions, `yb_amp` and `pgsentinel`
 #   - endpoint-supervisor (PID 1 under tini) that renders each service's
 #                          config from environment variables, brings the stack
 #                          up in order, and monitors/restarts the children

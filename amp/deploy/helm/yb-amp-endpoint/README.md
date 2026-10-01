@@ -113,7 +113,7 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `endpoint.pgVersion` | `18` | compute Postgres version (the image ships v18 only) |
 | `endpoint.computePort` | `55433` | compute Postgres port (exposed by the Service) |
 | `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
-| `endpoint.sharedPreloadLibraries` | `yb_amp,pg_stat_statements` | compute `shared_preload_libraries`; `pg_stat_statements` here also turns on the exporter's `stat_statements` collector and compute_ctl's `/insights` |
+| `endpoint.sharedPreloadLibraries` | `yb_amp,pg_stat_statements,pgsentinel` | compute `shared_preload_libraries`; `pg_stat_statements` here also turns on the exporter's `stat_statements` collector and compute_ctl's `/insights` |
 | `endpoint.endpointId` | _(empty)_ | the endpoint's `amp_registry.endpoints` id; lets the supervisor read its own and its branch's `pg_settings` (and the pageserver/safekeeper override columns) from the registry. Empty ⇒ derived defaults only |
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `16Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS. 16Gi is the 8 GiB per vCPU the control plane holds every endpoint to — a core without the memory to feed it gives Postgres a cache it cannot keep |
 | `service.type` | `ClusterIP` | Service type |

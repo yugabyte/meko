@@ -6,18 +6,22 @@ package features
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
-// DefaultExtensionsBaked is the contrib set built into the compute image, which
-// every endpoint must serve with no opt-in.
+// DefaultExtensionsBaked is the set built into the compute image (PG contrib,
+// plus pgsentinel from compute/pgxn/vendor), which every endpoint must serve with
+// no opt-in.
 // test_decoding is deliberately absent: postgres.mk builds it, but it has no
 // control file, so the only way to exercise it is to create a logical
 // replication slot, which asserts working logical decoding over amp storage.
@@ -25,7 +29,7 @@ import (
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
 	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements", "tsm_system_rows",
-	"postgres_fdw",
+	"postgres_fdw", "pgsentinel",
 }
 
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
@@ -283,7 +287,15 @@ func extensionsMatrixSteps(ctx context.Context, cl ampCtl, proj ampCluster, bake
 	}
 
 	for _, e := range want {
-		if _, err := c.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS "+quoteExtIdent(e.sql)); err != nil {
+		create := "CREATE EXTENSION IF NOT EXISTS " + quoteExtIdent(e.sql)
+		_, err := c.Exec(ctx, create)
+		// compute_ctl creates the preloaded ones in the background after start, and
+		// IF NOT EXISTS loses a concurrent create with a unique violation.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			_, err = c.Exec(ctx, create)
+		}
+		if err != nil {
 			return fmt.Errorf("CREATE EXTENSION %s failed on an endpoint where pg_available_extensions lists it at version %s (%s): %w",
 				e.sql, avail[e.sql], extClass(e), err)
 		}
@@ -343,7 +355,7 @@ func expectedExtensions(baked []string, catalog []catalogExt, catalogOK bool) []
 
 func extClass(e expectedExtension) string {
 	if e.catalog == "" {
-		return "baked into the compute image as PG contrib, no opt-in"
+		return "baked into the compute image (postgres.mk contrib or compute/pgxn), no opt-in"
 	}
 	return "catalog extension " + e.catalog + ", mounted because the cluster opted in"
 }
@@ -420,6 +432,23 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 	}
 	if tracked == 0 {
 		return fmt.Errorf("pg_stat_statements tracked 0 statements on a connection that has been executing SQL — the preloaded library is not recording")
+	}
+
+	// A readable view proves the preload and rows prove the sampler is alive. It
+	// records only `active` sessions, about once a second but later when its own
+	// query is slow, so stay active and poll rather than trust one window.
+	var ash int64
+	for attempt := 0; attempt < 5 && ash == 0; attempt++ {
+		if _, err := c.Exec(ctx, "SELECT pg_sleep(2)"); err != nil {
+			return fmt.Errorf("pg_sleep before reading pgsentinel's view: %w", err)
+		}
+		ash, err = c.QueryInt(ctx, "SELECT count(*) FROM pg_active_session_history")
+		if err != nil {
+			return fmt.Errorf("pg_active_session_history is not readable, so pgsentinel is not in shared_preload_libraries: %w", err)
+		}
+	}
+	if ash == 0 {
+		return fmt.Errorf("pg_active_session_history is empty after 10s of an active session: pgsentinel's sampler is not recording")
 	}
 
 	// The observability/maintenance contribs each do one real call over the

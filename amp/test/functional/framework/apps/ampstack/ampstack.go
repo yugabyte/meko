@@ -122,13 +122,15 @@ const (
 	DefaultControllerImage = "amp/controller:tailnet-mig0010"
 	DefaultEndpointImage   = "amp/endpoint:phase1-20260703-154251"
 	// Default pins for the flat-named registries (quay/ghcr). Bumped as new
-	// builds are published; custom-7f195e43e51f is the current build whose
-	// controller folds the storage-controller in-process (#280) and so matches
-	// the shipped chart. Earlier tags (custom-4f1ca53, custom-0e2131d) predate
-	// #280 and crash-loop on "Insecure config" (separate storage_controller
-	// subprocess), so the controller never reaches Available.
-	DefaultQuayControllerImage = "amp-controller:custom-7f195e43e51f"
-	DefaultQuayEndpointImage   = "amp-endpoint:custom-7f195e43e51f"
+	// builds are published, as a pair from one build: the chart in the
+	// controller image names the libraries the endpoint image must ship.
+	// custom-99ef0d8ddbe9 is the first build that bakes pgsentinel (#1446).
+	// Tags before #280 (custom-4f1ca53, custom-0e2131d) ran the storage
+	// controller as a separate subprocess that crash-loops on "Insecure config".
+	// The ECR pins above also predate pgsentinel, so a `registry: ecr` run
+	// without an image override fails pg_extensions_matrix until they move.
+	DefaultQuayControllerImage = "amp-controller:custom-99ef0d8ddbe9"
+	DefaultQuayEndpointImage   = "amp-endpoint:custom-99ef0d8ddbe9"
 	DefaultEndpointServiceType = "ClusterIP"
 	DefaultControllerExpose    = "none"
 	DefaultBackingUser         = "yugabyte"

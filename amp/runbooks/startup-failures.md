@@ -72,6 +72,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | PS/SK panics at startup: `OS can't spawn worker thread: Resource temporarily unavailable` | per-user process/thread limit (`ulimit -u` / cgroup `pids.max`) exhausted | **O** |
 | SK: `failed to load timeline` / `end-of-WAL record-boundary scan failed`; compute reconnects in a loop and the PS can't stream | the safekeeper won't trust a scan it couldn't finish, so it fails the load rather than delete or misreport durable WAL. Deterministic causes (unknown codec tag, anchor bail) keep the branch down until fixed | **P** |
 | SK: `safekeeper_timelines` is 0, no error logged, walproposer and PS stuck `connecting`; writes block on `SyncRep` | `load_timeline` is blocked on a YB statement that never returns — no error, so nothing retries | **Q** |
+| Compute postmaster exits at startup: `FATAL: could not access file "<lib>"` | `shared_preload_libraries` names a library the endpoint image does not ship, usually a chart newer than the image | **S** |
 
 ---
 
@@ -464,3 +465,23 @@ without bound. Check `safekeeper_timelines`, the branch's row count trend in
 `amp_storage.wals`, and whether the removal task logs `WAL removal` completions.
 Before #874 this query ran on the startup load instead, where the same cost took
 the branch's endpoint down (§Q).
+
+## S. Compute postmaster exits: `could not access file "<lib>"`
+`shared_preload_libraries` is applied at postmaster start, and a name in it whose library is missing
+stops the postmaster instead of being skipped. The compute's log (the endpoint container, or
+`compute.log` under yb_amp_local) ends with
+`FATAL:  could not access file "<lib>": No such file or directory`, just after a
+`WARNING:  yb_amp_download_extension_file_http failed` from yb_amp asking compute_ctl's extension
+server for the library; that warning is a consequence, not the cause. The supervisor restarts the
+compute within its budget, then exits so the kubelet recreates the pod, which repeats the cycle.
+
+**The base list is newer than the image.** The chart's `endpoint.sharedPreloadLibraries` ships in
+the controller image, while the `.so` files ship in the endpoint image, so a controller rendering
+an endpoint whose `spec.Version` points at an older image fails this way when a library joins the
+default list (`pgsentinel` did in [#1446]; `pg_stat_statements` before it). This happens on a
+re-render of an endpoint still recorded at the older version, and on a rollback of the endpoint
+image alone. Roll the endpoint image out before the controller, and upgrade or roll back the two
+together. Tracked in [#1572].
+
+[#1446]: https://github.com/yugabyte/meko/issues/1446
+[#1572]: https://github.com/yugabyte/meko/issues/1572

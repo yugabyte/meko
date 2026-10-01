@@ -175,10 +175,11 @@ endpoint:
   password: ""
   # -- Postgres shared_preload_libraries for the compute. Extensions with
   # `preload: true` below are appended to this automatically.
-  # `pg_stat_statements` (contrib, in the image) is preloaded by default because a
-  # preload library cannot be added later without a postmaster restart. The
-  # compute_ctl creates the matching extension after start when it sees the name here.
-  sharedPreloadLibraries: "yb_amp,pg_stat_statements"
+  # `pg_stat_statements` (contrib) and `pgsentinel` (pgxn/vendor) are preloaded by
+  # default because a preload library cannot be added later without a postmaster
+  # restart. The compute_ctl creates the matching extension after start when it sees
+  # the name here.
+  sharedPreloadLibraries: "yb_amp,pg_stat_statements,pgsentinel"
   # -- Externalized extensions to mount as read-only Kubernetes ImageVolumes
   # (built from deploy/extensions). Each mounts at /extensions/<name>, and its
   # share/ + lib/ subdirs are appended to extension_control_path /

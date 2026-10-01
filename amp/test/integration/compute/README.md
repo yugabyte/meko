@@ -33,13 +33,15 @@ essential: `yb_amp_local` launches them from `target/<profile>/` at
 runtime without rebuilding, so a missing one silently runs a stale binary.
 Default builds are debug; `--release` builds and runs the release binaries.
 
-`run.sh` also rebuilds the **`yb_amp` Postgres extension**
-(`make yb-amp-pg-ext-v18`) when its C sources changed — `cargo` does not build
-it, and the compute loads `<install>/lib/postgresql/yb_amp.so` at runtime,
+`run.sh` also rebuilds the **compute Postgres extensions** (`make
+yb-amp-pg-ext-v18`: `yb_amp` and the vendored `pgsentinel`) when their sources
+changed (C, headers, Makefiles, SQL scripts, control files) or a library the
+compute preloads is missing. `cargo` does not build them, and the compute loads
+`<install>/lib/postgresql/yb_amp.so` at runtime,
 so a stale `.so` runs an old walproposer/compute against fresh cluster binaries
 (a wire/ABI skew that looks like a hang or segfault). Staleness is tracked via
 `.yb_amp_ext.stamp` in the build dir; because the PGXS build has no
-header-dependency tracking, any C change forces a **clean** extension rebuild
+header-dependency tracking, any such change forces a **clean** extension rebuild
 (~1–2 min), while Rust-only edits skip it entirely.
 
 ### Which PostgreSQL the suites run

@@ -314,12 +314,8 @@ spec:
           # Readiness here is pod-wide: a failing probe on this sidecar pulls the
           # whole pod out of the Service, taking Postgres and the controller's
           # safekeeper round trip (verifyReady, #724) with it. `check` verifies
-          # the documentdb EXTENSION is loaded, and nothing in the product
-          # creates it — compute_ctl auto-creates only PRELOADED_EXTENSIONS
-          # ("pg_stat_statements"), and mounting the ImageVolume only makes the
-          # extension available for the user's own CREATE EXTENSION. Gating
-          # readiness on it meant no documentdb endpoint could reach Ready at
-          # all: helm --wait failed every create, on a healthy compute.
+          # the documentdb EXTENSION is loaded, which is catalog state, not this
+          # container's health.
           #
           # So probe what this container is responsible for — its own listener —
           # exactly as the endpoint container probes pg-compute.

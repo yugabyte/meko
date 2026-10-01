@@ -574,7 +574,7 @@ a ConfigMap + Secret):
 | `ENDPOINT_PG_VERSION` | `18` | compute Postgres major version; locates `pg_install/v{N}` (the image ships v18 only) |
 | `COMPUTE_PORT` | `55433` | compute Postgres port |
 | `COMPUTE_PASSWORD` | _(unset)_ | password for the compute's default user (`cloud_admin`), set by the supervisor once Postgres answers so non-loopback clients can authenticate. May be a plaintext (Postgres hashes it, to SCRAM) or the verifier `pg_authid` stores — `SCRAM-SHA-256$...` — which is what the control plane sends, so it never hands the pod something that can log in. Unset leaves the role's password as the catalog has it; the supervisor also declines to overwrite a password that is already set |
-| `SHARED_PRELOAD_LIBRARIES` | `yb_amp,pg_stat_statements` | compute `shared_preload_libraries` |
+| `SHARED_PRELOAD_LIBRARIES` | `yb_amp,pg_stat_statements,pgsentinel` | compute `shared_preload_libraries` |
 | `EXTENSION_LIBRARY_PATH` | _(unset)_ | colon-separated dirs of system shared libraries a registered extension bundles (e.g. `/extensions/postgis/system`); appended to `LD_LIBRARY_PATH` for every child |
 | `TENANT_ID` / `TIMELINE_ID` | _(unset)_ | serve an existing tenant; unset ⇒ bootstrap a fresh one |
 

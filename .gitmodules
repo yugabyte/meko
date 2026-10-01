@@ -10,3 +10,8 @@
 	path = amp/compute/vendor/postgres-v18
 	url = git@github.com:yugabyte/amp-postgres.git
 	branch = REL_18_STABLE_amp
+# amp-pgsentinel is public, so HTTPS needs no key and no CI rewrite.
+[submodule "amp/compute/pgxn/vendor/pgsentinel"]
+	path = amp/compute/pgxn/vendor/pgsentinel
+	url = https://github.com/yugabyte/amp-pgsentinel.git
+	branch = master

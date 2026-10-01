@@ -292,8 +292,9 @@ Afterwards `post_apply_config()` spawns a background task that runs
 maintenance database, to avoid a spurious error on every startup — and creates the
 **preloaded extensions**: `CREATE EXTENSION IF NOT EXISTS <name> WITH SCHEMA public`
 for every entry of `spec_apply.rs`'s `PRELOADED_EXTENSIONS` that the effective
-`shared_preload_libraries` names (`pg_stat_statements` today). It runs here, not in
-the `HandleOtherExtensions` phase above, because this task runs whether or not the
+`shared_preload_libraries` names (`pg_stat_statements`, a contrib module, and
+`pgsentinel`, built from `compute/pgxn`). It runs here, not in the
+`HandleOtherExtensions` phase above, because this task runs whether or not the
 spec sets `skip_pg_catalog_updates` — and amp's specs do. The schema is pinned
 because these extensions are relocatable: without it one lands in the first schema
 of the connection's `search_path`, while `/insights` reads

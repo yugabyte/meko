@@ -168,15 +168,18 @@ env:
     # alone would reserve hundreds of GiB at the product shape. Raise it to
     # exercise what real endpoints get, at the cost of what those suites can fit.
     endpoint_memory_gib_per_vcpu: 2
-    # Pinned to known-good tags; bump as new builds publish. custom-7f195e43e51f
-    # is the current build whose controller folds the storage-controller
-    # in-process (#280) and so matches this chart. Earlier tags (custom-4f1ca53,
-    # custom-0e2131d) predate #280: their separate storage_controller subprocess
-    # crash-loops on "Insecure config! One or more secrets is not set", so the
-    # controller never reaches Available. The ecr flavor's equivalents are
-    # amp/controller:tailnet-mig0010 / amp/endpoint:phase1-20260703-154251.
-    controller_image: "amp-controller:custom-7f195e43e51f"
-    endpoint_image: "amp-endpoint:custom-7f195e43e51f"
+    # Pinned to known-good tags; bump as new builds publish, and keep the pair
+    # from one build: the chart in the controller image names the libraries the
+    # endpoint image must ship. custom-99ef0d8ddbe9 is the first build that bakes
+    # pgsentinel (#1446), which pg_extensions_matrix requires. Tags before #280
+    # (custom-4f1ca53, custom-0e2131d) ran the storage controller as a separate
+    # subprocess that crash-loops on "Insecure config!", so avoid them. The ecr
+    # flavor's equivalents, amp/controller:tailnet-mig0010 and
+    # amp/endpoint:phase1-20260703-154251, predate pgsentinel: a `registry: ecr`
+    # run without an image override fails pg_extensions_matrix on it until those
+    # are rebuilt.
+    controller_image: "amp-controller:custom-99ef0d8ddbe9"
+    endpoint_image: "amp-endpoint:custom-99ef0d8ddbe9"
     # quay.io robot credentials for the pull secret (custom/release builds
     # pushed by the amp build pipeline live there). Empty -> no quay auth.
     # quay_token is redacted from the recorded config snapshot and masked in
@@ -465,7 +468,8 @@ functional:
   # The extension set the release commits to shipping, pinned here rather than
   # read back from the database (a test that enumerates pg_available_extensions
   # cannot detect a missing extension).
-  #   baked: PG contrib built into the compute image, available with no opt-in.
+  #   baked: built into the compute image (PG contrib, and pgsentinel from
+  #     compute/pgxn), available with no opt-in.
   #   catalog: externalized, opt-in per branch, as catalogName:sqlName — the two
   #     differ (the pgvector image ships the "vector" extension).
   extensions:
@@ -487,6 +491,7 @@ functional:
       - pg_stat_statements
       - tsm_system_rows
       - postgres_fdw
+      - pgsentinel
     catalog:
       - "pgvector:vector"
       - "pg_cron:pg_cron"

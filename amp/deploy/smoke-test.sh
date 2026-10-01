@@ -362,6 +362,21 @@ for ((r=0; r<10; r++)); do
 done
 echo "$out" | grep -q '^t$' && ok "pg_stat_statements preloaded + created, tracking statements" \
   || bad "pg_stat_statements not usable on a fresh endpoint (got: $(echo "$out"|tail -1))"
+# (c') pgsentinel: the view must have rows, since a sampler that died at startup
+#      leaves it readable but empty. pg_sleep keeps this session active across two
+#      1 Hz ticks. Same CREATE EXTENSION retry as (c).
+out=""
+for ((r=0; r<10; r++)); do
+  out=$(psql_pod "$POD" 127.0.0.1 55433 <<'SQL' 2>&1
+SELECT pg_sleep(2);
+SELECT count(*) > 0 FROM public.pg_active_session_history;
+SQL
+)
+  echo "$out" | tail -1 | grep -q '^t$' && break
+  sleep 3
+done
+echo "$out" | tail -1 | grep -q '^t$' && ok "pgsentinel preloaded + created, sampler recording into active session history" \
+  || bad "pgsentinel not usable on a fresh endpoint (got: $(echo "$out"|tail -1))"
 # (d) the shipped Postgres is a release build. `debug_assertions` reports whether it
 #     was configured --enable-cassert, which the image must never be: assertions plus
 #     the -O0 that comes with them are a large, silent slowdown, and nothing else here

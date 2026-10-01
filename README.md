@@ -38,7 +38,7 @@ every PR ([`REVIEW.md`](REVIEW.md#upgrade-safety--every-pr)).
 ## After cloning
 
 ```bash
-git submodule update --init --recursive   # amp's vendored PostgreSQL
+git submodule update --init --recursive   # amp's vendored PostgreSQL and pgsentinel
 git config log.follow true                # git log <file> spans the tree moves
 ```
 

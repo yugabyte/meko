@@ -60,8 +60,9 @@ Notes:
 - The `amp-build-tools` base is a **private** Quay repo, so `podman login quay.io`
   (or `docker login quay.io`) before building — the endpoint/extension images pull
   it as their `FROM` base.
-- Requires the `compute/vendor/postgres-v18` submodule checked out
-  (`git submodule update --init --recursive compute/vendor/postgres-v18`).
+- Requires the `compute/vendor/postgres-v18` and `compute/pgxn/vendor/pgsentinel`
+  submodules checked out (`git submodule update --init --recursive
+  compute/vendor/postgres-v18 compute/pgxn/vendor/pgsentinel`).
 - The self-built `amp-build-tools` base runs as `nonroot` (uid 1000), so it needs
   no unusually large subuid range to extract (unlike the old neon build-tools
   image, whose files were owned by a high UID ~197609).

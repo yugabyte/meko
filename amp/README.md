@@ -342,7 +342,8 @@ update` or `make` to remember. Specifically it:
   matches what produced it: the submodule commit (`.pg_commit`), the makefiles
   that shaped the build (`.pg_makefiles` — `Makefile` + `postgres.mk`, so a new
   contrib module or a changed configure flag counts), and the requested build
-  type. Otherwise it rebuilds PostgreSQL.
+  type. Otherwise it rebuilds PostgreSQL. The `pgsentinel` submodule
+  (`compute/pgxn/vendor/pgsentinel`) is checked out the same way.
 - Builds PostgreSQL to match the requested build type — `BUILD_TYPE` picks it
   along with the cargo profile. A debug build (the default) is assertion-enabled
   at `-O2` and lands in `pg_install-debug/v18`, which is what the integration

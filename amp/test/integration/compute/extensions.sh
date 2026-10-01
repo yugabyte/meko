@@ -427,8 +427,8 @@ done
 #    and amp/compute/pgxn/** — the last so a change to the yb_amp .so (e.g. the
 #    pagestream wire command) busts the cache and rebuilds it against the fresh
 #    pageserver, rather than reusing a stale .so that speaks the old protocol.
-if [[ ! -x "$PGINST/bin/postgres" || ! -f "$PGINST/lib/postgresql/yb_amp.so" ]]; then
-    echo ">>> $PGINST missing — building Postgres + yb_amp extension (./build.sh)"
+if [[ ! -x "$PGINST/bin/postgres" ]] || ! pg_tree_has_pgxn_libs; then
+    echo ">>> $PGINST missing or lacks an extension library: building Postgres + extensions (./build.sh)"
     bash "$REPO/build.sh" --release
 fi
 
@@ -624,11 +624,12 @@ PG_SETTINGS=(
 if [[ ${#ABI_EXEMPT[@]} -gt 0 ]]; then
     PG_SETTINGS+=(--pg-setting "yb_amp_abi_extra_exempt_libraries=$(IFS=,; echo "${ABI_EXEMPT[*]}")")
 fi
-# A preload extension must also be added to shared_preload_libraries; the base is
-# the supervisor's DEFAULT_SHARED_PRELOAD_LIBRARIES (endpoint_supervisor's
-# main.rs), which local and deployed endpoints share. That GUC is comma-separated
-# (a list of library names), unlike the path GUCs above. pgvector/age need no
-# preload; pg_cron/hexabridge do — union whatever the co-mounted set requires.
+# A preload extension must also be added to shared_preload_libraries. This
+# setting replaces the supervisor's DEFAULT_SHARED_PRELOAD_LIBRARIES rather than
+# extending it, so the suite runs a preload extension beside yb_amp alone, without
+# the pg_stat_statements and pgsentinel every real endpoint loads (#1638). That GUC is
+# comma-separated (a list of library names), unlike the path GUCs above.
+# pgvector/age need no preload; pg_cron/hexabridge do. Union the co-mounted set.
 if [[ ${#PRELOAD_LIBS[@]} -gt 0 ]]; then
     SPL="$(IFS=,; echo "${PRELOAD_LIBS[*]}")"
     PG_SETTINGS+=(--pg-setting "shared_preload_libraries=yb_amp,$SPL")
