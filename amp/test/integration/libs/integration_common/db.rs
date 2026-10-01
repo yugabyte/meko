@@ -1,8 +1,9 @@
-//! Typed Postgres-wire query helpers for scenario assertions. Each call
-//! opens a fresh connection, runs one query (or batch), and drops it —
-//! the suite is sequential and never holds a connection across a
-//! blocking subprocess call, so per-query connect cost is irrelevant and
-//! the connection lifetime stays trivially correct.
+//! Typed Postgres-wire query helpers for scenario assertions. Each query
+//! helper opens a fresh connection, runs one query (or batch), and drops
+//! it; the suite is sequential, so per-query connect cost is irrelevant.
+//! A client from `connect` or `connect_with_notices` stays live across a
+//! blocking subprocess call only on a multi-threaded runtime, which keeps
+//! driving its connection on another thread.
 //!
 //! Connections speak plain Postgres wire over `NoTls` (the local
 //! cluster runs `pg_auth_type = Trust`). Custom column types
@@ -10,7 +11,9 @@
 //! relying on a `FromSql` impl.
 
 use anyhow::Context;
-use tokio_postgres::{Client, NoTls};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio_postgres::error::DbError;
+use tokio_postgres::{AsyncMessage, Client, NoTls};
 
 /// Connection string for a compute endpoint: trust auth, no password.
 pub fn compute_conn(port: u16) -> String {
@@ -36,6 +39,25 @@ pub async fn connect(conninfo: &str) -> anyhow::Result<Client> {
         let _ = connection.await;
     });
     Ok(client)
+}
+
+/// Like [`connect`], but also returns the notices the server sends on the
+/// connection, which the plain driver drops.
+pub async fn connect_with_notices(
+    conninfo: &str,
+) -> anyhow::Result<(Client, UnboundedReceiver<DbError>)> {
+    let (client, mut connection) = tokio_postgres::connect(conninfo, NoTls)
+        .await
+        .with_context(|| format!("connecting to {conninfo}"))?;
+    let (tx, notices) = unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(Ok(msg)) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+            if let AsyncMessage::Notice(notice) = msg {
+                let _ = tx.send(notice);
+            }
+        }
+    });
+    Ok((client, notices))
 }
 
 /// Run a single query returning one row, project column 0 as `i64`

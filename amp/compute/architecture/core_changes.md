@@ -398,6 +398,25 @@ the shutdown ordering by itself. The postmaster state machine has grown pretty c
 would benefit from a refactoring for the sake of readability anyway.
 
 
+## Keep waiting when a commit's sync-rep wait is cancelled
+
+```
++                       if (AmRegularBackendProcess() || AmWalSenderProcess() ||
++                               AmAutoVacuumWorkerProcess() || IsLogicalWorker())
++                       {
++                               if (!yb_cancel_warned)
++                               {
++                                       ereport(WARNING,
++                                                       (errmsg("ignoring cancel request until the transaction is safely stored"),
+```
+
+Stock PostgreSQL answers a query cancel in `SyncRepWaitForLSN` by releasing the wait and acking the commit with a WARNING, which is safe only because its local WAL is durable. A compute's local WAL is scratch until the safekeepers confirm it, so client backends, walsenders, autovacuum workers and logical replication workers ignore the cancel and keep waiting. Each of them installs `die()` for SIGTERM, so SIGTERM still ends the wait, and its WARNING now says the transaction may or may not be committed. Other processes keep the stock behavior, including single-user mode and background workers that install `die()` themselves, such as pg_cron's job workers when `cron.use_background_workers` is on. A commit made during `proc_exit`, such as the one that drops a session's temp tables, skips the wait: no client needs its ack, and signals can no longer end the wait.
+
+### How to get rid of the patch
+
+Submit a patch to upstream for a hook in the sync-rep wait loop that decides what a cancel does, and for not waiting during `proc_exit`.
+
+
 ## EXPLAIN changes for prefetch and LFC
 
 ### How to get rid of the patch

@@ -39,6 +39,7 @@ mod page_api;
 mod psql;
 mod scenarios;
 mod sk_api;
+mod syncrep;
 mod workload;
 
 use std::future::Future;

@@ -98,6 +98,21 @@ Cross-check the safekeeper is idle (low CPU) in Step 5. If SK CPU is low and WAL
 - Fewer/larger commits (loader batch size) reduce the number of SyncRep waits.
 - Do **not** silently flip this for a run whose point is durability/latency — note it in results.
 
+A backend stuck on `IPC/SyncRep` (the safekeeper is down or not answering) is not released by
+`pg_cancel_backend()`, a driver's query timeout, or `statement_timeout`. The first cancel logs the
+WARNING `ignoring cancel request until the transaction is safely stored` (#473); later ones log
+nothing. `pg_terminate_backend()` ends the wait. The client then cannot tell whether the commit
+landed, and other sessions see the commit before it is durable: it is lost if the compute
+restarts before the safekeeper has it.
+
+Do not clear `synchronous_standby_names` to unstick commits. On reload every waiting commit
+returns success to its client without being durable, and later commits stop waiting too.
+
+Each stuck backend keeps its connection slot and its locks. Clients that give up and reconnect
+can use up `max_connections`, and then reads fail too. To free the slots, at the cost above,
+terminate only the client backends, since only they hold those slots:
+`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE wait_event = 'SyncRep' AND backend_type = 'client backend';`
+
 ---
 
 ## Step 2a — Backpressure throttling (writes capped at the pageserver's ingest rate)

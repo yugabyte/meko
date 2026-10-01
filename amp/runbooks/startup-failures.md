@@ -383,7 +383,9 @@ accepts TCP on 5454, and never answers on it. `load_timeline` logged its last
 line and stopped. Reads keep working from the pageserver; every commit blocks
 on `SyncRep` forever, and both the walproposer and the pageserver's
 `wal_connection_manager` sit in `connecting` and time out in a loop. CPU is
-idle — it is waiting on YB, not working.
+idle: it is waiting on YB, not working. Cancelling a stuck commit does not
+release it; see
+[throughput-troubleshooting Step 2](throughput-troubleshooting.md#step-2--commit-durability-latency-ipcsyncrep).
 
 The tell is which `load_timeline` line came last, since the load is a straight
 line of YB statements:
