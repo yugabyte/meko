@@ -16,6 +16,17 @@ import (
 // over this is a 400. The number is a policy, not a schema limit.
 const maxPatchesPerCall = 100
 
+// intents counts how many of the mutually-exclusive create/update/delete flags are set.
+func intents(flags ...bool) int {
+	n := 0
+	for _, f := range flags {
+		if f {
+			n++
+		}
+	}
+	return n
+}
+
 // ListResourcesByName returns the resources of a storage pool across every MANAGED
 // environment it is mapped to, as `desired` (declared) and `observed` (agent-reported)
 // lists per environment. No environment id is named: the storage pool is the first
@@ -107,6 +118,13 @@ func (h *EnvironmentHandler) SetResourcesByRegion(c echo.Context) error {
 					"regions["+strconv.Itoa(ri)+"].resources["+strconv.Itoa(pi)+
 						"] has delete:true and a spec; a delete must not carry a spec")
 			}
+			// create/update/delete are mutually exclusive intents; more than one is
+			// ambiguous.
+			if intents(p.Create, p.Update, p.Delete) > 1 {
+				return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
+					"regions["+strconv.Itoa(ri)+"].resources["+strconv.Itoa(pi)+
+						"] sets more than one of create/update/delete; they are mutually exclusive")
+			}
 		}
 	}
 	if total > maxPatchesPerCall {
@@ -123,6 +141,17 @@ func (h *EnvironmentHandler) SetResourcesByRegion(c echo.Context) error {
 		// same as naming an environment that does not exist.
 		if errors.Is(err, service.ErrNoManagedEnv) {
 			return apiError(c, http.StatusNotFound, "NOT_FOUND", err.Error())
+		}
+		// A create landing on an existing resource, or a cluster name already used
+		// elsewhere in the pool, is a 409; an update naming an absent one is a 404.
+		if errors.Is(err, service.ErrClusterNameInUse) {
+			return apiError(c, http.StatusConflict, "CLUSTER_NAME_IN_USE", err.Error())
+		}
+		if errors.Is(err, service.ErrResourceExists) {
+			return apiError(c, http.StatusConflict, "RESOURCE_EXISTS", err.Error())
+		}
+		if errors.Is(err, service.ErrResourceNotFound) {
+			return apiError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", err.Error())
 		}
 		// A lost concurrent-write race rolled the whole batch back, so the identical
 		// request is safe to retry — a 409, not a 500.

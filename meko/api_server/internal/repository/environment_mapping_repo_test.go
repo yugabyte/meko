@@ -12,9 +12,16 @@ import (
 
 const poolRegion = "us-east-1"
 
-// First touch of a (storage_pool, region): no mapping exists, so the call picks a
-// READY MANAGED environment, records the mapping, locks the environment, auto-creates
-// the storage-pool row (absent), and applies the child patch — all in one commit.
+// expectPoolLock asserts the single pool-scoped advisory lock taken first by every
+// ApplyStoragePoolPatches call (it replaced the per-environment locks).
+func expectPoolLock(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("acct-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+// First touch of a (storage_pool, region): no mapping exists, so the call locks the
+// pool, picks a READY MANAGED environment, records the mapping, auto-creates the
+// storage-pool row (absent), and applies the child patch — all in one commit.
 func TestApplyStoragePoolPatches_FirstTouchAssignsAndSynthesizes(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -24,6 +31,7 @@ func TestApplyStoragePoolPatches_FirstTouchAssignsAndSynthesizes(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	// No existing pin.
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
@@ -39,9 +47,6 @@ func TestApplyStoragePoolPatches_FirstTouchAssignsAndSynthesizes(t *testing.T) {
 	mock.ExpectQuery(`SELECT environment_id FROM meko_system\.environment_aeon_account_mapping`).
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id"}).AddRow(envUUID))
-	// Serialize this environment's writes.
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	// Pool row absent -> synthesize it.
 	mock.ExpectQuery(`SELECT EXISTS`).
 		WithArgs(envUUID, "acct-1").
@@ -90,11 +95,10 @@ func TestApplyStoragePoolPatches_ReusesPinNoSynthesis(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	// Pool already exists -> no synthesis.
 	mock.ExpectQuery(`SELECT EXISTS`).
 		WithArgs(envUUID, "acct-1").
@@ -132,6 +136,7 @@ func TestApplyStoragePoolPatches_NoEligibleEnvIsError(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
@@ -167,6 +172,7 @@ func TestApplyStoragePoolPatches_DeregisteredPinFailsOverAndRepins(t *testing.T)
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	// Existing pin, but its environment is DEREGISTERED -> fail over.
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
@@ -179,8 +185,6 @@ func TestApplyStoragePoolPatches_DeregisteredPinFailsOverAndRepins(t *testing.T)
 		WithArgs(envUUID, "acct-1", poolRegion).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Everything after resolves against the NEW env.
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).
 		WithArgs(envUUID, "acct-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -210,8 +214,8 @@ func TestApplyStoragePoolPatches_DeregisteredPinFailsOverAndRepins(t *testing.T)
 	}
 }
 
-// Two regions apply inside ONE transaction: a single Begin/Commit wraps both regions'
-// resolve + lock + apply, and both assignments come back.
+// Two regions apply inside ONE transaction: one pool lock, then a single Begin/Commit
+// wraps both regions' resolve + apply, and both assignments come back.
 func TestApplyStoragePoolPatches_MultiRegionAtomic(t *testing.T) {
 	const envWest = "88888888-8888-8888-8888-888888888888"
 	db, mock, err := sqlmock.New()
@@ -222,6 +226,7 @@ func TestApplyStoragePoolPatches_MultiRegionAtomic(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	// Phase 1 resolves every region up front, in region order (east < west).
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", "us-east-1").
@@ -229,12 +234,7 @@ func TestApplyStoragePoolPatches_MultiRegionAtomic(t *testing.T) {
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", "us-west-2").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envWest, "READY"))
-	// Phase 2 locks every distinct env in one pass, sorted by uuid (envUUID < envWest).
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envWest, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	// Phase 3 applies each region's batch in body order.
+	// Phase 2 applies each region's batch in body order.
 	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envUUID, "acct-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
@@ -283,18 +283,15 @@ func TestApplyStoragePoolPatches_RollsBackWhenSecondRegionFails(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
-	// Phase 1 resolves both regions, phase 2 locks both (sorted by uuid).
+	expectPoolLock(mock)
+	// Phase 1 resolves both regions.
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", "us-east-1").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", "us-west-2").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envWest, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envWest, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	// Phase 3: region 1 applies fully; region 2's apply fails -> the whole tx rolls back.
+	// Phase 2: region 1 applies fully; region 2's apply fails -> the whole tx rolls back.
 	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envUUID, "acct-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
@@ -325,6 +322,64 @@ func TestApplyStoragePoolPatches_RollsBackWhenSecondRegionFails(t *testing.T) {
 	}
 }
 
+// A cluster Create whose name is already used in a sibling region of the same pool
+// rolls the whole call back with ErrClusterNameInUse: region one creates east-db, then
+// region two's create of the same cluster name collides via the pool-wide check.
+func TestApplyStoragePoolPatches_CrossRegionClusterCollisionRollsBack(t *testing.T) {
+	const envWest = "88888888-8888-8888-8888-888888888888"
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+
+	mock.ExpectBegin()
+	expectPoolLock(mock)
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs("acct-1", "us-east-1").
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs("acct-1", "us-west-2").
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envWest, "READY"))
+	// Region one: cluster create, name free in the pool -> upsert.
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envUUID, "acct-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envUUID, "cluster", "acct-1/shared-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1\s+FROM meko_system\.environment_aeon_account_mapping m`).
+		WithArgs("acct-1", "acct-1/shared-db").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
+		WithArgs(envUUID, "cluster", "acct-1/shared-db", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Region two: same cluster name, now in use in the pool -> collision.
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envWest, "acct-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envWest, "cluster", "acct-1/shared-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1\s+FROM meko_system\.environment_aeon_account_mapping m`).
+		WithArgs("acct-1", "acct-1/shared-db").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	_, err = repo.ApplyStoragePoolPatches("acct-1",
+		[]models.RegionResources{
+			{Region: "us-east-1", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/shared-db", Spec: []byte(`{}`), Create: true}}},
+			{Region: "us-west-2", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/shared-db", Spec: []byte(`{}`), Create: true}}},
+		},
+		[]byte(`{"owner":"x"}`),
+	)
+	if !errors.Is(err, ErrClusterNameInUse) {
+		t.Fatalf("err = %v, want ErrClusterNameInUse", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("a cross-region collision did not roll the call back: %v", err)
+	}
+}
+
 // When the caller names the storage-pool row itself, synthesis is skipped entirely —
 // no EXISTS probe — and the pool is applied as the caller sent it.
 func TestApplyStoragePoolPatches_ExplicitPoolSkipsSynthesis(t *testing.T) {
@@ -336,11 +391,10 @@ func TestApplyStoragePoolPatches_ExplicitPoolSkipsSynthesis(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	// No SELECT EXISTS: the caller owns the pool row. Apply pool then cluster as given.
 	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
 		WithArgs(envUUID, "storage-pool", "acct-1").
@@ -384,11 +438,10 @@ func TestApplyStoragePoolPatches_DeleteOnlyBatchNoSynthesis(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
+	expectPoolLock(mock)
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	// No SELECT EXISTS, no INSERT: just the subtree delete.
 	mock.ExpectExec(`DELETE FROM meko_system\.environment_desired_resources`).
 		WithArgs(envUUID, "acct-1/main-db").
@@ -409,8 +462,8 @@ func TestApplyStoragePoolPatches_DeleteOnlyBatchNoSynthesis(t *testing.T) {
 	}
 }
 
-// A Postgres deadlock (40P01) taking the advisory lock is translated to the retryable
-// ErrConcurrentPoolUpdate sentinel, and the transaction rolls back.
+// A Postgres deadlock (40P01) taking the pool-scoped advisory lock is translated to the
+// retryable ErrConcurrentPoolUpdate sentinel, and the transaction rolls back.
 func TestApplyStoragePoolPatches_DeadlockTranslated(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -420,10 +473,7 @@ func TestApplyStoragePoolPatches_DeadlockTranslated(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
-		WithArgs("acct-1", poolRegion).
-		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, "acct-1").
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("acct-1").
 		WillReturnError(&pq.Error{Code: "40P01", Message: "deadlock detected"})
 	mock.ExpectRollback()
 

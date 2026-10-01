@@ -416,12 +416,16 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 // so two items naming the same (kind, name) compose as a shallow-merge sequence (the
 // second reads back what the first wrote).
 //
-// Each item is either a partial-spec upsert (Delete false) or a cascade subtree
-// delete (Delete true). Unlike ReplaceDesired this does not prune: only the rows the
-// batch names are read or written, so no unrelated resource is touched. The per-item
-// upsert reuses ReplaceDesired's spec-defaulting ({}) and generation rule — a
-// generation bumps only when the merged spec is semantically different.
-func applyDesiredPatchesTx(tx *sql.Tx, envUUID string, patches []models.ResourcePatch) error {
+// Each item is a cascade subtree delete (Delete true) or a partial-spec write. A
+// write honors the intent flags: Create asserts the resource is absent, Update asserts
+// it is present. For a cluster Create the absence check spans every environment the
+// storagePool is mapped to (a cluster short name is unique per pool across regions);
+// for every other kind it is the environment's own rows. Unlike ReplaceDesired this
+// does not prune: only the rows the batch names are read or written, so no unrelated
+// resource is touched. The per-item upsert reuses ReplaceDesired's spec-defaulting ({})
+// and generation rule — a generation bumps only when the merged spec is semantically
+// different.
+func applyDesiredPatchesTx(tx *sql.Tx, envUUID, storagePool string, patches []models.ResourcePatch) error {
 	for _, p := range patches {
 		if p.Delete {
 			// Removes the resource AND every descendant (endpoints under a branch,
@@ -435,9 +439,25 @@ func applyDesiredPatchesTx(tx *sql.Tx, envUUID string, patches []models.Resource
 			}
 			continue
 		}
-		merged, err := mergeDesiredSpec(tx, envUUID, p.Kind, p.Name, p.Spec)
+		merged, existed, err := mergeDesiredSpec(tx, envUUID, p.Kind, p.Name, p.Spec)
 		if err != nil {
 			return err
+		}
+		if p.Update && !existed {
+			return fmt.Errorf("%w: %s/%s", ErrResourceNotFound, p.Kind, p.Name)
+		}
+		if p.Create {
+			if p.Kind == "cluster" {
+				inUse, cerr := clusterNameInPool(tx, storagePool, p.Name)
+				if cerr != nil {
+					return cerr
+				}
+				if inUse {
+					return fmt.Errorf("%w: %s", ErrClusterNameInUse, p.Name)
+				}
+			} else if existed {
+				return fmt.Errorf("%w: %s/%s", ErrResourceExists, p.Kind, p.Name)
+			}
 		}
 		if _, err := tx.Exec(
 			`INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
@@ -461,19 +481,21 @@ func applyDesiredPatchesTx(tx *sql.Tx, envUUID string, patches []models.Resource
 // stored spec, unmentioned keys are preserved, and a nested object (e.g. pg_settings)
 // is replaced wholesale — matching the backend's "a declared settings surface owns
 // the whole map". An absent row (or an empty stored/patch spec) merges onto {}, so a
-// first patch becomes the whole spec.
-func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMessage) (json.RawMessage, error) {
+// first patch becomes the whole spec. The returned existed reports whether the row was
+// already present, so a caller can enforce a create/update assertion off the same read.
+func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMessage) (json.RawMessage, bool, error) {
 	var existingText string
 	err := tx.QueryRow(
 		`SELECT COALESCE(spec::text, '{}') FROM meko_system.environment_desired_resources
 		 WHERE env_uuid=$1 AND kind=$2 AND name=$3 FOR UPDATE`,
 		envUUID, kind, name).Scan(&existingText)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("read desired %s/%s: %w", kind, name, err)
+		return nil, false, fmt.Errorf("read desired %s/%s: %w", kind, name, err)
 	}
+	existed := err == nil
 
 	merged := map[string]json.RawMessage{}
-	if err == nil && strings.TrimSpace(existingText) != "" {
+	if existed && strings.TrimSpace(existingText) != "" {
 		if uerr := json.Unmarshal([]byte(existingText), &merged); uerr != nil {
 			// A stored spec that is not a JSON object cannot be shallow-merged onto;
 			// treat it as opaque and let the patch replace it wholesale.
@@ -483,7 +505,7 @@ func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMess
 	if len(bytes.TrimSpace(patch)) > 0 {
 		var incoming map[string]json.RawMessage
 		if uerr := json.Unmarshal(patch, &incoming); uerr != nil {
-			return nil, fmt.Errorf("%w: spec for %s/%s is not a JSON object", ErrSpecNotObject, kind, name)
+			return nil, false, fmt.Errorf("%w: spec for %s/%s is not a JSON object", ErrSpecNotObject, kind, name)
 		}
 		for k, v := range incoming {
 			merged[k] = v
@@ -491,14 +513,52 @@ func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMess
 	}
 	out, err := json.Marshal(merged)
 	if err != nil {
-		return nil, fmt.Errorf("marshal merged spec for %s/%s: %w", kind, name, err)
+		return nil, false, fmt.Errorf("marshal merged spec for %s/%s: %w", kind, name, err)
 	}
-	return out, nil
+	return out, existed, nil
+}
+
+// clusterNameInPool reports whether a cluster of the given full name already exists in
+// any non-deregistered environment the storage pool is mapped to. Because a cluster's
+// name is <pool>/<cluster> and the pool prefix is fixed within a pool, this is the
+// per-pool short-name uniqueness check, spanning regions. Callers must already hold the
+// pool-scoped advisory lock so the check-then-write is atomic against a concurrent PATCH
+// to another region of the same pool.
+func clusterNameInPool(tx *sql.Tx, storagePool, name string) (bool, error) {
+	var inUse bool
+	err := tx.QueryRow(
+		`SELECT EXISTS(
+		    SELECT 1
+		      FROM meko_system.environment_aeon_account_mapping m
+		      JOIN meko_system.environments e ON e.uuid = m.environment_id
+		      JOIN meko_system.environment_desired_resources r ON r.env_uuid = m.environment_id
+		     WHERE m.storage_pool_name = $1
+		       AND e.state <> 'DEREGISTERED'
+		       AND r.kind = 'cluster'
+		       AND r.name = $2)`, storagePool, name).Scan(&inUse)
+	if err != nil {
+		return false, fmt.Errorf("check cluster name %s in pool %s: %w", name, storagePool, err)
+	}
+	return inUse, nil
 }
 
 // ErrSpecNotObject is returned when a patch spec is present but is not a JSON object,
 // so it cannot be shallow-merged. Mapped to 400 by the service.
 var ErrSpecNotObject = errors.New("spec must be a JSON object")
+
+// ErrResourceExists is returned when a create patch names a resource that already
+// exists in the environment. Mapped to 409 by the service.
+var ErrResourceExists = errors.New("resource already exists")
+
+// ErrResourceNotFound is returned when an update patch names a resource that does not
+// exist in the environment. Mapped to 404 by the service.
+var ErrResourceNotFound = errors.New("resource does not exist")
+
+// ErrClusterNameInUse is returned when a cluster create names a cluster whose name is
+// already in use somewhere in the storage pool — possibly in another region/environment
+// the pool is mapped to. A cluster short name is unique per pool across regions. Mapped
+// to 409 by the service.
+var ErrClusterNameInUse = errors.New("cluster name already in use in this storage pool")
 
 // ListDesired returns the desired resources for an environment.
 func (r *EnvironmentRepo) ListDesired(envUUID string) ([]models.DesiredResource, error) {

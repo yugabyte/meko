@@ -86,6 +86,13 @@ paths:
         '402':
           description: Aeon entitlement does not permit another environment.
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '403':
+          description: |
+            A scoped (account-bound) caller requested `type: MANAGED`. MANAGED is
+            Yugabyte-operated shared infrastructure and may only be registered on the
+            unscoped operator path; a customer registering one would have other tenants'
+            storage pools pinned onto its own agent.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         '409': { $ref: '#/components/responses/Conflict' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
@@ -236,17 +243,29 @@ paths:
         pool's resources never scatter across environments.
 
         Every resource across every region is applied in one ATOMIC transaction. Each item names
-        one resource (`kind`+`name`, the name confined to the `<storage_pool>` subtree) and is
-        either a partial-spec merge (only the top-level keys present are changed; an absent
-        resource is created with the patch as its whole spec) or, with `delete: true`, a cascade
-        removal of that resource and every descendant. The storage-pool row itself is auto-created
-        on first touch, with an owner derived from the pool name.
+        one resource (`kind`+`name`, the name confined to the `<storage_pool>` subtree) and carries
+        at most one intent flag (`create`/`update`/`delete`, mutually exclusive):
+
+          - none — a partial-spec merge: only the top-level keys present are changed, an absent
+            resource is created with the patch as its whole spec.
+          - `create: true` — write, but fail if the resource already exists (409).
+          - `update: true` — write, but fail if the resource does not exist (404).
+          - `delete: true` — cascade-remove the resource and every descendant (no `spec`).
+
+        Create-only default: a write with NO flag is treated as `create`, so a flagless write onto
+        an existing resource is a 409 — pass `update: true` to modify one. The auto-created
+        storage-pool row (synthesized on first touch, owner derived from the pool name) is exempt.
+
+        Cluster names are unique per storage pool ACROSS regions: a cluster `create` whose name is
+        already used by any environment the pool is mapped to is a 409 `CLUSTER_NAME_IN_USE`.
 
         The whole call is validated first: a `storage_pool` that is not a UUID, or any invalid
-        item — a kind the environment does not serve, a `delete` carrying a `spec`, a missing
-        `kind`/`name`, a non-object `spec`, a name outside the pool subtree — fails with 400 and
-        writes nothing. A region with no READY MANAGED amp environment is a 404. The batch is
-        capped at 100 items across all regions.
+        item — a kind the environment does not serve, more than one of `create`/`update`/`delete`,
+        a `delete` carrying a `spec`, a missing `kind`/`name`, a non-object `spec`, a name outside
+        the pool subtree — fails with 400 and writes nothing. A create onto an existing resource is
+        409 `RESOURCE_EXISTS` (409 `CLUSTER_NAME_IN_USE` for a cluster); an update on an absent one
+        is 404 `RESOURCE_NOT_FOUND`. A region with no READY MANAGED amp environment is a 404. The
+        batch is capped at 100 items across all regions.
 
         The response mirrors the LIST: the pool's desired and observed resources per environment
         touched.
@@ -541,7 +560,11 @@ components:
           type: string
           enum: [BYOC, MANAGED]
           default: BYOC
-          description: BYOC (customer-run data plane) or MANAGED; empty defaults to BYOC. Fixed at registration.
+          description: |
+            BYOC (customer-run data plane) or MANAGED (Yugabyte-operated shared
+            infrastructure); empty defaults to BYOC. Fixed at registration. MANAGED is
+            operator-only: a scoped (account-bound) caller requesting it is refused with
+            403, so type='MANAGED' is a marker a customer cannot set.
         api_key_id:
           type: string
           format: uuid
@@ -718,7 +741,23 @@ components:
           default: false
           description: |
             When true, cascade-removes the named resource and every descendant from desired
-            state. Mutually exclusive with `spec` — a delete must not carry one.
+            state. Mutually exclusive with `spec` — a delete must not carry one — and with
+            `create`/`update`.
+        create:
+          type: boolean
+          default: false
+          description: |
+            Assert the resource does not yet exist; a collision is rejected (409
+            `RESOURCE_EXISTS`, or `CLUSTER_NAME_IN_USE` for a cluster already named elsewhere in
+            the pool). A flagless non-delete write defaults to this. Mutually exclusive with
+            `update`/`delete`.
+        update:
+          type: boolean
+          default: false
+          description: |
+            Assert the resource already exists; an absent one is rejected (404
+            `RESOURCE_NOT_FOUND`). This is how you modify an existing resource, since a flagless
+            write is create-only. Mutually exclusive with `create`/`delete`.
 
     StatusReport:
       type: object

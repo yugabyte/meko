@@ -28,6 +28,15 @@ var ErrValidation = errors.New("validation error")
 // which would otherwise reconcile the wrong desired state.
 var ErrKindMismatch = errors.New("environment kind mismatch")
 
+// ErrManagedRequiresOperator is returned when a scoped (account-bound) caller tries to
+// register a MANAGED environment (mapped to 403). MANAGED is Yugabyte-operated shared
+// infrastructure: the region APIs pin any account's storage pools onto the oldest READY
+// MANAGED amp env in a region with no account check (pickManagedEnvTx), so a customer
+// that could register one under its own API key would have its agent handed other
+// tenants' desired state. Only an unscoped operator (admin secret, no account header)
+// may register MANAGED, which keeps type='MANAGED' a marker a customer cannot set.
+var ErrManagedRequiresOperator = errors.New("registering a MANAGED environment requires an operator (unscoped) caller")
+
 // ErrAmbiguousID re-exports the repository's, so handlers map it to a status code
 // without importing the storage layer. Raised when an unscoped caller names an id
 // two accounts both hold (mapped to 409) -- send an account to disambiguate.
@@ -383,6 +392,15 @@ func (s *EnvironmentService) Register(
 	typ, err := normalizeType(req.Type)
 	if err != nil {
 		return nil, err
+	}
+	// MANAGED is operator-only. A scoped caller is a customer acting under its own
+	// account (and its own API key), and the region APIs pin other tenants' storage
+	// pools onto any READY MANAGED amp env with no account check -- so a customer that
+	// could register MANAGED would have its own agent handed other tenants' clusters,
+	// branches and endpoints. Refuse it here so type='MANAGED' can only come from the
+	// unscoped operator path (admin secret, no account header).
+	if typ == TypeManaged && scope != "" {
+		return nil, ErrManagedRequiresOperator
 	}
 	// Checked before the insert, not after: a declaration this environment's agent
 	// cannot converge should fail the registration outright rather than leave a
@@ -897,10 +915,42 @@ func validateResourcePatches(envKind string, patches []models.ResourcePatch) err
 	return checkKinds(envKind, check)
 }
 
+// createOnlyDefault returns a copy of regions in which every non-delete patch carrying
+// no explicit intent flag is marked Create. On a shared MANAGED pool a write is
+// create-only by default, so a flagless PATCH cannot silently overwrite an existing
+// resource; the caller opts into a merge with update:true. The copy is deep enough that
+// the caller's backing arrays are untouched. The repository's own synthesized
+// storage-pool prepend runs after this and stays a plain upsert, so first touch never
+// trips the create guard.
+func createOnlyDefault(regions []models.RegionResources) []models.RegionResources {
+	out := make([]models.RegionResources, len(regions))
+	for ri, rr := range regions {
+		res := make([]models.ResourcePatch, len(rr.Resources))
+		copy(res, rr.Resources)
+		for pi := range res {
+			p := &res[pi]
+			if !p.Delete && !p.Create && !p.Update {
+				p.Create = true
+			}
+		}
+		out[ri] = models.RegionResources{Region: rr.Region, Resources: res}
+	}
+	return out
+}
+
 // ErrNoManagedEnv re-exports the repository's, so handlers map it to a 404 without
 // importing the storage layer. Raised when a region names no READY MANAGED
 // environment for a storage pool to pin to.
 var ErrNoManagedEnv = repository.ErrNoEligibleEnvironment
+
+// ErrResourceExists, ErrResourceNotFound and ErrClusterNameInUse re-export the
+// repository's create/update guard sentinels so handlers map them to 409/404 without
+// importing the storage layer.
+var (
+	ErrResourceExists   = repository.ErrResourceExists
+	ErrResourceNotFound = repository.ErrResourceNotFound
+	ErrClusterNameInUse = repository.ErrClusterNameInUse
+)
 
 // ErrConcurrentPoolUpdate re-exports the repository's retryable-deadlock sentinel, so
 // handlers map a lost concurrent-write race to a retryable status without importing the
@@ -967,7 +1017,7 @@ func (s *EnvironmentService) SetResourcesByStoragePool(
 	if err != nil {
 		return nil, err
 	}
-	assignments, err := s.repo.ApplyStoragePoolPatches(storagePool, regions, poolSpec)
+	assignments, err := s.repo.ApplyStoragePoolPatches(storagePool, createOnlyDefault(regions), poolSpec)
 	if err != nil {
 		return nil, err
 	}

@@ -39,6 +39,8 @@ func TestSetResourcesByRegion_FirstTouch(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs(poolUUID, "us-east-1").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
@@ -51,12 +53,11 @@ func TestSetResourcesByRegion_FirstTouch(t *testing.T) {
 	mock.ExpectQuery(`SELECT environment_id FROM meko_system\.environment_aeon_account_mapping`).
 		WithArgs(poolUUID, "us-east-1").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id"}).AddRow(envUUID))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, poolUUID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).
 		WithArgs(envUUID, poolUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	// synthesized storage-pool, then the cluster.
+	// synthesized storage-pool (flagless upsert), then the cluster (a flagless write
+	// is normalized to create, so it also runs the pool-wide cluster-name check).
 	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
 		WithArgs(envUUID, "storage-pool", poolUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
@@ -66,6 +67,9 @@ func TestSetResourcesByRegion_FirstTouch(t *testing.T) {
 	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
 		WithArgs(envUUID, "cluster", poolUUID+"/main-db").
 		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1\s+FROM meko_system\.environment_aeon_account_mapping m`).
+		WithArgs(poolUUID, poolUUID+"/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
 		WithArgs(envUUID, "cluster", poolUUID+"/main-db", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -115,6 +119,8 @@ func TestSetResourcesByRegion_NoManagedEnvIs404(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs(poolUUID, "us-east-1").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
@@ -142,10 +148,17 @@ func TestSetResourcesByRegion_DeadlockIs409(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs(poolUUID, "us-east-1").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, poolUUID).
+	// Pool exists -> no synthesis; the per-item row read then loses a deadlock.
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs(envUUID, poolUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envUUID, "cluster", poolUUID+"/main-db").
 		WillReturnError(&pq.Error{Code: "40P01", Message: "deadlock detected"})
 	mock.ExpectRollback()
 
@@ -184,6 +197,8 @@ func TestSetResourcesByRegion_BodyRefusals(t *testing.T) {
 		{"missing kind", `{"storage_pool":"acct-1","regions":[{"region":"us-east-1","resources":[{"name":"acct-1/c"}]}]}`, "VALIDATION_ERROR"},
 		{"missing name", `{"storage_pool":"acct-1","regions":[{"region":"us-east-1","resources":[{"kind":"cluster"}]}]}`, "VALIDATION_ERROR"},
 		{"delete with a spec", `{"storage_pool":"acct-1","regions":[{"region":"us-east-1","resources":[{"kind":"cluster","name":"acct-1/c","spec":{"x":1},"delete":true}]}]}`, "VALIDATION_ERROR"},
+		{"create and update together", `{"storage_pool":"acct-1","regions":[{"region":"us-east-1","resources":[{"kind":"cluster","name":"acct-1/c","spec":{},"create":true,"update":true}]}]}`, "VALIDATION_ERROR"},
+		{"create and delete together", `{"storage_pool":"acct-1","regions":[{"region":"us-east-1","resources":[{"kind":"cluster","name":"acct-1/c","create":true,"delete":true}]}]}`, "VALIDATION_ERROR"},
 		// A structurally valid body whose only fault is a non-UUID pool: the service
 		// rejects it before any query, so it belongs here with the other DB-free refusals.
 		{"non-uuid storage_pool", `{"storage_pool":"acct-1","regions":[{"region":"us-east-1","resources":[{"kind":"cluster","name":"acct-1/c","spec":{}}]}]}`, "VALIDATION_ERROR"},
@@ -391,11 +406,11 @@ func TestSetResourcesByRegion_DeleteCascades(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs(poolUUID, "us-east-1").
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(envUUID, poolUUID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	// delete-only batch: no synthesis probe, just the subtree DELETE.
 	mock.ExpectExec(`DELETE FROM meko_system\.environment_desired_resources\s+`+
 		`WHERE env_uuid=\$1 AND \(name=\$2 OR starts_with\(name, \$2 \|\| '/'\)\)`).
@@ -418,6 +433,89 @@ func TestSetResourcesByRegion_DeleteCascades(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("delete did not issue exactly the subtree DELETE: %v", err)
+	}
+}
+
+// A flagless cluster write is create-only by default; when its name is already used in
+// the pool (here reported by the pool-wide check), the call is a 409 CLUSTER_NAME_IN_USE
+// and writes nothing.
+func TestSetResourcesByRegion_DuplicateClusterIs409(t *testing.T) {
+	h, mock, done := newScopeHandler(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs(poolUUID, "us-east-1").
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
+	// Pool exists -> no synthesis; the cluster's pool-wide name check finds a collision.
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs(envUUID, poolUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envUUID, "cluster", poolUUID+"/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1\s+FROM meko_system\.environment_aeon_account_mapping m`).
+		WithArgs(poolUUID, poolUUID+"/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	body := `{"storage_pool":"` + poolUUID + `","regions":[` +
+		`{"region":"us-east-1","resources":[{"kind":"cluster","name":"` + poolUUID + `/main-db","spec":{}}]}]}`
+	rec := fleetRequest(t, h.SetResourcesByRegion, http.MethodPatch,
+		"/api/v1/environments/resources", "", body, "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var resp APIResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "CLUSTER_NAME_IN_USE" {
+		t.Errorf("error = %+v, want code CLUSTER_NAME_IN_USE", resp.Error)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// update:true on a resource that does not exist is a 404 RESOURCE_NOT_FOUND.
+func TestSetResourcesByRegion_UpdateMissingIs404(t *testing.T) {
+	h, mock, done := newScopeHandler(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs(poolUUID, "us-east-1").
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs(envUUID, poolUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	// The locked read finds no row, so the update assertion fails.
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envUUID, "cluster", poolUUID+"/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectRollback()
+
+	body := `{"storage_pool":"` + poolUUID + `","regions":[` +
+		`{"region":"us-east-1","resources":[{"kind":"cluster","name":"` + poolUUID + `/main-db","spec":{"pg_version":17},"update":true}]}]}`
+	rec := fleetRequest(t, h.SetResourcesByRegion, http.MethodPatch,
+		"/api/v1/environments/resources", "", body, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+	var resp APIResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != "RESOURCE_NOT_FOUND" {
+		t.Errorf("error = %+v, want code RESOURCE_NOT_FOUND", resp.Error)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }
 

@@ -81,6 +81,11 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
+		// A customer (scoped caller) may not register Yugabyte-operated MANAGED
+		// infrastructure; only the unscoped operator path can.
+		if errors.Is(err, service.ErrManagedRequiresOperator) {
+			return apiError(c, http.StatusForbidden, "MANAGED_REQUIRES_OPERATOR", err.Error())
+		}
 		if errors.Is(err, service.ErrAPIKeyBound) {
 			return apiError(c, http.StatusConflict, "API_KEY_BOUND",
 				"this api key is already bound to another environment; one key drives one environment")

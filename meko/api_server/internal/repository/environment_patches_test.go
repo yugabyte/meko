@@ -43,7 +43,7 @@ func TestApplyDesiredPatchesTx_Batch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, []models.ResourcePatch{
+	if err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "cluster", Name: "pool-a/main-db", Spec: []byte(`{"pg_version":17}`)},
 		{Kind: "branch", Name: "pool-a/main-db/feature-x", Delete: true},
 	}); err != nil {
@@ -78,7 +78,7 @@ func TestApplyDesiredPatchesTx_MissingRowBecomesTheSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, []models.ResourcePatch{
+	if err := applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"aws"}`)},
 	}); err != nil {
 		t.Fatalf("applyDesiredPatchesTx: %v", err)
@@ -117,7 +117,7 @@ func TestApplyDesiredPatchesTx_RollsBackOnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, []models.ResourcePatch{
+	if err := applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"aws"}`)},
 		{Kind: "cluster", Name: "pool-b/reporting", Spec: []byte(`{"pg_version":17}`)},
 	}); err == nil {
@@ -128,5 +128,146 @@ func TestApplyDesiredPatchesTx_RollsBackOnError(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("a failed item did not roll the batch back: %v", err)
+	}
+}
+
+// A non-cluster Create on an existing row is rejected with ErrResourceExists.
+func TestApplyDesiredPatchesTx_CreateOnExisting(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text, '\{\}'\)`).
+		WithArgs(envUUID, "storage-pool", "pool-b").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}).AddRow(`{"cloud":"aws"}`))
+	// No INSERT: the guard fails before the upsert.
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	err = applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
+		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"gcp"}`), Create: true},
+	})
+	if !errors.Is(err, ErrResourceExists) {
+		t.Fatalf("err = %v, want ErrResourceExists", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// An Update on a missing row is rejected with ErrResourceNotFound.
+func TestApplyDesiredPatchesTx_UpdateOnMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text, '\{\}'\)`).
+		WithArgs(envUUID, "storage-pool", "pool-b").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"})) // no row
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	err = applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
+		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"aws"}`), Update: true},
+	})
+	if !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("err = %v, want ErrResourceNotFound", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// A cluster Create whose name is already used elsewhere in the pool (another region /
+// environment) is rejected with ErrClusterNameInUse. The check spans the pool via the
+// mapping, not just this environment's rows.
+func TestApplyDesiredPatchesTx_ClusterNameInPool(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	// The per-item locked read still runs (returns no row in this env)...
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text, '\{\}'\)`).
+		WithArgs(envUUID, "cluster", "pool-a/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	// ...then the pool-wide cluster-name check finds it in a sibling environment.
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1\s+FROM meko_system\.environment_aeon_account_mapping m`).
+		WithArgs("pool-a", "pool-a/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+		{Kind: "cluster", Name: "pool-a/main-db", Spec: []byte(`{"pg_version":17}`), Create: true},
+	})
+	if !errors.Is(err, ErrClusterNameInUse) {
+		t.Fatalf("err = %v, want ErrClusterNameInUse", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// A cluster Create whose name is free anywhere in the pool proceeds to the upsert.
+func TestApplyDesiredPatchesTx_ClusterCreateSucceeds(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text, '\{\}'\)`).
+		WithArgs(envUUID, "cluster", "pool-a/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectQuery(`SELECT EXISTS\(\s*SELECT 1\s+FROM meko_system\.environment_aeon_account_mapping m`).
+		WithArgs("pool-a", "pool-a/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
+		WithArgs(envUUID, "cluster", "pool-a/main-db", []byte(`{"pg_version":17}`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+		{Kind: "cluster", Name: "pool-a/main-db", Spec: []byte(`{"pg_version":17}`), Create: true},
+	}); err != nil {
+		t.Fatalf("applyDesiredPatchesTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }

@@ -61,6 +61,40 @@ func TestDeriveOwner(t *testing.T) {
 	}
 }
 
+// createOnlyDefault marks a flagless non-delete patch as a create, and leaves a delete,
+// an explicit create, or an explicit update untouched — without mutating the caller's
+// slices.
+func TestCreateOnlyDefault(t *testing.T) {
+	in := []models.RegionResources{{
+		Region: "us-east-1",
+		Resources: []models.ResourcePatch{
+			{Kind: "cluster", Name: "p/flagless"},
+			{Kind: "cluster", Name: "p/del", Delete: true},
+			{Kind: "cluster", Name: "p/upd", Update: true},
+			{Kind: "cluster", Name: "p/cre", Create: true},
+		},
+	}}
+	out := createOnlyDefault(in)
+
+	got := out[0].Resources
+	if !got[0].Create {
+		t.Error("a flagless write must default to create")
+	}
+	if got[1].Create {
+		t.Error("a delete must not be turned into a create")
+	}
+	if got[2].Create || !got[2].Update {
+		t.Error("an explicit update must be left as update")
+	}
+	if !got[3].Create {
+		t.Error("an explicit create must stay a create")
+	}
+	// The caller's backing array is untouched.
+	if in[0].Resources[0].Create {
+		t.Error("createOnlyDefault mutated the caller's slice")
+	}
+}
+
 // The whole call is validated before any query: an empty or non-UUID storage pool, a
 // name outside the pool subtree, and a kind a MANAGED amp env does not serve are all
 // rejected with ErrValidation and never reach the database. The non-pool cases use a

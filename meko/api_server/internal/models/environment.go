@@ -87,18 +87,29 @@ type DesiredResource struct {
 }
 
 // ResourcePatch is one targeted change to an environment's desired state, the unit
-// of a batch PATCH. It names one resource by Kind+Name and is either a partial Spec
-// merge (only the top-level keys present are changed; an absent resource is created
-// with the patch as its whole spec) or, when Delete is true, a cascade removal of
-// that resource and every descendant. Delete and a non-empty Spec are mutually
-// exclusive — a delete that also names a spec is ambiguous, and the handler rejects
-// it. Lives here beside DesiredResource so handler, service and repository can all
-// name it without a layering cycle.
+// of a batch PATCH. It names one resource by Kind+Name and carries at most one intent
+// flag; the four intents are mutually exclusive:
+//
+//   - none — a partial Spec merge: only the top-level keys present are changed, an
+//     absent resource is created with the patch as its whole spec. (The region PATCH
+//     narrows this: see the create-only default below.)
+//   - Create — assert the resource does NOT exist yet; a collision is rejected.
+//   - Update — assert the resource DOES exist; an absent one is rejected.
+//   - Delete — a cascade removal of the resource and every descendant. Delete and a
+//     non-empty Spec are mutually exclusive.
+//
+// The region storage-pool PATCH normalises a flagless non-delete item to Create (so a
+// write cannot silently overwrite an existing resource on a shared MANAGED pool) and
+// enforces cluster short-name uniqueness per pool across regions; that policy lives in
+// the service/repository, not on this type. Lives here beside DesiredResource so
+// handler, service and repository can all name it without a layering cycle.
 type ResourcePatch struct {
 	Kind   string          `json:"kind"`
 	Name   string          `json:"name"`
 	Spec   json.RawMessage `json:"spec,omitempty"`
 	Delete bool            `json:"delete,omitempty"`
+	Create bool            `json:"create,omitempty"`
+	Update bool            `json:"update,omitempty"`
 }
 
 // RegionResources is one region's slice of a storage-pool region PATCH: the region

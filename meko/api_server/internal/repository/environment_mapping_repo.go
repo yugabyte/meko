@@ -19,7 +19,7 @@ var ErrNoEligibleEnvironment = errors.New("no eligible MANAGED environment for r
 // ErrConcurrentPoolUpdate is returned when a region PATCH lost a Postgres deadlock
 // (SQLSTATE 40P01) to a concurrent write. The transaction rolled back whole, so the
 // identical request is safe to retry -- hence a retryable status rather than a 500.
-// The sorted lock acquisition in ApplyStoragePoolPatches makes an advisory-lock
+// The single pool-scoped advisory lock in ApplyStoragePoolPatches makes an advisory-lock
 // deadlock unreachable, so this is a backstop for any other cycle (e.g. row-level).
 var ErrConcurrentPoolUpdate = errors.New("storage pool update lost a concurrent-write race; retry")
 
@@ -42,32 +42,18 @@ type StoragePoolAssignment struct {
 // every named region in ONE transaction, all-or-nothing. Any error rolls the whole
 // call back, so a bad item in one region leaves every region untouched.
 //
-// It runs in three phases so that two concurrent PATCHes cannot deadlock, regardless
-// of the region order in their bodies:
+// It takes a single pool-scoped advisory lock up front, then:
 //
 //  1. Resolve every region to the MANAGED environment that serves the pool there,
-//     first-touch-assigning one when unmapped. Done in region order so two callers
-//     first-touching the same regions insert their mapping rows in the same order.
-//  2. Take the per-(environment, storage-pool) advisory lock for every distinct
-//     environment resolved, in one pass sorted by environment uuid. These locks are
-//     what serialize this pool's desired-state writes against a concurrent PATCH;
-//     acquiring them all up front in a single global order is what removes the
-//     deadlock (see below). Transaction-scoped, so every one releases at commit or
-//     rollback.
-//  3. Apply each region's batch, auto-creating the storage-pool row on first touch.
-//     Order no longer matters here -- every lock this call needs is already held.
+//     first-touch-assigning one when unmapped, in region order.
+//  2. Apply each region's batch, auto-creating the storage-pool row on first touch.
 //
-// The deadlock the ordering avoids: locks were previously taken one region at a time
-// in body order and held until commit, so PATCH A over [east, west] and PATCH B over
-// [west, east] would each grab their first lock and then block on the other's --
-// Postgres aborts one with 40P01, surfaced as a 500. Resolving first and then locking
-// in a single sorted pass makes both callers request the same lock sequence, so one
-// simply waits for the other.
-//
-// The lock is keyed on (environment uuid, storage pool) via the two-int4 form, so
-// different pools on the same environment still run in parallel -- a PATCH is scoped
-// to one pool and rows are namespaced by the pool prefix, so two pools never touch
-// each other's rows.
+// The pool-scoped lock serializes every PATCH for one storage pool — a PATCH is scoped
+// to exactly one pool, so it takes exactly one advisory lock and no ordering cycle is
+// possible. Serializing same-pool PATCHes (including ones to different regions) is what
+// makes the per-pool cluster-name uniqueness check race-free. Different pools use
+// different keys and still run in parallel — even two pools pinned to the same shared
+// environment, since their rows are namespaced by the pool prefix.
 //
 // poolSpec is the synthesized storage-pool spec used only when the pool row is
 // auto-created (the caller derived its owner from the pool name).
@@ -93,6 +79,18 @@ func (r *EnvironmentRepo) applyStoragePoolPatches(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Lock the whole storage pool before touching anything. One key per call (a PATCH
+	// is scoped to one pool), so no lock-ordering cycle exists and no sorted pass is
+	// needed. This serializes every PATCH for the pool — including ones to different
+	// regions — which is what makes the cross-environment cluster-name check race-free.
+	// Different pools use different keys and stay concurrent, even when pinned to the
+	// same shared environment (their rows are namespaced by the pool prefix).
+	if _, err := tx.Exec(
+		`SELECT pg_advisory_xact_lock(hashtext('storage-pool:' || $1))`, storagePool,
+	); err != nil {
+		return nil, fmt.Errorf("lock storage pool %s: %w", storagePool, err)
+	}
+
 	// Phase 1: resolve every region to its environment, in region order.
 	envByIdx := make([]string, len(regions))
 	order := make([]int, len(regions))
@@ -108,25 +106,7 @@ func (r *EnvironmentRepo) applyStoragePoolPatches(
 		envByIdx[i] = envUUID
 	}
 
-	// Phase 2: lock every distinct environment, sorted by uuid, before any write.
-	seen := make(map[string]bool, len(envByIdx))
-	lockOrder := make([]string, 0, len(envByIdx))
-	for _, envUUID := range envByIdx {
-		if !seen[envUUID] {
-			seen[envUUID] = true
-			lockOrder = append(lockOrder, envUUID)
-		}
-	}
-	sort.Strings(lockOrder)
-	for _, envUUID := range lockOrder {
-		if _, err := tx.Exec(
-			`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, envUUID, storagePool,
-		); err != nil {
-			return nil, fmt.Errorf("lock environment %s pool %s: %w", envUUID, storagePool, err)
-		}
-	}
-
-	// Phase 3: apply each region's batch. Body order, so the response mirrors the
+	// Phase 2: apply each region's batch. Body order, so the response mirrors the
 	// request; the returned assignments feed the read-back.
 	assignments := make([]StoragePoolAssignment, 0, len(regions))
 	for i, rr := range regions {
@@ -142,7 +122,7 @@ func (r *EnvironmentRepo) applyStoragePoolPatches(
 				Kind: "storage-pool", Name: storagePool, Spec: poolSpec,
 			}}, patches...)
 		}
-		if err := applyDesiredPatchesTx(tx, envUUID, patches); err != nil {
+		if err := applyDesiredPatchesTx(tx, envUUID, storagePool, patches); err != nil {
 			return nil, err
 		}
 		assignments = append(assignments, StoragePoolAssignment{EnvUUID: envUUID, Region: rr.Region})

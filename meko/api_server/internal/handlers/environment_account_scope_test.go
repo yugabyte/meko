@@ -166,6 +166,49 @@ func TestRegister_StampsAccountFromHeader(t *testing.T) {
 	}
 }
 
+// A scoped (account-bound) caller cannot register Yugabyte-operated MANAGED
+// infrastructure: it is a 403 refused before any DB write, because the region APIs
+// would otherwise pin other tenants' storage pools onto the customer's own agent.
+func TestRegister_ScopedManagedIsForbidden(t *testing.T) {
+	h, mock, done := newScopeHandler(t)
+	defer done()
+
+	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
+		acctA, `{"name":"acme-prod","api_key_id":"`+keyA+`","type":"MANAGED","kind":"amp"}`, "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MANAGED_REQUIRES_OPERATOR") {
+		t.Errorf("error code missing from %s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("a refused MANAGED registration still reached the database: %v", err)
+	}
+}
+
+// The unscoped operator path (admin secret, no account header) may register MANAGED:
+// this is how Yugabyte stands up the shared fleet the region APIs pin pools onto.
+func TestRegister_UnscopedManagedIsAllowed(t *testing.T) {
+	h, mock, done := newScopeHandler(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_api_keys`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
+		"", `{"name":"acme-prod","api_key_id":"`+keyA+`","type":"MANAGED","kind":"amp"}`, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 // A registration without an api_key_id is refused: the key binding is the only
 // credential an agent can ever attach with.
 func TestRegister_RequiresAPIKeyID(t *testing.T) {
