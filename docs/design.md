@@ -312,14 +312,17 @@ terminal**, which hides it for that start in this page.
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
-session or project home, or create a session. Switching to a project (`⌘1–9`, the rail, or Back
-from its home) reopens the session last open there in this browser (kept in `localStorage`), or the
-one with the most recent activity when that one is closed or none was open. On Linux and Windows these use Ctrl, so the terminal
+session or project home, or create a session. On Linux and Windows these use Ctrl, so the terminal
 doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
 it has focus. To copy from the terminal, drag across the text: tmux selects it and sends it as
 OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) selects in the
 browser instead, and then `Ctrl+C` (`⌘C`) copies rather than interrupting Claude. Clipboard access
 needs HTTPS or localhost.
+
+Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
+names no session) reopens the session last open there in this browser, kept in `localStorage`.
+When that session is closed, or none was open there yet, it opens the one with the most recent
+activity.
 
 ### Notifications
 

@@ -61,7 +61,7 @@ export function rememberOpenSession(projectId: string, sessionId: string) {
   try {
     localStorage.setItem(LAST_OPEN_KEY, JSON.stringify(all));
   } catch {
-    /* storage blocked: the project opens its most recently active session instead */
+    /* storage blocked or full: this session isn't remembered */
   }
 }
 

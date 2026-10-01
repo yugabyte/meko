@@ -227,7 +227,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       if (route.view !== 'root' && route.projectId === pendingProjectId) return;
       const first = projects[0];
       if (first) {
-        const s = liveSessions(first).sort((a, b) => a.createdAt - b.createdAt)[0];
+        const s = sessionToOpen(liveSessions(first), lastOpenSession(first.id));
         navigate({ view: 'project', projectId: first.id, sessionId: s?.id ?? null }, { replace: true });
       } else if (route.view !== 'root') {
         navigate({ view: 'root' }, { replace: true });
@@ -235,8 +235,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       return;
     }
     if (route.view === 'project' && !currentSession && live.length > 0) {
-      const s = live.find((x) => x.id === lastOpenSession(currentProject.id)) ?? live[0];
-      navigate({ view: 'project', projectId: currentProject.id, sessionId: s.id }, { replace: true });
+      const s = sessionToOpen(live, lastOpenSession(currentProject.id));
+      if (s) navigate({ view: 'project', projectId: currentProject.id, sessionId: s.id }, { replace: true });
     }
   }, [state, route, currentProject, currentSession, live, projects, pendingProjectId]);
 
