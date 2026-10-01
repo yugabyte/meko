@@ -32,6 +32,21 @@ tests:
       - matchRegexRaw:
           pattern: checks it at enroll
 
+  - it: says the same when the in-cluster stores are switched off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.inClusterStores.enabled: false
+    asserts:
+      - matchRegexRaw:
+          pattern: NO in-cluster store
+      - matchRegexRaw:
+          pattern: Logs have no in-cluster store either
+      - notMatchRegexRaw:
+          pattern: in addition to
+
   # A non-BYOC install keeps the wording it had: both stores named, byoc optional.
   - it: keeps the in-cluster wording for a normal install
     capabilities:

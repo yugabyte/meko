@@ -35,6 +35,64 @@ tests:
       - notExists:
           path: spec.template.spec.volumes
 
+  - it: sets no YB password by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGPASSWORD
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_EXISTING_SECRET
+          any: true
+
+  # Both halves, or a YSQL-auth-on universe admits the controller and refuses
+  # every endpoint it deploys.
+  - it: hands the YB password Secret to the controller and to its endpoints
+    set:
+      controller.ybPasswordSecret.name: amp-yb-password
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: amp-yb-password
+                key: password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_EXISTING_SECRET
+            value: amp-yb-password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_EXISTING_SECRET_KEY
+            value: password
+
+  # The --reuse-values path: a release predating the value carries no key, and
+  # the old chart's values stand in for this one's defaults.
+  - it: defaults the YB password key when only the Secret name is set
+    set:
+      controller.ybPasswordSecret: {name: amp-yb-password}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: amp-yb-password
+                key: password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_YB_EXISTING_SECRET_KEY
+            value: password
+
   - it: hands the endpoint TLS mode and issuer to the controller
     set:
       controller.endpoint.ybTlsMode: verify-full

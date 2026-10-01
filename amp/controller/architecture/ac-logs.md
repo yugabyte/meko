@@ -141,7 +141,7 @@ Datadog off one tail of the node. On a cloud install this is a *sink*, not a sto
 swap: VictoriaLogs stays the in-cluster store (the Loki/CloudWatch/Datadog-as-store
 decision in the [`amp-monitoring` DESIGN](../../deploy/helm/amp-monitoring/DESIGN.md)
 is unchanged); Datadog is where the wider fleet's logs converge. On a BYOC install,
-where `logsEndpoint` is empty, Datadog is the only sink there is. Logs go **direct**
+where `otel.inClusterStores.enabled=false`, Datadog is the only sink there is. Logs go **direct**
 to Datadog's US3 intake (a public SaaS); metrics instead reach the *internal*
 Thanos through the BYOC PrivateLink door — hence two different auth secrets.
 
@@ -214,11 +214,11 @@ helm upgrade --install amp deploy/helm/yb-amp-controller -n amp-dev \
   --set otel.enabled=true --set otel.byoc.enabled=true \
   --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
 
-# BYOC: yugabyte-cloud only, no in-cluster stores to ship to. Emptying both
-# endpoints is what drops those exporters; leaving them set ships to both.
+# BYOC: yugabyte-cloud only, no in-cluster stores to ship to; leaving them on
+# ships to both.
 helm upgrade --install amp deploy/helm/yb-amp-controller -n "${NS}" \
   --set otel.enabled=true --set otel.byoc.enabled=true \
-  --set-string otel.remoteWriteEndpoint= --set-string otel.logsEndpoint= \
+  --set otel.inClusterStores.enabled=false \
   --set agent.enabled=true ...
 ```
 

@@ -224,7 +224,7 @@ func run() error {
 	// judged against, not whether anything comes up. Every non-devcloud YCP must
 	// set it; deploy-ycp-ybm.sh refuses to run without it.
 	byocMetricsURL := flag.String("byoc-metrics-url",
-		envOrDefault("MEKO_BYOC_METRICS_URL", "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"),
+		envOrDefault("MEKO_BYOC_METRICS_URL", devcloudBYOCMetricsURL),
 		"OTLP/HTTP metrics door a BYOC data plane ships to. Printed in the install hint; an "+
 			"environment whose agent reports a different one is marked DEGRADED, not refused. "+
 			"Defaults to the devcloud door; a prod control plane must set "+
@@ -508,6 +508,17 @@ func run() error {
 			"chart. Safe to drop from your deployment.")
 	}
 
+	// The devcloud fallback is right for a dev control plane and silently wrong for
+	// any other: a prod one prints the devcloud door in every install hint and
+	// marks each environment shipping to its own fleet's door DEGRADED
+	// (CLOUDGA-37256). Only the deployment knows which fleet it serves, so say
+	// so loudly rather than guess.
+	if *controlPlaneMode && os.Getenv("MEKO_BYOC_METRICS_URL") == "" && !flagSet("byoc-metrics-url") {
+		slog.Error("--byoc-metrics-url / MEKO_BYOC_METRICS_URL is unset, so install hints print the "+
+			"DEVCLOUD metrics door; a non-dev control plane must set it",
+			"byoc_metrics_url", *byocMetricsURL)
+	}
+
 	return api.Run(api.ServerConfig{
 		DB:                                 dataConn,
 		SystemDB:                           systemConn,
@@ -624,6 +635,17 @@ func splitCommaList(v string) []string {
 		}
 	}
 	return out
+}
+
+// devcloudBYOCMetricsURL is --byoc-metrics-url's fallback; see the flag.
+const devcloudBYOCMetricsURL = "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"
+
+// flagSet reports whether name was given on the command line, which a flag's
+// value cannot say once it can equal its default.
+func flagSet(name string) bool {
+	set := false
+	flag.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
 }
 
 func envOrDefault(key, fallback string) string {

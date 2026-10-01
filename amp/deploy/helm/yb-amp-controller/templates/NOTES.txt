@@ -69,13 +69,14 @@ MCP server disabled (mcp.enabled=false).
        smaller blast radius than it really has. */}}
 {{- $rw := dig "remoteWriteEndpoint" "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" .Values.otel }}
 {{- $logs := dig "logsEndpoint" "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" .Values.otel }}
+{{- if not (dig "inClusterStores" "enabled" true .Values.otel) }}{{ $rw = "" }}{{ $logs = "" }}{{ end }}
 {{- if $rw }}
 Metrics collectors are deployed (otel.enabled), remote-writing to:
 
     {{ $rw }}
 {{- else }}
 Metrics collectors are deployed (otel.enabled) with NO in-cluster store:
-otel.remoteWriteEndpoint is empty, so nothing remote-writes and the BYOC door
+no in-cluster store is configured, so nothing remote-writes and the BYOC door
 below is the only destination.
 {{- end }}
 {{- if dig "collectors" "logs" "enabled" true .Values.otel }}
@@ -86,7 +87,7 @@ Logs go to:
     {{ $logs }}
 {{- else }}
 
-Logs have no in-cluster store either (otel.logsEndpoint is empty).
+Logs have no in-cluster store either.
 {{- end }}
 {{- end }}
 {{- if dig "byoc" "enabled" false .Values.otel }}

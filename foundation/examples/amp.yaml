@@ -268,13 +268,13 @@ YBProvider:
 # universe is up, not with it (meko#1405).
 #
 # The exporter references a TelemetryProvider, whose credential is a Secret
-# (byoc-metrics-auth) that does not exist yet: it is created by the install hint,
-# from a password only the operator has. Declaring the provider here would apply
+# (byoc-metrics-auth) that does not exist yet: the install hint creates it in this
+# namespace, from a password only the operator has. Declaring the provider here would apply
 # it against a missing Secret and leave it in Error. And the identity the series
 # must carry — environment_id, account_id — is not known until that same step.
 #
-# So the install hint prints both blocks, with the ids filled in, to be added to
-# this file and applied. What arrives looks like:
+# So the install hint prints these, with the ids filled in, to be added to this
+# file and applied. What arrives looks like:
 #
 #   TelemetryProvider:          # above YBUniverse — keys apply top to bottom
 #     name: byoc-metrics

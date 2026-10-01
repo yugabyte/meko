@@ -180,6 +180,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `rbac.clusterScoped` | `false` | additionally create a ClusterRole for `namespaces get, list, create` (Helm `--create-namespace`). Separate from `nodeRead` because this one can change the cluster |
 | `controller.image.repository` / `.tag` | `amp-controller` / `imageTag` ⇒ appVersion | controller image |
 | `controller.databaseUrl` | `postgres://yugabyte@yb-tserver:5433/yb_storage?sslmode=disable` | `AMP_DATABASE_URL` |
+| `controller.ybPasswordSecret.name` / `.key` | `""` / `password` | Secret with the YB password for a YSQL-auth-on universe: the controller reads it as `PGPASSWORD` and endpoints mount it (`AMP_DEPLOY_YB_EXISTING_SECRET`). Empty = passwordless |
 | `controller.dbSchema` | `controller` | `AMP_DB_SCHEMA` |
 | `controller.logFormat` | `text` | `AMP_LOG_FORMAT` |
 | `controller.ports.api` | `8080` | controller API + storage-layer control surface port |
@@ -231,6 +232,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `agent.chartPullSecret` | _(empty)_ | dockerconfigjson Secret mounted as helm's registry config (`HELM_REGISTRY_CONFIG`) to pull an OCI chart. Empty ⇒ `imagePullSecrets[0]`; neither set ⇒ no registry credentials |
 | `agent.apiKeySecret.name` / `.key` | `amp-agent-api-key` / `api-key` | Secret the agent reads the YBM API key from. Create it before install — the chart holds no credentials |
 | `agent.extraEnv` | `[]` | extra `{name, value}` env for the agent container, rendered **before** the chart's own vars so a name the chart sets wins. For a YCP reachable only through a proxy: set `HTTPS_PROXY` here, and `NO_PROXY` covering `.svc.cluster.local`, or the agent cannot reach its own controller or the collector |
+| `otel.inClusterStores.enabled` | `true` | `false` drops both in-cluster exporters (VictoriaMetrics remote-write, VictoriaLogs), whatever the endpoints say — the BYOC shape. Refused unless `otel.byoc.enabled` gives the collectors somewhere else to ship |
 | `otel.environmentId` | _(empty)_ | stamped as an `environment_id` label on every series both metrics collectors scrape. The YCP environment id (same value as `agent.envName`); the install hint sets it |
 | `otel.accountId` | _(empty)_ | stamped as an `account_id` label alongside it. The install hint omits it for a standalone YCP, which has no account |
 

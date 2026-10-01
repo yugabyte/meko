@@ -40,6 +40,17 @@ spec:
           env:
             - name: AMP_DATABASE_URL
               value: {{ .Values.controller.databaseUrl | quote }}
+            {{- /* key defaults here as well as in values.yaml: --reuse-values replays
+                   the old release's values, so a release predating this block that
+                   sets only .name has no .key, and an empty secretKeyRef key is
+                   rejected by the API server. */}}
+            {{- with .Values.controller.ybPasswordSecret }}{{ if .name }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .key | default "password" | quote }}
+            {{- end }}{{ end }}
             - name: AMP_DB_SCHEMA
               value: {{ .Values.controller.dbSchema | quote }}
             - name: AMP_LOG_FORMAT
@@ -70,6 +81,12 @@ spec:
               value: {{ .Values.controller.endpoint.ybUser | quote }}
             - name: AMP_DEPLOY_YB_DBNAME
               value: {{ .Values.controller.endpoint.ybDbname | quote }}
+            {{- with .Values.controller.ybPasswordSecret }}{{ if .name }}
+            - name: AMP_DEPLOY_YB_EXISTING_SECRET
+              value: {{ .name | quote }}
+            - name: AMP_DEPLOY_YB_EXISTING_SECRET_KEY
+              value: {{ .key | default "password" | quote }}
+            {{- end }}{{ end }}
             {{- if .Values.controller.endpoint.ybTlsMode }}
             # Endpoints reach YB over TLS with a per-release client certificate
             # from this issuer, verified against this CA bundle.

@@ -47,6 +47,8 @@ so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
        below. */}}
 {{- $rwEndpoint := dig "remoteWriteEndpoint" "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" .Values.otel }}
 {{- if kindIs "invalid" $rwEndpoint }}{{ $rwEndpoint = "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" }}{{ end }}
+{{- $inClusterStores := dig "inClusterStores" "enabled" true .Values.otel }}
+{{- if not $inClusterStores }}{{ $rwEndpoint = "" }}{{ end }}
 {{- /* The single switch for shipping telemetry off-cluster: metrics to Thanos (the
        metrics collectors below) and logs to Datadog (the logs daemonset). Hoisted
        here because both halves of the file need it. */}}
@@ -61,7 +63,7 @@ so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
        way to say "run none", and the message names it. */}}
 {{- $metricsWanted := or (dig "collectors" "controller" "enabled" true .Values.otel) (dig "collectors" "compute" "enabled" true .Values.otel) }}
 {{- if and $metricsWanted (eq (len $metricsExporters) 0) }}
-{{- fail "otel.remoteWriteEndpoint is empty and otel.byoc.enabled is false: the metrics collectors would have no exporter at all. Set one of them, or turn the collectors off with otel.collectors.controller.enabled=false and otel.collectors.compute.enabled=false." }}
+{{- fail "no in-cluster metrics store (otel.inClusterStores.enabled=false or an empty otel.remoteWriteEndpoint) and otel.byoc.enabled is false: the metrics collectors would have no exporter at all. Turn one of them on, or turn the collectors off with otel.collectors.controller.enabled=false and otel.collectors.compute.enabled=false." }}
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
@@ -432,11 +434,12 @@ reference nil-pointers and fails the upgrade outright.
        otherwise reach hasPrefix as nil and fail the render on a type error). */}}
 {{- $logsEndpoint := dig "logsEndpoint" "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" .Values.otel }}
 {{- if kindIs "invalid" $logsEndpoint }}{{ $logsEndpoint = "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}{{ end }}
+{{- if not $inClusterStores }}{{ $logsEndpoint = "" }}{{ end }}
 {{- $logsExporters := list }}
 {{- if $logsEndpoint }}{{ $logsExporters = append $logsExporters "otlphttp/logs" }}{{ end }}
 {{- if $byocEnabled }}{{ $logsExporters = append $logsExporters "datadog" }}{{ end }}
 {{- if eq (len $logsExporters) 0 }}
-{{- fail "otel.logsEndpoint is empty and otel.byoc.enabled is false: the logs collector would have no exporter at all. Set one of them, or turn the collector off with otel.collectors.logs.enabled=false." }}
+{{- fail "no in-cluster log store (otel.inClusterStores.enabled=false or an empty otel.logsEndpoint) and otel.byoc.enabled is false: the logs collector would have no exporter at all. Turn one of them on, or turn the collector off with otel.collectors.logs.enabled=false." }}
 {{- end }}
 {{- /* Datadog logs fan-out — gated on byoc.enabled, the single switch for shipping
        telemetry off-cluster: metrics to Thanos (the metrics collectors above) and

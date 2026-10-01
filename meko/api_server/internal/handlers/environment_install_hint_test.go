@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -52,7 +53,9 @@ func TestInstallHint_Amp(t *testing.T) {
 	for _, want := range []string{
 		// The key, in a Secret the agent reads from — the chart's default name.
 		"create secret generic amp-agent-api-key",
-		"--from-literal=api-key=<YCP_AGENT_API_KEY>",
+		`--from-literal=api-key="${AGENT_API_KEY}"`,
+		// In the header: YBM shows the key beside the hint, not in it.
+		"AGENT_API_KEY='<YCP_AGENT_API_KEY>'",
 		// The release name every deploy script and the chart README use, so a
 		// hint-installed release answers to `helm uninstall yb-amp-controller`.
 		"helm upgrade --install yb-amp-controller oci://quay.io/yugabyte/charts/yb-amp-controller",
@@ -68,6 +71,14 @@ func TestInstallHint_Amp(t *testing.T) {
 		`--set-string imageTag="${TAG}"`,
 		// --set-string, not --set: ? and = in the DSN are mis-tokenized by --set.
 		`--set-string controller.databaseUrl="postgres://yugabyte@${YB}/yb_storage?sslmode=disable"`,
+		// The YSQL password, in a Secret both the controller and its endpoints
+		// read: a universe with YSQL auth on refuses either without it.
+		"YB_PASSWORD=''",
+		"create secret generic amp-yb-password",
+		`--from-literal=password="${YB_PASSWORD}"`,
+		`--set-string controller.ybPasswordSecret.name="${YB_PASSWORD:+amp-yb-password}"`,
+		// With YSQL auth off there is no password, so no Secret either.
+		`if [ -n "${YB_PASSWORD}" ]; then`,
 		// Without these three the controller comes up unable to pull, unable to
 		// reach storage, and shipping metrics to a store that is not there.
 		`--set-string controller.endpoint.ybHostPorts="${YB}"`,
@@ -78,11 +89,9 @@ func TestInstallHint_Amp(t *testing.T) {
 		"--set otel.enabled=true",
 		"--set otel.byoc.enabled=true",
 		"--set-string otel.byoc.metricsEndpoint=" + testBYOCMetricsURL,
-		// Empty, not absent — the chart reads "" as "drop the in-cluster exporter".
-		// Leaving them at their defaults points both collectors at a VictoriaMetrics
-		// and a VictoriaLogs no BYOC cluster runs.
-		"--set-string otel.remoteWriteEndpoint=",
-		"--set-string otel.logsEndpoint=",
+		// Left on, the collectors ship to a VictoriaMetrics and a VictoriaLogs no
+		// BYOC cluster runs.
+		"--set otel.inClusterStores.enabled=false",
 		// Both credentials, created before the install: a missing one fails the
 		// collector that reads it to start.
 		"create secret generic byoc-metrics-auth",
@@ -104,6 +113,26 @@ func TestInstallHint_Amp(t *testing.T) {
 		}
 	}
 
+	// Logs go to Datadog through otel.byoc.enabled, and the hint has to say so:
+	// the empty otel.logsEndpoint reads as "no logs" otherwise.
+	if !strings.Contains(hint, "logs ship to Datadog") {
+		t.Errorf("amp hint does not say where logs go:\n%s", hint)
+	}
+	// --reuse-values replays the old release's values, which predate these.
+	for _, want := range []string{
+		// Per image: imageTag is only the fallback, and existing releases pin these.
+		`--set-string controller.image.tag="${TAG}"`,
+		`#     --set-string agent.image.tag="${TAG}"`,
+		`#     --set-string controller.endpoint.image.tag="${TAG}"`,
+		`#     --set otel.podMetrics="${POD_METRICS}"`,
+		`#     --set-string controller.ybPasswordSecret.name="${YB_PASSWORD:+amp-yb-password}"`,
+		"#     --set otel.inClusterStores.enabled=false",
+	} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("the --reuse-values snippet is missing %q:\n%s", want, hint)
+		}
+	}
+
 	// The retired token flow and controller-side YCP loop must not reappear, the
 	// meko install must not bleed into an amp hint, and the placeholders this
 	// rewrite removed must not come back.
@@ -113,9 +142,18 @@ func TestInstallHint_Amp(t *testing.T) {
 		"values-byoc.yaml",
 		"<your YugabyteDB DSN>", "<reconcile-agent tag>",
 		"--set controller.databaseUrl=", // the mis-tokenizing form
+		// Spelled into the DSN, it is split by --set-string on "," and never
+		// reaches the endpoints.
+		"yugabyte:${YB_PASSWORD}@",
 		// The reason the hint existed to print this is gone: a YCP-managed install
 		// that ships no telemetry is refused by the chart and by enroll.
 		"--set otel.enabled=false",
+		// Superseded by otel.inClusterStores.enabled, and read as "ship no logs".
+		"otel.logsEndpoint=", "otel.remoteWriteEndpoint=",
+		// Contradicted the datadog-api Secret the hint creates.
+		"nowhere else",
+		// A dev build's tag, as the example in a prod hint.
+		"custom-",
 	} {
 		if strings.Contains(hint, unwanted) {
 			t.Errorf("amp hint contains retired/foreign string %q:\n%s", unwanted, hint)
@@ -126,7 +164,9 @@ func TestInstallHint_Amp(t *testing.T) {
 // The failure mode this rewrite existed to kill was a `<placeholder>` sitting inside
 // a command that looks pasteable. Values the server cannot know belong in the
 // editable header, so no other line may carry one — checking the shape rather than
-// the three specific placeholders that happened to be there.
+// the three specific placeholders that happened to be there. The API key is no
+// exception: the hint is pasted as printed, so an inline placeholder becomes the
+// key itself.
 func TestInstallHint_AmpPlaceholdersOnlyInTheHeader(t *testing.T) {
 	hint := hintForEnv(t, &models.Environment{
 		ID: "amp-acme-prod", Kind: "amp", APIKeyID: keyA, Placement: "cloud",
@@ -138,16 +178,18 @@ func TestInstallHint_AmpPlaceholdersOnlyInTheHeader(t *testing.T) {
 			continue
 		}
 		// The header's NAME=<value> lines are the point: they are what the operator
-		// edits. A header line is a bare shell assignment — no spaces before the
-		// "=" — which is what separates it from a `--set foo=<bar>` flag.
-		if name, _, ok := strings.Cut(trimmed, "="); ok && name != "" && !strings.ContainsAny(name, " \t") {
+		// edits. A header line is an unindented shell assignment, which is what
+		// separates it from an indented `--from-literal=<x>` or `--set foo=<bar>`.
+		if headerAssignment.MatchString(line) {
 			continue
 		}
-		if strings.Contains(strings.ReplaceAll(line, apiKeyPlaceholder, ""), "<") {
+		if strings.Contains(line, "<") {
 			t.Errorf("placeholder outside the editable header:\n%s\nin:\n%s", line, hint)
 		}
 	}
 }
+
+var headerAssignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // An environment registered without a placement takes the chart default rather than
 // printing an empty --set.
@@ -325,6 +367,14 @@ func TestInstallHint_AmpTurnsOnYugabyteDBMetrics(t *testing.T) {
 		"compression: gzip",
 		"environment_id: amp-acme-prod",
 		"account_id: 3f2b1c00-0000-0000-0000-000000000009",
+		// The provider reads its Secret in the foundation's namespace, which step
+		// 2's copy in ${NS} does not reach when the two differ.
+		"kubectl -n <foundation namespace> create secret generic byoc-metrics-auth",
+		// Three edits, each labeled with where it goes: "the provider above the
+		// YBUniverse entry" was read more than one way.
+		"(a) YBA's collector gate",
+		"(b) a new top-level key, above YBUniverse",
+		"(c) inside the YBUniverse entry's spec",
 	} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint does not carry %q:\n%s", want, hint)

@@ -20,8 +20,7 @@ func mekoHint(t *testing.T) string {
 }
 
 // The meko hint has to be runnable as printed: the values the operator must supply
-// belong in the header, and the only placeholder left inside the commands is the
-// API key the control plane never sees.
+// belong in the header — the API key the control plane never sees included.
 func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 	hint := mekoHint(t)
 
@@ -34,6 +33,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		// API key, and the pull secret every image in the release needs now that
 		// they are all on private Quay.
 		"create secret generic meko-agent-api-key",
+		`--from-literal=api-key="${AGENT_API_KEY}"`,
 		"create secret docker-registry quay-registry-creds",
 		"--docker-server=quay.io",
 		// The chart wiring that makes the agent render at all.
@@ -64,8 +64,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 	}
 
 	// Placeholders belong in the header block, where the operator edits them once,
-	// not mid-command where the paste silently produces something broken. The
-	// exceptions are the two credentials, which are Secret values on their own line.
+	// not mid-command where the paste silently produces something broken.
 	for _, line := range strings.Split(hint, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") || !strings.Contains(line, "<") {
 			continue
@@ -74,10 +73,10 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 			strings.HasPrefix(line, "QUAY_USER=") || strings.HasPrefix(line, "QUAY_TOKEN=") ||
 			strings.HasPrefix(line, "BEDROCK_KEY=") || strings.HasPrefix(line, "BEDROCK_SECRET=") ||
 			strings.HasPrefix(line, "LANGFUSE_OWNER_EMAIL=") ||
-			strings.Contains(line, "--from-literal=") {
+			strings.HasPrefix(line, "AGENT_API_KEY=") {
 			continue
 		}
-		t.Errorf("placeholder outside the header and the Secret literals: %q", line)
+		t.Errorf("placeholder outside the header: %q", line)
 	}
 }
 

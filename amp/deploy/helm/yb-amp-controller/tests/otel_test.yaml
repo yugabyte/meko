@@ -909,6 +909,40 @@ tests:
           path: spec.config.service.pipelines.logs.processors
           value: [memory_limiter, k8sattributes, transform/severity, transform/datadog, batch]
 
+  # One switch for the BYOC shape: it wins over endpoints left at (or set to) a
+  # store, since a --reuse-values upgrade replays the old chart's defaults.
+  - it: drops both in-cluster exporters when inClusterStores is off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.inClusterStores.enabled: false
+      otel.remoteWriteEndpoint: http://vm.example:8428/api/v1/write
+      otel.byoc.enabled: true
+    asserts:
+      - notExists:
+          path: spec.config.exporters.prometheus_remote_write
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-controller
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [otlphttp/byoc]
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-compute
+      - notExists:
+          path: spec.config.exporters.otlphttp/logs
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-logs
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [datadog]
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-logs
+
   # The acceptance case for the whole BYOC shape: three collectors, all of them
   # shipping only off-cluster.
   - it: a byoc-only install still renders every collector
@@ -968,9 +1002,10 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: >-
-            otel.remoteWriteEndpoint is empty and otel.byoc.enabled is false: the metrics
-            collectors would have no exporter at all. Set one of them, or turn the collectors
-            off with otel.collectors.controller.enabled=false and
+            no in-cluster metrics store (otel.inClusterStores.enabled=false or an empty
+            otel.remoteWriteEndpoint) and otel.byoc.enabled is false: the metrics collectors
+            would have no exporter at all. Turn one of them on, or turn the collectors off
+            with otel.collectors.controller.enabled=false and
             otel.collectors.compute.enabled=false.
 
   - it: refuses to render the logs collector with no exporter at all
@@ -982,9 +1017,19 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: >-
-            otel.logsEndpoint is empty and otel.byoc.enabled is false: the logs collector
-            would have no exporter at all. Set one of them, or turn the collector off with
+            no in-cluster log store (otel.inClusterStores.enabled=false or an empty
+            otel.logsEndpoint) and otel.byoc.enabled is false: the logs collector would have
+            no exporter at all. Turn one of them on, or turn the collector off with
             otel.collectors.logs.enabled=false.
+
+  - it: refuses to render with the in-cluster stores off and byoc off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.inClusterStores.enabled: false
+    asserts:
+      - failedTemplate: {}
 
   # collectors.*.enabled is the supported way to say "run none", which is what
   # makes the fail above a guard rather than a trap.

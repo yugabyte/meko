@@ -122,16 +122,17 @@ is named `<namespace>-<release>-otel` — unprefixed, two installs on one cluste
 share it and either `uninstall` revokes the other's node access (#888). With
 `podMetrics` off the collectors need no cluster-scoped rights at all. Store is set
 via `otel.remoteWriteEndpoint` (VictoriaMetrics by default); an explicit `""` drops
-that exporter entirely, which is what a BYOC install does. **Requires the OTel
+that exporter entirely, and `otel.inClusterStores.enabled=false` drops it along with
+the logs one, which is what a BYOC install does. **Requires the OTel
 Operator** (opentelemetry.io CRDs) in the cluster.
 
 ## BYOC: shipping to yugabyte-cloud
 
 `otel.byoc.enabled` adds an `otlphttp/byoc` exporter to both metrics collectors —
 BasicAuth over the BYOC PrivateLink door — and a `datadog` exporter to the logs
-daemonset. A BYOC install pairs it with empty `remoteWriteEndpoint` and
-`logsEndpoint`, so yugabyte-cloud is the only destination; a cloud install leaves
-those set and ships to both.
+daemonset. A BYOC install pairs it with `otel.inClusterStores.enabled=false`, so
+yugabyte-cloud is the only destination; a cloud install leaves the stores on and
+ships to both.
 
 Three things make that hold in a cluster we do not own.
 

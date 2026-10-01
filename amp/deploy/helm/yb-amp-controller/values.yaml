@@ -98,6 +98,15 @@ controller:
 
   # -- Postgres DSN for the controller's backing YugabyteDB (AMP_DATABASE_URL).
   databaseUrl: "postgres://yugabyte@yb-tserver:5433/yb_storage?sslmode=disable"
+  # -- Secret in the release namespace holding the backing YugabyteDB password,
+  # for a universe with YSQL auth on. Empty = passwordless. One Secret serves
+  # both connections: the controller reads it as PGPASSWORD, which pgx uses when
+  # databaseUrl carries no password, and every endpoint it deploys mounts it
+  # (AMP_DEPLOY_YB_EXISTING_SECRET). Without the second, the controller comes up
+  # healthy and every endpoint then fails to reach YB.
+  ybPasswordSecret:
+    name: ""
+    key: "password"
   # -- Schema the controller's own tables live in (AMP_DB_SCHEMA).
   dbSchema: "controller"
   # -- Log format: text | json (AMP_LOG_FORMAT).
@@ -500,6 +509,13 @@ otel:
   # default, so `helm upgrade --reuse-values` cannot silently lose a store.
   # Emptying it with byoc off is refused at render time (nothing would export).
   remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # The in-cluster stores as one switch: false drops both in-cluster exporters,
+  # whatever remoteWriteEndpoint and logsEndpoint say — the BYOC shape, where the
+  # cluster runs neither store and otel.byoc is the only destination. Equivalent to
+  # emptying both endpoints, which still works. A --reuse-values upgrade of a
+  # release predating this key keeps its stores.
+  inClusterStores:
+    enabled: true
   # Fleet identity, stamped as a label on EVERY series both metrics collectors
   # scrape (controller/architecture/ac-metrics.md). Normally set by the install
   # hint the YCP console prints; unset stamps nothing.
@@ -514,8 +530,8 @@ otel:
   # The single switch for shipping telemetry OFF-cluster to the yugabyte-cloud
   # managed backends. Off by default: a normal install ships only to
   # VictoriaMetrics/VictoriaLogs and needs no external credentials. A BYOC install
-  # turns this on AND empties remoteWriteEndpoint/logsEndpoint, so yugabyte-cloud
-  # is the only destination; leaving those set ships to both.
+  # turns this on AND sets inClusterStores.enabled=false, so yugabyte-cloud is the
+  # only destination; leaving the stores on ships to both.
   #
   # EXPECTED for a YCP-managed install (agent.enabled): without it the console can
   # read nothing about the environment. Not enforced — templates/telemetry-preflight
