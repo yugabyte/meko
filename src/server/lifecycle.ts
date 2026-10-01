@@ -452,7 +452,7 @@ export class Lifecycle {
       }, PR_CONVERSATION_TIMEOUT_MS);
     });
     const conv = await Promise.race([lookup, late]).finally(() => clearTimeout(timer));
-    return mekoPrFooter(mekoHost(this.core.config), dp.id, conv);
+    return mekoPrFooter(mekoHost(this.core.config), dp, conv);
   }
 
   /**

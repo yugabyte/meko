@@ -207,5 +207,6 @@ describe("a PR's description in a search", () => {
     const body = 'Adds the widget.\n\nSee meko:// docs.\nmeko://0f1e2d3c-1111-4222-8333-444455556666\nmeko_conversation_id:abc123\n';
     expect(withoutMekoLines(body)).toBe('Adds the widget.\n\nSee meko:// docs.');
     expect(withoutMekoLines('https://example.com/a')).toBe('https://example.com/a');
+    expect(withoutMekoLines('Adds it.\ncloud.mekodata.ai://0f1e2d3c-1111;adlc/proj/demo/x\nmeko_conversation_id:abc')).toBe('Adds it.');
   });
 });

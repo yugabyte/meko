@@ -421,7 +421,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it("ends the PR description with the project's datapack and the session's Meko conversation", async () => {
     const { text, row } = await prPrompt({ mode: 'existing', id: 'dp-1', name: 'team/demo' });
-    expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1\nmeko_conversation_id:conv-1')).toBe(true);
+    expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1;team/demo\nmeko_conversation_id:conv-1')).toBe(true);
     expect(text).toContain('End the PR description with these lines, exactly as written');
     const conv = env.meko.calls.filter((c) => c.name === 'ensureConversation').at(-1);
     expect(conv?.args.slice(0, 4)).toEqual([sessionAgentId(row), 'dp-1', row.claude_session_id, 'Footer (Demo)']);
@@ -432,7 +432,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       throw new Error('Meko is down');
     };
     const { text } = await prPrompt({ mode: 'existing', id: 'dp-1', name: 'team/demo' });
-    expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1')).toBe(true);
+    expect(text.endsWith('\n\ncloud.mekodata.ai://dp-1;team/demo')).toBe(true);
     expect(text).toContain('End the PR description with this line');
     expect(text).not.toContain('meko_conversation_id');
   });

@@ -16,7 +16,7 @@ import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName,
+  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
@@ -641,6 +641,13 @@ describe('Meko recall in prompts', () => {
 
   it("isn't in the default prompts, which reach sessions with Meko off too", () => {
     for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toMatch(/search Meko/);
+  });
+
+  it("names the datapack after its id in the PR's Meko line, on one line", () => {
+    const dp = { id: '0f1e2d3c-1111', name: 'adlc/proj/demo/pr review' };
+    expect(mekoPrFooter('cloud.mekodata.ai', dp, null).endsWith('\n\ncloud.mekodata.ai://0f1e2d3c-1111;adlc/proj/demo/pr review')).toBe(true);
+    expect(mekoPrFooter('h', { ...dp, name: ' two\nlines ' }, 'c1').endsWith('\n\nh://0f1e2d3c-1111;two lines\nmeko_conversation_id:c1')).toBe(true);
+    expect(mekoPrFooter('h', { ...dp, name: '' }, null).endsWith('\n\nh://0f1e2d3c-1111')).toBe(true);
   });
 });
 

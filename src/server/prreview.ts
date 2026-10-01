@@ -181,9 +181,12 @@ async function githubRemote(path: string): Promise<string | null> {
   return githubRepo(upstream) ?? githubRepo(origin);
 }
 
-/** The datapack ids a PR description's Meko lines name (`<host>://<datapack id>`, see mekoPrFooter). */
+/**
+ * The datapack ids a PR description's Meko lines name (`<host>://<datapack id>`, then `;<name>` in
+ * the PRs opened since the name was added; see mekoPrFooter).
+ */
 export function datapackIdsIn(body: string): string[] {
-  return [...body.matchAll(/^\s*[a-z][\w.+-]*:\/\/([0-9a-f][0-9a-f-]{7,})\s*$/gim)].map((m) => m[1]);
+  return [...body.matchAll(/^\s*[a-z][\w.+-]*:\/\/([0-9a-f][0-9a-f-]{7,})(?:;[^\n]*)?\s*$/gim)].map((m) => m[1]);
 }
 
 function toReviewable(
