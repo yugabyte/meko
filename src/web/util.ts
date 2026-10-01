@@ -1,4 +1,4 @@
-import type { ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { MekoFirstTurn, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<SessionStatus, number> = {
@@ -156,6 +156,29 @@ export function formatCostOf(cost: { usd: number; unpricedMessages: number }): s
 export function usageTitle(u: TokenUsage): string {
   const f = (n: number) => n.toLocaleString();
   return `Tokens: ${f(totalTokens(u))} total · ${f(u.output)} output · ${f(u.input)} input · ${f(u.cacheWrite)} cache write · ${f(u.cacheRead)} cache read · ${u.messages} responses`;
+}
+
+/**
+ * The Meko section's 1st-turn tokens tile in words: its split line (shown, since tooltips aren't
+ * seen on touch) and a tooltip that spells it out, including how many sessions AgentK's search at
+ * start (the seed) ran in, since sessions from before it was added, or started with no task, count
+ * but never had one.
+ */
+export function firstTurnText(t: MekoFirstTurn): { split: string | null; title: string } {
+  const f = (n: number) => n.toLocaleString();
+  if (t.sessions === 0) return { split: null, title: 'No session has finished its first turn yet.' };
+  const sessions = (n: number) => `${f(n)} ${n === 1 ? 'session' : 'sessions'}`;
+  const seed = t.startSearches === 0
+    ? "AgentK's search at session start, the seed, hasn't run in any of them yet;"
+    : `${f(t.seedTokens)} that AgentK's search at session start passed to Claude (the seed` +
+      (t.startSearches < t.sessions ? `; it ran in ${f(t.startSearches)} of them, the others are from before it was added or had no task),` : '),');
+  return {
+    split: `${t.startSearches === 0 ? 'Seeded none yet' : `Seeded ≈ ${formatTokens(t.seedTokens)}`} · Searched ≈ ${formatTokens(t.searchedTokens)}`,
+    title:
+      `About ${f(t.seedTokens + t.searchedTokens)} tokens from Meko in the first turns of ${sessions(t.sessions)} (characters ÷ 4): ` +
+      `${seed} and ${f(t.searchedTokens)} from Claude's own Meko searches before its first turn ended. ` +
+      'Only sessions in projects with datapacks count.',
+  };
 }
 
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */

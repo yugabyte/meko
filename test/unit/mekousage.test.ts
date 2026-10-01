@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
+import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { classifyResult, mekoTool, parseMekoCalls, parseMekoResults } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
@@ -207,7 +207,7 @@ describe('what Meko saved', () => {
 
     const pu = projectUsage(db, 'p');
     expect(pu.meko).toMatchObject({ calls: 4, lookups: 3, found: 2, empty: 1, errors: 1, saves: 1 });
-    expect(pu.meko.savings).toEqual({ searches: 1, tokens: expected.tokens, usd: expected.usd, unpricedSearches: 0 });
+    expect(pu.meko.savings).toEqual({ searches: 1, seeds: 0, tokens: expected.tokens, usd: expected.usd, unpricedSearches: 0, unpricedSeeds: 0 });
     expect(pu.bySession[0].meko).toEqual({ lookups: 3, found: 2, saves: 1 });
     expect(pu.cost.usd).toBeGreaterThan(0);
     expect(pu.cost.unpricedMessages).toBe(0);
@@ -233,8 +233,34 @@ describe('what Meko saved', () => {
   it('shows nothing saved, and no Meko use, for a project that never called Meko', () => {
     const { db } = setup();
     expect(projectUsage(db, 'p').meko).toEqual({
-      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, tokens: 0, usd: 0, unpricedSearches: 0 },
+      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 },
     });
+  });
+
+  it('credits a seed AgentK passed at start like a search by the first response, once there is one', () => {
+    const { dir, db } = setup();
+    recordPreload(db, 's1', { outcome: 'found', results: 2, chars: 4000, ms: 900 });
+    // No response yet: nothing to credit it against.
+    expect(projectUsage(db, 'p').meko.savings).toMatchObject({ seeds: 0, tokens: 0 });
+
+    const at = (s: number) => new Date(Date.UTC(2026, 8, 29, 12, 0, s)).toISOString();
+    const main = join(dir, 'c.jsonl');
+    writeFileSync(main, reply('m1', at(0)) + reply('m2', at(1)) + reply('m3', at(2)));
+    ingestSessionUsage(db, 's1', main);
+    // The first response's context (201,000) held the 1,000-token seed; a search's context doesn't hold its result yet.
+    const expected = searchSaving({ contextTokens: 200_000, resultTokens: 1000, laterResponses: 2, model: 'claude-opus-5-5' });
+    const pu = projectUsage(db, 'p');
+    expect(pu.meko).toMatchObject({ calls: 0, lookups: 0, found: 0, foundTokens: 0 });
+    expect(pu.meko.savings).toEqual({ searches: 0, seeds: 1, tokens: expected.tokens, usd: expected.usd, unpricedSearches: 0, unpricedSeeds: 0 });
+    expect(usageOverview(db).byProject[0].meko.savings).toEqual(pu.meko.savings);
+
+    // A seed on a model with no price counts in the tokens and as an unpriced seed, not an unpriced search.
+    run(db, `UPDATE usage_messages SET model = 'claude-fake-1' WHERE message_id = 'm1'`);
+    expect(projectUsage(db, 'p').meko.savings).toMatchObject({ seeds: 1, tokens: expected.tokens, usd: null, unpricedSearches: 0, unpricedSeeds: 1 });
+
+    // A search at start that found nothing, or came too late, passed nothing.
+    run(db, `UPDATE meko_preloads SET outcome = 'late'`);
+    expect(projectUsage(db, 'p').meko.savings).toMatchObject({ seeds: 0, tokens: 0 });
   });
 });
 
@@ -301,10 +327,10 @@ describe('Meko in the first turn', () => {
     expect(endAt(db, 's2')).toBe(Date.parse(at(2)));
   });
 
-  it('counts sessions that searched before the first turn ended, found something at start, or either', () => {
+  it('counts the tokens Meko brought into first turns: searches before the turn ended, and what AgentK passed at startup', () => {
     const { dir, db } = setup();
     addDatapack(db);
-    for (const id of ['s2', 's3', 's4', 's5']) addSession(db, id);
+    for (const id of ['s2', 's3', 's4', 's5', 's6']) addSession(db, id);
     // A project with no datapack had no Meko to search: its sessions don't count.
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
     addSession(db, 'q1', 'q');
@@ -313,22 +339,28 @@ describe('Meko in the first turn', () => {
       writeFileSync(f, text);
       ingestSessionUsage(db, id, f);
     };
-    // s1: a search in the first turn. s2: a search only after it. s3: nothing, but AgentK's search
-    // found something. s4: both. s5: its first turn hasn't ended.
-    write('s1', call('m1', [['a', 'mcp__meko__context_search']], { at: at(0) }) + result('a', found) + reply('m2', at(1), 'end_turn'));
+    // s1: a search in the first turn, and one that found nothing. s2: a search only after it. s3:
+    // nothing, but AgentK's search passed something. s4: both. s5: its first turn hasn't ended. s6:
+    // from before AgentK searched at start.
+    write('s1', call('m1', [['a', 'mcp__meko__context_search'], ['z', 'mcp__meko__memory_search']], { at: at(0) }) + result('a', found) +
+      result('z', wrapped({ results: [] })) + reply('m2', at(1), 'end_turn'));
     write('s2', reply('m1', at(0), 'end_turn') + call('m2', [['b', 'mcp__meko__context_search']], { at: at(5) }) + result('b', found));
     write('s3', reply('m1', at(0), 'end_turn'));
     write('s4', call('m1', [['c', 'mcp__meko__memory_search']], { at: at(0) }) + result('c', found) + reply('m2', at(1), 'end_turn'));
     write('s5', call('m1', [['d', 'mcp__meko__memory_search']], { at: at(0) }) + result('d', found));
+    write('s6', reply('m1', at(0), 'end_turn'));
     write('q1', call('m1', [['e', 'mcp__meko__memory_search']], { at: at(0) }) + result('e', found) + reply('m2', at(1), 'end_turn'));
     recordPreload(db, 's3', { outcome: 'found', results: 2, chars: 300, ms: 900 });
     recordPreload(db, 's4', { outcome: 'found', results: 1, chars: 100, ms: 900 });
     recordPreload(db, 's2', { outcome: 'late', results: 1, chars: 100, ms: 9000 });
     recordPreload(db, 's1', { outcome: 'empty', results: 0, chars: 0, ms: 900 });
 
-    const want = { sessions: 4, searched: 2, preloaded: 2, either: 3 };
+    const tokens = Math.round(found.length / 4);
+    expect(get(db, `SELECT result_chars FROM meko_calls WHERE tool_use_id = 'a'`)).toEqual({ result_chars: found.length });
+    // The late and empty searches at start passed nothing, so only s3's 300 and s4's 100 characters count.
+    const want = { sessions: 5, startSearches: 4, searchedTokens: 2 * tokens, seedTokens: 100 };
     expect(projectUsage(db, 'p').mekoFirstTurn).toEqual(want);
-    expect(projectUsage(db, 'q').mekoFirstTurn).toEqual({ sessions: 0, searched: 0, preloaded: 0, either: 0 });
+    expect(projectUsage(db, 'q').mekoFirstTurn).toEqual({ sessions: 0, startSearches: 0, searchedTokens: 0, seedTokens: 0 });
     expect(usageOverview(db).mekoFirstTurn).toEqual(want);
   });
 });

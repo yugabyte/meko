@@ -188,40 +188,75 @@ interface CallRow {
   project_id: string;
   session_id: string;
   tool: string;
-  kind: MekoKind;
+  /** `seed`: what AgentK's search at session start passed to Claude, which counts only toward the savings. */
+  kind: MekoKind | 'seed';
   outcome: MekoOutcome | null;
   result_chars: number | null;
   model: string | null;
   context_tokens: number | null;
-  /** For searches that found something: responses after the call, up to CARRY_TURNS. */
+  /** For searches that found something, and seeds: responses after the call (or the first response), up to CARRY_TURNS. */
   later: number | null;
 }
 
 const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
 
-/** Every Meko call, for one project or all of them. */
+/**
+ * Every Meko call, for one project or all of them, plus a `seed` row for each session that AgentK's
+ * search at start passed something to. A seed is credited like a search made by the session's first
+ * response: its context (less the seed itself, which a search's context doesn't hold yet), model, and
+ * the responses after it. A seed waits for that first response.
+ */
 export function mekoCalls(db: Db, projectId?: string): CallRow[] {
+  const where = projectId ? ' WHERE s.project_id = ?' : '';
   return all<CallRow>(db,
     `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.model, c.context_tokens,
        CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) THEN
          (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
           WHERE u.session_id = c.session_id AND u.agent IS c.agent AND u.at > c.at LIMIT ?))
        END AS later
-     FROM meko_calls c JOIN sessions s ON s.id = c.session_id${projectId ? ' WHERE s.project_id = ?' : ''}`,
-    ...(projectId ? [CARRY_TURNS, projectId] : [CARRY_TURNS]));
+     FROM meko_calls c JOIN sessions s ON s.id = c.session_id${where}
+     UNION ALL
+     SELECT s.project_id, p.session_id, 'seed', 'seed', 'found', p.chars, f.model,
+       MAX(0, f.input + f.cache_read + f.cache_write - ROUND(p.chars / 4.0)),
+       (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
+        WHERE u.session_id = p.session_id AND u.agent IS NULL AND u.at > f.at LIMIT ?))
+     FROM meko_preloads p JOIN sessions s ON s.id = p.session_id
+       JOIN usage_messages f ON f.session_id = p.session_id AND f.agent IS NULL
+         AND f.message_id = (SELECT m.message_id FROM usage_messages m WHERE m.session_id = p.session_id AND m.agent IS NULL
+                             ORDER BY m.at, m.message_id LIMIT 1)
+     ${where ? `${where} AND` : 'WHERE'} p.outcome = 'found'`,
+    ...(projectId ? [CARRY_TURNS, projectId, CARRY_TURNS, projectId] : [CARRY_TURNS, CARRY_TURNS]));
 }
 
 const tokensOf = (chars: number | null) => Math.round((chars ?? 0) / 4);
 
-/** Counts and the savings estimate for a set of calls. */
+/** Counts and the savings estimate for a set of calls (seeds count only toward the savings). */
 export function summarizeMeko(rows: CallRow[]): MekoUsage {
   const u: MekoUsage = {
-    calls: rows.length, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0,
-    savings: { searches: 0, tokens: 0, usd: null, unpricedSearches: 0 },
+    calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0,
+    savings: { searches: 0, seeds: 0, tokens: 0, usd: null, unpricedSearches: 0, unpricedSeeds: 0 },
   };
   let usd = 0;
   let priced = 0;
+  const credit = (r: CallRow) => {
+    const s = searchSaving({ contextTokens: r.context_tokens ?? 0, resultTokens: tokensOf(r.result_chars), laterResponses: r.later ?? 0, model: r.model });
+    u.savings.tokens += s.tokens;
+    if (s.usd !== null) {
+      usd += s.usd;
+      priced++;
+    } else if (r.kind === 'seed') {
+      u.savings.unpricedSeeds++;
+    } else {
+      u.savings.unpricedSearches++;
+    }
+  };
   for (const r of rows) {
+    if (r.kind === 'seed') {
+      u.savings.seeds++;
+      credit(r);
+      continue;
+    }
+    u.calls++;
     if (r.outcome === 'error') u.errors++;
     if (r.kind === 'save') u.saves++;
     if (r.kind !== 'lookup') continue;
@@ -231,37 +266,35 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
     u.found++;
     u.foundTokens += tokensOf(r.result_chars);
     if (r.later === null) continue; // not a search
-    const s = searchSaving({ contextTokens: r.context_tokens ?? 0, resultTokens: tokensOf(r.result_chars), laterResponses: r.later, model: r.model });
     u.savings.searches++;
-    u.savings.tokens += s.tokens;
-    if (s.usd !== null) {
-      usd += s.usd;
-      priced++;
-    } else {
-      u.savings.unpricedSearches++;
-    }
+    credit(r);
   }
-  u.savings.usd = priced > 0 || u.savings.searches === 0 ? usd : null;
+  u.savings.usd = priced > 0 || u.savings.searches + u.savings.seeds === 0 ? usd : null;
   return u;
 }
 
 /**
- * Sessions whose first turn has ended, for one project or all of them, and how many had something
- * from Meko in it: Claude's own lookups (from any agent) up to the turn's end, AgentK's search at
- * start that found something, or either one. Only sessions in projects with datapacks count, since
- * the others had no Meko to search.
+ * Sessions whose first turn has ended, for one project or all of them, and about how many tokens
+ * Meko brought into it: Claude's own lookups (from any agent) that found something up to the
+ * turn's end, and what AgentK's search at start passed over. Also how many had a search at start at
+ * all, since sessions from before AgentK searched at start had none. Only sessions in projects with
+ * datapacks count, since the others had no Meko to search.
  */
 export function firstTurnMeko(db: Db, projectId?: string): MekoFirstTurn {
   const r = get<{ [K in keyof MekoFirstTurn]: number | null }>(db,
-    `SELECT COUNT(*) AS sessions, SUM(searched) AS searched, SUM(preloaded) AS preloaded, SUM(MAX(searched, preloaded)) AS either
+    `SELECT COUNT(*) AS sessions, SUM(started) AS startSearches, SUM(searched) AS searchedTokens, SUM(startup) AS seedTokens
      FROM (SELECT
-             EXISTS (SELECT 1 FROM meko_calls c WHERE c.session_id = s.id AND c.kind = 'lookup' AND c.at <= s.first_turn_end_at) AS searched,
-             EXISTS (SELECT 1 FROM meko_preloads p WHERE p.session_id = s.id AND p.outcome = 'found') AS preloaded
+             (SELECT SUM(ROUND(COALESCE(c.result_chars, 0) / 4.0)) FROM meko_calls c
+              WHERE c.session_id = s.id AND c.kind = 'lookup' AND c.outcome = 'found' AND c.at <= s.first_turn_end_at) AS searched,
+             EXISTS (SELECT 1 FROM meko_preloads p WHERE p.session_id = s.id) AS started,
+             (SELECT ROUND(p.chars / 4.0) FROM meko_preloads p WHERE p.session_id = s.id AND p.outcome = 'found') AS startup
            FROM sessions s
            WHERE s.first_turn_end_at IS NOT NULL
              AND EXISTS (SELECT 1 FROM project_datapacks d WHERE d.project_id = s.project_id)${projectId ? ' AND s.project_id = ?' : ''})`,
     ...(projectId ? [projectId] : []));
-  return { sessions: r?.sessions ?? 0, searched: r?.searched ?? 0, preloaded: r?.preloaded ?? 0, either: r?.either ?? 0 };
+  return {
+    sessions: r?.sessions ?? 0, startSearches: r?.startSearches ?? 0, searchedTokens: r?.searchedTokens ?? 0, seedTokens: r?.seedTokens ?? 0,
+  };
 }
 
 /** Calls grouped by a key (session or project), each summarized. */

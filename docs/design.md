@@ -998,15 +998,22 @@ a command, "[Request interrupted by user]"; meta lines, compaction summaries and
 don't count). So an interrupted or failed first turn ends there, not at a later turn's end. After
 a `/clear`, a transcript read again from the start is only the current conversation's. Among
 sessions whose first turn has ended, in projects with datapacks (the others had no Meko to
-search), AgentK counts those where Claude or a subagent made a lookup at or before that time
-(`searched`), those where the search at start was handed over (`preloaded`), and those with either
-(`either`; the other two can overlap). They're `mekoFirstTurn` on the project and overview usage,
-beside `meko`. The migration that added the column cleared the read offsets once more, so sessions
-from before AgentK searched at start give the numbers to compare with.
+search), AgentK adds up about how many tokens Meko brought into that turn (characters ÷ 4, like
+the tokens found): from lookups by Claude or a subagent that found something at or before that
+time (`searchedTokens`), and from the search at start when it was handed over (the seed, `seedTokens`).
+It also counts the sessions the search at start ran in at all (`startSearches`, whatever it
+found), since older sessions predate it and a session started with no task skips it. They're `mekoFirstTurn` on the project and overview
+usage, beside `meko`. The migration that added the column cleared the read offsets once more, so
+sessions from before AgentK searched at start give the numbers to compare with.
 
 **What Meko saved (an estimate).** Nobody sees the run where Meko wasn't there, so savings come
 from a fixed formula (`src/server/mekosavings.ts`), not a comparison. Only searches that found
-something count (`memory_search`, `knowledgebase_search`, `context_search`). Without Meko, Claude
+something count (`memory_search`, `knowledgebase_search`, `context_search`), plus each **seed**:
+what AgentK's search at session start passed to Claude (`meko_preloads` with outcome `found`). A
+seed is credited like a search made by the session's first main-agent response: *C* is that
+response's context less the seed (a search's context doesn't hold its result yet), *k* counts the
+responses after it, and its price is that response's model. A seed waits for that first response,
+and it counts only in the savings, not in the lookups or tokens found. Without Meko, Claude
 would have found the same thing by exploring: several tool calls, each re-reading the whole context
 and adding file contents. The constants come from this host's transcripts (2026-09-29):
 
@@ -1027,8 +1034,9 @@ content   X − R             1-hour cache-write price (2× input)
 carry     (X − R) × k       cache-read price
 ```
 
-The saving is the sum, in tokens and in USD at the calling model's price. A search on a model with
-no known price counts in the tokens but not the dollars, and the tile says how many were left out.
+The saving is the sum, in tokens and in USD at the calling model's price. A search (or seed) on a
+model with no known price counts in the tokens but not the dollars, and the tile says how many
+searches and seeds were left out.
 An index on `usage_messages(session_id, agent, at)` keeps counting *k* cheap. A result over 6,000
 tokens makes the content and carry terms negative, and they're kept. Session, project and overall
 figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10
@@ -1082,12 +1090,14 @@ only move when a session gets a reply, so the rail says when they were last repo
   column header sorts its table; tapping it again reverses the order.
 - **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
   light theme, white in the dark) and tiles for lookups, lookups that found something, saves,
-  tokens found, **Est. saved** in USD and tokens, green for a saving (a negative estimate is in
-  the normal text color, and a dash means no search has found anything), and **Meko in 1st turn**:
-  sessions with something from Meko in their first turn out of those that finished one (`18 / 30`),
-  with the split on a second line (`Claude searched 12 · found at start 9`; a dash before any first
-  turn has ended). It shows once there's any
-  Meko call, or before that while Meko is on (and, on the project home, the project has a datapack).
+  **1st-turn tokens** (the tokens Meko brought into first turns, `≈ 15.3k`, with the split on one
+  more line, `Seeded ≈ 3.3k · Searched ≈ 12k`, or `Seeded none yet` before AgentK's search at
+  start has run in any of them; a dash before any first turn has ended; the
+  tooltip says how many sessions the search at start ran in; `firstTurnText` in
+  `src/web/util.ts`), tokens found, and **Est. saved** in USD and tokens (searches and seeds), green for a saving
+  (a negative estimate is in the normal text color, and a dash means no search has found
+  anything and no session was seeded). It shows once there's any
+  Meko call or seed, or before that while Meko is on (and, on the project home, the project has a datapack).
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The
   cost is an estimate at API list prices, not a bill.

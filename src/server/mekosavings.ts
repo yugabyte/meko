@@ -36,7 +36,7 @@ export interface FoundSearch {
   model: string | null;
 }
 
-/** Tokens and USD one search that found something saved (usd is null for a model with no known price). */
+/** Tokens and USD one search that found something saved, or one seed AgentK passed at start (usd is null for a model with no known price). */
 export function searchSaving(s: FoundSearch): { tokens: number; usd: number | null } {
   const explored = EXPLORE_CALLS * EXPLORE_RESULT_TOKENS;
   const carry = Math.min(CARRY_TURNS, Math.max(0, s.laterResponses));

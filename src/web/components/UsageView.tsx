@@ -5,7 +5,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
 import { cx, formatCostOf, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
-import { MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
+import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { CostStat, DailyChart, DailyTable, Stat } from './UsagePanel';
 
@@ -29,7 +29,7 @@ const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
     case 'saved': {
       // No estimate sorts last; a tokens-only one (no known price) sorts by its tokens among $0.
       const s = p.meko.savings;
-      return s.searches === 0 ? -Number.MAX_VALUE : (s.usd ?? 0) + s.tokens * 1e-12;
+      return !credited(s) ? -Number.MAX_VALUE : (s.usd ?? 0) + s.tokens * 1e-12;
     }
     default:
       return p[k];
@@ -71,7 +71,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
   }, []);
 
   const t = usage?.total;
-  const showMeko = !!usage && (usage.meko.calls > 0 || mekoConfigured);
+  const showMeko = !!usage && (usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || mekoConfigured);
   return (
     <div className="home-view">
       {mobile && <TopBar onMenu={onMenu} title="Usage" />}
@@ -134,7 +134,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                           {projectHeader('total', 'Total', { className: 'num' })}
                           {projectHeader('cost', 'Cost', { className: 'num opt', title: "What the tokens would cost at Anthropic's API list prices" })}
                           {showMeko && projectHeader('meko', 'Meko', { className: 'num opt', title: 'Meko lookups that found something, of all lookups' })}
-                          {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something' })}
+                          {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something and the seeds AgentK passed at session start' })}
                         </tr>
                       </thead>
                       <tbody>

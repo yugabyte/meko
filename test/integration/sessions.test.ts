@@ -205,7 +205,9 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(get(env.core.db, 'SELECT outcome, results FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found', results: 1 });
     // The first turn is over, and something from Meko was in it.
     const home = await waitFor(() => env.core.projects.home(p.id), (h) => h.usage.mekoFirstTurn.sessions === 1, 10000, 'the first turn');
-    expect(home.usage.mekoFirstTurn).toEqual({ sessions: 1, searched: 0, preloaded: 1, either: 1 });
+    const { chars } = get<{ chars: number }>(env.core.db, 'SELECT chars FROM meko_preloads WHERE session_id = ?', s.id)!;
+    expect(chars).toBe(ctx.additionalContext.length);
+    expect(home.usage.mekoFirstTurn).toEqual({ sessions: 1, startSearches: 1, searchedTokens: 0, seedTokens: Math.round(chars / 4) });
 
     // The prompts ask for a Meko search and say how to load the tools.
     const argv = argvLog(env)[0].args;
@@ -287,7 +289,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(home.usage.meko).toMatchObject({ calls: 1, lookups: 1, found: 1, empty: 0, errors: 0, saves: 0 });
     // The stub's model has no price: the estimate is in tokens only, and the cost leaves it out.
     // Context 5,103 tokens, a 20-token result, one later response: 2 × 5,103 + 480 + (6,000 − 20) × 2.
-    expect(home.usage.meko.savings).toEqual({ searches: 1, tokens: 22_646, usd: null, unpricedSearches: 1 });
+    expect(home.usage.meko.savings).toEqual({ searches: 1, seeds: 0, tokens: 22_646, usd: null, unpricedSearches: 1, unpricedSeeds: 0 });
     expect(home.usage.cost).toEqual({ usd: 0, unpricedMessages: 2 });
     expect(home.usage.bySession[0].meko).toEqual({ lookups: 1, found: 1, saves: 0 });
     const overview = usageOverview(env.core.db);

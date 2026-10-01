@@ -150,33 +150,38 @@ export interface MekoUsage {
 }
 
 /**
- * Whether sessions had something from Meko in their first turn: Claude searched before the turn
- * ended, or AgentK's search at session start found something to hand it (`src/server/recall.ts`).
- * Only sessions in projects with datapacks count.
+ * About how many tokens Meko brought into sessions' first turns: what AgentK's search at session
+ * start passed to Claude (the seed, `src/server/recall.ts`), and Claude's own lookups before the turn ended.
+ * Characters ÷ 4, like `MekoUsage.foundTokens`. Only sessions in projects with datapacks count.
  */
 export interface MekoFirstTurn {
   /** Sessions whose first turn has ended. */
   sessions: number;
-  /** …where Claude (or a subagent) made a Meko lookup before it ended. */
-  searched: number;
-  /** …where AgentK's search at session start found something. */
-  preloaded: number;
-  /** …with either one; `searched` and `preloaded` can overlap. */
-  either: number;
+  /** …where AgentK's search at session start ran (sessions from before it was added have none). */
+  startSearches: number;
+  /** Tokens from lookups by Claude (or a subagent) that found something before the first turn ended. */
+  searchedTokens: number;
+  /** Tokens AgentK's search at session start passed to Claude: the seed. */
+  seedTokens: number;
 }
 
 /**
- * An estimate of what Meko saved: each search that found something is credited with the exploring
- * it most likely replaced, by a fixed formula (`src/server/mekosavings.ts`).
+ * An estimate of what Meko saved: each search that found something, and each seed AgentK passed at
+ * session start, is credited with the exploring it most likely replaced, by a fixed formula
+ * (`src/server/mekosavings.ts`).
  */
 export interface MekoSavings {
   /** Searches that found something: the only calls that count. */
   searches: number;
+  /** Seeds: what AgentK's search at session start passed to Claude, each credited like a search. */
+  seeds: number;
   tokens: number;
-  /** USD at API list prices; null when none of the searches' models has a known price. */
+  /** USD at API list prices; null when none of the searches' (or seeds') models has a known price. */
   usd: number | null;
   /** Searches on a model with no known price: in `tokens`, left out of `usd`. */
   unpricedSearches: number;
+  /** Seeds on a model with no known price, likewise. */
+  unpricedSeeds: number;
 }
 
 export interface SessionUsage {
