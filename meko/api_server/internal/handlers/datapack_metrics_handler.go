@@ -38,7 +38,7 @@ func (h *DatapackMetricsHandler) GetMetrics(c echo.Context) error {
 		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing datapack context")
 	}
 
-	metrics, err := h.repo.GetMetrics(c.Request().Context(), dp.ID)
+	metrics, err := h.repo.GetMetrics(c.Request().Context(), dp.ID, dp.UserID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}

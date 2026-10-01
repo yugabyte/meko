@@ -28,17 +28,19 @@ func NewDatapackMetricsRepo(systemDB, dataDB *sql.DB) *DatapackMetricsRepo {
 }
 
 // GetMetrics returns all analytics metrics for the given datapack.
-func (r *DatapackMetricsRepo) GetMetrics(ctx context.Context, datapackID string) (*models.DatapackMetrics, error) {
-	return r.fetchMetrics(ctx, datapackID)
+// ownerUserID is the datapack owner's user ID, used to exclude the owner from
+// the agent/human access counts (the owner's own connection is implicit).
+func (r *DatapackMetricsRepo) GetMetrics(ctx context.Context, datapackID, ownerUserID string) (*models.DatapackMetrics, error) {
+	return r.fetchMetrics(ctx, datapackID, ownerUserID)
 }
 
-func (r *DatapackMetricsRepo) fetchMetrics(ctx context.Context, datapackID string) (*models.DatapackMetrics, error) {
+func (r *DatapackMetricsRepo) fetchMetrics(ctx context.Context, datapackID, ownerUserID string) (*models.DatapackMetrics, error) {
 	m := &models.DatapackMetrics{DatapackID: datapackID}
 
 	if err := r.fetchSavings(ctx, datapackID, m); err != nil {
 		return nil, err
 	}
-	if err := r.fetchAccess(ctx, datapackID, m); err != nil {
+	if err := r.fetchAccess(ctx, datapackID, ownerUserID, m); err != nil {
 		return nil, err
 	}
 	if err := r.fetchDailyActivity(ctx, datapackID, m); err != nil {
@@ -93,15 +95,38 @@ func (r *DatapackMetricsRepo) fetchSavings(ctx context.Context, datapackID strin
 	return rows.Err()
 }
 
-func (r *DatapackMetricsRepo) fetchAccess(ctx context.Context, datapackID string, m *models.DatapackMetrics) error {
+func (r *DatapackMetricsRepo) fetchAccess(ctx context.Context, datapackID, ownerUserID string, m *models.DatapackMetrics) error {
 	var lastAccessedAt sql.NullTime
+	// Exclude only the owner's default meko_agent row — that row is the
+	// implicit "I created this datapack" seat, not a real external access event.
+	// The owner's additional agents (Claude Code, Cursor, etc.) are kept in
+	// agent_count because they represent real usage sessions. Pending invites
+	// are added so shares not yet accepted still appear.
+	// Note: agent_count and human_count count the same set of rows, so they
+	// equal one another whenever each accessor has exactly one agent_access row
+	// (which is the common case — AcceptInvite links only DefaultAgentID).
+	//
+	// The CTE lets us scan agent_access once (three aggregates via FILTER) and
+	// datapack_invites once, rather than five separate subquery round-trips.
 	err := r.systemDB.QueryRowContext(ctx,
-		`SELECT COUNT(*) AS agent_count,
-		        COUNT(DISTINCT user_id) AS human_count,
+		`WITH access AS (
+		    SELECT
+		        COUNT(*) FILTER (WHERE NOT (user_id = $2::uuid AND agent_id = 'meko_agent')) AS agent_count,
+		        COUNT(DISTINCT user_id) FILTER (WHERE NOT (user_id = $2::uuid AND agent_id = 'meko_agent')) AS human_count,
 		        MAX(created_at) AS last_accessed_at
-		 FROM meko_system.agent_access
-		 WHERE datapack_id = $1::uuid`,
-		datapackID,
+		    FROM meko_system.agent_access
+		    WHERE datapack_id = $1::uuid
+		),
+		invites AS (
+		    SELECT COUNT(*) AS pending_count
+		    FROM meko_system.datapack_invites
+		    WHERE datapack_id = $1::uuid AND status = 'pending'
+		)
+		SELECT access.agent_count + invites.pending_count,
+		       access.human_count + invites.pending_count,
+		       access.last_accessed_at
+		FROM access, invites`,
+		datapackID, ownerUserID,
 	).Scan(&m.AgentCount, &m.HumanCount, &lastAccessedAt)
 	if err != nil {
 		return fmt.Errorf("failed to read agent access: %w", err)
