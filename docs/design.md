@@ -144,7 +144,7 @@ the repo.
 - **Clone from URL.** Paste a git URL and the server clones it into `~/code/<name>` using your
   existing git credentials, then selects it. "Other folder" takes any repo path on the host.
 
-The dialog starts with the **dedicated datapack**: **Create a new one** (the first option and the
+The dialog asks for the **dedicated datapack**, then the **Project name**, then the repo. It starts with the datapack: **Create a new one** (the first option and the
 default), **Use an existing one** (the default when it's opened for a share, from its banner) or
 **No datapack** (the default while Meko is off). The existing list shows invites waiting for you first, then datapacks shared with you, then yours, each with its
 access and, for shares, its owner. It holds project datapacks (`adlc/proj/…`) unless you tap **Show
@@ -167,7 +167,7 @@ the list to that one row (**Change** brings it back) and fills in the rest from 
 
 The name and repo matching live in `src/shared/datapacks.ts`, so the server and the dialog use the
 same rules. **Create a new one** puts its **New datapack name** field at the bottom, under
-**Project name**, since it's filled in from both: it suggests `adlc/proj/<repo>/<project>` from the
+the repo, since it's filled in from the repo and the **Project name**: it suggests `adlc/proj/<repo>/<project>` from the
 repo and the name you type (until you edit it), where `<repo>` is the upstream repo's name for a
 fork, else the origin's, else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the
 repo was picked from the list or typed under Other folder; a name without the prefix gets a hint

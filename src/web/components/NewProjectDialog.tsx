@@ -404,7 +404,7 @@ export function NewProjectDialog({
               : 'Meko is off, so the project starts without a datapack. Add a Meko key on the Meko tab in Settings to give projects one.'}
           </p>
         ) : dpMode === 'create' ? (
-          <p className="hint">Its name is under the project name, at the bottom.</p>
+          <p className="hint">Its name is at the bottom, under the repo.</p>
         ) : dpChosen ? (
           <>
             <div className="dp-list">
@@ -501,6 +501,10 @@ export function NewProjectDialog({
         )}
       </div>
 
+      <Field label="Project name">
+        <input id="np-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+
       <div className="np-section">
         <span className="label">Repo</span>
         {source === 'list' && (
@@ -588,9 +592,6 @@ export function NewProjectDialog({
         )}
       </div>
 
-      <Field label="Project name">
-        <input id="np-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
-      </Field>
       {dpMode === 'create' && (
         <Field
           label="New datapack name"
