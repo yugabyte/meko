@@ -147,6 +147,27 @@ func (c *Client) PostStatus(ctx context.Context, r api.StatusReport) (tasksAccep
 	return true, nil
 }
 
+// PutExtensions replaces the environment's extension catalog on the control plane.
+// Returns ErrUnauthorized on a 401.
+func (c *Client) PutExtensions(ctx context.Context, cat api.ExtensionCatalog) error {
+	if cat.Extensions == nil {
+		// nil would marshal as null, which the control plane rejects: it is the
+		// "never reported" value, not a catalog.
+		cat.Extensions = []api.Extension{}
+	}
+	code, _, err := c.do(ctx, http.MethodPut, "/agent/extensions", cat, nil)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusUnauthorized {
+		return ErrUnauthorized
+	}
+	if code >= 300 {
+		return fmt.Errorf("ycp: extensions -> HTTP %d", code)
+	}
+	return nil
+}
+
 // do issues one request and decodes the {"data","error"} envelope. It returns the
 // status, the api_server error the response carried when it carried one (zero
 // otherwise), and a transport/decode error. The error's CODE matters because

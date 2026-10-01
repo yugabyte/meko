@@ -166,6 +166,7 @@ func stateIsKnown(state string) bool {
 type EnvironmentService struct {
 	repo     *repository.EnvironmentRepo
 	taskRepo *repository.EnvironmentTaskRepo
+	extRepo  *repository.EnvironmentExtensionRepo
 
 	// pruneMu guards lastPruned, which rate-limits the fleet-wide task-retention
 	// delete. Every environment's agent heartbeats every 10s, so pruning on each

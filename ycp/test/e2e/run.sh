@@ -348,6 +348,35 @@ got_hint="$(api GET "/api/v1/environments/$ENV_NAME" |
 [ "$got_hint" = "$reg_hint" ] || die "the environment's install hint is not register's"
 echo "    the install hint reads back off the environment"
 
+# 4c'. The extension catalog, on a throwaway amp environment -- only amp has one. Null
+#      before any agent relays one (the console's cue to fall back, so it must not read
+#      as []), the relayed catalog after; and a meko environment's key is refused.
+ext_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+api POST /api/v1/environments -H 'content-type: application/json' \
+  -d '{"name":"ext-check","kind":"amp","account_id":"11111111-1111-1111-1111-111111111111",
+       "placement":"cloud","region":"local","api_key_id":"'"$ext_key"'"}' >/dev/null ||
+  die "registering ext-check failed"
+ext_of() {
+  api GET /api/v1/environments/ext-check/extensions |
+    python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["data"]["extensions"]))'
+}
+put_ext() {
+  curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:$PORT$BASE/api/v1/agent/extensions" \
+    -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H "X-Meko-Api-Key-ID: $1" \
+    -H 'content-type: application/json' \
+    -d '{"extensions":[{"name":"pgvector","builtin":true,"preload":false}]}'
+}
+[ "$(ext_of)" = "null" ] || die "a never-reported catalog reads as $(ext_of), want null"
+code="$(put_ext "$ext_key")"
+[ "$code" = "204" ] || die "PUT /agent/extensions for an amp environment returned $code, want 204"
+got_ext="$(ext_of)"
+[ "$got_ext" = '[{"name": "pgvector", "builtin": true, "preload": false}]' ] ||
+  die "the relayed catalog reads back as $got_ext"
+code="$(put_ext "$API_KEY_ID")"
+[ "$code" = "400" ] || die "PUT /agent/extensions for a meko environment returned $code, want 400"
+api DELETE /api/v1/environments/ext-check >/dev/null 2>&1 || true
+echo "    the extension catalog is null until relayed, then reads back; meko's is refused"
+
 #     A YBM-registered environment reads back the pass-through base its registration
 #     gave, which is the whole reason that value is stored: rendered from the request
 #     address instead, the hint would point its agent somewhere it cannot reach.

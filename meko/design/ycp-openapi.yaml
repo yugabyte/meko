@@ -405,6 +405,34 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
+  /api/v1/environments/{envId}/extensions:
+    parameters: [{ $ref: '#/components/parameters/EnvId' }]
+    get:
+      tags: [environments]
+      summary: The extension catalog this environment's controller serves
+      operationId: getEnvironmentExtensions
+      description: |
+        Builtins plus every extension an operator registered on the amp controller — the
+        set a cluster in this environment can be created with — as the agent last relayed
+        it. `extensions: null` means no catalog has been relayed (an agent that predates
+        this, a meko environment, one not yet reported): a console must fall back rather
+        than offer nothing. `[]` is a reported, empty catalog.
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  extensions:
+                    type: array
+                    nullable: true
+                    items: { $ref: '#/components/schemas/Extension' }
+                  reported_at: { type: string, format: date-time, nullable: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /api/v1/agent/desired-state:
     get:
       tags: [agent]
@@ -435,6 +463,33 @@ paths:
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/StatusReport' } } }
+      responses:
+        '204': { description: Recorded. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /api/v1/agent/extensions:
+    put:
+      tags: [agent]
+      summary: Replace this environment's extension catalog
+      operationId: agentExtensions
+      description: |
+        The amp controller's `GET /extensions`, relayed when it changes and at least
+        hourly — not on the status heartbeat, which goes out every tick. Replaces the
+        stored catalog. `extensions` is required: an absent or null value is a `400`,
+        never stored as an empty catalog. Only an amp environment has a catalog; any
+        other kind is a `400`.
+      security: [{ agentAPIKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [extensions]
+              properties:
+                extensions: { type: array, items: { $ref: '#/components/schemas/Extension' } }
       responses:
         '204': { description: Recorded. }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -767,6 +822,16 @@ components:
         agent_version: { type: string }
         applied_revision: { type: integer }
         components: { type: array, items: { $ref: '#/components/schemas/Component' } }
+
+    Extension:
+      type: object
+      required: [name, builtin, preload]
+      properties:
+        name: { type: string, examples: [pgvector] }
+        builtin: { type: boolean, description: Shipped with amp, as opposed to registered by an operator. }
+        preload: { type: boolean, description: Enabling it needs a compute restart (shared_preload_libraries). }
+        version: { type: string }
+        description: { type: string }
 
     Entitlement:
       type: object

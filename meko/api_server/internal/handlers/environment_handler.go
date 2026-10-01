@@ -357,6 +357,44 @@ func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// AgentExtensions stores the environment's extension catalog, which the agent sends
+// when it changes rather than on every heartbeat. A non-amp environment is a 400.
+func (h *EnvironmentHandler) AgentExtensions(c echo.Context) error {
+	e := h.resolveAgent(c)
+	if e == nil {
+		return nil
+	}
+	var rep service.ExtensionCatalogReport
+	if !bindJSON(c, &rep) {
+		return nil
+	}
+	if err := h.svc.ApplyExtensions(e.UUID, e.Kind, rep); err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// Extensions answers GET /environments/:id/extensions. 200 with extensions: null
+// when no catalog has been relayed — an older agent, a meko environment — so a
+// console can fall back instead of offering nothing.
+func (h *EnvironmentHandler) Extensions(c echo.Context) error {
+	e, err := h.svc.Get(c.Param("id"), accountScope(c))
+	if err != nil {
+		return envLookupError(c, err)
+	}
+	if e == nil {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
+	}
+	cat, err := h.svc.Extensions(e.UUID)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "EXTENSION_LIST_FAILED", err.Error())
+	}
+	return ok(c, http.StatusOK, cat)
+}
+
 // resolveAgent resolves the environment from the call's API key id, returning nil
 // (having written the error) when the key is bound to no environment. A revoked
 // key and a never-registered one are deliberately the same 401.

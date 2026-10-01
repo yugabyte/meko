@@ -180,3 +180,14 @@ type Entitlement struct {
 	MaxEnvironments *int   `json:"max_environments"`
 	MaxDatapacks    *int   `json:"max_datapacks"`
 }
+
+// EnvironmentExtension is one entry of an amp environment's extension catalog, as
+// its reconcile agent relays it from the controller's GET /extensions.
+type EnvironmentExtension struct {
+	Name        string `json:"name"`
+	Version     string `json:"version,omitempty"`
+	Description string `json:"description,omitempty"`
+	Builtin     bool   `json:"builtin"`
+	// Preload means enabling it needs a compute restart (shared_preload_libraries).
+	Preload bool `json:"preload"`
+}

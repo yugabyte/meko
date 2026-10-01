@@ -244,6 +244,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 			repository.NewEnvironmentRepo(cfg.SystemDB),
 			repository.NewEnvironmentTaskRepo(cfg.SystemDB),
 		)
+		envSvc.SetExtensionRepo(repository.NewEnvironmentExtensionRepo(cfg.SystemDB))
 		envSvc.SetTelemetryPolicy(service.TelemetryPolicy{
 			MetricsURL: cfg.BYOCMetricsURL,
 			StaleAfter: service.DefaultTelemetryStaleAfter,
@@ -520,6 +521,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		tasksH := handlers.NewEnvironmentTasksHandler(reg.envSvc)
 		fleet.GET("/environments/:id/tasks", tasksH.List)
 		fleet.GET("/environments/:id/tasks/:task_id", tasksH.Get)
+		fleet.GET("/environments/:id/extensions", envH.Extensions)
 		fleet.GET("/entitlements", envH.Entitlements)
 		// The agent surface has no account header — the key id names the environment
 		// on its own — so it hangs off v1 directly with its own auth pair rather
@@ -537,6 +539,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		agentGroup.POST("/enroll", envH.AgentEnroll)
 		agentGroup.GET("/desired-state", envH.AgentDesiredState)
 		agentGroup.POST("/status", envH.AgentStatus)
+		agentGroup.PUT("/extensions", envH.AgentExtensions)
 		agentGroup.POST("/bootstrap-progress", envH.AgentBootstrapProgress)
 
 		// The fleet console, served from this binary so the control plane is one

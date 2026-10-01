@@ -378,6 +378,26 @@ type TaskStatus struct {
 // request, it would ride every heartbeat, and Kind + TargetRef + Result already
 // answer what the console asks.
 
+// Extension is one entry of the amp controller's extension catalog (its
+// listExtensions): what a cluster in this environment can be created with, builtins
+// and operator-registered images alike. Image, library and layout are left behind —
+// they describe how the data plane mounts the extension, not what a console picks.
+type Extension struct {
+	Name    string `json:"name"`
+	Builtin bool   `json:"builtin"`
+	// Preload means enabling it needs a compute restart (shared_preload_libraries).
+	Preload     bool   `json:"preload"`
+	Version     string `json:"version,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// ExtensionCatalog is the body of PUT /agent/extensions: the environment's whole
+// catalog, replacing what the control plane held. Extensions is never omitempty —
+// an empty catalog is a reported fact, distinct from one never reported.
+type ExtensionCatalog struct {
+	Extensions []Extension `json:"extensions"`
+}
+
 // BootstrapProgress is the pre-agent installer's outbound report.
 type BootstrapProgress struct {
 	Phase   EnvState `json:"phase"`

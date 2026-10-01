@@ -139,6 +139,7 @@ func main() {
 	}
 	var backend reconcile.Backend
 	var tasks *ampbackend.TaskCollector
+	var catalog *catalogRelay
 	switch kind {
 	case kindAmp:
 		b, berr := ampbackend.New(ampURL, os.Getenv("AMP_CONTROLLER_TOKEN"), nil,
@@ -152,6 +153,7 @@ func main() {
 		// collector is built here rather than beside the agent and stays nil for
 		// every other kind.
 		tasks = ampbackend.NewTaskCollector(b, log.Printf)
+		catalog = newCatalogRelay(b, ycp, log.Printf)
 	case kindMeko:
 		// Optional, unlike amp's controller token, because an api-server running
 		// without Cognito authenticates nobody: DevAuth puts every request on one
@@ -181,6 +183,7 @@ func main() {
 		telemetry: telemetry,
 		telWatch:  telWatch,
 		tasks:     tasks,
+		catalog:   catalog,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -328,6 +331,11 @@ type agent struct {
 	// and meko's verbs are synchronous, so there is no asynchronous work for a
 	// console to watch.
 	tasks *ampbackend.TaskCollector
+
+	// catalog relays the controller's extension catalog, so a console can offer the
+	// extensions an operator registered and not only the builtins. amp only, nil
+	// otherwise: meko has no catalog, and the control plane reads none as unknown.
+	catalog *catalogRelay
 }
 
 // enrollWithRetry performs the startup check-in, falling back to the persisted
@@ -491,6 +499,11 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 			len(tasks))
 	default:
 		commitTasks()
+	}
+	// After the heartbeat, and only if it landed: a control plane that just refused
+	// the status will refuse this too.
+	if err == nil && a.catalog != nil {
+		a.catalog.Sync(ctx)
 	}
 	return err
 }
