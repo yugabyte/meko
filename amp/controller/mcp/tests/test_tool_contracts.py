@@ -171,6 +171,12 @@ def test_create_cluster_includes_extensions_when_set(wire):
     assert handler.last_json() == {"name": "db", "extensions": ["pgvector"]}
 
 
+def test_create_cluster_includes_tags_when_set(wire):
+    handler = wire({f"POST {P}/clusters": (202, TASK)})
+    tools.create_cluster(pool_id="p1", name="db", tags={"team": "web"})
+    assert handler.last_json() == {"name": "db", "tags": {"team": "web"}}
+
+
 def test_create_cluster_includes_engine_when_set(wire):
     handler = wire({f"POST {P}/clusters": (202, TASK)})
     tools.create_cluster(pool_id="p1", name="db", engine="aidb")
@@ -253,6 +259,14 @@ def test_create_endpoint_sends_the_password(wire):
         pool_id="p1", cluster_id="pr1", branch_id="b1", password="hunter2hunter2",
     )
     assert handler.last_json() == {"password": "hunter2hunter2"}
+
+
+def test_create_endpoint_sends_tags(wire):
+    handler = wire({f"POST {B}/endpoints": (202, TASK)})
+    tools.create_endpoint(
+        pool_id="p1", cluster_id="pr1", branch_id="b1", tags={"acme.com/owner": "jdoe"},
+    )
+    assert handler.last_json() == {"tags": {"acme.com/owner": "jdoe"}}
 
 
 def test_create_endpoint_partial_resources(wire):

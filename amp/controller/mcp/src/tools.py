@@ -79,6 +79,7 @@ def create_cluster(
     pg_version: Optional[int] = None,
     engine: Optional[str] = None,
     extensions: Optional[list[str]] = None,
+    tags: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     """Create a cluster (and its default branch "main") in a pool. ASYNCHRONOUS.
 
@@ -102,9 +103,17 @@ def create_cluster(
     is any value when the controller has no extension catalog (e.g. the Docker
     driver) — which includes a non-default `engine`, since its bundle resolves to
     the same catalog.
+
+    `tags` are `{key: value}` strings labelled onto every Kubernetes object of
+    every endpoint in the cluster (an endpoint's own tag wins on a shared key).
+    They follow Kubernetes label rules — keys like `team` or `acme.com/owner`,
+    values of at most 63 characters. Refused with a 400: the labels the chart
+    sets itself (`helm.sh/chart`, `app.kubernetes.io/name`, `/instance`,
+    `/version`, `/managed-by`) and any key under `amp.yugabyte.com/`. Set at
+    create only.
     """
     return controller_client.create_cluster(
-        pool_id, name, pg_version, engine, extensions
+        pool_id, name, pg_version, engine, extensions, tags
     )
 
 
@@ -215,6 +224,7 @@ def create_endpoint(
     pageserver_settings: Optional[dict[str, Any]] = None,
     safekeeper_settings: Optional[dict[str, Any]] = None,
     password: Optional[str] = None,
+    tags: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     """Create and deploy an endpoint (compute) on a branch. ASYNCHRONOUS.
 
@@ -264,10 +274,15 @@ def create_endpoint(
     `listen_*` addresses, `yb_storage_conn`, `pg_distrib_dir`,
     `control_plane_api`, `safekeeper_pg_addr`) all 400 naming the key — read that
     message rather than retrying, since it often suggests the dotted form.
+
+    `tags` are this endpoint's own `{key: value}` labels, merged over its
+    cluster's (this endpoint's win on a shared key) and labelled onto its pod and
+    every other object of its release. Same rules as `create_cluster`'s `tags`;
+    set at create only.
     """
     return controller_client.create_endpoint(
         pool_id, cluster_id, branch_id, role, disk_type, cpu, memory,
-        pg_settings, pageserver_settings, safekeeper_settings, password
+        pg_settings, pageserver_settings, safekeeper_settings, password, tags
     )
 
 

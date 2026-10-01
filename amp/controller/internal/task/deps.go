@@ -53,7 +53,9 @@ type StateStore interface {
 	// fork later inherits its parent's set, and every endpoint resolves against
 	// its own branch's row. A cluster-name collision within the pool, or a missing
 	// pool, is a real error (the step fails the task).
-	EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string) error
+	//
+	// tags are the cluster's own, inherited by every endpoint's labels.
+	EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string, tags map[string]string) error
 
 	// EnsureBranch creates a branch (a non-default branch) under clusterID, forked
 	// from parentBranchID at forkLSN, with the given id — or no-ops if it already
@@ -68,12 +70,12 @@ type StateStore interface {
 	// read_write endpoint (a different id violating the single-writer index) or a
 	// missing branch is a real error.
 	//
-	// The four trailing JSON documents are positional and same-typed, so check the
+	// The five trailing JSON documents are positional and same-typed, so check the
 	// order when editing a call. Not a struct because the type would have to live
 	// in `task` or `core`, and `core`'s in-package test imports back the other
 	// way, so that edge would be an import cycle.
 	EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
-		config, pgSettings, pageserverSettings, safekeeperSettings []byte) error
+		config, pgSettings, pageserverSettings, safekeeperSettings, tags []byte) error
 
 	// BranchExtensions returns the branch's opted-in externalized extension names
 	// (the set the create_endpoint step unions with the catalog defaults to

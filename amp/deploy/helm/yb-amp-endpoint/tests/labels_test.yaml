@@ -1,0 +1,79 @@
+suite: commonLabels
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/pvc.yaml
+  - templates/configmap.yaml
+tests:
+  - it: labels the Deployment and its pod, but not its selector
+    template: templates/deployment.yaml
+    set:
+      commonLabels:
+        team: web
+        cost-center: "42"
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: web
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: web
+      - equal:
+          path: spec.template.metadata.labels.cost-center
+          value: "42"
+      - notExists:
+          path: spec.selector.matchLabels.team
+
+  - it: labels the Service
+    template: templates/service.yaml
+    set:
+      commonLabels:
+        team: web
+        cost-center: "42"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: web
+
+  - it: labels the PVC
+    template: templates/pvc.yaml
+    set:
+      persistence.storageClass: yb-standard
+      commonLabels:
+        team: web
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: web
+
+  - it: labels the ConfigMap
+    template: templates/configmap.yaml
+    set:
+      commonLabels:
+        team: web
+        cost-center: "42"
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: web
+
+  - it: never lets a caller label override a chart-owned key
+    template: templates/deployment.yaml
+    set:
+      commonLabels:
+        app.kubernetes.io/instance: other
+        helm.sh/chart: other
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: yb-amp-endpoint-0.1.0
+
+  - it: renders no extra labels when none are set
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.labels.team

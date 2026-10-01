@@ -542,6 +542,11 @@ readinessProbe:
 
 podAnnotations: {}
 podLabels: {}
+# -- Labels on every object of the release, the pod included, never on a
+# selector. The controller sets the endpoint's amp.yugabyte.com/ identity labels
+# and its tags (its cluster's merged with its own). Keys the chart sets itself
+# are dropped.
+commonLabels: {}
 # -- Node labels the endpoint pod must schedule onto. The controller sets this
 # per-deployment (from AMP_DEPLOY_NODE_SELECTOR); override here for a standalone
 # install — e.g. {cloud.google.com/gke-ephemeral-storage-local-ssd: "true"} to

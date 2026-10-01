@@ -25,7 +25,19 @@ Create a default fully qualified app name.
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+The caller's labels (the controller renders an endpoint's tags here), minus any
+key the chart sets itself: a duplicate key is invalid YAML to the API server, and
+the selector keys are what the controller finds the pod by.
+*/}}
+{{- define "yb-amp-endpoint.commonLabels" -}}
+{{- with omit .Values.commonLabels "helm.sh/chart" "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/version" "app.kubernetes.io/managed-by" }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
 {{- define "yb-amp-endpoint.labels" -}}
+{{- with include "yb-amp-endpoint.commonLabels" . }}{{ . }}{{ "\n" }}{{- end -}}
 helm.sh/chart: {{ include "yb-amp-endpoint.chart" . }}
 {{ include "yb-amp-endpoint.selectorLabels" . }}
 {{- if .Chart.AppVersion }}

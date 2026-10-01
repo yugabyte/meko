@@ -245,7 +245,9 @@ else
 fi
 
 hdr "createCluster -> 202 + Task + Location -> task succeeded -> materialized"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" "{\"name\":\"$PROJ_NAME\"}")
+# Tagged so the endpoint below can be checked for the labels it inherits (`smoke-cluster`)
+# and the one it overrides (`team`).
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" "{\"name\":\"$PROJ_NAME\",\"tags\":{\"smoke-cluster\":\"c\",\"team\":\"cluster\"}}")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createCluster code=$code (want 202)"
 [[ "$loc" == /api/v1/tasks/* ]] && ok "Location: $loc" || bad "Location header: '$loc'"
 [ "$(curl -sf "$BASE/tasks/$tid" | jq -r .kind)" = create_cluster ] && ok "task kind=create_cluster" || bad "task kind"
@@ -259,7 +261,7 @@ DEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -r '.default_bran
 EP_PASSWORD="${EP_PASSWORD:-smoke-test-pw-1}"
 
 hdr "createEndpoint (read_write on default branch) -> task succeeded -> address + pod Ready"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\",\"tags\":{\"team\":\"endpoint\"}}")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createEndpoint code=$code"
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint succeeded" || bad "create_endpoint task=$st"
 EP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" | jq -r '.endpoints[0].id')
@@ -302,6 +304,29 @@ else
   echo "---- namespace events ----"
   kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -40 | sed 's/^/    /' || true
 fi
+
+hdr "tags: the endpoint's objects carry its cluster's tags under its own"
+# Each resource reports only its own tags; the merge shows on the objects.
+[ "$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -cS '.tags')" = '{"smoke-cluster":"c","team":"cluster"}' ] \
+  && ok "cluster reports its tags" || bad "cluster tags: $(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -c '.tags')"
+[ "$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -cS '.tags')" = '{"team":"endpoint"}' ] \
+  && ok "endpoint reports only its own tags" || bad "endpoint tags: $(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -c '.tags')"
+for obj in "pod/$POD" "deployment/yb-ep-$EP" "service/yb-ep-$EP"; do
+  got=$(kubectl -n "$NS" get "$obj" -o json 2>/dev/null \
+        | jq -r '.metadata.labels | "\(.["smoke-cluster"] // "")/\(.team // "")"')
+  [ "$got" = "c/endpoint" ] && ok "$obj labelled smoke-cluster=c team=endpoint" \
+    || bad "$obj labels smoke-cluster/team = '$got', want 'c/endpoint'"
+done
+got=$(kubectl -n "$NS" get "pod/$POD" -o json 2>/dev/null | jq -r '.metadata.labels |
+  [.["amp.yugabyte.com/endpoint-id"], .["amp.yugabyte.com/branch-id"], .["amp.yugabyte.com/cluster-id"],
+   .["amp.yugabyte.com/storage-pool-id"], .["amp.yugabyte.com/ep-type"]] | map(. // "") | join(" ")')
+[ "$got" = "$EP $DEF $PROJ $POOL read_write" ] && ok "pod carries its endpoint/branch/cluster/pool/role identity labels" \
+  || bad "pod identity labels = '$got', want '$EP $DEF $PROJ $POOL read_write'"
+# The selector must stay the chart's own: it is immutable, and the controller
+# finds the pod by app.kubernetes.io/instance.
+sel=$(kubectl -n "$NS" get "deployment/yb-ep-$EP" -o json 2>/dev/null | jq -c '.spec.selector.matchLabels | keys')
+[ "$sel" = '["app.kubernetes.io/instance","app.kubernetes.io/name"]' ] && ok "Deployment selector untouched" \
+  || bad "Deployment selector keys = $sel"
 
 hdr "endpoint is USABLE: write + read real data via psql"
 # (a) loopback (pg_hba trusts loopback): full DDL/DML + CHECKPOINT (forces the

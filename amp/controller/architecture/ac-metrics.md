@@ -220,6 +220,28 @@ One source this does **not** reach: the reconcile-agent, which exposes no
 entirely, and **only on the operator-managed foundation** — see below. (The QA
 framework also samples the DB into the report portal, which is a third one.)
 
+### Endpoint identity labels
+
+The compute collector's six endpoint jobs copy the pod's `amp.yugabyte.com/`
+identity labels ([`ac-k8s-deploy.md`](ac-k8s-deploy.md#labels-identity-and-tags))
+onto every series they scrape, as `endpoint_id`, `branch_id`, `cluster_id`,
+`storage_pool_id` and `ep_type`, so a query can group by cluster, pool or role
+without a join. The relabel rules are one helper,
+`yb-amp-controller.endpointIdentityRelabels`.
+
+The pageserver and safekeeper need one extra step for `branch_id`. Each serves
+exactly the pod's one branch and already puts that same id on its branch-scoped
+series, but most of their series have none (WAL ingest, WAL redo, the YugabyteDB
+read and write paths, GC). A target label named `branch_id` would make Prometheus
+rename theirs to `exported_branch_id`, so those two jobs add the pod's branch as
+`pod_branch_id` and a `metric_relabel_configs` pair
+(`yb-amp-controller.endpointBranchFill`) moves it into `branch_id` only on a
+series whose own `branch_id` is empty, then drops it. Every series ends up with
+`branch_id`, and the daemon's value is never overwritten.
+
+User tags are not copied: their keys are the caller's, so they can collide with
+an exporter's label names or the ones above.
+
 ## YugabyteDB: exported by YBA, not scraped by us
 
 **Only where YBA runs.** These are CRs the YugabyteDB Kubernetes operator reads,

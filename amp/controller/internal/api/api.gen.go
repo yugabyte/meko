@@ -461,6 +461,9 @@ type Cluster struct {
 
 	// StoragePoolId The storage pool this cluster belongs to.
 	StoragePoolId openapi_types.UUID `json:"storage_pool_id"`
+
+	// Tags The tags the cluster was created with; `{}` when none.
+	Tags Tags `json:"tags"`
 }
 
 // ClusterList defines model for ClusterList.
@@ -539,6 +542,11 @@ type CreateClusterRequest struct {
 	// defaults of 2 CPU cores and the memory those cores are owed (16Gi at the
 	// standard 8 GiB per vCPU).
 	Resources *EndpointResources `json:"resources,omitempty"`
+
+	// Tags Tags every endpoint of this cluster carries, on every branch and
+	// including the writer `with_writer` creates. An endpoint's own tag
+	// replaces the cluster's on a key both set. Set at create only.
+	Tags *Tags `json:"tags,omitempty"`
 
 	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
 	WithWriter *bool `json:"with_writer,omitempty"`
@@ -706,6 +714,11 @@ type CreateEndpointRequest struct {
 	// Applied at pod start, so a change takes effect on the endpoint's next
 	// start — there is no live-reload path today.
 	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
+
+	// Tags This endpoint's own tags, merged over its cluster's: on a key both
+	// set, this value is the one its objects are labelled with. Set at
+	// create only.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // CreateEndpointRequestDiskType Backing disk for the endpoint's data volume. `network` (the default)
@@ -897,6 +910,10 @@ type Endpoint struct {
 	// Applied at pod start, so a change takes effect on the endpoint's next
 	// start — there is no live-reload path today.
 	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
+
+	// Tags The endpoint's own tags, as sent at create; `{}` when none. Not
+	// merged with its cluster's — the labels on its objects are.
+	Tags Tags `json:"tags"`
 
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
 	TailnetAddress string `json:"tailnet_address"`
@@ -1619,6 +1636,25 @@ type SubtaskList struct {
 	Count    int       `json:"count"`
 	Subtasks []Subtask `json:"subtasks"`
 }
+
+// Tags Key/value tags, rendered as Kubernetes labels on every object of an
+// endpoint's release — its Deployment, pod, Services, PVC, ConfigMap,
+// Secrets and Certificates. A cluster has no objects of its own, so its tags
+// reach Kubernetes through its endpoints. The Docker and local deployers
+// create no Kubernetes objects and only record them.
+//
+// Keys are Kubernetes qualified names: an optional DNS-subdomain prefix
+// and `/`, then a name of at most 63 characters of alphanumerics, `-`, `_`
+// and `.`, starting and ending with an alphanumeric. Values follow the same
+// character rule, are at most 63 characters, and may be empty. Refused:
+// the labels the endpoint chart sets itself (`helm.sh/chart` and
+// `app.kubernetes.io/` `name`, `instance`, `version`, `managed-by`) and
+// any key under `amp.yugabyte.com/`, the controller's own. A tag breaking
+// any of these rules is a `400`.
+//
+// Set at create and not changeable afterwards: a label change on the pod
+// restarts it.
+type Tags map[string]string
 
 // Task defines model for Task.
 type Task struct {

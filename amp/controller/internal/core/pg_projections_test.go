@@ -59,7 +59,8 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		t.Fatalf("create pool: %v", err)
 	}
 	clusterID, branchID := uuid.New(), uuid.New()
-	if err := b.EnsureCluster(ctx, sp.ID, clusterID, branchID, "projections", 18, "", nil); err != nil {
+	clusterTags := map[string]string{"team": "db", "env": "prod"}
+	if err := b.EnsureCluster(ctx, sp.ID, clusterID, branchID, "projections", 18, "", nil, clusterTags); err != nil {
 		t.Fatalf("ensure cluster: %v", err)
 	}
 	endpointID := uuid.New()
@@ -69,7 +70,8 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		// Disjoint keys: the two daemon columns are adjacent in the projection, so
 		// identical fixtures would let a transposed scan pass.
 		[]byte(`{"tenant_config.enable_gc":true,"scale_factor":8}`),
-		[]byte(`{"wal_cache_size_mib":512}`)); err != nil {
+		[]byte(`{"wal_cache_size_mib":512}`),
+		[]byte(`{"team":"web","owner":"jdoe"}`)); err != nil {
 		t.Fatalf("ensure endpoint: %v", err)
 	}
 	// version is its own column, written after the insert the way the
@@ -193,6 +195,9 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		if p.DefaultBranch.BranchID != branchID {
 			t.Errorf("GetCluster default branch = %+v", p.DefaultBranch)
 		}
+		if !reflect.DeepEqual(p.Tags, clusterTags) {
+			t.Errorf("GetCluster tags = %v, want %v", p.Tags, clusterTags)
+		}
 	})
 
 	t.Run("endpoints", func(t *testing.T) {
@@ -234,6 +239,10 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		if _, wrong := got.SafekeeperSettings["scale_factor"]; wrong {
 			t.Errorf("pageserver settings leaked into safekeeper_settings: %v", got.SafekeeperSettings)
 		}
+		// The endpoint reports its own tags, not the merge with its cluster's.
+		if want := map[string]string{"team": "web", "owner": "jdoe"}; !reflect.DeepEqual(got.Tags, want) {
+			t.Errorf("endpoint tags = %v, want %v", got.Tags, want)
+		}
 
 		list, total, err := b.ListEndpoints(ctx, sp.ID, clusterID, branchID, 100, 0)
 		if err != nil {
@@ -259,6 +268,13 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 		if d.BranchID != branchID {
 			t.Errorf("deploy state branch = %s, want %s", d.BranchID, branchID)
+		}
+		if d.StoragePoolID != sp.ID {
+			t.Errorf("deploy state storage pool = %s, want %s", d.StoragePoolID, sp.ID)
+		}
+		// The cluster's tags under the endpoint's, the endpoint winning `team`.
+		if want := map[string]string{"team": "web", "env": "prod", "owner": "jdoe"}; !reflect.DeepEqual(d.Labels, want) {
+			t.Errorf("deploy labels = %v, want %v", d.Labels, want)
 		}
 
 		// The by-id form shares that projection and scanner, and is what

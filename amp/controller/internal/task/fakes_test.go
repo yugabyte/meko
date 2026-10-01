@@ -68,14 +68,21 @@ type fakeStateStore struct {
 
 	// clusterEngine records the engine each EnsureCluster was given, so a task
 	// test can assert the arg is carried rather than dropped.
-	clusterEngine     map[uuid.UUID]string
-	errEnsureCluster  error
-	errEnsureBranch   error
-	errEnsureEndpoint error
-	errSetAddress     error
-	errDeleteEndpoint error
-	errDeleteBranch   error
-	errDeleteCluster  error
+	clusterEngine map[uuid.UUID]string
+	// clusterTags and endpointTags are the tags each EnsureCluster /
+	// EnsureEndpointRecord was given; EndpointDeploy merges them into Labels the
+	// way endpointDeploySelect does.
+	clusterTags map[uuid.UUID]map[string]string
+	// endpointRecordBranch is the branch each EnsureEndpointRecord was given.
+	endpointRecordBranch map[uuid.UUID]uuid.UUID
+	endpointTags         map[uuid.UUID]map[string]string
+	errEnsureCluster     error
+	errEnsureBranch      error
+	errEnsureEndpoint    error
+	errSetAddress        error
+	errDeleteEndpoint    error
+	errDeleteBranch      error
+	errDeleteCluster     error
 }
 
 func newFakeStateStore() *fakeStateStore {
@@ -91,6 +98,9 @@ func newFakeStateStore() *fakeStateStore {
 		branchParent:         map[uuid.UUID]uuid.UUID{},
 		branchExts:           map[uuid.UUID][]string{},
 		clusterEngine:        map[uuid.UUID]string{},
+		clusterTags:          map[uuid.UUID]map[string]string{},
+		endpointRecordBranch: map[uuid.UUID]uuid.UUID{},
+		endpointTags:         map[uuid.UUID]map[string]string{},
 		endpointExts:         map[uuid.UUID][]string{},
 		deletedBranches:      map[uuid.UUID]struct{}{},
 		deletedClusters:      map[uuid.UUID]struct{}{},
@@ -192,8 +202,15 @@ func (f *fakeStateStore) EndpointDeploy(_ context.Context, endpointID uuid.UUID)
 	defer f.mu.Unlock()
 	d, ok := f.endpointBranch[endpointID]
 	if !ok {
-		return core.EndpointDeploy{}, core.ErrNotFound
+		// An endpoint EnsureEndpointRecord wrote but no test seeded: what the
+		// create step reads back for its labels.
+		if _, created := f.createdEndpoints[endpointID]; !created {
+			return core.EndpointDeploy{}, core.ErrNotFound
+		}
+		d = core.EndpointDeploy{ID: endpointID, ClusterID: f.endpointCluster[endpointID],
+			BranchID: f.endpointRecordBranch[endpointID], Role: f.createdEndpoints[endpointID]}
 	}
+	d.Labels = core.MergeTags(f.clusterTags[f.endpointCluster[endpointID]], f.endpointTags[endpointID])
 	return d, nil
 }
 
@@ -288,7 +305,7 @@ func (f *fakeStateStore) ChildBranchIDs(_ context.Context, clusterID, branchID u
 	return ids, nil
 }
 
-func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID uuid.UUID, _ string, _ int, engine string, extensions []string) error {
+func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID uuid.UUID, _ string, _ int, engine string, extensions []string, tags map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensureClusterCalls++
@@ -298,6 +315,9 @@ func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID
 	f.createdBranches[branchID] = struct{}{}
 	f.branchCluster[branchID] = clusterID
 	f.clusterEngine[clusterID] = engine
+	if len(tags) > 0 {
+		f.clusterTags[clusterID] = tags
+	}
 	if len(extensions) > 0 {
 		f.branchExts[branchID] = append([]string(nil), extensions...)
 	}
@@ -334,8 +354,8 @@ func (f *fakeStateStore) BranchPgSettings(_ context.Context, _, branchID uuid.UU
 	return out, nil
 }
 
-func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, branchID uuid.UUID, role, name string,
-	_, pgSettings, pageserverSettings, safekeeperSettings []byte) error {
+func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
+	_, pgSettings, pageserverSettings, safekeeperSettings, tags []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.endpointRecordCalls++
@@ -352,6 +372,19 @@ func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, 
 		f.existingWriterBranch[branchID] = endpointID
 	}
 	f.createdEndpoints[endpointID] = role
+	f.endpointRecordBranch[endpointID] = branchID
+	if _, seeded := f.endpointCluster[endpointID]; !seeded {
+		f.endpointCluster[endpointID] = clusterID
+	}
+	if len(tags) > 0 {
+		var t map[string]string
+		if err := json.Unmarshal(tags, &t); err != nil {
+			return err
+		}
+		if len(t) > 0 {
+			f.endpointTags[endpointID] = t
+		}
+	}
 	if name != "" {
 		if f.endpointNames == nil {
 			f.endpointNames = map[uuid.UUID]string{}

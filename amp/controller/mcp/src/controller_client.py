@@ -168,6 +168,7 @@ class ControllerClient:
         pg_version: Optional[int] = None,
         engine: Optional[str] = None,
         extensions: Optional[list[str]] = None,
+        tags: Optional[dict[str, str]] = None,
     ) -> dict:
         body: dict[str, Any] = {"name": name}
         if pg_version is not None:
@@ -176,6 +177,8 @@ class ControllerClient:
             body["engine"] = engine
         if extensions:
             body["extensions"] = extensions
+        if tags:
+            body["tags"] = tags
         return self._request(
             "POST", f"/storage-pools/{pool_id}/clusters", json=body
         )
@@ -270,6 +273,7 @@ class ControllerClient:
         pageserver_settings: Optional[dict[str, Any]] = None,
         safekeeper_settings: Optional[dict[str, Any]] = None,
         password: Optional[str] = None,
+        tags: Optional[dict[str, str]] = None,
     ) -> dict:
         body: dict[str, Any] = {}
         if role is not None:
@@ -292,6 +296,8 @@ class ControllerClient:
             body["pageserver_settings"] = pageserver_settings
         if safekeeper_settings:
             body["safekeeper_settings"] = safekeeper_settings
+        if tags:
+            body["tags"] = tags
         return self._request(
             "POST",
             f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints",

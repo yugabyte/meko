@@ -63,7 +63,7 @@ func TestPgBranchExtensions(t *testing.T) {
 	// CONFLICT DO NOTHING); the default branch it inserts is the point.
 	poolID, clusterID := seedCoreCluster(t, ctx, pool)
 	rootID := uuid.New()
-	if err := b.EnsureCluster(ctx, poolID, clusterID, rootID, "main", 18, "", nil); err != nil {
+	if err := b.EnsureCluster(ctx, poolID, clusterID, rootID, "main", 18, "", nil, nil); err != nil {
 		t.Fatalf("EnsureCluster: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestPgBranchExtensions(t *testing.T) {
 	// --- create-time write: a second cluster created WITH extensions carries them
 	// on its default branch from the start. ---
 	cluster2, root2 := uuid.New(), uuid.New()
-	if err := b.EnsureCluster(ctx, poolID, cluster2, root2, "main2-"+cluster2.String(), 18, "", []string{"pg_cron", "pgvector"}); err != nil {
+	if err := b.EnsureCluster(ctx, poolID, cluster2, root2, "main2-"+cluster2.String(), 18, "", []string{"pg_cron", "pgvector"}, nil); err != nil {
 		t.Fatalf("EnsureCluster(with extensions): %v", err)
 	}
 	if got := mustExts(cluster2, root2); !reflect.DeepEqual(got, []string{"pg_cron", "pgvector"}) {

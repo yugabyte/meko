@@ -48,12 +48,12 @@ func TestPgYCPGeneration(t *testing.T) {
 	b := NewPgBackend(pool)
 	poolID, clusterID := seedCoreCluster(t, ctx, pool)
 	branchID := uuid.New()
-	if err := b.EnsureCluster(ctx, poolID, clusterID, branchID, "main", 18, "", nil); err != nil {
+	if err := b.EnsureCluster(ctx, poolID, clusterID, branchID, "main", 18, "", nil, nil); err != nil {
 		t.Fatalf("EnsureCluster: %v", err)
 	}
 	endpointID := uuid.New()
 	if err := b.EnsureEndpointRecord(ctx, endpointID, clusterID, branchID, "read_write", "rw",
-		[]byte(`{"cpu":"2","memory":"4Gi"}`), nil, nil, nil); err != nil {
+		[]byte(`{"cpu":"2","memory":"4Gi"}`), nil, nil, nil, nil); err != nil {
 		t.Fatalf("EnsureEndpointRecord: %v", err)
 	}
 

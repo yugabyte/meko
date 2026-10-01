@@ -289,3 +289,34 @@ Usage: include "yb-amp-controller.kvAnnotations" (dict "items" <list>) | nindent
 {{- end -}}
 {{- toYaml $out -}}
 {{- end }}
+
+{{/*
+Relabel rules copying an endpoint pod's identity labels (the controller's
+deploy.IdentityLabels) onto every series scraped from it, so a query can group
+by cluster, pool, branch or role without a join. A pod created before these
+labels yields an empty value, which Prometheus drops rather than storing.
+
+`branchFill` is for the pageserver and safekeeper, which already put branch_id
+on their branch-scoped series (the same id: each serves exactly the pod's one
+branch). A target label named branch_id would make Prometheus rename theirs to
+exported_branch_id, so the pod's branch goes on as pod_branch_id instead, and
+endpointBranchFill moves it into branch_id only on the series that have none.
+*/}}
+{{- define "yb-amp-controller.endpointIdentityRelabels" -}}
+- {source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_endpoint_id], target_label: endpoint_id}
+- {source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_branch_id], target_label: {{ if .branchFill }}pod_branch_id{{ else }}branch_id{{ end }}}
+- {source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_cluster_id], target_label: cluster_id}
+- {source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_storage_pool_id], target_label: storage_pool_id}
+- {source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_ep_type], target_label: ep_type}
+{{- end }}
+
+{{/*
+metric_relabel_configs for a job that set pod_branch_id (endpointIdentityRelabels
+with branchFill). Source labels join with ";", so ";<id>" matches only a series
+whose own branch_id is empty: the exporter's value is never overwritten. Then
+pod_branch_id is dropped, so it is never stored.
+*/}}
+{{- define "yb-amp-controller.endpointBranchFill" -}}
+- {source_labels: [branch_id, pod_branch_id], regex: ";(.+)", target_label: branch_id, replacement: "$1"}
+- {action: labeldrop, regex: pod_branch_id}
+{{- end }}

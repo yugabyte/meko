@@ -2089,10 +2089,17 @@ components:
             (400), as is any value when externalized extensions are unavailable
             (e.g. the Docker driver). Empty/omitted enables only the catalog
             defaults. See compute/architecture/extensions.md.
+        tags:
+          allOf:
+            - $ref: '#/components/schemas/Tags'
+          description: |
+            Tags every endpoint of this cluster carries, on every branch and
+            including the writer `with_writer` creates. An endpoint's own tag
+            replaces the cluster's on a key both set. Set at create only.
 
     Cluster:
       type: object
-      required: [id, storage_pool_id, name, created_at, default_branch]
+      required: [id, storage_pool_id, name, created_at, default_branch, tags]
       properties:
         id:
           type: string
@@ -2126,6 +2133,10 @@ components:
             parent's; see getBranch and addBranchExtensions). Set at createCluster;
             empty when none. Excludes the catalog defaults, which are added per
             endpoint at deploy time.
+        tags:
+          allOf:
+            - $ref: '#/components/schemas/Tags'
+          description: The tags the cluster was created with; `{}` when none.
 
     AddBranchExtensionsRequest:
       type: object
@@ -2252,7 +2263,7 @@ components:
 
     Endpoint:
       type: object
-      required: [id, cluster_id, branch_id, role, name, address, tailnet_address, created_at]
+      required: [id, cluster_id, branch_id, role, name, address, tailnet_address, created_at, tags]
       properties:
         id:
           type: string
@@ -2330,6 +2341,12 @@ components:
             reported one. Never guessed from the controller's configured default.
         ycp_generation:
           $ref: '#/components/schemas/YCPGenerationObserved'
+        tags:
+          allOf:
+            - $ref: '#/components/schemas/Tags'
+          description: |
+            The endpoint's own tags, as sent at create; `{}` when none. Not
+            merged with its cluster's — the labels on its objects are.
         created_at:
           type: string
           format: date-time
@@ -2679,6 +2696,13 @@ components:
           $ref: '#/components/schemas/EndpointResources'
         connectivity:
           $ref: '#/components/schemas/EndpointConnectivity'
+        tags:
+          allOf:
+            - $ref: '#/components/schemas/Tags'
+          description: |
+            This endpoint's own tags, merged over its cluster's: on a key both
+            set, this value is the one its objects are labelled with. Set at
+            create only.
 
     EndpointConnectivity:
       type: object
@@ -2752,6 +2776,31 @@ components:
             Empty means unrestricted. On `nlb_external` that puts Postgres on the
             public internet with password authentication as the only barrier, so
             set it for anything but a deliberately open test endpoint.
+
+    Tags:
+      type: object
+      maxProperties: 50
+      additionalProperties:
+        type: string
+        maxLength: 63
+      description: |
+        Key/value tags, rendered as Kubernetes labels on every object of an
+        endpoint's release — its Deployment, pod, Services, PVC, ConfigMap,
+        Secrets and Certificates. A cluster has no objects of its own, so its tags
+        reach Kubernetes through its endpoints. The Docker and local deployers
+        create no Kubernetes objects and only record them.
+
+        Keys are Kubernetes qualified names: an optional DNS-subdomain prefix
+        and `/`, then a name of at most 63 characters of alphanumerics, `-`, `_`
+        and `.`, starting and ending with an alphanumeric. Values follow the same
+        character rule, are at most 63 characters, and may be empty. Refused:
+        the labels the endpoint chart sets itself (`helm.sh/chart` and
+        `app.kubernetes.io/` `name`, `instance`, `version`, `managed-by`) and
+        any key under `amp.yugabyte.com/`, the controller's own. A tag breaking
+        any of these rules is a `400`.
+
+        Set at create and not changeable afterwards: a label change on the pod
+        restarts it.
 
     EndpointResources:
       type: object

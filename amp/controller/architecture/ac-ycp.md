@@ -358,11 +358,11 @@ pod, where most `pg_settings` reload in place.
 ### What an endpoint spec can declare and not get
 
 An endpoint converges `resources` and its three settings surfaces. What is left
-over — `connectivity`, `role`, `extended_config` — is permanent drift on an
+over — `connectivity`, `role`, `tags`, `extended_config` — is permanent drift on an
 **existing** endpoint, named in the resource's `Error`. Omitting a field leaves it
 unmanaged.
 
-The reasons differ. `connectivity` and `role` are create-time in the controller:
+The reasons differ. `connectivity`, `role` and `tags` are create-time in the controller:
 no update verb carries them, so they can never converge and recreating the endpoint
 is the only path. `extended_config` is the odd one out — it is the single surface
 `updateEndpointSettings` does *not* take, so it stays unfixable for a reason of its

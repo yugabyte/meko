@@ -809,8 +809,8 @@ func TestUpdateEndpointIgnoresAllowedCidrOrder(t *testing.T) {
 	}
 }
 
-// What an endpoint spec can declare and still not get. `role` and `connectivity`
-// are create-time in the controller — no update verb carries them, so recreating
+// What an endpoint spec can declare and still not get. `role`, `connectivity` and
+// `tags` are create-time in the controller — no update verb carries them, so recreating
 // the endpoint is the only path. `extended_config` is the one surface
 // updateEndpointSettings does NOT take, so it stays here for a reason of its own
 // even though its three neighbours converge now.
@@ -818,6 +818,7 @@ func TestUpdateEndpointReportsEveryFieldItCannotApply(t *testing.T) {
 	for name, tc := range map[string]struct{ declare, want string }{
 		"role":            {`"role":"read_only"`, "role"},
 		"extended_config": {`"extended_config":{"shared_preload_libraries":"pg_stat_statements"}`, "extended_config"},
+		"tags":            {`"tags":{"team":"web"}`, "tags"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := &genServer{endpointGen: gen64(1)}

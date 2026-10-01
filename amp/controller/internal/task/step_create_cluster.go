@@ -30,6 +30,8 @@ type CreateClusterArgs struct {
 	// written onto the default branch row so every endpoint on the cluster
 	// resolves against it. Empty when none were requested.
 	Extensions []string `json:"extensions,omitempty"`
+	// Tags are the cluster's key/value tags, stored on the cluster row.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // createClusterStep creates a cluster and its default branch. Its only exported
@@ -56,7 +58,7 @@ func buildCreateClusterStep(raw json.RawMessage, deps Deps) (Step, error) {
 func (*createClusterStep) Kind() string { return StepCreateCluster }
 
 func (s *createClusterStep) Execute(ctx context.Context) StepResult {
-	if err := s.state.EnsureCluster(ctx, s.PoolID, s.ClusterID, s.BranchID, s.Name, s.PgVersion, s.Engine, s.Extensions); err != nil {
+	if err := s.state.EnsureCluster(ctx, s.PoolID, s.ClusterID, s.BranchID, s.Name, s.PgVersion, s.Engine, s.Extensions, s.Tags); err != nil {
 		return Fail(fmt.Errorf("ensure cluster+default branch: %w", err))
 	}
 	return Ok(mustResult(map[string]string{"cluster_id": s.ClusterID.String(), "branch_id": s.BranchID.String()}))

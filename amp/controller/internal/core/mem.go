@@ -487,7 +487,7 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 // EnsureCluster idempotently creates a cluster and its default branch with the
 // given ids. A repeated id is a no-op; a cluster-name collision within the pool
 // (a different id) is ErrConflict; a missing pool is ErrNotFound.
-func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string) error {
+func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string, tags map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
@@ -515,7 +515,7 @@ func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchI
 		CreatedAt:  now,
 		Extensions: dedupSorted(extensions),
 	}
-	p := Cluster{ID: clusterID, StoragePoolID: poolID, Name: name, CreatedAt: now, Engine: normalizeEngine(engine), DefaultBranch: def}
+	p := Cluster{ID: clusterID, StoragePoolID: poolID, Name: name, CreatedAt: now, Engine: normalizeEngine(engine), Tags: nonEmptyTags(tags), DefaultBranch: def}
 	m.clusters[clusterID] = p
 	m.branches[branchID] = def
 	m.clusterNames[nk] = struct{}{}
@@ -620,18 +620,21 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, _, branchID uuid.UUI
 // has to grow the five fields with it — the deployer refuses a zero slot on an
 // ingress endpoint, so the failure would be loud rather than a ":0" address.
 func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) EndpointDeploy {
+	clusterID := m.branches[e.BranchID].ClusterID
 	return EndpointDeploy{
-		ID:           id,
-		BranchID:     e.BranchID,
-		ClusterID:    m.branches[e.BranchID].ClusterID,
-		PgVersion:    pgVersion,
-		CPU:          e.CPU,
-		Memory:       e.Memory,
-		Version:      e.Version,
-		Role:         e.Role,
-		Connectivity: e.Connectivity,
-		AllowedCIDRs: e.AllowedCIDRs,
-		Extensions:   m.endpointExts[id],
+		ID:            id,
+		BranchID:      e.BranchID,
+		ClusterID:     clusterID,
+		StoragePoolID: m.clusters[clusterID].StoragePoolID,
+		PgVersion:     pgVersion,
+		CPU:           e.CPU,
+		Memory:        e.Memory,
+		Version:       e.Version,
+		Role:          e.Role,
+		Connectivity:  e.Connectivity,
+		AllowedCIDRs:  e.AllowedCIDRs,
+		Extensions:    m.endpointExts[id],
+		Labels:        MergeTags(m.clusters[clusterID].Tags, e.Tags),
 	}
 }
 
@@ -759,7 +762,7 @@ func dedupSorted(names []string) []string {
 // endpoint (a different id on a branch that already has one) is ErrConflict, as
 // is a name already taken on the branch; a missing branch is ErrNotFound.
 func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
-	config, pgSettings, pageserverSettings, safekeeperSettings []byte) error {
+	config, pgSettings, pageserverSettings, safekeeperSettings, tags []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.endpoints[endpointID]; ok {
@@ -802,6 +805,10 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 	if len(settings) == 0 {
 		settings = nil
 	}
+	var epTags map[string]string
+	if len(tags) > 0 {
+		_ = json.Unmarshal(tags, &epTags)
+	}
 	m.endpoints[endpointID] = Endpoint{
 		ID:                 endpointID,
 		ClusterID:          clusterID,
@@ -811,6 +818,7 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		PgSettings:         settings,
 		PageserverSettings: decodeAnyMap(pageserverSettings),
 		SafekeeperSettings: decodeAnyMap(safekeeperSettings),
+		Tags:               nonEmptyTags(epTags),
 		CPU:                cfg.CPU,
 		Memory:             cfg.Memory,
 		Connectivity:       cfg.Connectivity,

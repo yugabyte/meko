@@ -293,6 +293,7 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port], action: replace, regex: (.+);(.+), replacement: "$1:$2", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+                {{- include "yb-amp-controller.endpointIdentityRelabels" (dict) | nindent 16 }}
             - job_name: amp-pageserver
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
@@ -301,6 +302,9 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "pageserver" 9898 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                {{- include "yb-amp-controller.endpointIdentityRelabels" (dict "branchFill" true) | nindent 16 }}
+              metric_relabel_configs:
+                {{- include "yb-amp-controller.endpointBranchFill" . | nindent 16 }}
             - job_name: amp-safekeeper
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
@@ -309,6 +313,9 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "safekeeper" 7676 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                {{- include "yb-amp-controller.endpointIdentityRelabels" (dict "branchFill" true) | nindent 16 }}
+              metric_relabel_configs:
+                {{- include "yb-amp-controller.endpointBranchFill" . | nindent 16 }}
             - job_name: amp-compute-ctl
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
@@ -317,6 +324,7 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                {{- include "yb-amp-controller.endpointIdentityRelabels" (dict) | nindent 16 }}
             # The compute's local file cache (LFC) counters live in the
             # communicator worker process and are served over a unix socket in
             # PGDATA, which nothing outside the container can reach. compute_ctl
@@ -333,6 +341,7 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                {{- include "yb-amp-controller.endpointIdentityRelabels" (dict) | nindent 16 }}
             # Certificate expiries, from the supervisor. Two gauges, both read from
             # the files the postmaster is actually configured with rather than from
             # what cert-manager believes it issued — those diverge exactly when a
@@ -348,6 +357,7 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "supervisor" 9899 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                {{- include "yb-amp-controller.endpointIdentityRelabels" (dict) | nindent 16 }}
             {{- if .Values.otel.podMetrics }}
             - job_name: kubelet-cadvisor
               scrape_interval: 30s

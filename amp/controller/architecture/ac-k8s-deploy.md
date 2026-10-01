@@ -141,6 +141,33 @@ Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 kill-before-create retire (ac-highlvl.md §4); `--wait` blocks until the
 resources are gone.
 
+### Labels: identity and tags
+
+Every endpoint's objects carry five identity labels, from `deploy.IdentityLabels`:
+
+| Label | Value |
+|---|---|
+| `amp.yugabyte.com/endpoint-id` | the endpoint id |
+| `amp.yugabyte.com/branch-id` | its branch id |
+| `amp.yugabyte.com/cluster-id` | its cluster id |
+| `amp.yugabyte.com/storage-pool-id` | its cluster's storage pool id |
+| `amp.yugabyte.com/ep-type` | its role, `read_write` or `read_only` |
+
+So `kubectl get pods -l amp.yugabyte.com/cluster-id=<id>` lists a cluster's
+computes. With them come the endpoint's tags (`EndpointSpec.Labels`, its cluster's
+merged with its own, see [`ac-apis.md`](ac-apis.md#tags-are-kubernetes-labels)).
+Both render as the chart's `commonLabels`. The `yb-amp-endpoint.labels` helper puts them on every object of
+the release, and the pod template gets them too. They never reach a selector: a
+Deployment's selector is immutable, and the controller finds the pod by
+`app.kubernetes.io/instance`. The chart drops any key it sets itself rather than
+emitting it twice.
+
+The identity labels are on every endpoint, so the first redeploy of one created
+before them changes its pod template and restarts its pod. That is free on an
+upgrade or an extension redeploy, which restart it anyway, and costs a restart
+on a plain `POST /endpoint-rerenders`. A resize patches the pod in place and runs
+no helm, so it is unaffected.
+
 ## Materializing a branch: the creation record
 
 Cluster/branch creation and endpoint creation are **separate** steps, joined by

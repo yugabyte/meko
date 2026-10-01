@@ -78,6 +78,9 @@ type CreateEndpointArgs struct {
 	// pod start — but they are carried here so a replay writes the same row.
 	PageserverSettings map[string]any `json:"pageserver_settings,omitempty"`
 	SafekeeperSettings map[string]any `json:"safekeeper_settings,omitempty"`
+	// Tags are this endpoint's own key/value tags. The labels it deploys with are
+	// these merged over its cluster's, read back from the record (see Execute).
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // createEndpointStep records the endpoint, provisions the compute, and records
@@ -166,10 +169,24 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(fmt.Errorf("encode endpoint safekeeper_settings: %w", err))
 	}
+	tags, err := json.Marshal(orEmptyMap(s.Tags))
+	if err != nil {
+		return Fail(fmt.Errorf("encode endpoint tags: %w", err))
+	}
 	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ClusterID, s.BranchID, s.Role, s.Name,
-		config, settings, pageserverSettings, safekeeperSettings); err != nil {
+		config, settings, pageserverSettings, safekeeperSettings, tags); err != nil {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
+	// The labels are the one thing read back rather than assembled from the args:
+	// they include the cluster's tags and its pool, and the record's projection is
+	// where those are joined in, so the create renders exactly what every
+	// redeploy will.
+	rec, err := s.state.EndpointDeploy(ctx, s.EndpointID)
+	if err != nil {
+		return Fail(fmt.Errorf("read endpoint labels: %w", err))
+	}
+	spec.Labels = rec.Labels
+	spec.Identity = deploy.IdentityLabels(rec)
 
 	if deploy.IsIngress(s.Connectivity) {
 		slot, err := s.ingressSlot(ctx)

@@ -73,6 +73,10 @@ type Cluster struct {
 	// default branch's extensions at create and is never re-derived. Empty only
 	// on a row written before the engine column existed.
 	Engine string
+	// Tags are the caller's key/value tags, set at create. A cluster has no
+	// Kubernetes objects, so they land as labels on its endpoints' releases,
+	// merged under each endpoint's own (EndpointDeploy.Labels). Nil when none.
+	Tags map[string]string
 	// DefaultBranch is the cluster's root branch (IsDefault). It is created with
 	// the cluster and always exists; reads populate it.
 	DefaultBranch Branch
@@ -184,7 +188,11 @@ type Endpoint struct {
 	// deploys the compute can carry what the API does not model (the ports a
 	// locally-deployed compute binds). Nil when the endpoint has none.
 	Extended []byte
-	Address  string
+	// Tags are this endpoint's own key/value tags, set at create. The labels its
+	// release carries are its cluster's tags merged with these, these winning —
+	// see EndpointDeploy.Labels. Nil when none.
+	Tags    map[string]string
+	Address string
 	// TailnetAddress is the endpoint's Tailscale (tailnet) connection target,
 	// set alongside Address when the endpoint is exposed on the tailnet; empty
 	// otherwise.
@@ -235,11 +243,14 @@ type EndpointDeploy struct {
 	CPU       string
 	Memory    string
 	// ClusterID is the cluster the endpoint's branch sits under, and Role its
-	// endpoint_role. Neither is rendered onto a deploy spec: they are what lets a
-	// fleet roll spread its bounded pool across clusters and move a branch's
-	// readers before its writer (ac-endpoint-upgrade.md §5.7).
+	// endpoint_role. They let a fleet roll spread its bounded pool across clusters
+	// and move a branch's readers before its writer (ac-endpoint-upgrade.md §5.7),
+	// and are rendered only as identity labels.
 	ClusterID uuid.UUID
 	Role      string
+	// StoragePoolID is the pool the endpoint's cluster sits in. Like ClusterID
+	// and Role it is rendered only as an identity label (deploy.IdentityLabels).
+	StoragePoolID uuid.UUID
 	// Version is the endpoint's own version (the `version` column), rendered onto
 	// the deploy spec so a redeploy keeps it. Empty means unknown, which renders
 	// as "whatever the deployer is configured with" — the behaviour of every
@@ -267,6 +278,11 @@ type EndpointDeploy struct {
 	IngressDNSName    string
 	IngressShardHost  string
 	IngressRecordType string
+	// Labels are the endpoint's EFFECTIVE tags — its cluster's merged with its
+	// own, its own winning — rendered onto every object of its release. Carried
+	// here because a redeploy renders from this record alone, and a dropped label
+	// is one helm strips from the live objects.
+	Labels map[string]string
 }
 
 // DefaultBranchName is the name given to a cluster's default (root) branch. The
@@ -424,4 +440,30 @@ type Backend interface {
 	UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any, ycpGeneration *int64) error
 	// UpdateEndpointSettings does the same for one endpoint's three surfaces.
 	UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any, ycpGeneration *int64) error
+}
+
+// MergeTags is the effective tag set of an endpoint: its cluster's tags with its
+// own laid over them, its own winning a key both set. PgBackend computes the same
+// thing in SQL (`clusters.tags || endpoints.tags`); this is that merge for
+// MemBackend. Nil when both are empty.
+func MergeTags(cluster, endpoint map[string]string) map[string]string {
+	if len(cluster) == 0 && len(endpoint) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(cluster)+len(endpoint))
+	for k, v := range cluster {
+		out[k] = v
+	}
+	for k, v := range endpoint {
+		out[k] = v
+	}
+	return out
+}
+
+// nonEmptyTags is nil for an empty map, matching what PgBackend reads back.
+func nonEmptyTags(tags map[string]string) map[string]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	return tags
 }

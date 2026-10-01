@@ -189,6 +189,9 @@ type CreateClusterInput struct {
 	// the default branch so every endpoint on the cluster mounts it. Empty leaves
 	// the cluster with catalog defaults only.
 	Extensions []string `json:"extensions,omitempty"`
+	// Tags are the cluster's key/value tags (validated by the handler), which
+	// every endpoint of the cluster carries as labels under its own.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // CreateCluster records a create_cluster task: create the cluster + its default
@@ -208,6 +211,7 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Ta
 			PgVersion:  in.PgVersion,
 			Engine:     in.Engine,
 			Extensions: in.Extensions,
+			Tags:       in.Tags,
 		}),
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ClusterID:  clusterID,
@@ -341,6 +345,8 @@ type CreateEndpointInput struct {
 	// returns it, so the verifier must not be part of it. It reaches the pod on
 	// the create_endpoint step's own args instead.
 	PasswordVerifier string `json:"-"`
+	// Tags are this endpoint's own key/value tags, validated by the API.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // CreateEndpoint records a create_endpoint task: a single create_endpoint step on
@@ -368,6 +374,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			Connectivity:       in.Connectivity,
 			AllowedCIDRs:       in.AllowedCIDRs,
 			PasswordVerifier:   in.PasswordVerifier,
+			Tags:               in.Tags,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ClusterID, endpointID.String(), steps)

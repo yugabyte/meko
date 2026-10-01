@@ -143,7 +143,7 @@ func TestPgStoragePoolDeleteRename(t *testing.T) {
 		// EnsureCluster's own liveness write is the only thing that can refuse it.
 		// The concurrent ordering is what the write turns into a serialization
 		// abort; this asserts the guard the abort falls back on.
-		err = b.EnsureCluster(ctx, p.ID, uuid.New(), uuid.New(), "orphan", 18, "", nil)
+		err = b.EnsureCluster(ctx, p.ID, uuid.New(), uuid.New(), "orphan", 18, "", nil, nil)
 		if !errors.Is(err, ErrNotFound) {
 			t.Fatalf("EnsureCluster into a tombstoned pool = %v, want ErrNotFound", err)
 		}

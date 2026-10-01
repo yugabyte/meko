@@ -17,16 +17,17 @@ import (
 // asserted here, once, rather than in each calling step. The reflect sweep is the
 // guard for a field added to EndpointSpec that the assembler forgets.
 func TestEndpointSpecFromRendersEveryField(t *testing.T) {
-	epID, branchID := uuid.New(), uuid.New()
+	epID, branchID, clusterID, poolID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	yb := YBConn{HostPorts: "yb:5433", User: "yugabyte", DBName: "yb_storage"}
 	mounts := []Extension{{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"}}
 
 	spec := EndpointSpecFrom(core.EndpointDeploy{
-		ID: epID, BranchID: branchID, PgVersion: 18,
+		ID: epID, BranchID: branchID, ClusterID: clusterID, StoragePoolID: poolID, Role: "read_only", PgVersion: 18,
 		CPU: "8", Memory: "16Gi", Version: "ep-v7.7.7",
 		Connectivity: ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.0/16"},
 		IngressShard: "pgin-0", IngressPort: 20007, IngressDNSName: "ep-abc.pg.example",
 		IngressShardHost: "lb-0.example", IngressRecordType: "CNAME",
+		Labels: map[string]string{"team": "web"},
 	}, yb, "http://sc:50051", mounts)
 
 	if spec.Name != EndpointName(epID) {
@@ -69,6 +70,17 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec.AllowedCIDRs, []string{"10.0.0.0/16"}) {
 		t.Errorf("AllowedCIDRs = %+v, want [10.0.0.0/16]", spec.AllowedCIDRs)
+	}
+	// A redeploy that dropped them would strip the labels from the live release.
+	if !reflect.DeepEqual(spec.Labels, map[string]string{"team": "web"}) {
+		t.Errorf("Labels = %+v, want the deploy record's", spec.Labels)
+	}
+	wantIdentity := map[string]string{
+		LabelEndpointID: epID.String(), LabelBranchID: branchID.String(), LabelClusterID: clusterID.String(),
+		LabelStoragePoolID: poolID.String(), LabelEndpointType: "read_only",
+	}
+	if !reflect.DeepEqual(spec.Identity, wantIdentity) {
+		t.Errorf("Identity = %+v, want %+v", spec.Identity, wantIdentity)
 	}
 	// PasswordVerifier is the one field this assembler must NOT fill, so it is exempt
 	// from the sweep below and asserted empty instead. Nothing stores the

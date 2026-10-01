@@ -70,7 +70,7 @@ func TestPgDeleteBranchVanishingBlocker(t *testing.T) {
 		t.Fatalf("create pool: %v", err)
 	}
 	clusterID, defaultBranchID := uuid.New(), uuid.New()
-	if err := b.EnsureCluster(ctx, sp.ID, clusterID, defaultBranchID, "branch-classify", 18, "", nil); err != nil {
+	if err := b.EnsureCluster(ctx, sp.ID, clusterID, defaultBranchID, "branch-classify", 18, "", nil, nil); err != nil {
 		t.Fatalf("ensure cluster: %v", err)
 	}
 

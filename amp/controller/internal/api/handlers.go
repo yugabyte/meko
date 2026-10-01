@@ -398,6 +398,11 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		}
 	}
 
+	tags := tagsFrom(request.Body.Tags)
+	if err := validateTags(tags); err != nil {
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", err.Error()))}, nil
+	}
+
 	// Plan the work as an async task and return 202 + the Task. The cluster +
 	// default branch rows, the pending-init recipe, and (when with_writer) the
 	// write endpoint are all created by the worker; a duplicate cluster name now
@@ -414,6 +419,7 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		Engine:           engine,
 		Extensions:       exts,
 		PasswordVerifier: verifier,
+		Tags:             tags,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create cluster task: %w", err)
@@ -1099,6 +1105,14 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 			"password belongs to the branch's read_write endpoint; a read_only endpoint shares the roles already in the branch"))}, nil
 	}
 
+	var tags map[string]string
+	if request.Body != nil {
+		tags = tagsFrom(request.Body.Tags)
+	}
+	if err := validateTags(tags); err != nil {
+		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", err.Error()))}, nil
+	}
+
 	// Plan the work as an async task and return 202 + the Task. The endpoint row,
 	// its deploy, and the address record are all created by the worker's
 	// create_endpoint step; the single-writer rule (a duplicate read_write
@@ -1118,6 +1132,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		Connectivity:       connectivity,
 		AllowedCIDRs:       allowedCIDRs,
 		PasswordVerifier:   verifier,
+		Tags:               tags,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -1712,6 +1727,7 @@ func clusterToAPI(p core.Cluster) Cluster {
 		Name:          p.Name,
 		CreatedAt:     p.CreatedAt,
 		DefaultBranch: branchToAPI(p.DefaultBranch),
+		Tags:          tagsToAPI(p.Tags),
 	}
 	if p.Engine != "" {
 		engine := p.Engine
@@ -1920,6 +1936,7 @@ func endpointToAPI(e core.Endpoint, gatewayReachable bool) Endpoint {
 		TailnetAddress: e.TailnetAddress,
 		Resources:      &EndpointResources{Cpu: &cpu, Memory: &memory},
 		CreatedAt:      e.CreatedAt,
+		Tags:           tagsToAPI(e.Tags),
 	}
 	// No such substitution for the version: empty means genuinely unknown, and the
 	// controller's currently configured default is exactly the wrong guess — it

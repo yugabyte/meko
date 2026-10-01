@@ -446,6 +446,32 @@ func TestKubernetesValuesNodeSelector(t *testing.T) {
 	}
 }
 
+// An endpoint's tags and identity labels reach the chart together as
+// commonLabels, and a spec with neither omits the key.
+func TestKubernetesValuesCommonLabels(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+
+	spec := testEndpointSpec()
+	spec.Labels = map[string]string{"team": "web"}
+	spec.Identity = map[string]string{LabelEndpointType: "read_write"}
+	want := map[string]string{"team": "web", LabelEndpointType: "read_write"}
+	if v := k.values(spec, "yb-ep-rel"); !reflect.DeepEqual(v.CommonLabels, want) {
+		t.Errorf("CommonLabels = %v, want %v", v.CommonLabels, want)
+	}
+
+	data, err := json.Marshal(k.values(testEndpointSpec(), "yb-ep-rel"))
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal(data, &asMap); err != nil {
+		t.Fatalf("unmarshal values: %v", err)
+	}
+	if _, present := asMap["commonLabels"]; present {
+		t.Errorf("commonLabels should be omitted when there are no labels, got %s", data)
+	}
+}
+
 func TestKubernetesValuesPersistence(t *testing.T) {
 	cfg := testKubernetesConfig()
 	cfg.StorageClass = "yb-standard"

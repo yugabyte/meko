@@ -28,7 +28,7 @@ func TestMemEndpointDeployProjectionsCarryConnectivity(t *testing.T) {
 	// Through EnsureEndpointRecord with a config blob, the way create_endpoint
 	// writes it — PgBackend reads connectivity back out of that same jsonb.
 	config := []byte(`{"cpu":"8","memory":"16Gi","connectivity":"nlb_internal","allowed_cidrs":["10.0.0.0/16"]}`)
-	if err := m.EnsureEndpointRecord(ctx, epID, clusterID, branchID, RoleReadWrite, "", config, nil, nil, nil); err != nil {
+	if err := m.EnsureEndpointRecord(ctx, epID, clusterID, branchID, RoleReadWrite, "", config, nil, nil, nil, nil); err != nil {
 		t.Fatalf("EnsureEndpointRecord: %v", err)
 	}
 	if err := m.SetEndpointVersion(ctx, epID, "ep-v1"); err != nil {
@@ -40,7 +40,7 @@ func TestMemEndpointDeployProjectionsCarryConnectivity(t *testing.T) {
 	}
 
 	want := EndpointDeploy{
-		ID: epID, BranchID: branchID, ClusterID: clusterID, PgVersion: 18,
+		ID: epID, BranchID: branchID, ClusterID: clusterID, StoragePoolID: poolID, PgVersion: 18,
 		CPU: "8", Memory: "16Gi", Version: "ep-v1", Role: RoleReadWrite,
 		Connectivity: "nlb_internal", AllowedCIDRs: []string{"10.0.0.0/16"},
 	}
@@ -92,7 +92,7 @@ func TestMemEndpointDeployWithoutConnectivity(t *testing.T) {
 
 	epID := uuid.New()
 	if err := m.EnsureEndpointRecord(ctx, epID, clusterID, branchID, RoleReadWrite, "",
-		[]byte(`{"cpu":"2","memory":"16Gi"}`), nil, nil, nil); err != nil {
+		[]byte(`{"cpu":"2","memory":"16Gi"}`), nil, nil, nil, nil); err != nil {
 		t.Fatalf("EnsureEndpointRecord: %v", err)
 	}
 	d, err := m.EndpointDeploy(ctx, epID)

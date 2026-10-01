@@ -39,7 +39,11 @@ import (
 // A cluster-name collision within the pool surfaces as ErrConflict (the
 // clusters_name_per_pool unique index, which is not the ON CONFLICT target); a
 // missing pool surfaces as ErrNotFound (the FK on cluster.storage_pool_id).
-func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string) error {
+func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, engine string, extensions []string, tags map[string]string) error {
+	tagsJSON, err := json.Marshal(orEmptyTags(tags))
+	if err != nil {
+		return fmt.Errorf("encode cluster tags: %w", err)
+	}
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -47,10 +51,10 @@ func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branch
 	defer tx.Rollback(ctx)
 
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name, engine)
-		 VALUES ($1::uuid, $2::uuid, $3, $4)
+		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name, engine, tags)
+		 VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
-		clusterID.String(), poolID.String(), name, normalizeEngine(engine))
+		clusterID.String(), poolID.String(), name, normalizeEngine(engine), string(tagsJSON))
 	if err != nil {
 		return mapClusterErr("insert cluster", err)
 	}
@@ -279,15 +283,20 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // zero slot, the deployer formats its address as ":0", and SetEndpointAddress
 // overwrites the address clients are using. LEFT, because every non-ingress
 // endpoint has no allocation and must still project.
+//
+// Labels are merged here, `ec.tags || e.tags`, so the endpoint's own tags win
+// and every render — the create's included — reads the same set.
 const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.cluster_id::text, eb.pg_version,
 	        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''),
 	        COALESCE(e.version, ''), e.role::text,
 	        COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs',
 	        e.config->'extensions',
 	        COALESCE(ia.shard, ''), COALESCE(ia.port, 0), COALESCE(ia.dns_name, ''),
-	        COALESCE(ish.hostname, ''), COALESCE(ish.record_type::text, '')
+	        COALESCE(ish.hostname, ''), COALESCE(ish.record_type::text, ''),
+	        ec.tags || e.tags, ec.storage_pool_id::text
 	   FROM amp_registry.endpoints e
 	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
+	   JOIN amp_registry.clusters ec ON ec.id = eb.cluster_id
 	   LEFT JOIN amp_registry.ingress_allocations ia
 	          ON ia.endpoint_id = e.id AND ia.released_at IS NULL
 	   LEFT JOIN amp_registry.ingress_shards ish ON ish.name = ia.shard`
@@ -295,13 +304,22 @@ const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.cluster_i
 func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) {
 	var (
 		id, branchID, clusterID string
+		poolID                  string
 		cidrsRaw                []byte
 		extsRaw                 []byte
+		labelsRaw               []byte
 		d                       EndpointDeploy
 	)
 	if err := r.Scan(&id, &branchID, &clusterID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Role,
 		&d.Connectivity, &cidrsRaw, &extsRaw,
-		&d.IngressShard, &d.IngressPort, &d.IngressDNSName, &d.IngressShardHost, &d.IngressRecordType); err != nil {
+		&d.IngressShard, &d.IngressPort, &d.IngressDNSName, &d.IngressShardHost, &d.IngressRecordType,
+		&labelsRaw, &poolID); err != nil {
+		return EndpointDeploy{}, err
+	}
+	// Failed rather than tolerated like the two below: rendering without the
+	// labels would strip them from a live release.
+	var err error
+	if d.Labels, err = decodeTags(labelsRaw, "endpoint deploy"); err != nil {
 		return EndpointDeploy{}, err
 	}
 	// Same tolerance as scanEndpoint: a malformed allowed_cidrs must not fail the
@@ -323,7 +341,6 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 				"endpoint", id, "error", err, "raw", string(extsRaw))
 		}
 	}
-	var err error
 	if d.ID, err = uuid.Parse(id); err != nil {
 		return EndpointDeploy{}, fmt.Errorf("parse endpoint id: %w", err)
 	}
@@ -332,6 +349,9 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 	}
 	if d.ClusterID, err = uuid.Parse(clusterID); err != nil {
 		return EndpointDeploy{}, fmt.Errorf("parse cluster id: %w", err)
+	}
+	if d.StoragePoolID, err = uuid.Parse(poolID); err != nil {
+		return EndpointDeploy{}, fmt.Errorf("parse storage pool id: %w", err)
 	}
 	return d, nil
 }
@@ -446,6 +466,15 @@ func (b *PgBackend) UpdateEndpointExtensions(ctx context.Context, endpointID uui
 	return nil
 }
 
+// orEmptyTags normalizes nil tags to an empty map so they encode as `{}`, which
+// the NOT NULL column takes, rather than `null`.
+func orEmptyTags(tags map[string]string) map[string]string {
+	if tags == nil {
+		return map[string]string{}
+	}
+	return tags
+}
+
 // orEmptyJSON substitutes `{}` for an absent document, since the settings columns
 // are NOT NULL.
 func orEmptyJSON(doc []byte) []byte {
@@ -474,7 +503,7 @@ func orEmptyJSON(doc []byte) []byte {
 // branch row rather than a read of it, so it serializes against a concurrent drop
 // instead of write-skewing past it (see the interlock comment in the body).
 func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
-	config, pgSettings, pageserverSettings, safekeeperSettings []byte) error {
+	config, pgSettings, pageserverSettings, safekeeperSettings, tags []byte) error {
 	_ = clusterID // implied by branchID; see the doc comment
 	var cfg any
 	if len(config) > 0 {
@@ -487,6 +516,7 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, cluste
 	settings := orEmptyJSON(pgSettings)
 	psSettings := orEmptyJSON(pageserverSettings)
 	skSettings := orEmptyJSON(safekeeperSettings)
+	tagsDoc := orEmptyJSON(tags)
 
 	// One transaction, so the record and the interlock below commit or roll back
 	// together: a refused endpoint leaves no row behind.
@@ -498,11 +528,11 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, cluste
 
 	tag, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.endpoints
-		   (id, branch_id, role, name, config, pg_settings, pageserver_settings, safekeeper_settings)
-		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb)
+		   (id, branch_id, role, name, config, pg_settings, pageserver_settings, safekeeper_settings, tags)
+		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
 		endpointID.String(), branchID.String(), role, nameArg, cfg,
-		string(settings), string(psSettings), string(skSettings))
+		string(settings), string(psSettings), string(skSettings), string(tagsDoc))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {

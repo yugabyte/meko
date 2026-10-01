@@ -115,6 +115,12 @@ type EndpointSpec struct {
 	// for Preload entries) from them; the Docker deployer does not support
 	// ImageVolumes and ignores this.
 	Extensions []Extension
+	// Labels are the endpoint's effective tags (its cluster's merged with its
+	// own), rendered as labels on every object of its release. Only the
+	// Kubernetes deployer implements this.
+	Labels map[string]string
+	// Identity is IdentityLabels of the endpoint, rendered alongside Labels.
+	Identity map[string]string
 }
 
 // IngressSlot is an endpoint's place on a shared ingress shard: which shard,
@@ -242,6 +248,38 @@ type Extension struct {
 	Settings map[string]string
 }
 
+// Identity label keys. They live in the controller's own domain, which the API
+// refuses as a tag key, so a caller's tag can never shadow or spoof one.
+const (
+	LabelEndpointID    = "amp.yugabyte.com/endpoint-id"
+	LabelBranchID      = "amp.yugabyte.com/branch-id"
+	LabelClusterID     = "amp.yugabyte.com/cluster-id"
+	LabelStoragePoolID = "amp.yugabyte.com/storage-pool-id"
+	LabelEndpointType  = "amp.yugabyte.com/ep-type"
+)
+
+// IdentityLabels are the labels that say which endpoint an object belongs to,
+// so its objects can be selected by endpoint, branch, cluster, pool or role
+// without parsing the release name. A zero id is left out rather than rendered
+// as the nil UUID, which would select every such object together.
+func IdentityLabels(e core.EndpointDeploy) map[string]string {
+	out := map[string]string{}
+	for k, id := range map[string]uuid.UUID{
+		LabelEndpointID:    e.ID,
+		LabelBranchID:      e.BranchID,
+		LabelClusterID:     e.ClusterID,
+		LabelStoragePoolID: e.StoragePoolID,
+	} {
+		if id != uuid.Nil {
+			out[k] = id.String()
+		}
+	}
+	if e.Role != "" {
+		out[LabelEndpointType] = e.Role
+	}
+	return out
+}
+
 // EndpointName is the deployer's stable instance handle for an endpoint (the
 // container/pod/Helm-release name), keyed by the endpoint id. "yb-ep-" + a
 // lowercase-hyphen uuid is a valid DNS-1123 name (42 chars, under Helm's 53-char
@@ -274,6 +312,8 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 			RecordType: e.IngressRecordType,
 		},
 		Extensions: mounts,
+		Labels:     e.Labels,
+		Identity:   IdentityLabels(e),
 		// No PasswordVerifier: there is nowhere to read one from. The password is
 		// already set in the branch's catalog, and re-rendering an empty verifier
 		// is what stops a redeploy resetting it.

@@ -305,6 +305,14 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 Notes: `create_cluster` takes an optional `pg_version` that **defaults to 18,
 and only 18 is accepted** — omit it.
 
+**Tags.** `create_cluster` and `create_endpoint` take optional `tags`
+(`{key: value}`), which become Kubernetes labels on every object of the
+endpoint's release. An endpoint carries its cluster's tags plus its own, and its
+own win on a shared key. They follow label rules, the chart's own labels
+(`app.kubernetes.io/instance` and the like) and `amp.yugabyte.com/` keys are
+refused, and they **cannot be changed after create**, so
+settle them before you call.
+
 **`create_branch` fork precondition.** It forks the cluster's default branch
 (`main`) unless you pass `parent_branch_id`. When you **omit** `fork_point_lsn`,
 the controller derives the fork point from the parent's live WAL: it must find a

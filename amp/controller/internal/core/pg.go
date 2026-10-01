@@ -282,7 +282,7 @@ func (b *PgBackend) CreateCluster(ctx context.Context, poolID uuid.UUID, name st
 //
 // The default-branch join filters tombstones inline; the cluster's own tombstone
 // filter is clusterLive, which callers append alongside their WHERE.
-const clusterSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at, p.engine,
+const clusterSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at, p.engine, p.tags,
 		b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.extensions, b.created_at
 	FROM amp_registry.clusters p
 	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
@@ -564,7 +564,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a cluster.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.ycp_generation, e.created_at
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.tags, e.ycp_generation, e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -893,8 +893,9 @@ func scanCluster(r scanRow) (Cluster, error) {
 		defParentStr  sql.NullString
 		defForkLSN    sql.NullString
 		defExtRaw     []byte
+		tagsRaw       []byte
 	)
-	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt, &p.Engine,
+	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt, &p.Engine, &tagsRaw,
 		&defClusterStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &defExtRaw, &def.CreatedAt); err != nil {
 		return Cluster{}, err
 	}
@@ -916,6 +917,9 @@ func scanCluster(r scanRow) (Cluster, error) {
 	}
 	p.ID = id
 	p.StoragePoolID = poolID
+	if p.Tags, err = decodeTags(tagsRaw, "cluster"); err != nil {
+		return Cluster{}, err
+	}
 	def.ClusterID = defClusterID
 	def.BranchID = defBranchID
 	if defParentStr.Valid {
@@ -1012,11 +1016,12 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		psRaw       []byte
 		skRaw       []byte
 		cidrsRaw    []byte
+		tagsRaw     []byte
 		ycpGen      sql.NullInt64 // NULL until a YCP update has been applied
 		ep          Endpoint
 	)
 	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &ep.Version, &ep.TargetVersion,
-		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &ycpGen, &ep.CreatedAt); err != nil {
+		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &tagsRaw, &ycpGen, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	// A malformed allowed_cidrs is not worth failing the read over — the endpoint
@@ -1057,7 +1062,26 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 	if ep.SafekeeperSettings, err = decodeDaemonSettings(skRaw, "safekeeper"); err != nil {
 		return Endpoint{}, err
 	}
+	if ep.Tags, err = decodeTags(tagsRaw, "endpoint"); err != nil {
+		return Endpoint{}, err
+	}
 	return ep, nil
+}
+
+// decodeTags turns a stored tags object into a map, or nil when it is absent or
+// empty, so "no tags" is one case.
+func decodeTags(raw []byte, what string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode %s tags: %w", what, err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // decodeDaemonSettings is decodePgSettings for the daemon override columns, whose

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -1373,6 +1374,9 @@ type chartValues struct {
 	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
 	// selector — schedules anywhere).
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	// CommonLabels are the endpoint's identity labels and tags, labelled onto
+	// every object of the release — never onto a selector.
+	CommonLabels map[string]string `json:"commonLabels,omitempty"`
 	// StartupProbe sizes how long the compute may take to listen before the
 	// liveness probe starts judging it. Derived from the deploy timeout rather
 	// than left to the chart, so raising --deploy-timeout for a slow cluster
@@ -1789,6 +1793,12 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	// so their emptyDir /data lands on NVMe. Omitted = schedules anywhere.
 	if len(k.cfg.NodeSelector) > 0 {
 		v.NodeSelector = k.cfg.NodeSelector
+	}
+	// Identity last, though the API refuses its domain as a tag anyway.
+	if len(spec.Labels)+len(spec.Identity) > 0 {
+		v.CommonLabels = make(map[string]string, len(spec.Labels)+len(spec.Identity))
+		maps.Copy(v.CommonLabels, spec.Labels)
+		maps.Copy(v.CommonLabels, spec.Identity)
 	}
 	return v
 }

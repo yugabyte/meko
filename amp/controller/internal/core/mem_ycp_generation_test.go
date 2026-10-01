@@ -46,7 +46,7 @@ func TestMemYCPGeneration(t *testing.T) {
 	}
 
 	endpointID := uuid.New()
-	if err := m.EnsureEndpointRecord(ctx, endpointID, clusterID, branchID, "read_write", "rw", nil, nil, nil, nil); err != nil {
+	if err := m.EnsureEndpointRecord(ctx, endpointID, clusterID, branchID, "read_write", "rw", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("EnsureEndpointRecord: %v", err)
 	}
 	if err := m.SetEndpointYCPGeneration(ctx, endpointID, 7); err != nil {

@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -958,6 +959,7 @@ type endpointSpec struct {
 	PageserverSettings *ampclient.DaemonSettings            `json:"pageserver_settings"`
 	SafekeeperSettings *ampclient.DaemonSettings            `json:"safekeeper_settings"`
 	ExtendedConfig     *map[string]interface{}              `json:"extended_config"`
+	Tags               *map[string]string                   `json:"tags"`
 }
 
 func endpointSpecOf(r api.DesiredResource) (endpointSpec, error) {
@@ -991,7 +993,7 @@ func allowedCidrs(c *ampclient.EndpointConnectivity) []string {
 // unappliedEndpoint names the endpoint-spec fields whose declared value the
 // controller does not report, i.e. the ones this update did not and cannot
 // apply. What is left here after the settings verb is wired is create-time in the
-// controller — connectivity and role, which no update verb carries — plus
+// controller — connectivity, role and tags, which no update verb carries — plus
 // extended_config, which is the one surface updateEndpointSettings does NOT take,
 // so it stays unfixable for a reason of its own.
 //
@@ -1015,6 +1017,11 @@ func unappliedEndpoint(spec endpointSpec, ep ampclient.Endpoint) []string {
 	}
 	if spec.ExtendedConfig != nil && !sameJSON(spec.ExtendedConfig, ep.ExtendedConfig) {
 		out = append(out, "extended_config")
+	}
+	// Create-time like role. An endpoint reports only its own tags, not the
+	// labels it inherits from its cluster, so the two compare like for like.
+	if spec.Tags != nil && !maps.Equal(*spec.Tags, map[string]string(ep.Tags)) {
+		out = append(out, "tags")
 	}
 	sort.Strings(out)
 	return out

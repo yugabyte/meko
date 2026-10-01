@@ -1056,3 +1056,85 @@ tests:
     asserts:
       - hasDocuments:
           count: 7
+
+  # The endpoint pod's identity labels ride every series scraped from it, so a
+  # query can group by cluster, pool, branch or role without a join.
+  - it: copies the endpoint pod's identity labels onto the Postgres exporter's series
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[0].job_name
+          value: amp-endpoint-pg
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[0].relabel_configs
+          content:
+            source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_cluster_id]
+            target_label: cluster_id
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[0].relabel_configs
+          content:
+            source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_branch_id]
+            target_label: branch_id
+
+  # The pageserver already labels its branch-scoped series with the same id, and
+  # a target label of that name would rename theirs to exported_branch_id. So the
+  # pod's branch arrives as pod_branch_id and fills only the series without one.
+  - it: fills branch_id on the pageserver's series only where it set none
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].job_name
+          value: amp-pageserver
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].relabel_configs
+          content:
+            source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_endpoint_id]
+            target_label: endpoint_id
+      - notContains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].relabel_configs
+          content:
+            source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_branch_id]
+            target_label: branch_id
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].relabel_configs
+          content:
+            source_labels: [__meta_kubernetes_pod_label_amp_yugabyte_com_branch_id]
+            target_label: pod_branch_id
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].metric_relabel_configs
+          value:
+            - {source_labels: [branch_id, pod_branch_id], regex: ";(.+)", target_label: branch_id, replacement: "$1"}
+            - {action: labeldrop, regex: pod_branch_id}
+
+  - it: fills branch_id the same way on the safekeeper's series
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[2].job_name
+          value: amp-safekeeper
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[2].metric_relabel_configs
+          value:
+            - {source_labels: [branch_id, pod_branch_id], regex: ";(.+)", target_label: branch_id, replacement: "$1"}
+            - {action: labeldrop, regex: pod_branch_id}
