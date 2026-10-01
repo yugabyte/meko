@@ -336,8 +336,9 @@ const MIGRATIONS: string[] = [
   `,
   // 21: Review a PR sessions. The PR's repo on GitHub (owner/name), title and author; the commit
   // checked out for the review (review_sha) and the PR's head at the last look (pr_head_sha), with
-  // the commits since review_sha (NULL when the history was rewritten); the PR's state; and the
-  // user's notes for AgentK. All NULL for other kinds.
+  // the commits since review_sha (NULL when the history was rewritten); the PR's state; the
+  // remote of the clone the PR is fetched from (origin, or upstream for a fork); and the user's
+  // notes for AgentK. All NULL for other kinds.
   `
   ALTER TABLE sessions ADD COLUMN pr_repo TEXT;
   ALTER TABLE sessions ADD COLUMN pr_title TEXT;
@@ -346,6 +347,7 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN pr_head_sha TEXT;
   ALTER TABLE sessions ADD COLUMN pr_new_commits INTEGER;
   ALTER TABLE sessions ADD COLUMN pr_state TEXT;
+  ALTER TABLE sessions ADD COLUMN pr_remote TEXT;
   ALTER TABLE sessions ADD COLUMN review_notes TEXT;
   `,
 ];

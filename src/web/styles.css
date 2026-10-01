@@ -3608,7 +3608,14 @@ a.icon-btn {
   .share-reviewer {
     flex-wrap: wrap;
   }
+  /* 16 px, so iOS doesn't zoom the sheet when one is focused. */
   .share-reviewer .input.small {
     width: 100%;
+    font-size: 16px;
+  }
+}
+@media (pointer: coarse) {
+  .share-reviewer .input.small {
+    min-height: 36px;
   }
 }

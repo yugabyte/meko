@@ -292,7 +292,7 @@ export interface FoundPr {
  */
 export async function searchOpenPrs(cwd: string, text: string, limit = 20): Promise<FoundPr[]> {
   const out = await ghWithin(cwd, 20_000, 'search', 'prs', `"${text.replace(/"/g, '')}"`, '--match', 'body', '--state', 'open',
-    '--json', 'repository,number,title,author,url,createdAt', '--limit', String(limit));
+    '--sort', 'created', '--order', 'desc', '--json', 'repository,number,title,author,url,createdAt', '--limit', String(limit));
   const rows = JSON.parse(out || '[]') as { repository?: { nameWithOwner?: string }; number: number; title: string; author?: Author | null; url: string; createdAt: string }[];
   return rows
     .filter((r) => isRepoName(r.repository?.nameWithOwner))

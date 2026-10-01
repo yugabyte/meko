@@ -36,10 +36,11 @@ export const WORKFLOW: Record<SessionKind, string> = {
   'review-pr': "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK Local UI.",
 };
 
-/** The PR a new Review a PR session checks out: what GitHub says about it, the remote it's on, and the head fetched. */
+/** The PR a new Review a PR session checks out: its repo on GitHub, what GitHub says about it, the clone's remote it's fetched from, and the head fetched. */
 interface ReviewTarget {
   repo: string;
   info: PrInfo;
+  remote: string;
   sha: string;
 }
 
@@ -279,12 +280,12 @@ export class SessionManager {
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
-                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, review_notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
         randomBytes(24).toString('base64url'), kind, stage, task || null, now, now, sessionAgentId({ id, slug }),
         review?.info.number ?? null, review?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null, review?.info.author ?? null,
-        review?.sha ?? null, review?.sha ?? null, review ? 0 : null, review ? 'OPEN' : null, notes || null);
+        review?.sha ?? null, review?.sha ?? null, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -438,7 +439,7 @@ export class SessionManager {
       throw new HttpError(400, `PR #${pr.number} of ${pr.repo} is ${info.state === 'MERGED' ? 'merged' : 'closed'}, so there's nothing to review.`);
     }
     try {
-      return { repo: pr.repo, info, sha: await fetchPrHead(repo, remote, pr.number, info.baseRefName) };
+      return { repo: pr.repo, info, remote, sha: await fetchPrHead(repo, remote, pr.number, info.baseRefName) };
     } catch (e) {
       throw new HttpError(400, `Couldn't fetch PR #${pr.number} from ${remote}: ${errMsg(e)}`);
     }
@@ -461,10 +462,13 @@ export class SessionManager {
     const p = projectRow(this.db, row.project_id);
     const settings = p ? parseSettings(p.settings_json) : null;
     const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name)].filter(Boolean) : [];
-    // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the fork.
+    // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the
+    // fork. Its base is the remote's branch the review fetched, since the local one may follow a
+    // fork, lag behind, or not exist.
     const review = row.kind === 'review-pr'
       ? {
         repo: row.pr_repo ?? '{owner}/{repo}',
+        base: row.pr_remote ? `${row.pr_remote}/${row.base_branch}` : row.base_branch,
         title: row.pr_title ?? '',
         author: row.pr_author ?? 'its author',
         sha: row.review_sha ?? '',
@@ -1048,11 +1052,14 @@ export class SessionManager {
     if (row.kind !== 'review-pr' || !row.pr_number) throw new HttpError(409, 'Only a Review a PR session can close a review.');
     await this.refuseUncommitted(row, 'Commit them, or Discard the session to throw them away.');
     const repo = sessionRepo(this.db, row);
-    const own = repo ? await commitsBeyond(repo, row.branch, row.pr_head_sha ?? row.review_sha ?? 'HEAD') : 0;
-    const { worktreeFreed } = await this.archive(row, { keepBranch: own > 0 });
+    // Measured from the commit the branch was put at, which is always here (the PR's newer head may
+    // not be fetched). When git can't tell, the branch is kept.
+    const own = repo && row.review_sha ? await commitsBeyond(repo, row.branch, row.review_sha) : null;
+    const keep = own !== 0;
+    const { worktreeFreed } = await this.archive(row, { keepBranch: keep });
     this.setStage(row.id, 'done', 'you', { event: false });
-    this.event(row.id, 'review-closed', own > 0 && worktreeFreed
-      ? `Closed the review of PR #${row.pr_number}; branch ${row.branch} kept, since it has ${own === 1 ? 'a commit' : `${own} commits`} of yours`
+    this.event(row.id, 'review-closed', keep && worktreeFreed
+      ? `Closed the review of PR #${row.pr_number}; branch ${row.branch} kept, since it ${own ? `has ${own === 1 ? 'a commit' : `${own} commits`} of yours` : 'may have commits of yours'}`
       : `Closed the review of PR #${row.pr_number}`);
   }
 
@@ -1123,9 +1130,13 @@ export class SessionManager {
     const row = this.row(id);
     const p = projectRow(this.db, row.project_id);
     const owned = this.ownsWorktree(row);
+    const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
     const [uncommittedFiles, unpushedCommits] = await Promise.all([
       owned ? uncommittedCount(row.worktree_path) : 0,
-      p ? unpushedCount(sessionRepo(this.db, row) ?? p.repo_path, row.branch, row.base_branch) : 0,
+      // A review branch holds the author's commits, which are safe on GitHub: only the user's own count.
+      repo && row.kind === 'review-pr' && row.review_sha
+        ? commitsBeyond(repo, row.branch, row.review_sha).then((n) => n ?? unpushedCount(repo, row.branch, row.base_branch))
+        : repo ? unpushedCount(repo, row.branch, row.base_branch) : 0,
     ]);
     return { worktreeExists: owned && existsSync(row.worktree_path), uncommittedFiles, unpushedCommits };
   }

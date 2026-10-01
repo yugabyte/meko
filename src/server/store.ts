@@ -91,6 +91,8 @@ export interface SessionRow {
   /** Commits on the PR since review_sha; NULL when its history was rewritten. */
   pr_new_commits: number | null;
   pr_state: 'OPEN' | 'CLOSED' | 'MERGED' | null;
+  /** The clone's remote the PR is fetched from (`origin`, or `upstream` for a fork). */
+  pr_remote: string | null;
   /** The user's notes for AgentK, given when the review started. */
   review_notes: string | null;
 }

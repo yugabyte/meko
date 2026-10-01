@@ -441,10 +441,14 @@ export async function fetchPrHead(repo: string, remote: string, number: number, 
   return sha;
 }
 
+/** The push remote a review branch gets: no remote has this name, so a bare `git push` fails. */
+export const NO_PUSH_REMOTE = 'agentk-review-no-push';
+
 /**
  * Puts a new review branch at <sha>, in a new worktree at <path> or (<reuse>) in an idle worktree
- * of <repo>, which must be clean on a detached HEAD. The branch has no upstream, so a bare
- * `git push` has nowhere to go.
+ * of <repo>, which must be clean on a detached HEAD. The branch has no upstream, and its
+ * `pushRemote` is a remote that doesn't exist, so a bare `git push` fails whatever the push config
+ * (`push.default=current` and `push.autoSetupRemote` included); `git branch -D` drops the setting.
  */
 export async function addReviewWorktree(repo: string, path: string, branch: string, sha: string, reuse: boolean): Promise<void> {
   await checkBranchName(repo, branch);
@@ -455,12 +459,16 @@ export async function addReviewWorktree(repo: string, path: string, branch: stri
   } else {
     await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, sha);
   }
+  await git(repo, 'config', `branch.${branch}.pushRemote`, NO_PUSH_REMOTE);
 }
 
-/** Commits on <branch> that <ref> lacks: the user's own on a review branch. 0 when either is missing. */
-export async function commitsBeyond(repo: string, branch: string, ref: string): Promise<number> {
+/**
+ * Commits on <branch> that <ref> lacks: the user's own on a review branch. Null when git can't tell
+ * (either is missing), which callers take as "there may be some".
+ */
+export async function commitsBeyond(repo: string, branch: string, ref: string): Promise<number | null> {
   const n = await tryGit(repo, 'rev-list', '--count', `${ref}..refs/heads/${branch}`);
-  return n && /^\d+$/.test(n) ? Number(n) : 0;
+  return n && /^\d+$/.test(n) ? Number(n) : null;
 }
 
 /** Commits from <from> to <to> when <to> follows on from <from>, or null when it doesn't (a rewritten history). */

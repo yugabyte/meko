@@ -110,7 +110,7 @@ When the user asks, help with exactly that: explain code, trace a path, check a 
 
   'review-pr-update': `PR #{{pr}} ({{prUrl}}) moved from {{oldSha}} to {{sha}} ({{count}}); this worktree is now at {{sha}}. Without reviewing, show a short summary of what changed since {{oldSha}} (\`git log --oneline {{oldSha}}..{{sha}}\` and \`git diff --stat {{oldSha}}..{{sha}}\`; after a force-push, compare with \`git range-diff\` or the diff against {{base}}) and which review threads got replies or were resolved (\`gh api repos/{{repo}}/pulls/{{pr}}/comments --paginate\`). Then wait for the user.`,
 
-  'review-pr-comments': `The user left {{count}} on PR #{{pr}}'s diff in AgentK Local. These are their review comments. Answer any question in them, and draft the rest as review comments (path, line, and their point in clear words). Don't add comments of your own. Show the drafts, and post them as one review on the PR only when the user says so.
+  'review-pr-comments': `The user left {{count}} on PR #{{pr}}'s diff in AgentK Local. These are their review comments. Answer any question in them, and draft the rest as review comments (path, line, and their point in clear words). Don't add comments of your own. Show the drafts, and post them as one review on the PR only when the user says so: \`gh api -X POST repos/{{repo}}/pulls/{{pr}}/reviews --input review.json\`, with "event" COMMENT, REQUEST_CHANGES or APPROVE as the user says, "commit_id" {{sha}}, and each comment's path, line and side.
 
 {{comments}}`,
 };

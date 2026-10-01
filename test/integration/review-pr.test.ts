@@ -38,6 +38,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
 
 const { makeEnv, gitRepo, waitFor } = await import('../helpers.js');
 const { get, run } = await import('../../src/server/db.js');
+const { usageOverview } = await import('../../src/server/usage.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -125,14 +126,21 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     });
     expect(git(got.worktreePath, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(got.worktreePath, 'symbolic-ref', '--short', 'HEAD')).toBe('ak/review-pr-7');
-    // No upstream: a bare `git push` has nowhere to go.
+    // No upstream, and a bare `git push` is refused even where the push config would push a new branch.
     expect(() => git(got.worktreePath, 'rev-parse', '--abbrev-ref', '@{upstream}')).toThrow();
+    git(clone, 'config', 'push.default', 'current');
+    git(clone, 'config', 'push.autoSetupRemote', 'true');
+    expect(() => git(got.worktreePath, 'push')).toThrow(/agentk-review-no-push/);
+    expect(git(author, 'ls-remote', upstream, 'refs/heads/ak/*')).toBe('');
     expect(event(s.id, 'created')).toBe(`Checked out PR #7 of acme/demo at ${head.slice(0, 7)} on ak/review-pr-7 (base main)`);
     // The first prompt: get ready, sum up, wait; and search Meko on every why-question.
     const t = transcript(s.id);
     expect(t).toContain("You're assisting the user while they review PR #7 (https://github.com/acme/demo/pull/7) by dana");
     expect(t).toContain("The user's notes for you: the polling");
     expect(t).toContain('gh pr view 7 --repo acme/demo --comments');
+    // The diff is against the remote's base the review fetched, never the local branch.
+    expect(t).toContain('the base is origin/main.');
+    expect(t).toContain('git diff --stat origin/main...HEAD');
     expect(t).toContain("Don't list problems, rate the code or suggest a verdict");
     expect(t).toContain('Then stop and wait for the user to ask you something.');
     expect(t).toContain('Before the summary, search Meko for the design');
@@ -189,6 +197,8 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     alias(fork, 'acme/demo', upstream);
     const a = await env.core.sessions.create(p.id, { name: 'a', kind: 'review-pr', repoPath: fork, pr: { repo: 'acme/demo', number: 7 } });
     expect(git(env.core.sessions.get(a.id).worktreePath, 'rev-parse', 'HEAD')).toBe(head);
+    await idle(a.id);
+    expect(transcript(a.id)).toContain('git diff --stat upstream/main...HEAD');
     // PR #7 of another repo, in the same project.
     const otherBare = join(env.home, 'acme-other.git');
     git(env.home, 'clone', '-q', '--bare', join(env.home, 'seed'), otherBare);
@@ -272,6 +282,31 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     expect(() => git(clone, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
     expect(event(s.id, 'review-closed')).toBe('Closed the review of PR #7');
     expect(existsSync(wt)).toBe(true); // idle, for the next session on the repo
+    // Someone else's PR, closed: never one of the user's merged PRs.
+    expect(usageOverview(env.core.db).mergedPrs).toBe(0);
+  });
+
+  it("keeps the user's own commits when the PR moved to a head not fetched here, and counts only those for Discard", async () => {
+    const p = await project();
+    const first = pushToPr(7, 'widget.ts');
+    pr(7);
+    const s = await env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 7 } });
+    await idle(s.id, 'first turn');
+    const wt = env.core.sessions.get(s.id).worktreePath;
+    // The author's commits are on GitHub: Discard doesn't warn about them.
+    expect((await env.core.sessions.discardCheck(s.id)).unpushedCommits).toBe(0);
+    writeFileSync(join(wt, 'repro.test.ts'), 'test\n');
+    git(wt, 'add', '.');
+    git(wt, 'commit', '-q', '-m', 'my repro');
+    expect((await env.core.sessions.discardCheck(s.id)).unpushedCommits).toBe(1);
+    // GitHub reports a head this clone hasn't fetched.
+    const unseen = 'f'.repeat(40);
+    watch(7, { headRefOid: unseen, commits: [first, unseen] });
+    await env.core.lifecycle.pollReviewedPr(env.core.sessions.row(s.id));
+    expect(env.core.sessions.get(s.id).reviewingPr).toMatchObject({ headSha: unseen, newCommits: 1 });
+    await env.core.sessions.action(s.id, 'close-review');
+    expect(git(clone, 'branch', '--list', '--format=%(refname:short)', 'ak/*')).toBe('ak/review-pr-7');
+    expect(event(s.id, 'review-closed')).toBe('Closed the review of PR #7; branch ak/review-pr-7 kept, since it has a commit of yours');
   });
 
   it('sends Changes panel comments as review comments to draft, not changes to make', async () => {
@@ -283,6 +318,7 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     env.core.comments.add(s.id, { path: 'widget.ts', side: 'new', line: 1, endLine: 1, excerpt: 'widget.ts', body: 'Why a file per widget?' });
     await env.core.comments.send(s.id);
     await waitFor(() => transcript(s.id), (t) => t.includes('These are their review comments'), 10000, 'comments prompt');
+    expect(transcript(s.id)).toContain('gh api -X POST repos/acme/demo/pulls/7/reviews');
     expect(transcript(s.id)).toContain("Don't add comments of your own.");
     expect(transcript(s.id)).toContain('For every question about why something is the way it is');
   });

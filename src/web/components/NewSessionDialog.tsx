@@ -276,8 +276,8 @@ export function NewSessionDialog({
               </Field>
               {review && (
                 <p className="hint">
-                  The base and the branch come from the PR: AgentK checks out its latest commit on {reviewBranch || 'a review branch'}, with
-                  nowhere to push to.
+                  The base and the branch come from the PR: AgentK checks out its latest commit on {reviewBranch || 'a review branch'}, where a
+                  plain git push is refused.
                 </p>
               )}
               {!review && (

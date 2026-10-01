@@ -81,7 +81,7 @@ your phone can connect.
   Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
   (in every repo its sessions work in) with their emails, to share with in one click.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
-  of a project shared with you, checks one out on a branch with nowhere to push, and has AgentK sum
+  of a project shared with you, checks one out on a branch a plain `git push` refuses, and has AgentK sum
   it up for you, using the author's design and decisions from Meko. Then AgentK waits and helps with
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.

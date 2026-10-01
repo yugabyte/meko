@@ -500,6 +500,7 @@ CREATE TABLE sessions (
   pr_repo TEXT, pr_title TEXT, pr_author TEXT,  -- Review a PR only: the PR's owner/name on GitHub, title and author
   review_sha TEXT, pr_head_sha TEXT,  -- Review a PR: the commit checked out; the PR's head at the last look
   pr_new_commits INTEGER, pr_state TEXT,  -- commits on the PR since review_sha (NULL: rewritten); OPEN | CLOSED | MERGED
+  pr_remote TEXT,                  -- Review a PR: the clone's remote the PR is fetched from (origin, or upstream for a fork)
   review_notes TEXT,               -- Review a PR: the user's notes for AgentK
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
   pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'ci' | 'review-pr-update' to
@@ -714,8 +715,12 @@ repo (the PR's clone, changeable to another clone of it); the base and branch co
 and that the PR is open (400 otherwise, with nothing started), fetches `refs/pull/<n>/head` from
 that remote into `refs/agentk/pr/<n>` (a fork's PR too) along with the PR's base, and puts the
 branch `<prefix>review-pr-<n>` (numbered like any session's, so PR #7 of two repos never collide)
-at that commit, in a new or idle worktree, with no upstream, so a bare `git push` has nowhere to
-go. The base is the PR's base, so the footer diff and the Changes panel show the PR's diff. The
+at that commit, in a new or idle worktree, with no upstream and a `pushRemote` naming a remote
+that doesn't exist, so a bare `git push` fails whatever the push config (`push.default=current`
+and `push.autoSetupRemote` included); an explicit `git push <remote>` still works when the user
+asks for one. The base is the PR's base, so the footer diff and the Changes panel show the PR's
+diff, and the prompts compare with the remote's branch the review fetched (`upstream/main` in a
+fork), never the local one, which may follow the fork, lag behind or not exist. The
 session keeps the PR's repo, title, author, the commit checked out (`review_sha`) and the PR's
 head and state at the last look (`Session.reviewingPr`). The search at start
 ([Meko recall](#meko-recall-at-start)) uses the PR's title and description, without its Meko
@@ -746,11 +751,15 @@ latest** fetches the head, moves the review branch there (`reset --keep`) and se
 `review-pr-update` prompt: a short summary of what changed since the commit reviewed so far and of
 the threads that got replies, again without reviewing. It's refused while AgentK is mid-turn or
 waiting on you, while the worktree has uncommitted files, or while the branch has commits of your
-own (move them to another branch first); queued in `pending_prompts` if Claude is busy. A review
+own on top of the commit reviewed (move them to another branch first); queued in
+`pending_prompts` if Claude is busy. A review
 you post is logged ("You requested changes on PR #21"). When the PR is merged or closed, a
 notification says so, and **Close review** becomes the main button. It archives the session,
-deletes the review branch (kept when it has commits of yours) and `refs/agentk/pr/<n>`, and is
-refused while the worktree has uncommitted files. Discard works as for any session. A Review a PR
+deletes the review branch (kept when it has commits of yours on top of the commit reviewed, or
+when git can't tell) and `refs/agentk/pr/<n>`, and is refused while the worktree has uncommitted
+files. Discard works as for any session; its warning counts only your own commits, not the
+author's, which are on GitHub. A closed review ends in Done with someone else's PR, so the usage
+counts never take it for one of your merged PRs. A Review a PR
 session can't be moved to another type or stage, and no session can be moved into one.
 
 ### Moving a session

@@ -395,10 +395,11 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
   const sessions = counts<{ project_id: string; n: number }>('SELECT project_id, COUNT(*) AS n FROM sessions GROUP BY project_id');
   // A restart mid-cleanup can log a merge twice; count sessions. Merge & Close ends in Done only
   // after a merge, so a Done session with a PR counts too (its event may predate a pruning release).
+  // A Review a PR session ends in Done with someone else's PR, merged or not: it never counts.
   const merged = counts<{ project_id: string; n: number }>(
     `SELECT project_id, COUNT(DISTINCT session_id) AS n FROM (
        SELECT project_id, session_id FROM session_events WHERE kind = 'merged'
-       UNION SELECT project_id, id FROM sessions WHERE stage = 'done' AND pr_number IS NOT NULL
+       UNION SELECT project_id, id FROM sessions WHERE stage = 'done' AND pr_number IS NOT NULL AND kind != 'review-pr'
      ) GROUP BY project_id`);
   // commits is -1 when git couldn't count a push's range: the push counts, its commits don't.
   const pushed = counts<{ project_id: string; pushes: number; commits: number }>(

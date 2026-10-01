@@ -155,7 +155,7 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
     // Back to schema 16: undo 21 (Review a PR sessions), 20 (sessions.meko_agent_id, project_events),
     // 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*) and 17 (Meko calls), then upgrade again.
-    for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'review_notes']) {
+    for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     }
     db.exec('ALTER TABLE sessions DROP COLUMN meko_agent_id; DROP TABLE project_events');

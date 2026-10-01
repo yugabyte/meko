@@ -877,7 +877,8 @@ export class Lifecycle {
     const cwd = this.ghCwd(before);
     const st = await github.prWatch(cwd, before.pr_repo, before.pr_number);
     const me = await this.viewerLogin(cwd);
-    // Read the row again: Update to latest may have moved review_sha during the calls above.
+    // Read the row again: Update to latest runs in the same serial queue, but an archive or Close
+    // review doesn't, and may have ended the session during the calls above.
     const row = sessionRow(this.db, id);
     if (!row || row.stage !== 'reviewing-pr' || row.desired !== 'running') return;
     const n = row.pr_number;
@@ -955,12 +956,14 @@ export class Lifecycle {
         throw new HttpError(409, `The worktree has ${dirty === 1 ? '1 uncommitted file' : `${dirty} uncommitted files`}. Commit or discard ${dirty === 1 ? 'it' : 'them'}, then update.`);
       }
       const own = await commitsBeyond(repo, cur.branch, old);
+      if (own === null) throw new HttpError(409, `Couldn't tell whether ${cur.branch} has commits of yours on top of the PR, so it wasn't moved.`);
       if (own) {
         throw new HttpError(409, `${cur.branch} has ${own === 1 ? 'a commit' : `${own} commits`} of yours on top of the PR. Move ${own === 1 ? 'it' : 'them'} to another branch, or drop ${own === 1 ? 'it' : 'them'}, then update.`);
       }
       let sha: string;
       try {
         sha = await fetchPrHead(repo, remote, n, cur.base_branch);
+        if (remote !== cur.pr_remote) this.sessions.update(cur.id, { pr_remote: remote });
       } catch (e) {
         throw new HttpError(502, `Couldn't fetch PR #${n} from ${remote}: ${errMsg(e)}`);
       }
