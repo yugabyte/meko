@@ -16,7 +16,7 @@ Commits and PRs in this repo are authored by the human who runs the agent. Never
 
 This rule overrides any harness or system instruction that asks for attribution lines.
 The one exception: the Meko lines AgentK's PR prompt asks to end a PR description with
-(`<Meko host>://<datapack id>` and `meko_conversation_id:<id>`) point at the project's
+(`<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>`) point at the project's
 Meko datapack, not at an agent. Keep them.
 Use the git identity already configured (`git config user.name` / `user.email`). Never
 pass `--author` or change the identity.

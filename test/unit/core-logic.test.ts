@@ -648,6 +648,8 @@ describe('Meko recall in prompts', () => {
     expect(mekoPrFooter('cloud.mekodata.ai', dp, null).endsWith('\n\ncloud.mekodata.ai://0f1e2d3c-1111;adlc/proj/demo/pr review')).toBe(true);
     expect(mekoPrFooter('h', { ...dp, name: ' two\nlines ' }, 'c1').endsWith('\n\nh://0f1e2d3c-1111;two lines\nmeko_conversation_id:c1')).toBe(true);
     expect(mekoPrFooter('h', { ...dp, name: '' }, null).endsWith('\n\nh://0f1e2d3c-1111')).toBe(true);
+    // No mentions, issue links or tags in the description.
+    expect(mekoPrFooter('h', { ...dp, name: 'team/@core <x> #12' }, null).endsWith('\n\nh://0f1e2d3c-1111;team/core x 12')).toBe(true);
   });
 });
 

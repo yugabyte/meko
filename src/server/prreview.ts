@@ -9,6 +9,7 @@ import * as github from './github.js';
 import { errMsg } from './log.js';
 import { repoKey } from './paths.js';
 import { HttpError } from './projects.js';
+import { mekoDatapackLineId } from './prompts.js';
 import { projectDatapacks, sessionRepo, sessionRows } from './store.js';
 
 /** Most PRs the Review a PR picker lists. */
@@ -181,12 +182,9 @@ async function githubRemote(path: string): Promise<string | null> {
   return githubRepo(upstream) ?? githubRepo(origin);
 }
 
-/**
- * The datapack ids a PR description's Meko lines name (`<host>://<datapack id>`, then `;<name>` in
- * the PRs opened since the name was added; see mekoPrFooter).
- */
+/** The datapack ids a PR description's Meko lines name (see mekoDatapackLineId). */
 export function datapackIdsIn(body: string): string[] {
-  return [...body.matchAll(/^\s*[a-z][\w.+-]*:\/\/([0-9a-f][0-9a-f-]{7,})(?:;[^\n]*)?\s*$/gim)].map((m) => m[1]);
+  return body.split('\n').map(mekoDatapackLineId).filter((id): id is string => id !== null);
 }
 
 function toReviewable(

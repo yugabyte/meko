@@ -166,12 +166,21 @@ export function mekoQuestionSystemLine(): string {
 }
 
 /**
+ * The datapack id on a PR description's Meko line (`<host>://<id>;<name>`, or `<host>://<id>` in
+ * PRs opened before the name was added; see mekoPrFooter), or null for any other line.
+ */
+export function mekoDatapackLineId(line: string): string | null {
+  return /^\s*[a-z][\w.+-]*:\/\/([0-9a-f][0-9a-f-]{7,})(?:;.*)?\s*$/i.exec(line)?.[1] ?? null;
+}
+
+/**
  * Added to the PR prompt when the project has a Meko datapack: the lines that end the PR
  * description, so the PR points back at the datapack (`<host>://<id>;<name>`, the name for people
- * reading it) and at the session's Meko conversation.
+ * reading it) and at the session's Meko conversation. The name is kept to one line, without the
+ * characters GitHub would turn into a mention, a link or an HTML tag.
  */
 export function mekoPrFooter(host: string, datapack: { id: string; name: string }, conversationId: string | null): string {
-  const name = datapack.name.replace(/\s+/g, ' ').trim();
+  const name = datapack.name.replace(/[@#<>`]/g, '').replace(/\s+/g, ' ').trim();
   const lines = [`${host}://${datapack.id}${name ? `;${name}` : ''}`];
   if (conversationId) lines.push(`meko_conversation_id:${conversationId}`);
   return `End the PR description with ${lines.length === 1 ? 'this line' : 'these lines'}, exactly as written and each on its own line, after everything else. Keep ${lines.length === 1 ? 'it' : 'them'} there if you update the description later.

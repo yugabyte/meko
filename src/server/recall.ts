@@ -1,6 +1,7 @@
 import type { SearchResult } from '../shared/types.js';
 import { run, type Db } from './db.js';
 import type { IssueText } from './github.js';
+import { mekoDatapackLineId } from './prompts.js';
 
 /**
  * Meko recall at session start: when a session is created, AgentK searches the project's datapacks
@@ -50,14 +51,13 @@ export function issueRefs(task: string): number[] {
 }
 
 /**
- * A PR description without the Meko lines AgentK ends it with (`<host>://<datapack id>;<name>`,
- * or without the name in older PRs, and `meko_conversation_id:<id>`; see mekoPrFooter), which mean
- * nothing to a search.
+ * A PR description without the Meko lines AgentK ends it with (the datapack's, see
+ * mekoDatapackLineId, and `meko_conversation_id:<id>`), which mean nothing to a search.
  */
 export function withoutMekoLines(body: string): string {
   return body
     .split('\n')
-    .filter((l) => !/^\s*[a-z][\w.+-]*:\/\/[0-9a-f][0-9a-f-]{7,}(?:;.*)?\s*$/i.test(l) && !/^\s*meko_conversation_id:\S+\s*$/i.test(l))
+    .filter((l) => mekoDatapackLineId(l) === null && !/^\s*meko_conversation_id:\S+\s*$/i.test(l))
     .join('\n')
     .trim();
 }
