@@ -275,6 +275,10 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		if d.StoragePoolName != sp.Name {
 			t.Errorf("deploy state storage pool name = %q, want %q", d.StoragePoolName, sp.Name)
 		}
+		if d.ClusterName != "projections" || d.BranchName != DefaultBranchName || d.Name != "primary" {
+			t.Errorf("deploy state names = cluster %q, branch %q, endpoint %q, want projections, %s, primary",
+				d.ClusterName, d.BranchName, d.Name, DefaultBranchName)
+		}
 		// The cluster's tags under the endpoint's, the endpoint winning `team`.
 		if want := map[string]string{"team": "web", "env": "prod", "owner": "jdoe"}; !reflect.DeepEqual(d.Labels, want) {
 			t.Errorf("deploy labels = %v, want %v", d.Labels, want)

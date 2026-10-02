@@ -255,6 +255,12 @@ type EndpointDeploy struct {
 	// annotation (deploy.IdentityAnnotations): it is free text and renamable, so
 	// it cannot be a label value. A rename reaches the pod on its next redeploy.
 	StoragePoolName string
+	// ClusterName, BranchName and Name are the cluster's, the branch's and the
+	// endpoint's own names, rendered only as identity annotations for the same
+	// reason. Name is empty for an endpoint created without one.
+	ClusterName string
+	BranchName  string
+	Name        string
 	// Version is the endpoint's own version (the `version` column), rendered onto
 	// the deploy spec so a redeploy keeps it. Empty means unknown, which renders
 	// as "whatever the deployer is configured with" — the behaviour of every

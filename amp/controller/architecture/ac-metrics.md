@@ -220,9 +220,10 @@ discovery-time identity relabelling below cannot reach it. `kube_pod_labels`
 carries the identity instead — KSM is started with the five `amp.yugabyte.com/`
 keys allowlisted, and the job renames `label_amp_yugabyte_com_*` to the same
 `endpoint_id` … `ep_type` names — so pool- or cluster-level rollups are a join.
-The pool's name is an annotation
+The pool, cluster, branch and endpoint names are annotations
 ([`ac-k8s-deploy.md`](ac-k8s-deploy.md#labels-identity-and-tags)), allowlisted
-onto `kube_pod_annotations` and renamed to `storage_pool_name` the same way:
+onto `kube_pod_annotations` and renamed to `storage_pool_name`, `cluster_name`,
+`branch_name` and `endpoint_name` the same way:
 
 ```promql
 sum by (storage_pool_id, resource) (
@@ -230,7 +231,7 @@ sum by (storage_pool_id, resource) (
   * on (namespace, pod) group_left (storage_pool_id) kube_pod_labels
 )
 
-kube_pod_labels * on (namespace, pod) group_left (storage_pool_name) kube_pod_annotations
+kube_pod_labels * on (namespace, pod) group_left (storage_pool_name, cluster_name, branch_name, endpoint_name) kube_pod_annotations
 ```
 
 ### Tenancy labels

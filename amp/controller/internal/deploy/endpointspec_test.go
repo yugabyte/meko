@@ -23,6 +23,7 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 
 	spec := EndpointSpecFrom(core.EndpointDeploy{
 		ID: epID, BranchID: branchID, ClusterID: clusterID, StoragePoolID: poolID, StoragePoolName: "Acme prod pool",
+		ClusterName: "Orders DB", BranchName: "main", Name: "primary reader",
 		Role: "read_only", PgVersion: 18,
 		CPU: "8", Memory: "16Gi", Version: "ep-v7.7.7",
 		Connectivity: ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.0/16"},
@@ -83,7 +84,12 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	if !reflect.DeepEqual(spec.Identity, wantIdentity) {
 		t.Errorf("Identity = %+v, want %+v", spec.Identity, wantIdentity)
 	}
-	wantAnnotations := map[string]string{AnnotationStoragePoolName: "Acme prod pool"}
+	wantAnnotations := map[string]string{
+		AnnotationStoragePoolName: "Acme prod pool",
+		AnnotationClusterName:     "Orders DB",
+		AnnotationBranchName:      "main",
+		AnnotationEndpointName:    "primary reader",
+	}
 	if !reflect.DeepEqual(spec.IdentityAnnotations, wantAnnotations) {
 		t.Errorf("IdentityAnnotations = %+v, want %+v", spec.IdentityAnnotations, wantAnnotations)
 	}

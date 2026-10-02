@@ -1201,7 +1201,7 @@ tests:
           content: --metric-labels-allowlist=pods=[amp.yugabyte.com/endpoint-id,amp.yugabyte.com/branch-id,amp.yugabyte.com/cluster-id,amp.yugabyte.com/storage-pool-id,amp.yugabyte.com/ep-type]
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name]
+          content: --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name,amp.yugabyte.com/cluster-name,amp.yugabyte.com/branch-name,amp.yugabyte.com/endpoint-name]
 
   # Appended after cadvisor, so the indexed assertions above do not move.
   - it: scrapes kube-state-metrics for endpoint pods only, with the identity labels renamed

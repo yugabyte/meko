@@ -395,8 +395,8 @@ spec:
             # Each series names the pod it describes in its own `pod` label, so the
             # endpoint identity cannot come from discovery as in the jobs above;
             # kube_pod_labels carries it under the same label names, and
-            # kube_pod_annotations the pool name as storage_pool_name, for a join
-            # on (namespace, pod).
+            # kube_pod_annotations the names as storage_pool_name, cluster_name,
+            # branch_name and endpoint_name, for a join on (namespace, pod).
             - job_name: amp-kube-state-metrics
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
@@ -551,8 +551,9 @@ spec:
             - --resources=pods
             # The controller's identity labels, as kube_pod_labels{label_amp_yugabyte_com_*}.
             - --metric-labels-allowlist=pods=[amp.yugabyte.com/endpoint-id,amp.yugabyte.com/branch-id,amp.yugabyte.com/cluster-id,amp.yugabyte.com/storage-pool-id,amp.yugabyte.com/ep-type]
-            # The pool name, which is free text and so an annotation, as kube_pod_annotations.
-            - --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name]
+            # The pool, cluster, branch and endpoint names, which are free text and so
+            # annotations, as kube_pod_annotations.
+            - --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name,amp.yugabyte.com/cluster-name,amp.yugabyte.com/branch-name,amp.yugabyte.com/endpoint-name]
             - --port=8080
             - --telemetry-port=8081
           ports:

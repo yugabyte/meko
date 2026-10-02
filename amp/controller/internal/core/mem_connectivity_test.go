@@ -41,6 +41,7 @@ func TestMemEndpointDeployProjectionsCarryConnectivity(t *testing.T) {
 
 	want := EndpointDeploy{
 		ID: epID, BranchID: branchID, ClusterID: clusterID, StoragePoolID: poolID, PgVersion: 18,
+		ClusterName: "main", BranchName: "main",
 		CPU: "8", Memory: "16Gi", Version: "ep-v1", Role: RoleReadWrite,
 		Connectivity: "nlb_internal", AllowedCIDRs: []string{"10.0.0.0/16"},
 	}

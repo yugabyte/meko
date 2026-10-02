@@ -260,9 +260,12 @@ const (
 	LabelStoragePoolID = "amp.yugabyte.com/storage-pool-id"
 	LabelEndpointType  = "amp.yugabyte.com/ep-type"
 
-	// AnnotationStoragePoolName is an annotation rather than a label because a
-	// pool name is free text, which a label value need not accept.
+	// The names are annotations rather than labels because a name is free text,
+	// which a label value need not accept.
 	AnnotationStoragePoolName = "amp.yugabyte.com/storage-pool-name"
+	AnnotationClusterName     = "amp.yugabyte.com/cluster-name"
+	AnnotationBranchName      = "amp.yugabyte.com/branch-name"
+	AnnotationEndpointName    = "amp.yugabyte.com/endpoint-name"
 )
 
 // IdentityLabels are the labels that say which endpoint an object belongs to,
@@ -288,12 +291,24 @@ func IdentityLabels(e core.EndpointDeploy) map[string]string {
 }
 
 // IdentityAnnotations are the identity values that cannot be label values. An
-// empty pool name is left out.
+// empty name is left out.
 func IdentityAnnotations(e core.EndpointDeploy) map[string]string {
-	if e.StoragePoolName == "" {
-		return nil
+	var out map[string]string
+	for k, name := range map[string]string{
+		AnnotationStoragePoolName: e.StoragePoolName,
+		AnnotationClusterName:     e.ClusterName,
+		AnnotationBranchName:      e.BranchName,
+		AnnotationEndpointName:    e.Name,
+	} {
+		if name == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = name
 	}
-	return map[string]string{AnnotationStoragePoolName: e.StoragePoolName}
+	return out
 }
 
 // EndpointName is the deployer's stable instance handle for an endpoint (the

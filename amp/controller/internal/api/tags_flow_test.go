@@ -66,7 +66,13 @@ func TestTagsLabelEveryEndpointOfTheCluster(t *testing.T) {
 	if !reflect.DeepEqual(dep.created[0].Identity, wantIdentity) {
 		t.Errorf("writer identity labels = %v, want %v", dep.created[0].Identity, wantIdentity)
 	}
-	if want := map[string]string{deploy.AnnotationStoragePoolName: pool.Name}; !reflect.DeepEqual(dep.created[0].IdentityAnnotations, want) {
+	// The writer with_writer creates is unnamed, so it has no endpoint-name.
+	wantAnnotations := map[string]string{
+		deploy.AnnotationStoragePoolName: pool.Name,
+		deploy.AnnotationClusterName:     cluster.Name,
+		deploy.AnnotationBranchName:      cluster.DefaultBranch.Name,
+	}
+	if want := wantAnnotations; !reflect.DeepEqual(dep.created[0].IdentityAnnotations, want) {
 		t.Errorf("writer identity annotations = %v, want %v", dep.created[0].IdentityAnnotations, want)
 	}
 	writer := mustOneEndpoint(t, client, pool.Id, cluster.Id, cluster.DefaultBranch.BranchId)

@@ -162,13 +162,15 @@ Deployment's selector is immutable, and the controller finds the pod by
 `app.kubernetes.io/instance`. The chart drops any key it sets itself rather than
 emitting it twice.
 
-The pod also carries the pool's name as the annotation
-`amp.yugabyte.com/storage-pool-name` (`deploy.IdentityAnnotations`, the chart's
-`podAnnotations`). It is an annotation because a pool name is free text, which a
-label value need not accept. A pool rename reaches the pod on its next redeploy,
-not before.
+The pod also carries the pool's, cluster's, branch's and endpoint's names as the
+annotations `amp.yugabyte.com/storage-pool-name`, `amp.yugabyte.com/cluster-name`,
+`amp.yugabyte.com/branch-name` and `amp.yugabyte.com/endpoint-name`
+(`deploy.IdentityAnnotations`, the chart's `podAnnotations`). They are annotations
+because a name is free text, which a label value need not accept. An unnamed
+endpoint has no `amp.yugabyte.com/endpoint-name`. A pool rename reaches the pod on
+its next redeploy, not before.
 
-The identity labels and the annotation are on every endpoint, so the first
+The identity labels and the annotations are on every endpoint, so the first
 redeploy of one created before them changes its pod template and restarts its pod. That is free on an
 upgrade or an extension redeploy, which restart it anyway, and costs a restart
 on a plain `POST /endpoint-rerenders`. A resize patches the pod in place and runs
