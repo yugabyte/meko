@@ -1199,6 +1199,9 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metric-labels-allowlist=pods=[amp.yugabyte.com/endpoint-id,amp.yugabyte.com/branch-id,amp.yugabyte.com/cluster-id,amp.yugabyte.com/storage-pool-id,amp.yugabyte.com/ep-type]
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name]
 
   # Appended after cadvisor, so the indexed assertions above do not move.
   - it: scrapes kube-state-metrics for endpoint pods only, with the identity labels renamed
@@ -1216,8 +1219,8 @@ tests:
           path: spec.config.receivers.prometheus.config.scrape_configs[7].metric_relabel_configs
           value:
             - {source_labels: [pod], action: keep, regex: "(yb-ep-.*)"}
-            - {action: labelmap, regex: label_amp_yugabyte_com_(.+), replacement: "$1"}
-            - {action: labeldrop, regex: label_amp_yugabyte_com_.+}
+            - {action: labelmap, regex: "(?:label|annotation)_amp_yugabyte_com_(.+)", replacement: "$1"}
+            - {action: labeldrop, regex: "(?:label|annotation)_amp_yugabyte_com_.+"}
 
   - it: drops the kube-state-metrics Deployment when disabled
     capabilities:

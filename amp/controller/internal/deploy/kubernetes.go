@@ -1377,6 +1377,8 @@ type chartValues struct {
 	// CommonLabels are the endpoint's identity labels and tags, labelled onto
 	// every object of the release — never onto a selector.
 	CommonLabels map[string]string `json:"commonLabels,omitempty"`
+	// PodAnnotations carry the identity annotations, on the pod only.
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 	// StartupProbe sizes how long the compute may take to listen before the
 	// liveness probe starts judging it. Derived from the deploy timeout rather
 	// than left to the chart, so raising --deploy-timeout for a slow cluster
@@ -1799,6 +1801,9 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 		v.CommonLabels = make(map[string]string, len(spec.Labels)+len(spec.Identity))
 		maps.Copy(v.CommonLabels, spec.Labels)
 		maps.Copy(v.CommonLabels, spec.Identity)
+	}
+	if len(spec.IdentityAnnotations) > 0 {
+		v.PodAnnotations = maps.Clone(spec.IdentityAnnotations)
 	}
 	return v
 }

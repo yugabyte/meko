@@ -293,10 +293,11 @@ const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.cluster_i
 	        e.config->'extensions',
 	        COALESCE(ia.shard, ''), COALESCE(ia.port, 0), COALESCE(ia.dns_name, ''),
 	        COALESCE(ish.hostname, ''), COALESCE(ish.record_type::text, ''),
-	        ec.tags || e.tags, ec.storage_pool_id::text
+	        ec.tags || e.tags, ec.storage_pool_id::text, esp.name
 	   FROM amp_registry.endpoints e
 	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
 	   JOIN amp_registry.clusters ec ON ec.id = eb.cluster_id
+	   JOIN amp_registry.storage_pools esp ON esp.id = ec.storage_pool_id
 	   LEFT JOIN amp_registry.ingress_allocations ia
 	          ON ia.endpoint_id = e.id AND ia.released_at IS NULL
 	   LEFT JOIN amp_registry.ingress_shards ish ON ish.name = ia.shard`
@@ -313,7 +314,7 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 	if err := r.Scan(&id, &branchID, &clusterID, &d.PgVersion, &d.CPU, &d.Memory, &d.Version, &d.Role,
 		&d.Connectivity, &cidrsRaw, &extsRaw,
 		&d.IngressShard, &d.IngressPort, &d.IngressDNSName, &d.IngressShardHost, &d.IngressRecordType,
-		&labelsRaw, &poolID); err != nil {
+		&labelsRaw, &poolID, &d.StoragePoolName); err != nil {
 		return EndpointDeploy{}, err
 	}
 	// Failed rather than tolerated like the two below: rendering without the

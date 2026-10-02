@@ -324,13 +324,16 @@ got=$(kubectl -n "$NS" get "pod/$POD" -o json 2>/dev/null | jq -r '.metadata.lab
    .["amp.yugabyte.com/storage-pool-id"], .["amp.yugabyte.com/ep-type"]] | map(. // "") | join(" ")')
 [ "$got" = "$EP $DEF $PROJ $POOL read_write" ] && ok "pod carries its endpoint/branch/cluster/pool/role identity labels" \
   || bad "pod identity labels = '$got', want '$EP $DEF $PROJ $POOL read_write'"
+got=$(kubectl -n "$NS" get "pod/$POD" -o json 2>/dev/null | jq -r '.metadata.annotations["amp.yugabyte.com/storage-pool-name"] // ""')
+[ "$got" = "$POOL_NAME" ] && ok "pod carries its pool name annotation" \
+  || bad "pod storage-pool-name annotation = '$got', want '$POOL_NAME'"
 # The selector must stay the chart's own: it is immutable, and the controller
 # finds the pod by app.kubernetes.io/instance.
 sel=$(kubectl -n "$NS" get "deployment/yb-ep-$EP" -o json 2>/dev/null | jq -c '.spec.selector.matchLabels | keys')
 [ "$sel" = '["app.kubernetes.io/instance","app.kubernetes.io/name"]' ] && ok "Deployment selector untouched" \
   || bad "Deployment selector keys = $sel"
 
-hdr "kube-state-metrics: the endpoint pod's requests and identity labels are exported"
+hdr "kube-state-metrics: the endpoint pod's requests, identity labels and pool name are exported"
 # KSM's own /metrics, which proves the namespace scoping and the label allowlist.
 # Not the store: itest-dev runs none, so the collector's pod filter and label
 # rename are covered by the chart tests only.
@@ -352,6 +355,10 @@ else
     | grep "label_amp_yugabyte_com_endpoint_id=\"$EP\"" | grep "label_amp_yugabyte_com_storage_pool_id=\"$POOL\"" >/dev/null \
     && ok "KSM exports the endpoint pod's identity labels on kube_pod_labels" \
     || bad "KSM kube_pod_labels for $POD lacks endpoint_id=$EP / storage_pool_id=$POOL"
+  echo "$ksm" | grep '^kube_pod_annotations{' | grep "pod=\"$POD\"" \
+    | grep "annotation_amp_yugabyte_com_storage_pool_name=\"$POOL_NAME\"" >/dev/null \
+    && ok "KSM exports the endpoint pod's pool name on kube_pod_annotations" \
+    || bad "KSM kube_pod_annotations for $POD lacks storage_pool_name=$POOL_NAME"
 fi
 
 hdr "endpoint is USABLE: write + read real data via psql"

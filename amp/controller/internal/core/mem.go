@@ -621,20 +621,22 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, _, branchID uuid.UUI
 // ingress endpoint, so the failure would be loud rather than a ":0" address.
 func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) EndpointDeploy {
 	clusterID := m.branches[e.BranchID].ClusterID
+	poolID := m.clusters[clusterID].StoragePoolID
 	return EndpointDeploy{
-		ID:            id,
-		BranchID:      e.BranchID,
-		ClusterID:     clusterID,
-		StoragePoolID: m.clusters[clusterID].StoragePoolID,
-		PgVersion:     pgVersion,
-		CPU:           e.CPU,
-		Memory:        e.Memory,
-		Version:       e.Version,
-		Role:          e.Role,
-		Connectivity:  e.Connectivity,
-		AllowedCIDRs:  e.AllowedCIDRs,
-		Extensions:    m.endpointExts[id],
-		Labels:        MergeTags(m.clusters[clusterID].Tags, e.Tags),
+		ID:              id,
+		BranchID:        e.BranchID,
+		ClusterID:       clusterID,
+		StoragePoolID:   poolID,
+		StoragePoolName: m.pools[poolID].Name,
+		PgVersion:       pgVersion,
+		CPU:             e.CPU,
+		Memory:          e.Memory,
+		Version:         e.Version,
+		Role:            e.Role,
+		Connectivity:    e.Connectivity,
+		AllowedCIDRs:    e.AllowedCIDRs,
+		Extensions:      m.endpointExts[id],
+		Labels:          MergeTags(m.clusters[clusterID].Tags, e.Tags),
 	}
 }
 

@@ -121,6 +121,9 @@ type EndpointSpec struct {
 	Labels map[string]string
 	// Identity is IdentityLabels of the endpoint, rendered alongside Labels.
 	Identity map[string]string
+	// IdentityAnnotations is IdentityAnnotations of the endpoint, rendered on its
+	// pod. Only the Kubernetes deployer implements this.
+	IdentityAnnotations map[string]string
 }
 
 // IngressSlot is an endpoint's place on a shared ingress shard: which shard,
@@ -256,6 +259,10 @@ const (
 	LabelClusterID     = "amp.yugabyte.com/cluster-id"
 	LabelStoragePoolID = "amp.yugabyte.com/storage-pool-id"
 	LabelEndpointType  = "amp.yugabyte.com/ep-type"
+
+	// AnnotationStoragePoolName is an annotation rather than a label because a
+	// pool name is free text, which a label value need not accept.
+	AnnotationStoragePoolName = "amp.yugabyte.com/storage-pool-name"
 )
 
 // IdentityLabels are the labels that say which endpoint an object belongs to,
@@ -278,6 +285,15 @@ func IdentityLabels(e core.EndpointDeploy) map[string]string {
 		out[LabelEndpointType] = e.Role
 	}
 	return out
+}
+
+// IdentityAnnotations are the identity values that cannot be label values. An
+// empty pool name is left out.
+func IdentityAnnotations(e core.EndpointDeploy) map[string]string {
+	if e.StoragePoolName == "" {
+		return nil
+	}
+	return map[string]string{AnnotationStoragePoolName: e.StoragePoolName}
 }
 
 // EndpointName is the deployer's stable instance handle for an endpoint (the
@@ -311,9 +327,10 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 			ShardHost:  e.IngressShardHost,
 			RecordType: e.IngressRecordType,
 		},
-		Extensions: mounts,
-		Labels:     e.Labels,
-		Identity:   IdentityLabels(e),
+		Extensions:          mounts,
+		Labels:              e.Labels,
+		Identity:            IdentityLabels(e),
+		IdentityAnnotations: IdentityAnnotations(e),
 		// No PasswordVerifier: there is nowhere to read one from. The password is
 		// already set in the branch's catalog, and re-rendering an empty verifier
 		// is what stops a redeploy resetting it.

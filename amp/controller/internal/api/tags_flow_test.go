@@ -66,6 +66,9 @@ func TestTagsLabelEveryEndpointOfTheCluster(t *testing.T) {
 	if !reflect.DeepEqual(dep.created[0].Identity, wantIdentity) {
 		t.Errorf("writer identity labels = %v, want %v", dep.created[0].Identity, wantIdentity)
 	}
+	if want := map[string]string{deploy.AnnotationStoragePoolName: pool.Name}; !reflect.DeepEqual(dep.created[0].IdentityAnnotations, want) {
+		t.Errorf("writer identity annotations = %v, want %v", dep.created[0].IdentityAnnotations, want)
+	}
 	writer := mustOneEndpoint(t, client, pool.Id, cluster.Id, cluster.DefaultBranch.BranchId)
 	if len(writer.Tags) != 0 {
 		t.Errorf("writer tags = %v, want none of its own", writer.Tags)

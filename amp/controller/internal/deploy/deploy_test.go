@@ -472,6 +472,30 @@ func TestKubernetesValuesCommonLabels(t *testing.T) {
 	}
 }
 
+// The pool name reaches the chart as a pod annotation, and a spec without one
+// omits the key.
+func TestKubernetesValuesPodAnnotations(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+
+	spec := testEndpointSpec()
+	spec.IdentityAnnotations = map[string]string{AnnotationStoragePoolName: "Acme prod pool"}
+	if v := k.values(spec, "yb-ep-rel"); !reflect.DeepEqual(v.PodAnnotations, spec.IdentityAnnotations) {
+		t.Errorf("PodAnnotations = %v, want %v", v.PodAnnotations, spec.IdentityAnnotations)
+	}
+
+	data, err := json.Marshal(k.values(testEndpointSpec(), "yb-ep-rel"))
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal(data, &asMap); err != nil {
+		t.Fatalf("unmarshal values: %v", err)
+	}
+	if _, present := asMap["podAnnotations"]; present {
+		t.Errorf("podAnnotations should be omitted when there are none, got %s", data)
+	}
+}
+
 func TestKubernetesValuesPersistence(t *testing.T) {
 	cfg := testKubernetesConfig()
 	cfg.StorageClass = "yb-standard"

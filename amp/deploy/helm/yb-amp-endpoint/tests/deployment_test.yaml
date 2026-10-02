@@ -705,3 +705,15 @@ tests:
       - lengthEqual:
           path: spec.template.spec.containers
           count: 3
+
+  # The controller puts the pool name here; it is free text, so it must render
+  # verbatim rather than through a label.
+  - it: renders podAnnotations on the pod
+    template: templates/deployment.yaml
+    set:
+      podAnnotations:
+        amp.yugabyte.com/storage-pool-name: Acme prod pool
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["amp.yugabyte.com/storage-pool-name"]
+          value: Acme prod pool

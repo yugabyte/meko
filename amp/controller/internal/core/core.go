@@ -251,6 +251,10 @@ type EndpointDeploy struct {
 	// StoragePoolID is the pool the endpoint's cluster sits in. Like ClusterID
 	// and Role it is rendered only as an identity label (deploy.IdentityLabels).
 	StoragePoolID uuid.UUID
+	// StoragePoolName is that pool's current name, rendered only as an identity
+	// annotation (deploy.IdentityAnnotations): it is free text and renamable, so
+	// it cannot be a label value. A rename reaches the pod on its next redeploy.
+	StoragePoolName string
 	// Version is the endpoint's own version (the `version` column), rendered onto
 	// the deploy spec so a redeploy keeps it. Empty means unknown, which renders
 	// as "whatever the deployer is configured with" — the behaviour of every

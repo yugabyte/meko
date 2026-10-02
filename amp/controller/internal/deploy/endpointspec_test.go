@@ -22,7 +22,8 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	mounts := []Extension{{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"}}
 
 	spec := EndpointSpecFrom(core.EndpointDeploy{
-		ID: epID, BranchID: branchID, ClusterID: clusterID, StoragePoolID: poolID, Role: "read_only", PgVersion: 18,
+		ID: epID, BranchID: branchID, ClusterID: clusterID, StoragePoolID: poolID, StoragePoolName: "Acme prod pool",
+		Role: "read_only", PgVersion: 18,
 		CPU: "8", Memory: "16Gi", Version: "ep-v7.7.7",
 		Connectivity: ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.0/16"},
 		IngressShard: "pgin-0", IngressPort: 20007, IngressDNSName: "ep-abc.pg.example",
@@ -81,6 +82,10 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec.Identity, wantIdentity) {
 		t.Errorf("Identity = %+v, want %+v", spec.Identity, wantIdentity)
+	}
+	wantAnnotations := map[string]string{AnnotationStoragePoolName: "Acme prod pool"}
+	if !reflect.DeepEqual(spec.IdentityAnnotations, wantAnnotations) {
+		t.Errorf("IdentityAnnotations = %+v, want %+v", spec.IdentityAnnotations, wantAnnotations)
 	}
 	// PasswordVerifier is the one field this assembler must NOT fill, so it is exempt
 	// from the sweep below and asserted empty instead. Nothing stores the

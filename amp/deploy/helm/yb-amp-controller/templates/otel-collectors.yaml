@@ -394,8 +394,9 @@ spec:
             # The endpoint pods' object state, from the kube-state-metrics below.
             # Each series names the pod it describes in its own `pod` label, so the
             # endpoint identity cannot come from discovery as in the jobs above;
-            # kube_pod_labels carries it under the same label names, for a join on
-            # (namespace, pod).
+            # kube_pod_labels carries it under the same label names, and
+            # kube_pod_annotations the pool name as storage_pool_name, for a join
+            # on (namespace, pod).
             - job_name: amp-kube-state-metrics
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
@@ -404,8 +405,8 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_container_port_name], action: keep, regex: http-metrics}
               metric_relabel_configs:
                 - {source_labels: [pod], action: keep, regex: "({{ .Values.otel.podMetricsSelector | default "yb-ep-.*" }})"}
-                - {action: labelmap, regex: label_amp_yugabyte_com_(.+), replacement: "$1"}
-                - {action: labeldrop, regex: label_amp_yugabyte_com_.+}
+                - {action: labelmap, regex: "(?:label|annotation)_amp_yugabyte_com_(.+)", replacement: "$1"}
+                - {action: labeldrop, regex: "(?:label|annotation)_amp_yugabyte_com_.+"}
             {{- end }}
     processors:
       batch: {}
@@ -550,6 +551,8 @@ spec:
             - --resources=pods
             # The controller's identity labels, as kube_pod_labels{label_amp_yugabyte_com_*}.
             - --metric-labels-allowlist=pods=[amp.yugabyte.com/endpoint-id,amp.yugabyte.com/branch-id,amp.yugabyte.com/cluster-id,amp.yugabyte.com/storage-pool-id,amp.yugabyte.com/ep-type]
+            # The pool name, which is free text and so an annotation, as kube_pod_annotations.
+            - --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name]
             - --port=8080
             - --telemetry-port=8081
           ports:

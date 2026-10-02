@@ -187,6 +187,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	}
 	spec.Labels = rec.Labels
 	spec.Identity = deploy.IdentityLabels(rec)
+	spec.IdentityAnnotations = deploy.IdentityAnnotations(rec)
 
 	if deploy.IsIngress(s.Connectivity) {
 		slot, err := s.ingressSlot(ctx)
