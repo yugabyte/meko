@@ -32,7 +32,7 @@ from a browser.
 | Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts, with an estimate of what Meko searches saved. |
-| Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
+| Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
 | Task lifecycle | Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates; Quick Code sessions skip Design, and Exploration and Review a PR sessions have none of it. You can change a session's type and move its stage by hand (not a Review a PR's). More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
@@ -1220,8 +1220,9 @@ only move when a session gets a reply, so the rail says when they were last repo
 
 ## Usage stats
 
-Each install sends a small report of counts once a day to a collector run by the AgentK Local team,
-so we know how many installs are active and how much work goes through them. The collector is a
+Each install sends a small report of counts once a day (every hour in its first day) to a
+collector run by the AgentK Local team, so we know how many installs are active and how much work
+goes through them. The collector is a
 separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
 `CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](call-home-report.schema.json)
 is the same contract as a JSON Schema. The collector keeps an identical copy
@@ -1274,8 +1275,14 @@ account number) are sent as `other`.
 
 **Sending.** An hourly check (the first one 10 to 60 minutes after start, at random, so a release
 doesn't make every install report at once) sends a report when the last one went out 23 hours ago
-or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. A report over the
-collector's 64 KB (a busy install's 30-day first report, with every day's file types and models
+or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. A new install
+reports sooner and more often, so the collector sees it on the day it starts: until a day after
+its first report (`kv` `call_home_first_sent`, the time of the check that sent it), the first
+check comes 1 to 5 minutes after start (or when the next report is due, if that's later, so a
+restart doesn't skip one), and a report goes out when the last one is 55 minutes old, so at every
+hourly check. Reports are stamped with the check's time, so the time a send takes doesn't push
+the next one past its check. Installs that reported before `call_home_first_sent` was
+kept have none and stay daily. A report over the collector's 64 KB (a busy install's 30-day first report, with every day's file types and models
 full) drops its oldest days until it fits, since the collector would refuse it every hour from then
 on. It POSTs the JSON
 to the collector's report URL, as given, with a 15-second timeout; a failure is logged once and tried again an hour

@@ -119,7 +119,7 @@ your phone can connect.
   cost that Meko searches saved, and how many sessions had something from Meko in their first
   turn, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
-- **Usage stats:** once a day AgentK Local sends anonymous counts to YugabyteDB: how many
+- **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
   (details in [docs/design.md](docs/design.md#usage-stats)).

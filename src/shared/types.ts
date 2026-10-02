@@ -254,8 +254,8 @@ export interface UsageOverview {
 
 // ---- usage stats (Call Home) ----
 //
-// The report each install sends once a day to the usage stats collector (yugabyte/agent-k,
-// services/ak-local-call-home). docs/call-home-report.schema.json is the same contract as a JSON
+// The report each install sends once a day (hourly in its first day) to the usage stats collector
+// (yugabyte/agent-k, services/ak-local-call-home). docs/call-home-report.schema.json is the same contract as a JSON
 // Schema, and the collector keeps an identical copy; change all three together.
 // Only counts, enums, version strings, model ids and file extensions: never a name, path, prompt
 // or anything else that says who someone is or what they work on.

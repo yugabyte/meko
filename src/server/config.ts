@@ -29,7 +29,7 @@ export interface Config {
    */
   worktrees: { idlePerRepo: number; idleDays: number };
   /**
-   * Anonymous usage stats (callhome.ts). enabled: send the daily report. url: where to POST it
+   * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day). url: where to POST it
    * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
    * nothing is sent.
    */
