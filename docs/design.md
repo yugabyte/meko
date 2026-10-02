@@ -101,10 +101,13 @@ Claude Code runs *mods*: plugins of TypeScript function hooks that run inside th
 (early access). AgentK Local ships one, `agentk` (`src/mod/agentk`, about a hundred lines), that
 gives the server a way into each session besides the terminal. The server copies it to
 `run/mod/agentk` at startup, writing only files that changed, each through a temp file renamed into
-place. Claude reloads a `--plugin-dir` mod whenever its files change, so an update reaches running
+place; when a source file is missing or a write fails, it removes the run copy, so sessions start
+without the mod rather than with an old or half-updated one. Claude reloads a `--plugin-dir` mod whenever its files change, so an update reaches running
 sessions without a relaunch, and a plain restart reloads nothing. Every launch adds
 `--plugin-dir run/mod/agentk` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, since hooks modules of
-installed plugins are otherwise off unless Claude Code's own rollout turns them on. It does this when:
+installed plugins are otherwise off unless Claude Code's own rollout turns them on. That variable
+only helps while the rollout hasn't decided: when its switch serves off, Claude loads no plugin's
+hooks module whatever the variable says, and AgentK types prompts as before. It does this when:
 
 - `[claude] mod` is on (the default);
 - the mod's files are there;
@@ -113,19 +116,23 @@ installed plugins are otherwise off unless Claude Code's own rollout turns them 
 
 The mod reaches the server on the hook socket, with the session's `AK_HOOK_SOCK` and
 `AK_HOOK_TOKEN`, like the hook scripts. Its routes answer with `Connection: close`, so a mod that
-keeps polling never holds the socket open when the server stops:
+keeps polling on one connection can't hold the socket open. Before the socket closes (a stop, or a
+rebind after its file went missing) the server answers every held poll and holds none until it's
+bound again, so no hook is kept out for the 20 seconds a held poll would take:
 
 | Route | What it does |
 |---|---|
 | `/mod/hello` | Sent once per load, from `session.start`. |
-| `/mod/poll` | A loop the mod keeps going with `$.clock.after`. The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing (a reloaded module's loop). Unknown tokens get 403, and a stopping server 503; the mod waits 3 seconds after any failure. |
-| `/mod/ack` | `accepted` for each prompt as it arrives, before the mod hands it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words. `dropped` with a reason when another plugin's `prompt.submit` hook refused it. |
+| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
+| `/mod/ack` | `accepted` for each prompt as it arrives. The server answers 204 when it still wants the prompt, and only then does the mod hand it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words; 410 (it gave up on the prompt) or no answer, and the mod drops it. `dropped` with a reason, and whether it filled the prompt box, when another plugin's `prompt.submit` hook refused it. |
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
-- live means the mod is polling, or polled in the last 10 seconds (`modlink.ts`);
-- the send resolves on the `accepted` ack;
+- live means the mod is polling, or polled in the last 10 seconds (`modlink.ts`), and `[claude] mod`
+  is on: turning it off types prompts again at once, though running sessions keep the mod (and
+  `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`) until they're relaunched;
+- the send resolves when the server answers the `accepted` ack with 204;
 - the engine holds the prompt until Claude is idle, so it never lands in a permission dialog, a
   menu or a running turn, and a long one arrives whole rather than as `[Pasted text]`;
 - the transcript row is a plain user message (it adds an `origin` naming the plugin), and the
@@ -135,9 +142,15 @@ Without a live link the prompt is typed into the terminal as before (tmux bracke
 Enter). A prompt is never sent both ways:
 
 - once handed to the mod, a send that isn't acked within 5 seconds fails, as a failed paste does,
-  and the caller keeps the prompt queued;
-- a relaunch, `SessionEnd`, archive or project delete resets the link and fails what was on its way;
-- a `dropped` ack puts the session in **Needs you** with the plugin's reason.
+  and the caller keeps the prompt queued; a late ack gets 410, so the mod never runs it;
+- a relaunch, `SessionEnd`, archive, project delete or stop resets the link and fails what was on
+  its way, and those prompts' acks get 410 too;
+- the one gap left is on the other side: if the 204 answering an ack never reaches the mod, the
+  prompt counts as sent but doesn't run. That costs a prompt, never a duplicate;
+- a `dropped` ack comes after the send resolved, so the caller already counts the prompt as sent.
+  The session goes to **Needs you**, naming the prompt (its first line) and the plugin's reason.
+  When Claude's prompt box was empty, the mod put the prompt's text there, and the detail says to
+  press Enter in the terminal to send it; otherwise it says to ask AgentK for it in the terminal.
 
 The links are in memory only. After a server restart the mod's next poll brings its link back
 within seconds, and the prompts AgentK queues are in the database anyway.

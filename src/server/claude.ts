@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -255,28 +255,38 @@ export function modDirPath(paths: Paths): string {
 /**
  * Copies AgentK's mod to the run folder. Claude reloads a `--plugin-dir` mod when its files change,
  * so only files that differ are written (a server restart reloads nothing), each through a temp
- * file renamed into place (a session never reads half a module). False when the mod's source is
- * missing: sessions then start without it.
+ * file renamed into place (a session never reads half a module). Every source file is read first:
+ * when one is missing, or a write fails, the run copy is removed, so sessions start without the
+ * mod (`modDir()` checks for it) rather than with an old or half-updated one. False then; a failed
+ * write also throws.
  */
 export function writeModFiles(paths: Paths, source = MOD_SOURCE): boolean {
   const dest = modDirPath(paths);
+  const texts: string[] = [];
   for (const f of MOD_FILES) {
-    let text: string;
     try {
-      text = readFileSync(join(source, f), 'utf8');
+      texts.push(readFileSync(join(source, f), 'utf8'));
     } catch {
+      rmSync(dest, { recursive: true, force: true });
       return false;
     }
-    const to = join(dest, f);
-    try {
-      if (readFileSync(to, 'utf8') === text) continue;
-    } catch {
-      /* not there yet */
-    }
-    mkdirSync(dirname(to), { recursive: true });
-    const tmp = `${to}.${randomBytes(4).toString('hex')}.tmp`;
-    writeFileSync(tmp, text);
-    renameSync(tmp, to);
+  }
+  try {
+    MOD_FILES.forEach((f, i) => {
+      const to = join(dest, f);
+      try {
+        if (readFileSync(to, 'utf8') === texts[i]) return;
+      } catch {
+        /* not there yet */
+      }
+      mkdirSync(dirname(to), { recursive: true });
+      const tmp = `${to}.${randomBytes(4).toString('hex')}.tmp`;
+      writeFileSync(tmp, texts[i]);
+      renameSync(tmp, to);
+    });
+  } catch (e) {
+    rmSync(dest, { recursive: true, force: true });
+    throw e;
   }
   return true;
 }

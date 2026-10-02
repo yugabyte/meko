@@ -106,8 +106,9 @@ your phone can connect.
   Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
   never land in a permission dialog or a running turn. After each turn the footer shows how full
   Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml`, and AgentK
-  types its prompts into the terminal instead
-  ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early access.
+  types its prompts into the terminal again at once; running sessions keep the mod loaded until
+  they're relaunched ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early
+  access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
 - **Four session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
   merge), *Plan & Implement* (the default) for the full lifecycle below, *Quick Code* for small
   tasks that go straight to code, and *Review a PR* (above). A session other than a review can change its type and move between stages, forward or

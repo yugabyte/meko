@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { modDirPath } from '../../src/server/claude.js';
@@ -95,7 +95,38 @@ describe("AgentK's mod in Claude (real tmux + git, fake claude)", () => {
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
     await env.core.sessions.submit(s.id, 'refused');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input', 5000, 'needs input');
-    expect(env.core.sessions.get(s.id).statusDetail).toBe("A plugin in Claude refused AgentK's prompt: held by another plugin");
+    expect(env.core.sessions.get(s.id).statusDetail).toBe(
+      "A plugin in Claude refused AgentK's prompt \"refused\": held by another plugin. Its text is in Claude's prompt box: press Enter in the terminal to send it, or edit it first.",
+    );
+  });
+
+  it("answers held polls when the hook socket is bound again, so hooks aren't kept out", async () => {
+    env = await makeEnv();
+    fakeFiles(env, { mod: '' });
+    const s = await session();
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    rmSync(env.core.paths.hookSock);
+    const started = Date.now();
+    await env.core.checkHookSocket();
+    expect(Date.now() - started).toBeLessThan(3000); // not the 20 s a held poll would take
+    expect(existsSync(env.core.paths.hookSock)).toBe(true);
+    // The mod polls the new socket, and prompts go through it again.
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll again');
+    await env.core.sessions.submit(s.id, 'after the rebind');
+    await waitFor(() => modPrompts(env).map((p) => p.text), (t) => t.includes('after the rebind'), 10000, 'the prompt');
+  });
+
+  it('types prompts again as soon as the mod is turned off, though running sessions keep it loaded', async () => {
+    env = await makeEnv();
+    fakeFiles(env, { mod: '', debug: '' });
+    const s = await session();
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    env.core.updateConfig((c) => {
+      c.claude.mod = false;
+    });
+    await env.core.sessions.submit(s.id, 'typed after turning it off');
+    await waitFor(() => typed(env), (t) => t.includes('typed after turning it off'), 10000, 'the typed prompt');
+    expect(modPrompts(env)).toEqual([]);
   });
 
   it('forgets the mod when Claude is relaunched, until the new one polls', async () => {

@@ -73,8 +73,9 @@ let planWaiting = false;
 
 // Like AgentK's mod (src/mod/agentk) loaded with --plugin-dir: when the fake's dir has a `mod` file,
 // it polls the hook socket for prompts, acks each and takes it as a typed prompt (mod-prompts.jsonl
-// records them), and reports a measurement after each turn. A `mod-silent` file makes it take
-// prompts without acking them; a `mod-drop` file makes it ack them, then report them refused.
+// records them, mod-acks.jsonl the server's answer to each ack), and reports a measurement after
+// each turn. A `mod-silent` file makes it take prompts without acking them; a `mod-drop` file makes
+// it ack them, then report them refused (their text put in the prompt box).
 const pluginDir = opt('--plugin-dir');
 const modOn = !!pluginDir && existsSync(join(pluginDir, 'hooks', 'register.ts')) && existsSync(join(dir, 'mod'));
 
@@ -104,9 +105,12 @@ async function modLoop() {
         for (const p of JSON.parse(r.text).prompts) {
           appendFileSync(join(dir, 'mod-prompts.jsonl'), JSON.stringify(p) + '\n');
           if (existsSync(join(dir, 'mod-silent'))) continue;
-          await modPost('/mod/ack', { id: p.id, state: 'accepted' });
+          // Like the mod: only a 204 means AgentK still wants it run.
+          const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
+          appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
+          if (ack.status !== 204) continue;
           if (existsSync(join(dir, 'mod-drop'))) {
-            await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin' });
+            await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin', filled: true });
             continue;
           }
           modTurns = modTurns.then(() => turn(p.text));

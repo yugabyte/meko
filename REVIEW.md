@@ -30,8 +30,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       user's own status line with the same input, and never prints anything of its own.
 - [ ] AgentK's mod (`src/mod/agentk`) never gets in Claude's way: every failure is swallowed, and
       sessions work without it (Claude Code too old, `[claude] mod = false`, hooks modules off). A
-      prompt handed to the mod is never also typed into the terminal, and a send it doesn't ack
-      fails as a failed paste does. Changes to the mod pass `claude plugin validate` and
+      prompt runs once at most: the mod submits it only on the server's 204 to its ack, a send it
+      doesn't ack in time fails as a failed paste does (and a late ack gets 410), and a prompt
+      handed to the mod is never also typed into the terminal. Held polls are answered before the
+      hook socket closes, on a rebind as well as a stop. Changes to the mod pass `claude plugin validate` and
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).

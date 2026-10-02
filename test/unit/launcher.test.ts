@@ -159,9 +159,29 @@ describe("AgentK's mod", () => {
     expect(readdirSync(join(dir, 'hooks')).sort()).toEqual(['hooks.json', 'register.ts']);
   });
 
-  it('is skipped when its source is missing from the install', () => {
+  it('is removed when its source is missing from the install, rather than an old copy kept', () => {
     const paths = getPaths(join(home, 'ak'));
+    expect(writeModFiles(paths)).toBe(true);
+    expect(existsSync(modDirPath(paths))).toBe(true);
     expect(writeModFiles(paths, join(home, 'nowhere'))).toBe(false);
+    expect(existsSync(modDirPath(paths))).toBe(false);
+  });
+
+  it('writes nothing when one of its files is missing, and removes a copy a failed write left', () => {
+    const paths = getPaths(join(home, 'ak'));
+    const src = join(home, 'src');
+    mkdirSync(join(src, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(src, '.claude-plugin', 'plugin.json'), '{"name":"agentk"}');
+    expect(writeModFiles(paths, src)).toBe(false); // no hooks/: nothing half-written
+    expect(existsSync(modDirPath(paths))).toBe(false);
+    mkdirSync(join(src, 'hooks'));
+    writeFileSync(join(src, 'hooks', 'hooks.json'), '{}');
+    writeFileSync(join(src, 'hooks', 'register.ts'), '');
+    // A file where the hooks folder should be: the write fails, and the copy is removed.
+    mkdirSync(modDirPath(paths), { recursive: true });
+    writeFileSync(join(modDirPath(paths), 'hooks'), 'in the way');
+    expect(() => writeModFiles(paths, src)).toThrow();
+    expect(existsSync(modDirPath(paths))).toBe(false);
   });
 
   it('needs Claude Code 2.1.286 or later, comparing versions part by part', () => {

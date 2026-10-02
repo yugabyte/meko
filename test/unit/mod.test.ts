@@ -25,8 +25,10 @@ describe.skipIf(!bin)("AgentK's mod, checked by Claude Code", () => {
     expect(r.stdout).toMatch(/hooks: session\.start, session\.measure/);
   });
 
-  it('passes its own tests (src/mod/agentk/tests)', () => {
+  it('passes its own tests (src/mod/agentk/tests)', (ctx) => {
     const r = run('plugin', 'test', MOD);
+    // Claude Code runs a plugin's tests only while its rollout switch serves hooks modules on.
+    if (/hooks modules are turned off/.test(r.stdout + r.stderr)) ctx.skip();
     expect(r.status, r.stdout + r.stderr).toBe(0);
   }, 150_000);
 });

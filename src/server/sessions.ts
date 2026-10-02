@@ -22,7 +22,7 @@ import { HttpError } from './projects.js';
 import {
   EDIT_TOOLS, MIN_MOD_CLAUDE, claudeVersion, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, versionAtLeast, writeLauncher,
 } from './claude.js';
-import { ModLinks } from './modlink.js';
+import { ModLinks, type DroppedPrompt } from './modlink.js';
 import {
   dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
@@ -136,7 +136,7 @@ export class SessionManager {
   /** Each new session's Meko search on its task, until its SessionStart hook takes what it found. */
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
   /** Each session's link to AgentK's mod in its Claude (modlink.ts): prompts go through it while it's live. */
-  readonly mod = new ModLinks((id, reason) => this.promptDropped(id, reason));
+  readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped));
   /** How full each session's context window is (percent), from the mod's measurements. */
   private contextFill = new Map<string, number>();
   /** The Claude Code version, read for the mod's version check. */
@@ -678,8 +678,8 @@ export class SessionManager {
   }
 
   /**
-   * Submits a prompt to the session's Claude: through AgentK's mod while it's live (Claude takes it
-   * when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
+   * Submits a prompt to the session's Claude: through AgentK's mod while it's live and `[claude] mod`
+   * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
    * that had to wait is refused if the one before it started a turn.
    */
   submit(id: string, text: string): Promise<void> {
@@ -688,7 +688,7 @@ export class SessionManager {
       const r = this.row(id);
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
-      if (this.mod.live(id)) await this.mod.send(id, text);
+      if (this.core.config.claude.mod && this.mod.live(id)) await this.mod.send(id, text);
       else await this.core.tmux.submit(r.tmux_name, text);
       this.setStatus(id, 'working');
     });
@@ -751,14 +751,19 @@ export class SessionManager {
         if (this.mod.hello(row.id)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
         return { status: 204 };
       case '/mod/poll': {
-        // Stopping: the mod waits a few seconds and polls the next server.
-        if (this.mod.closed) return { status: 503 };
+        // The socket is closing (a rebind or a stop), or the mod was turned off in the config: the
+        // mod waits a few seconds and polls again. Sessions keep the mod until they're relaunched.
+        if (!this.mod.accepting || !this.core.config.claude.mod) return { status: 503 };
         const answer = await this.mod.poll(row.id, signal);
         return answer ? { status: 200, body: answer } : { status: 204 };
       }
       case '/mod/ack':
-        this.mod.ack(row.id, body.id, body.state, body.reason);
-        return { status: 204 };
+        if (body.state === 'dropped') {
+          this.mod.dropped(row.id, body.id, body.reason, body.filled);
+          return { status: 204 };
+        }
+        // 204: submit it. 410: AgentK gave up on it (it reported the send failed), so don't.
+        return { status: body.state === 'accepted' && this.mod.accept(row.id, body.id) ? 204 : 410 };
       case '/mod/measure':
         this.measured(row.id, body);
         return { status: 204 };
@@ -777,9 +782,17 @@ export class SessionManager {
     this.core.changed();
   }
 
-  /** Another plugin in Claude refused a prompt AgentK sent through the mod: the user has to step in. */
-  private promptDropped(id: string, reason: string): void {
-    const detail = `A plugin in Claude refused AgentK's prompt: ${reason}`;
+  /**
+   * Another plugin in Claude refused a prompt AgentK sent through the mod, after the send had
+   * resolved (its caller counts it delivered): the user has to step in, so the detail names the
+   * prompt and says how to send it.
+   */
+  private promptDropped(id: string, d: DroppedPrompt): void {
+    const line = d.text?.split('\n').find((l) => l.trim())?.trim() ?? '';
+    const name = line ? ` "${line.length > 80 ? `${line.slice(0, 79)}…` : line}"` : '';
+    const detail = `A plugin in Claude refused AgentK's prompt${name}: ${d.reason}. ` + (d.filled
+      ? "Its text is in Claude's prompt box: press Enter in the terminal to send it, or edit it first."
+      : 'Ask AgentK for it in the terminal.');
     this.core.log.warn(`${id}: ${detail}`);
     if (sessionRow(this.db, id)?.desired !== 'running') return;
     this.event(id, 'mod', detail);

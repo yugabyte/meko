@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCEPT_MS, LINK_STALE_MS, ModLinks, POLL_HOLD_MS } from '../../src/server/modlink.js';
+import { ACCEPT_MS, LINK_STALE_MS, ModLinks, POLL_HOLD_MS, type DroppedPrompt } from '../../src/server/modlink.js';
 
 describe('the link to AgentK\'s mod', () => {
   let now = 1_000_000;
-  let dropped: [string, string][];
+  let dropped: [string, DroppedPrompt][];
   let links: ModLinks;
   beforeEach(() => {
     vi.useFakeTimers();
@@ -40,7 +40,7 @@ describe('the link to AgentK\'s mod', () => {
     expect(answer?.prompts).toEqual([{ id: expect.any(String), text: 'Implement the design.' }]);
     await Promise.resolve();
     expect(sent).toBe(false); // not until the mod says it took it
-    links.ack('s1', answer!.prompts[0].id, 'accepted');
+    expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
     await send;
     expect(sent).toBe(true);
     // Handed once: the next poll waits.
@@ -54,11 +54,11 @@ describe('the link to AgentK\'s mod', () => {
     const send = links.send('s1', 'Open the PR.');
     const answer = await links.poll('s1');
     expect(answer?.prompts.map((p) => p.text)).toEqual(['Open the PR.']);
-    links.ack('s1', answer!.prompts[0].id, 'accepted');
+    expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
     await expect(send).resolves.toBeUndefined();
   });
 
-  it('fails a send the mod never acks, and never hands that prompt out again', async () => {
+  it('fails a send the mod never acks, tells a late ack not to run it, and never hands it out again', async () => {
     links.hello('s1');
     const send = links.send('s1', 'Fix the review.');
     const caught = send.catch((e: Error) => e.message);
@@ -66,17 +66,45 @@ describe('the link to AgentK\'s mod', () => {
     expect(answer?.prompts).toHaveLength(1);
     vi.advanceTimersByTime(ACCEPT_MS);
     expect(await caught).toMatch(/didn't take the prompt/);
-    links.ack('s1', answer!.prompts[0].id, 'accepted'); // too late: nothing to resolve
+    // Too late: the caller already has the prompt back, so the mod must not submit it.
+    expect(links.accept('s1', answer!.prompts[0].id)).toBe(false);
+    expect(links.accept('s1', 'unknown')).toBe(false);
+    expect(links.accept('other', answer!.prompts[0].id)).toBe(false);
     const next = links.poll('s1');
     vi.advanceTimersByTime(POLL_HOLD_MS);
     expect(await next).toBeNull();
   });
 
-  it('passes on a prompt another plugin refused', () => {
+  it('passes on a prompt another plugin refused, with its text', async () => {
     links.hello('s1');
-    links.ack('s1', 'p1', 'dropped', 'not now');
-    links.ack('s1', 'p2', 'dropped');
-    expect(dropped).toEqual([['s1', 'not now'], ['s1', 'no reason given']]);
+    const send = links.send('s1', 'Open the PR.\n\nThen wait for review.');
+    const answer = await links.poll('s1');
+    const id = answer!.prompts[0].id;
+    expect(links.accept('s1', id)).toBe(true);
+    await send;
+    links.dropped('s1', id, 'not now', true);
+    links.dropped('s1', id, ' ', 'yes'); // its text is only kept for the first report
+    expect(dropped).toEqual([
+      ['s1', { text: 'Open the PR.\n\nThen wait for review.', reason: 'not now', filled: true }],
+      ['s1', { text: null, reason: 'no reason given', filled: false }],
+    ]);
+  });
+
+  it('while the hook socket closes (a rebind), answers held polls at once and holds none until it resumes', async () => {
+    links.hello('s1');
+    const held = links.poll('s1');
+    links.pause();
+    expect(links.accepting).toBe(false);
+    expect(await held).toBeNull();
+    expect(await links.poll('s1')).toBeNull(); // not held
+    expect(links.live('s1')).toBe(true); // the link itself stays
+    links.resume();
+    const next = links.poll('s1');
+    const send = links.send('s1', 'After the rebind.');
+    const answer = await next;
+    expect(answer?.prompts.map((p) => p.text)).toEqual(['After the rebind.']);
+    expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
+    await send;
   });
 
   it('answers an older poll with nothing when a newer one comes (a reloaded module)', async () => {
@@ -87,7 +115,7 @@ describe('the link to AgentK\'s mod', () => {
     const send = links.send('s1', 'Go on.');
     const answer = await fresh;
     expect(answer?.prompts.map((p) => p.text)).toEqual(['Go on.']);
-    links.ack('s1', answer!.prompts[0].id, 'accepted');
+    expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
     await send;
   });
 
@@ -100,7 +128,7 @@ describe('the link to AgentK\'s mod', () => {
     const send = links.send('s1', 'Still here?');
     const answer = await links.poll('s1');
     expect(answer?.prompts.map((p) => p.text)).toEqual(['Still here?']);
-    links.ack('s1', answer!.prompts[0].id, 'accepted');
+    expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
     await send;
   });
 
@@ -116,11 +144,16 @@ describe('the link to AgentK\'s mod', () => {
     expect(links.hello('s1')).toBe(true); // the next launch's mod says hello afresh
   });
 
-  it('answers every held poll when the server stops', async () => {
+  it('answers every held poll when the server stops, and fails what was on its way', async () => {
     links.hello('a');
     links.hello('b');
     const polls = [links.poll('a'), links.poll('b')];
+    const caught = links.send('b', 'Stopping.').catch((e: Error) => e.message);
+    const handed = (await polls[1])!.prompts[0].id;
     links.closeAll();
-    expect(await Promise.all(polls)).toEqual([null, null]);
+    expect(await polls[0]).toBeNull();
+    expect(await caught).toBe('AgentK Local is stopping');
+    expect(links.accepting).toBe(false);
+    expect(links.accept('b', handed)).toBe(false); // its ack arrives late: not run
   });
 });

@@ -270,7 +270,6 @@ export class Core extends EventEmitter {
     this.lifecycle.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
-    // Held polls would keep the hook socket open until they time out.
     this.sessions.mod.closeAll();
     await this.closeHooks();
     await this.meko.close();
@@ -288,6 +287,7 @@ export class Core extends EventEmitter {
       (token, route, body, signal) => this.sessions.onMod(token, route, body, signal),
     );
     this.hookSockId = socketId(this.paths.hookSock);
+    this.sessions.mod.resume();
   }
 
   /** Stops the hook server. Its socket file is removed only if it is still ours. */
@@ -295,6 +295,9 @@ export class Core extends EventEmitter {
     const server = this.hookServer;
     this.hookServer = null;
     if (!server) return;
+    // Held mod polls would keep the socket open until they time out (20 s), and no hook could
+    // reach the server meanwhile: answer them now, and hold none until it's bound again.
+    this.sessions.mod.pause();
     await new Promise<void>((r) => server.close(() => r()));
     if (this.hookSockId && socketId(this.paths.hookSock) === this.hookSockId) rmSync(this.paths.hookSock, { force: true });
     this.hookSockId = null;

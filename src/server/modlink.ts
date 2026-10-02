@@ -9,9 +9,20 @@ export const POLL_HOLD_MS = 20_000;
 export const LINK_STALE_MS = 10_000;
 /** How long a prompt handed to the mod has to be acked before the send fails. */
 export const ACCEPT_MS = 5_000;
+/** How long the text of a prompt the mod took is kept, to name it if another plugin refuses it. */
+const TAKEN_KEEP_MS = 10 * 60 * 1000;
 
 /** What a poll answers: the prompts to submit, or null for none. */
 export type PollAnswer = { prompts: { id: string; text: string }[] } | null;
+
+/** A prompt another plugin in Claude refused after the mod took it. */
+export interface DroppedPrompt {
+  /** Its text, when the server still has it. */
+  text: string | null;
+  reason: string;
+  /** The mod put the text in Claude's prompt box (it was empty), for the user to send. */
+  filled: boolean;
+}
 
 interface Pending {
   id: string;
@@ -29,6 +40,8 @@ interface Link {
   /** The poll held open now, if any. */
   waiter: { answer(a: PollAnswer): void } | null;
   queue: Pending[];
+  /** The prompts the mod took, by id: their text and when, kept TAKEN_KEEP_MS. */
+  taken: Map<string, { text: string; at: number }>;
 }
 
 /**
@@ -36,23 +49,25 @@ interface Link {
  * mod is there, and the prompts on their way to it. Kept in memory only: after a server restart the
  * mod's next poll brings the link back, and the prompts AgentK queues are in the database anyway.
  *
- * A prompt goes to the mod only while the link is live. Once it has been handed over it is never
- * also typed into the terminal: a send that isn't acked in time fails, as a failed paste does, and
- * the caller keeps the prompt for later.
+ * A prompt goes to the mod only while the link is live, and is submitted by the mod only once the
+ * server answered its `accepted` ack with 204, which is also when the send resolves. A prompt not
+ * acked within ACCEPT_MS (or reset) is given up on: the send fails, as a failed paste does, the
+ * caller keeps the prompt, and a late ack is answered 410 so the mod never submits it. So a prompt
+ * is never run twice, and never both handed to the mod and typed into the terminal.
  */
 export class ModLinks {
   private links = new Map<string, Link>();
-  /** The server is stopping (closeAll): no poll is held from now on. */
-  closed = false;
+  /** False while the hook socket is closing (a rebind or a stop): polls aren't held then. */
+  accepting = true;
 
   constructor(
-    private onDropped: (session: string, reason: string) => void = () => undefined,
+    private onDropped: (session: string, dropped: DroppedPrompt) => void = () => undefined,
     private now: () => number = Date.now,
   ) {}
 
   private link(session: string): Link {
     let l = this.links.get(session);
-    if (!l) this.links.set(session, (l = { seenAt: 0, waiter: null, queue: [] }));
+    if (!l) this.links.set(session, (l = { seenAt: 0, waiter: null, queue: [], taken: new Map() }));
     return l;
   }
 
@@ -72,15 +87,15 @@ export class ModLinks {
 
   /**
    * The mod asks for prompts: answered at once when some are waiting, else held up to POLL_HOLD_MS.
-   * A newer poll answers the one before it with nothing (a reloaded module's loop replacing the old
-   * one's). `signal` aborts when the mod's connection closes.
+   * A newer poll answers the one before it with nothing (the mod's loop polled again after a failure
+   * the server didn't see). `signal` aborts when the mod's connection closes.
    */
   poll(session: string, signal?: AbortSignal): Promise<PollAnswer> {
     const l = this.link(session);
     l.seenAt = this.now();
     l.waiter?.answer(null);
     const ready = this.hand(l);
-    if (ready) return Promise.resolve(ready);
+    if (ready || !this.accepting) return Promise.resolve(ready);
     return new Promise((resolve) => {
       const done = (a: PollAnswer) => {
         clearTimeout(timer);
@@ -108,8 +123,9 @@ export class ModLinks {
   }
 
   /**
-   * Sends a prompt through the mod. Resolves once the mod says it took it (Claude submits it when
-   * it's next idle); rejects when it doesn't say so within ACCEPT_MS, or the link is reset.
+   * Sends a prompt through the mod. Resolves once the server has told the mod to submit it (Claude
+   * runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
+   * is reset, and then the mod is told not to submit it.
    */
   send(session: string, text: string): Promise<void> {
     const l = this.link(session);
@@ -139,19 +155,35 @@ export class ModLinks {
     l.queue = l.queue.filter((q) => q !== p);
   }
 
-  /** The mod's word on a prompt: it took it (accepted), or another plugin refused it (dropped). */
-  ack(session: string, prompt: unknown, state: unknown, reason?: unknown): void {
+  /**
+   * The mod took a prompt it was handed. True when the send is still waiting for it: the send
+   * resolves, and the mod submits the prompt. False when it was given up on (timed out, reset) or
+   * is unknown: the mod must not submit it.
+   */
+  accept(session: string, prompt: unknown): boolean {
     const l = this.links.get(session);
-    if (!l) return;
+    if (!l) return false;
     l.seenAt = this.now();
-    if (state === 'dropped') {
-      this.onDropped(session, typeof reason === 'string' && reason.trim() ? reason.trim() : 'no reason given');
-      return;
-    }
-    const p = l.queue.find((q) => q.id === prompt);
-    if (state !== 'accepted' || !p) return;
+    const p = l.queue.find((q) => q.id === prompt && q.handed);
+    if (!p) return false;
     this.remove(l, p);
+    const now = this.now();
+    for (const [id, t] of l.taken) if (now - t.at > TAKEN_KEEP_MS) l.taken.delete(id);
+    l.taken.set(p.id, { text: p.text, at: now });
     p.resolve();
+    return true;
+  }
+
+  /** Another plugin in Claude refused a prompt the mod took (its `prompt.submit` hook dropped it). */
+  dropped(session: string, prompt: unknown, reason: unknown, filled: unknown): void {
+    const l = this.links.get(session);
+    const taken = typeof prompt === 'string' ? l?.taken.get(prompt) : undefined;
+    if (taken) l!.taken.delete(prompt as string);
+    this.onDropped(session, {
+      text: taken?.text ?? null,
+      reason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'no reason given',
+      filled: filled === true,
+    });
   }
 
   /** The session's Claude was relaunched or ended: forget its mod, failing what was on its way. */
@@ -167,11 +199,21 @@ export class ModLinks {
   }
 
   /**
-   * The server is stopping: answers every held poll, so the hook socket can close at once, and
-   * holds no new one (the mod is told to come back later instead).
+   * The hook socket is about to close (a rebind, or the server stopping): answers every held poll
+   * with nothing and holds no new one, so the socket closes at once. `resume` once it's bound again.
    */
+  pause(): void {
+    this.accepting = false;
+    for (const l of this.links.values()) l.waiter?.answer(null);
+  }
+
+  resume(): void {
+    this.accepting = true;
+  }
+
+  /** The server is stopping: pauses polls for good, and fails every prompt on its way. */
   closeAll(): void {
-    this.closed = true;
+    this.pause();
     for (const s of [...this.links.keys()]) this.reset(s, 'AgentK Local is stopping');
   }
 }

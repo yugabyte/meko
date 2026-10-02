@@ -5,7 +5,8 @@
 //
 //   /mod/hello    once per load: the server sends this session's prompts through the mod from now on
 //   /mod/poll     held by the server up to 20 s; answers the prompts AgentK has for the session
-//   /mod/ack      each prompt taken (accepted), or refused by another plugin (dropped)
+//   /mod/ack      each prompt taken (accepted; submitted only when the server answers 204), or
+//                 refused by another plugin (dropped)
 //   /mod/measure  the context window's fill and the plan limits, after each turn
 //
 // It must never get in Claude's way: every failure is swallowed, and while the server doesn't hear
@@ -56,18 +57,31 @@ function post($: EngineInterface, l: Link, path: string, body: unknown) {
 
 /**
  * Submits AgentK's prompts as the person's own (the model reads them bare, not as a plugin's
- * message). Each is acked first, so the server knows it arrived; the engine holds it until the
- * session is idle, so a prompt never lands in a dialog or a running turn.
+ * message). Each is acked first and submitted only when the server answers 204: any other answer,
+ * or no answer, means AgentK gave up on it (and may send it again), so running it would run it
+ * twice. The engine holds a submitted prompt until the session is idle, so it never lands in a
+ * dialog or a running turn.
  */
 async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
   for (const p of prompts) {
     if (typeof p?.id !== 'string' || typeof p.text !== 'string') continue
-    await post($, l, '/mod/ack', { id: p.id, state: 'accepted' }).catch(() => undefined)
+    const ack = await post($, l, '/mod/ack', { id: p.id, state: 'accepted' }).catch(() => null)
+    if (ack?.status !== 204) continue
     // Not awaited: it resolves only when the prompt's turn starts, and polling goes on meanwhile.
     void $.prompt.submit({ text: p.text, asUser: true }).then(
-      (r) => (r.drop !== undefined ? post($, l, '/mod/ack', { id: p.id, state: 'dropped', reason: r.drop }) : undefined),
+      (r) => (r.drop !== undefined ? refused($, l, p, r.drop) : undefined),
     ).catch(() => undefined)
   }
+}
+
+/**
+ * Another plugin's `prompt.submit` hook refused AgentK's prompt. The prompt box gets its text when
+ * it's empty, for the person to send, and the server is told, to ask them to step in.
+ */
+async function refused($: EngineInterface, l: Link, p: Prompt, reason: string) {
+  const box = await $.prompt.read().catch(() => null)
+  const filled = box?.text === '' && (await $.prompt.fill({ text: p.text }).catch(() => null))?.isFilled === true
+  await post($, l, '/mod/ack', { id: p.id, state: 'dropped', reason, filled })
 }
 
 async function poll($: EngineInterface, l: Link): Promise<void> {
