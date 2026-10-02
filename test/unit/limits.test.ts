@@ -6,7 +6,7 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { statusLineScriptPath, userStatusLine, withoutMekoSuffix, writeHookFiles } from '../../src/server/claude.js';
 import { getPaths } from '../../src/server/paths.js';
 import { openDb } from '../../src/server/db.js';
-import { PlanLimitsStore, currentLimits, parseRateLimits } from '../../src/server/limits.js';
+import { PlanLimitsStore, currentLimits, parseMeasuredLimits, parseRateLimits } from '../../src/server/limits.js';
 
 const NOW = 1_790_000_000_000;
 const OURS = '/home/x/.agent-k-local/run/statusline.sh';
@@ -55,6 +55,39 @@ describe('plan limits from the status line', () => {
     const l = parseRateLimits(input({ used_percentage: 90, resets_at: NOW / 1000 + 60 }, { used_percentage: 20, resets_at: NOW / 1000 + 86_400 }), NOW);
     expect(currentLimits(l, NOW + 120_000)).toMatchObject({ fiveHour: null, sevenDay: { usedPercent: 20 } });
     expect(currentLimits(l, NOW + 2 * 86_400_000)).toBeNull();
+  });
+});
+
+describe("plan limits from AgentK's mod", () => {
+  it('reads both windows by kind, with ISO reset times', () => {
+    const list = [
+      { kind: 'five_hour', percentUsed: 2, resetsAt: '2026-09-21T15:00:00.000Z' },
+      { kind: 'seven_day', percentUsed: 42, resetsAt: '2026-09-24T20:00:00.000Z' },
+      { kind: 'spend_limit', percentUsed: 5 },
+    ];
+    expect(parseMeasuredLimits(list, NOW)).toEqual({
+      fiveHour: { usedPercent: 2, resetsAt: Date.parse('2026-09-21T15:00:00.000Z') },
+      sevenDay: { usedPercent: 42, resetsAt: Date.parse('2026-09-24T20:00:00.000Z') },
+      updatedAt: NOW,
+    });
+  });
+
+  it('ignores a window without a usable reset time, and anything that is not a list', () => {
+    expect(parseMeasuredLimits([{ kind: 'five_hour', percentUsed: 2 }, { kind: 'seven_day', percentUsed: 4, resetsAt: 'soon' }], NOW)).toBeNull();
+    expect(parseMeasuredLimits([], NOW)).toBeNull();
+    expect(parseMeasuredLimits({ five_hour: 2 }, NOW)).toBeNull();
+    expect(parseMeasuredLimits(undefined, NOW)).toBeNull();
+  });
+
+  it('merges into the same store as the status line', () => {
+    const db = openDb(':memory:');
+    let changes = 0;
+    const store = new PlanLimitsStore(db, () => changes++);
+    store.report(input({ used_percentage: 10, resets_at: 1_790_003_600 }, undefined), NOW);
+    store.reportMeasured([{ kind: 'five_hour', percentUsed: 12, resetsAt: new Date(1_790_003_600_000).toISOString() }], NOW + 1000);
+    expect(store.current(NOW + 1000)?.fiveHour).toEqual({ usedPercent: 12, resetsAt: 1_790_003_600_000 });
+    expect(changes).toBe(2);
+    db.close();
   });
 });
 

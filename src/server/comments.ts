@@ -186,7 +186,7 @@ export class CommentService {
     try {
       sent = await this.deliver(sessionId);
     } catch (e) {
-      throw new HttpError(502, `Couldn't paste the comments into Claude's terminal: ${errMsg(e)}. They stay queued and are retried when Claude finishes a turn.`);
+      throw new HttpError(502, `Couldn't send the comments to Claude: ${errMsg(e)}. They stay queued and are retried when Claude finishes a turn.`);
     }
     return { sent, queued: commentCounts(this.db, sessionId).queued };
   }

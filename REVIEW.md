@@ -28,6 +28,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `ConditionHost=`, and nothing removes a socket or file another server may own.
 - [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
       user's own status line with the same input, and never prints anything of its own.
+- [ ] AgentK's mod (`src/mod/agentk`) never gets in Claude's way: every failure is swallowed, and
+      sessions work without it (Claude Code too old, `[claude] mod = false`, hooks modules off). A
+      prompt handed to the mod is never also typed into the terminal, and a send it doesn't ack
+      fails as a failed paste does. Changes to the mod pass `claude plugin validate` and
+      `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
+      `MIN_MOD_CLAUDE` allows.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).
 - [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash

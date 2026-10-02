@@ -24,6 +24,9 @@ import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
 
+/** From this full, the footer's context fill shows in the warning color. */
+const CONTEXT_WARN_PERCENT = 85;
+
 const REVIEW_TEXT: Record<Session['reviewState'], string> = {
   none: 'no PR',
   waiting: 'waiting for review',
@@ -125,6 +128,15 @@ export function ProjectView({
   const tokensText = session && (
     <span title={usageTitle(session.usage)}>
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
+    </span>
+  );
+  // Measured by AgentK's mod after each turn; null without it.
+  const contextText = session && session.contextPercent !== null && (
+    <span
+      className={session.contextPercent >= CONTEXT_WARN_PERCENT ? 'warn-text' : undefined}
+      title="How full Claude's context window is, measured after each turn. Claude compacts the conversation when it fills up."
+    >
+      context {session.contextPercent}%
     </span>
   );
   const mekoText = (
@@ -296,6 +308,7 @@ export function ProjectView({
             </button>
           )}
           {!mobile && tokensText}
+          {!mobile && contextText}
           {!mobile && mekoText}
           {stageText}
         </footer>
@@ -332,6 +345,7 @@ export function ProjectView({
             <>
               {branchText}
               {tokensText}
+              {contextText}
               {mekoText}
               {stageText}
             </>

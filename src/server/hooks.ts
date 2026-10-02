@@ -39,11 +39,22 @@ export type GuardDecision = Record<string, unknown> | null;
 /** What the SessionStart context hook prints for Claude Code; null adds nothing. */
 export type HookContext = Record<string, unknown> | null;
 
+/** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
+export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure'];
+
+/** How the server answers the mod: the status, and a JSON body for a 200. */
+export interface ModReply {
+  status: number;
+  body?: unknown;
+}
+
 /**
  * Receives Claude Code hook events on a unix socket (mode 0600). Hooks never
  * touch the network port. Each request carries the session's hook token.
  * `/hook` events are answered at once and handled afterwards; `/guard` and `/context`
  * requests wait for the answer, which is returned as JSON (204 when there is none).
+ * The `/mod/*` routes are AgentK's mod in Claude: `onMod` answers them, and may hold a
+ * `/mod/poll` open (its signal aborts when the mod's connection closes).
  *
  * The socket is bound under a temporary name and renamed into place. Closing a
  * server unlinks the path it was bound to, so this way closing never removes a
@@ -56,6 +67,7 @@ export function startHookServer(
   onGuard: (token: string, payload: HookPayload) => GuardDecision = () => null,
   onStatusLine: (token: string, input: unknown) => void = () => undefined,
   onContext: (token: string, payload: HookPayload) => Promise<HookContext> = async () => null,
+  onMod: (token: string, route: string, body: Record<string, unknown>, signal: AbortSignal) => Promise<ModReply> = async () => ({ status: 404 }),
 ): Promise<Server> {
   const dir = dirname(sockPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -68,7 +80,7 @@ export function startHookServer(
   const bound = join(dir, `.h${randomBytes(3).toString('hex')}`);
   rmSync(bound, { force: true });
   const server = createServer((req, res) => {
-    if (req.method !== 'POST' || !['/hook', '/guard', '/statusline', '/context'].includes(req.url ?? '')) {
+    if (req.method !== 'POST' || ![...MOD_ROUTES, '/hook', '/guard', '/statusline', '/context'].includes(req.url ?? '')) {
       res.writeHead(404).end();
       return;
     }
@@ -80,6 +92,28 @@ export function startHookServer(
       if (body.length > 4 * 1024 * 1024) req.destroy();
     });
     req.on('end', () => {
+      if (MOD_ROUTES.includes(req.url ?? '')) {
+        let payload: unknown = null;
+        try {
+          payload = JSON.parse(body || '{}');
+        } catch {
+          /* malformed payload: read as empty */
+        }
+        const closed = new AbortController();
+        res.on('close', () => closed.abort());
+        const reply = token
+          ? onMod(token, req.url!, payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {}, closed.signal)
+            .catch((): ModReply => ({ status: 500 }))
+          : Promise.resolve<ModReply>({ status: 403 });
+        // One connection per request: a kept-alive one the mod keeps polling on would hold the
+        // server open when it closes. A poll comes every few seconds at most, so this costs nothing.
+        void reply.then((r) => {
+          if (res.writableEnded || res.destroyed) return;
+          if (r.status === 200) res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' }).end(JSON.stringify(r.body ?? null));
+          else res.writeHead(r.status, { Connection: 'close' }).end();
+        });
+        return;
+      }
       if (req.url === '/guard') {
         let decision: GuardDecision = null;
         try {

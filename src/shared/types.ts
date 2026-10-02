@@ -456,6 +456,11 @@ export interface Session {
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
+  /**
+   * How full Claude's context window is, in percent, as AgentK's mod last measured it (after each
+   * turn); null without the mod, or before its first reading since Claude started or was cleared.
+   */
+  contextPercent: number | null;
   /** Set while status is `starting`. */
   startup: StartupState | null;
   lastEventAt: number | null;

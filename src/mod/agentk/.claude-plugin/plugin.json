@@ -1,0 +1,6 @@
+{
+  "name": "agentk",
+  "version": "1.0.0",
+  "description": "AgentK Local's link into the Claude Code sessions it runs: takes AgentK's prompts and reports usage.",
+  "author": { "name": "AgentK Local" }
+}

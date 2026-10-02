@@ -1,8 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hooksSettingsPath, loginShellCommand, shq, writeHookFiles, writeLauncher, type LaunchSpec } from '../../src/server/claude.js';
+import {
+  MIN_MOD_CLAUDE, claudeVersion, hooksSettingsPath, loginShellCommand, modDirPath, shq, versionAtLeast, writeHookFiles, writeLauncher,
+  writeModFiles, type LaunchSpec,
+} from '../../src/server/claude.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { tmuxName } from '../../src/server/tmux.js';
 import { tempDir } from '../helpers.js';
@@ -94,6 +97,14 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
     expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
   });
 
+  it('loads each plugin folder with --plugin-dir, after the added directories', () => {
+    const s = spec({ pluginDirs: ['/ak/run/mod/agentk'] });
+    expect(run(s).args).toEqual([
+      '--settings', join(paths.run, 'hooks.json'), '--session-id', 'c0ffee', '--name', 'Fix "it" now',
+      '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--append-system-prompt', s.appendSystemPrompt,
+    ]);
+  });
+
   it('keeps a variable it sets even when it is also listed to unset', () => {
     const { env } = run(spec({ resume: true, env: { MEKO_AGENT_ID: 'x', MEKO_CHECKPOINT_INTERVAL: '2147483' } }));
     expect(env.slice(2, 4)).toEqual(['x', '2147483']);
@@ -102,5 +113,75 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
   it('finds tools in ~/.local/bin (where the installer puts Claude Code and gh) even when the profile leaves it out', () => {
     run(spec({}));
     expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
+  });
+});
+
+describe("AgentK's mod", () => {
+  let home: string;
+  beforeEach(() => {
+    home = tempDir('akl-mod-');
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('is copied to the run folder from the repo, without its tests', () => {
+    const paths = getPaths(join(home, 'ak'));
+    expect(writeModFiles(paths)).toBe(true);
+    const dir = modDirPath(paths);
+    expect(dir).toBe(join(paths.run, 'mod', 'agentk'));
+    expect(JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('agentk');
+    expect(JSON.parse(readFileSync(join(dir, 'hooks', 'hooks.json'), 'utf8'))).toEqual({ modules: ['./register.ts'] });
+    expect(readFileSync(join(dir, 'hooks', 'register.ts'), 'utf8')).toMatch(/\/mod\/poll/);
+    expect(existsSync(join(dir, 'tests'))).toBe(false);
+  });
+
+  it('writes only the files that changed (Claude reloads the mod on every write), and none left half-written', () => {
+    const paths = getPaths(join(home, 'ak'));
+    const src = join(home, 'src');
+    const put = (f: string, text: string) => {
+      mkdirSync(join(src, f, '..'), { recursive: true });
+      writeFileSync(join(src, f), text);
+    };
+    put('.claude-plugin/plugin.json', '{"name":"agentk"}');
+    put('hooks/hooks.json', '{"modules":["./register.ts"]}');
+    put('hooks/register.ts', 'export const register = () => {}\n');
+    expect(writeModFiles(paths, src)).toBe(true);
+    const dir = modDirPath(paths);
+    const mtime = (f: string) => statSync(join(dir, f)).mtimeMs;
+    const before = { manifest: mtime('.claude-plugin/plugin.json'), module: mtime('hooks/register.ts') };
+    execFileSync('sleep', ['0.05']);
+    put('hooks/register.ts', 'export const register = (on) => {}\n');
+    expect(writeModFiles(paths, src)).toBe(true);
+    expect(readFileSync(join(dir, 'hooks', 'register.ts'), 'utf8')).toBe('export const register = (on) => {}\n');
+    expect(mtime('hooks/register.ts')).not.toBe(before.module);
+    expect(mtime('.claude-plugin/plugin.json')).toBe(before.manifest);
+    expect(readdirSync(join(dir, 'hooks')).sort()).toEqual(['hooks.json', 'register.ts']);
+  });
+
+  it('is skipped when its source is missing from the install', () => {
+    const paths = getPaths(join(home, 'ak'));
+    expect(writeModFiles(paths, join(home, 'nowhere'))).toBe(false);
+  });
+
+  it('needs Claude Code 2.1.286 or later, comparing versions part by part', () => {
+    expect(MIN_MOD_CLAUDE).toBe('2.1.286');
+    expect(versionAtLeast('2.1.286', MIN_MOD_CLAUDE)).toBe(true);
+    expect(versionAtLeast('2.1.287', MIN_MOD_CLAUDE)).toBe(true);
+    expect(versionAtLeast('2.2.0', MIN_MOD_CLAUDE)).toBe(true);
+    expect(versionAtLeast('3.0.1', MIN_MOD_CLAUDE)).toBe(true);
+    expect(versionAtLeast('2.1.285', MIN_MOD_CLAUDE)).toBe(false);
+    expect(versionAtLeast('2.1.29', MIN_MOD_CLAUDE)).toBe(false);
+    expect(versionAtLeast('1.9.999', MIN_MOD_CLAUDE)).toBe(false);
+  });
+
+  it("reads the version Claude Code prints, and null when it can't run", async () => {
+    const bin = join(home, 'claude');
+    writeFileSync(bin, '#!/bin/sh\necho "2.1.290 (Claude Code)"\n');
+    chmodSync(bin, 0o755);
+    expect(await claudeVersion(bin)).toBe('2.1.290');
+    writeFileSync(bin, '#!/bin/sh\necho nope; exit 1\n');
+    expect(await claudeVersion(bin)).toBeNull();
+    expect(await claudeVersion(join(home, 'missing'))).toBeNull();
   });
 });

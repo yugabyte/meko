@@ -95,6 +95,64 @@ It binds the socket under a temporary name and renames it into place, removes it
 only if the file is still its own, and every 10 seconds binds it again if the file was removed or
 replaced (see [One server per home](#one-server-per-home)).
 
+### AgentK's mod in Claude
+
+Claude Code runs *mods*: plugins of TypeScript function hooks that run inside the Claude process
+(early access). AgentK Local ships one, `agentk` (`src/mod/agentk`, about a hundred lines), that
+gives the server a way into each session besides the terminal. The server copies it to
+`run/mod/agentk` at startup, writing only files that changed, each through a temp file renamed into
+place. Claude reloads a `--plugin-dir` mod whenever its files change, so an update reaches running
+sessions without a relaunch, and a plain restart reloads nothing. Every launch adds
+`--plugin-dir run/mod/agentk` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, since hooks modules of
+installed plugins are otherwise off unless Claude Code's own rollout turns them on. It does this when:
+
+- `[claude] mod` is on (the default);
+- the mod's files are there;
+- `claude --version` (read at startup, then at most every 10 minutes) is 2.1.286 or later. Older
+  versions frame a plugin's prompt as the plugin's message, not the person's.
+
+The mod reaches the server on the hook socket, with the session's `AK_HOOK_SOCK` and
+`AK_HOOK_TOKEN`, like the hook scripts. Its routes answer with `Connection: close`, so a mod that
+keeps polling never holds the socket open when the server stops:
+
+| Route | What it does |
+|---|---|
+| `/mod/hello` | Sent once per load, from `session.start`. |
+| `/mod/poll` | A loop the mod keeps going with `$.clock.after`. The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing (a reloaded module's loop). Unknown tokens get 403, and a stopping server 503; the mod waits 3 seconds after any failure. |
+| `/mod/ack` | `accepted` for each prompt as it arrives, before the mod hands it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words. `dropped` with a reason when another plugin's `prompt.submit` hook refused it. |
+| `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
+
+**Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
+
+- live means the mod is polling, or polled in the last 10 seconds (`modlink.ts`);
+- the send resolves on the `accepted` ack;
+- the engine holds the prompt until Claude is idle, so it never lands in a permission dialog, a
+  menu or a running turn, and a long one arrives whole rather than as `[Pasted text]`;
+- the transcript row is a plain user message (it adds an `origin` naming the plugin), and the
+  `UserPromptSubmit` and `Stop` hooks fire as for a typed prompt, so status and usage work as before.
+
+Without a live link the prompt is typed into the terminal as before (tmux bracketed paste, then
+Enter). A prompt is never sent both ways:
+
+- once handed to the mod, a send that isn't acked within 5 seconds fails, as a failed paste does,
+  and the caller keeps the prompt queued;
+- a relaunch, `SessionEnd`, archive or project delete resets the link and fails what was on its way;
+- a `dropped` ack puts the session in **Needs you** with the plugin's reason.
+
+The links are in memory only. After a server restart the mod's next poll brings its link back
+within seconds, and the prompts AgentK queues are in the database anyway.
+
+**Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context N%` from the
+latest measurement, in the warning colour from 85%. It is cleared when Claude is relaunched or
+`/clear`ed, until the next turn measures it again. The plan limits in the measurement are merged
+like the status line's (see [Plan limits](#token-usage)).
+
+Without the mod everything works as before; the footer just shows no context fill. The mod
+swallows every failure, and a hook that throws is skipped by Claude Code. `claude plugin validate`
+and `claude plugin test src/mod/agentk` check it against the engine (`test/unit/mod.test.ts` runs
+both where Claude Code is installed). Its source compiles against Claude Code's own declarations,
+not the repo's tsconfig.
+
 ## The app
 
 The left rail holds projects, each with its repo's folder name in small type under the project
@@ -262,8 +320,9 @@ you can jump to any file from anywhere in a long diff; each file's header shows 
 ### Review comments
 
 Click **+** beside a line of any diff (shift-click a second line for a range) to leave a comment,
-as on a PR. Comments are drafts in `state.db` until you click **Send N comments**, which pastes
-them into Claude as one prompt, grouped by file, with the lines each one is about. If Claude is
+as on a PR. Comments are drafts in `state.db` until you click **Send N comments**, which sends
+them to Claude as one prompt (through [AgentK's mod](#agentks-mod-in-claude), or pasted into the
+terminal), grouped by file, with the lines each one is about. If Claude is
 mid-turn or waiting on a permission prompt, they queue and go out when it's back at its prompt in
 the Code or Review stage. Each comment keeps an excerpt of its last 20 lines (lines over 1,000 characters are cut short and
 marked with "…"), so it follows them when
@@ -431,7 +490,8 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
 ~/.agent-k-local/
   config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
   state.db                 # SQLite: projects, sessions, events, auth (WAL)
-  hook.sock                # Claude hooks → server
+  hook.sock                # Claude hooks (and AgentK's mod) → server
+  run/                     # launchers, the hooks settings file and scripts, run/mod/agentk (AgentK's mod)
   server.lock              # the running server's lease on this home (one server per home)
   certs/                   # self-signed pair, or symlinks to your own
   app/0.4.1/  app/current → 0.4.1
@@ -459,6 +519,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
 # capture_transcripts = false  # stop sending session transcripts to Meko conversations; on by default
 
+[claude]
+# command = "claude"         # how Claude Code is run
+# mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
+
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
 # url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
@@ -466,7 +530,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
 | Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
@@ -1180,6 +1244,7 @@ user-level command saved in `run/user-statusline`; its `padding` and `refreshInt
 If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--inner-cmd`, or
 `MEKO_INNER_STATUSLINE`) runs: Meko's "Meko: <datapack>" suffix would repeat what the session
 screen already shows, since sessions always use the project's datapack.
+AgentK's mod reports the same windows after each turn (`session.measure`), whatever the status line does.
 All sessions share one account, so reports are merged per window: a window that has reset is
 ignored, a later window replaces an earlier one, the higher use wins within a window, and a report
 missing a window keeps the last one, so an idle session re-running its status line with an old

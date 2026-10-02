@@ -102,6 +102,12 @@ your phone can connect.
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
+- **AgentK's mod in Claude:** with Claude Code 2.1.286 or later, each session loads a small Claude
+  Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
+  never land in a permission dialog or a running turn. After each turn the footer shows how full
+  Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml`, and AgentK
+  types its prompts into the terminal instead
+  ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early access.
 - **Four session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
   merge), *Plan & Implement* (the default) for the full lifecycle below, *Quick Code* for small
   tasks that go straight to code, and *Review a PR* (above). A session other than a review can change its type and move between stages, forward or

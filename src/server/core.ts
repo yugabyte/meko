@@ -11,7 +11,7 @@ import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
-import { writeHookFiles } from './claude.js';
+import { writeHookFiles, writeModFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
@@ -221,6 +221,13 @@ export class Core extends EventEmitter {
   async start(): Promise<void> {
     writeTmuxConf(this.paths);
     writeHookFiles(this.paths);
+    try {
+      if (!writeModFiles(this.paths)) this.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
+    } catch (e) {
+      this.log.warn("couldn't write AgentK's mod for Claude Code; sessions start without it", errMsg(e));
+    }
+    // Reads the Claude Code version for the mod now, so the first launch doesn't wait for it.
+    void this.sessions.modDir().catch(() => undefined);
     mkdirSync(this.paths.worktrees, { recursive: true });
     try {
       if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);
@@ -263,6 +270,8 @@ export class Core extends EventEmitter {
     this.lifecycle.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
+    // Held polls would keep the hook socket open until they time out.
+    this.sessions.mod.closeAll();
     await this.closeHooks();
     await this.meko.close();
   }
@@ -276,6 +285,7 @@ export class Core extends EventEmitter {
       (token, payload) => this.sessions.guard(token, payload),
       (token, input) => this.sessions.onStatusLine(token, input),
       (token, payload) => this.sessions.context(token, payload),
+      (token, route, body, signal) => this.sessions.onMod(token, route, body, signal),
     );
     this.hookSockId = socketId(this.paths.hookSock);
   }

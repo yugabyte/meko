@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { chmodSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import type { Server } from 'node:http';
+import { request, type Server } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { contextScriptPath, hooksSettingsPath, writeHookFiles } from '../../src/server/claude.js';
@@ -75,6 +75,41 @@ describe('hook socket', () => {
     expect((await postHookFull(sock, '/context', 'tok', { source: 'boom' })).status).toBe(204);
     expect((await postHookFull(sock, '/context', null, { source: 'startup' })).status).toBe(204);
     expect(asked.map(([t, p]) => [t, p.source])).toEqual([['tok', 'startup'], ['tok', 'resume'], ['tok', 'boom']]);
+  });
+
+  it("answers the mod's routes with what the handler replies, and 403 without a token", async () => {
+    const sock = join(home, 'run', 'hooks.sock');
+    const asked: [string, string, Record<string, unknown>][] = [];
+    server = await startHookServer(sock, () => undefined, undefined, undefined, undefined, async (token, route, body) => {
+      asked.push([token, route, body]);
+      if (route === '/mod/poll') return { status: 200, body: { prompts: [{ id: 'p1', text: 'hi' }] } };
+      if (route === '/mod/measure') throw new Error('broken');
+      return { status: 204 };
+    });
+    const poll = await postHookFull(sock, '/mod/poll', 'tok', {});
+    expect(poll.status).toBe(200);
+    expect(JSON.parse(poll.body)).toEqual({ prompts: [{ id: 'p1', text: 'hi' }] });
+    expect(await postHook(sock, '/mod/ack', 'tok', { id: 'p1', state: 'accepted' })).toBe(204);
+    expect(await postHook(sock, '/mod/measure', 'tok', {})).toBe(500);
+    expect(await postHook(sock, '/mod/hello', null, {})).toBe(403);
+    expect(await postHook(sock, '/mod/other', 'tok', {})).toBe(404);
+    expect(asked).toEqual([['tok', '/mod/poll', {}], ['tok', '/mod/ack', { id: 'p1', state: 'accepted' }], ['tok', '/mod/measure', {}]]);
+  });
+
+  it("aborts a held mod poll's signal when the mod's connection closes", async () => {
+    const sock = join(home, 'run', 'hooks.sock');
+    let aborted = false;
+    server = await startHookServer(sock, () => undefined, undefined, undefined, undefined, (_t, _r, _b, signal) =>
+      new Promise((resolve) => signal.addEventListener('abort', () => {
+        aborted = true;
+        resolve({ status: 204 });
+      })));
+    const req = request({ socketPath: sock, path: '/mod/poll', method: 'POST', headers: { 'X-AK-Token': 'tok' } });
+    req.on('error', () => undefined);
+    req.end('{}');
+    await new Promise((r) => setTimeout(r, 100));
+    req.destroy();
+    await waitFor(() => aborted, (a) => a, 2000, 'abort');
   });
 });
 
