@@ -5,7 +5,8 @@ implement the collect-and-export step of the amp metrics pipeline
 (controller/architecture/ac-metrics.md) and log pipeline
 (controller/architecture/ac-logs.md). Three collectors ship with the control
 plane:
-  - controller: scrapes the amp controller (:8080).
+  - controller: scrapes the amp controller (:8080) and, with agent.enabled,
+    the reconcile-agent (:9464).
   - compute:    scrapes every endpoint pod's Prometheus sources — the
     postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
     compute_ctl (:3080), the supervisor's certificate expiries (:9899) — plus
@@ -190,6 +191,19 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: controller}
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ .Values.controller.ports.api }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            {{- if and .Values.agent.enabled (gt (int (dig "metricsPort" 9464 .Values.agent)) 0) }}
+            # The reconcile-agent's own loop (ycp/cmd/reconcile-agent/metrics.go):
+            # tick outcomes, desired-state fetches, status reports to YCP. On its
+            # named port, so an agent image predating the listener is one down
+            # target rather than a scrape of the wrong port.
+            - job_name: amp-reconcile-agent
+              scrape_interval: 30s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: reconcile-agent}
+                - {source_labels: [__meta_kubernetes_pod_container_port_name], action: keep, regex: metrics}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            {{- end }}
     processors:
       batch: {}
       {{- if or $envID $acctID }}

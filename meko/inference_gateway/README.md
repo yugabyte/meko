@@ -172,6 +172,7 @@ deep-links.
 | `--show-pg-amp` | `SHOW_PG_AMP` | off | appends the AMP cluster/branch/compute tool sets to both tiers (same env var as meko-ui / api-server / MCP) |
 | `--max-tool-rounds` | `INFERENCE_MAX_TOOL_ROUNDS` | `3` | tool-execution rounds per agentic turn; after the cap a final no-tools answer is forced |
 | `--log-level` | `INFERENCE_LOG_LEVEL` | `INFO` | |
+| — | `MEKO_METRICS_PORT` | `9464` | Prometheus `/metrics` (HTTP requests by route, LLM calls and tokens by model) on its own port; `0` disables |
 
 With `MEKO_AGENTIC_CHAT` on, `POST /chat` may return a `pending_action` (a
 confirm-tier tool call the model proposed but the gateway did NOT execute);

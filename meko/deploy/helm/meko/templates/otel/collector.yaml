@@ -1,0 +1,539 @@
+{{- if eq (include "meko.otel.collectorRendered" .) "true" }}
+{{- /*
+The data plane's telemetry, as two OpenTelemetryCollector CRs:
+  - meko-metrics: a deployment scraping this release's Prometheus sources, exporting
+    to a remote-write store, the BYOC door, or both.
+  - meko-logs:    a daemonset tailing this release's container logs off each node,
+    exporting to an OTLP log store, Datadog, or both.
+The amp controller chart's otel-collectors.yaml is the reference; the exporter,
+identity and BYOC blocks are the same so one store, one Datadog org and one console
+read both, and only what is collected differs.
+
+`$otel` and `dig` throughout: `helm upgrade --reuse-values` replays the old
+release's values and ignores new chart defaults, so on a release predating the
+block (or a key in it) a direct lookup nil-pointers the render.
+*/}}
+{{- $otel := .Values.otel | default dict }}
+{{- $ns := .Release.Namespace }}
+{{- $name := "meko-metrics" }}
+{{- $saName := "meko-otel" }}
+{{- /* Namespace-prefixed: cluster-scoped, and two releases on one cluster must not
+       share it — uninstalling either would revoke the other's node access. */}}
+{{- $clusterName := printf "%s-meko-otel" $ns }}
+{{- $envID := dig "environmentId" "" $otel }}
+{{- $acctID := dig "accountId" "" $otel }}
+{{- $byocEnabled := dig "byoc" "enabled" false $otel }}
+{{- /* An explicit "" drops the exporter; an absent key keeps the default. */}}
+{{- $rwDefault := "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write" }}
+{{- $rwEndpoint := dig "remoteWriteEndpoint" $rwDefault $otel }}
+{{- if kindIs "invalid" $rwEndpoint }}{{ $rwEndpoint = $rwDefault }}{{ end }}
+{{- $exporters := list }}
+{{- if $rwEndpoint }}{{ $exporters = append $exporters "prometheus_remote_write" }}{{ end }}
+{{- if $byocEnabled }}{{ $exporters = append $exporters "otlphttp/byoc" }}{{ end }}
+{{- if eq (len $exporters) 0 }}
+{{- fail "otel.remoteWriteEndpoint is empty and otel.byoc.enabled is false: the metrics collector would have no exporter. Set one of them, or otel.enabled=false." }}
+{{- end }}
+{{- /* The meko services, each serving /metrics on a port named `metrics` and
+       found by its selector label. */}}
+{{- $services := list }}
+{{- range $s := list
+      (dict "job" "meko-api-server" "comp" "apiServer" "scrape" "apiServer" "label" "app" "value" "meko-api-server")
+      (dict "job" "meko-mcp-server" "comp" "mekoMcpServer" "scrape" "mcpServer" "label" "app" "value" "meko-mcp-server")
+      (dict "job" "meko-inference-gateway" "comp" "inferenceGateway" "scrape" "inferenceGateway" "label" "app_kubernetes_io_name" "value" "inference-gateway")
+      (dict "job" "meko-reconcile-agent" "comp" "reconcileAgent" "scrape" "reconcileAgent" "label" "app" "value" "meko-reconcile-agent") }}
+{{- $v := index $.Values $s.comp }}
+{{- if and $v.enabled (eq (include "meko.componentEnabled" (dict "root" $ "comp" $s.comp)) "true") (dig "scrape" $s.scrape true $otel) (gt (int (dig "metricsPort" 9464 $v)) 0) }}
+{{- $services = append $services (merge (dict "ns" (include "meko.ns" (dict "root" $ "ns" $v.namespace))) $s) }}
+{{- end }}
+{{- end }}
+{{- $scrapeServices := gt (len $services) 0 }}
+{{- $scrapeProv := and .Values.provisioner.enabled (eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true") (dig "scrape" "provisioner" true $otel) }}
+{{- $provNs := include "meko.ns" (dict "root" $ "ns" .Values.provisioner.namespace) }}
+{{- $statsd := and .Values.langfuse.enabled (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") (dig "scrape" "langfuse" true $otel) }}
+{{- $scrapeYB := and .Values.yugabyte.enabled (dig "scrape" "yugabyte" true $otel) }}
+{{- /* Every namespace a scraped pod can be in. Each service's is its own unless
+       global.singleNamespace; the database subchart is always the release's. */}}
+{{- $scrapeNs := list $ns }}
+{{- range $services }}{{ $scrapeNs = append $scrapeNs .ns | uniq }}{{ end }}
+{{- if $scrapeProv }}{{ $scrapeNs = append $scrapeNs $provNs | uniq }}{{ end }}
+{{- if not (or $scrapeServices $scrapeProv $statsd $scrapeYB (dig "podMetrics" true $otel)) }}
+{{- fail "otel.enabled with nothing to scrape: the service and yugabyte scrapes are off and otel.podMetrics is false. Turn one on, or otel.enabled=false." }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $saName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+{{- range $scrapeNs }}
+---
+# Pod discovery. A Role per scraped namespace rather than a ClusterRole; the only
+# cluster-scoped grants are the podMetrics and provisioner bindings below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: meko-otel
+  namespace: {{ . }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  # For the logs collector's k8sattributes, which names a pod's Deployment.
+  - apiGroups: ["apps"]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: meko-otel
+  namespace: {{ . }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: meko-otel
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $ns }}
+{{- end }}
+{{- if $scrapeProv }}
+---
+# The provisioner's metrics are behind controller-runtime's authn/authz filter,
+# which checks the caller's token against the provisioner's metrics-reader role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $clusterName }}-provisioner-metrics
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-provisioner-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $ns }}
+{{- end }}
+{{- if (dig "podMetrics" true $otel) }}
+---
+# cAdvisor lives in the kubelet, so node discovery and nodes/metrics have no
+# namespaced equivalent. Rendered only with otel.podMetrics.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $clusterName }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, nodes/metrics]
+    verbs: [get, list, watch]
+  - nonResourceURLs: ["/metrics/cadvisor"]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $clusterName }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $clusterName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $ns }}
+{{- end }}
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+spec:
+  mode: deployment
+  serviceAccount: {{ $saName }}
+  {{- with (dig "image" "" $otel) }}
+  image: {{ . }}
+  {{- end }}
+  {{- if $statsd }}
+  # Declared rather than left to the operator's port inference, which is the
+  # difference between Langfuse's datagrams arriving and vanishing.
+  ports:
+    - {name: statsd, port: 8125, protocol: UDP}
+  {{- end }}
+  {{- if $byocEnabled }}
+  env:
+    - name: BYOC_METRICS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ dig "byoc" "passwordSecret" "name" "byoc-metrics-auth" $otel | quote }}
+          key: {{ dig "byoc" "passwordSecret" "key" "password" $otel | quote }}
+  {{- end }}
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      {{- if $byocEnabled }}
+      basicauth/byoc:
+        client_auth:
+          username: {{ dig "byoc" "username" "byoc" $otel | quote }}
+          password: ${env:BYOC_METRICS_PASSWORD}
+      {{- end }}
+    receivers:
+      {{- if $statsd }}
+      # Langfuse records through dd-trace's DogStatsD client; tags arrive as labels.
+      statsd:
+        endpoint: 0.0.0.0:8125
+        aggregation_interval: 30s
+        enable_metric_type: true
+        is_monotonic_counter: true
+        timer_histogram_mapping:
+          - {statsd_type: histogram, observer_type: summary}
+          - {statsd_type: distribution, observer_type: summary}
+          - {statsd_type: timing, observer_type: summary}
+      {{- end }}
+      prometheus:
+        config:
+          scrape_configs:
+            {{- range $services }}
+            - job_name: {{ .job }}
+              scrape_interval: 15s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ .ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_{{ .label }}], action: keep, regex: {{ .value }}}
+                - {source_labels: [__meta_kubernetes_pod_container_port_name], action: keep, regex: metrics}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                - {source_labels: [__meta_kubernetes_namespace], target_label: namespace}
+            {{- end }}
+            {{- if $scrapeProv }}
+            - job_name: meko-provisioner
+              scrape_interval: 30s
+              scheme: https
+              authorization:
+                credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              tls_config:
+                # controller-runtime serves a self-signed certificate unless given one.
+                insecure_skip_verify: true
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $provNs }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: meko-provisioner}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ .Values.provisioner.metricsPort }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            {{- end }}
+            {{- if $scrapeYB }}
+            {{- /* Pod-IP scraping on the subchart's labels and its default http-ui
+                   ports. metric_type is YugabyteDB's own label: server- and
+                   cluster-level series are bounded by the node count, table and
+                   tablet ones by the data. */}}
+            {{- range $job := list (dict "name" "meko-yb-master" "app" "yb-master" "port" 7000) (dict "name" "meko-yb-tserver" "app" "yb-tserver" "port" 9000) (dict "name" "meko-yb-ysql" "app" "yb-tserver" "port" 13000) }}
+            - job_name: {{ $job.name }}
+              scrape_interval: 30s
+              metrics_path: /prometheus-metrics
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app], action: keep, regex: {{ $job.app }}}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ $job.port }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+              metric_relabel_configs:
+                - {source_labels: [metric_type], action: drop, regex: "table|tablet"}
+            {{- end }}
+            {{- end }}
+            {{- if (dig "podMetrics" true $otel) }}
+            - job_name: kubelet-cadvisor
+              scrape_interval: 30s
+              scheme: https
+              metrics_path: /metrics/cadvisor
+              authorization:
+                credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              tls_config:
+                insecure_skip_verify: true
+              kubernetes_sd_configs: [{role: node}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_node_address_InternalIP], action: replace, regex: (.+), replacement: "$1:10250", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_node_name], target_label: node}
+              metric_relabel_configs:
+                # The node's other tenants are not ours to ship.
+                - {source_labels: [namespace], action: keep, regex: "{{ $scrapeNs | join "|" }}"}
+            {{- end }}
+    processors:
+      batch: {}
+      {{- if or $envID $acctID }}
+      # Fleet identity, as datapoint attributes so the store's OTLP receiver
+      # promotes them to labels without promote_resource_attributes.
+      transform/identity:
+        metric_statements:
+          - context: datapoint
+            statements:
+              {{- if $envID }}
+              - set(attributes["environment_id"], {{ $envID | quote }})
+              {{- end }}
+              {{- if $acctID }}
+              - set(attributes["account_id"], {{ $acctID | quote }})
+              {{- end }}
+      {{- end }}
+      {{- if $byocEnabled }}
+      transform/byoc:
+        metric_statements:
+          - context: datapoint
+            statements:
+              - set(attributes["source"], {{ dig "byoc" "source" "meko" $otel | quote }})
+      {{- end }}
+    exporters:
+      {{- if $rwEndpoint }}
+      prometheus_remote_write:
+        endpoint: {{ $rwEndpoint | quote }}
+        tls:
+          insecure: {{ if hasPrefix "https://" $rwEndpoint }}false{{ else }}true{{ end }}
+        resource_to_telemetry_conversion:
+          enabled: true
+      {{- end }}
+      {{- if $byocEnabled }}
+      # gzip is mandatory: the door's nginx answers 415 without it.
+      otlphttp/byoc:
+        metrics_endpoint: {{ dig "byoc" "metricsEndpoint" "" $otel | quote }}
+        compression: gzip
+        auth:
+          authenticator: basicauth/byoc
+        tls:
+          insecure: false
+      {{- end }}
+    service:
+      extensions: [health_check{{ if $byocEnabled }}, basicauth/byoc{{ end }}]
+      pipelines:
+        metrics:
+          receivers: [prometheus{{ if $statsd }}, statsd{{ end }}]
+          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if $byocEnabled }}, transform/byoc{{ end }}]
+          exporters: [{{ $exporters | join ", " }}]
+{{- if dig "collectors" "logs" "enabled" true $otel }}
+{{- $logsDefault := "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}
+{{- $logsEndpoint := dig "logsEndpoint" $logsDefault $otel }}
+{{- if kindIs "invalid" $logsEndpoint }}{{ $logsEndpoint = $logsDefault }}{{ end }}
+{{- $logsExporters := list }}
+{{- if $logsEndpoint }}{{ $logsExporters = append $logsExporters "otlphttp/logs" }}{{ end }}
+{{- if $byocEnabled }}{{ $logsExporters = append $logsExporters "datadog" }}{{ end }}
+{{- if eq (len $logsExporters) 0 }}
+{{- fail "otel.logsEndpoint is empty and otel.byoc.enabled is false: the logs collector would have no exporter. Set one of them, or otel.collectors.logs.enabled=false." }}
+{{- end }}
+{{- /* Every namespace this release runs a workload in. One namespace in a BYOC
+       release; the hosted layout spreads the stack over several. */}}
+{{- $logNs := list $ns }}
+{{- range $comp := list "apiServer" "mekoUi" "mekoMcpServer" "inferenceGateway" "ragAgent" "langfuse" "reconcileAgent" }}
+{{- if and (index $.Values $comp).enabled (eq (include "meko.componentEnabled" (dict "root" $ "comp" $comp)) "true") }}
+{{- $logNs = append $logNs (include "meko.ns" (dict "root" $ "ns" (index $.Values $comp).namespace)) | uniq }}
+{{- end }}
+{{- end }}
+{{- /* k8sattributes is filtered to ONE namespace, which the Role above covers.
+       Over several it would list pods cluster-wide and need a ClusterRole, so the
+       hosted layout ships the file path's pod/container metadata alone. */}}
+{{- $k8sattrs := eq (len $logNs) 1 }}
+{{- $ddSite := dig "datadog" "site" "us3.datadoghq.com" $otel }}
+{{- $ddTags := list }}
+{{- if $envID }}{{ $ddTags = append $ddTags (printf "env:%s" $envID) }}{{ end }}
+{{- if $acctID }}{{ $ddTags = append $ddTags (printf "account:%s" $acctID) }}{{ end }}
+{{- $ddTagsStr := $ddTags | join "," }}
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: meko-logs
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-otel") | nindent 4 }}
+spec:
+  # Container logs are node-local files.
+  mode: daemonset
+  serviceAccount: {{ $saName }}
+  # Both hostPaths are root-owned: as the operator's default non-root uid the
+  # collector can neither write its checkpoints nor read every container's log.
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  {{- with (dig "image" "" $otel) }}
+  image: {{ . }}
+  {{- end }}
+  {{- with (dig "logsTolerations" list $otel) }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  env:
+    - name: KUBE_NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+    {{- if $byocEnabled }}
+    # Not optional: the datadog exporter refuses an empty key at startup and takes
+    # the whole daemonset down with it, so the Secret must exist first.
+    - name: DD_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: {{ dig "datadog" "apiKeySecret" "name" "datadog-api" $otel | quote }}
+          key: {{ dig "datadog" "apiKeySecret" "key" "api-key" $otel | quote }}
+    {{- end }}
+  volumes:
+    - name: varlogpods
+      hostPath:
+        path: /var/log/pods
+    # Read offsets survive a restart, so nothing is replayed or skipped. Keyed by
+    # namespace: the directory is node-shared and bbolt locks it exclusively, so two
+    # releases on one node would otherwise crash-loop the second collector.
+    - name: checkpoints
+      hostPath:
+        path: /var/lib/otelcol/{{ $ns }}-meko-logs
+        type: DirectoryOrCreate
+  volumeMounts:
+    - name: varlogpods
+      mountPath: /var/log/pods
+      readOnly: true
+    - name: checkpoints
+      mountPath: /var/lib/otelcol
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      file_storage/checkpoints:
+        directory: /var/lib/otelcol
+    receivers:
+      filelog:
+        # This release's namespaces only: the node's other tenants are not ours.
+        include:
+          {{- range $logNs }}
+          - /var/log/pods/{{ . }}_*/*/*.log
+          {{- end }}
+        # The collectors' own output would otherwise feed back into the pipeline.
+        exclude: [/var/log/pods/{{ $ns }}_meko-*-collector-*/*/*.log]
+        include_file_path: true
+        # Not `end`: a pod that dies during startup is what these logs explain, and
+        # the checkpoint prevents replay.
+        start_at: beginning
+        storage: file_storage/checkpoints
+        retry_on_failure:
+          enabled: true
+        operators:
+          # Strips the CRI envelope, rejoins lines split at 16 KiB, and lifts
+          # k8s.{namespace,pod,container} off the path.
+          - type: container
+            id: container-parser
+            add_metadata_from_filepath: true
+    processors:
+      # First, so one pod's log storm cannot OOM the node's collector.
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      {{- if $k8sattrs }}
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        filter:
+          namespace: {{ first $logNs }}
+          node_from_env_var: KUBE_NODE_NAME
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.container.name
+            - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.node.name
+          labels:
+            # What names the service: `app` on every meko workload and the
+            # database, app.kubernetes.io/name on the inference gateway.
+            - {tag_name: component, key: app, from: pod}
+            - {tag_name: app_name, key: app.kubernetes.io/name, from: pod}
+        pod_association:
+          - sources: [{from: resource_attribute, name: k8s.pod.uid}]
+          - sources: [{from: resource_attribute, name: k8s.namespace.name}, {from: resource_attribute, name: k8s.pod.name}]
+      {{- end }}
+      {{- if $byocEnabled }}
+      # Best-effort shaping for Datadog: a line that matches nothing ships unshaped.
+      transform/severity:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              # The level word, in each format this stack writes: JSON (Rust tracing),
+              # logfmt (the api-server's slog), Python logging ("<date> <time> INFO
+              # name: ..."), and glog's one-letter prefix (YugabyteDB, "I1001 ...").
+              - set(cache["lvl"], ExtractPatterns(body, "\"level\"\\s*:\\s*\"(?P<lvl>[A-Za-z]+)\"")["lvl"]) where IsMatch(body, "\"level\"\\s*:\\s*\"")
+              - set(cache["lvl"], ExtractPatterns(body, "(^|\\s)level=(?P<lvl>[A-Za-z]+)")["lvl"]) where cache["lvl"] == nil and IsMatch(body, "(^|\\s)level=[A-Za-z]")
+              - set(cache["lvl"], ExtractPatterns(body, "^\\S+ \\S+ (?P<lvl>DEBUG|INFO|WARNING|ERROR|CRITICAL) ")["lvl"]) where cache["lvl"] == nil and IsMatch(body, "^\\S+ \\S+ (DEBUG|INFO|WARNING|ERROR|CRITICAL) ")
+              - set(cache["lvl"], "INFO") where cache["lvl"] == nil and IsMatch(body, "^I\\d{4} ")
+              - set(cache["lvl"], "WARN") where cache["lvl"] == nil and IsMatch(body, "^W\\d{4} ")
+              - set(cache["lvl"], "ERROR") where cache["lvl"] == nil and IsMatch(body, "^E\\d{4} ")
+              - set(cache["lvl"], "FATAL") where cache["lvl"] == nil and IsMatch(body, "^F\\d{4} ")
+              - set(severity_text, "critical") where cache["lvl"] == "FATAL" or cache["lvl"] == "CRITICAL"
+              - set(severity_text, "error") where cache["lvl"] == "ERROR" or cache["lvl"] == "error"
+              - set(severity_text, "warn") where cache["lvl"] == "WARN" or cache["lvl"] == "WARNING" or cache["lvl"] == "warn"
+              - set(severity_text, "info") where cache["lvl"] == "INFO" or cache["lvl"] == "info"
+              - set(severity_text, "debug") where cache["lvl"] == "DEBUG" or cache["lvl"] == "debug"
+              # severity_number is what Datadog reads for `status`.
+              - set(severity_number, SEVERITY_NUMBER_FATAL) where severity_text == "critical"
+              - set(severity_number, SEVERITY_NUMBER_ERROR) where severity_text == "error"
+              - set(severity_number, SEVERITY_NUMBER_WARN) where severity_text == "warn"
+              - set(severity_number, SEVERITY_NUMBER_INFO) where severity_text == "info"
+              - set(severity_number, SEVERITY_NUMBER_DEBUG) where severity_text == "debug"
+      transform/datadog:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              - set(attributes["datadog.log.source"], resource.attributes["k8s.container.name"]) where resource.attributes["k8s.container.name"] != nil
+              {{- if $ddTagsStr }}
+              # The metrics collector's identity labels, as tags, so a log and its
+              # metrics share one scope.
+              - set(attributes["ddtags"], {{ $ddTagsStr | quote }})
+              {{- end }}
+          - context: resource
+            statements:
+              - set(attributes["service.name"], attributes["component"]) where attributes["service.name"] == nil and attributes["component"] != nil
+              - set(attributes["service.name"], attributes["app_name"]) where attributes["service.name"] == nil and attributes["app_name"] != nil
+              - set(attributes["service.name"], attributes["k8s.container.name"]) where attributes["service.name"] == nil and attributes["k8s.container.name"] != nil
+      {{- end }}
+      batch: {}
+    exporters:
+      {{- if $logsEndpoint }}
+      otlphttp/logs:
+        logs_endpoint: {{ $logsEndpoint | quote }}
+        tls:
+          insecure: {{ if hasPrefix "https://" $logsEndpoint }}false{{ else }}true{{ end }}
+      {{- end }}
+      {{- if $byocEnabled }}
+      # Its own queue and retries, so a Datadog outage backs up this exporter alone.
+      datadog:
+        api:
+          site: {{ $ddSite | quote }}
+          key: ${env:DD_API_KEY}
+        host_metadata:
+          enabled: false
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          queue_size: 100
+          num_consumers: 10
+      {{- end }}
+    service:
+      extensions: [health_check, file_storage/checkpoints]
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [memory_limiter{{ if $k8sattrs }}, k8sattributes{{ end }}{{ if $byocEnabled }}, transform/severity, transform/datadog{{ end }}, batch]
+          exporters: [{{ $logsExporters | join ", " }}]
+{{- end }}
+{{- end }}

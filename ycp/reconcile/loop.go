@@ -19,6 +19,7 @@ type Engine struct {
 	maxBO      time.Duration
 	stuckAfter time.Duration
 	now        func() time.Time
+	onTick     func(Result, error, time.Duration)
 
 	mu        sync.Mutex
 	cache     map[ResourceKey]int64      // last-applied generation; fallback for a backend that cannot echo
@@ -79,6 +80,10 @@ type Options struct {
 	StuckAfter time.Duration
 	// Now is injectable for tests. Defaults to time.Now.
 	Now func() time.Time
+	// OnTick, when set, is called by Run after every Reconcile with its result,
+	// its error and how long it took — an observer for the caller's metrics, so
+	// this package carries no metrics dependency of its own.
+	OnTick func(res Result, err error, took time.Duration)
 }
 
 // New builds an Engine driving backend.
@@ -105,6 +110,7 @@ func New(backend Backend, opts Options) *Engine {
 		maxBO:      opts.MaxBackoff,
 		stuckAfter: opts.StuckAfter,
 		now:        opts.Now,
+		onTick:     opts.OnTick,
 		cache:      map[ResourceKey]int64{},
 		failures:   map[ResourceKey]*failState{},
 		permanent:  map[ResourceKey]permMark{},
@@ -547,7 +553,11 @@ func (e *Engine) Run(ctx context.Context, src Source, rep Reporter, interval tim
 			// fresh is false: reconcile with whatever the source returned (its
 			// last-good set) but skip deletes.
 		}
+		start := e.now()
 		res, rerr := e.Reconcile(ctx, state.Resources, fresh && err == nil)
+		if e.onTick != nil {
+			e.onTick(res, rerr, e.now().Sub(start))
+		}
 		if rerr != nil {
 			logf("reconcile: tick: %v", rerr)
 		} else {

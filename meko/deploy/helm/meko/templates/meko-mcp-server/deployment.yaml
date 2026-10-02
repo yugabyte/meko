@@ -2,6 +2,7 @@
 {{- $c := .Values.mekoMcpServer }}
 {{- $s := $c.secrets.existing }}
 {{- $cm := "meko-mcp-server-config" }}
+{{- $metricsPort := dig "metricsPort" 9464 $c }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -173,10 +174,18 @@ spec:
                 configMapKeyRef:
                   name: {{ $cm }}
                   key: ENABLE_ASYNC_MEMORY_EXTRACTION
+            {{- /* Env rather than a flag, so an image predating the listener ignores it. */}}
+            - name: MEKO_METRICS_PORT
+              value: {{ $metricsPort | quote }}
           ports:
             - containerPort: 8000
               name: http
               protocol: TCP
+            {{- if gt (int $metricsPort) 0 }}
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+            {{- end }}
           resources:
             {{- toYaml $c.resources | nindent 12 }}
           readinessProbe:

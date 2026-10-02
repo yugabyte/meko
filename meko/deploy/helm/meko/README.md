@@ -193,6 +193,49 @@ YCP's own register response prints that command with everything it can know alre
 filled in — the namespace, the URL it was reached on, and the stack's per-component
 image tags from the release it pins. Prefer it over retyping this.
 
+### Metrics and logs (`otel`)
+
+`templates/otel/collector.yaml` is two `OpenTelemetryCollector` CRs — they need the
+OpenTelemetry Operator with the contrib distro — modelled on amp's
+([`ac-metrics.md`](../../../../amp/controller/architecture/ac-metrics.md),
+[`ac-logs.md`](../../../../amp/controller/architecture/ac-logs.md)):
+
+- **`meko-metrics`** collects, each where its component is enabled:
+  - `/metrics` from the api-server, MCP server, inference gateway and reconcile-agent,
+    each on `<component>.metricsPort` (9464), a port named `metrics` kept off the one
+    their Service and Ingress expose. The api-server's include `meko_api_rag_documents`,
+    the knowledge-base backlog by status, read from `dist_rag` — the rag workers export
+    nothing themselves.
+  - the provisioner's controller-runtime `/metrics`, over HTTPS with the collector's
+    token, through a ClusterRoleBinding to the provisioner's metrics-reader role;
+  - Langfuse's DogStatsD metrics, on a `statsd` receiver at UDP 8125 that the web and
+    worker containers are pointed at;
+  - the bundled YugabyteDB's master, tserver and YSQL endpoints, with table- and
+    tablet-level series dropped;
+  - with `otel.podMetrics`, cAdvisor for this release's namespaces.
+
+  It ships to `otel.remoteWriteEndpoint`, the BYOC door, or both. `otel.scrape.*`
+  turns each source off.
+- **`meko-logs`** is a daemonset tailing `/var/log/pods` for this release's
+  namespaces only, shipping to `otel.logsEndpoint`, Datadog, or both. In the
+  one-namespace BYOC shape it adds pod metadata with `k8sattributes`; across the
+  hosted layout's several namespaces that would need cluster-wide pod reads, so it
+  ships the file path's pod and container names alone.
+
+`otel.byoc.enabled` turns on both off-cluster sinks together, each reading its own
+Secret — `byoc-metrics-auth` and `datadog-api` — which must exist first. Metrics
+carry `environment_id`/`account_id`/`source="meko"`, and logs the same identity as
+Datadog tags.
+
+Off by default, because this chart also deploys the hosted stack. The install hint
+YCP prints turns it on for a BYOC data plane, and the reconcile-agent reports the
+result back, so an environment whose release ships nowhere shows as `DEGRADED`.
+The UI exposes no metrics; its logs ship. The MCP server's series come from its own
+repository (`yugabyte/meko-mcp-server`); an image predating any source's metrics just
+leaves that target down.
+
+`helm template` sees no CRDs, so render it with `--api-versions opentelemetry.io/v1beta1`.
+
 ## Identity provider
 
 `apiServer.cognito.enabled` and `apiServer.oidc.enabled` select who authenticates

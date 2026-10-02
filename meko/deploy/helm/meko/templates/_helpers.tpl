@@ -356,3 +356,14 @@ untouched.
 {{- printf "http://meko-api-server-service.%s.svc.cluster.local.:%v%s/api/v1" $apiNs $root.Values.apiServer.service.port $base -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+meko.otel.collectorRendered — "true" when templates/otel/collector.yaml renders its
+collectors: otel on, a data-plane release, and the operator's CRDs present. For the
+templates that point a workload at the collector, so none aims at a Service that
+does not exist.
+*/}}
+{{- define "meko.otel.collectorRendered" -}}
+{{- $otel := .Values.otel | default dict -}}
+{{- and (dig "enabled" false $otel) (eq (include "meko.mode" .) "mcp") (.Capabilities.APIVersions.Has "opentelemetry.io/v1beta1") -}}
+{{- end -}}

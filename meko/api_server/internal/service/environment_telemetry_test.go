@@ -24,9 +24,9 @@ func goodTelemetry() *Telemetry {
 	return &Telemetry{OtelEnabled: true, ByocEnabled: true, MetricsEndpoint: testDoor, LogsSink: "datadog"}
 }
 
-// The happy path, and the two shapes that must pass untouched: a meko environment
-// (whose chart has no otel block at all, so it has nothing to attest) and a control
-// plane with no door configured (nothing to compare against).
+// The happy path, and the shapes that must pass untouched: a meko agent on a chart
+// predating its collector (nothing to attest) and a control plane with no door
+// configured (nothing to compare against).
 func TestTelemetryPolicy_Accepts(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -35,7 +35,8 @@ func TestTelemetryPolicy_Accepts(t *testing.T) {
 		tel    *Telemetry
 	}{
 		{"a correctly configured amp deployment", doorPolicy(), KindAmp, goodTelemetry()},
-		{"a meko environment, which has no otel at all", doorPolicy(), KindMeko, nil},
+		{"a correctly configured meko deployment", doorPolicy(), KindMeko, goodTelemetry()},
+		{"a meko agent on a chart with no collector", doorPolicy(), KindMeko, nil},
 		{"any environment when no door is configured", TelemetryPolicy{}, KindAmp, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,15 +77,18 @@ func TestTelemetryPolicy_DegradesWithAReasonThatNamesTheFix(t *testing.T) {
 			`but this control plane issued`,
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			degraded := doorPolicy().check(KindAmp, tc.tel)
-			if degraded == "" {
-				t.Fatalf("check accepted %s without comment", tc.name)
-			}
-			if !strings.Contains(degraded, tc.want) {
-				t.Errorf("reason does not name the fix; want %q in:\n%s", tc.want, degraded)
-			}
-		})
+		// A meko agent that reports at all is held to exactly amp's checks.
+		for _, kind := range []string{KindAmp, KindMeko} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				degraded := doorPolicy().check(kind, tc.tel)
+				if degraded == "" {
+					t.Fatalf("check accepted %s without comment", tc.name)
+				}
+				if !strings.Contains(degraded, tc.want) {
+					t.Errorf("reason does not name the fix; want %q in:\n%s", tc.want, degraded)
+				}
+			})
+		}
 	}
 }
 
@@ -170,7 +174,7 @@ func TestTelemetryPolicy_ProbeErrorReadsAsUnknown(t *testing.T) {
 
 // The runtime check NEVER refuses, even for a first enrolment: a door outage is not
 // the operator's misconfiguration and must not stop a new environment coming up.
-// It also only applies to amp, and only when a threshold is configured.
+// It also applies only when a threshold and a door are configured.
 func TestTelemetryPolicy_RuntimeIsDegradeOnlyAndScoped(t *testing.T) {
 	stalled := &Telemetry{OtelEnabled: true, ByocEnabled: true, MetricsEndpoint: testDoor, StalledSeconds: 9000}
 
@@ -185,13 +189,24 @@ func TestTelemetryPolicy_RuntimeIsDegradeOnlyAndScoped(t *testing.T) {
 		policy TelemetryPolicy
 		kind   string
 	}{
-		{"a meko environment", TelemetryPolicy{MetricsURL: testDoor, StaleAfter: time.Minute}, KindMeko},
 		{"no threshold configured", TelemetryPolicy{MetricsURL: testDoor}, KindAmp},
 		{"no door configured", TelemetryPolicy{StaleAfter: time.Minute}, KindAmp},
 	} {
 		if got := tc.policy.checkRuntime(tc.kind, stalled); got != "" {
 			t.Errorf("%s was degraded by the runtime check: %q", tc.name, got)
 		}
+	}
+}
+
+// A meko agent that reports counters is watched the same way an amp one is.
+func TestTelemetryPolicy_RuntimeStallDegradesMeko(t *testing.T) {
+	p := TelemetryPolicy{MetricsURL: testDoor, StaleAfter: time.Minute}
+	stalled := &Telemetry{OtelEnabled: true, ByocEnabled: true, MetricsEndpoint: testDoor, StalledSeconds: 9000}
+	if got := p.checkRuntime(KindMeko, stalled); !strings.Contains(got, "shipped no metrics") {
+		t.Errorf("a stalled meko environment was not degraded: %q", got)
+	}
+	if got := p.checkRuntime(KindMeko, nil); got != "" {
+		t.Errorf("a meko agent reporting nothing was degraded: %q", got)
 	}
 }
 

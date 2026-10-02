@@ -11,6 +11,7 @@
 | Flag                | Default       | Description                      |
 |---------------------|---------------|----------------------------------|
 | `-port`             | `25433`       | API server listen port           |
+| `-metrics-port`     | `9464`        | Prometheus `/metrics` listener, apart from `-port`; `0` disables (`MEKO_METRICS_PORT`) |
 | `-db-host`          | `127.0.0.1`   | Database host                    |
 | `-db-port`          | `5433`        | Database port                    |
 | `-db-user-name`     | `yugabyte`    | Database user name               |

@@ -1,6 +1,10 @@
 {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
 {{- $c := .Values.langfuse }}
 {{- $secret := $c.secrets.existing.langfuse }}
+{{- $statsd := "" }}
+{{- if and (eq (include "meko.otel.collectorRendered" .) "true") (dig "scrape" "langfuse" true (.Values.otel | default dict)) }}
+{{- $statsd = printf "meko-metrics-collector.%s.svc.cluster.local" .Release.Namespace }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -136,6 +140,16 @@ spec:
           ports:
             - containerPort: 3000
               name: http-web
+          {{- if $statsd }}
+          {{- /* dd-trace's DogStatsD client, which carries every metric Langfuse
+                 records (queue depths, processing times, runtime), aimed at the
+                 collector's statsd receiver instead of a Datadog agent. Both host
+                 spellings, for dd-trace versions on either side of the rename. */}}
+          env:
+            - {name: DD_DOGSTATSD_HOST, value: {{ $statsd | quote }}}
+            - {name: DD_DOGSTATSD_HOSTNAME, value: {{ $statsd | quote }}}
+            - {name: DD_DOGSTATSD_PORT, value: "8125"}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: langfuse-config
@@ -160,6 +174,16 @@ spec:
           ports:
             - containerPort: 3030
               name: http-worker
+          {{- if $statsd }}
+          {{- /* dd-trace's DogStatsD client, which carries every metric Langfuse
+                 records (queue depths, processing times, runtime), aimed at the
+                 collector's statsd receiver instead of a Datadog agent. Both host
+                 spellings, for dd-trace versions on either side of the rename. */}}
+          env:
+            - {name: DD_DOGSTATSD_HOST, value: {{ $statsd | quote }}}
+            - {name: DD_DOGSTATSD_HOSTNAME, value: {{ $statsd | quote }}}
+            - {name: DD_DOGSTATSD_PORT, value: "8125"}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: langfuse-config

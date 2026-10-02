@@ -315,3 +315,29 @@ tests:
           content:
             name: YCP_URL
             value: https://devcloud.yugabyte.com/ycp/api/v1
+
+  - it: serves metrics on a named port
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example/api/v1
+      agent.envName: amp-acme-prod
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: AGENT_METRICS_PORT, value: "9464"}
+
+  - it: can turn the metrics listener off
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example/api/v1
+      agent.envName: amp-acme-prod
+      agent.metricsPort: 0
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].ports
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: AGENT_METRICS_PORT, value: "0"}

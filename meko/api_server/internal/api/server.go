@@ -3,13 +3,16 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"meko/api_server/internal/metrics"
 	"meko/api_server/internal/repository"
 )
 
@@ -262,6 +265,13 @@ type ServerConfig struct {
 	// mount. GET /api/v1/health stays reachable at the domain root either way so
 	// container probes don't have to know the prefix.
 	BasePath string
+
+	// Metrics, when non-nil, records every request and is served on MetricsPort.
+	// Its own listener rather than a route on Port: the hosted Ingress forwards
+	// every path on Port to the internet, and the series name routes, pool sizes
+	// and the Go build — nothing a public client should read.
+	Metrics     *metrics.Metrics
+	MetricsPort int
 }
 
 // deploymentStatusPollInterval is how often runDeploymentStatusPoller checks
@@ -332,14 +342,14 @@ func Run(cfg ServerConfig) error {
 	deployPollerDone := make(chan struct{})
 	go runDeploymentStatusPoller(deployPollerCtx, reg, deploymentStatusPollInterval, deployPollerDone)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	metricsSrv := startMetricsServer(cfg, errCh)
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.Port)
 		slog.Info("api server starting", "port", cfg.Port)
 		if err := e.Start(addr); err != nil {
 			errCh <- fmt.Errorf("server error: %w", err)
 		}
-		close(errCh)
 	}()
 
 	quit := make(chan os.Signal, 1)
@@ -362,6 +372,12 @@ func Run(cfg ServerConfig) error {
 	defer cancel()
 
 	slog.Info("shutting down api server")
+	if metricsSrv != nil {
+		// Logged, not returned: a scrape cut short loses one sample, not data.
+		if err := metricsSrv.Shutdown(ctx); err != nil {
+			slog.Warn("metrics server shutdown", "error", err)
+		}
+	}
 	if err := e.Shutdown(ctx); err != nil {
 		flusherCancel()
 		<-flusherDone
@@ -377,6 +393,29 @@ func Run(cfg ServerConfig) error {
 
 	slog.Info("api server stopped")
 	return nil
+}
+
+// startMetricsServer serves cfg.Metrics on cfg.MetricsPort, or returns nil when
+// either is unset. A listener that fails reports on errCh, which stops the whole
+// server: a pod that silently stopped exporting would look healthy and dark.
+func startMetricsServer(cfg ServerConfig, errCh chan<- error) *http.Server {
+	if cfg.Metrics == nil || cfg.MetricsPort <= 0 {
+		return nil
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", cfg.Metrics.Handler())
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.MetricsPort),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		slog.Info("metrics server starting", "port", cfg.MetricsPort)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("metrics server error: %w", err)
+		}
+	}()
+	return srv
 }
 
 // runMCPPATFlusher drains MCPPATRepo.QueueLastUsedTouch on a fixed

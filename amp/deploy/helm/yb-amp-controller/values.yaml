@@ -302,6 +302,9 @@ agent:
   enabled: false
   # -- Number of agent pods. Keep at 1: single YCP client, unsharded loop.
   replicaCount: 1
+  # -- Port the agent serves Prometheus /metrics on (tick outcomes, desired-state
+  # fetches, status reports), scraped by the controller collector. 0 turns it off.
+  metricsPort: 9464
 
   image:
     # -- Reconcile-agent image repository. Published as

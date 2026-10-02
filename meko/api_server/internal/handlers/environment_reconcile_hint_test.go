@@ -13,10 +13,15 @@ import (
 // mekoHint renders a meko environment's install hint.
 func mekoHint(t *testing.T) string {
 	t.Helper()
+	return mekoHintFor(t, "", testBYOCMetricsURL)
+}
+
+func mekoHintFor(t *testing.T, accountID, byocMetricsURL string) string {
+	t.Helper()
 	req := httptest.NewRequest("POST", "/api/v1/environments", nil)
 	req.Host = "ycp.example.com"
 	c := echo.New().NewContext(req, httptest.NewRecorder())
-	return installHint(c, &models.Environment{ID: "acme-prod", Kind: "meko"}, testBYOCMetricsURL)
+	return installHint(c, &models.Environment{ID: "acme-prod", Kind: "meko", AccountID: accountID}, byocMetricsURL)
 }
 
 // The meko hint has to be runnable as printed: the values the operator must supply
@@ -73,6 +78,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 			strings.HasPrefix(line, "QUAY_USER=") || strings.HasPrefix(line, "QUAY_TOKEN=") ||
 			strings.HasPrefix(line, "BEDROCK_KEY=") || strings.HasPrefix(line, "BEDROCK_SECRET=") ||
 			strings.HasPrefix(line, "LANGFUSE_OWNER_EMAIL=") ||
+			strings.HasPrefix(line, "BYOC_PASSWORD=") || strings.HasPrefix(line, "DD_API_KEY=") ||
 			strings.HasPrefix(line, "AGENT_API_KEY=") {
 			continue
 		}
@@ -107,5 +113,54 @@ func TestInstallHint_MekoCanEnableTheDisabledComponents(t *testing.T) {
 	// did not ask for is how a BYOC install grows pods it has no credentials for.
 	if strings.Contains(hint, "-f meko/deploy/helm/meko/values-byoc-full.yaml \\") {
 		t.Errorf("the full-stack overlay is applied unconditionally:\n%s", hint)
+	}
+}
+
+// The data plane ships telemetry the way an amp one does: metrics to the door this
+// control plane issued, logs to Datadog, nowhere else, labeled with the
+// environment's identity, and with both credentials in place before the install
+// that reads them.
+func TestInstallHint_MekoShipsTelemetryOffCluster(t *testing.T) {
+	hint := mekoHintFor(t, "3f2b1c00-0000-0000-0000-000000000009", testBYOCMetricsURL)
+
+	for _, want := range []string{
+		"opentelemetry-operator",
+		"otel/opentelemetry-collector-contrib",
+		"create secret generic byoc-metrics-auth",
+		"create secret generic datadog-api",
+		`--from-literal=api-key="${DD_API_KEY}"`,
+		"--set otel.enabled=true",
+		"--set otel.byoc.enabled=true",
+		"--set-string otel.byoc.metricsEndpoint=" + testBYOCMetricsURL,
+		// Empty, not absent: the chart reads "" as no in-cluster store.
+		"--set-string otel.remoteWriteEndpoint=",
+		"--set-string otel.logsEndpoint=",
+		`--set otel.podMetrics="${POD_METRICS}"`,
+		"--set otel.environmentId=acme-prod",
+		"--set otel.accountId=3f2b1c00-0000-0000-0000-000000000009",
+		// Quoted, so a pasted credential is not expanded by the shell.
+		"BYOC_PASSWORD='<byoc password>'",
+		"DD_API_KEY='<datadog api key>'",
+	} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint is missing %q:\n%s", want, hint)
+		}
+	}
+	install := strings.Index(hint, "helm upgrade --install meko")
+	for _, secret := range []string{"byoc-metrics-auth", "datadog-api"} {
+		if strings.Index(hint, secret) > install {
+			t.Errorf("%s is created after the install that reads it:\n%s", secret, hint)
+		}
+	}
+}
+
+// With no door configured the endpoint is left to the chart, and a standalone
+// YCP's sentinel account is not stamped on every series.
+func TestInstallHint_MekoWithoutADoorOrAnAccount(t *testing.T) {
+	hint := mekoHintFor(t, "00000000-0000-0000-0000-000000000000", "")
+	for _, unwanted := range []string{"otel.byoc.metricsEndpoint", "otel.accountId"} {
+		if strings.Contains(hint, unwanted) {
+			t.Errorf("hint carries %q:\n%s", unwanted, hint)
+		}
 	}
 }

@@ -64,7 +64,7 @@ func installHint(c echo.Context, e *models.Environment, byocMetricsURL string) s
 	if e.Kind == "amp" {
 		return ampInstallHint(url, e.ID, e.Placement, e.AccountID, byocMetricsURL)
 	}
-	return mekoReconcileInstallHint(url, e.ID, service.DefaultDataPlaneRelease(""))
+	return mekoReconcileInstallHint(url, e.ID, e.AccountID, byocMetricsURL, service.DefaultDataPlaneRelease(""))
 }
 
 // mekoStackNamespace is where a chart-installed meko data plane goes when the
@@ -98,7 +98,11 @@ const mekoTokenSecretName = "meko-reconcile-agent-token" //nolint:gosec // a Sec
 // it is the api-server's only caller and is authoritative over it, which the hint
 // says outright, because an operator who points one at a shared api-server needs
 // to know before running it.
-func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease) string {
+//
+// Telemetry is wired exactly as amp's is (see ampInstallHint): the BYOC door and
+// Datadog are the only sinks, the endpoint is printed inline rather than offered as
+// a choice, and the agent reports it back for the enroll check.
+func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, rel service.DataPlaneRelease) string {
 	ns := namespaceFor(envID, mekoStackNamespace)
 	chart := "meko/deploy/helm/meko"
 
@@ -106,7 +110,8 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "# Prerequisites\n")
 	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
 	fmt.Fprintf(&b, "#   - a cluster with a default StorageClass (the bundled YugabyteDB claims it)\n")
-	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-*\n\n")
+	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-*\n")
+	otelOperatorPrerequisite(&b)
 
 	// The tags are one release across the stack, but printed separately anyway: the
 	// pin can name different tags per component, and a hint that collapsed them to
@@ -139,6 +144,12 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	// entirely green and remembers nothing, which reads as a bug rather than a
 	// missing credential. The refs are optional, so empty installs fine.
 	fmt.Fprintf(&b, "OPENAI_KEY=                    # no key, no memory extraction and no RAG\n")
+	// Single-quoted like the amp hint's: a pasted credential carrying $, & or a
+	// space would otherwise be expanded by the shell and land wrong in its Secret.
+	fmt.Fprintf(&b, "BYOC_PASSWORD='<byoc password>'  # BasicAuth password for the metrics door\n")
+	fmt.Fprintf(&b, "DD_API_KEY='<datadog api key>'   # logs fan-out to Datadog\n")
+	fmt.Fprintf(&b, "POD_METRICS=true               # per-pod CPU/mem; needs a cluster-scoped ClusterRole\n")
+	fmt.Fprintf(&b, "                               # for node metrics — false to stay namespace-scoped\n")
 	// The extension point. values-byoc.yaml leaves the rag workers, langfuse and
 	// the provisioner off; an overlay passed after it is what turns any of them
 	// back on, and helm's last-wins ordering is the whole mechanism. Empty by
@@ -148,15 +159,22 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "#   moves the inference gateway onto OpenAI and adds the rag workers;\n")
 	fmt.Fprintf(&b, "#   needs OPENAI_KEY\n\n")
 
-	fmt.Fprintf(&b, "# 1 — two credentials. The agent's API key, and a pull secret: every image\n")
-	fmt.Fprintf(&b, "#      in this release is on private Quay, and %s is the\n", mekoPullSecretName)
-	fmt.Fprintf(&b, "#      name values-byoc.yaml expects.\n")
+	fmt.Fprintf(&b, "# 1 — four credentials. The agent's API key; a pull secret, since every image\n")
+	fmt.Fprintf(&b, "#      in this release is on private Quay and %s is the name\n", mekoPullSecretName)
+	fmt.Fprintf(&b, "#      values-byoc.yaml expects; and the two telemetry credentials, which the\n")
+	fmt.Fprintf(&b, "#      collectors read by secretKeyRef — a missing one stops that collector.\n")
 	fmt.Fprintf(&b, "kubectl create namespace \"${NS}\" --dry-run=client -o yaml | kubectl apply -f -\n")
 	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic meko-agent-api-key \\\n")
 	fmt.Fprintf(&b, "  --from-literal=api-key=\"${AGENT_API_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n")
 	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret docker-registry %s \\\n", mekoPullSecretName)
 	fmt.Fprintf(&b, "  --docker-server=quay.io --docker-username=\"${QUAY_USER}\" --docker-password=\"${QUAY_TOKEN}\" \\\n")
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic %s \\\n", byocMetricsSecretName)
+	fmt.Fprintf(&b, "  --from-literal=password=\"${BYOC_PASSWORD}\" \\\n")
+	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n")
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" create secret generic %s \\\n", datadogSecretName)
+	fmt.Fprintf(&b, "  --from-literal=api-key=\"${DD_API_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
 
 	fmt.Fprintf(&b, "# 2 — install the stack and the reconcile-agent, from a meko checkout. Swap\n")
@@ -186,6 +204,17 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitUserEmail=\"${LANGFUSE_OWNER_EMAIL}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitUserPassword=\"$(openssl rand -hex 16)\" \\\n")
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitProjectSecretKey=\"$(openssl rand -hex 16)\" \\\n")
+	fmt.Fprintf(&b, "  --set otel.enabled=true \\\n")
+	fmt.Fprintf(&b, "  --set otel.byoc.enabled=true \\\n")
+	if byocMetricsURL != "" {
+		fmt.Fprintf(&b, "  --set-string otel.byoc.metricsEndpoint=%s \\\n", byocMetricsURL)
+	}
+	fmt.Fprintf(&b, "  --set-string otel.remoteWriteEndpoint= \\\n")
+	fmt.Fprintf(&b, "  --set-string otel.logsEndpoint= \\\n")
+	fmt.Fprintf(&b, "  --set otel.podMetrics=\"${POD_METRICS}\" \\\n")
+	for _, a := range metricsIdentityArgs(envID, accountID) {
+		fmt.Fprintf(&b, "  --set %s \\\n", a)
+	}
 	fmt.Fprintf(&b, "  --set reconcileAgent.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set reconcileAgent.ycpUrl=%s \\\n", ycpURL)
 	fmt.Fprintf(&b, "  --set reconcileAgent.envName=%s \\\n", envID)
@@ -197,6 +226,12 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" rollout status deploy/meko-api-server\n")
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" logs -f deploy/meko-reconcile-agent\n")
 	fmt.Fprintf(&b, "#\n")
+	fmt.Fprintf(&b, "# Metrics ship to yugabyte-cloud and logs to Datadog, and nowhere else — this\n")
+	fmt.Fprintf(&b, "# cluster runs no in-cluster store, which is why both endpoints above are empty.\n")
+	fmt.Fprintf(&b, "# The metrics endpoint is not an install-time choice: this console checks it at\n")
+	fmt.Fprintf(&b, "# enroll, and shows an environment that ships elsewhere, or has stopped\n")
+	fmt.Fprintf(&b, "# shipping, as DEGRADED.\n")
+	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# The agent is this api-server's only caller and is authoritative over it:\n")
 	fmt.Fprintf(&b, "# anything desired state stops declaring is collected. On an api-server with an\n")
 	fmt.Fprintf(&b, "# identity provider ON (Cognito or OIDC), add the account's MCP token, or every\n")
@@ -204,6 +239,18 @@ func mekoReconcileInstallHint(ycpURL, envID string, rel service.DataPlaneRelease
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" create secret generic %s \\\n", mekoTokenSecretName)
 	fmt.Fprintf(&b, "#     --from-literal=meko-api-token=<token>\n")
 	return b.String()
+}
+
+// otelOperatorPrerequisite prints the last Prerequisites bullet both hints share.
+func otelOperatorPrerequisite(b *strings.Builder) {
+	fmt.Fprintf(b, "#   - the OpenTelemetry Operator, with the contrib collector distro. The\n")
+	fmt.Fprintf(b, "#     collectors are OpenTelemetryCollector CRs, so nothing ships without it:\n")
+	fmt.Fprintf(b, "#       helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts\n")
+	fmt.Fprintf(b, "#       helm upgrade --install opentelemetry-operator open-telemetry/opentelemetry-operator \\\n")
+	fmt.Fprintf(b, "#         -n opentelemetry-operator-system --create-namespace \\\n")
+	fmt.Fprintf(b, "#         --set admissionWebhooks.certManager.enabled=false \\\n")
+	fmt.Fprintf(b, "#         --set admissionWebhooks.autoGenerateCert.enabled=true \\\n")
+	fmt.Fprintf(b, "#         --set manager.collectorImage.repository=otel/opentelemetry-collector-contrib\n\n")
 }
 
 // ampInstallNamespace is where the amp controller install puts the controller
@@ -293,14 +340,7 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "#   - helm logged in to quay.io with that Secret's credential — the chart is\n")
 	fmt.Fprintf(&b, "#     private, like the images:\n")
 	fmt.Fprintf(&b, "#       helm registry login quay.io\n")
-	fmt.Fprintf(&b, "#   - the OpenTelemetry Operator, with the contrib collector distro. The\n")
-	fmt.Fprintf(&b, "#     collectors are OpenTelemetryCollector CRs, so nothing ships without it:\n")
-	fmt.Fprintf(&b, "#       helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts\n")
-	fmt.Fprintf(&b, "#       helm upgrade --install opentelemetry-operator open-telemetry/opentelemetry-operator \\\n")
-	fmt.Fprintf(&b, "#         -n opentelemetry-operator-system --create-namespace \\\n")
-	fmt.Fprintf(&b, "#         --set admissionWebhooks.certManager.enabled=false \\\n")
-	fmt.Fprintf(&b, "#         --set admissionWebhooks.autoGenerateCert.enabled=true \\\n")
-	fmt.Fprintf(&b, "#         --set manager.collectorImage.repository=otel/opentelemetry-collector-contrib\n\n")
+	otelOperatorPrerequisite(&b)
 
 	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is.\n")
 	fmt.Fprintf(&b, "NS=%s\n", ns)

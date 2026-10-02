@@ -102,7 +102,8 @@ func TestMetrics_QueryIsScopedToResolvedRow(t *testing.T) {
 	for _, want := range []string{
 		`environment_id="acme-prod"`,
 		`account_id=~"` + acctA + `"`,
-		`source="amp"`,
+		// scopeRow is a meko environment, whose series its chart labels source="meko".
+		`source="meko"`,
 	} {
 		if !strings.Contains(query, want) {
 			t.Errorf("query %s\nis missing %s", query, want)

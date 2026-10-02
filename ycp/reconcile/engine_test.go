@@ -686,3 +686,31 @@ func TestPermanentReasonSurvivesToTheResult(t *testing.T) {
 		})
 	}
 }
+
+type oneShotSource struct{ ds api.DesiredState }
+
+func (s oneShotSource) Desired(context.Context) (api.DesiredState, bool, error) {
+	return s.ds, true, nil
+}
+
+// OnTick sees every tick Run drives, with the result the reporter gets.
+func TestRunCallsOnTickWithEachResult(t *testing.T) {
+	f := newFake()
+	ctx, cancel := context.WithCancel(context.Background())
+	var got []Result
+	e := New(f, Options{OnTick: func(res Result, err error, took time.Duration) {
+		if err != nil {
+			t.Errorf("tick error: %v", err)
+		}
+		if took < 0 {
+			t.Errorf("negative tick duration %s", took)
+		}
+		got = append(got, res)
+		cancel()
+	}})
+	src := oneShotSource{api.DesiredState{Resources: []api.DesiredResource{{Kind: "pool", Name: "p", Generation: 1}}}}
+	e.Run(ctx, src, nil, time.Hour, nil)
+	if len(got) != 1 || got[0].Created != 1 {
+		t.Fatalf("OnTick saw %+v, want one tick that created the pool", got)
+	}
+}

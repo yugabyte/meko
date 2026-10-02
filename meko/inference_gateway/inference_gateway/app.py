@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import AppConfig
 from .llm import build_llm, build_summary_llm
+from .metrics import HTTPMetricsMiddleware
 from .routes.chat import router as chat_router
 from .session_store import InMemorySessionStore
 
@@ -34,6 +35,9 @@ def create_app(cfg: AppConfig) -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+
+    # Added last, so it is outermost and sees the status CORS answered with too.
+    app.add_middleware(HTTPMetricsMiddleware)
 
     app.state.config = cfg
     app.state.llm = build_llm(cfg)

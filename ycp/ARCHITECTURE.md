@@ -96,9 +96,11 @@ cluster.
    idempotent check-in the agent repeats at every startup, so a restart can never lock
    an agent out.
 
-   An amp agent also **attests its telemetry** here — whether otel and byoc shipping
+   The agent also **attests its telemetry** here — whether otel and byoc shipping
    are on, and the metrics endpoint it is configured with, read from the env its chart
-   set from the same values its collectors render from. YCP compares that endpoint
+   set from the same values its collectors render from. Both charts set it; a meko
+   agent that reports nothing is on a chart predating its collector and is left alone,
+   where an amp one is degraded. YCP compares that endpoint
    against its own `--byoc-metrics-url`, which is the same value it printed in the
    install hint. This is the only check a customer cannot edit away: a data plane
    installs from a checkout they have, so the endpoint is not theirs to choose but

@@ -1,6 +1,9 @@
 {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "reconcileAgent")) "true") }}
 {{- $c := .Values.reconcileAgent }}
 {{- $ns := include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+{{- $metricsPort := dig "metricsPort" 9464 $c }}
+{{- $otel := .Values.otel | default dict }}
+{{- $collecting := eq (include "meko.otel.collectorRendered" .) "true" }}
 {{- if not $c.ycpUrl }}{{ fail "reconcileAgent.ycpUrl is required when reconcileAgent.enabled=true" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -42,6 +45,28 @@ spec:
               value: {{ $c.placement | quote }}
             - name: AGENT_VERSION
               value: {{ $c.image.tag | quote }}
+            - name: AGENT_METRICS_PORT
+              value: {{ $metricsPort | quote }}
+            {{- /* What this release's collector ships, for the control plane to check
+                   against the door it issued (ycp/cmd/reconcile-agent/preflight.go).
+                   OTEL_ENABLED is whether a collector actually renders — otel on, a
+                   data-plane release, the operator's CRDs present — not the raw
+                   value: otel on with no collector ships nothing, and has to read as
+                   off so the environment is DEGRADED. */}}
+            - name: OTEL_ENABLED
+              value: {{ $collecting | quote }}
+            - name: OTEL_BYOC_ENABLED
+              value: {{ dig "byoc" "enabled" false $otel | quote }}
+            - name: BYOC_METRICS_ENDPOINT
+              value: {{ dig "byoc" "metricsEndpoint" "" $otel | quote }}
+            - name: OTEL_LOGS_SINK
+              value: {{ if and $collecting (dig "byoc" "enabled" false $otel) (dig "collectors" "logs" "enabled" true $otel) }}"datadog"{{ else }}""{{ end }}
+            {{- if $collecting }}
+            {{- /* The collector's own counters, so the agent reports whether metrics
+                   are still LEAVING, not only where they are configured to go. */}}
+            - name: OTEL_COLLECTOR_METRICS_URL
+              value: "http://meko-metrics-collector-monitoring.{{ .Release.Namespace }}.svc.cluster.local:8888/metrics"
+            {{- end }}
             {{- with $c.reconcileInterval }}
             - name: RECONCILE_INTERVAL
               value: {{ . | quote }}
@@ -78,6 +103,12 @@ spec:
                   name: {{ $c.secrets.existing.mekoApiToken }}
                   key: meko-api-token
                   optional: true
+          {{- if gt (int $metricsPort) 0 }}
+          ports:
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+          {{- end }}
           resources:
             {{- toYaml $c.resources | nindent 12 }}
       restartPolicy: Always

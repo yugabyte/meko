@@ -1,0 +1,499 @@
+# The data plane's metrics collector (templates/otel/collector.yaml). What this pins:
+#
+#   1. It renders only with otel.enabled, the operator's CRDs, and a data-plane mode.
+#   2. The BYOC shape: the door is the only exporter, with the identity and source
+#      labels on every datapoint.
+#   3. A collector with no exporter, or nothing to scrape, fails the render rather
+#      than reaching the operator's webhook.
+#   4. The logs daemonset reads only this release's namespaces and ships to Datadog
+#      with the same identity the metrics carry.
+#   5. The reconcile-agent attests what the collectors ship.
+#
+#   helm unittest charts/meko
+suite: otel
+templates:
+  - templates/otel/collector.yaml
+  - templates/reconcile-agent/deployment.yaml
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+  - templates/meko-mcp-server/deployment.yaml
+  - templates/meko-mcp-server/configmap.yaml
+  - templates/inference-gateway/deployment.yaml
+  - templates/inference-gateway/configmap.yaml
+  - templates/langfuse/deployment.yaml
+  - templates/langfuse/configmap.yaml
+# No suite-level `capabilities`: helm unittest merges a test's apiVersions into the
+# suite's, so the CRD-absent case could not clear it. Each test that needs the CRD
+# declares it.
+release:
+  namespace: acme
+set:
+  global.imageRegistry: reg.example.com
+  global.singleNamespace: true
+  yugabyte.enabled: true
+  apiServer.image.tag: t
+  mekoMcpServer.image.tag: t
+  inferenceGateway.image.tag: t
+  # Off unless a test is about them, so the job and document counts stay fixed.
+  langfuse.enabled: false
+  provisioner.enabled: false
+tests:
+  - it: renders nothing unless enabled
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing without the operator's CRDs
+    template: templates/otel/collector.yaml
+    set:
+      otel.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for a control plane
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      mode: ycp
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ships only to the BYOC door, labelled with the fleet identity
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector:
+      path: metadata.name
+      value: meko-metrics
+    set:
+      otel.enabled: true
+      otel.byoc.enabled: true
+      otel.remoteWriteEndpoint: ""
+      otel.environmentId: acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+    asserts:
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [otlphttp/byoc]
+      - equal:
+          path: spec.config.service.pipelines.metrics.processors
+          value: [transform/identity, batch, transform/byoc]
+      - equal:
+          path: spec.config.processors["transform/identity"].metric_statements[0].statements
+          value:
+            - set(attributes["environment_id"], "acme-prod")
+            - set(attributes["account_id"], "3f2b1c00-0000-0000-0000-000000000009")
+      - equal:
+          path: spec.config.processors["transform/byoc"].metric_statements[0].statements
+          value: ['set(attributes["source"], "meko")']
+      - contains:
+          path: spec.env
+          content:
+            name: BYOC_METRICS_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: byoc-metrics-auth, key: password}
+
+  - it: scrapes the api-server and the database, dropping per-table series
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector:
+      path: metadata.name
+      value: meko-metrics
+    set:
+      otel.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 7
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[0].job_name
+          value: meko-api-server
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].job_name
+          value: meko-mcp-server
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[2].job_name
+          value: meko-inference-gateway
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[3].job_name
+          value: meko-yb-master
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[4].job_name
+          value: meko-yb-tserver
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[5].job_name
+          value: meko-yb-ysql
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[6].job_name
+          value: kubelet-cadvisor
+      # The gateway carries no `app` label; its selector label is the one kept.
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[2].relabel_configs
+          content: {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: inference-gateway}
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[3].metric_relabel_configs
+          content: {source_labels: [metric_type], action: drop, regex: "table|tablet"}
+      # The node's other tenants are not shipped.
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[6].metric_relabel_configs
+          content: {source_labels: [namespace], action: keep, regex: "acme"}
+
+  - it: needs no cluster-scoped rights without podMetrics
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      otel.podMetrics: false
+    asserts:
+      # ServiceAccount, Role, RoleBinding, two collectors — no ClusterRole pair.
+      - hasDocuments:
+          count: 5
+
+  - it: refuses a collector with no exporter
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      otel.remoteWriteEndpoint: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "would have no exporter"
+
+  - it: refuses a logs collector with no exporter
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      otel.logsEndpoint: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "logs collector would have no exporter"
+
+  - it: ships this release's logs to Datadog, tagged with the fleet identity
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector:
+      path: metadata.name
+      value: meko-logs
+    set:
+      otel.enabled: true
+      otel.byoc.enabled: true
+      otel.remoteWriteEndpoint: ""
+      otel.logsEndpoint: ""
+      otel.environmentId: acme-prod
+      otel.accountId: 3f2b1c00-0000-0000-0000-000000000009
+    asserts:
+      - equal:
+          path: spec.mode
+          value: daemonset
+      - equal:
+          path: spec.config.receivers.filelog.include
+          value: [/var/log/pods/acme_*/*/*.log]
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [datadog]
+      - equal:
+          path: spec.config.service.pipelines.logs.processors
+          value: [memory_limiter, k8sattributes, transform/severity, transform/datadog, batch]
+      - equal:
+          path: spec.config.processors["k8sattributes"].filter.namespace
+          value: acme
+      - contains:
+          path: spec.config.processors["transform/datadog"].log_statements[0].statements
+          content: 'set(attributes["ddtags"], "env:acme-prod,account:3f2b1c00-0000-0000-0000-000000000009")'
+      - contains:
+          path: spec.env
+          content:
+            name: DD_API_KEY
+            valueFrom:
+              secretKeyRef: {name: datadog-api, key: api-key}
+
+  # Several namespaces would need cluster-wide pod reads for k8sattributes, so the
+  # split layout reads every namespace's files and drops the processor instead.
+  - it: tails every namespace of the split layout without cluster-scoped rights
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector:
+      path: metadata.name
+      value: meko-logs
+    set:
+      global.singleNamespace: false
+      otel.enabled: true
+    asserts:
+      - contains:
+          path: spec.config.receivers.filelog.include
+          content: /var/log/pods/meko-system_*/*/*.log
+      - equal:
+          path: spec.config.service.pipelines.logs.processors
+          value: [memory_limiter, batch]
+
+  - it: can run without the logs collector
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      otel.collectors.logs.enabled: false
+    asserts:
+      # ServiceAccount, Role, RoleBinding, ClusterRole pair, the metrics collector.
+      - hasDocuments:
+          count: 6
+
+  - it: scrapes the reconcile-agent on its named metrics port
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector: {path: metadata.name, value: meko-metrics}
+    set:
+      otel.enabled: true
+      reconcileAgent.enabled: true
+      reconcileAgent.ycpUrl: https://ycp.example/api/v1
+      reconcileAgent.image.tag: t
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[3].job_name
+          value: meko-reconcile-agent
+
+  - it: gives the agent a metrics port
+    template: templates/reconcile-agent/deployment.yaml
+    set:
+      reconcileAgent.enabled: true
+      reconcileAgent.ycpUrl: https://ycp.example/api/v1
+      reconcileAgent.image.tag: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: AGENT_METRICS_PORT, value: "9464"}
+
+  # The provisioner is a hosted-layout component, so this runs with the split
+  # namespaces.
+  - it: scrapes the provisioner with its token, bound to the metrics-reader role
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      global.singleNamespace: false
+      otel.enabled: true
+      provisioner.enabled: true
+      provisioner.image.tag: t
+    asserts:
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          any: true
+          content:
+            job_name: meko-provisioner
+            scheme: https
+        documentSelector: {path: metadata.name, value: meko-metrics}
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-provisioner-metrics-reader
+        documentSelector: {path: metadata.name, value: acme-meko-otel-provisioner-metrics}
+
+  - it: receives Langfuse's DogStatsD on a declared UDP port
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector: {path: metadata.name, value: meko-metrics}
+    set:
+      otel.enabled: true
+      langfuse.enabled: true
+      langfuse.web.image.tag: t
+      langfuse.worker.image.tag: t
+    asserts:
+      - equal:
+          path: spec.ports
+          value: [{name: statsd, port: 8125, protocol: UDP}]
+      - equal:
+          path: spec.config.service.pipelines.metrics.receivers
+          value: [prometheus, statsd]
+
+  - it: points Langfuse at the collector only when the collector exists
+    template: templates/langfuse/deployment.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      langfuse.enabled: true
+      langfuse.web.image.tag: t
+      langfuse.worker.image.tag: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content: {name: DD_DOGSTATSD_HOST, value: meko-metrics-collector.acme.svc.cluster.local}
+
+  - it: leaves Langfuse alone with otel off
+    template: templates/langfuse/deployment.yaml
+    set:
+      langfuse.enabled: true
+      langfuse.web.image.tag: t
+      langfuse.worker.image.tag: t
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].env
+
+  - it: refuses a collector with nothing to scrape
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      otel.podMetrics: false
+      otel.scrape.apiServer: false
+      otel.scrape.mcpServer: false
+      otel.scrape.inferenceGateway: false
+      yugabyte.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "nothing to scrape"
+
+  - it: serves api-server metrics on a named port off the Ingress port
+    template: templates/api-server/deployment.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MEKO_METRICS_PORT, value: "9464"}
+
+  - it: serves mcp-server metrics on a named port
+    template: templates/meko-mcp-server/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MEKO_METRICS_PORT, value: "9464"}
+
+  - it: serves gateway metrics on a named port
+    template: templates/inference-gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9464, protocol: TCP}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MEKO_METRICS_PORT, value: "9464"}
+
+  - it: has the agent attest the collector's config and watch its counters
+    template: templates/reconcile-agent/deployment.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel.enabled: true
+      otel.byoc.enabled: true
+      otel.byoc.metricsEndpoint: https://byoc.example/api/v1/otlp/metrics
+      reconcileAgent.enabled: true
+      reconcileAgent.ycpUrl: https://ycp.example/api/v1
+      reconcileAgent.image.tag: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_BYOC_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: BYOC_METRICS_ENDPOINT, value: https://byoc.example/api/v1/otlp/metrics}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_LOGS_SINK, value: datadog}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_COLLECTOR_METRICS_URL
+            value: http://meko-metrics-collector-monitoring.acme.svc.cluster.local:8888/metrics
+
+  # otel on but no operator: nothing collects, so the agent must not attest that
+  # anything does — YCP has to see it as off and degrade the environment.
+  - it: has the agent attest otel off when no collector can render
+    template: templates/reconcile-agent/deployment.yaml
+    set:
+      otel.enabled: true
+      otel.byoc.enabled: true
+      reconcileAgent.enabled: true
+      reconcileAgent.ycpUrl: https://ycp.example/api/v1
+      reconcileAgent.image.tag: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_ENABLED, value: "false"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_LOGS_SINK, value: ""}
+
+  # `helm upgrade --reuse-values` on a release predating the otel block renders
+  # with no .Values.otel at all; nothing may nil-pointer on it.
+  - it: renders the collector without an otel block
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel: null
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the agent without an otel block
+    template: templates/reconcile-agent/deployment.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel: null
+      reconcileAgent.enabled: true
+      reconcileAgent.ycpUrl: https://ycp.example/api/v1
+      reconcileAgent.image.tag: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_ENABLED, value: "false"}
+
+  - it: renders langfuse without an otel block
+    template: templates/langfuse/deployment.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      otel: null
+      langfuse.enabled: true
+      langfuse.web.image.tag: t
+      langfuse.worker.image.tag: t
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].env
+
+  - it: has the agent attest that telemetry is off
+    template: templates/reconcile-agent/deployment.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    set:
+      reconcileAgent.enabled: true
+      reconcileAgent.ycpUrl: https://ycp.example/api/v1
+      reconcileAgent.image.tag: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_ENABLED, value: "false"}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content: {name: OTEL_COLLECTOR_METRICS_URL}

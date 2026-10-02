@@ -36,6 +36,7 @@ from .config import (
     DEFAULT_PORT,
     AppConfig,
 )
+from .metrics import DEFAULT_METRICS_PORT, start_metrics_server
 
 
 def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
@@ -232,6 +233,7 @@ def cli_entry(argv: Sequence[str] | None = None) -> None:
         level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    start_metrics_server(int(os.getenv("MEKO_METRICS_PORT", str(DEFAULT_METRICS_PORT))))
     app = create_app(cfg)
     # log_config=None keeps uvicorn from clobbering our handler; we lose its
     # default access-log line but that's fine in dev.

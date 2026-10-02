@@ -106,7 +106,7 @@ an install where the operator is absent; there the collectors are skipped and
 `NOTES.txt` says they were:
 
 - **`<release>-controller`** — scrapes the amp controller (`:8080`) and its in-pod
-  controller (`:50051`).
+  controller (`:50051`), and with `agent.enabled` the reconcile-agent (`:9464`).
 - **`<release>-compute`** — scrapes every endpoint pod: the postgres_exporter
   sidecar (`:9187`), pageserver (`:9898`), safekeeper (`:7676`), compute_ctl
   (`:3080`) twice — `/metrics` for compute_ctl's own counters and
@@ -216,8 +216,9 @@ the console prints fills both in. Unset, nothing is stamped. The hint omits
 `account_id` for a standalone YCP, whose all-zeros sentinel account would label
 every series identically.
 
-One source this does **not** reach: the reconcile-agent, which exposes no
-`/metrics` at all. The backing YugabyteDB is reached by a different pipeline
+The reconcile-agent serves its own loop's series (`ycp_agent_*`: tick outcomes,
+desired-state fetches, status reports) on `AGENT_METRICS_PORT` (9464), and with
+`agent.enabled` the controller collector scrapes it as `amp-reconcile-agent`. The backing YugabyteDB is reached by a different pipeline
 entirely, and **only on the operator-managed foundation** — see below. (The QA
 framework also samples the DB into the report portal, which is a third one.)
 

@@ -1,5 +1,6 @@
 {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") }}
 {{- $c := .Values.inferenceGateway }}
+{{- $metricsPort := dig "metricsPort" 9464 $c }}
 {{- /*
   The gateway builds its LangChain client while the app is being constructed, so a
   missing provider credential is fatal rather than degrading: the process exits with
@@ -54,6 +55,15 @@ spec:
             - name: http
               containerPort: 8088
               protocol: TCP
+            {{- if gt (int $metricsPort) 0 }}
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+            {{- end }}
+          env:
+            {{- /* Env rather than a flag, so an image predating the listener ignores it. */}}
+            - name: MEKO_METRICS_PORT
+              value: {{ $metricsPort | quote }}
           envFrom:
             - configMapRef:
                 name: inference-gateway-config

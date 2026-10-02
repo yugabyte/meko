@@ -153,9 +153,7 @@ func (s *EnvironmentService) BYOCMetricsURL() string {
 // that ships nowhere is degraded from the moment it checks in rather than from its
 // first heartbeat, and a deployment edited later is caught on the next tick.
 func (p TelemetryPolicy) check(kind string, t *Telemetry) (degraded string) {
-	// amp only: the meko chart has no otel block at all, so a meko agent has
-	// nothing to attest and its silence means nothing.
-	if kind != KindAmp || p.MetricsURL == "" {
+	if !attests(kind, t) || p.MetricsURL == "" {
 		return ""
 	}
 	if t == nil {
@@ -178,6 +176,22 @@ func (p TelemetryPolicy) check(kind string, t *Telemetry) (degraded string) {
 	return reason + ". Re-run the install command from the install hint this console prints for the environment"
 }
 
+// attests reports whether an environment's telemetry report means anything. An amp
+// agent's always does. A meko chart only gained a collector later, so an agent on
+// an older one reports nothing — silence there is a chart predating the collector,
+// not a broken one, and degrading every such environment at control-plane rollout
+// would say nothing an operator can act on. Once it does report, it is held to the
+// same checks as amp.
+func attests(kind string, t *Telemetry) bool {
+	switch kind {
+	case KindAmp:
+		return true
+	case KindMeko:
+		return t != nil
+	}
+	return false
+}
+
 // checkRuntime asks the other question: this deployment is configured correctly,
 // but is it actually shipping? Configuration cannot answer that — the door goes
 // unreachable, a password is rotated, PrivateLink breaks, a collector crashloops,
@@ -187,7 +201,7 @@ func (p TelemetryPolicy) check(kind string, t *Telemetry) (degraded string) {
 // the operator's misconfiguration and must not stop a new environment coming up;
 // it also clears itself, unlike a wrong endpoint baked into a release.
 func (p TelemetryPolicy) checkRuntime(kind string, t *Telemetry) string {
-	if kind != KindAmp || p.MetricsURL == "" || p.StaleAfter <= 0 || t == nil {
+	if !attests(kind, t) || p.MetricsURL == "" || p.StaleAfter <= 0 || t == nil {
 		return ""
 	}
 	// The agent could not read its collector at all. Worth saying — an unreachable

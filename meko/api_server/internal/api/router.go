@@ -381,6 +381,9 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = handlers.CustomHTTPErrorHandler
+	// Outermost, so the request logger inside it has rendered any error and the
+	// status recorded is the one the client got.
+	e.Use(cfg.Metrics.Middleware())
 	RegisterMiddleware(e)
 
 	// Refuse to start on a base path that isn't one. Booting anyway would serve

@@ -70,6 +70,17 @@ func TestBuildQuery_PinsResolvedIdentity(t *testing.T) {
 	}
 }
 
+// A meko environment's series are labeled source="meko" by its chart; matching
+// "amp" would select none of them, and amp's would leak into a meko chart.
+func TestBuildQuery_ScopesSourceByKind(t *testing.T) {
+	env := testEnv(metricsAcct)
+	env.Kind = KindMeko
+	got := buildQuery(metricsCatalog["MEKO_API_HTTP_REQUESTS_PER_SEC"], env, ".*", ".*")
+	if !strings.Contains(got, `source="meko"`) || strings.Contains(got, `source="amp"`) {
+		t.Errorf("meko query not scoped to source=\"meko\": %s", got)
+	}
+}
+
 // A standalone environment's series carry no account_id at all, because the install
 // hint omits otel.accountId for the sentinel. An exact match on the zeros would
 // select nothing; the regex has to stay open so those series are still found.

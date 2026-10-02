@@ -44,7 +44,59 @@ var metricsCatalog = map[string]string{
 	"AMP_CONTROLLER_TASK_DURATION_P95_SEC": `histogram_quantile(0.95, sum by (le,kind) (rate(` +
 		`amp_controller_tasks_duration_seconds_bucket{$FLEET}[5m])))`,
 
+	// ── Meko api-server: its own instrumentation (internal/metrics) ───────────
+	"MEKO_API_HTTP_REQUESTS_PER_SEC": `sum(rate(` +
+		`meko_api_http_requests_total{$FLEET}[5m]))`,
+	"MEKO_API_HTTP_REQUESTS_BY_ROUTE": `sum by (route) (rate(` +
+		`meko_api_http_requests_total{$FLEET}[5m]))`,
+	"MEKO_API_HTTP_REQUESTS_BY_STATUS": `sum by (status) (rate(` +
+		`meko_api_http_requests_total{$FLEET}[5m]))`,
+	"MEKO_API_HTTP_LATENCY_P50_SEC": `histogram_quantile(0.5, sum by (le) (rate(` +
+		`meko_api_http_request_duration_seconds_bucket{$FLEET}[5m])))`,
+	"MEKO_API_HTTP_LATENCY_P95_SEC": `histogram_quantile(0.95, sum by (le) (rate(` +
+		`meko_api_http_request_duration_seconds_bucket{$FLEET}[5m])))`,
+	"MEKO_API_HTTP_LATENCY_P99_SEC": `histogram_quantile(0.99, sum by (le) (rate(` +
+		`meko_api_http_request_duration_seconds_bucket{$FLEET}[5m])))`,
+	"MEKO_API_DB_OPEN_CONNECTIONS": `sum by (db_name) (` +
+		`go_sql_open_connections{$FLEET})`,
+
+	// ── Meko MCP server: tool calls (meko-mcp-server src/metrics.py) ──────────
+	"MEKO_MCP_TOOL_CALLS_BY_TOOL": `sum by (tool) (rate(` +
+		`meko_mcp_tool_calls_total{$FLEET}[5m]))`,
+	"MEKO_MCP_TOOL_ERRORS_BY_TOOL": `sum by (tool) (rate(` +
+		`meko_mcp_tool_calls_total{$FLEET,outcome="error"}[5m]))`,
+	"MEKO_MCP_TOOL_LATENCY_P95_SEC": `histogram_quantile(0.95, sum by (le,tool) (rate(` +
+		`meko_mcp_tool_call_duration_seconds_bucket{$FLEET}[5m])))`,
+
+	// ── Meko inference gateway: chat turns and LLM calls ──────────────────────
+	"MEKO_GATEWAY_HTTP_REQUESTS_BY_ROUTE": `sum by (route) (rate(` +
+		`meko_gateway_http_requests_total{$FLEET}[5m]))`,
+	"MEKO_GATEWAY_CHAT_LATENCY_P95_SEC": `histogram_quantile(0.95, sum by (le) (rate(` +
+		`meko_gateway_http_request_duration_seconds_bucket{$FLEET,route="/chat"}[5m])))`,
+	"MEKO_GATEWAY_LLM_LATENCY_P95_SEC": `histogram_quantile(0.95, sum by (le,model) (rate(` +
+		`meko_gateway_llm_request_duration_seconds_bucket{$FLEET}[5m])))`,
+	"MEKO_GATEWAY_LLM_ERRORS_PER_SEC": `sum by (model) (rate(` +
+		`meko_gateway_llm_requests_total{$FLEET,outcome="error"}[5m]))`,
+	"MEKO_GATEWAY_LLM_TOKENS_PER_SEC": `sum by (model,direction) (rate(` +
+		`meko_gateway_llm_tokens_total{$FLEET}[5m]))`,
+
+	// ── Reconcile agent (ycp/cmd/reconcile-agent/metrics.go) ─────────────────
+	"YCP_AGENT_SECONDS_SINCE_LAST_TICK": `time() - max(` +
+		`ycp_agent_last_successful_tick_timestamp_seconds{$FLEET})`,
+	"YCP_AGENT_RESOURCES_BY_CONDITION": `sum by (condition) (` +
+		`ycp_agent_resources{$FLEET})`,
+	"YCP_AGENT_TICK_ERRORS_PER_SEC": `sum(rate(` +
+		`ycp_agent_ticks_total{$FLEET,outcome="error"}[5m]))`,
+	"YCP_AGENT_STATUS_REPORT_ERRORS_PER_SEC": `sum(rate(` +
+		`ycp_agent_status_reports_total{$FLEET,outcome="error"}[5m]))`,
+
+	// ── Knowledge-base ingestion, as the api-server reads it from dist_rag ────
+	"MEKO_RAG_DOCUMENTS_BY_STATUS": `max by (status) (` +
+		`meko_api_rag_documents{$FLEET})`,
+
 	// ── Pod resources: cAdvisor, via the compute collector's kubelet job ───────
+	// Kind-agnostic: a meko environment's collector runs the same job, and $FLEET's
+	// source matcher keeps the two apart.
 	// container!="" drops the per-pod cgroup rollup, which would double-count.
 	"AMP_PODS_TRACKED": `count(count by (pod) (` +
 		`container_memory_working_set_bytes{$FLEET,container!=""}))`,

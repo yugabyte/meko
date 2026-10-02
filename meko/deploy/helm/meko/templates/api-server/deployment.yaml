@@ -1,5 +1,7 @@
 {{- if .Values.apiServer.enabled }}
 {{- $c := .Values.apiServer }}
+{{- /* dig: --reuse-values on a release predating the key leaves it unset. */}}
+{{- $metricsPort := dig "metricsPort" 9464 $c }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -101,9 +103,18 @@ spec:
             - "--deploy-env={{ $c.deployEnv }}"
           env:
             {{- include "meko.apiServer.env" $ | nindent 12 }}
+            {{- /* Env rather than --metrics-port: an api-server image predating the
+                   listener ignores an unknown variable, but exits on an unknown flag. */}}
+            - name: MEKO_METRICS_PORT
+              value: {{ $metricsPort | quote }}
           ports:
             - containerPort: {{ $c.containerPort }}
               protocol: TCP
+            {{- if gt (int $metricsPort) 0 }}
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+            {{- end }}
           readinessProbe:
             httpGet:
               path: {{ $c.ingress.healthcheckPath }}

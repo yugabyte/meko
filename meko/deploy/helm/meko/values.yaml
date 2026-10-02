@@ -123,6 +123,10 @@ apiServer:
     #     tailscale.com/tags: "tag:k8s-meko"
     annotations: {}
   containerPort: 25433
+  # Prometheus /metrics, on its own port so the Ingress in front of containerPort
+  # never exposes it. Scraped by the otel collector (see `otel` below); 0 turns
+  # the listener off.
+  metricsPort: 9464
   # Serve the whole api-server under a URL prefix instead of the domain root:
   # console, /api/v1, the agent API, swagger, the OAuth2 callback. Empty (the
   # default) keeps everything at the root — set it only when a proxy in front
@@ -726,6 +730,8 @@ mekoUi:
 # ---------------------------------------------------------------------------
 mekoMcpServer:
   enabled: true
+  # Prometheus /metrics on its own port, scraped by the otel collector; 0 turns it off.
+  metricsPort: 9464
   namespace: meko-mcp
   replicas: 3
   image:
@@ -777,6 +783,88 @@ mekoMcpServer:
       mcpInternal: meko-mcp-internal-secret
 
 # ---------------------------------------------------------------------------
+# otel — metrics and logs, the meko twin of the amp controller chart's collectors
+# (amp/controller/architecture/ac-metrics.md, ac-logs.md). Two OpenTelemetryCollector
+# CRs, reconciled by the OpenTelemetry Operator: one scrapes this release's
+# api-server and bundled YugabyteDB and ships to a Prometheus remote-write store,
+# the BYOC door, or both; a daemonset tails this release's container logs and ships
+# to an OTLP log store, Datadog, or both. The keys mean what they mean there, so one
+# install hint can drive both.
+#
+# Rendered only when enabled AND the cluster has the opentelemetry.io CRDs, so
+# turning it on cannot fail an install on a cluster without the operator.
+# `helm template` sees no CRDs either: pass --api-versions opentelemetry.io/v1beta1.
+# ---------------------------------------------------------------------------
+otel:
+  # Off by default, unlike amp's: this chart also deploys the hosted stack, which
+  # runs no collector and has no store at remoteWriteEndpoint. The BYOC install
+  # hint turns it on. When it is off, the reconcile-agent reports that and YCP
+  # shows the environment DEGRADED.
+  enabled: false
+  # Collector image. Empty -> the operator's default, which must be the contrib
+  # distro (prometheus receiver, prometheusremotewrite exporter).
+  image: ""
+  # Prometheus remote-write endpoint. "" drops the exporter, which is what a BYOC
+  # install does; an ABSENT key keeps this default, so --reuse-values cannot lose
+  # a store. With byoc off too, the render fails: nothing would export.
+  remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # Fleet identity, stamped on every series. Set by the install hint: the YCP
+  # environment id (the same value as reconcileAgent.envName) and the YBM account,
+  # which the hint omits for a standalone YCP.
+  environmentId: ""
+  accountId: ""
+  # Ship off-cluster to yugabyte-cloud: metrics to YBM Thanos over the BYOC OTLP
+  # door, logs to Datadog. Each half reads its own Secret, and both must exist
+  # before the install — a missing one stops that collector starting:
+  #   kubectl -n <ns> create secret generic byoc-metrics-auth \
+  #     --from-literal=password='<byoc password>'
+  #   kubectl -n <ns> create secret generic datadog-api \
+  #     --from-literal=api-key='<datadog api key>'
+  byoc:
+    enabled: false
+    metricsEndpoint: "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"
+    username: "byoc"
+    # The `source` label on every datapoint, which separates meko series from
+    # amp's in the shared store.
+    source: "meko"
+    passwordSecret:
+      name: "byoc-metrics-auth"
+      key: "password"
+  # OTLP/HTTP logs endpoint. Same "" contract as remoteWriteEndpoint: "" drops the
+  # in-cluster exporter (the BYOC shape), an absent key keeps this default.
+  logsEndpoint: "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs"
+  # The logs daemonset has to schedule wherever this release's pods run, or those
+  # nodes' logs are silently missing.
+  logsTolerations: []
+  # The Datadog sink's parameters, used when byoc.enabled.
+  datadog:
+    site: "us3.datadoghq.com"
+    apiKeySecret:
+      name: "datadog-api"
+      key: "api-key"
+  collectors:
+    logs:
+      enabled: true
+  # Per-pod CPU/memory/network from each node's kubelet (cAdvisor), kept to the
+  # namespaces this release runs in. Needs a ClusterRole on nodes; with
+  # scrape.provisioner off too, the collector needs no cluster-scoped rights.
+  podMetrics: true
+  scrape:
+    apiServer: true
+    mcpServer: true
+    inferenceGateway: true
+    reconcileAgent: true
+    # controller-runtime's own /metrics, authenticated by service-account token.
+    # Needs a ClusterRoleBinding to the provisioner's metrics-reader role.
+    provisioner: true
+    # Langfuse's DogStatsD metrics, received by the collector on UDP 8125.
+    langfuse: true
+    # yb-master, yb-tserver and YSQL, when yugabyte.enabled. Table- and
+    # tablet-level series are dropped at the collector: every datapack is several
+    # tables, so they grow with the customer's data rather than with the stack.
+    yugabyte: true
+
+# ---------------------------------------------------------------------------
 # reconcile-agent — the BYOC pull agent, run INSIDE this data plane. When enabled
 # it enrolls this environment into a YCP control plane and converges the agents
 # and datapacks the environment declares over the api-server's REST API, over
@@ -796,6 +884,9 @@ reconcileAgent:
   # Keep this at 1: replicas would share one API-key identity, race on the
   # reconcile-agent-state Secret, and each garbage-collect the other's work.
   replicas: 1
+  # Prometheus /metrics: tick outcomes, desired-state fetches and status reports.
+  # 0 turns it off.
+  metricsPort: 9464
   image:
     # Quay rather than the Meko ECR — the same registry the control-plane image
     # uses, so a cluster pulls it without ECR cross-account pull-secret setup.
@@ -833,6 +924,8 @@ reconcileAgent:
 # ---------------------------------------------------------------------------
 inferenceGateway:
   enabled: true
+  # Prometheus /metrics on its own port, scraped by the otel collector; 0 turns it off.
+  metricsPort: 9464
   namespace: meko-system
   replicas: 1
   image:

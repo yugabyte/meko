@@ -302,7 +302,7 @@ func stepFor(start, end time.Time) string {
 // match-everything case also selects the series of a standalone environment, which
 // carry no account_id label at all (see MetricsAccountID).
 //
-// source="amp" is not redundant with the pair: names like
+// source is not redundant with the pair: names like
 // container_memory_working_set_bytes and pg_up exist in the control plane's store
 // from other producers, and without it a query would silently mix them in.
 func buildQuery(expr string, env *models.Environment, endpoint, pod string) string {
@@ -310,8 +310,8 @@ func buildQuery(expr string, env *models.Environment, endpoint, pod string) stri
 	if account == "" {
 		account = ".*"
 	}
-	fleet := fmt.Sprintf(`environment_id="%s",account_id=~"%s",source="amp"`,
-		escapeLabelValue(env.ID), escapeLabelValue(account))
+	fleet := fmt.Sprintf(`environment_id="%s",account_id=~"%s",source="%s"`,
+		escapeLabelValue(env.ID), escapeLabelValue(account), MetricsSource(env.Kind))
 
 	expr = strings.ReplaceAll(expr, "$FLEET", fleet)
 	expr = strings.ReplaceAll(expr, "$ENDPOINT", escapeLabelValue(endpoint))

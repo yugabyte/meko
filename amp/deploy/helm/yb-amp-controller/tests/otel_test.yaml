@@ -97,6 +97,39 @@ tests:
           path: spec.config.exporters.prometheus_remote_write.endpoint
           value: http://vm.example:8428/api/v1/write
 
+  # The controller collector is the one the agent watches for its own counters,
+  # and it runs whenever the agent does, so the agent's series ride on it.
+  - it: scrapes the reconcile-agent on its named metrics port
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://ycp.example/api/v1
+      agent.envName: amp-acme-prod
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].job_name
+          value: amp-reconcile-agent
+      - contains:
+          path: spec.config.receivers.prometheus.config.scrape_configs[1].relabel_configs
+          content: {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: reconcile-agent}
+
+  - it: has no agent job without an agent
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 1
+
   # Fleet identity labels. Both metrics collectors must stamp them, because the
   # controller and the compute sources land in the same store and a series from
   # either has to say which environment and account it came from.

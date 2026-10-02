@@ -2,6 +2,8 @@
 {{- if not .Values.agent.ycpUrl }}{{ fail "agent.ycpUrl is required when agent.enabled" }}{{- end }}
 {{- if not .Values.agent.envName }}{{ fail "agent.envName is required when agent.enabled" }}{{- end }}
 {{- $chartPullSecret := .Values.agent.chartPullSecret | default (dig "name" "" (first (.Values.imagePullSecrets | default (list dict)))) }}
+{{- /* dig: --reuse-values on a release predating the key leaves it unset. */}}
+{{- $metricsPort := dig "metricsPort" 9464 .Values.agent }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -70,6 +72,8 @@ spec:
               value: {{ .Values.agent.placement | quote }}
             - name: AGENT_VERSION
               value: {{ include "yb-amp-controller.imageTag" (dict "tag" .Values.agent.image.tag "ctx" .) | quote }}
+            - name: AGENT_METRICS_PORT
+              value: {{ $metricsPort | quote }}
             {{- with .Values.agent.reconcileInterval }}
             - name: RECONCILE_INTERVAL
               value: {{ . | quote }}
@@ -120,6 +124,12 @@ spec:
                   name: {{ $keySecret | quote }}
                   key: dev-api-key-id
                   optional: true
+          {{- if gt (int $metricsPort) 0 }}
+          ports:
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+          {{- end }}
           {{- if $chartPullSecret }}
           volumeMounts:
             - name: chart-pull-secret

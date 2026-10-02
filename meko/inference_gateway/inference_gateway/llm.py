@@ -10,6 +10,7 @@ from __future__ import annotations
 from langchain_core.language_models import BaseChatModel
 
 from .config import AppConfig
+from .metrics import LLMMetricsCallback
 
 
 def build_llm(
@@ -33,7 +34,10 @@ def build_llm(
         # Reads OPENAI_API_KEY from the environment.
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=model_id, temperature=0, max_tokens=mt)
+        return ChatOpenAI(
+            model=model_id, temperature=0, max_tokens=mt,
+            callbacks=[LLMMetricsCallback(model_id)],
+        )
 
     if provider == "bedrock":
         # Reads from the standard AWS credential chain (env / shared creds /
@@ -46,6 +50,7 @@ def build_llm(
             region_name=cfg.aws_region,
             temperature=0,
             max_tokens=mt,
+            callbacks=[LLMMetricsCallback(model_id)],
         )
 
     raise ValueError(

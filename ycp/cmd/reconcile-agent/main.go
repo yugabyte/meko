@@ -173,7 +173,11 @@ func main() {
 		log.Fatalf("ENV_KIND=%q is not a kind this agent serves (%s | %s)", kind, kindAmp, kindMeko)
 	}
 
+	metrics := newAgentMetrics(kind)
+	metrics.serve()
+
 	a := &agent{
+		metrics:   metrics,
 		ycp:       ycp,
 		kc:        kc,
 		envName:   envName,
@@ -226,7 +230,7 @@ func main() {
 		}
 	}
 
-	eng := reconcile.New(backend, reconcile.Options{})
+	eng := reconcile.New(backend, reconcile.Options{OnTick: metrics.tick})
 	eng.Run(ctx, a, a, interval, log.Printf)
 	log.Printf("reconcile-agent stopped")
 }
@@ -299,6 +303,7 @@ const stateSecret = "reconcile-agent-state"
 // agent adapts the YCP client to the engine's Source + Reporter and owns the
 // enrollment and last-good-desired logic.
 type agent struct {
+	metrics   *agentMetrics
 	ycp       *ycpclient.Client
 	kc        *k8s
 	envName   string
@@ -407,11 +412,15 @@ func (a *agent) Desired(ctx context.Context) (api.DesiredState, bool, error) {
 	ds, err := a.ycp.Desired(ctx)
 	if err != nil {
 		if errors.Is(err, ycpclient.ErrUnauthorized) {
+			a.metrics.fetched("unauthorized")
 			log.Printf("DESIRED-STATE REJECTED (401): the API key is revoked or bound to no environment; " +
 				"holding the last desired state and changing nothing")
+		} else {
+			a.metrics.fetched("error")
 		}
 		return a.fallback(err)
 	}
+	a.metrics.fetched("ok")
 	a.lastGood, a.haveGood = ds, true
 	return ds, true, nil
 }
@@ -436,7 +445,8 @@ func (a *agent) fallback(err error) (api.DesiredState, bool, error) {
 // could not be confirmed is as unconverged as a declared one that could not be
 // created — so a partial reading cannot post AppliedRevision for a revision
 // whose deletes were never issued.
-func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.Result) error {
+func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.Result) (err error) {
+	defer func() { a.metrics.reported(err) }()
 	stateStr := api.StateReady
 	if len(res.Failed) > 0 || len(res.Stuck) > 0 || len(res.Unreadable) > 0 {
 		stateStr = api.StateDegraded

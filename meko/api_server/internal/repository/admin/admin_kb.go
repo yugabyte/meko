@@ -277,3 +277,40 @@ func (r *AdminRepo) GetSourceIDsByOwner(userID string) ([]string, error) {
 	}
 	return ids, rows.Err()
 }
+
+// documentsByStatusSQL counts kbSpine's latest run per document by status.
+func documentsByStatusSQL() string {
+	return `SELECT status, COUNT(*)::bigint FROM (` + kbSpine("", "") + `
+	 ) latest GROUP BY status`
+}
+
+// CountDocumentsByStatus returns every knowledge-base document's count by its
+// latest pipeline run's status — the rag workers' backlog and failures, for the
+// api-server's metrics. kbSpine's scan with no filter, so it stays on the base
+// tables and under the same statement timeout; a document with no run yet is not
+// counted (see kbSpine's semantics note).
+func (r *AdminRepo) CountDocumentsByStatus() (map[string]int64, error) {
+	counts := map[string]int64{}
+	query := documentsByStatusSQL()
+	err := r.withKBTimeout(func(tx *sql.Tx) error {
+		rows, err := tx.Query(query)
+		if err != nil {
+			return fmt.Errorf("count documents by status: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var status sql.NullString
+			var n int64
+			if err := rows.Scan(&status, &n); err != nil {
+				return fmt.Errorf("count documents by status: scan: %w", err)
+			}
+			key := status.String
+			if !status.Valid {
+				key = "unknown"
+			}
+			counts[key] += n
+		}
+		return rows.Err()
+	})
+	return counts, err
+}

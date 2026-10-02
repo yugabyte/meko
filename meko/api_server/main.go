@@ -26,7 +26,9 @@ import (
 
 	"meko/api_server/internal/api"
 	"meko/api_server/internal/db"
+	"meko/api_server/internal/metrics"
 	"meko/api_server/internal/repository"
+	adminrepo "meko/api_server/internal/repository/admin"
 	"meko/api_server/internal/service"
 )
 
@@ -34,6 +36,8 @@ func run() error {
 
 	// meko datapack api server configuration
 	port := flag.Int("port", 25433, "API server listen port")
+	metricsPort := flag.Int("metrics-port", envIntOrDefault("MEKO_METRICS_PORT", 9464),
+		"port serving Prometheus /metrics, apart from --port so an Ingress in front of the API never exposes it; 0 disables")
 
 	// Logging level. Accepts debug, info, warn, error (case-insensitive).
 	// Set via flag or LOG_LEVEL env. Defaults to info.
@@ -519,10 +523,20 @@ func run() error {
 			"byoc_metrics_url", *byocMetricsURL)
 	}
 
+	var serverMetrics *metrics.Metrics
+	if *metricsPort > 0 {
+		serverMetrics = metrics.New(dataConn, systemConn)
+		if !*controlPlaneMode {
+			serverMetrics.WithRAGBacklog(adminrepo.NewAdminRepo(systemConn, dataConn, nil).CountDocumentsByStatus)
+		}
+	}
+
 	return api.Run(api.ServerConfig{
 		DB:                                 dataConn,
 		SystemDB:                           systemConn,
 		Port:                               *port,
+		Metrics:                            serverMetrics,
+		MetricsPort:                        *metricsPort,
 		CognitoRegion:                      *cognitoRegion,
 		CognitoPoolID:                      *cognitoPoolID,
 		CognitoClientID:                    *cognitoClientID,

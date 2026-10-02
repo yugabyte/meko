@@ -21,3 +21,14 @@ func MetricsAccountID(accountID string) string {
 	}
 	return trimmed
 }
+
+// MetricsSource is the source label an environment's series carry: the default of
+// otel.byoc.source in its chart — "meko" in the meko chart, "amp" in the amp
+// controller's. Anything but meko reads as amp, which is what every environment
+// queried before meko shipped metrics was.
+func MetricsSource(kind string) string {
+	if kind == KindMeko {
+		return "meko"
+	}
+	return "amp"
+}

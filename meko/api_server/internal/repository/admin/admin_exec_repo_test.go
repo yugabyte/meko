@@ -229,3 +229,29 @@ func TestCountIndexedDocsBreakdownBySourceIDs_JoinAndSums(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+// The rag backlog reads the base pipeline_details table under the KB timeout,
+// never the view whose global sort timed out the exec panel (MEKO-728).
+func TestCountDocumentsByStatus_ReadsBaseTablesUnderTimeout(t *testing.T) {
+	db, mock, done := mockDB(t)
+	defer done()
+	repo := NewAdminRepo(nil, db, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SET LOCAL statement_timeout`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`FROM   dist_rag\.pipeline_details pd\s+WHERE  TRUE\s+ORDER  BY pd\.document_id`).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "count"}).
+			AddRow("COMPLETED", int64(40)).AddRow("FAILED", int64(2)).AddRow(nil, int64(1)))
+	mock.ExpectCommit()
+
+	got, err := repo.CountDocumentsByStatus()
+	if err != nil {
+		t.Fatalf("CountDocumentsByStatus: %v", err)
+	}
+	if got["COMPLETED"] != 40 || got["FAILED"] != 2 || got["unknown"] != 1 {
+		t.Errorf("counts = %v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
