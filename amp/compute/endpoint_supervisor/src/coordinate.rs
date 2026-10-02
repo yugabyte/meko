@@ -331,6 +331,8 @@ mod tests {
     /// at all.
     #[test]
     fn a_slow_branch_create_outlives_the_probe_budget() {
+        // `create_safekeeper_branch` reads `fence::lost()`, which other tests set.
+        let _fence = crate::fence::lost_lock();
         let (port, _rx) = serve_after(Duration::from_secs(6), vec![(200, "{}".into())]);
         let started = Instant::now();
         create_safekeeper_branch(
@@ -402,6 +404,7 @@ mod tests {
     /// greeting check expects.
     #[test]
     fn the_branch_create_sends_the_lsn_and_scaled_version() {
+        let _fence = crate::fence::lost_lock();
         let (port, rx) = serve(vec![(200, "{}".into())]);
         create_safekeeper_branch(
             "127.0.0.1",
@@ -424,6 +427,7 @@ mod tests {
     /// an existing branch must not fail startup.
     #[test]
     fn an_existing_branch_is_success() {
+        let _fence = crate::fence::lost_lock();
         let (port, _rx) = serve(vec![(409, "already exists".into())]);
         create_safekeeper_branch(
             "127.0.0.1",
@@ -443,6 +447,7 @@ mod tests {
     /// starts the load over, so the branch can never be given an endpoint again.
     #[test]
     fn a_still_loading_safekeeper_is_waited_out() {
+        let _fence = crate::fence::lost_lock();
         let loading = r#"{"msg":"timeline abc123 has not been loaded yet"}"#.to_string();
         let (port, _rx) = serve(vec![
             (503, loading.clone()),
@@ -465,6 +470,7 @@ mod tests {
     /// on rather than hang startup silently.
     #[test]
     fn waiting_out_the_load_is_bounded() {
+        let _fence = crate::fence::lost_lock();
         let loading = r#"{"msg":"timeline abc123 has not been loaded yet"}"#.to_string();
         // More replies than the budget allows attempts: a stub that runs out
         // would hand the loop a connection error instead of another 503, which is
@@ -487,6 +493,7 @@ mod tests {
     /// serve the walproposer, and starting the compute anyway hides the cause.
     #[test]
     fn a_real_failure_is_an_error() {
+        let _fence = crate::fence::lost_lock();
         let (port, _rx) = serve(vec![(500, "boom".into())]);
         let err = create_safekeeper_branch(
             "127.0.0.1",

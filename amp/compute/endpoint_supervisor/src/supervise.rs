@@ -539,6 +539,15 @@ impl Supervisor {
             }
             tracing::warn!(service = %name, restarts = count, "exited; restarting");
             std::thread::sleep(self.policy.backoff);
+            // A daemon that fenced itself out exits before the renewal thread
+            // learns the lease is gone, so the check at the top of this pass can
+            // pass. Respawning it would hold this pass for the backoff and a
+            // `renew_now` wait while Postgres keeps answering reads from a
+            // snapshot another endpoint has moved past (AMP-76).
+            if crate::fence::lost() {
+                self.stop_all();
+                return Ok(Some(Outcome::FenceLost));
+            }
             // Same as an operator start: the replacement needs a token that
             // outlasts its startup, not the remainder of this interval.
             crate::fence::renew_now();
@@ -643,6 +652,13 @@ impl Supervisor {
         // Before the spawn, so the child is seeded with a full-TTL token: what is
         // left of the current one may not outlast its startup writes.
         crate::fence::renew_now();
+        // The monitor loop stops the endpoint on its next pass; a service
+        // started now would only fence itself out, after holding the supervisor
+        // lock for its whole health gate.
+        anyhow::ensure!(
+            !crate::fence::lost(),
+            "not starting {name}: the write lease is lost"
+        );
         svc.spawn()?;
         svc.wait_healthy(timeout, interval)?;
         crate::fence::push_current();
@@ -705,19 +721,15 @@ impl Supervisor {
 mod tests {
     use super::*;
 
-    /// Serializes the tests that touch the process-wide fence flag against the
-    /// ones that run the monitor loop.
+    /// Serializes the tests that touch the process-wide fence state against the
+    /// ones that read it — see [`crate::fence::lost_lock`].
     ///
-    /// `poll_once` reads `fence::lost()`, which is a static: a test that sets it
-    /// is setting it for every test running in parallel. That is how a
-    /// lease-loss test made an unrelated restart-budget test see `FenceLost`
-    /// instead of the outcome it was asserting on.
-    static FENCE_FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Take the fence flag for the duration of a test. Poisoning is ignored: a
-    /// panic in one test must not cascade into every later one.
+    /// `poll_once` and `start_one` read `fence::lost()`, which is static: a test
+    /// that sets it is setting it for every test running in parallel. That is
+    /// how a lease-loss test made an unrelated restart-budget test see
+    /// `FenceLost` instead of the outcome it was asserting on.
     fn fence_flag() -> std::sync::MutexGuard<'static, ()> {
-        FENCE_FLAG.lock().unwrap_or_else(|e| e.into_inner())
+        crate::fence::lost_lock()
     }
 
     /// Declare the lease lost, and put it back on the way out — including on a
@@ -760,6 +772,8 @@ mod tests {
     /// having done nothing — and the caller goes on to probe a dead port.
     #[test]
     fn starting_a_crashed_service_replaces_it() {
+        // `start_one` reads `fence::lost()`.
+        let _fence = fence_flag();
         let mut sup = Supervisor::new(fast_policy());
         let mut svc = Service::new("pageserver", sh("exit 7"));
         svc.spawn().unwrap();
@@ -788,6 +802,9 @@ mod tests {
     /// covered too.
     #[test]
     fn a_spawned_child_is_handed_the_current_token() {
+        // The token below is long expired, which `fence::lost` reads as a lapsed
+        // lease: hold the flag so no monitor-loop test sees it.
+        let _fence = fence_flag();
         let dir = camino_tempfile::tempdir().unwrap();
         let seen = dir.path().join("seen");
         let mut svc = Service::new(
@@ -1099,6 +1116,117 @@ mod tests {
         for s in &mut sup.services {
             assert!(s.started(), "{} did not come back", s.name);
         }
+    }
+
+    /// A pod thawed from a freeze holds a token whose deadline passed while it
+    /// was frozen. That is a lost lease on the first tick, before the renewal
+    /// thread has woken to ask the store (AMP-76).
+    #[test]
+    fn a_lapsed_token_stops_every_child_without_waiting_for_a_renewal() {
+        let _fence = fence_flag();
+        let mut sup = Supervisor::new(fast_policy());
+        for n in ["safekeeper", "pageserver", "compute_ctl"] {
+            sup.add(Service::new(n, sh("sleep 30")).health(Box::new(|| true)));
+        }
+        sup.start_all().unwrap();
+
+        // Epoch micros one second in: long expired.
+        crate::fence::set_current_for_test(Some(1_000_000));
+        let outcome = sup.poll_once();
+        crate::fence::set_current_for_test(None);
+
+        assert!(
+            matches!(outcome, Ok(Some(Outcome::FenceLost))),
+            "monitor loop kept serving on a lapsed token: {outcome:?}"
+        );
+        for s in &mut sup.services {
+            assert!(s.child.is_none(), "{} was left serving", s.name);
+        }
+    }
+
+    /// The daemons notice a lapsed lease before the supervisor does and exit,
+    /// so the pass that finds them dead starts a restart. A loss declared
+    /// during its backoff has to end the pass there, not after a respawn and a
+    /// wait for a renewal that is never coming (AMP-76: 7 s per daemon, with
+    /// Postgres serving stale reads throughout).
+    #[test]
+    fn a_lease_lost_during_a_restart_backoff_stops_the_endpoint() {
+        let held = fence_flag();
+        let mut sup = Supervisor::new(Policy {
+            backoff: Duration::from_millis(500),
+            ..fast_policy()
+        });
+        sup.add(Service::new("pageserver", sh("exit 66")).health(Box::new(|| true)));
+        sup.add(Service::new("compute_ctl", sh("sleep 30")).health(Box::new(|| true)));
+        sup.start_all().unwrap();
+        wait_for_exit(&mut sup.services[0]);
+
+        let declare = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            crate::fence::set_lost_for_test(true);
+        });
+        let started = Instant::now();
+        let outcome = sup.poll_once();
+        declare.join().unwrap();
+        crate::fence::set_lost_for_test(false);
+        drop(held);
+
+        assert!(
+            matches!(outcome, Ok(Some(Outcome::FenceLost))),
+            "the restart went ahead without the lease: {outcome:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the pass held the endpoint up for {:?}",
+            started.elapsed()
+        );
+        for s in &mut sup.services {
+            assert!(s.child.is_none(), "{} was left serving", s.name);
+        }
+    }
+
+    /// A renewal still in flight at the local deadline may come back as a valid
+    /// continuation — it is judged by the database's clock — so a lapse waits for
+    /// its answer instead of ending every session first.
+    #[test]
+    fn a_lapse_waits_for_a_renewal_in_flight() {
+        let _fence = fence_flag();
+        let mut sup = Supervisor::new(fast_policy());
+        sup.add(Service::new("compute_ctl", sh("sleep 30")).health(Box::new(|| true)));
+        sup.start_all().unwrap();
+
+        crate::fence::set_current_for_test(Some(1_000_000));
+        crate::fence::set_renewing_for_test(true);
+        let in_flight = sup.poll_once();
+        crate::fence::set_renewing_for_test(false);
+        let answered = sup.poll_once();
+        crate::fence::set_current_for_test(None);
+
+        assert!(
+            matches!(in_flight, Ok(None)),
+            "stopped the endpoint under a renewal in flight: {in_flight:?}"
+        );
+        assert!(
+            matches!(answered, Ok(Some(Outcome::FenceLost))),
+            "a lapse with no renewal in flight is a loss: {answered:?}"
+        );
+    }
+
+    /// An operator start after the lease is gone would only fence itself out,
+    /// holding the supervisor lock through its health gate.
+    #[test]
+    fn a_service_is_not_started_into_a_lost_lease() {
+        let lost = LeaseLost::declare();
+        let mut sup = Supervisor::new(fast_policy());
+        sup.add(Service::new("pageserver", sh("sleep 30")));
+
+        let err = sup
+            .start_one("pageserver", None)
+            .expect_err("started a service without the lease");
+        drop(lost);
+
+        assert!(format!("{err:#}").contains("lease is lost"), "{err:#}");
+        assert!(!sup.services[0].started(), "pageserver was spawned anyway");
     }
 
     #[test]

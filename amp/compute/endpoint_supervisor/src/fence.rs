@@ -105,6 +105,23 @@ pub fn set_lost_for_test(lost: bool) {
     LOST.store(lost, Ordering::Relaxed);
 }
 
+/// Mark a renewal as in flight (or not), for tests of what [`lost`] reports
+/// while one is.
+#[cfg(test)]
+pub fn set_renewing_for_test(renewing: bool) {
+    RENEWING.store(renewing, Ordering::Relaxed);
+}
+
+/// Serializes the tests that change what [`lost`] reports — `LOST`, `CURRENT`,
+/// `RENEWING` — against every test that reads it: the monitor loop's and the
+/// safekeeper branch create's. They are process-wide, so one test's lost lease
+/// is every parallel test's.
+#[cfg(test)]
+pub(crate) fn lost_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The lease timings in force right now, in milliseconds.
 ///
 /// Seeded from the environment and then, once the registry has been read, from
@@ -258,6 +275,11 @@ pub fn renew_now() {
         if current_token() != before {
             return;
         }
+        // No renewal is coming. Every caller checks `lost` next, so they act on
+        // the loss instead of starting a service into it.
+        if lost() {
+            return;
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     tracing::warn!("write token: renewal did not land before starting a service");
@@ -292,8 +314,50 @@ fn set_current(token: Option<WriteToken>) {
     CURRENT.store(token.unwrap_or(0), Ordering::Relaxed);
 }
 
+/// The lease is over: the renewal thread said so, or the held token's deadline
+/// has passed on this host's clock with no renewal in flight.
+///
+/// The second half is what a pod thawing from a freeze needs. Its daemons check
+/// the deadline locally and exit on their first write, but the renewal thread
+/// only finds out after its sleep runs down and `token_acquire` answers — and
+/// until the monitor loop acts, Postgres keeps answering reads from a snapshot
+/// another endpoint has moved past (AMP-76).
+///
+/// A renewal in flight is left to decide. `renew` judges a grant by the
+/// database's clock, so one that is slow, or answers a host clock running ahead
+/// of the database's, can still continue the lease after the local deadline —
+/// and stopping the endpoint under it would end every session for a lease that
+/// was never lost. A pod frozen past its lease has no renewal in flight: the
+/// renewal thread was asleep, or its call is answered (or times out) at thaw.
 pub fn lost() -> bool {
-    LOST.load(Ordering::Relaxed)
+    LOST.load(Ordering::Relaxed) || lapsed()
+}
+
+/// A lease is held, its deadline has passed by this host's clock, and no
+/// renewal is in flight to extend it.
+fn lapsed() -> bool {
+    let held = current_token();
+    held != 0 && !RENEWING.load(Ordering::Relaxed) && token_remaining(held).is_zero()
+}
+
+/// Set while [`Fence::renew`] runs, retries included, so [`lapsed`] waits for
+/// its answer rather than overruling it.
+static RENEWING: AtomicBool = AtomicBool::new(false);
+
+/// Holds [`RENEWING`] for one `renew`, clearing it on every way out.
+struct Renewing;
+
+impl Renewing {
+    fn start() -> Self {
+        RENEWING.store(true, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for Renewing {
+    fn drop(&mut self) {
+        RENEWING.store(false, Ordering::Relaxed);
+    }
 }
 
 /// How the lease is configured, as the chart's ConfigMap delivers it.
@@ -467,6 +531,7 @@ impl Fence {
     /// retried until the held token's own deadline passes. A *denial* is
     /// immediate: someone else holds it.
     fn renew(&mut self) -> bool {
+        let _renewing = Renewing::start();
         while !crate::supervise::shutdown_requested() {
             let ttl = timings().0;
             match self.acquire_with_ttl(ttl) {

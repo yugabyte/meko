@@ -267,6 +267,15 @@ this instance is no longer the endpoint.
   since `token_acquire` issues `now_us() + ttl`) and treats a late one as a
   loss, **without pushing it**. That keeps a daemon from ever being handed a
   token from a different tenure than the one its in-memory state belongs to.
+- **Lapsed locally**: the held token's deadline has passed by this host's
+  clock and no renewal is in flight. The monitor loop checks this every tick
+  without asking the store, so a pod thawed from a freeze stops on its first
+  tick rather than when the renewal thread wakes and is denied. A renewal
+  still in flight is left to decide, since the store may yet grant it as a
+  continuation by its own clock. The check matters for reads: Postgres
+  reads touch no fenced write, so until the stop it answers from a snapshot
+  the new owner has moved past (AMP-76). A daemon found dead after fencing
+  itself out is not restarted once the lease is gone.
 
 On loss the supervisor SIGTERMs every child immediately — safekeeper,
 pageserver, `compute_ctl` and its Postgres — then goes
