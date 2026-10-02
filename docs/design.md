@@ -472,7 +472,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Action | What the server does |
 |---|---|
 | New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
-| Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
+| Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits for Claude to start first. |
@@ -1334,7 +1334,14 @@ their own copy.
   matched, so an encoded path (`/%61pi/…`) gets the same checks as `/api/…`. The API only takes
   JSON bodies, so a plain HTML form can't post to it. Every WebSocket upgrade checks the cookie (or
   local access) and refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
-  out, and the server pings them every 30 seconds to drop ones whose network went away. A browser
+  out, and the server pings them every 30 seconds to drop ones whose network went away. The page
+  checks its events socket too, since a phone often never hears that the server dropped it: after
+  30 seconds without a message, and whenever the page is shown again or comes back online, it sends
+  a `ping`, and opens a new socket (which starts with the current state) if no `pong` comes back
+  within 5 seconds, or at once if the socket is already closing. A new socket gets 10 seconds to
+  open and 30 more for its first state. Each of these deadlines that passes doubles the next ones
+  (up to 8 times), so a slow link whose snapshots take longer still gets through; a quick answer
+  to a ping sets them back (`src/web/events.ts`). A browser
   that falls behind doesn't make the server buffer without limit: its terminal stops reading from
   `tmux attach` until it catches up (tmux copes with a slow client), and it skips state snapshots
   until it has drained, then gets the current one.
@@ -1409,6 +1416,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 | Event | What survives | What happens |
 |---|---|---|
+| A phone's page goes to the background, or its network changes | Everything | The server drops the page's sockets once they stop answering its pings. When the page is shown again, it pings its events socket and opens a new one if there's no answer, so it shows the current state instead of the one it had when it was hidden. After 30 seconds or more hidden, it also lets go of its terminals and reconnects the ones on screen, even if the phone kept its timers from running. |
 | Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the running tmux sessions, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](#releases-and-auto-update)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
 | tmux crash | Worktrees, transcripts, state | The unit restarts tmux, and the server relaunches every session with `desired: running` using `claude --resume`. |

@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
+  EventsClientMessage, MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs,
 } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
@@ -521,6 +521,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!wsGuard(socket, req)) return;
     clients.add(socket);
     socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+    // A page checking that its socket is still there (src/web/events.ts).
+    socket.on('message', (data) => {
+      let msg: EventsClientMessage | null;
+      try {
+        msg = JSON.parse(String(data)) as EventsClientMessage;
+      } catch {
+        return;
+      }
+      if (msg?.type === 'ping' && socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'pong' } satisfies ServerEvent));
+    });
     socket.on('close', () => clients.delete(socket));
   });
 
