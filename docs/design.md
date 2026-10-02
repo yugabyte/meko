@@ -18,7 +18,7 @@ from a browser.
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
 | Process host | tmux on a dedicated socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. |
-| Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL. |
+| Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL or start a new one there. |
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
 | Datapacks | Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets). |
@@ -144,6 +144,20 @@ the repo.
   and the list of folders are both settings.
 - **Clone from URL.** Paste a git URL and the server clones it into `~/code/<name>` using your
   existing git credentials, then selects it. "Other folder" takes any repo path on the host.
+- **New repo.** Type a folder name (it follows the project name until you edit it, and again after
+  you clear it: lower case, `[a-z0-9-]`) and the server makes `~/code/<name>` (the clone folder):
+  `git init`, `HEAD` on your `init.defaultBranch` (or `main`), and an empty first commit as you, so
+  a session's worktree has a base to branch from. The commit skips signing and hooks (the server
+  has no terminal to answer a passphrase prompt, and an empty commit has nothing to check) and runs
+  in the C locale, so a missing name and email is recognised in any language; then the folder is
+  removed and the error says how to set them. The name is one folder name (letters, digits, `.`,
+  `_`, `-`, not starting with `.` or `-`, up to 100 characters; `newRepoNameProblem()` in
+  `types.ts`, which the dialog also checks as you type). A folder already there is left alone
+  (409), except a repo just as an earlier try left it (no remote, one commit with no files, nothing
+  uncommitted, no open project on it), which is used again, so a create that failed later (Meko
+  refusing the datapack, say) can be retried. While a new repo's project is being opened its
+  folder is held, so a second open of the same name meanwhile gets the 409 instead of sharing the
+  repo. The repo has no remote: sessions work in it, but a PR needs one added first.
 
 The dialog asks for the **dedicated datapack**, then the **Project name**, then the repo. It starts with the datapack: **Create a new one** (the first option and the
 default), **Use an existing one** (the default when it's opened for a share, from its banner) or
@@ -419,7 +433,7 @@ closed or gets an open session elsewhere.
 ## Projects, worktrees and sessions
 
 A **project** is an effort to build or improve a feature, product or service. It works in a git
-repository on the host, picked from your repos folder (`~/code`) or cloned into it at creation.
+repository on the host, picked from your repos folder (`~/code`), cloned into it, or made new there at creation.
 The project only points at the repo. The one change it makes there: when a
 session starts, it fast-forwards the local base branch to `origin`. That's a `merge --ff-only`
 with autostash off when your main checkout has the branch checked out (git refuses if it would
@@ -450,7 +464,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
 [repos]
 roots = ["~/code"]        # folders the Open project dialog lists
 depth = 1                 # 1 = only direct children
-clone_into = "~/code"     # where "Clone from URL" puts new repos
+clone_into = "~/code"     # where "Clone from URL" and "New repo" put new repos
 
 [worktrees]
 idle_per_repo = 3         # idle worktrees each repo keeps for its next session (0 to 20; 0 removes them)

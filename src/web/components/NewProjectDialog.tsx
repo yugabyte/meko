@@ -1,13 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
+import { newRepoNameProblem } from '../../shared/types';
 import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
 } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
-import { cx, relativeTime } from '../util';
+import { cx, relativeTime, slugify } from '../util';
 import { Dialog, ErrorText, Field } from './common';
 
-type Source = 'list' | 'clone' | 'folder';
+type Source = 'list' | 'clone' | 'folder' | 'new';
 
 function nameFromPath(p: string): string {
   return p.trim().replace(/\/+$/, '').split('/').pop() ?? '';
@@ -72,6 +73,7 @@ export function NewProjectDialog({
 }) {
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
+  const [cloneInto, setCloneInto] = useState('');
   const [reposError, setReposError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<'recent' | 'az'>('recent');
@@ -80,6 +82,10 @@ export function NewProjectDialog({
   const [cloneUrl, setCloneUrl] = useState('');
   const [folder, setFolder] = useState('');
   const [name, setName] = useState('');
+  // A new repo's folder name follows the project name until edited, and again after it's cleared
+  // (from the next change to the project name, so clearing it doesn't refill it at once).
+  const [newName, setNewName] = useState('');
+  const newNameTouched = useRef(false);
 
   const [datapacks, setDatapacks] = useState<MekoDatapack[] | null>(null);
   const [invites, setInvites] = useState<DatapackInvite[]>(initialInvite ? [initialInvite] : []);
@@ -133,6 +139,7 @@ export function NewProjectDialog({
       .then((r) => {
         setRepos(r.repos);
         setRoots(r.roots);
+        setCloneInto(r.cloneInto);
       })
       .catch((e) => setReposError(errorMessage(e)));
   }, []);
@@ -162,13 +169,19 @@ export function NewProjectDialog({
         : ''
       : source === 'clone'
         ? remoteRepoName(cloneUrl)
-        : folderRepo
+        : source === 'new'
+          ? newName.trim()
+          : folderRepo
           ? canonicalRepoName(folderRepo)
           : nameFromPath(folder);
   const defaultDp = defaultProjectDatapackName(repoName, name);
   useEffect(() => {
     if (!dpNameTouched) setDpName(defaultDp);
   }, [defaultDp, dpNameTouched]);
+  const defaultNew = slugify(name);
+  useEffect(() => {
+    if (!newNameTouched.current) setNewName(defaultNew);
+  }, [defaultNew]);
 
   const options = useMemo<DpOption[]>(() => {
     const usedBy = new Map<string, string[]>();
@@ -289,12 +302,20 @@ export function NewProjectDialog({
 
   // The repo picked, when it isn't the one the closed project being opened again was on.
   const pickedRepo = source === 'list' ? (selected?.path ?? null) : source === 'folder' ? folder.trim().replace(/\/+$/, '') || null : null;
-  const movesFrom = dpMode === 'existing' && dpChosen?.closed && (source === 'clone' || (pickedRepo && pickedRepo !== dpChosen.closed.repoPath))
+  const movesFrom = dpMode === 'existing' && dpChosen?.closed && (source === 'clone' || source === 'new' || (pickedRepo && pickedRepo !== dpChosen.closed.repoPath))
     ? dpChosen.closed.repoPath
     : null;
 
+  // Checked as typed, as the server checks it; an empty name only keeps Open project off.
+  const newProblem = newRepoNameProblem(newName);
   const repoChosen =
-    source === 'list' ? !!selected : source === 'clone' ? cloneUrl.trim().length > 0 : folder.trim().length > 0;
+    source === 'list'
+      ? !!selected
+      : source === 'clone'
+        ? cloneUrl.trim().length > 0
+        : source === 'new'
+          ? !newProblem
+          : folder.trim().length > 0;
   const dpReady = dpMode === 'none' ? true : dpMode === 'create' ? dpName.trim().length > 0 : !!dpChosen;
   const canCreate = repoChosen && dpReady && name.trim().length > 0 && (dpMode === 'none' || mekoUsable) && !busy;
   const accepting = dpMode === 'existing' && !!dpChosen?.inviteId;
@@ -313,6 +334,7 @@ export function NewProjectDialog({
       const p = await api.openProject({
         repoPath: source === 'list' ? selected!.path : source === 'folder' ? folder.trim() : undefined,
         cloneUrl: source === 'clone' ? cloneUrl.trim() : undefined,
+        newRepo: source === 'new' ? newName.trim() : undefined,
         name: name.trim(),
         datapack,
       });
@@ -356,6 +378,11 @@ export function NewProjectDialog({
                 Other folder…
               </button>
             )}
+            {source !== 'new' && (
+              <button className="link-btn" onClick={() => setSource('new')}>
+                New repo…
+              </button>
+            )}
           </div>
           <button className="btn primary" disabled={!canCreate} onClick={() => void create()}>
             {busy
@@ -363,7 +390,9 @@ export function NewProjectDialog({
                 ? 'Accepting…'
                 : source === 'clone'
                   ? 'Cloning…'
-                  : 'Opening…'
+                  : source === 'new'
+                    ? 'Creating…'
+                    : 'Opening…'
               : accepting
                 ? 'Accept and open project'
                 : 'Open project'}
@@ -587,6 +616,29 @@ export function NewProjectDialog({
               placeholder="~/work/some-repo"
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
+            />
+          </Field>
+        )}
+        {source === 'new' && (
+          <Field
+            label="Repo name"
+            hint={
+              newName.trim() && newProblem ? (
+                <span className="error-text">{newProblem}</span>
+              ) : (
+                `Created in ${(cloneInto || '~/code').replace(/\/+$/, '')}/${newName.trim() || '…'} with git init and an empty first commit. It has no remote, so add one before opening a PR.`
+              )
+            }
+          >
+            <input
+              id="np-new"
+              className="input mono"
+              placeholder="my-new-repo"
+              value={newName}
+              onChange={(e) => {
+                setNewName(e.target.value);
+                newNameTouched.current = e.target.value.trim() !== '';
+              }}
             />
           </Field>
         )}

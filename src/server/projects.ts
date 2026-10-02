@@ -4,12 +4,14 @@ import type {
   ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
   SetDedicatedDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
-import { REVIEWER_LABELS } from '../shared/types.js';
+import { newRepoNameProblem, REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx, type Db } from './db.js';
 import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks.js';
-import { canonicalRemote, cloneRepo, defaultBranch, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos } from './git.js';
+import {
+  canonicalRemote, cloneRepo, defaultBranch, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
+} from './git.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
 import { expandHome, repoKey } from './paths.js';
@@ -40,6 +42,11 @@ function isDatapackLimit(e: unknown): boolean {
   return /TIER_DATAPACK_LIMIT|tier datapack limit reached|Upgrade to \w+ to create a new datapack/i.test(errMsg(e));
 }
 
+/** A new repo's folder that's already there (or being made by another open). */
+function folderTaken(dest: string): HttpError {
+  return new HttpError(409, `${dest} already exists. Pick it from the list, or choose another name.`);
+}
+
 /** A project name on a repo, as names are compared there (trimmed, any case). */
 function nameKey(repo: string, name: string): string {
   return `${repo}\0${name.trim().toLowerCase()}`;
@@ -50,6 +57,8 @@ export class ProjectService {
   private addingDatapack = new Set<string>();
   /** Names of projects being created right now, per repo (nameKey): taken until their row is written. */
   private creatingNames = new Set<string>();
+  /** New repos' folders whose project is being opened right now: taken until its row is written. */
+  private creatingRepos = new Set<string>();
 
   /** Project Meko conversations being created, so concurrent callers share one. */
   private creatingConversation = new Map<string, Promise<string>>();
@@ -83,6 +92,7 @@ export class ProjectService {
     }
     return {
       roots: cfg.repos.roots,
+      cloneInto: cfg.repos.cloneInto,
       repos: scanned
         .map((r) => ({ ...r, projects: used.get(repoKey(r.path)) ?? [] }))
         .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt),
@@ -93,12 +103,31 @@ export class ProjectService {
     const name = (req.name ?? '').trim();
     if (!name) throw new HttpError(400, 'Give the project a name.');
     if (!req.datapack) throw new HttpError(400, 'Choose a dedicated datapack, or no datapack.');
-    if (!!req.repoPath === !!req.cloneUrl) throw new HttpError(400, 'Pick a repo or give a URL to clone.');
+    if ([req.repoPath, req.cloneUrl, req.newRepo].filter(Boolean).length !== 1) {
+      throw new HttpError(400, 'Pick a repo, give a URL to clone, or name a new repo.');
+    }
     if (req.datapack.mode !== 'none') this.needMeko('the project can only be opened without a datapack');
 
+    // A new repo's folder is held from here until its project is written, so a second open of the
+    // same name meanwhile is refused instead of taking the repo this one just made.
+    const newDest = req.newRepo ? this.newRepoPath(req.newRepo) : null;
+    if (!newDest) return this.openOn(req, name, null);
+    if (this.creatingRepos.has(newDest)) throw folderTaken(newDest);
+    this.creatingRepos.add(newDest);
+    try {
+      return await this.openOn(req, name, newDest);
+    } finally {
+      this.creatingRepos.delete(newDest);
+    }
+  }
+
+  /** The rest of create(): the repo (made at <newDest> for a new one), the datapack and the row. */
+  private async openOn(req: CreateProjectRequest, name: string, newDest: string | null): Promise<Project> {
     let repoPath: string;
     if (req.cloneUrl) {
       repoPath = await this.clone(req.cloneUrl);
+    } else if (newDest) {
+      repoPath = await this.newRepo(newDest);
     } else {
       repoPath = resolve(expandHome(req.repoPath!));
     }
@@ -170,6 +199,33 @@ export class ProjectService {
       await cloneRepo(url, dest);
     } catch (e) {
       throw new HttpError(400, `Clone failed: ${errMsg(e)}`);
+    }
+    return dest;
+  }
+
+  /** Where the new repo <name> goes: the repos folder (`[repos] clone_into`), once the name is checked. */
+  private newRepoPath(name: unknown): string {
+    const problem = newRepoNameProblem(typeof name === 'string' ? name : '');
+    if (problem) throw new HttpError(400, problem);
+    return join(expandHome(this.core.config.repos.cloneInto), (name as string).trim());
+  }
+
+  /**
+   * Makes the new repo at <dest> (from newRepoPath) and returns it: git init and an empty first
+   * commit. A repo there just as an earlier try left it (no remote, no files, no open project) is
+   * used as it is; anything else there is left alone (409).
+   */
+  private async newRepo(dest: string): Promise<string> {
+    if (existsSync(dest)) {
+      if (await isFreshRepo(dest) && !this.siblings(repoKey(dest)).length) return dest;
+      throw folderTaken(dest);
+    }
+    try {
+      await initRepo(dest);
+    } catch (e) {
+      // Made meanwhile, by something other than AgentK.
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw folderTaken(dest);
+      throw new HttpError(400, `Couldn't create the repo: ${errMsg(e)}`);
     }
     return dest;
   }

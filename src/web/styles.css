@@ -3450,6 +3450,11 @@ a.icon-btn {
     flex-wrap: wrap;
     padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
   }
+  /* Open project lists three other repo sources, more than fit on one line. */
+  .alt-links {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
   /* A dialog without a footer (Settings) ends with its body, which clears the home indicator. */
   .dialog-body:last-child {
     padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));

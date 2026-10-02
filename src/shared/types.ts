@@ -568,6 +568,8 @@ export interface RepoBranches {
 
 export interface ReposResponse {
   roots: string[];
+  /** Where Clone from URL and New repo put repos (`[repos] clone_into`, as configured). */
+  cloneInto: string;
   repos: RepoInfo[];
 }
 
@@ -962,11 +964,30 @@ export type SetDedicatedDatapackRequest = DatapackChoice & {
 };
 
 export interface CreateProjectRequest {
-  /** Exactly one of repoPath / cloneUrl. */
+  /** Exactly one of repoPath / cloneUrl / newRepo. */
   repoPath?: string;
   cloneUrl?: string;
+  /**
+   * A folder name for a new repo in the clone folder (`[repos] clone_into`): git init and an empty
+   * first commit. A repo there just as an earlier try left it is used again.
+   */
+  newRepo?: string;
   name: string;
   datapack: DatapackChoice;
+}
+
+/**
+ * What's wrong with <name> as a new repo's folder name, or null when nothing is: one plain folder
+ * name, not hidden (a ".git" in the repos folder would make it look like a repo), up to 100
+ * characters. Checked by the server and, as it's typed, by the Open project dialog.
+ */
+export function newRepoNameProblem(name: string): string | null {
+  const n = name.trim();
+  if (!n) return 'Name the new repo.';
+  if (n.length > 100) return 'Keep the repo name to 100 characters or fewer.';
+  if (!/^[A-Za-z0-9._-]+$/.test(n)) return 'Use only letters, digits, “.”, “_” and “-” in the repo name.';
+  if (/^[.-]/.test(n)) return 'Start the repo name with a letter, a digit or “_”.';
+  return null;
 }
 
 export interface UpdateProjectRequest {
@@ -1111,7 +1132,8 @@ export type TermServerMessage =
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
-// POST   /api/projects        CreateProjectRequest → Project   (opens a project)
+// POST   /api/projects        CreateProjectRequest → Project   (opens a project on a repo here, a clone, or a new repo;
+//        409 when a new repo's folder is already taken)
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project
 // DELETE /api/projects/:id                     → 204   (closes it: the repo, branches and datapacks stay)
 // GET    /api/projects/:id/branches            → string[]
