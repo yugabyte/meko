@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../src/shared/types.js';
-import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, STATE_MS, type Conn, type SocketLike } from '../../src/web/events.js';
 
 /** A socket the test drives: what the page sent, and whether it let go of it. */
 class FakeSocket {
@@ -19,9 +19,12 @@ class FakeSocket {
   }
   /** The server accepts the socket and sends the state. */
   accept(state = { v: 1 }) {
+    this.opened();
+    this.receive({ type: 'state', state });
+  }
+  opened() {
     this.readyState = 1;
     this.onopen?.call(this as never, {} as Event);
-    this.receive({ type: 'state', state });
   }
   receive(msg: unknown) {
     this.onmessage?.call(this as never, { data: JSON.stringify(msg) } as MessageEvent);
@@ -130,9 +133,70 @@ describe('the events connection', () => {
     t.conn.stop();
   });
 
-  it('gives up on a socket that never sends its first state', () => {
+  it('gives up on a socket that never opens', () => {
     const t = setup();
     vi.advanceTimersByTime(CONNECT_MS);
+    expect(t.sockets[0]!.closed).toBe(true);
+    vi.advanceTimersByTime(1000);
+    expect(t.sockets).toHaveLength(2);
+    t.conn.stop();
+  });
+
+  it('gives an open socket longer for its first state, and more on each try', () => {
+    const t = setup();
+    t.last().opened();
+    vi.advanceTimersByTime(STATE_MS - 1);
+    expect(t.last().closed).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(t.sockets[0]!.closed).toBe(true);
+    // A link this slow gets twice as long on the next socket, so a big snapshot can come through.
+    vi.advanceTimersByTime(1000);
+    t.last().opened();
+    vi.advanceTimersByTime(STATE_MS * 2 - 1);
+    expect(t.last().closed).toBe(false);
+    t.last().receive({ type: 'state', state: { v: 2 } });
+    expect(t.states).toEqual([{ v: 2 }]);
+    expect(t.sockets).toHaveLength(2);
+    t.conn.stop();
+  });
+
+  it('goes back to the short ping deadline once a ping is answered quickly', () => {
+    const t = setup();
+    t.last().accept();
+    vi.advanceTimersByTime(QUIET_MS + PROBE_MS);
+    vi.advanceTimersByTime(1000);
+    t.last().accept();
+    // The next ping gets twice as long: the dropped socket may have been a slow one.
+    t.conn.resume();
+    vi.advanceTimersByTime(PROBE_MS);
+    expect(t.last().closed).toBe(false);
+    // A slow answer doesn't show the link is quick; a quick one does.
+    t.last().receive({ type: 'pong' });
+    t.conn.resume();
+    vi.advanceTimersByTime(100);
+    t.last().receive({ type: 'pong' });
+    t.conn.resume();
+    vi.advanceTimersByTime(PROBE_MS);
+    expect(t.last().closed).toBe(true);
+    t.conn.stop();
+  });
+
+  it('starts over at once on resume when the socket is closing but its close never came', () => {
+    const t = setup();
+    t.last().accept();
+    t.last().readyState = 2;
+    t.conn.resume();
+    expect(t.sockets[0]!.closed).toBe(true);
+    vi.advanceTimersByTime(1000);
+    expect(t.sockets).toHaveLength(2);
+    t.conn.stop();
+  });
+
+  it('starts over when a quiet socket turns out to be closing', () => {
+    const t = setup();
+    t.last().accept();
+    t.last().readyState = 2;
+    vi.advanceTimersByTime(QUIET_MS);
     expect(t.sockets[0]!.closed).toBe(true);
     vi.advanceTimersByTime(1000);
     expect(t.sockets).toHaveLength(2);

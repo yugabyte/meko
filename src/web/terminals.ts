@@ -323,7 +323,13 @@ class SessionTerminal {
     this.paused = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    this.ws?.close();
+    // Let go of it now: a socket the server already dropped may not report its close for minutes,
+    // and resume() reconnects only once there's no socket.
+    const old = this.ws;
+    this.ws = null;
+    this.openedAt = 0;
+    old?.close();
+    if (old && this.conn !== 'ended') this.setConn('closed');
   }
 
   resume() {
@@ -735,16 +741,23 @@ export function setTerminalFontSize(size: number) {
  */
 const HIDDEN_RELEASE_MS = 30_000;
 let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+/** When a phone's page was hidden, or 0. */
+let hiddenAt = 0;
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (hiddenTimer) clearTimeout(hiddenTimer);
     hiddenTimer = null;
     if (document.hidden) {
       if (!matches(MOBILE_QUERY)) return;
+      hiddenAt = Date.now();
       hiddenTimer = setTimeout(() => {
         for (const t of cache.values()) t.pause();
       }, HIDDEN_RELEASE_MS);
     } else {
+      // A phone that suspends a hidden page runs no timers, so the release above may never have
+      // happened, and the server has likely dropped the sockets since. Measured by the clock.
+      if (hiddenAt && Date.now() - hiddenAt >= HIDDEN_RELEASE_MS) for (const t of cache.values()) t.pause();
+      hiddenAt = 0;
       // Only terminals on screen: ones taken off screen on a phone stay released until shown.
       for (const t of cache.values()) if (t.el.isConnected) t.resume();
     }
