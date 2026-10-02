@@ -2948,6 +2948,69 @@
                 }
             }
         },
+        "/datapacks/{datapack_id}/bulk-share": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Invite many people to a datapack in one call",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack ID",
+                        "name": "datapack_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Bulk invite request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.BulkInviteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/datapacks/{datapack_id}/conversation-search-opt-out": {
             "patch": {
                 "security": [
@@ -6027,7 +6090,32 @@
             }
         },
         "service.AddRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.BulkInviteRequest": {
+            "type": "object",
+            "properties": {
+                "emails": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "grant": {
+                    "type": "string"
+                }
+            }
         },
         "service.ChangePasswordRequest": {
             "type": "object",
@@ -6120,7 +6208,18 @@
             }
         },
         "service.CreateUserAgentRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "agent_details": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "agent_id": {
+                    "type": "string"
+                }
+            }
         },
         "service.ForgotPasswordConfirmRequest": {
             "type": "object",

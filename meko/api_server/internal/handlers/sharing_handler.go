@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -88,6 +90,114 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 		"datapack_id", dp.ID,
 		"recipient_email", req.RecipientEmail,
 		"grant_role", req.GrantRole,
+		"auth_method", auth.GetAuthMethod(c),
+		"pat_id", auth.GetPATID(c),
+	)
+
+	return ok(c, http.StatusOK, resp)
+}
+
+// maxBulkInviteEmails caps a single bulk-invite batch. Each row can fan out to
+// a Cognito CreateUser plus an SES send — roughly 300-700 ms per row in serial.
+// api_server itself sets no HTTP server timeout (see internal/api/server.go);
+// the only ceiling in the path is the nginx proxy_read_timeout of 180 s
+// configured on the meko-ui ingress (deploy/helm/meko/templates/meko-ui/
+// nginx-configmap.yaml). 50 rows worst case is ~35 s — comfortably under, and
+// matches the sync-invite caps at GitHub org invites, 1Password Business, and
+// Slack. Larger batches belong on an async queued flow; raise this cap only
+// if the invite path moves off the request goroutine.
+const maxBulkInviteEmails = 50
+
+// BulkInvite handles POST /api/v1/datapacks/:datapack_id/bulk-share.
+//
+// Partial success by design: the response is 200 with a per-email `results`
+// array and a `summary` count per status. Only a malformed body, an empty list,
+// an oversized batch, or an invalid shared grant fail the whole request.
+//
+//	@Summary	Invite many people to a datapack in one call
+//	@Tags		sharing
+//	@Accept		json
+//	@Produce	json
+//	@Param		datapack_id	path		string						true	"Datapack ID"
+//	@Param		body		body		service.BulkInviteRequest	true	"Bulk invite request"
+//	@Success	200			{object}	APIResponse
+//	@Failure	400			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
+//	@Failure	404			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{datapack_id}/bulk-share [post]
+func (h *SharingHandler) BulkInvite(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing datapack context")
+	}
+
+	var req service.BulkInviteRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+	if len(req.Emails) == 0 {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "emails is required and must contain at least one address")
+	}
+	if len(req.Emails) > maxBulkInviteEmails {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
+			fmt.Sprintf("too many emails: %d (max %d per request)", len(req.Emails), maxBulkInviteEmails))
+	}
+
+	// Same as Invite: invite rows use the datapack row owner as OwnerUserID so
+	// resend/revoke checks match; maintainers act on behalf of the same datapack.
+	resp, err := h.svc.BulkInviteToDatapack(
+		c.Request().Context(),
+		dp.ID,
+		dp.UserID,
+		dp.Name,
+		dp.Description,
+		dp.OwnerName,
+		dp.OwnerEmail,
+		req,
+	)
+	if err != nil {
+		// Per-row failures never surface here — they're classified into
+		// results[]. Only the up-front whole-batch validation OR a
+		// request-context cancellation can error.
+		if isValidationErr(err) {
+			return apiError(c, http.StatusBadRequest,
+				"VALIDATION_ERROR", err.Error())
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Client disconnect or upstream (nginx) timeout. The service
+			// already stopped provisioning further users; whatever
+			// reached results[] before cancellation is the partial state
+			// we have. Log at info — this isn't a server bug.
+			slog.Info("bulk invite: context cancelled mid-batch",
+				"datapack_id", dp.ID,
+				"requested", len(req.Emails),
+				"processed", len(resp.Results),
+				"error", err)
+			// echo's default handler will short-circuit on a dead
+			// connection anyway; returning the ctx error keeps the
+			// signal for the framework to close cleanly.
+			return err
+		}
+		slog.Error("bulk invite failed",
+			"datapack_id", dp.ID, "email_count", len(req.Emails), "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to send invites, please try again or contact support")
+	}
+
+	// Same attribution as the single invite, and more load-bearing here: one
+	// call can provision up to maxBulkInviteEmails Cognito users and mail that
+	// many temporary passwords, so a disputed batch has to point at one
+	// revocable key. Counts rather than addresses — the per-row outcomes are
+	// in the response, and the recipient list does not belong in the log.
+	slog.Info("bulk invite sent",
+		"datapack_id", dp.ID,
+		"grant_role", req.GrantRole,
+		"requested", len(req.Emails),
+		"results", len(resp.Results),
 		"auth_method", auth.GetAuthMethod(c),
 		"pat_id", auth.GetPATID(c),
 	)

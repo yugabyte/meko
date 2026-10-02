@@ -555,6 +555,115 @@ export async function inviteDatapackShare(
   );
 }
 
+/**
+ * Server-enforced cap on how many addresses one bulk-share request accepts.
+ * Exceeding it fails the WHOLE request with a 400 VALIDATION_ERROR, so the UI
+ * checks this client-side and asks the user to split the list instead.
+ *
+ * Must stay in step with `maxBulkInviteEmails` in
+ * api_server/internal/handlers/sharing_handler.go. That constant carries the
+ * rationale (per-row Cognito + SES fan-out kept inside the ALB idle timeout).
+ */
+export const DATAPACK_BULK_SHARE_MAX_EMAILS = 50;
+
+/**
+ * Per-row outcome of a bulk share. The batch itself succeeds (HTTP 200) even
+ * when individual rows fail, so every value here is "expected", not an error:
+ * - `invited` / `invited_new_user` — invite created (the latter for an address
+ *   with no Meko/Cognito account yet, i.e. not-yet-provisioned).
+ * - `already_member` / `invite_exists` / `is_owner` — no-op, already has access
+ *   or an invite is already pending (bulk share is idempotent).
+ * - `invalid_email` / `error` — that row was rejected; the others still applied.
+ */
+export type DatapackBulkShareStatus =
+  | "invited"
+  | "invited_new_user"
+  | "already_member"
+  | "invite_exists"
+  | "is_owner"
+  | "invalid_email"
+  | "error";
+
+/** One row of `data.results` from POST /datapacks/:datapack_id/bulk-share. */
+export type DatapackBulkShareResult = {
+  email: string;
+  status: DatapackBulkShareStatus;
+  /** Present only when an invite was created. */
+  invite_id?: string;
+  /** Optional server-side detail, e.g. "already has access to this datapack". */
+  message?: string;
+};
+
+/** Body for POST /datapacks/:datapack_id/bulk-share */
+export type DatapackBulkSharePayload = {
+  emails: string[];
+  grant: DatapackShareGrant;
+};
+
+/**
+ * `data` from POST /datapacks/:datapack_id/bulk-share.
+ *
+ * The server de-duplicates `emails` case-insensitively, so `results` can be
+ * SHORTER than the request list — never index-match results to inputs, key on
+ * `email`. `summary` is a convenience count keyed by status; the UI recomputes
+ * it from `results` so it stays correct if the field is missing.
+ */
+export type DatapackBulkShareResponse = {
+  results: DatapackBulkShareResult[];
+  summary?: Partial<Record<DatapackBulkShareStatus, number>>;
+};
+
+/**
+ * Grant one role to many addresses in a single request (owner or maintainer).
+ * POST /datapacks/:datapack_id/bulk-share
+ *
+ * Partial success by design: inspect `results` per row. Whole-request 400 only
+ * for a malformed body, an empty list, more than
+ * {@link DATAPACK_BULK_SHARE_MAX_EMAILS} addresses, or an unknown grant.
+ *
+ * NOTE: this endpoint is not deployed everywhere yet. Use
+ * {@link isApiEndpointMissingError} to distinguish "route not deployed" from
+ * a legitimate 404 (RequireDatapackAccess returns 404 code=NOT_FOUND on
+ * revoked / deleted datapack access — the helper filters that out).
+ */
+export async function bulkShareDatapack(
+  datapackId: string,
+  payload: DatapackBulkSharePayload,
+  options: DatapackRouteOptions = {},
+) {
+  return request<DatapackBulkShareResponse>(
+    `${datapackRoute(datapackId)}/bulk-share`,
+    "POST",
+    payload,
+    options,
+  );
+}
+
+/**
+ * True when the API responded "this route does not exist here" rather than
+ * "your request was bad". Used to degrade a client feature whose endpoint has
+ * not been rolled out yet, instead of showing a generic red failure.
+ *
+ * Contract:
+ *   405 = path exists with another method     → almost always "endpoint not deployed"
+ *   501 = explicitly not implemented          → server said so
+ *   404 = ambiguous — it can be
+ *           (a) the route isn't registered (echo's default 404, no envelope),
+ *           (b) a middleware that legitimately 404s an existing route
+ *               (RequireDatapackAccess returns 404 code=NOT_FOUND on
+ *               revoked / deleted datapack access — see
+ *               api_server/internal/auth/middleware.go).
+ *         Only treat (a) as "endpoint missing". The distinguishing signal is
+ *         the presence of an api-error code: (a) has no `code`, (b) has one.
+ */
+export function isApiEndpointMissingError(err: unknown): boolean {
+  if (!isMekoApiRequestError(err)) return false;
+  if (err.httpStatus === 405 || err.httpStatus === 501) return true;
+  // 404 with a code was returned by our own middleware — legitimate not-found,
+  // not "endpoint missing". 404 with no code = echo's default fallthrough.
+  return err.httpStatus === 404 && !err.code;
+}
+
 /** One row from GET /datapacks/incoming-shares */
 export type DatapackIncomingShare = {
   invite_id: string;
@@ -709,24 +818,6 @@ export async function updateDatapackMemberGrant(
     `${datapackRoute(datapackId)}/share/${encodeURIComponent(shareUserId)}`,
     "PATCH",
     payload,
-    options,
-  );
-}
-
-/**
- * TODO: This is a stretch goal for the MVP.
- * Remove a member’s access / delete active share (owner).
- * DELETE /datapacks/:datapack_id/share/:shareUserId
- */
-export async function removeDatapackMemberShare(
-  datapackId: string,
-  shareUserId: string,
-  options: DatapackRouteOptions = {},
-) {
-  return request<unknown>(
-    `${datapackRoute(datapackId)}/share/${encodeURIComponent(shareUserId)}`,
-    "DELETE",
-    undefined,
     options,
   );
 }

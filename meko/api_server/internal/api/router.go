@@ -1170,6 +1170,12 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
+	// Bulk invite (parsed CSV / email list): same gate pair as single invite.
+	dpDirect.POST("/datapacks/:datapack_id/bulk-share", shareH.BulkInvite,
+		auth.RequireScope(auth.ScopeWrite),
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
 	dpDirect.POST("/datapacks/:datapack_id/invite/:invite_id/resend", shareH.ResendInvite,
 		auth.RequireScope(auth.ScopeWrite),
 		auth.RequireDatapackAccess(reg.dpRepo),

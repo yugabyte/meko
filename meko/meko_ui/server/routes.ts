@@ -314,6 +314,120 @@ export async function registerRoutes(
     );
   });
 
+  // POST /api/v1/datapacks/:datapack_id/bulk-share — dev mock.
+  //
+  // Without this route registered explicitly, the SPA catch-all (see
+  // server/vite.ts) matched the request and returned 200 + index.html —
+  // which the FE `request()` helper parsed as JSON, yielding
+  // `payload.data === undefined` and a downstream TypeError on
+  // `res.results`. Operators saw a red "Bulk invite failed / Cannot read
+  // properties of undefined" toast rather than the amber "not available
+  // yet" degrade path that `isApiEndpointMissingError` would trigger
+  // for a proper 404 envelope.
+  //
+  // This handler classifies each row against the mock's in-memory
+  // share state so a dev can exercise the flow end-to-end without
+  // booting api_server / Cognito / SES: known members come back as
+  // `already_member`, existing pending invites as `invite_exists`,
+  // the datapack owner (matched by the mock owner email) as
+  // `is_owner`, unparseable strings as `invalid_email`, and everything
+  // else is filed as `invited_new_user` (with a synthesized invite id
+  // appended to the pending list so the UI's `refreshShares` picks up
+  // the change).
+  app.post("/api/v1/datapacks/:datapack_id/bulk-share", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    const rawEmails = Array.isArray(req.body?.emails) ? req.body.emails : null;
+    const grant = req.body?.grant;
+    if (!rawEmails || rawEmails.length === 0) {
+      return res.status(400).json({
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "emails is required and must contain at least one address",
+        },
+      });
+    }
+    if (rawEmails.length > 50) {
+      return res.status(400).json({
+        data: null,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: `too many emails: ${rawEmails.length} (max 50 per request)`,
+        },
+      });
+    }
+    if (!isDatapackShareGrant(grant)) {
+      return res.status(400).json({
+        data: null,
+        error: { code: "VALIDATION_ERROR", message: DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE },
+      });
+    }
+
+    // Match api_server's regex-adjacent guard so a bad row here reports
+    // the same status as prod would. `[^\s@]+@[^\s@]+\.[^\s@]+` — one
+    // `@`, a dot somewhere in the domain, no whitespace.
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const summary: Record<string, number> = {};
+    const results: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+    for (const rawEmail of rawEmails) {
+      const email = String(rawEmail ?? "").trim();
+      const key = email.toLowerCase();
+      if (!email || seen.has(key)) continue;
+      seen.add(key);
+
+      let status = "invited_new_user";
+      let message: string | undefined;
+      if (!validEmail.test(email)) {
+        status = "invalid_email";
+        message = "not a valid email address";
+      } else if (
+        st.members.some(
+          (m) => m.is_owner && m.user_email_id?.toLowerCase() === key,
+        )
+      ) {
+        status = "is_owner";
+        message = "cannot invite the datapack owner";
+      } else if (
+        st.members.some((m) => m.user_email_id?.toLowerCase() === key)
+      ) {
+        status = "already_member";
+        message = "already has access to this datapack";
+      } else if (
+        st.pending.some((p) => p.recipient_email_id?.toLowerCase() === key)
+      ) {
+        status = "invite_exists";
+        message = "a pending invite already exists for this email";
+      } else {
+        // Fresh invite — push into the mock's pending list so the UI's
+        // pending-invites section reflects it after refetch.
+        const inviteID = `inv_${Date.now()}_${results.length}`;
+        st.pending.push({
+          invite_id: inviteID,
+          grant,
+          recipient_user_id: "",
+          recipient_user_name: email.split("@")[0] || "invitee",
+          recipient_email_id: email,
+        });
+        results.push({ email, status, invite_id: inviteID });
+        summary[status] = (summary[status] ?? 0) + 1;
+        continue;
+      }
+
+      results.push({ email, status, message });
+      summary[status] = (summary[status] ?? 0) + 1;
+    }
+
+    return res.status(200).json(ok({ results, summary }));
+  });
+
   app.post("/api/v1/datapacks/:datapack_id/invite/:inviteId/resend", (req, res) => {
     const name = datapackNameForID(req.params.datapack_id);
     const inviteId = req.params.inviteId;

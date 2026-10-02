@@ -152,6 +152,10 @@ type InviteResponse struct {
 	InviteID       string `json:"invite_id"`
 	RecipientEmail string `json:"recipient_email"`
 	GrantRole      string `json:"grant"`
+	// IsNewUser is true when the recipient had no Meko account and one was
+	// provisioned in Cognito as part of this invite. omitempty keeps the
+	// single-invite response shape unchanged for existing users.
+	IsNewUser bool `json:"is_new_user,omitempty"`
 }
 
 // InviteToDatapack creates a pending invite for the given datapack.
@@ -272,7 +276,185 @@ func (s *SharingService) InviteToDatapack(
 		InviteID:       inv.InviteID,
 		RecipientEmail: inv.RecipientEmail,
 		GrantRole:      inv.GrantRole,
+		IsNewUser:      recipientUserID == nil,
 	}, nil
+}
+
+// Per-row statuses returned by BulkInviteToDatapack. One of these lands in
+// every BulkInviteResult.Status, and the same strings key the summary map.
+const (
+	// BulkStatusInvited: a pending invite was created for an existing account.
+	BulkStatusInvited = "invited"
+	// BulkStatusInvitedNewUser: invite created and a Cognito account was
+	// provisioned because the recipient had no Meko account yet.
+	BulkStatusInvitedNewUser = "invited_new_user"
+	// BulkStatusAlreadyMember: the recipient already has access.
+	BulkStatusAlreadyMember = "already_member"
+	// BulkStatusInviteExists: a pending invite for this email already exists.
+	BulkStatusInviteExists = "invite_exists"
+	// BulkStatusIsOwner: the email is the datapack owner's — already full access.
+	BulkStatusIsOwner = "is_owner"
+	// BulkStatusInvalidEmail: the address failed format validation and was skipped.
+	BulkStatusInvalidEmail = "invalid_email"
+	// BulkStatusError: an unexpected failure; details are logged, not returned.
+	BulkStatusError = "error"
+)
+
+// BulkInviteRequest is the body for POST /datapacks/:datapack_id/bulk-share.
+// GrantRole applies to every email in the batch.
+type BulkInviteRequest struct {
+	Emails    []string `json:"emails"`
+	GrantRole string   `json:"grant"`
+}
+
+// BulkInviteResult is the outcome for a single email in a bulk invite.
+type BulkInviteResult struct {
+	Email    string `json:"email"`
+	Status   string `json:"status"`
+	InviteID string `json:"invite_id,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// BulkInviteResponse aggregates per-email results plus a count per status.
+type BulkInviteResponse struct {
+	Results []BulkInviteResult `json:"results"`
+	Summary map[string]int     `json:"summary"`
+}
+
+// BulkInviteToDatapack invites many emails to one datapack in a single call.
+// Each row is processed independently (partial success); only a bad shared
+// grant fails the whole request.
+//
+// Owner-collision is classified before the format guard so it matches
+// POST /share even when the owner address would fail isValidEmailFormat
+// (dotless domains). Remaining malformed rows are classified invalid_email
+// without calling InviteToDatapack; every other case loops the single-invite
+// path.
+//
+// Emails are de-duplicated case-insensitively; the first spelling of a repeated
+// address is the one reported.
+func (s *SharingService) BulkInviteToDatapack(
+	ctx context.Context,
+	datapackID, ownerUserID, datapackName, datapackDesc, ownerName, ownerEmail string,
+	req BulkInviteRequest,
+) (*BulkInviteResponse, error) {
+	// The grant applies to the whole batch, so a bad one fails the request
+	// rather than producing N identical per-row errors.
+	req.GrantRole = strings.ToLower(strings.TrimSpace(req.GrantRole))
+	if !models.ValidGrantRole(req.GrantRole) {
+		return nil, fmt.Errorf("grant is required and must be one of: viewer, contributor, maintainer")
+	}
+	if len(req.Emails) == 0 {
+		return nil, fmt.Errorf("emails is required and must contain at least one address")
+	}
+
+	resp := &BulkInviteResponse{
+		Results: make([]BulkInviteResult, 0, len(req.Emails)),
+		Summary: map[string]int{},
+	}
+	seen := make(map[string]struct{}, len(req.Emails))
+
+	for _, raw := range req.Emails {
+		// Client disconnect or upstream timeout (meko-ui nginx
+		// proxy_read_timeout, 180 s) cancels ctx. Bail rather than
+		// keep provisioning Cognito users and firing SES sends for
+		// rows the caller no longer cares about; the batch-cap comment
+		// on handlers/sharing_handler.go assumes the request is alive
+		// for the whole ~35 s worst-case, and cancellation is the
+		// other half of that budget.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			slog.Info("bulk invite: aborting after cancellation",
+				"datapack_id", datapackID,
+				"processed", len(resp.Results),
+				"remaining", len(req.Emails)-len(resp.Results),
+				"error", ctxErr,
+			)
+			return resp, ctxErr
+		}
+
+		email := strings.TrimSpace(raw)
+		key := strings.ToLower(email)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		// Owner-collision before the format guard: isValidEmailFormat rejects
+		// dotless domains, so checking format first would mis-label an owner
+		// address like the seeded `dev@localhost`.
+		if owner := strings.TrimSpace(ownerEmail); owner != "" && strings.EqualFold(email, owner) {
+			resp.add(BulkInviteResult{
+				Email:   email,
+				Status:  BulkStatusIsOwner,
+				Message: ErrCannotInviteOwner.Error(),
+			})
+			continue
+		}
+
+		if !isValidEmailFormat(email) {
+			resp.add(BulkInviteResult{
+				Email:   email,
+				Status:  BulkStatusInvalidEmail,
+				Message: "not a valid email address",
+			})
+			continue
+		}
+
+		inv, err := s.InviteToDatapack(
+			ctx, datapackID, ownerUserID, datapackName, datapackDesc, ownerName, ownerEmail,
+			InviteRequest{RecipientEmail: email, GrantRole: req.GrantRole},
+		)
+		switch {
+		case err == nil:
+			status := BulkStatusInvited
+			if inv.IsNewUser {
+				status = BulkStatusInvitedNewUser
+			}
+			resp.add(BulkInviteResult{Email: email, Status: status, InviteID: inv.InviteID})
+		case errors.Is(err, repository.ErrAlreadyMember):
+			resp.add(BulkInviteResult{
+				Email:   email,
+				Status:  BulkStatusAlreadyMember,
+				Message: "already has access to this datapack",
+			})
+		case errors.Is(err, repository.ErrInviteExists):
+			resp.add(BulkInviteResult{
+				Email:   email,
+				Status:  BulkStatusInviteExists,
+				Message: "a pending invite already exists for this email",
+			})
+		case errors.Is(err, ErrCannotInviteOwner):
+			resp.add(BulkInviteResult{
+				Email:   email,
+				Status:  BulkStatusIsOwner,
+				Message: ErrCannotInviteOwner.Error(),
+			})
+		default:
+			// This path can carry raw Cognito/AWS SDK errors (IAM ARNs,
+			// request IDs) — log them, return a generic per-row message.
+			slog.Error("bulk invite: row failed",
+				"datapack_id", datapackID, "recipient", email, "error", err)
+			resp.add(BulkInviteResult{
+				Email:   email,
+				Status:  BulkStatusError,
+				Message: "failed to send invite, please try again or contact support",
+			})
+		}
+	}
+
+	slog.Info("bulk invite complete",
+		"datapack_id", datapackID,
+		"requested", len(req.Emails),
+		"processed", len(resp.Results),
+		"summary", resp.Summary,
+	)
+	return resp, nil
+}
+
+// add appends a result and keeps the status summary in sync.
+func (r *BulkInviteResponse) add(res BulkInviteResult) {
+	r.Results = append(r.Results, res)
+	r.Summary[res.Status]++
 }
 
 // ListIncomingShares returns all pending invites for the given user's email.

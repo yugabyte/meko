@@ -91,6 +91,108 @@ func TestSharingService_InviteToDatapack_AcceptsValidGrants(t *testing.T) {
 	}
 }
 
+// Bulk invite: only the pre-repo branches are exercised here. Rows that reach
+// the repo can't run against a nil repo, so per-row repo classifications
+// (already_member / invite_exists) are covered by the handler integration test.
+
+func TestSharingService_BulkInvite_RequiresValidGrant(t *testing.T) {
+	svc := service.NewSharingService(nil, nil)
+	for _, grant := range []string{"", "superadmin", "can_view"} {
+		t.Run("grant="+grant, func(t *testing.T) {
+			_, err := svc.BulkInviteToDatapack(
+				context.Background(),
+				"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", "owner@example.com",
+				service.BulkInviteRequest{Emails: []string{"a@example.com"}, GrantRole: grant},
+			)
+			if err == nil || !strings.Contains(err.Error(), "grant is required") {
+				t.Errorf("expected grant validation error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestSharingService_BulkInvite_RequiresEmails(t *testing.T) {
+	svc := service.NewSharingService(nil, nil)
+	for name, emails := range map[string][]string{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.BulkInviteToDatapack(
+				context.Background(),
+				"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", "owner@example.com",
+				service.BulkInviteRequest{Emails: emails, GrantRole: "viewer"},
+			)
+			if err == nil || !strings.Contains(err.Error(), "emails is required") {
+				t.Errorf("expected emails validation error, got %v", err)
+			}
+		})
+	}
+}
+
+// Malformed addresses and the owner's own email are classified per-row and
+// never reach the repo, so a nil-repo service can process a whole batch of them.
+func TestSharingService_BulkInvite_ClassifiesPreRepoRows(t *testing.T) {
+	svc := service.NewSharingService(nil, nil)
+	resp, err := svc.BulkInviteToDatapack(
+		context.Background(),
+		"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", "dev@localhost",
+		service.BulkInviteRequest{
+			Emails: []string{
+				"not-an-email",
+				"missing@tld",
+				"",
+				"DEV@localhost", // owner, case-insensitive; domain is dotless
+			},
+			GrantRole: "viewer",
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected partial success (nil error), got %v", err)
+	}
+	want := []string{
+		service.BulkStatusInvalidEmail,
+		service.BulkStatusInvalidEmail,
+		service.BulkStatusInvalidEmail,
+		service.BulkStatusIsOwner,
+	}
+	if len(resp.Results) != len(want) {
+		t.Fatalf("expected %d results, got %d (%+v)", len(want), len(resp.Results), resp.Results)
+	}
+	for i, w := range want {
+		if resp.Results[i].Status != w {
+			t.Errorf("result[%d] (%q) status = %q, want %q",
+				i, resp.Results[i].Email, resp.Results[i].Status, w)
+		}
+	}
+	if got := resp.Summary[service.BulkStatusInvalidEmail]; got != 3 {
+		t.Errorf("summary[invalid_email] = %d, want 3", got)
+	}
+	if got := resp.Summary[service.BulkStatusIsOwner]; got != 1 {
+		t.Errorf("summary[is_owner] = %d, want 1", got)
+	}
+}
+
+// Repeated addresses collapse to one result regardless of capitalisation, so a
+// pasted CSV with duplicates doesn't invite the same person twice.
+func TestSharingService_BulkInvite_DeduplicatesCaseInsensitively(t *testing.T) {
+	svc := service.NewSharingService(nil, nil)
+	resp, err := svc.BulkInviteToDatapack(
+		context.Background(),
+		"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", "owner@example.com",
+		service.BulkInviteRequest{
+			Emails:    []string{"bad email", "BAD EMAIL", "  bad email  "},
+			GrantRole: "viewer",
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected partial success (nil error), got %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 de-duplicated result, got %d (%+v)", len(resp.Results), resp.Results)
+	}
+	if resp.Summary[service.BulkStatusInvalidEmail] != 1 {
+		t.Errorf("summary[invalid_email] = %d, want 1", resp.Summary[service.BulkStatusInvalidEmail])
+	}
+}
+
 func TestSharingService_HandleInviteAction_RequiresInviteID(t *testing.T) {
 	svc := service.NewSharingService(nil, nil)
 	_, err := svc.HandleInviteAction(service.InviteActionRequest{

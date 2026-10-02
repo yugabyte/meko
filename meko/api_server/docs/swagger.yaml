@@ -173,6 +173,22 @@ definitions:
         type: string
     type: object
   service.AddRequest:
+    properties:
+      details:
+        items:
+          type: integer
+        type: array
+      url:
+        type: string
+    type: object
+  service.BulkInviteRequest:
+    properties:
+      emails:
+        items:
+          type: string
+        type: array
+      grant:
+        type: string
     type: object
   service.ChangePasswordRequest:
     properties:
@@ -241,6 +257,13 @@ definitions:
         type: string
     type: object
   service.CreateUserAgentRequest:
+    properties:
+      agent_details:
+        items:
+          type: integer
+        type: array
+      agent_id:
+        type: string
     type: object
   service.ForgotPasswordConfirmRequest:
     properties:
@@ -2159,6 +2182,46 @@ paths:
       summary: Presigned S3 download URL for an artifact
       tags:
       - artifacts
+  /datapacks/{datapack_id}/bulk-share:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack ID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      - description: Bulk invite request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.BulkInviteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Invite many people to a datapack in one call
+      tags:
+      - sharing
   /datapacks/{datapack_id}/conversation-search-opt-out:
     patch:
       consumes:
