@@ -57,6 +57,41 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(good.statusCode).toBe(204);
   });
 
+  it('says a setup link replaces the existing login, so the setup screen can offer a reset', async () => {
+    const status = async () => (await app.inject({ url: '/api/auth/status' })).json();
+    expect(await status()).toMatchObject({ setupRequired: true, reset: false });
+    const cookie = await setup();
+    expect(await status()).toMatchObject({ setupRequired: false, reset: false });
+
+    // Forgot password: `agent-k-local setup-link` on the host issues a token for a reset.
+    const token = issueSetupToken(env.core.db);
+    expect(await status()).toMatchObject({ setupRequired: true, reset: true });
+    expect((await app.inject({ url: '/api/auth/status', headers: { cookie } })).json()).toMatchObject({ setupRequired: false, reset: false });
+
+    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me2', password: 'a brand new passphrase' } });
+    expect(res.statusCode).toBe(204);
+    expect(await status()).toMatchObject({ setupRequired: false, reset: false });
+    // The reset signed out the old browser, and only the new password works.
+    expect((await app.inject({ url: '/api/state', headers: { cookie } })).statusCode).toBe(401);
+    const old = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery' } });
+    expect(old.statusCode).toBe(401);
+    const next = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me2', password: 'a brand new passphrase' } });
+    expect(next.statusCode).toBe(204);
+  });
+
+  it('takes a valid setup link while sign-in is rate limited, so a locked-out owner gets back in', async () => {
+    await setup();
+    for (let i = 0; i < 5; i++) {
+      await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'wrong' } });
+    }
+    const reset = (token: string) => app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'a brand new passphrase' } });
+    const token = issueSetupToken(env.core.db);
+    // A wrong token is still refused by the limit, and doesn't use up the real one.
+    expect((await reset('not-the-token')).statusCode).toBe(429);
+    expect((await reset(token)).statusCode).toBe(204);
+    expect((await reset(token)).statusCode).toBe(429);
+  });
+
   it('rate limits failed logins', async () => {
     await setup();
     for (let i = 0; i < 5; i++) {

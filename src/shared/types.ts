@@ -741,6 +741,8 @@ export interface SearchResult {
 
 export interface AuthStatus {
   setupRequired: boolean;
+  /** The setup asked for replaces an existing login (a `setup-link` run to recover a lost password). */
+  reset: boolean;
   loggedIn: boolean;
   username: string | null;
   totpEnabled: boolean;
@@ -1081,7 +1083,7 @@ export type TermServerMessage =
 // to localhost need no cookie.
 //
 // GET    /healthz                              → { ok: true, version }
-// GET    /api/auth/status                      → AuthStatus            (no auth)
+// GET    /api/auth/status                      → AuthStatus            (no auth; reset: a setup link replaces the login)
 // POST   /api/auth/setup      SetupRequest     → 204 + cookie | 400 | 403 (bad link) | 429   (no auth)
 // POST   /api/auth/login      LoginRequest     → 204 + cookie | 401 LoginError | 429
 // POST   /api/auth/logout                      → 204

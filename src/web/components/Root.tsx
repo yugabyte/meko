@@ -41,7 +41,7 @@ export function Root() {
     );
   }
   if (!auth) return <div className="boot">Loading…</div>;
-  if (auth.setupRequired) return <SetupScreen onDone={refresh} />;
+  if (auth.setupRequired) return <SetupScreen reset={auth.reset} onDone={refresh} />;
   if (!auth.loggedIn) return <LoginScreen onDone={refresh} />;
   return (
     <App

@@ -1328,6 +1328,15 @@ their own copy.
   `https://host:7777/setup?token=…`. You open it, choose a username and password, and can
   optionally enrol TOTP. The token stops working after it is used. With local access it prints
   the address instead; `agent-k-local setup-link` still makes a login for a later switch to remote.
+- **Forgot password.** The sign-in screen's **Forgot password?** says how to get back in: run
+  `agent-k-local setup-link` on the host and open the link it prints. There is no email or
+  self-service reset in the browser, on purpose: the one login guards a shell on the host, so a
+  reset needs someone who can already run commands there. While a link is outstanding the setup
+  screen shows (`AuthStatus.reset` says it replaces an existing login, so it reads **Reset your
+  login**); using it replaces the username and password, turns off TOTP and signs out every
+  browser. A valid link works even while sign-in is rate limited, so a locked-out owner can use
+  it at once. A browser that is still signed in keeps working until then and doesn't see the setup
+  screen. Projects and sessions are untouched.
 - **Sessions.** Passwords are hashed with scrypt. After login you get an `HttpOnly`,
   `SameSite=Strict` cookie (`Secure` over HTTPS) that lasts 14 days, renewed as you use the app.
   Changing the password signs out every other browser. Access checks key on the route a request
