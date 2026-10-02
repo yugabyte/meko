@@ -27,6 +27,16 @@ const namespace = "meko_api"
 // mint a series per probe.
 const unmatchedRoute = "unmatched"
 
+// otherMethod labels any method outside knownMethods. The method is
+// client-controlled and net/http accepts any token, so an unclamped label lets
+// anyone reaching the API mint series without bound.
+const otherMethod = "OTHER"
+
+var knownMethods = map[string]bool{
+	http.MethodGet: true, http.MethodPost: true, http.MethodPut: true, http.MethodPatch: true,
+	http.MethodDelete: true, http.MethodHead: true, http.MethodOptions: true,
+}
+
 // Metrics holds the registry and the series recorded at runtime. A nil *Metrics
 // is a valid no-op.
 type Metrics struct {
@@ -110,6 +120,9 @@ func (m *Metrics) Middleware() echo.MiddlewareFunc {
 				route = unmatchedRoute
 			}
 			method := c.Request().Method
+			if !knownMethods[method] {
+				method = otherMethod
+			}
 			m.httpRequests.WithLabelValues(method, route, strconv.Itoa(statusOf(c, err))).Inc()
 			m.httpDuration.WithLabelValues(method, route).Observe(time.Since(start).Seconds())
 			return err

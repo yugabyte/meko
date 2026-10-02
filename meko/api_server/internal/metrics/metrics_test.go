@@ -59,6 +59,21 @@ func TestMiddleware_LabelsByRouteTemplateAndStatus(t *testing.T) {
 	}
 }
 
+// The method is client-controlled: a made-up one must not mint its own series.
+func TestMiddleware_ClampsUnknownMethods(t *testing.T) {
+	m := New(nil, nil)
+	e := newEcho(m)
+	for _, method := range []string{"FLOOD0", "FLOOD1", "FLOOD2"} {
+		e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, "/no/such/route", nil))
+	}
+	if got := testutil.ToFloat64(m.httpRequests.WithLabelValues(otherMethod, unmatchedRoute, "404")); got != 3 {
+		t.Errorf("requests_total{method=OTHER} = %v, want 3", got)
+	}
+	if got := testutil.ToFloat64(m.httpRequests.WithLabelValues("FLOOD0", unmatchedRoute, "404")); got != 0 {
+		t.Errorf("a made-up method got its own series")
+	}
+}
+
 func TestNilMetricsIsANoOp(t *testing.T) {
 	var m *Metrics
 	serve(newEcho(m), "/api/v1/datapacks/a")

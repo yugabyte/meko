@@ -14,7 +14,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from prometheus_client import REGISTRY
 
-from inference_gateway.metrics import UNMATCHED_ROUTE, HTTPMetricsMiddleware, LLMMetricsCallback
+from inference_gateway.metrics import (
+    OTHER_METHOD,
+    UNMATCHED_ROUTE,
+    HTTPMetricsMiddleware,
+    LLMMetricsCallback,
+)
 
 
 def _sample(name: str, labels: dict[str, str]) -> float:
@@ -62,6 +67,20 @@ def test_errors_and_unmatched_paths_keep_bounded_labels() -> None:
 
     assert _sample("meko_gateway_http_requests_total", forbidden) - before[0] == 1
     assert _sample("meko_gateway_http_requests_total", unmatched) - before[1] == 1
+
+
+# The method is client-controlled: a made-up one must not mint its own series.
+def test_unknown_methods_share_one_label() -> None:
+    other = {"method": OTHER_METHOD, "route": UNMATCHED_ROUTE, "status": "404"}
+    before = _sample("meko_gateway_http_requests_total", other)
+
+    client = TestClient(_app())
+    for i in range(3):
+        client.request(f"FLOOD{i}", "/nowhere")
+
+    assert _sample("meko_gateway_http_requests_total", other) - before == 3
+    flood = {"method": "FLOOD0", "route": UNMATCHED_ROUTE, "status": "404"}
+    assert _sample("meko_gateway_http_requests_total", flood) == 0
 
 
 def test_llm_calls_are_counted_and_timed_from_the_model_callback() -> None:

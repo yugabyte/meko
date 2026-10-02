@@ -27,6 +27,12 @@ DEFAULT_METRICS_PORT = 9464
 # Unmatched requests share one label: by raw path, any scanner mints a series per probe.
 UNMATCHED_ROUTE = "unmatched"
 
+# Likewise the method, which is client-controlled. The shipped image parses with
+# httptools (uvicorn[standard]), whose method table is fixed but holds ~30 verbs
+# beyond these; under the h11 fallback any token reaches the app.
+OTHER_METHOD = "OTHER"
+_KNOWN_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
 HTTP_REQUESTS = Counter(
     "meko_gateway_http_requests",
     "HTTP requests handled, by method, route template and response status code.",
@@ -105,6 +111,8 @@ class HTTPMetricsMiddleware:
             # so it is readable here once the app returns.
             route = _route_of(scope)
             method = scope.get("method", "")
+            if method not in _KNOWN_METHODS:
+                method = OTHER_METHOD
             HTTP_REQUESTS.labels(method, route, str(status["code"])).inc()
             HTTP_DURATION.labels(method, route).observe(time.perf_counter() - start)
 
