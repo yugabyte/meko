@@ -1,5 +1,5 @@
 import type { MekoSettings, MekoSettingsUpdate } from '../shared/types.js';
-import { DEFAULT_MEKO_URL, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, envMekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
 import { checkMeko, strOrNull } from './meko.js';
@@ -41,8 +41,10 @@ export function mekoSettings(cfg: Config): MekoSettings {
     url: cfg.meko.url,
     effectiveUrl: eff.url,
     defaultUrl: DEFAULT_MEKO_URL,
+    fallbackUrl: resolveMekoWithSource({ ...cfg, meko: { ...cfg.meko, url: '' } }).url,
     webUrl: cfg.meko.webUrl,
     apiUrl: cfg.meko.apiUrl,
+    envWebUrl: envMekoWebUrl(),
     effectiveWebUrl: resolveMekoWebUrl(cfg),
     effectiveApiUrl: resolveMekoApiUrl(cfg),
     // Never the key itself; short keys get no hint at all.

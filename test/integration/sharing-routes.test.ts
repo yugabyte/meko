@@ -167,7 +167,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
       c.meko.apiKey = 'mko_tkn_abcdefghij1234';
     });
     const s = (await call('GET', '/api/settings')).json();
-    expect(s.meko).toMatchObject({ url: '', effectiveUrl: 'https://mcp.mekodata.ai/mcp', keyHint: '1234', keySource: 'config', effectiveApiUrl: 'https://cloud.mekodata.ai/api/v1' });
+    expect(s.meko).toMatchObject({ url: '', effectiveUrl: 'https://mcp.mekodata.ai/mcp', keyHint: '1234', keySource: 'config', effectiveApiUrl: 'https://cloud.mekodata.ai/api/v1', fallbackUrl: 'https://mcp.mekodata.ai/mcp', envWebUrl: '' });
     expect(JSON.stringify(s)).not.toContain('abcdefghij');
 
     expect((await call('PUT', '/api/settings', { meko: { url: 'ftp://x' } })).statusCode).toBe(400);
@@ -183,7 +183,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     const before = env.meko.calls.filter((c) => c.name === 'reset').length;
     const good = await call('PUT', '/api/settings', { meko: { url: 'https://meko.example.com/mcp', apiKey: 'mko_tkn_newkey000000' } });
     expect(good.statusCode).toBe(200);
-    expect(good.json().meko).toMatchObject({ url: 'https://meko.example.com/mcp', keyHint: '0000', effectiveWebUrl: null });
+    expect(good.json().meko).toMatchObject({ url: 'https://meko.example.com/mcp', keyHint: '0000', effectiveWebUrl: null, fallbackUrl: 'https://mcp.mekodata.ai/mcp' });
     expect(env.mekoTools.calls.find((c) => c.name === 'check')?.args).toEqual(['https://meko.example.com/mcp', 'mko_tkn_newkey000000']);
     expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(before + 1);
     expect(readFileSync(env.core.paths.config, 'utf8')).toContain('meko.example.com/mcp');

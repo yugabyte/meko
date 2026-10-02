@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { cx, relativeTime } from '../util';
+import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { MekoGetKey } from './MekoGetKey';
 
 type Tab = 'general' | 'meko' | 'account' | 'updates';
 
@@ -228,14 +229,6 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
   claude: 'from Claude Code’s settings',
 };
 
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).host.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
 /** The Meko server and key AgentK uses, its links, and whether Claude Code's sessions use the same. */
 function MekoTab({ status }: { status: MekoStatus }) {
   const [s, setS] = useState<Settings | null>(null);
@@ -276,8 +269,8 @@ function MekoTab({ status }: { status: MekoStatus }) {
     if (apiUrl.trim() !== m.apiUrl) next.apiUrl = apiUrl.trim();
     if (!Object.keys(next).length) return;
     // Datapacks live on one Meko: moving to another server leaves existing projects' behind.
-    const newHost = hostOf(url.trim() || m.defaultUrl);
-    if (next.url !== undefined && newHost && newHost !== hostOf(m.effectiveUrl) && confirmHost !== newHost) {
+    const newHost = httpHost(url.trim() || m.defaultUrl);
+    if (next.url !== undefined && newHost && newHost !== httpHost(m.effectiveUrl) && confirmHost !== newHost) {
       setConfirmHost(newHost);
       return;
     }
@@ -362,11 +355,18 @@ function MekoTab({ status }: { status: MekoStatus }) {
           }}
         />
       </Field>
+      {m.keyHint === null && (
+        <MekoGetKey
+          title="No Meko API key yet."
+          webUrl={mekoKeyLinkBase({ url, webUrl }, m)}
+          fallback={`Fill in the web app URL below to get links to sign up and make a key on ${httpHost(url.trim() || m.fallbackUrl) ?? 'this Meko'}.`}
+        />
+      )}
       <Field
         label="API key"
         hint={
           m.keyHint === null
-            ? 'No key is set. Paste the key from your Meko account.'
+            ? 'Paste the key you generated in Meko.'
             : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
         }
       >
@@ -406,7 +406,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
       </p>
       {status.configured && !m.effectiveWebUrl && (
         <p className="confirm-warn" role="status">
-          AgentK can’t work out the web app for {hostOf(m.effectiveUrl) ?? 'this Meko'}, so datapack links
+          AgentK can’t work out the web app for {httpHost(m.effectiveUrl) ?? 'this Meko'}, so datapack links
           {m.effectiveApiUrl ? ' are' : ' and sharing are'} off. Set the web app URL to turn them on.
         </p>
       )}
@@ -445,7 +445,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
 
       {confirmHost && (
         <p className="confirm-warn" role="alert">
-          Existing projects’ datapacks live on {hostOf(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
+          Existing projects’ datapacks live on {httpHost(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
           won’t work after the switch. Save again to switch anyway.
         </p>
       )}

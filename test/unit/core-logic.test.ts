@@ -10,6 +10,7 @@ import {
   resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { shortHost } from '../../src/server/core.js';
+import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin } from '../../src/server/github.js';
@@ -817,6 +818,20 @@ describe('Meko credentials', () => {
     clearEnv();
     cfg.meko.apiKey = '';
     expect(resolveMekoWithSource(cfg).keySource).toBeNull();
+  });
+
+  it('tells the Meko tab what an empty MCP or web app URL falls back to', () => {
+    clearEnv();
+    claudeSettings({ env: { MEKO_WEB_URL: 'https://settings-web.example' } });
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.meko.url = 'https://config.example/mcp';
+    cfg.meko.webUrl = 'https://config-web.example';
+    expect(mekoSettings(cfg)).toMatchObject({ fallbackUrl: DEFAULT_MEKO_URL, envWebUrl: 'https://settings-web.example' });
+    process.env.MEKO_MCP_URL = 'https://env.example/mcp';
+    process.env.MEKO_WEB_URL = 'https://env-web.example';
+    expect(mekoSettings(cfg)).toMatchObject({ fallbackUrl: 'https://env.example/mcp', envWebUrl: 'https://env-web.example' });
+    // The config's own values are left out: they're what the tab's fields hold.
+    expect(mekoSettings(cfg)).toMatchObject({ url: 'https://config.example/mcp', webUrl: 'https://config-web.example' });
   });
 
   it("finds Meko's API: config, then MEKO_API_URL, then the web app plus /api/v1", () => {

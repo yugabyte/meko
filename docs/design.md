@@ -937,6 +937,15 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   (worked out for Meko Cloud; for any other Meko, datapack links and sharing stay off until the
 >   web app URL is set, and the tab and the server log say so). The
 >   key never goes to the browser: the tab shows its last four characters and where it came from.
+>   With no key from anywhere, the tab offers **Sign up ↗** and **Log in ↗** in the Meko web app
+>   (`/signup` and `/signin` with `return_to=/settings`, so they land on Meko's Settings, where
+>   keys are made under Security), with the steps and the Settings URL written out (with Copy) for
+>   a browser on another device. The links follow the MCP and web app URLs as typed, before
+>   they're saved, worked out the way the server will (`mekoWebUrl()` in `src/shared/mekourls.ts`,
+>   used by both): an empty field falls back to the environment or Claude Code's settings (the
+>   settings carry `fallbackUrl` and `envWebUrl` for that), and Meko Cloud's MCP URL gives its web
+>   app. For any other Meko they wait for the web app URL. **Add a Meko API key** on a project's
+>   home shows the same links.
 >   A new URL or key is checked with a Meko ping before anything is saved; then the MCP connection
 >   is dropped (one still being opened with the old ones is dropped once it's up) so the next call
 >   reconnects, and Meko and the sharing mode are checked again. An API URL that comes from a typed

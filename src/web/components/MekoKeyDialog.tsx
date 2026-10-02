@@ -1,6 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { MekoSettings } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { mekoKeyLinkBase } from '../util';
 import { Dialog, ErrorText, Field } from './common';
+import { MekoGetKey } from './MekoGetKey';
 
 /**
  * Turns Meko on with an API key (for an install without one). The same as the Meko tab in
@@ -11,6 +14,15 @@ export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // For the sign-up links when another MCP URL is typed; without it they wait for an empty field.
+  const [meko, setMeko] = useState<MekoSettings | null>(null);
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => setMeko(s.meko))
+      .catch(() => setMeko(null));
+  }, []);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -31,17 +43,13 @@ export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string
       <form className="stack" onSubmit={save}>
         <p className="muted">
           {reason ?? 'Meko gives projects a datapack: shared memory for their sessions, and what you share a project with.'}
-          {mekoWebUrl && (
-            <>
-              {' '}
-              No account or key yet? Create them in{' '}
-              <a href={mekoWebUrl} target="_blank" rel="noreferrer">
-                Meko ↗
-              </a>
-              .
-            </>
-          )}
         </p>
+        <MekoGetKey
+          title="No account or key yet?"
+          // An empty MCP URL keeps the current server; the web app URL isn't changed here.
+          webUrl={!url.trim() ? mekoWebUrl : meko && mekoKeyLinkBase({ url, webUrl: meko.webUrl }, meko)}
+          fallback="Sign up and make a key in your Meko's web app, then paste the key below."
+        />
         <Field label="API key">
           <input
             id="meko-key-input"

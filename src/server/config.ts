@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { claudeUserDir } from './claude.js';
+import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
 import { expandHome, type Paths } from './paths.js';
 
@@ -36,10 +37,7 @@ export interface Config {
   callHome: { enabled: boolean; url: string };
 }
 
-/** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
-export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
-/** Meko Cloud's web app, which goes with DEFAULT_MEKO_URL. */
-export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
+export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
 
 export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777, name: '' },
@@ -192,24 +190,15 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
   return { url: url || DEFAULT_MEKO_URL, apiKey, keySource };
 }
 
-/**
- * The Meko web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else null (a local or
- * self-hosted server, whose web app can't be known). An explicit override always wins.
- */
-export function mekoWebUrl(mcpUrl: string, override = ''): string | null {
-  if (override.trim()) return override.trim().replace(/\/+$/, '');
-  try {
-    return new URL(mcpUrl).hostname === new URL(DEFAULT_MEKO_URL).hostname ? DEFAULT_MEKO_WEB_URL : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Meko web app URL: config first, then the environment, then derived from the MCP URL. */
 export function resolveMekoWebUrl(cfg: Config): string | null {
+  return mekoWebUrl(resolveMeko(cfg).url, cfg.meko.webUrl || envMekoWebUrl());
+}
+
+/** The web app URL MEKO_WEB_URL or Claude Code's settings give, used when config has none; '' when unset. */
+export function envMekoWebUrl(): string {
   const fromClaude = readClaudeSettingsEnv().MEKO_WEB_URL;
-  const override = cfg.meko.webUrl || process.env.MEKO_WEB_URL || (typeof fromClaude === 'string' ? fromClaude : '');
-  return mekoWebUrl(resolveMeko(cfg).url, override);
+  return process.env.MEKO_WEB_URL || (typeof fromClaude === 'string' ? fromClaude : '');
 }
 
 /**

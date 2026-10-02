@@ -786,9 +786,13 @@ export interface MekoSettings {
   effectiveUrl: string;
   /** Meko Cloud's MCP server, used when nothing else names one. */
   defaultUrl: string;
+  /** The MCP server AgentK would use with `url` empty (from the environment, Claude Code's settings or Meko Cloud). */
+  fallbackUrl: string;
   /** Web app and API URLs as set; empty means worked out from the MCP URL. */
   webUrl: string;
   apiUrl: string;
+  /** The web app URL MEKO_WEB_URL or Claude Code's settings give, used when `webUrl` is empty; '' when unset. */
+  envWebUrl: string;
   /** What they work out to now; null when they can't be (your own Meko with no URL set). */
   effectiveWebUrl: string | null;
   effectiveApiUrl: string | null;

@@ -1,4 +1,5 @@
-import type { MekoFirstTurn, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
+import type { MekoFirstTurn, MekoSettings, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<SessionStatus, number> = {
@@ -151,6 +152,39 @@ export function mekoDatapackUrl(webUrl: string | null, datapackId: string): stri
 export function mekoDatapackShareUrl(webUrl: string | null, datapackId: string): string | null {
   const u = mekoDatapackUrl(webUrl, datapackId);
   return u ? `${u}/share` : null;
+}
+
+/** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */
+export function httpHost(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.host.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Meko web app pages for getting an account and an API key (keys are under Settings →
+ * Security). Signing in or up with `return_to` lands on Settings. Null when the web app is unknown.
+ */
+export function mekoKeyLinks(webUrl: string | null): { signup: string; signin: string; settings: string } | null {
+  const base = webUrl?.trim().replace(/\/+$/, '') ?? '';
+  if (!httpHost(base)) return null;
+  const back = `return_to=${encodeURIComponent('/settings')}`;
+  return { signup: `${base}/signup?${back}`, signin: `${base}/signin?${back}`, settings: `${base}/settings` };
+}
+
+/**
+ * Which Meko web app the sign-up links point to, from the MCP and web app URLs as typed (saved or
+ * not): worked out the way the server will once they're saved (`mekoWebUrl`), with an empty field
+ * falling back to what the environment or Claude Code's settings give. Null when it isn't known
+ * (your own Meko with no web app URL); `mekoKeyLinks` drops anything that isn't http(s).
+ */
+export function mekoKeyLinkBase(typed: { url: string; webUrl: string }, m: Pick<MekoSettings, 'fallbackUrl' | 'envWebUrl'>): string | null {
+  // The server saves Meko Cloud's URL as empty, like a cleared field.
+  const url = typed.url.trim().replace(/\/+$/, '');
+  return mekoWebUrl(url && url !== DEFAULT_MEKO_URL ? url : m.fallbackUrl, typed.webUrl.trim() || m.envWebUrl);
 }
 
 export function isMac(): boolean {
