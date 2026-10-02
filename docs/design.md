@@ -1327,7 +1327,8 @@ their own copy.
   reset needs someone who can already run commands there. While a link is outstanding the setup
   screen shows (`AuthStatus.reset` says it replaces an existing login, so it reads **Reset your
   login**); using it replaces the username and password, turns off TOTP and signs out every
-  browser. A browser that is still signed in keeps working until then and doesn't see the setup
+  browser. A valid link works even while sign-in is rate limited, so a locked-out owner can use
+  it at once. A browser that is still signed in keeps working until then and doesn't see the setup
   screen. Projects and sessions are untouched.
 - **Sessions.** Passwords are hashed with scrypt. After login you get an `HttpOnly`,
   `SameSite=Strict` cookie (`Secure` over HTTPS) that lasts 14 days, renewed as you use the app.

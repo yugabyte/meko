@@ -51,12 +51,15 @@ export function SetupScreen({ reset, onDone }: { reset: boolean; onDone: () => v
       title={reset ? 'Reset your login' : 'Set up your account'}
       sub={
         reset
-          ? 'Choose a new username and password. This turns off the authenticator app and signs out every browser; your projects and sessions stay as they are.'
+          ? 'Choose a new username and password. This signs out every browser and turns off two-step sign-in, if you had it on. Your projects and sessions stay as they are.'
           : 'This install has one owner. The terminal runs as your Unix user, so choose a password you’d trust with your SSH key.'
       }
     >
       <form className="stack" onSubmit={submit}>
-        <Field label="Setup token" hint="Printed by the installer. Run `agent-k-local setup-link` for a new one.">
+        <Field
+          label="Setup token"
+          hint={reset ? 'Printed by `agent-k-local setup-link` on the host. Run it again for a new one.' : 'Printed by the installer. Run `agent-k-local setup-link` for a new one.'}
+        >
           <input id="setup-token" className="input mono" value={token} onChange={(e) => setToken(e.target.value)} required />
         </Field>
         <Field label="Username">
@@ -121,7 +124,7 @@ export function LoginScreen({ onDone }: { onDone: () => void }) {
         if (needTotp) setError(err.message || 'That code didn’t work. Try the current one.');
         setNeedTotp(true);
       } else if (err instanceof ApiError && err.status === 429) {
-        setError('Too many failed sign-ins. Sign-in is locked for a few minutes; try again later, or reset your login.');
+        setError('Too many failed sign-ins. Sign-in is locked for 15 minutes. Try again then, or reset your login now.');
         setForgot(true);
       } else {
         setError(errorMessage(err));
@@ -199,8 +202,8 @@ function ForgotPassword() {
       </p>
       <code className="auth-cmd">agent-k-local setup-link</code>
       <p className="muted small">
-        Open the one-time link it prints (it expires in 7 days) and choose a new username and password. This also turns
-        off the authenticator app and signs out every browser. Your projects and sessions stay as they are.
+        Open the one-time link it prints (it expires in 7 days) and choose a new username and password. This also signs
+        out every browser and turns off two-step sign-in, if you had it on. Your projects and sessions stay as they are.
       </p>
     </div>
   );

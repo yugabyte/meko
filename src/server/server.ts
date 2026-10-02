@@ -14,7 +14,7 @@ import type {
 import { SHARE_GRANTS } from '../shared/types.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
-  deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, totpAccept, validateAuthSession, validatePassword,
+  deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
 import type { Core } from './core.js';
@@ -144,7 +144,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Body: SetupRequest }>('/api/auth/setup', async (req, reply) => {
     const { token, username, password } = req.body ?? ({} as SetupRequest);
     const ip = req.ip;
-    if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
+    // A valid setup link gets past the limit: it's how a locked-out owner gets back in. The token
+    // is 192 random bits, so letting it through doesn't help anyone guess it.
+    if (limiter.blocked(ip) && !setupTokenValid(db, token)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
     if (typeof username !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(username)) return reply.code(400).send({ error: 'Use letters, digits, dots, dashes or underscores for the username.' });
     const bad = validatePassword(password ?? '');
     if (bad) return reply.code(400).send({ error: bad });

@@ -79,6 +79,19 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(next.statusCode).toBe(204);
   });
 
+  it('takes a valid setup link while sign-in is rate limited, so a locked-out owner gets back in', async () => {
+    await setup();
+    for (let i = 0; i < 5; i++) {
+      await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'wrong' } });
+    }
+    const reset = (token: string) => app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'a brand new passphrase' } });
+    const token = issueSetupToken(env.core.db);
+    // A wrong token is still refused by the limit, and doesn't use up the real one.
+    expect((await reset('not-the-token')).statusCode).toBe(429);
+    expect((await reset(token)).statusCode).toBe(204);
+    expect((await reset(token)).statusCode).toBe(429);
+  });
+
   it('rate limits failed logins', async () => {
     await setup();
     for (let i = 0; i < 5; i++) {
