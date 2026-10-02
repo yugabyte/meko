@@ -8,7 +8,15 @@ import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
-import { lastSessionClosed, liveSessions, modKey, type LiveCount } from '../util';
+import {
+  lastOpenSession,
+  lastSessionClosed,
+  liveSessions,
+  modKey,
+  rememberOpenSession,
+  sessionToOpen,
+  type LiveCount,
+} from '../util';
 import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
@@ -183,6 +191,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
+  useEffect(() => {
+    if (currentProject && currentSession) rememberOpenSession(currentProject.id, currentSession.id);
+  }, [currentProject, currentSession]);
+
   // When the project on screen loses its last open session, offer to close it. Only on the
   // project's view, with no other dialog open, and in a visible page (a background tab stays quiet).
   const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
@@ -215,7 +227,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       if (route.view !== 'root' && route.projectId === pendingProjectId) return;
       const first = projects[0];
       if (first) {
-        const s = liveSessions(first).sort((a, b) => a.createdAt - b.createdAt)[0];
+        const s = sessionToOpen(liveSessions(first), lastOpenSession(first.id));
         navigate({ view: 'project', projectId: first.id, sessionId: s?.id ?? null }, { replace: true });
       } else if (route.view !== 'root') {
         navigate({ view: 'root' }, { replace: true });
@@ -223,15 +235,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       return;
     }
     if (route.view === 'project' && !currentSession && live.length > 0) {
-      navigate({ view: 'project', projectId: currentProject.id, sessionId: live[0].id }, { replace: true });
+      const s = sessionToOpen(live, lastOpenSession(currentProject.id));
+      if (s) navigate({ view: 'project', projectId: currentProject.id, sessionId: s.id }, { replace: true });
     }
   }, [state, route, currentProject, currentSession, live, projects, pendingProjectId]);
 
   const goProject = useCallback((p: ProjectWithSessions) => {
-    // Open the session with the most recent activity.
-    const s = liveSessions(p).sort(
-      (a, b) => (b.lastEventAt ?? b.createdAt) - (a.lastEventAt ?? a.createdAt),
-    )[0];
+    // Reopen the session last open there, else the one with the most recent activity.
+    const s = sessionToOpen(liveSessions(p), lastOpenSession(p.id));
     // From the drawer, replace its history entry so Back doesn't reopen it.
     navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);

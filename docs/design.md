@@ -319,6 +319,11 @@ OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) 
 browser instead, and then `Ctrl+C` (`⌘C`) copies rather than interrupting Claude. Clipboard access
 needs HTTPS or localhost.
 
+Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
+names no session) reopens the session last open there in this browser, kept in `localStorage`.
+When that session is closed, or none was open there yet, it opens the one with the most recent
+activity.
+
 ### Notifications
 
 A browser notification fires when any session moves to *needs you* or finishes a turn while its
