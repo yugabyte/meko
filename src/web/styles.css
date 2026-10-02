@@ -1891,6 +1891,24 @@ a.icon-btn {
   gap: 12px;
   margin-bottom: 6px;
 }
+.auth-forgot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+}
+.auth-card > .link-btn {
+  align-self: flex-start;
+}
+.auth-cmd {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  background: var(--sunk);
+  padding: 6px 8px;
+  border-radius: 6px;
+}
 .brand-name {
   font-family: var(--display);
   font-weight: 700;

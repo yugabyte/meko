@@ -57,6 +57,28 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(good.statusCode).toBe(204);
   });
 
+  it('says a setup link replaces the existing login, so the setup screen can offer a reset', async () => {
+    const status = async () => (await app.inject({ url: '/api/auth/status' })).json();
+    expect(await status()).toMatchObject({ setupRequired: true, reset: false });
+    const cookie = await setup();
+    expect(await status()).toMatchObject({ setupRequired: false, reset: false });
+
+    // Forgot password: `agent-k-local setup-link` on the host issues a token for a reset.
+    const token = issueSetupToken(env.core.db);
+    expect(await status()).toMatchObject({ setupRequired: true, reset: true });
+    expect((await app.inject({ url: '/api/auth/status', headers: { cookie } })).json()).toMatchObject({ setupRequired: false, reset: false });
+
+    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me2', password: 'a brand new passphrase' } });
+    expect(res.statusCode).toBe(204);
+    expect(await status()).toMatchObject({ setupRequired: false, reset: false });
+    // The reset signed out the old browser, and only the new password works.
+    expect((await app.inject({ url: '/api/state', headers: { cookie } })).statusCode).toBe(401);
+    const old = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery' } });
+    expect(old.statusCode).toBe(401);
+    const next = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me2', password: 'a brand new passphrase' } });
+    expect(next.statusCode).toBe(204);
+  });
+
   it('rate limits failed logins', async () => {
     await setup();
     for (let i = 0; i < 5; i++) {

@@ -45,6 +45,9 @@ default over SSH or on a machine with no display. Then it prints the address, or
 access a one-time setup link that creates your login. Local access trusts everyone who can log
 in to the computer, so pick remote on a shared host.
 
+Forgot your password? Run `agent-k-local setup-link` on the host and open the link it prints to
+choose a new username and password (the sign-in screen's **Forgot password?** says the same).
+
 If your home directory is shared with other hosts (over NFS, say), AgentK Local runs only on the
 host you installed it on: logging in to another host doesn't start a second server on the same
 `~/.agent-k-local`. To run it on another host too, give that host its own home with `AK_HOME`.

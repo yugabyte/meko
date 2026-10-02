@@ -21,7 +21,7 @@ function AuthFrame({ title, sub, children }: { title: string; sub: string; child
   );
 }
 
-export function SetupScreen({ onDone }: { onDone: () => void }) {
+export function SetupScreen({ reset, onDone }: { reset: boolean; onDone: () => void }) {
   const [token, setToken] = useState(() => new URLSearchParams(location.search).get('token') ?? '');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -48,8 +48,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
 
   return (
     <AuthFrame
-      title="Set up your account"
-      sub="This install has one owner. The terminal runs as your Unix user, so choose a password you’d trust with your SSH key."
+      title={reset ? 'Reset your login' : 'Set up your account'}
+      sub={
+        reset
+          ? 'Choose a new username and password. This turns off the authenticator app and signs out every browser; your projects and sessions stay as they are.'
+          : 'This install has one owner. The terminal runs as your Unix user, so choose a password you’d trust with your SSH key.'
+      }
     >
       <form className="stack" onSubmit={submit}>
         <Field label="Setup token" hint="Printed by the installer. Run `agent-k-local setup-link` for a new one.">
@@ -89,7 +93,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         </Field>
         <ErrorText error={error} />
         <button className="btn primary block" disabled={busy}>
-          {busy ? 'Creating account…' : 'Create account'}
+          {busy ? (reset ? 'Resetting login…' : 'Creating account…') : reset ? 'Reset login' : 'Create account'}
         </button>
       </form>
     </AuthFrame>
@@ -103,6 +107,7 @@ export function LoginScreen({ onDone }: { onDone: () => void }) {
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -116,7 +121,8 @@ export function LoginScreen({ onDone }: { onDone: () => void }) {
         if (needTotp) setError(err.message || 'That code didn’t work. Try the current one.');
         setNeedTotp(true);
       } else if (err instanceof ApiError && err.status === 429) {
-        setError('Too many failed sign-ins. Sign-in is locked for a few minutes; try again later.');
+        setError('Too many failed sign-ins. Sign-in is locked for a few minutes; try again later, or reset your login.');
+        setForgot(true);
       } else {
         setError(errorMessage(err));
       }
@@ -171,6 +177,31 @@ export function LoginScreen({ onDone }: { onDone: () => void }) {
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
+      {forgot ? <ForgotPassword /> : (
+        <button type="button" className="link-btn" onClick={() => setForgot(true)}>
+          Forgot password?
+        </button>
+      )}
     </AuthFrame>
+  );
+}
+
+/**
+ * How to get back in. There's no email or reset form: this install's one login guards a shell
+ * on the host, so a reset has to come from someone who can already run commands there.
+ */
+function ForgotPassword() {
+  return (
+    <div className="auth-forgot" id="login-forgot">
+      <strong>Reset your login from the host</strong>
+      <p className="muted small">
+        On the computer AgentK Local runs on, sign in as the user it runs as and run:
+      </p>
+      <code className="auth-cmd">agent-k-local setup-link</code>
+      <p className="muted small">
+        Open the one-time link it prints (it expires in 7 days) and choose a new username and password. This also turns
+        off the authenticator app and signs out every browser. Your projects and sessions stay as they are.
+      </p>
+    </div>
   );
 }
