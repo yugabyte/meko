@@ -1038,7 +1038,9 @@ export interface TotpEnrollResponse {
 // ---- WebSockets ----
 //
 // /ws/events: server → client JSON ServerEvent. A full `state` is sent on
-// connect and again (debounced) after every change.
+// connect and again (debounced) after every change. Client → server JSON
+// EventsClientMessage: a `ping` is answered with a `pong`, so a page can tell a
+// socket the server dropped (a phone back from the background) from a quiet one.
 //
 // Both sockets close with code 4401 when the login is missing or gone (logout, a password
 // change or reset); the client should show the login screen rather than reconnect. The
@@ -1053,7 +1055,11 @@ export type ServerEvent =
   | { type: 'state'; state: AppState }
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
   /** A project datapack was shared with you: sent once per datapack. */
-  | { type: 'invite'; datapackId: string; title: string; body: string };
+  | { type: 'invite'; datapackId: string; title: string; body: string }
+  /** The answer to a client's `ping`. */
+  | { type: 'pong' };
+
+export type EventsClientMessage = { type: 'ping' };
 
 export type TermClientMessage =
   | { type: 'input'; data: string }

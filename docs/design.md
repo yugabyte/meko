@@ -1327,7 +1327,11 @@ their own copy.
   matched, so an encoded path (`/%61pi/…`) gets the same checks as `/api/…`. The API only takes
   JSON bodies, so a plain HTML form can't post to it. Every WebSocket upgrade checks the cookie (or
   local access) and refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
-  out, and the server pings them every 30 seconds to drop ones whose network went away. A browser
+  out, and the server pings them every 30 seconds to drop ones whose network went away. The page
+  checks its events socket too, since a phone often never hears that the server dropped it: after
+  30 seconds without a message, and whenever the page is shown again or comes back online, it sends
+  a `ping`, and opens a new socket (which starts with the current state) if no `pong` comes back
+  within 5 seconds (`src/web/events.ts`). A browser
   that falls behind doesn't make the server buffer without limit: its terminal stops reading from
   `tmux attach` until it catches up (tmux copes with a slow client), and it skips state snapshots
   until it has drained, then gets the current one.
@@ -1402,6 +1406,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 | Event | What survives | What happens |
 |---|---|---|
+| A phone's page goes to the background, or its network changes | Everything | The server drops the page's sockets once they stop answering its pings. When the page is shown again, it pings its events socket and opens a new one if there's no answer, so it shows the current state instead of the one it had when it was hidden. Its terminals reconnect too. |
 | Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the running tmux sessions, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](#releases-and-auto-update)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
 | tmux crash | Worktrees, transcripts, state | The unit restarts tmux, and the server relaunches every session with `desired: running` using `claude --resume`. |

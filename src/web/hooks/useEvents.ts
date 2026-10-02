@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppState, ServerEvent } from '../../shared/types';
+import type { AppState } from '../../shared/types';
 import { api, checkLogin, wsUrl, WS_UNAUTHORIZED } from '../api';
+import { EventsConnection, type Conn } from '../events';
 
-export type Conn = 'connecting' | 'open' | 'closed';
+export type { Conn };
 
 export interface NotifyEvent {
   projectId: string;
@@ -19,9 +20,9 @@ export interface InviteEvent {
 }
 
 /**
- * Live AppState from /ws/events. Reconnects with exponential backoff and
- * falls back to GET /api/state for the first paint. A close for a lost login
- * (4401) goes to the login screen instead of retrying.
+ * Live AppState from /ws/events (see EventsConnection: backoff, and checking a quiet socket or
+ * one whose page was just shown again). Falls back to GET /api/state for the first paint. A
+ * close for a lost login (4401) goes to the login screen instead of retrying.
  */
 export function useEvents(
   onNotify: (n: NotifyEvent) => void,
@@ -35,11 +36,7 @@ export function useEvents(
   inviteRef.current = onInvite;
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
     let stopped = false;
-
     api
       .state()
       .then((s) => {
@@ -49,46 +46,29 @@ export function useEvents(
         /* the socket will deliver state, or the 401 handler takes over */
       });
 
-    const connect = () => {
-      if (stopped) return;
-      setConn('connecting');
-      ws = new WebSocket(wsUrl('/ws/events'));
-      ws.onopen = () => setConn('open');
-      ws.onmessage = (ev) => {
-        let msg: ServerEvent;
-        try {
-          msg = JSON.parse(ev.data as string);
-        } catch {
-          return;
-        }
-        if (msg.type === 'state') {
-          // The server sends the state first thing, so the connection has proved itself: the
-          // backoff starts over. (An open alone doesn't: the server upgrades, then may refuse.)
-          attempt = 0;
-          setState(msg.state);
-        } else if (msg.type === 'notify') notifyRef.current(msg);
-        else if (msg.type === 'invite') inviteRef.current(msg);
-      };
-      ws.onclose = (ev) => {
-        ws = null;
-        if (stopped) return;
-        setConn('closed');
-        const delay = Math.min(15000, 500 * 2 ** attempt++) + Math.random() * 300;
-        const retry = () => {
-          if (!stopped) timer = setTimeout(connect, delay);
-        };
-        // Logged out, password changed or login expired: the 401 handler shows the login screen.
-        if (ev.code === WS_UNAUTHORIZED) void checkLogin().then((ok) => ok && retry());
-        else retry();
-      };
-      ws.onerror = () => ws?.close();
+    const events = new EventsConnection({
+      open: () => new WebSocket(wsUrl('/ws/events')),
+      onState: setState,
+      onConn: setConn,
+      onEvent: (ev) => (ev.type === 'notify' ? notifyRef.current(ev) : inviteRef.current(ev)),
+      checkLogin,
+      unauthorized: WS_UNAUTHORIZED,
+    });
+    events.start();
+    // A phone's page that was in the background may hold a socket the server has long dropped.
+    const resume = () => {
+      if (!document.hidden) events.resume();
     };
-    connect();
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('online', resume);
 
     return () => {
       stopped = true;
-      if (timer) clearTimeout(timer);
-      ws?.close();
+      events.stop();
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('online', resume);
     };
   }, []);
 
