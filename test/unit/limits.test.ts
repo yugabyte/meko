@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { statusLineScriptPath, userStatusLine, withoutMekoSuffix, writeHookFiles } from '../../src/server/claude.js';
 import { getPaths } from '../../src/server/paths.js';
 import { openDb } from '../../src/server/db.js';
@@ -10,6 +10,25 @@ import { PlanLimitsStore, currentLimits, parseRateLimits } from '../../src/serve
 
 const NOW = 1_790_000_000_000;
 const OURS = '/home/x/.agent-k-local/run/statusline.sh';
+/** The status JSON the status line tests pipe in, written once. */
+const STATUS_IN = join(mkdtempSync(join(tmpdir(), 'akl-sl-in-')), 'in.json');
+writeFileSync(STATUS_IN, '{"model":{}}');
+afterAll(() => rmSync(dirname(STATUS_IN), { recursive: true, force: true }));
+
+/**
+ * Runs a status line command with the status JSON on stdin, as Claude Code does. Stdin is a file,
+ * not a pipe: a command that never reads it can exit before Node writes the input, which fails
+ * with EPIPE now and then.
+ */
+function runStatusLine(command: string, env: Record<string, string> = {}): string {
+  const fd = openSync(STATUS_IN, 'r');
+  try {
+    return execFileSync('sh', ['-c', command], { stdio: [fd, 'pipe', 'pipe'], env: { PATH: process.env.PATH!, ...env } }).toString();
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const input = (five: unknown, week: unknown) => ({ model: { id: 'x' }, rate_limits: { five_hour: five, seven_day: week } });
 
 describe('plan limits from the status line', () => {
@@ -139,7 +158,7 @@ describe("the user's own status line", () => {
       write(join(dir, 'config', 'settings.json'), { statusLine: { type: 'command', command, padding: 1 } });
       const sl = userStatusLine(null, OURS)!;
       expect(sl.padding).toBe(1);
-      return execFileSync('sh', ['-c', sl.command!], { input: '{"model":{}}', env: { PATH: process.env.PATH!, ...env } }).toString();
+      return runStatusLine(sl.command!, env);
     };
     expect(run(`'${meko}'`)).toBe('');
     expect(run(`"${meko}" --inner-cmd 'printf "inner:"; cat'`)).toBe('inner:{"model":{}}');
@@ -164,8 +183,7 @@ describe('the status line script', () => {
       const paths = getPaths(join(dir, 'ak'));
       writeHookFiles(paths);
       expect(readFileSync(join(paths.run, 'user-statusline'), 'utf8')).toBe('printf user:; cat');
-      const run = (env: Record<string, string>) =>
-        execFileSync('sh', ['-c', statusLineScriptPath(paths)], { input: '{"model":{}}', env: { PATH: process.env.PATH!, ...env } }).toString();
+      const run = (env: Record<string, string>) => runStatusLine(statusLineScriptPath(paths), env);
       expect(run({ AK_USER_STATUSLINE: 'printf session:; cat' })).toBe('session:{"model":{}}');
       expect(run({})).toBe('user:{"model":{}}');
       expect(run({ AK_USER_STATUSLINE: '' })).toBe('');
