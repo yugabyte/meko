@@ -20,6 +20,8 @@
 #     DELETE/CHECKPOINT/SELECT (the CHECKPOINT forces the writes through the
 #     safekeeper -> pageserver -> YB storage path), and the recorded connection
 #     address routes to a ready Service backend
+#   - kube-state-metrics exports the endpoint pod's CPU request and identity
+#     labels (skipped when there is no compute collector)
 #   - GET /tasks lists tasks, filters by status, and rejects a bad status with 400
 #   - a duplicate name surfaces as a FAILED task (not a synchronous 409)
 #   - deleting a branch that still has child forks is refused with 409
@@ -327,6 +329,30 @@ got=$(kubectl -n "$NS" get "pod/$POD" -o json 2>/dev/null | jq -r '.metadata.lab
 sel=$(kubectl -n "$NS" get "deployment/yb-ep-$EP" -o json 2>/dev/null | jq -c '.spec.selector.matchLabels | keys')
 [ "$sel" = '["app.kubernetes.io/instance","app.kubernetes.io/name"]' ] && ok "Deployment selector untouched" \
   || bad "Deployment selector keys = $sel"
+
+hdr "kube-state-metrics: the endpoint pod's requests and identity labels are exported"
+# KSM's own /metrics, which proves the namespace scoping and the label allowlist.
+# Not the store: itest-dev runs none, so the collector's pod filter and label
+# rename are covered by the chart tests only.
+KSM_POD=$(kubectl -n "$NS" get pods -l app.kubernetes.io/component=kube-state-metrics \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+COMPUTE_CR=$(kubectl -n "$NS" get opentelemetrycollectors -o name 2>/dev/null | grep -- '-compute$' | head -1)
+if [ -z "$KSM_POD" ] && [ -z "$COMPUTE_CR" ]; then
+  echo "  SKIP no compute collector in $NS (otel off, or no OpenTelemetry Operator)"
+elif [ -z "$KSM_POD" ]; then
+  bad "compute collector $COMPUTE_CR is deployed but no kube-state-metrics pod is"
+else
+  kubectl -n "$NS" wait --for=condition=Ready "pod/$KSM_POD" --timeout=120s >/dev/null 2>&1 \
+    && ok "kube-state-metrics pod Ready ($KSM_POD)" || bad "kube-state-metrics pod $KSM_POD not Ready"
+  ksm=$(kubectl get --raw "/api/v1/namespaces/$NS/pods/$KSM_POD:8080/proxy/metrics" 2>&1) || true
+  echo "$ksm" | grep '^kube_pod_container_resource_requests{' | grep "pod=\"$POD\"" | grep 'resource="cpu"' >/dev/null \
+    && ok "KSM exports the endpoint pod's CPU request" \
+    || bad "KSM has no kube_pod_container_resource_requests{resource=cpu} for $POD: $(echo "$ksm" | head -c 300)"
+  echo "$ksm" | grep '^kube_pod_labels{' | grep "pod=\"$POD\"" \
+    | grep "label_amp_yugabyte_com_endpoint_id=\"$EP\"" | grep "label_amp_yugabyte_com_storage_pool_id=\"$POOL\"" >/dev/null \
+    && ok "KSM exports the endpoint pod's identity labels on kube_pod_labels" \
+    || bad "KSM kube_pod_labels for $POD lacks endpoint_id=$EP / storage_pool_id=$POOL"
+fi
 
 hdr "endpoint is USABLE: write + read real data via psql"
 # (a) loopback (pg_hba trusts loopback): full DDL/DML + CHECKPOINT (forces the

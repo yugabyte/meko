@@ -10,7 +10,8 @@ plane:
   - compute:    scrapes every endpoint pod's Prometheus sources — the
     postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
     compute_ctl (:3080), the supervisor's certificate expiries (:9899) — plus
-    per-pod cAdvisor resource metrics.
+    per-pod cAdvisor resource metrics and, from a namespace-scoped
+    kube-state-metrics, the pods' object state.
   - logs:       tails every amp container's stdout off the node — pageserver,
     safekeeper, compute_ctl and Postgres itself — and exports OTLP to a log
     store (VictoriaLogs by default).
@@ -56,6 +57,7 @@ so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
 {{- $byocEnabled := dig "byoc" "enabled" false .Values.otel }}
 {{- /* Built as a list, like $ddTags below: with both halves optional an inline
        [{{if}}...{{end}}{{if}}, ...{{end}}] has to hand-manage the comma. */}}
+{{- $ksmEnabled := and .Values.otel.collectors.compute.enabled (dig "kubeStateMetrics" "enabled" true .Values.otel) }}
 {{- $metricsExporters := list }}
 {{- if $rwEndpoint }}{{ $metricsExporters = append $metricsExporters "prometheus_remote_write" }}{{ end }}
 {{- if $byocEnabled }}{{ $metricsExporters = append $metricsExporters "otlphttp/byoc" }}{{ end }}
@@ -388,6 +390,23 @@ spec:
               metric_relabel_configs:
                 - {source_labels: [pod], action: keep, regex: "({{ .Values.otel.podMetricsSelector | default "yb-ep-.*" }})"}
             {{- end }}
+            {{- if $ksmEnabled }}
+            # The endpoint pods' object state, from the kube-state-metrics below.
+            # Each series names the pod it describes in its own `pod` label, so the
+            # endpoint identity cannot come from discovery as in the jobs above;
+            # kube_pod_labels carries it under the same label names, for a join on
+            # (namespace, pod).
+            - job_name: amp-kube-state-metrics
+              scrape_interval: 30s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: kube-state-metrics}
+                - {source_labels: [__meta_kubernetes_pod_container_port_name], action: keep, regex: http-metrics}
+              metric_relabel_configs:
+                - {source_labels: [pod], action: keep, regex: "({{ .Values.otel.podMetricsSelector | default "yb-ep-.*" }})"}
+                - {action: labelmap, regex: label_amp_yugabyte_com_(.+), replacement: "$1"}
+                - {action: labeldrop, regex: label_amp_yugabyte_com_.+}
+            {{- end }}
     processors:
       batch: {}
       {{- if or $envID $acctID }}
@@ -445,6 +464,120 @@ spec:
           receivers: [prometheus]
           processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if $byocEnabled }}, transform/byoc{{ end }}]
           exporters: [{{ $metricsExporters | join ", " }}]
+{{- end }}
+{{- if $ksmEnabled }}
+{{- /*
+kube-state-metrics for the endpoint pods: phase, readiness, restarts, the last
+termination reason, CPU/memory requests and limits, and creation time — object
+state that neither cAdvisor nor the pods' own exporters can report. Its own
+ServiceAccount, not the collectors': with podMetrics on, that one is also bound
+to the cluster-wide nodes/proxy ClusterRole, which a third-party pod has no use
+for. Watching one namespace and only pods, list/watch on pods is all it holds.
+*/}}
+{{- $ksm := dig "kubeStateMetrics" dict .Values.otel }}
+{{- $ksmName := printf "%s-kube-state-metrics" $fullName }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $ksmName }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $ksmName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $ksmName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $ksmName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $ksmName }}
+    namespace: {{ $ns }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $ksmName }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "yb-amp-controller.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        {{- include "yb-amp-controller.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kube-state-metrics
+    spec:
+      serviceAccountName: {{ $ksmName }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kube-state-metrics
+          image: {{ dig "image" "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1" $ksm }}
+          args:
+            - --namespaces={{ $ns }}
+            - --resources=pods
+            # The controller's identity labels, as kube_pod_labels{label_amp_yugabyte_com_*}.
+            - --metric-labels-allowlist=pods=[amp.yugabyte.com/endpoint-id,amp.yugabyte.com/branch-id,amp.yugabyte.com/cluster-id,amp.yugabyte.com/storage-pool-id,amp.yugabyte.com/ep-type]
+            - --port=8080
+            - --telemetry-port=8081
+          ports:
+            - {name: http-metrics, containerPort: 8080}
+            - {name: telemetry, containerPort: 8081}
+          livenessProbe:
+            httpGet: {path: /livez, port: http-metrics}
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet: {path: /readyz, port: telemetry}
+            initialDelaySeconds: 5
+          {{- with (dig "resources" dict $ksm) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
 {{- /*
 `dig` rather than a direct lookup: `helm upgrade --reuse-values` replays the

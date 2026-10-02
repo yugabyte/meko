@@ -89,7 +89,7 @@ tests:
             apiGroups: ["rbac.authorization.k8s.io"]
             resources: [roles]
             verbs: [bind]
-            resourceNames: [amp-controller, amp-reconcile-agent, RELEASE-NAME-yb-amp-controller-otel]
+            resourceNames: [amp-controller, amp-reconcile-agent, RELEASE-NAME-yb-amp-controller-otel, RELEASE-NAME-yb-amp-controller-kube-state-metrics]
       - documentIndex: 1
         contains:
           path: rules

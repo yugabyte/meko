@@ -235,6 +235,7 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `otel.inClusterStores.enabled` | `true` | `false` drops both in-cluster exporters (VictoriaMetrics remote-write, VictoriaLogs), whatever the endpoints say — the BYOC shape. Refused unless `otel.byoc.enabled` gives the collectors somewhere else to ship |
 | `otel.environmentId` | _(empty)_ | stamped as an `environment_id` label on every series both metrics collectors scrape. The YCP environment id (same value as `agent.envName`); the install hint sets it |
 | `otel.accountId` | _(empty)_ | stamped as an `account_id` label alongside it. The install hint omits it for a standalone YCP, which has no account |
+| `otel.kubeStateMetrics.enabled` / `.image` / `.resources` | `true` / `kube-state-metrics:v2.19.1` | a kube-state-metrics Deployment watching only this namespace's pods, scraped by the compute collector. Its own ServiceAccount and a namespaced Role on pods — no cluster RBAC. Its image comes from `registry.k8s.io`, so an install that mirrors images must override `.image` |
 
 See [`values.yaml`](values.yaml) for the full set.
 

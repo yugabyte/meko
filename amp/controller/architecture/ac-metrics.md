@@ -1,7 +1,7 @@
 # ac — Metrics
 
 **Status:** Draft
-**Last updated:** 2026-07-14
+**Last updated:** 2026-10-01
 
 How amp emits metrics for its compute instances, the controller, and
 the amp controller, and how they reach a metrics store. The guiding finding:
@@ -111,8 +111,9 @@ an install where the operator is absent; there the collectors are skipped and
   sidecar (`:9187`), pageserver (`:9898`), safekeeper (`:7676`), compute_ctl
   (`:3080`) twice — `/metrics` for compute_ctl's own counters and
   `/autoscaling_metrics` for the LFC gauges it proxies from the communicator's
-  unix socket — and (with `otel.podMetrics`) per-pod cAdvisor resource metrics
-  from each node's kubelet.
+  unix socket — (with `otel.podMetrics`) per-pod cAdvisor resource metrics
+  from each node's kubelet, and the endpoint pods' object state from a
+  kube-state-metrics the chart runs in the namespace (below).
 
 The chart also creates the collector `ServiceAccount` and RBAC sized to what is
 actually scraped: a namespaced **`Role`** on `pods` for discovery — every app
@@ -198,12 +199,41 @@ them, the Collector's pod service-discovery must target those ports (the
 multi-port scrape config or per-port annotations is the step-2 work. The
 `controller` and the amp `controller` (`:8080`) are scraped directly.
 
+### Endpoint pod state — kube-state-metrics
+
+cAdvisor reports what a container *uses*; it cannot say what the pod was
+*granted* or what state it is in. `otel.kubeStateMetrics` (on by default, with the
+compute collector) runs a kube-state-metrics Deployment with `--namespaces=<release
+ns> --resources=pods`, scraped as `amp-kube-state-metrics` and kept to the
+`otel.podMetricsSelector` pods: `kube_pod_container_resource_requests` / `_limits`,
+`kube_pod_status_phase`, `kube_pod_status_ready`, `kube_pod_created`,
+`kube_pod_container_status_restarts_total`,
+`kube_pod_container_status_last_terminated_reason` and the rest of the pod family.
+
+It has its own ServiceAccount, bound to a `Role` granting list/watch on `pods` and
+nothing else — not the collectors' account, which `otel.podMetrics` also binds to the
+cluster-wide `nodes/proxy` ClusterRole. The agent's Role can `bind` it, so a BYOC
+upgrade applies it.
+
+Every KSM series describes some *other* pod, named in its own `pod` label, so the
+discovery-time identity relabelling below cannot reach it. `kube_pod_labels`
+carries the identity instead — KSM is started with the five `amp.yugabyte.com/`
+keys allowlisted, and the job renames `label_amp_yugabyte_com_*` to the same
+`endpoint_id` … `ep_type` names — so pool- or cluster-level rollups are a join:
+
+```promql
+sum by (storage_pool_id, resource) (
+  kube_pod_container_resource_requests
+  * on (namespace, pod) group_left (storage_pool_id) kube_pod_labels
+)
+```
+
 ### Tenancy labels
 
 Both metrics collectors stamp **`environment_id`** and **`account_id`** on every
 datapoint they scrape, via a `transform/identity` processor fed by
 `otel.environmentId` / `otel.accountId`. That covers every source at once — the Go
-controller, the Rust services, `postgres_exporter`, cAdvisor:
+controller, the Rust services, `postgres_exporter`, cAdvisor, kube-state-metrics:
 labelling at the collector is one setting, where labelling at the source would be
 ~230 metric declarations across two languages plus the exporters amp does not own.
 They are datapoint attributes rather than resource attributes so Prometheus's OTLP

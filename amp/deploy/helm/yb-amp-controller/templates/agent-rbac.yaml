@@ -80,6 +80,7 @@ rules:
       - {{ include "yb-amp-controller.controllerName" . }}
       - {{ include "yb-amp-controller.agentName" . }}
       - {{ include "yb-amp-controller.fullname" . }}-otel
+      - {{ include "yb-amp-controller.fullname" . }}-kube-state-metrics
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [rolebindings]
     verbs: [get, list, watch, create, update, patch, delete]

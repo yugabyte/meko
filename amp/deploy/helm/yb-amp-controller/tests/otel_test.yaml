@@ -24,7 +24,7 @@ tests:
         - opentelemetry.io/v1beta1
     asserts:
       - hasDocuments:
-          count: 8
+          count: 12
 
   - it: renders nothing when the opentelemetry.io CRDs are absent, though enabled by default
     asserts:
@@ -38,7 +38,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: renders all three collector CRs plus RBAC (SA + Role/binding + ClusterRole/binding) when enabled
+  - it: renders all three collector CRs, kube-state-metrics and RBAC (SA + Role/binding + ClusterRole/binding) when enabled
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -46,7 +46,7 @@ tests:
       otel.enabled: true
     asserts:
       - hasDocuments:
-          count: 8
+          count: 12
 
   - it: the controller collector is a deployment-mode OpenTelemetryCollector
     capabilities:
@@ -351,9 +351,9 @@ tests:
       otel.collectors.controller.enabled: false
     asserts:
       # SA + Role + RoleBinding + ClusterRole + ClusterRoleBinding + compute CR
-      # + logs CR.
+      # + logs CR + kube-state-metrics (SA + Role + RoleBinding + Deployment).
       - hasDocuments:
-          count: 7
+          count: 11
 
   - it: omits the logs collector when it is disabled
     capabilities:
@@ -362,9 +362,9 @@ tests:
     set:
       otel.collectors.logs.enabled: false
     asserts:
-      # The default renders 8, so 7 is exactly the logs CR being absent.
+      # The default renders 12, so 11 is exactly the logs CR being absent.
       - hasDocuments:
-          count: 7
+          count: 11
 
   # `helm upgrade --reuse-values` replays the previous release's values and
   # ignores new chart defaults, so an install predating this collector has an
@@ -381,10 +381,10 @@ tests:
         compute:
           enabled: true
     asserts:
-      # 8 is the full default set; the sibling case above renders 7 when logs is
-      # explicitly disabled, so this count is exactly "the logs CR is present".
+      # 12 is the full default set; the sibling case above renders 11 when logs
+      # is explicitly disabled, so this count is exactly "the logs CR is present".
       - hasDocuments:
-          count: 8
+          count: 12
 
   # Same --reuse-values path: an unset logsEndpoint reaches hasPrefix as nil and
   # fails the render on a type error, so the exporter has to fall back.
@@ -443,7 +443,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
-          count: 7
+          count: 8
 
   - it: drops the cadvisor job when podMetrics is off
     capabilities:
@@ -458,7 +458,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
-          count: 6
+          count: 7
 
   # The LFC counters are the only ones behind a non-default metrics_path, so a
   # job that silently loses it scrapes compute_ctl's own /metrics twice and the
@@ -488,17 +488,20 @@ tests:
     set:
       otel.podMetrics: false
     asserts:
-      # SA + Role + RoleBinding + all three collectors, and NO
-      # ClusterRole/binding: the default renders 8, so 6 here is exactly the two
-      # cluster-scoped documents being absent. The log collector adds no
+      # SA + Role + RoleBinding + all three collectors + kube-state-metrics' four,
+      # and NO ClusterRole/binding: the default renders 12, so 10 here is exactly
+      # the two cluster-scoped documents being absent. The log collector adds no
       # cluster-scoped RBAC — it is namespace-filtered by design.
       - hasDocuments:
-          count: 6
+          count: 10
 
   - it: pod discovery is a namespaced Role, scoped to pods and replicasets
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
+    # kube-state-metrics' own Role is the other one in this template.
+    set:
+      otel.kubeStateMetrics.enabled: false
     documentSelector:
       path: kind
       value: Role
@@ -988,7 +991,7 @@ tests:
       otel.byoc.enabled: true
     asserts:
       - hasDocuments:
-          count: 8
+          count: 12
 
   # The defaults are load-bearing for every non-BYOC install, and the endpoint is
   # otherwise only ever asserted under an override.
@@ -1088,7 +1091,7 @@ tests:
       otel.collectors.logs.enabled: false
     asserts:
       - hasDocuments:
-          count: 7
+          count: 11
 
   # The endpoint pod's identity labels ride every series scraped from it, so a
   # query can group by cluster, pool, branch or role without a join.
@@ -1171,3 +1174,121 @@ tests:
           value:
             - {source_labels: [branch_id, pod_branch_id], regex: ";(.+)", target_label: branch_id, replacement: "$1"}
             - {action: labeldrop, regex: pod_branch_id}
+
+  # Its own ServiceAccount: the collectors' is also bound to the nodes/proxy
+  # ClusterRole whenever podMetrics is on.
+  - it: runs kube-state-metrics on the release namespace's pods under its own ServiceAccount
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    release:
+      namespace: amp-ns
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME-yb-amp-controller-kube-state-metrics
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --namespaces=amp-ns
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --resources=pods
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metric-labels-allowlist=pods=[amp.yugabyte.com/endpoint-id,amp.yugabyte.com/branch-id,amp.yugabyte.com/cluster-id,amp.yugabyte.com/storage-pool-id,amp.yugabyte.com/ep-type]
+
+  # Appended after cadvisor, so the indexed assertions above do not move.
+  - it: scrapes kube-state-metrics for endpoint pods only, with the identity labels renamed
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[7].job_name
+          value: amp-kube-state-metrics
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[7].metric_relabel_configs
+          value:
+            - {source_labels: [pod], action: keep, regex: "(yb-ep-.*)"}
+            - {action: labelmap, regex: label_amp_yugabyte_com_(.+), replacement: "$1"}
+            - {action: labeldrop, regex: label_amp_yugabyte_com_.+}
+
+  - it: drops the kube-state-metrics Deployment when disabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.kubeStateMetrics.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 8
+
+  - it: drops the kube-state-metrics job when disabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.kubeStateMetrics.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 7
+
+  # --reuse-values from a release predating the key.
+  - it: still renders kube-state-metrics when otel has no kubeStateMetrics key
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.kubeStateMetrics: null
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1
+
+  # Template order: the collectors' SA/Role/binding, ClusterRole/binding, the
+  # controller and compute CRs, then kube-state-metrics' SA (7), Role (8),
+  # RoleBinding (9). The kind/name asserts fail loudly if that order moves.
+  - it: grants kube-state-metrics list/watch on pods and nothing else
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentIndex: 8
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-kube-state-metrics
+      - equal:
+          path: rules
+          value:
+            - {apiGroups: [""], resources: [pods], verbs: [list, watch]}
+
+  - it: binds kube-state-metrics' Role to its own ServiceAccount only
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentIndex: 9
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-yb-amp-controller-kube-state-metrics
+      - equal:
+          path: subjects
+          value:
+            - {kind: ServiceAccount, name: RELEASE-NAME-yb-amp-controller-kube-state-metrics, namespace: NAMESPACE}

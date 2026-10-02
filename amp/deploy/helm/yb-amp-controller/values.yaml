@@ -631,10 +631,22 @@ otel:
   # install that must stay namespace-scoped — the other three dashboards are
   # unaffected and this one reports no data.
   podMetrics: true
-  # -- Pod-name regex the compute collector keeps for cAdvisor metrics. Defaults
-  # to the controller's endpoint naming (yb-ep-*); widen it (e.g.
-  # ".*yb-amp-endpoint.*") for manually-installed endpoint releases.
+  # -- Pod-name regex the compute collector keeps for cAdvisor and
+  # kube-state-metrics series. Defaults to the controller's endpoint naming
+  # (yb-ep-*); widen it (e.g. ".*yb-amp-endpoint.*") for manually-installed
+  # endpoint releases.
   podMetricsSelector: "yb-ep-.*"
+  # -- A kube-state-metrics Deployment watching only this namespace's pods,
+  # scraped by the compute collector: phase, readiness, restarts, termination
+  # reasons, resource requests/limits and creation time of each endpoint pod.
+  # Its own ServiceAccount and a namespaced Role on pods, so unlike podMetrics
+  # it needs no cluster RBAC. Rendered only with the compute collector.
+  kubeStateMetrics:
+    enabled: true
+    image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1
+    resources:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {memory: 128Mi}
   # Scrape ports for the Neon services on each endpoint pod. Keep these in sync
   # with the yb-amp-endpoint chart's ports.{pageserverHttp,safekeeperHttp,computeCtlHttp}
   # if you override them there.
