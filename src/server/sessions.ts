@@ -498,6 +498,8 @@ export class SessionManager {
       pr: row.pr_number,
       prUrl: row.pr_url,
       reviewer: settings?.reviewerLogin ?? 'the reviewer',
+      // A review-people prompt queued before it named its reviewers.
+      reviewers: 'its reviewers',
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
       ...review,

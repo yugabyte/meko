@@ -56,6 +56,11 @@ type Queue = Partial<Record<QueuedPrompt, { state: 'queued' | 'sent'; vars?: Rec
 
 const REVIEW_REQUEST = /^\/agentk review\b/;
 
+/** The reviews' authors, each once, as `a, b`. */
+function loginList(reviews: github.PrReview[]): string {
+  return [...new Set(reviews.map((r) => r.author?.login))].join(', ');
+}
+
 /**
  * True when the local branch has commits the PR's head lacks: committed but never pushed, or
  * pushed after the PR merged. False when the head is unknown or the branch is gone.
@@ -528,6 +533,13 @@ export class Lifecycle {
     this.setQueue(id, q);
   }
 
+  /** Queues `review-people` naming its reviewers, adding to those of a prompt still waiting to go out. */
+  private enqueuePeople(id: string, logins: string[]): void {
+    const waiting = this.queue(id)['review-people'];
+    const earlier = waiting?.state === 'queued' ? (waiting.vars?.reviewers ?? '').split(', ').filter(Boolean) : [];
+    this.enqueue(id, 'review-people', { reviewers: [...new Set([...earlier, ...logins])].join(', ') });
+  }
+
   /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */
   private ghCwd(row: SessionRow): string {
     if (existsSync(row.worktree_path) && this.sessions.ownsWorktree(row)) return row.worktree_path;
@@ -644,8 +656,12 @@ export class Lifecycle {
     let reviewState = row.review_state;
     const seen = new Set(JSON.parse(row.seen_review_ids) as string[]);
     const isAgentk = (a: { login: string } | null) => github.isLogin(a, settings.reviewerLogin);
+    // On a public repo anyone can comment: only the user and people with a role on it can ask for AgentK.
+    const asked = st.comments.filter((c) => REVIEW_REQUEST.test(c.body.trim()));
+    const me = asked.some((c) => !github.isTrustedAuthor(c, settings.reviewerLogin)) ? await this.viewerLogin(this.ghCwd(before)) : null;
+    const requests = asked.filter((c) => github.isTrustedAuthor(c, settings.reviewerLogin) || (!!me && github.isLogin(c.author, me)));
     const agentkSeen = !!row.agentk_seen || st.reviews.some((r) => isAgentk(r.author))
-      || st.comments.some((c) => isAgentk(c.author) || REVIEW_REQUEST.test(c.body.trim()));
+      || st.comments.some((c) => isAgentk(c.author)) || requests.length > 0;
 
     if (mode !== 'people') {
       const botReviews = st.reviews.filter((r) => isAgentk(r.author));
@@ -669,7 +685,7 @@ export class Lifecycle {
         // AgentK talks through issue comments before the review: an ack, or a refusal. Only
         // comments after the last review and the last request count (a forced review follows a refusal).
         const latestReviewAt = Math.max(0, ...botReviews.map((r) => Date.parse(r.submittedAt)));
-        const requestedAt = Math.max(0, ...st.comments.filter((c) => REVIEW_REQUEST.test(c.body.trim())).map((c) => Date.parse(c.createdAt)));
+        const requestedAt = Math.max(0, ...requests.map((c) => Date.parse(c.createdAt)));
         const since = Math.max(latestReviewAt, requestedAt);
         const botComment = [...st.comments].reverse().find((c) => isAgentk(c.author) && Date.parse(c.createdAt) > since);
         if (botComment) {
@@ -681,19 +697,31 @@ export class Lifecycle {
 
     // People, and in All mode other bots too. AgentK's reviews are never counted here.
     const others = st.reviews.filter((r) => r.author && !isAgentk(r.author) && !seen.has(r.id));
-    const bots = others.length && mode !== 'all' ? await this.botLogins(before, st.number) : [];
+    const bots = others.length ? await this.botLogins(before, st.number) : [];
     if (others.length && bots) {
       others.forEach((r) => seen.add(r.id));
-      const counted = others.filter((r) => !bots.some((b) => github.isLogin(r.author, b)));
+      const isBot = (r: github.PrReview) => bots.some((b) => github.isLogin(r.author, b));
+      const counted = others.filter((r) => mode === 'all' || !isBot(r));
       // Replies on review threads (Claude's too: it posts as the user) are empty COMMENTED reviews.
       const worded = counted.filter((r) => r.state !== 'COMMENTED' || r.body.trim());
-      if (worded.length) {
-        const names = [...new Set(worded.map((r) => r.author?.login))].join(', ');
+      // Anyone can review a public repo's PR. Only people with a role on it, bots (apps installed
+      // on it) and the user get to start a turn; the rest are shown to the user, not to Claude.
+      const outside = worded.filter((r) => !isBot(r) && !github.isTrustedAuthor(r, settings.reviewerLogin));
+      const user = outside.length ? await this.viewerLogin(this.ghCwd(before)) : null;
+      const ignored = outside.filter((r) => !user || !github.isLogin(r.author, user));
+      const trusted = worded.filter((r) => !ignored.includes(r));
+      if (ignored.length) {
+        const names = loginList(ignored);
+        this.sessions.event(row.id, 'review', `Ignored review from ${names} (not a collaborator on the repo)`);
+        this.sessions.notifyUser(row.id, 'Review ignored', `From ${names}, not a collaborator on the repo. AgentK won't act on it; read it on GitHub.`);
+      }
+      if (trusted.length) {
+        const names = loginList(trusted);
         this.sessions.event(row.id, 'review', `Review from ${names}`);
-        if (worded.some((r) => r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED')) {
+        if (trusted.some((r) => r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED')) {
           reviewState = 'addressing';
           this.sessions.notifyUser(row.id, 'Review arrived', `From ${names}.`);
-          this.enqueue(row.id, 'review-people');
+          this.enqueuePeople(row.id, trusted.map((r) => r.author!.login));
         }
       }
     }
