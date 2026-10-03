@@ -75,9 +75,9 @@ const STABLE_MS = 5000;
 /** On phones, a terminal taken off screen lets go of its tmux window after this long. */
 const DETACH_RELEASE_MS = 5000;
 
-/** Why the pty behind a terminal exited, in words. */
+/** Why the pty behind a terminal exited, in words (the UI adds the dots while it reconnects). */
 const EXIT_REASONS: Record<string, string> = {
-  detached: 'The terminal was detached. Reconnecting…',
+  detached: 'The terminal was detached. Reconnecting',
 };
 
 class SessionTerminal {
@@ -120,6 +120,8 @@ class SessionTerminal {
   selecting = false;
   conn: TermConn = 'connecting';
   message: string | null = null;
+  /** `message` says what is being retried ("Reconnecting"): the UI shows it with moving dots. */
+  retrying = false;
   /** The server said why it can't attach (in `message`): no reconnecting until reconnect(). */
   failed = false;
   /** A short-lived note after copying ("Copied", or why it failed). */
@@ -220,9 +222,10 @@ class SessionTerminal {
     }, ms);
   }
 
-  private setConn(c: TermConn, message: string | null = null) {
+  private setConn(c: TermConn, message: string | null = null, retrying = false) {
     this.conn = c;
     this.message = message;
+    this.retrying = retrying;
     this.listeners.forEach((l) => l());
   }
 
@@ -269,11 +272,11 @@ class SessionTerminal {
         } catch {
           return;
         }
-        if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting…');
+        if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
         else if (msg.type === 'error') {
           // A missing or archived session is final (Try again); a failed attach may pass, so back off and retry.
           this.failed = !msg.retry;
-          this.setConn('ended', msg.retry ? `${msg.error} Retrying…` : msg.error);
+          this.setConn('ended', msg.retry ? `${msg.error} Retrying` : msg.error, msg.retry);
         }
         return;
       }

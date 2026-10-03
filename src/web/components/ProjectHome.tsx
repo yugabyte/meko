@@ -15,7 +15,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, mekoDatapackShareUrl, shortTime } from '../util';
-import { ConfirmButton, DatapackName, ErrorText, Field } from './common';
+import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
 import { AddDatapackDialog } from './AddDatapackDialog';
 import { MekoKeyDialog } from './MekoKeyDialog';
 import { ShareDialog } from './ShareDialog';
@@ -231,7 +231,7 @@ export function ProjectHomeView({
           </section>
           <section className="box">
             <span className="label">Recent activity</span>
-            {!home && !loadError && <p className="muted">Loading…</p>}
+            {!home && !loadError && <p className="muted"><Busy label="Loading" /></p>}
             {home && home.activity.length === 0 && <p className="muted">Nothing yet. Start a session to get going.</p>}
             {home && home.activity.length > 0 && (
               <div className="act-list" tabIndex={0} aria-label="Recent activity">
@@ -314,7 +314,7 @@ function SearchBox({ projectId }: { projectId: string }) {
           onChange={(e) => setQ(e.target.value)}
         />
         <button className="btn" disabled={busy || !q.trim()}>
-          {busy ? 'Searching…' : 'Search'}
+          {busy ? <Busy label="Searching" /> : 'Search'}
         </button>
       </form>
       <ErrorText error={error} />
@@ -385,7 +385,9 @@ function AttachDatapack({
       </div>
       <div className="dp-list">
         {error && <p className="error-text pad">{error}</p>}
-        {!all && !error && <p className="muted pad">Loading datapacks…</p>}
+        {!all && !error && <p className="muted pad">
+                <Busy label="Loading datapacks" />
+              </p>}
         {all && shown.length === 0 && <p className="muted pad">No other datapacks match.</p>}
         {shown.map((d) => (
           <button key={d.id} className="dp-row" onClick={() => onAttach(d)}>
@@ -521,7 +523,7 @@ function ProjectSettingsForm({
         )}
         <div className="settings-actions">
           <button className="btn primary" disabled={!dirty || busy || !name.trim()}>
-            {busy ? 'Saving…' : 'Save'}
+            {busy ? <Busy label="Saving" /> : 'Save'}
           </button>
           {saved && <span className="muted small">Saved</span>}
           <span className="sp" />

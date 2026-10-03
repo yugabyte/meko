@@ -8,7 +8,7 @@ import { api, errorMessage } from '../api';
 import { anchorComment, parsePatch, showsLine, sideLine, type DiffLine } from '../diff';
 import { useTouch } from '../hooks/useMedia';
 import { cx } from '../util';
-import { ConfirmButton } from './common';
+import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
 
 const KIND: Record<ChangeKind, { letter: string; label: string }> = {
@@ -320,11 +320,11 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
             }
             onClick={send}
           >
-            {sending ? 'Sending…' : `Send ${plural(drafts, 'comment')}`}
+            {sending ? <Busy label="Sending" /> : `Send ${plural(drafts, 'comment')}`}
           </button>
         )}
         <button className="btn small" disabled={loading} onClick={() => setTick((t) => t + 1)}>
-          {loading ? 'Loading…' : 'Refresh'}
+          {loading ? <Busy label="Loading" /> : 'Refresh'}
         </button>
         <button className="icon-btn panel-close" onClick={onClose} aria-label="Close changes">
           <span className="desktop-only">×</span>
@@ -353,7 +353,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         {error ? (
           <p className="error-text">{error}</p>
         ) : !data ? (
-          <p className="muted">Loading…</p>
+          <p className="muted"><Busy label="Loading" /></p>
         ) : files.length === 0 ? (
           <p className="muted">No changes yet compared to {data.base}.</p>
         ) : (
@@ -696,7 +696,7 @@ function CommentEditor({
           Cancel
         </button>
         <button className="btn small primary" disabled={busy || !text.trim()} onClick={() => void submit()}>
-          {busy ? 'Saving…' : editor.id ? 'Save' : 'Save draft'}
+          {busy ? <Busy label="Saving" /> : editor.id ? 'Save' : 'Save draft'}
         </button>
       </div>
     </div>

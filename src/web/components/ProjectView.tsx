@@ -15,7 +15,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, mekoDatapackShareUrl, repoFolder, totalTokens, usageTitle } from '../util';
-import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -445,7 +445,9 @@ function StageBar({
       );
       break;
     case 'pr':
-      gate = <span className="gate-pill">Opening PR…</span>;
+      gate = <span className="gate-pill">
+          <Busy label="Opening PR" />
+        </span>;
       break;
     case 'review':
       gate = (
@@ -487,7 +489,7 @@ function StageBar({
       );
       break;
     case 'merge':
-      gate = <span className="gate-pill">Merging and closing…</span>;
+      gate = <span className="gate-pill"><Busy label="Merging and closing" /></span>;
       break;
     case 'done':
       gate = <span className="gate-pill done">Done</span>;

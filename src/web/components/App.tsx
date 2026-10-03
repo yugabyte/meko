@@ -21,6 +21,7 @@ import {
 import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
+import { Busy } from './common';
 import { NewProjectDialog } from './NewProjectDialog';
 import { MoveSessionDialog, type MovePreset } from './MoveSessionDialog';
 import { NewSessionDialog } from './NewSessionDialog';
@@ -356,7 +357,9 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }, [state, modalKind, closeProjectStale]);
 
   if (!state) {
-    return <div className="boot">{conn === 'closed' ? 'Reconnecting to the server…' : 'Loading your projects…'}</div>;
+    return <div className="boot">
+        <Busy label={conn === 'closed' ? 'Reconnecting to the server' : 'Loading your projects'} />
+      </div>;
   }
 
   // A design doc opened in its own tab: just the doc, full page.

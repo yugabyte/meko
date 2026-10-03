@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ProjectWithSessions } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { Dialog, ErrorText } from './common';
+import { Busy, Dialog, ErrorText } from './common';
 
 /**
  * Offered when the project on screen loses its last open session: close it, start another
@@ -40,7 +40,7 @@ export function CloseProjectDialog({
       footer={
         <>
           <button className="btn danger" disabled={busy} onClick={close}>
-            {busy ? 'Closing…' : 'Close project'}
+            {busy ? <Busy label="Closing" /> : 'Close project'}
           </button>
           <span className="sp" />
           <button className="btn" disabled={busy} onClick={onClose}>

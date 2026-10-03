@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
 type Tab = 'general' | 'meko' | 'account' | 'updates';
@@ -74,7 +74,7 @@ function GeneralTab() {
       .catch((e) => setError(errorMessage(e)));
   }, []);
 
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
@@ -215,7 +215,7 @@ function GeneralTab() {
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn primary" disabled={busy}>
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? <Busy label="Saving" /> : 'Save'}
         </button>
         {saved && <span className="muted small">Saved</span>}
       </div>
@@ -257,7 +257,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
       .catch((e) => setError(errorMessage(e)));
   }, []);
 
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
   const m = s.meko;
 
   const save = async (e: FormEvent) => {
@@ -436,7 +436,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
           </span>
           {!claudeMatches && (
             <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
-              {busy === 'claude' ? 'Setting up…' : 'Set up Claude Code with this Meko'}
+              {busy === 'claude' ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
             </button>
           )}
           {claudeDone && <span className="ok-text">Claude Code now uses this Meko.</span>}
@@ -452,7 +452,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn primary" disabled={busy !== null}>
-          {busy === 'save' ? 'Checking…' : confirmHost ? 'Switch Meko' : 'Save'}
+          {busy === 'save' ? <Busy label="Checking" /> : confirmHost ? 'Switch Meko' : 'Save'}
         </button>
         {saved && <span className="muted small">Saved</span>}
       </div>
@@ -635,7 +635,7 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
         {pwMsg && <p className="ok-text">{pwMsg}</p>}
         <div>
           <button className="btn primary" disabled={!current || !next || pwBusy}>
-            {pwBusy ? 'Changing…' : 'Change password'}
+            {pwBusy ? <Busy label="Changing" /> : 'Change password'}
           </button>
         </div>
       </form>
@@ -644,7 +644,7 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
         <h3>Two-step sign-in</h3>
         <p className="muted">
           {totpOn === null
-            ? 'Checking…'
+            ? <Busy label="Checking" />
             : totpOn
               ? 'On. Sign-in asks for a code from your authenticator app.'
               : 'Off. Add a code from an authenticator app to every sign-in.'}
@@ -751,11 +751,11 @@ function UpdatesTab({ initial }: { initial: UpdateStatus }) {
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn" disabled={!!busy || u.channel === 'off'} onClick={() => run('check')}>
-          {busy === 'check' ? 'Checking…' : 'Check now'}
+          {busy === 'check' ? <Busy label="Checking" /> : 'Check now'}
         </button>
         {u.available && (
           <button className="btn primary" disabled={!!busy || u.applying} onClick={() => run('apply')}>
-            {busy === 'apply' || u.applying ? 'Updating…' : `Update to v${u.latest}`}
+            {busy === 'apply' || u.applying ? <Busy label="Updating" /> : `Update to v${u.latest}`}
           </button>
         )}
         {u.releaseUrl && (

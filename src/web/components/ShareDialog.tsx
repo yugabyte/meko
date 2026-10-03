@@ -4,7 +4,7 @@ import { SHARE_GRANTS } from '../../shared/types';
 import { isProjectDatapack } from '../../shared/datapacks';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
-import { Dialog, ErrorText } from './common';
+import { Busy, Dialog, ErrorText } from './common';
 import { ShareReviewers } from './ShareReviewers';
 
 const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
@@ -150,7 +150,7 @@ export function ShareDialog({
         <div className="share-actions">
           {sent && <span className="ok-text">{sent}</span>}
           <button className="btn primary" type="submit" disabled={!email.trim() || busy !== null}>
-            {busy === 'invite' ? 'Inviting…' : 'Invite'}
+            {busy === 'invite' ? <Busy label="Inviting" /> : 'Invite'}
           </button>
         </div>
         <ErrorText error={error} />
@@ -159,7 +159,7 @@ export function ShareDialog({
       <div className="field">
         <span className="label">People</span>
         {loadError && <p className="error-text">{loadError}</p>}
-        {!people && !loadError && <p className="muted">Loading…</p>}
+        {!people && !loadError && <p className="muted"><Busy label="Loading" /></p>}
         {stale && <p className="hint">{stale} The list below may be out of date.</p>}
         {people && (
           <div className="share-people">
@@ -182,14 +182,14 @@ export function ShareDialog({
                     disabled={busy !== null}
                     onClick={() => void run(`resend-${i.inviteId}`, () => api.resendDatapackInvite(datapack.id, i.inviteId), `Sent the invite to ${i.email} again.`)}
                   >
-                    {busy === `resend-${i.inviteId}` ? 'Sending…' : 'Resend'}
+                    {busy === `resend-${i.inviteId}` ? <Busy label="Sending" /> : 'Resend'}
                   </button>
                   <button
                     className="btn small danger-outline"
                     disabled={busy !== null}
                     onClick={() => void run(`revoke-${i.inviteId}`, () => api.revokeDatapackInvite(datapack.id, i.inviteId))}
                   >
-                    {busy === `revoke-${i.inviteId}` ? 'Revoking…' : 'Revoke'}
+                    {busy === `revoke-${i.inviteId}` ? <Busy label="Revoking" /> : 'Revoke'}
                   </button>
                 </span>
               </div>

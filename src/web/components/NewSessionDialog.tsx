@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Project, RepoInfo, ReviewablePr, ReviewablePrs, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { repoFolder, slugify } from '../util';
-import { Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
+import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
 const NAME_PLACEHOLDER: Record<StartChoice, string> = {
@@ -168,7 +168,7 @@ export function NewSessionDialog({
       footer={
         <>
           <button className="btn primary" disabled={!canStart} onClick={create}>
-            {busy ? 'Starting…' : review ? 'Start review' : 'Start session'}
+            {busy ? <Busy label="Starting" /> : review ? 'Start review' : 'Start session'}
           </button>
         </>
       }

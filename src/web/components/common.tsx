@@ -188,9 +188,29 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-/** Animated ". .. ..." for things in progress (static "…" with reduced motion). */
+/** Dots cycling ". .. ..." after something in progress, so it doesn't look stuck (a static "..." with reduced motion). */
 export function Dots() {
-  return <span className="dots" aria-hidden="true" />;
+  return (
+    <span className="dots" aria-hidden="true">
+      <span>.</span>
+      <span>.</span>
+      <span>.</span>
+    </span>
+  );
+}
+
+/**
+ * An in-progress label such as "Starting", with the dots after it. One span, so a flex parent (a
+ * button) keeps them together; screen readers get a "…", so a sentence after it still reads apart.
+ */
+export function Busy({ label }: { label: string }) {
+  return (
+    <span className="busy">
+      {label}
+      <span className="sr-only">…</span>
+      <Dots />
+    </span>
+  );
 }
 
 /** A tick drawn as a path, so it sits exactly in the middle of its circle whatever the font. */

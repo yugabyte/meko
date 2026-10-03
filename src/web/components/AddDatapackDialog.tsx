@@ -3,7 +3,7 @@ import type { DatapackRef, MekoDatapack, Project, Session } from '../../shared/t
 import { canonicalRepoName, defaultProjectDatapackName, freeDatapackName, isProjectDatapack } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
 import { cx, runningSessions } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { Busy, Dialog, ErrorText, Field } from './common';
 
 /**
  * Gives a project without one its dedicated datapack: a new one, or one of yours (for a project
@@ -181,7 +181,9 @@ export function AddDatapackDialog({
           <div className="dp-picker">
             <input id="add-dp-filter" className="input" placeholder="Search your datapacks…" value={filter} onChange={(e) => setFilter(e.target.value)} />
             <div className="dp-list" role="listbox" aria-label="Datapacks">
-              {!datapacks && !error && <p className="muted pad">Loading datapacks…</p>}
+              {!datapacks && !error && <p className="muted pad">
+                <Busy label="Loading datapacks" />
+              </p>}
               {datapacks && shown.length === 0 && <p className="muted pad">No datapacks you can write to.</p>}
               {shown.map((d) => (
                 <button
@@ -215,7 +217,7 @@ export function AddDatapackDialog({
         )}
         <div className="settings-actions">
           <button className="btn primary" disabled={busy || !ready}>
-            {replacing ? (busy ? 'Switching…' : 'Switch datapack') : busy ? 'Adding…' : 'Add datapack'}
+            {replacing ? (busy ? <Busy label="Switching" /> : 'Switch datapack') : busy ? <Busy label="Adding" /> : 'Add datapack'}
           </button>
         </div>
       </form>

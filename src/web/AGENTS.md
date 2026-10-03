@@ -37,6 +37,13 @@ with a finger. Before you finish a UI change:
   and the pure helpers in `keys.ts`, which have unit tests. Don't focus the terminal on touch
   screens unless typing mode is on (`term.typing`), or the keyboard pops up on every tap.
 
+## In-progress labels
+
+A label for something still running ("Starting", "Opening", "Loading") is `<Busy label="Starting" />`
+from `common.tsx`, never a static "Starting…", which looks stuck. Its dots cycle `.` `..` `...`
+by opacity (Safari doesn't animate `content`) and stay still with reduced motion.
+`test/unit/busy-labels.test.ts` flags a static label like "Saving…" in a component.
+
 ## Reloads after an update
 
 An open page reloads itself when the server comes back on another version (`reload.ts`), unless

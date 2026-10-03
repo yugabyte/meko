@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { MekoSettings } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { mekoKeyLinkBase } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { Busy, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
 /**
@@ -67,7 +67,7 @@ export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string
         <ErrorText error={error} />
         <div className="settings-actions">
           <button className="btn primary" disabled={busy || !key.trim()}>
-            {busy ? 'Checking…' : 'Turn on Meko'}
+            {busy ? <Busy label="Checking" /> : 'Turn on Meko'}
           </button>
         </div>
       </form>

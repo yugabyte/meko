@@ -6,7 +6,7 @@ import {
 } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
 import { cx, relativeTime } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { Busy, Dialog, ErrorText, Field } from './common';
 
 type Source = 'list' | 'clone' | 'folder' | 'new';
 
@@ -381,12 +381,12 @@ export function NewProjectDialog({
           <button className="btn primary" disabled={!canCreate} onClick={() => void create()}>
             {busy
               ? accepting
-                ? 'Accepting…'
+                ? <Busy label="Accepting" />
                 : source === 'clone'
-                  ? 'Cloning…'
+                  ? <Busy label="Cloning" />
                   : source === 'new'
-                    ? 'Creating…'
-                    : 'Opening…'
+                    ? <Busy label="Creating" />
+                    : <Busy label="Opening" />
               : accepting
                 ? 'Accept and open project'
                 : 'Open project'}
@@ -463,7 +463,9 @@ export function NewProjectDialog({
             />
             <div className="dp-list" role="listbox" aria-label="Datapacks">
               {dpError && <p className="error-text pad">{dpError}</p>}
-              {!datapacks && !dpError && <p className="muted pad">Loading datapacks…</p>}
+              {!datapacks && !dpError && <p className="muted pad">
+                <Busy label="Loading datapacks" />
+              </p>}
               {datapacks && dpShown.length === 0 && (
                 <p className="muted pad">{showAll ? 'No datapacks match.' : 'No adlc/proj/ datapacks match.'}</p>
               )}
@@ -512,7 +514,7 @@ export function NewProjectDialog({
                 </span>
               )}
               <button className="link-btn" disabled={dpLoading} onClick={loadDatapacks}>
-                {dpLoading ? 'Refreshing…' : 'Refresh'}
+                {dpLoading ? <Busy label="Refreshing" /> : 'Refresh'}
               </button>
               {(showAll || hiddenCount > 0) && (
                 <button className="link-btn" onClick={() => setShowAll((v) => !v)}>
@@ -551,7 +553,9 @@ export function NewProjectDialog({
             </div>
             <div className="repos" role="listbox" aria-label="Repositories">
               {reposError && <p className="error-text pad">{reposError}</p>}
-              {!repos && !reposError && <p className="muted pad">Scanning {roots.join(', ') || 'your repos folder'}…</p>}
+              {!repos && !reposError && <p className="muted pad">
+                  <Busy label={`Scanning ${roots.join(', ') || 'your repos folder'}`} />
+                </p>}
               {repos && shown.length === 0 && <p className="muted pad">No repos match.</p>}
               {shown.map((r) => {
                 const used = r.projects.length > 0;

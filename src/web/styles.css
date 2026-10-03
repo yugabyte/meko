@@ -2678,22 +2678,24 @@ a.icon-btn {
 }
 
 /* ---------- Starting ---------- */
-.dots::after {
-  content: '…';
-  display: inline-block;
-  width: 1.2em;
-  text-align: left;
+/* Opacity, not an animated content, so the dots run in Safari too and the width never changes. */
+.dots {
+  white-space: nowrap;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .dots::after {
-    content: '';
-    animation: dots 1.2s steps(1, end) infinite;
+  .dots > span:nth-child(2) {
+    animation: dots-2 1.2s steps(1, end) infinite;
   }
-  @keyframes dots {
-    0% { content: ''; }
-    25% { content: '.'; }
-    50% { content: '..'; }
-    75% { content: '...'; }
+  .dots > span:nth-child(3) {
+    animation: dots-3 1.2s steps(1, end) infinite;
+  }
+  @keyframes dots-2 {
+    0% { opacity: 0; }
+    33.333% { opacity: 1; }
+  }
+  @keyframes dots-3 {
+    0% { opacity: 0; }
+    66.667% { opacity: 1; }
   }
 }
 .dot.starting {

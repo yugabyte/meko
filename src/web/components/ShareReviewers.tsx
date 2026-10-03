@@ -3,6 +3,7 @@ import type { DatapackPeople, PrReviewer, PrReviewers, ShareGrant } from '../../
 import { SHARE_GRANTS } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
+import { Busy } from './common';
 
 const GRANT_NAMES: Record<ShareGrant, string> = { contributor: 'Contributor', maintainer: 'Maintainer', viewer: 'Viewer' };
 
@@ -42,7 +43,12 @@ export function ShareReviewers({
   }, [projectId]);
 
   if (error) return <p className="hint">Couldn't list the reviewers of the project's PRs: {error}</p>;
-  if (!prs) return <p className="muted small">Looking up the reviewers of the project's PRs…</p>;
+  if (!prs)
+    return (
+      <p className="muted small">
+        <Busy label="Looking up the reviewers of the project's PRs" />
+      </p>
+    );
   if (!prs.length) return null;
   const ordered = [...prs.filter((p) => p.sessionId === focusSessionId), ...prs.filter((p) => p.sessionId !== focusSessionId)];
   const withAccess = new Set(

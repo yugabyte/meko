@@ -3,7 +3,7 @@ import { STAGE_LABELS, type MoveTarget, type Session } from '../../shared/types'
 import { defaultTarget, moveBlockedIn, moveEffect, moveError, moveTargets, offersPrompt, promptByDefault, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { Busy, Dialog, ErrorText, Field } from './common';
 
 /** What the new stage's prompt asks AgentK to do, for the checkbox that sends it. */
 const PROMPT_TEXT: Record<Exclude<MoveTarget, 'review'>, string> = {
@@ -69,7 +69,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
             Cancel
           </button>
           <button className="btn primary" disabled={!!blocker || busy} title={blocker ?? undefined} onClick={() => void move()}>
-            {busy ? 'Moving…' : `Move to ${STAGE_LABELS[stage]}`}
+            {busy ? <Busy label="Moving" /> : `Move to ${STAGE_LABELS[stage]}`}
           </button>
         </>
       }

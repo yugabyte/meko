@@ -4,7 +4,7 @@ import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
-import { trapTab } from './common';
+import { Busy, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -153,7 +153,7 @@ export function EndSessionButton({
           Archive (keep branch)
         </button>
         <button className="btn danger" disabled={busy || disabled || step === 'checking'} onClick={askDiscard}>
-          {step === 'checking' ? 'Checking…' : 'Discard…'}
+          {step === 'checking' ? <Busy label="Checking" /> : 'Discard…'}
         </button>
         {cancel}
       </span>

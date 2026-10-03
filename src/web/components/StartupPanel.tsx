@@ -2,7 +2,7 @@ import { useEffect, useReducer } from 'react';
 import type { Session, StartupStep } from '../../shared/types';
 import { STAGE_LABELS, STARTUP_STEPS } from '../../shared/types';
 import { cx } from '../util';
-import { Check, Dots } from './common';
+import { Busy, Check } from './common';
 
 const STAGE_HINT: Partial<Record<Session['stage'], string>> = {
   explore: 'AgentK investigates and experiments in this worktree. Nothing is merged; end the session when you are done.',
@@ -51,8 +51,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
         {slow ? `${currentLabel}. This can take up to a minute.` : currentLabel}
       </span>
       <div className="startup-title">
-        {st?.resumed ? 'Resuming session' : 'Starting session'}
-        <Dots />
+        <Busy label={st?.resumed ? 'Resuming session' : 'Starting session'} />
       </div>
       <ol className="startup-steps">
         {steps.map((s, i) => {
@@ -63,8 +62,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
                 {state === 'done' && <Check size={10} />}
               </span>
               <span className="startup-label">
-                {s.label}
-                {state === 'current' && <Dots />}
+                {state === 'current' ? <Busy label={s.label} /> : s.label}
               </span>
               <span className="startup-time" aria-hidden="true">{state === 'current' && st ? secs(now - st.stepSince) : ''}</span>
             </li>

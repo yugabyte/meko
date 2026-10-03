@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { ApiError, api, errorMessage } from '../api';
-import { ErrorText, Field } from './common';
+import { Busy, ErrorText, Field } from './common';
 
 function AuthFrame({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
   return (
@@ -96,7 +96,7 @@ export function SetupScreen({ reset, onDone }: { reset: boolean; onDone: () => v
         </Field>
         <ErrorText error={error} />
         <button className="btn primary block" disabled={busy}>
-          {busy ? (reset ? 'Resetting login…' : 'Creating account…') : reset ? 'Reset login' : 'Create account'}
+          {busy ? <Busy label={reset ? 'Resetting login' : 'Creating account'} /> : reset ? 'Reset login' : 'Create account'}
         </button>
       </form>
     </AuthFrame>
@@ -177,7 +177,7 @@ export function LoginScreen({ onDone }: { onDone: () => void }) {
         )}
         <ErrorText error={error} />
         <button className="btn primary block" disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? <Busy label="Signing in" /> : 'Sign in'}
         </button>
       </form>
       {forgot ? <ForgotPassword /> : (

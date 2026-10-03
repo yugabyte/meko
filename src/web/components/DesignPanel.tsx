@@ -7,6 +7,7 @@ import { designFrameDoc } from '../design-frame';
 import { routePath } from '../router';
 import { designApprovalBlocker, relativeTime } from '../util';
 import { SidePanel } from './SidePanel';
+import { Busy } from './common';
 
 // Markdown designs render in the app's own page, so they get no forms or styles (an invisible
 // form button could post to the API with the user's cookie, and a <style> could restyle the
@@ -138,7 +139,7 @@ export function DesignPanel({
           {error ? (
             <p className="error-text">{error}</p>
           ) : !doc ? (
-            <p className="muted">Loading…</p>
+            <p className="muted"><Busy label="Loading" /></p>
           ) : doc.markdown ? (
             <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
           ) : doc.artifactUrl ? (
