@@ -1134,6 +1134,8 @@ export type TermServerMessage =
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
 // POST   /api/projects        CreateProjectRequest → Project   (opens a project on a repo here, a clone, or a new repo;
 //        409 when a new repo's folder is already taken)
+// GET    /api/projects/:id                     → Project   (404 once it's closed: the UI asks for a project it just
+//        opened when a state push comes without it)
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project
 // DELETE /api/projects/:id                     → 204   (closes it: the repo, branches and datapacks stay)
 // GET    /api/projects/:id/branches            → string[]

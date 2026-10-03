@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
   ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
   SetDedicatedDatapackRequest, UpdateProjectRequest,
@@ -42,9 +42,17 @@ function isDatapackLimit(e: unknown): boolean {
   return /TIER_DATAPACK_LIMIT|tier datapack limit reached|Upgrade to \w+ to create a new datapack/i.test(errMsg(e));
 }
 
-/** A new repo's folder that's already there (or being made by another open). */
-function folderTaken(dest: string): HttpError {
-  return new HttpError(409, `${dest} already exists. Pick it from the list, or choose another name.`);
+/** A repo's folder that's already there (or being made by another open); <fix> says what to do instead. */
+function folderTaken(dest: string, fix = 'Pick it from the list, or choose another name.'): HttpError {
+  return new HttpError(409, `${dest} already exists. ${fix}`);
+}
+
+/**
+ * How a new repo's folder is held while it's being made: case folded, since on macOS "Fresh" and
+ * "fresh" are one folder (on Linux this only also holds the other spelling for that moment).
+ */
+function newRepoClaim(dest: string): string {
+  return dest.toLowerCase();
 }
 
 /** A project name on a repo, as names are compared there (trimmed, any case). */
@@ -112,12 +120,13 @@ export class ProjectService {
     // same name meanwhile is refused instead of taking the repo this one just made.
     const newDest = req.newRepo ? this.newRepoPath(req.newRepo) : null;
     if (!newDest) return this.openOn(req, name, null);
-    if (this.creatingRepos.has(newDest)) throw folderTaken(newDest);
-    this.creatingRepos.add(newDest);
+    const claim = newRepoClaim(newDest);
+    if (this.creatingRepos.has(claim)) throw folderTaken(newDest);
+    this.creatingRepos.add(claim);
     try {
       return await this.openOn(req, name, newDest);
     } finally {
-      this.creatingRepos.delete(newDest);
+      this.creatingRepos.delete(claim);
     }
   }
 
@@ -192,7 +201,7 @@ export class ProjectService {
       const origin = isMainRepo(dest) ? (await readRemotes(dest)).origin : null;
       const want = normaliseRemote(url);
       const same = !!origin && (origin === url.trim() || (!!want && normaliseRemote(origin) === want));
-      if (!same) throw new HttpError(409, `${dest} already exists. Pick it from the list instead.`);
+      if (!same) throw folderTaken(dest, 'Pick it from the list instead.');
       return dest;
     }
     try {
@@ -212,12 +221,14 @@ export class ProjectService {
 
   /**
    * Makes the new repo at <dest> (from newRepoPath) and returns it: git init and an empty first
-   * commit. A repo there just as an earlier try left it (no remote, no files, no open project) is
-   * used as it is; anything else there is left alone (409).
+   * commit. A repo there just as an earlier try left it (spelled the same, no remote, no files, and
+   * not in use) is used as it is; anything else there is left alone (409).
    */
   private async newRepo(dest: string): Promise<string> {
     if (existsSync(dest)) {
-      if (await isFreshRepo(dest) && !this.siblings(repoKey(dest)).length) return dest;
+      // On a case-insensitive disk, "Fresh" finds "fresh": that's another repo, not this one.
+      const sameSpelling = readdirSync(dirname(dest)).includes(basename(dest));
+      if (sameSpelling && await isFreshRepo(dest) && !this.repoInUse(repoKey(dest))) return dest;
       throw folderTaken(dest);
     }
     try {
@@ -341,6 +352,13 @@ export class ProjectService {
   }
 
   /** The projects on a repo, by its stored (real) path. */
+  /** A project is on <repo> (a real path), or a running session of an open project works in it. */
+  private repoInUse(repo: string): boolean {
+    if (this.siblings(repo).length) return true;
+    return !!get(this.db, `SELECT 1 FROM sessions s JOIN projects p ON p.id = s.project_id
+                           WHERE p.deleted_at IS NULL AND s.desired = 'running' AND s.repo_path = ? LIMIT 1`, repo);
+  }
+
   private siblings(repo: string): ProjectRow[] {
     return projectRows(this.db).filter((p) => p.repo_path === repo);
   }

@@ -144,8 +144,8 @@ the repo.
   and the list of folders are both settings.
 - **Clone from URL.** Paste a git URL and the server clones it into `~/code/<name>` using your
   existing git credentials, then selects it. "Other folder" takes any repo path on the host.
-- **New repo.** Type a folder name (it follows the project name until you edit it, and again after
-  you clear it: lower case, `[a-z0-9-]`) and the server makes `~/code/<name>` (the clone folder):
+- **New repo.** Type a folder name (it's never filled in for you) and the server makes
+  `~/code/<name>` (the clone folder):
   `git init`, `HEAD` on your `init.defaultBranch` (or `main`), and an empty first commit as you, so
   a session's worktree has a base to branch from. The commit skips signing and hooks (the server
   has no terminal to answer a passphrase prompt, and an empty commit has nothing to check) and runs
@@ -153,11 +153,13 @@ the repo.
   removed and the error says how to set them. The name is one folder name (letters, digits, `.`,
   `_`, `-`, not starting with `.` or `-`, up to 100 characters; `newRepoNameProblem()` in
   `types.ts`, which the dialog also checks as you type). A folder already there is left alone
-  (409), except a repo just as an earlier try left it (no remote, one commit with no files, nothing
-  uncommitted, no open project on it), which is used again, so a create that failed later (Meko
-  refusing the datapack, say) can be retried. While a new repo's project is being opened its
-  folder is held, so a second open of the same name meanwhile gets the 409 instead of sharing the
-  repo. The repo has no remote: sessions work in it, but a PR needs one added first.
+  (409), except a repo just as an earlier try left it, which is used again, so a create that
+  failed later (Meko refusing the datapack, say) can be retried: spelled exactly the same (on a
+  case-insensitive disk "Fresh" finds "fresh", which is another repo), no remote, one commit with
+  no files, nothing uncommitted, untracked or ignored (`status --ignored`, so files your global
+  excludes hide count), and not in use (no open project on it, and no running session of an open
+  project working in it). While a new repo's project is being opened its folder is held (case
+  folded), so a second open of the same name meanwhile gets the 409 instead of sharing the repo. The repo has no remote: sessions work in it, but a PR needs one added first.
 
 The dialog asks for the **dedicated datapack**, then the **Project name**, then the repo. It starts with the datapack: **Create a new one** (the first option and the
 default), **Use an existing one** (the default when it's opened for a share, from its banner) or
@@ -205,8 +207,11 @@ from when another repo is picked. The close dialog and **Close project** confirm
 reopening only for a project with a dedicated datapack.
 
 Once the project is open, the New session dialog opens for it, so you go straight on to its
-first task. It waits for the project to arrive in the state push, which can come after the create
-reply. Closing it leaves the project's empty view with its **New session** button.
+first task. The UI keeps the project the create reply returned and lists it (`withOpened()` in
+`src/web/util.ts`) until a state push brings it, so the route, the rail and the dialog never wait
+on the events socket, which may be slow or reconnecting. A push without it may be an older
+snapshot, or mean it was closed meanwhile: the UI asks `GET /api/projects/:id`, and a 404 drops it
+(the dialog then closes, as it does for any project closed under it). Closing it leaves the project's empty view with its **New session** button.
 
 ### New session
 

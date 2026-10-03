@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ProjectWithSessions, RepoInfo, ReviewablePr, ReviewablePrs, Session, SessionKind } from '../../shared/types';
+import type { Project, RepoInfo, ReviewablePr, ReviewablePrs, Session, SessionKind } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { repoFolder, slugify } from '../util';
 import { Dialog, ErrorText, Field, KindPicker } from './common';
@@ -21,7 +21,7 @@ export function NewSessionDialog({
   onClose,
   onCreated,
 }: {
-  project: ProjectWithSessions;
+  project: Project;
   /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
   fresh?: boolean;
   onClose: () => void;

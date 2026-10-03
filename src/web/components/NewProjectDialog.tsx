@@ -5,7 +5,7 @@ import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
 } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
-import { cx, relativeTime, slugify } from '../util';
+import { cx, relativeTime } from '../util';
 import { Dialog, ErrorText, Field } from './common';
 
 type Source = 'list' | 'clone' | 'folder' | 'new';
@@ -82,10 +82,8 @@ export function NewProjectDialog({
   const [cloneUrl, setCloneUrl] = useState('');
   const [folder, setFolder] = useState('');
   const [name, setName] = useState('');
-  // A new repo's folder name follows the project name until edited, and again after it's cleared
-  // (from the next change to the project name, so clearing it doesn't refill it at once).
+  // A new repo's folder name, always typed by the user (never filled in from the project name).
   const [newName, setNewName] = useState('');
-  const newNameTouched = useRef(false);
 
   const [datapacks, setDatapacks] = useState<MekoDatapack[] | null>(null);
   const [invites, setInvites] = useState<DatapackInvite[]>(initialInvite ? [initialInvite] : []);
@@ -178,10 +176,6 @@ export function NewProjectDialog({
   useEffect(() => {
     if (!dpNameTouched) setDpName(defaultDp);
   }, [defaultDp, dpNameTouched]);
-  const defaultNew = slugify(name);
-  useEffect(() => {
-    if (!newNameTouched.current) setNewName(defaultNew);
-  }, [defaultNew]);
 
   const options = useMemo<DpOption[]>(() => {
     const usedBy = new Map<string, string[]>();
@@ -635,10 +629,7 @@ export function NewProjectDialog({
               className="input mono"
               placeholder="my-new-repo"
               value={newName}
-              onChange={(e) => {
-                setNewName(e.target.value);
-                newNameTouched.current = e.target.value.trim() !== '';
-              }}
+              onChange={(e) => setNewName(e.target.value)}
             />
           </Field>
         )}

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, type TestEnv } from '../helpers.js';
+import { run } from '../../src/server/db.js';
 import { addWorktree, isFreshRepo } from '../../src/server/git.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
@@ -118,6 +119,49 @@ describe('Open project on a new repo', () => {
     git(join(code, 'remoted'), 'commit', '-q', '--allow-empty', '-m', 'Initial commit');
     git(join(code, 'remoted'), 'remote', 'add', 'origin', 'https://example.com/a/remoted.git');
     await expect(open('remoted')).rejects.toMatchObject({ status: 409 });
+  });
+
+  /** A repo made by hand just as an earlier try would have left it (one empty commit, no remote). */
+  const handMade = (n: string) => {
+    const dir = join(code, n);
+    execFileSync('git', ['init', '-q', dir]);
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'Initial commit');
+    return dir;
+  };
+
+  it('counts files git ignores, so a folder worked in is never taken for an earlier try', async () => {
+    const dir = handMade('proto');
+    writeFileSync(join(dir, '.git', 'info', 'exclude'), '.env\n');
+    writeFileSync(join(dir, '.env'), 'SECRET=1\n');
+    expect(await isFreshRepo(dir)).toBe(false);
+    await expect(open('proto')).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("doesn't take a repo another project's running session works in", async () => {
+    const dir = handMade('fresh');
+    const other = await env.core.projects.create({ repoPath: env.repo, name: 'Other', datapack: { mode: 'none' } });
+    run(env.core.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, worktree_path,
+                        tmux_name, hook_token, desired, status, kind, stage, created_at)
+                      VALUES ('s1', ?, 's1', 'S1', 'c1', 'ak/s1', 'main', ?, ?, 't1', 'h1', 'running', 'idle', 'quick', 'code', ?)`,
+      other.id, dir, join(env.home, 'wt'), Date.now());
+    await expect(open('fresh')).rejects.toMatchObject({ status: 409 });
+    // Once that session is archived, the repo is free again.
+    run(env.core.db, `UPDATE sessions SET desired = 'archived' WHERE id = 's1'`);
+    expect((await open('fresh')).repoPath).toBe(dir);
+  });
+
+  it('never takes a folder spelled differently, as "Fresh" finds "fresh" on a case-insensitive disk', async () => {
+    handMade('fresh');
+    // On Linux "Fresh" is its own new folder; on macOS it's the repo above, and is refused.
+    const caseless = existsSync(join(code, 'FRESH'));
+    if (caseless) await expect(open('Fresh')).rejects.toMatchObject({ status: 409 });
+    else expect((await open('Fresh')).repoPath).toBe(join(code, 'Fresh'));
+  });
+
+  it('words a clone folder already there the same way', async () => {
+    mkdirSync(join(code, 'thing'));
+    await expect(env.core.projects.create({ cloneUrl: 'https://example.com/a/thing.git', name: 'Thing', datapack: { mode: 'none' } }))
+      .rejects.toMatchObject({ status: 409, message: `${join(code, 'thing')} already exists. Pick it from the list instead.` });
   });
 
   it('uses the repo again when a try failed after making it, but not once a project is on it', async () => {

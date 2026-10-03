@@ -458,8 +458,8 @@ export async function initRepo(dest: string): Promise<void> {
 }
 
 /**
- * <dir> is a repo just as initRepo left it: no remotes, nothing uncommitted or untracked, and one
- * commit with no files. A retry can use it again.
+ * <dir> is a repo just as initRepo left it: no remotes, nothing uncommitted, untracked or ignored
+ * (by the user's global excludes, say), and one commit with no files. A retry can use it again.
  */
 export async function isFreshRepo(dir: string): Promise<boolean> {
   if (!isMainRepo(dir)) return false;
@@ -467,7 +467,7 @@ export async function isFreshRepo(dir: string): Promise<boolean> {
     tryGit(dir, 'remote'),
     tryGit(dir, 'rev-list', '--count', '--all'),
     tryGit(dir, 'ls-tree', '-r', '--name-only', 'HEAD'),
-    tryGit(dir, 'status', '--porcelain'),
+    tryGit(dir, 'status', '--porcelain', '--ignored'),
   ]);
   return remotes === '' && count === '1' && files === '' && status === '';
 }

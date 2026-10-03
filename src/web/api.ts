@@ -123,6 +123,7 @@ export const api = {
   openProject: (b: CreateProjectRequest) => post<Project>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
+  project: (id: string) => get<Project>(`/api/projects/${enc(id)}`),
   branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
   attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
   setDedicatedDatapack: (id: string, b: SetDedicatedDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/dedicated-datapack`, b),

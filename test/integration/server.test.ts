@@ -121,6 +121,17 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(replay.statusCode).toBe(401);
   });
 
+  it('returns one project, behind the login, and 404 once it is closed', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'One', datapack: { mode: 'none' } });
+    expect((await app.inject({ url: `/api/projects/${p.id}` })).statusCode).toBe(401);
+    const cookie = await setup();
+    const res = await app.inject({ url: `/api/projects/${p.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ id: p.id, name: 'One', repoPath: env.repo });
+    await env.core.projects.delete(p.id);
+    expect((await app.inject({ url: `/api/projects/${p.id}`, headers: { cookie } })).statusCode).toBe(404);
+  });
+
   it('shows the host name as the server name until Settings sets one', async () => {
     const cookie = await setup();
     const state = async () => (await app.inject({ url: '/api/state', headers: { cookie } })).json();

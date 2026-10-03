@@ -1,5 +1,5 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
-import type { MekoFirstTurn, MekoSettings, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { MekoFirstTurn, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<SessionStatus, number> = {
@@ -31,6 +31,16 @@ export function runningSessions(sessions: Session[]): Session[] {
 export interface LiveCount {
   projectId: string | null;
   live: number;
+}
+
+/**
+ * The projects to show: the state's, plus a project just opened (as Open project returned it, with
+ * no sessions yet) until a state push brings it, so the route, the rail and the New session dialog
+ * don't wait on the events socket.
+ */
+export function withOpened(projects: ProjectWithSessions[], opened: Project | null): ProjectWithSessions[] {
+  if (!opened || projects.some((p) => p.id === opened.id)) return projects;
+  return [...projects, { ...opened, sessions: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 } }];
 }
 
 /** The project on screen just lost its last open session (not a switch to a project without any). */

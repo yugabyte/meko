@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ProjectWithSessions, ReviewablePr, ReviewablePrs } from '../../shared/types';
+import type { Project, ReviewablePr, ReviewablePrs } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { cx, relativeTime, repoFolder } from '../util';
 import { ErrorText } from './common';
@@ -20,7 +20,7 @@ export function ReviewPrPicker({
   onPick,
   lookupRepo,
 }: {
-  project: ProjectWithSessions;
+  project: Project;
   /** null while loading. */
   list: ReviewablePrs | null;
   listError: string | null;
