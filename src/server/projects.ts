@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
   ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
@@ -10,7 +10,7 @@ import type { Core } from './core.js';
 import { all, get, run, tx, type Db } from './db.js';
 import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks.js';
 import {
-  canonicalRemote, cloneRepo, defaultBranch, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
+  canonicalRemote, cloneRepo, defaultBranch, ensureFirstCommit, initFolder, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
 } from './git.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
@@ -139,8 +139,17 @@ export class ProjectService {
       repoPath = await this.newRepo(newDest);
     } else {
       repoPath = resolve(expandHome(req.repoPath!));
+      await this.initIfEmpty(repoPath);
     }
-    if (!isMainRepo(repoPath)) throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree).`);
+    if (!isMainRepo(repoPath)) {
+      throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree). Run git init there and commit its files, or pick an empty folder and AgentK makes it a repo.`);
+    }
+    // A repo with no commits (just `git init`) gets an empty first commit, so sessions have a base.
+    try {
+      await ensureFirstCommit(repoPath);
+    } catch (e) {
+      throw new HttpError(400, errMsg(e));
+    }
     // Stored as its real path, so every path to the repo (a symlink, say) names the same one.
     repoPath = repoKey(repoPath);
     // The name is taken from here until the row is written, so a second create of it (or a rename
@@ -239,6 +248,25 @@ export class ProjectService {
       throw new HttpError(400, `Couldn't create the repo: ${errMsg(e)}`);
     }
     return dest;
+  }
+
+  /**
+   * Makes <dir>, a folder typed under Other folder, a repo as a new repo is made (git init and an
+   * empty first commit) when it's empty. Any other folder is left as it is.
+   */
+  private async initIfEmpty(dir: string): Promise<void> {
+    let empty = false;
+    try {
+      empty = statSync(dir).isDirectory() && readdirSync(dir).length === 0;
+    } catch {
+      // Not there: openOn says it isn't a repo.
+    }
+    if (!empty) return;
+    try {
+      await initFolder(dir);
+    } catch (e) {
+      throw new HttpError(400, `Couldn't make ${dir} a repo: ${errMsg(e)}`);
+    }
   }
 
   /**
