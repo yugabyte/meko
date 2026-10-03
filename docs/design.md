@@ -1552,9 +1552,8 @@ comes back. **Auto-continue is on by default**, with guards:
 
 - **CI (on every PR).** Typecheck, lint and unit tests, on Linux and macOS. Integration tests run
   against real tmux and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
-  The `PR title` job checks the title with `scripts/check-title.sh` and reruns when the PR is
-  edited; an edit doesn't rerun the tests. Changes reach `main` only through PRs, squash-merged
-  once CI passes.
+  A separate `PR title` workflow checks the title with `scripts/check-title.sh` and reruns when
+  the PR is edited. Changes reach `main` only through PRs, squash-merged once CI passes.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>[(<component>)][!]: <summary>`
   with one of nine types (`scripts/check-title.sh`), and PRs are squash-merged with the PR title

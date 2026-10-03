@@ -102,33 +102,25 @@ describe('check-title.sh', () => {
   });
 });
 
-describe('the PR title check in CI', () => {
-  const CI = readFileSync(fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url)), 'utf8');
-  /** A top-level job's lines, up to the next job. */
-  const job = (id: string) => {
-    const m = new RegExp(`^ {2}${id}:\\n((?: {4,}.*\\n|\\s*\\n)*)`, 'm').exec(CI);
-    if (!m) throw new Error(`no job ${id} in ci.yml`);
-    return m[1]!;
-  };
+describe('the PR title check', () => {
+  const workflow = (name: string) => readFileSync(fileURLToPath(new URL(`../../.github/workflows/${name}`, import.meta.url)), 'utf8');
 
   it('runs the script on the PR title, and again when the PR is edited', () => {
-    expect(CI).toMatch(/^ {2}pull_request:\n(?: {4}#.*\n)* {4}types: \[opened, synchronize, reopened, edited\]$/m);
-    const title = job('title');
+    const wf = workflow('pr-title.yml');
+    expect(wf).toMatch(/^ {2}pull_request:\n {4}types: \[opened, synchronize, reopened, edited\]$/m);
     // Merging into main requires the check by this name.
-    expect(title).toContain('    name: PR title\n');
-    expect(title).toContain("    if: github.event_name == 'pull_request'\n");
+    expect(wf).toContain('    name: PR title\n');
     // The title goes through the environment, never into the script.
-    expect(title).toContain('TITLE: ${{ github.event.pull_request.title }}');
-    expect(title).toContain('sh scripts/check-title.sh "$TITLE"');
-    expect(title).toContain('sh scripts/check-title.sh --no-length "$TITLE"');
-    expect(title.match(/\$\{\{/g)).toHaveLength(2);
+    expect(wf).toContain('TITLE: ${{ github.event.pull_request.title }}');
+    expect(wf).toContain('sh scripts/check-title.sh "$TITLE"');
+    expect(wf).toContain('sh scripts/check-title.sh --no-length "$TITLE"');
+    expect(wf.match(/\$\{\{/g)).toHaveLength(2);
   });
 
-  it("doesn't rerun the tests for an edit, and edits never cancel a run or each other", () => {
-    expect(job('test')).toContain("    if: github.event.action != 'edited' || github.event.changes.base\n");
-    // A new base reruns the tests, so it shares the PR's group; any other edit gets one of its own.
-    expect(CI).toContain(
-      "group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edited-{0}', github.run_id) || '' }}");
+  it('stays out of CI, so an edit never starts a CI run that skips the required tests', () => {
+    const ci = workflow('ci.yml');
+    expect(ci).not.toContain('edited');
+    expect(ci).not.toContain('check-title');
   });
 });
 

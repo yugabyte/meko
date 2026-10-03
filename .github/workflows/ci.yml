@@ -4,49 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
-    # edited: a retitled PR reruns the title check.
-    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
 
 concurrency:
-  # An edit that keeps the base runs only the title check, in a group of its own, so it never
-  # cancels the tests or another edit's run.
-  group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edited-{0}', github.run_id) || '' }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Merging into main requires `PR title` and both `test (...)` checks by name: renaming a job
-  # means updating the branch rules. The PR title becomes the squash commit's subject, which the
-  # release workflow reads.
-  title:
-    name: PR title
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          sparse-checkout: scripts/check-title.sh
-          sparse-checkout-cone-mode: false
-      # The title reaches the shell through the environment, never pasted into the script.
-      # Dependabot's subjects run long, so its PRs skip the length limit.
-      - name: Check the title
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: |
-          if [ "$AUTHOR" = "dependabot[bot]" ]; then
-            sh scripts/check-title.sh --no-length "$TITLE"
-          else
-            sh scripts/check-title.sh "$TITLE"
-          fi
-
+  # Merging into main requires both `test (...)` checks by name: renaming the job or a matrix
+  # entry means updating the branch rules.
   test:
-    # Editing a PR's title or description changes no code; a new base branch does.
-    if: github.event.action != 'edited' || github.event.changes.base
     strategy:
       fail-fast: false
       matrix:
