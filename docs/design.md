@@ -220,7 +220,9 @@ pipeline, Explore → Design → Code → PR & Review → Merge & Close, and **W
 start?** picks its first stage: the stages it can start at are pills like the stage bar's steps,
 numbered from 0 and joined by lines (dotted from Explore, which is optional), then "or" and Review
 a PR. They sit in one row on a desktop and one column on a phone, with a line under them saying what
-the selected one is for:
+the selected one is for. The Name and First prompt fields show an example of work that suits it
+(`START_EXAMPLES`): a question for Explore, a feature with choices to make for Design, a one-line
+fix for Code:
 
 | Start | For | First prompt |
 |---|---|---|

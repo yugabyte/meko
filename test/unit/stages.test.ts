@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   defaultTarget, kindOf, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps, stepOf,
 } from '../../src/shared/stages.js';
-import { KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS, type MoveTarget, type Stage } from '../../src/shared/types.js';
+import { KIND_STAGES, START_EXAMPLES, START_HINTS, START_STAGES, STAGE_LABELS, type MoveTarget, type Stage } from '../../src/shared/types.js';
 
 describe('stage moves', () => {
   it('shows the PR stage as part of PR & Review', () => {
@@ -16,6 +16,17 @@ describe('stage moves', () => {
     expect(KIND_STAGES.task).toEqual(['explore', 'design', 'code', 'review', 'merge']);
     expect(START_STAGES).toEqual(['explore', 'design', 'code']);
     for (const s of [...START_STAGES, 'review-pr'] as const) expect(START_HINTS[s]).toBeTruthy();
+  });
+
+  it('gives every start its own example name and first prompt', () => {
+    const starts = [...START_STAGES, 'review-pr'] as const;
+    for (const s of starts) {
+      expect(START_EXAMPLES[s].name).toBeTruthy();
+      expect(START_EXAMPLES[s].prompt).toMatch(/^e\.g\. /);
+    }
+    expect(new Set(starts.map((s) => START_EXAMPLES[s].name)).size).toBe(starts.length);
+    // Design's example is a feature with choices to make, not a quick fix (that's Code's).
+    expect(START_EXAMPLES.design.name).not.toMatch(/^fix\b/);
   });
 
   it('moves a task to any stage but Merge & Close', () => {

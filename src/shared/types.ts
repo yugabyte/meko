@@ -75,6 +75,27 @@ export const START_HINTS: Record<StartStage | 'review-pr', string> = {
 };
 
 /**
+ * An example of the work each start (and Review a PR) suits, shown as the placeholders of the New
+ * session dialog's Name and First prompt fields.
+ */
+export const START_EXAMPLES: Record<StartStage | 'review-pr', { name: string; prompt: string }> = {
+  explore: {
+    name: 'why is CI slow on macOS',
+    prompt: 'e.g. CI takes twice as long on macOS as on Linux. Find out where the time goes and what we could cut.',
+  },
+  design: {
+    name: 'add rate limiting to the API',
+    prompt:
+      "e.g. Add per-user rate limits to the public API so one client can't starve the rest: a limit per route, and a 429 with Retry-After when one is hit.",
+  },
+  code: {
+    name: 'fix typo in README',
+    prompt: 'e.g. The install section of the README says "npm instal". Make it "npm install".',
+  },
+  'review-pr': { name: 'review #21', prompt: 'e.g. the migration and the polling' },
+};
+
+/**
  * The steps shown in the stage bar for each kind, in order. `pr` (opening the PR) shows as part of
  * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
  * steps are numbered from 0, so Explore is 0 and Design 1.
