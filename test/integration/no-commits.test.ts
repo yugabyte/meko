@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
-import { get } from '../../src/server/db.js';
+import { get, run } from '../../src/server/db.js';
 import { ensureFirstCommit } from '../../src/server/git.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -64,6 +64,28 @@ describe('repos with no commits yet (real tmux + git, fake claude)', () => {
     expect(p.repoPath).toBe(dir);
     expect(commits(dir)).toBe('Initial commit');
     expect(readdirSync(dir)).toEqual(['.git']);
+  });
+
+  it('makes one repo when two opens of the same empty folder run at once', async () => {
+    const dir = join(env.home, 'elsewhere', 'empty');
+    mkdirSync(dir, { recursive: true });
+    const [a, b] = await Promise.all([openFolder(dir, 'One'), openFolder(dir, 'Two')]);
+    expect([a.repoPath, b.repoPath]).toEqual([dir, dir]);
+    expect(commits(dir)).toBe('Initial commit');
+  });
+
+  it('writes nothing to the folder when the open is refused for a taken name', async () => {
+    const repo = initOnly(join(env.home, 'elsewhere', 'proto'));
+    const empty = join(env.home, 'elsewhere', 'empty');
+    mkdirSync(empty, { recursive: true });
+    // A project named Taken on each, as one opened before AgentK made first commits.
+    for (const [id, dir] of [['p1', repo], ['p2', empty]]) {
+      run(env.core.db, `INSERT INTO projects(id, name, repo_path, default_branch, position, settings_json, created_at)
+                        VALUES (?, 'Taken', ?, 'main', 0, '{}', ?)`, id, dir, Date.now());
+      await expect(openFolder(dir, 'Taken')).rejects.toMatchObject({ status: 409 });
+    }
+    expect(git(repo, 'rev-list', '-n', '1', '--all')).toBe('');
+    expect(readdirSync(empty)).toEqual([]);
   });
 
   it('leaves a folder with files that is not a repo alone, and says how to fix it', async () => {

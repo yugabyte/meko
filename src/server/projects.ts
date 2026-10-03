@@ -43,6 +43,15 @@ function isDatapackLimit(e: unknown): boolean {
 }
 
 /** A repo's folder that's already there (or being made by another open); <fix> says what to do instead. */
+/** <dir> is a folder with nothing in it. */
+function isEmptyFolder(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory() && readdirSync(dir).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function folderTaken(dest: string, fix = 'Pick it from the list, or choose another name.'): HttpError {
   return new HttpError(409, `${dest} already exists. ${fix}`);
 }
@@ -139,16 +148,11 @@ export class ProjectService {
       repoPath = await this.newRepo(newDest);
     } else {
       repoPath = resolve(expandHome(req.repoPath!));
-      await this.initIfEmpty(repoPath);
     }
-    if (!isMainRepo(repoPath)) {
+    // An empty folder typed under Other folder is made a repo below, once the name is checked.
+    const makeRepo = !!req.repoPath && isEmptyFolder(repoPath);
+    if (!makeRepo && !isMainRepo(repoPath)) {
       throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree). Run git init there and commit its files, or pick an empty folder and AgentK makes it a repo.`);
-    }
-    // A repo with no commits (just `git init`) gets an empty first commit, so sessions have a base.
-    try {
-      await ensureFirstCommit(repoPath);
-    } catch (e) {
-      throw new HttpError(400, errMsg(e));
     }
     // Stored as its real path, so every path to the repo (a symlink, say) names the same one.
     repoPath = repoKey(repoPath);
@@ -161,7 +165,17 @@ export class ProjectService {
     let dp: { id: string; name: string } | null;
     let reopened = false;
     try {
-      // Datapack first: if Meko refuses, nothing is written locally.
+      // The repo gets what sessions need before Meko is asked, so a datapack is never made for an
+      // open that then fails here: the empty folder becomes a repo, and a repo with no commits
+      // (just `git init`) gets an empty first commit, so sessions have a base to branch from.
+      if (makeRepo) await this.makeFolderRepo(repoPath);
+      try {
+        await ensureFirstCommit(repoPath);
+      } catch (e) {
+        throw new HttpError(400, errMsg(e));
+      }
+      // Datapack before the row: if Meko refuses, no project is written. A repo or first commit
+      // made above stays, and a retry opens the repo as it is.
       dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
       const branch = await defaultBranch(repoPath);
       const settings = { ...DEFAULT_SETTINGS };
@@ -250,18 +264,8 @@ export class ProjectService {
     return dest;
   }
 
-  /**
-   * Makes <dir>, a folder typed under Other folder, a repo as a new repo is made (git init and an
-   * empty first commit) when it's empty. Any other folder is left as it is.
-   */
-  private async initIfEmpty(dir: string): Promise<void> {
-    let empty = false;
-    try {
-      empty = statSync(dir).isDirectory() && readdirSync(dir).length === 0;
-    } catch {
-      // Not there: openOn says it isn't a repo.
-    }
-    if (!empty) return;
+  /** Makes <dir>, an empty folder typed under Other folder, a repo as a new repo is made (git init and an empty first commit). */
+  private async makeFolderRepo(dir: string): Promise<void> {
     try {
       await initFolder(dir);
     } catch (e) {

@@ -87,9 +87,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
-- [ ] The only change made in the user's main checkout is fast-forwarding the base branch when a
+- [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
-      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), never a reset or force.
+      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), and an
+      empty first commit on HEAD's branch of a repo with no commits and no files
+      (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
+      empty folder typed under Other folder is made a repo only after the name check), never a
+      reset or force.
 - [ ] `/agentk review force` is only posted when the user asks.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
@@ -108,7 +112,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
       (tmux names, lookups) is keyed by project id, not repo path, and git work on the repo only
-      touches the session's own branch. The one exception is idle worktrees, which belong to the repo
+      touches the session's own branch. The exceptions are a repo's empty first commit (§3), and idle worktrees, which belong to the repo
       (keyed by its real path) and are shared by all its projects: a claim is one SQLite write, so
       two sessions never get the same worktree, and closing a project leaves idle worktrees another
       project on the repo can use. A project's `repo_path` is the repo's real path (`repoKey()`), so
