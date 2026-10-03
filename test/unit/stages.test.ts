@@ -25,6 +25,7 @@ describe('stage moves', () => {
       expect(START_EXAMPLES[s].prompt).toMatch(/^e\.g\. /);
     }
     expect(new Set(starts.map((s) => START_EXAMPLES[s].name)).size).toBe(starts.length);
+    expect(new Set(starts.map((s) => START_EXAMPLES[s].prompt)).size).toBe(starts.length);
     // Design's example is a feature with choices to make, not a quick fix (that's Code's).
     expect(START_EXAMPLES.design.name).not.toMatch(/^fix\b/);
   });
