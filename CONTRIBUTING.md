@@ -53,8 +53,11 @@ The component is optional and any lowercase name (`fix(web): …`). `!` marks a 
 and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`.
-Nothing on GitHub enforces the rules; the commit skill does. See
-`.claude/skills/commit/SKILL.md` for the full rules, including: no agent attribution.
+CI's `PR title` check runs it on every PR's title, and the `base` ruleset on `main` requires that
+check. The ruleset also requires a PR for every change to `main` (no direct pushes) and allows
+only squash merges. The script can't check commits on a PR branch or tell whether the type fits;
+the commit skill covers those. See `.claude/skills/commit/SKILL.md` for the full rules,
+including: no agent attribution.
 
 ## Dependencies
 

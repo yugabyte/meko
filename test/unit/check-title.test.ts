@@ -102,6 +102,34 @@ describe('check-title.sh', () => {
   });
 });
 
+describe('the PR title check in CI', () => {
+  const CI = readFileSync(fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url)), 'utf8');
+  /** A top-level job's lines, up to the next job. */
+  const job = (id: string) => {
+    const m = new RegExp(`^ {2}${id}:\\n((?: {4,}.*\\n|\\s*\\n)*)`, 'm').exec(CI);
+    if (!m) throw new Error(`no job ${id} in ci.yml`);
+    return m[1]!;
+  };
+
+  it('runs the script on the PR title, and again when the PR is edited', () => {
+    expect(CI).toMatch(/^ {2}pull_request:\n(?: {4}#.*\n)* {4}types: \[opened, synchronize, reopened, edited\]$/m);
+    const title = job('title');
+    // The ruleset requires the check by this name.
+    expect(title).toContain('    name: PR title\n');
+    expect(title).toContain("    if: github.event_name == 'pull_request'\n");
+    // The title goes through the environment, never into the script.
+    expect(title).toContain('TITLE: ${{ github.event.pull_request.title }}');
+    expect(title).toContain('sh scripts/check-title.sh "$TITLE"');
+    expect(title).toContain('sh scripts/check-title.sh --no-length "$TITLE"');
+    expect(title.match(/\$\{\{/g)).toHaveLength(2);
+  });
+
+  it("doesn't rerun the tests for an edit, or cancel them", () => {
+    expect(job('test')).toContain("    if: github.event.action != 'edited' || github.event.changes.base\n");
+    expect(CI).toContain("group: ci-${{ github.ref }}${{ github.event.action == 'edited' && '-edited' || '' }}");
+  });
+});
+
 describe('release types', () => {
   let root: string;
   let repo: string;

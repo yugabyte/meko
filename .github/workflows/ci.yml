@@ -4,16 +4,47 @@ on:
   push:
     branches: [main]
   pull_request:
+    # edited: a retitled PR reruns the title check.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # An edit runs only the title check, so it has its own group and never cancels the tests.
+  group: ci-${{ github.ref }}${{ github.event.action == 'edited' && '-edited' || '' }}
   cancel-in-progress: true
 
 jobs:
+  # PRs are squash-merged with the PR title as the commit subject, which the release workflow
+  # reads. The `base` ruleset requires this check by name, so keep the name in step with it.
+  title:
+    name: PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-title.sh
+          sparse-checkout-cone-mode: false
+      # The title reaches the shell through the environment, never pasted into the script.
+      # Dependabot's subjects run long, so its PRs skip the length limit.
+      - name: Check the title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then
+            sh scripts/check-title.sh --no-length "$TITLE"
+          else
+            sh scripts/check-title.sh "$TITLE"
+          fi
+
   test:
+    # Editing a PR's title or description changes no code; a new base branch does.
+    if: github.event.action != 'edited' || github.event.changes.base
     strategy:
       fail-fast: false
       matrix:

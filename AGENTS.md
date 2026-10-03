@@ -142,6 +142,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
   `scripts/check-title.sh`, and **no agent attribution** (see `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject.
+  CI's `PR title` job checks it, and the `base` ruleset on `main` requires that check and a PR for
+  every change.
 
 ## Keep the docs current
 
