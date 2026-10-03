@@ -102,6 +102,28 @@ describe('check-title.sh', () => {
   });
 });
 
+describe('the PR title check', () => {
+  const workflow = (name: string) => readFileSync(fileURLToPath(new URL(`../../.github/workflows/${name}`, import.meta.url)), 'utf8');
+
+  it('runs the script on the PR title, and again when the PR is edited', () => {
+    const wf = workflow('pr-title.yml');
+    expect(wf).toMatch(/^ {2}pull_request:\n {4}types: \[opened, synchronize, reopened, edited\]$/m);
+    // Merging into main requires the check by this name.
+    expect(wf).toContain('    name: PR title\n');
+    // The title goes through the environment, never into the script.
+    expect(wf).toContain('TITLE: ${{ github.event.pull_request.title }}');
+    expect(wf).toContain('sh scripts/check-title.sh "$TITLE"');
+    expect(wf).toContain('sh scripts/check-title.sh --no-length "$TITLE"');
+    expect(wf.match(/\$\{\{/g)).toHaveLength(2);
+  });
+
+  it('stays out of CI, so an edit never starts a CI run that skips the required tests', () => {
+    const ci = workflow('ci.yml');
+    expect(ci).not.toContain('edited');
+    expect(ci).not.toContain('check-title');
+  });
+});
+
 describe('release types', () => {
   let root: string;
   let repo: string;
