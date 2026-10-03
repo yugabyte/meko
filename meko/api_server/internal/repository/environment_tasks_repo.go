@@ -47,6 +47,10 @@ type EnvironmentTaskListOpts struct {
 	Statuses  []string
 	Kind      string
 	ClusterID string
+	// ClusterIDs is an OR set of amp cluster UUIDs; empty is unfiltered. It is how the
+	// pool-scoped tasks API restricts a shared environment's log to just the clusters
+	// a storage pool owns -- the caller resolves that set from observed inventory.
+	ClusterIDs []string
 }
 
 // EnvironmentTaskListResult is one page plus the count the page was taken from.
@@ -129,6 +133,11 @@ func (r *EnvironmentTaskRepo) ListTasks(envUUID string, opts EnvironmentTaskList
 	}
 	if opts.ClusterID != "" {
 		add("cluster_id = $%d::uuid", opts.ClusterID)
+	}
+	if len(opts.ClusterIDs) > 0 {
+		// ANY over a bound uuid[] rather than an interpolated IN list, so the number of
+		// clusters does not change the statement's shape. ANDs with ClusterID above.
+		add("cluster_id = ANY($%d::uuid[])", pq.Array(opts.ClusterIDs))
 	}
 	clause := " WHERE " + strings.Join(where, " AND ")
 

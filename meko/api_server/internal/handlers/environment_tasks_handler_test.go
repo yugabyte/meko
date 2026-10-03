@@ -324,6 +324,86 @@ func TestTasks_GetOne(t *testing.T) {
 	})
 }
 
+// poolTasksRequest runs one pool-addressed (region) tasks request. It carries no
+// :id path param -- the storage pool is in the query string, not the path.
+func poolTasksRequest(t *testing.T, h echo.HandlerFunc, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, strings.NewReader(""))
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	if err := h(c); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	return rec
+}
+
+// TestTasksByRegion_NameRequired: like the region resources LIST, a nameless request
+// is a 400 and never touches the database.
+func TestTasksByRegion_NameRequired(t *testing.T) {
+	h, mock, done := newTasksHandler(t)
+	defer done()
+
+	rec := poolTasksRequest(t, h.ListByRegion, "/api/v1/environments/resources/tasks")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("a nameless request touched the database: %v", err)
+	}
+}
+
+// TestTasksByRegion_FlatMergedEnvelope: the pool route answers one flat items list
+// (not per-environment), each item attributed to its environment, with top-level
+// pagination.
+func TestTasksByRegion_FlatMergedEnvelope(t *testing.T) {
+	h, mock, done := newTasksHandler(t)
+	defer done()
+
+	const ca = "33333333-3333-3333-3333-333333333333"
+	resources := `[{"kind":"cluster","id":"cluster/` + poolUUID + `/c1",` +
+		`"parent":"storage-pool/` + poolUUID + `","attrs":{"id":"` + ca + `"}}]`
+	now := time.Now().UTC()
+
+	mock.ExpectQuery(`FROM meko_system\.environment_aeon_account_mapping`).
+		WithArgs(poolUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "region"}).
+			AddRow(envUUID, "us-east-1"))
+	mock.ExpectQuery(`WHERE e\.uuid = \$1`).WithArgs(envUUID).
+		WillReturnRows(ampResourceRow(resources))
+	mock.ExpectQuery(`FROM meko_system\.environment_desired_resources`).WithArgs(envUUID).
+		WillReturnRows(desiredRows())
+	mock.ExpectQuery(`SELECT count\(\*\) FROM meko_system\.environment_tasks`).
+		WithArgs(envUUID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	// Offset 0: each environment is fetched whole and paged after the merge.
+	mock.ExpectQuery(`FROM meko_system\.environment_tasks`).
+		WithArgs(envUUID, sqlmock.AnyArg(), sqlmock.AnyArg(), 0).
+		WillReturnRows(sqlmock.NewRows(taskRowCols).
+			AddRow("task-A", "resize_endpoint", "running", ca, "endpoint/a", nil, "", nil, now, now, now))
+
+	rec := poolTasksRequest(t, h.ListByRegion, "/api/v1/environments/resources/tasks?name="+poolUUID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	data := decodeTaskList(t, rec)
+	items, _ := data["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("items = %v, want one flat task", data["items"])
+	}
+	item, _ := items[0].(map[string]any)
+	if item["environment_id"] != "acme-prod" || item["region"] != "us-east-1" || item["task_id"] != "task-A" {
+		t.Errorf("item = %+v, want task-A attributed to acme-prod/us-east-1", item)
+	}
+	if data["total"] != float64(1) || data["page"] != float64(1) ||
+		data["page_size"] != float64(tasksDefaultPageSize) || data["has_more"] != false {
+		t.Errorf("envelope = total:%v page:%v page_size:%v has_more:%v",
+			data["total"], data["page"], data["page_size"], data["has_more"])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 // TestTasks_ReportsTheHeartbeat: the console needs last_heartbeat_at alongside the
 // rows, or it cannot tell a task that has not moved from an agent that has stopped
 // reporting.

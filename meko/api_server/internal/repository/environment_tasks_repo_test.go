@@ -204,6 +204,32 @@ func TestListTasksFiltersBind(t *testing.T) {
 	}
 }
 
+// TestListTasksClusterIDsBind covers the pool-scoped set filter: ClusterIDs goes as
+// one bound uuid[] (so the statement's shape does not change with the number of
+// clusters), positioned after status/kind and ANDed with a single ClusterID.
+func TestListTasksClusterIDsBind(t *testing.T) {
+	r, mock, done := newEnvTaskDB(t)
+	defer done()
+
+	ids := []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	}
+	mock.ExpectQuery(`WHERE env_uuid = \$1 AND kind = \$2 AND cluster_id = ANY\(\$3::uuid\[\]\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`LIMIT \$4 OFFSET \$5`).
+		WillReturnRows(sqlmock.NewRows(envTaskColumns))
+
+	if _, err := r.ListTasks("env-1", EnvironmentTaskListOpts{
+		Limit: 10, Kind: "create_cluster", ClusterIDs: ids,
+	}); err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
 // TestGetTaskUnknownIsNilNotError, so the handler can turn "no such task" into a 404
 // instead of a 500.
 func TestGetTaskUnknownIsNilNotError(t *testing.T) {

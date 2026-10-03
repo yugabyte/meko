@@ -737,6 +737,133 @@ func (s *EnvironmentService) Task(envUUID, taskID string) (*models.EnvironmentTa
 	return s.taskRepo.GetTask(envUUID, taskID)
 }
 
+// tasksMaxMerge bounds how many of one environment's pool-scoped tasks the merged
+// pool-tasks response reads before paging. The merge/sort/slice is in-memory -- a
+// global page across environments cannot be a per-env SQL OFFSET -- so this caps the
+// work a pool spanning many busy environments can trigger. Well above any realistic
+// live-task count under 30-day retention and the usual active=true filter.
+const tasksMaxMerge = 5000
+
+// PoolTask is one task in a pool-scoped listing merged across environments. It keeps
+// the owning environment's id and region so a flat list stays attributable; the amp
+// task fields flatten up from the embedded model.
+type PoolTask struct {
+	EnvironmentID string `json:"environment_id"`
+	Region        string `json:"region"`
+	models.EnvironmentTask
+}
+
+// PoolTaskListResult is one page of a storage pool's task history merged across every
+// MANAGED amp environment it is mapped to, newest first, plus the count the page was
+// taken from. The handler adds page/page_size to form the response envelope.
+type PoolTaskListResult struct {
+	Items   []PoolTask
+	Total   int
+	HasMore bool
+}
+
+// TasksByStoragePool lists a storage pool's amp task history across every MANAGED
+// environment the pool is mapped to, as a single list merged and paginated across
+// environments. The pool is the first path segment of name (same as the resources
+// LIST); it never assigns, so a pool nothing is mapped to returns an empty page.
+//
+// Scoping is the load-bearing part. environment_tasks has no pool column -- a task is
+// keyed by cluster_id (an amp UUID). The only bridge from a pool to that UUID is the
+// agent-reported observed inventory: a cluster entry under the pool carries its amp
+// UUID in attrs["id"]. So per environment we resolve the pool's cluster UUIDs from
+// observed inventory and filter the task log to them. When that set is EMPTY the
+// environment contributes NOTHING -- never the unfiltered (shared) log. That
+// leak-safety invariant must not regress.
+//
+// opts.Limit/Offset address the MERGED list; each environment is fetched whole (capped
+// at tasksMaxMerge) because a global page cannot be a per-env SQL OFFSET.
+func (s *EnvironmentService) TasksByStoragePool(
+	name string, opts repository.EnvironmentTaskListOpts,
+) (PoolTaskListResult, error) {
+	out := PoolTaskListResult{Items: []PoolTask{}}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return out, fmt.Errorf("%w: name is required", ErrValidation)
+	}
+	if s.taskRepo == nil {
+		return out, nil
+	}
+	pool := storagePoolFromName(name)
+	assignments, err := s.repo.ListStoragePoolEnvs(pool)
+	if err != nil {
+		return out, err
+	}
+
+	var merged []PoolTask
+	for _, a := range assignments {
+		e, err := s.repo.GetByUUID(a.EnvUUID)
+		if err != nil {
+			return out, err
+		}
+		if e == nil {
+			continue // raced with a delete; skip rather than fail the whole response
+		}
+		// The pool's own cluster UUIDs, resolved from observed inventory (the only
+		// pool -> cluster_id bridge). Reuses the exact filter the resources LIST uses.
+		_, observed, err := s.listResourcesForEnv(e, "cluster", pool, true)
+		if err != nil {
+			return out, err
+		}
+		clusterIDs := make([]string, 0, len(observed))
+		for _, o := range observed {
+			if id := o.Attrs["id"]; id != "" {
+				clusterIDs = append(clusterIDs, id)
+			}
+		}
+		// Leak-safety: no observed clusters for this pool here means this environment
+		// contributes nothing. Never fall through to its shared, unfiltered task log.
+		if len(clusterIDs) == 0 {
+			continue
+		}
+		// A caller-supplied cluster_id must belong to this pool, else a caller could
+		// read another pool's cluster tasks in the same shared environment.
+		fetch := opts
+		if fetch.ClusterID != "" && !slices.Contains(clusterIDs, fetch.ClusterID) {
+			continue
+		}
+		fetch.ClusterIDs = clusterIDs
+		fetch.Offset = 0
+		fetch.Limit = tasksMaxMerge
+		res, err := s.taskRepo.ListTasks(e.UUID, fetch)
+		if err != nil {
+			return out, err
+		}
+		for _, t := range res.Items {
+			merged = append(merged, PoolTask{EnvironmentID: e.ID, Region: a.Region, EnvironmentTask: t})
+		}
+	}
+
+	// Newest first, matching the repo's own (task_created_at DESC, task_id DESC) order
+	// so the merged page is a stable total order across environments.
+	slices.SortFunc(merged, func(x, y PoolTask) int {
+		if !x.CreatedAt.Equal(y.CreatedAt) {
+			if x.CreatedAt.After(y.CreatedAt) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(y.TaskID, x.TaskID) // task_id DESC tiebreak
+	})
+
+	out.Total = len(merged)
+	lo := opts.Offset
+	if lo > len(merged) {
+		lo = len(merged)
+	}
+	hi := lo + opts.Limit
+	if opts.Limit <= 0 || hi > len(merged) {
+		hi = len(merged)
+	}
+	out.Items = append(out.Items, merged[lo:hi]...)
+	out.HasMore = hi < len(merged)
+	return out, nil
+}
+
 // SetState moves an environment to an agent-reported bootstrap phase. Distinct
 // from Action, which applies operator intent from a fixed set.
 func (s *EnvironmentService) SetState(envUUID, state string) (bool, error) {

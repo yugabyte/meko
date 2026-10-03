@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strconv"
@@ -93,6 +94,63 @@ func (h *EnvironmentTasksHandler) List(c echo.Context) error {
 		LastHeartbeatAt: e.LastHeartbeatAt,
 	}
 	return ok(c, http.StatusOK, resp)
+}
+
+// poolTaskListResponse is the merged, pool-scoped task envelope: one flat list across
+// every MANAGED amp environment the storage pool is mapped to, globally paginated.
+// Each item carries its own environment_id/region (service.PoolTask) for attribution.
+type poolTaskListResponse struct {
+	Items    []service.PoolTask `json:"items"`
+	Total    int                `json:"total"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
+	HasMore  bool               `json:"has_more"`
+}
+
+// ListByRegion answers GET /environments/resources/tasks: a storage pool's amp task
+// history merged across every MANAGED environment the pool is mapped to, scoped to the
+// pool's own clusters. The pool is the first path segment of `name`; `page`/`page_size`
+// address the single merged, time-sorted list.
+//
+// No accountScope: admin-secret-only, the same tenancy model as the region resources
+// routes. A MANAGED amp environment is shared fleet infrastructure with no
+// per-customer account_id, so the storage pool in `name` is the tenant key. See the
+// route wiring in router.go.
+func (h *EnvironmentTasksHandler) ListByRegion(c echo.Context) error {
+	name := strings.TrimSpace(c.QueryParam("name"))
+	if name == "" {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "name is required")
+	}
+
+	page := positiveIntParam(c, "page", 1)
+	pageSize := positiveIntParam(c, "page_size", tasksDefaultPageSize)
+	if pageSize > tasksMaxPageSize {
+		pageSize = tasksMaxPageSize
+	}
+
+	opts := repository.EnvironmentTaskListOpts{
+		Limit:     pageSize,
+		Offset:    (page - 1) * pageSize,
+		Statuses:  taskStatusFilter(c),
+		Kind:      strings.TrimSpace(c.QueryParam("kind")),
+		ClusterID: strings.TrimSpace(c.QueryParam("cluster_id")),
+	}
+
+	result, err := h.envSvc.TasksByStoragePool(name, opts)
+	if err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		return apiError(c, http.StatusInternalServerError, "TASK_LIST_FAILED", err.Error())
+	}
+
+	return ok(c, http.StatusOK, poolTaskListResponse{
+		Items:    result.Items,
+		Total:    result.Total,
+		Page:     page,
+		PageSize: pageSize,
+		HasMore:  result.HasMore,
+	})
 }
 
 // Get answers GET /environments/:id/tasks/:task_id, for a console drilling into one

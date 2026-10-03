@@ -287,6 +287,46 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
+  /api/v1/environments/resources/tasks:
+    get:
+      tags: [environments]
+      summary: List a MANAGED storage pool's amp task history, merged across its environments
+      operationId: listStoragePoolTasks
+      description: |
+        Region-addressed and environment-agnostic, like the resources LIST: no environment id in
+        the path, admin-secret auth, the storage pool (first segment of `name`) as the tenant key.
+        Returns the amp controller's task history for the pool, merged across every MANAGED
+        environment it is mapped to.
+
+        The response is ONE flat `items` list (not grouped per environment), sorted newest-first by
+        `created_at` and paginated globally; each item carries its own `environment_id`/`region`.
+
+        Scoping is the load-bearing part. A task is keyed by its amp `cluster_id`, and the task
+        table has no pool column. The pool → `cluster_id` bridge is the agent-reported OBSERVED
+        inventory: a cluster under the pool carries its amp UUID in `attrs.id`. So the history is
+        scoped to the clusters the pool's observed inventory names. Two consequences:
+        observed-dependent (a just-created cluster whose inventory has not arrived yet shows no
+        tasks until the next agent tick), and a task with no `cluster_id` is not attributable to a
+        pool and is excluded. 30-day retention applies.
+
+        A pool nothing is mapped to returns an empty `items` list with 200, not a 404.
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string }, description: A path whose first segment is the storage pool. }
+        - { name: status, in: query, schema: { type: array, items: { type: string, enum: [pending, running, succeeded, failed] } }, description: Repeatable; keep only these statuses. An unknown value is dropped, not rejected. }
+        - { name: active, in: query, schema: { type: boolean }, description: Shorthand for status=pending&status=running. }
+        - { name: kind, in: query, schema: { type: string }, description: Keep only this task kind. }
+        - { name: cluster_id, in: query, schema: { type: string, format: uuid }, description: A single amp cluster UUID; ignored unless it belongs to the pool. }
+        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 25, maximum: 200 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PoolTaskList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
   # ------------------------------------------------------------------ datapacks
   /api/v1/datapacks:
     get:
@@ -777,6 +817,38 @@ components:
         region: { type: string, examples: [us-east-1] }
         desired: { type: array, items: { $ref: '#/components/schemas/DesiredResource' } }
         observed: { type: array, items: { $ref: '#/components/schemas/ResourceStatus' } }
+
+    PoolTask:
+      type: object
+      description: |
+        One amp controller task in a pool-scoped listing merged across environments. The
+        `environment_id`/`region` identify which environment it ran in; the rest is the task as the
+        reconcile agent relayed it. Kind-agnostic — `kind` and `result` are stored and served
+        without interpretation.
+      properties:
+        environment_id: { type: string, examples: [demo-amp-east], description: The environment the task ran in. }
+        region: { type: string, examples: [us-east-1] }
+        task_id: { type: string, examples: ['9f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f'] }
+        kind: { type: string, examples: [resize_endpoint] }
+        status: { type: string, enum: [pending, running, succeeded, failed] }
+        cluster_id: { type: string, format: uuid, description: The amp cluster the task targets; absent for a task not scoped to a cluster. }
+        target_ref: { type: string, examples: [endpoint/ep-1] }
+        error: { type: string, description: The controller's failure reason, set when status is failed. }
+        result: { type: object, additionalProperties: true, description: Opaque task result, served verbatim. }
+        ycp_generation: { type: integer, format: int64, description: Absent for a task an operator or the amp UI planned directly rather than YCP driving it. }
+        created_at: { type: string, format: date-time, description: The controller's create time. }
+        updated_at: { type: string, format: date-time, description: The controller's last-update time. }
+        reported_at: { type: string, format: date-time, description: When the agent last relayed this row. }
+
+    PoolTaskList:
+      type: object
+      description: One page of a storage pool's task history merged across environments, newest first.
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/PoolTask' } }
+        total: { type: integer, description: Count the page was taken from, across all environments. }
+        page: { type: integer }
+        page_size: { type: integer }
+        has_more: { type: boolean }
 
     ResourcePatch:
       type: object

@@ -516,12 +516,17 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		// group would even 400 a caller that has no account to send. So they hang off
 		// the admin secret alone -- the same shared secret that already gates the
 		// fleet, held by the trusted proxy that manages storage pools.
+		tasksH := handlers.NewEnvironmentTasksHandler(reg.envSvc)
 		poolRoutes := v1.Group("", auth.RequireAdminSecret(cfg.AdminAPIKey))
 		poolRoutes.GET("/environments/resources", envH.ListResourcesByName)
 		poolRoutes.PATCH("/environments/resources", envH.SetResourcesByRegion)
+		// A pool's amp task history merged across the environments it is mapped to,
+		// scoped to the pool's own clusters. Same admin-secret tenancy as the routes
+		// above (the storage pool is the tenant key), distinct from the account-scoped
+		// per-environment /environments/:id/tasks on the fleet group.
+		poolRoutes.GET("/environments/resources/tasks", tasksH.ListByRegion)
 		fleet.GET("/environments/:id/metrics",
 			handlers.NewEnvironmentMetricsHandler(reg.envSvc, reg.metricsSvc).Get)
-		tasksH := handlers.NewEnvironmentTasksHandler(reg.envSvc)
 		fleet.GET("/environments/:id/tasks", tasksH.List)
 		fleet.GET("/environments/:id/tasks/:task_id", tasksH.Get)
 		fleet.GET("/environments/:id/extensions", envH.Extensions)
