@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Project, RepoInfo, ReviewablePr, ReviewablePrs, Session } from '../../shared/types';
+import { START_EXAMPLES, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { repoFolder, slugify } from '../util';
 import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { ReviewPrPicker } from './ReviewPrPicker';
-
-const NAME_PLACEHOLDER: Record<StartChoice, string> = {
-  explore: 'why is CI slow on macOS',
-  design: 'fix retry backoff',
-  code: 'fix typo in README',
-  'review-pr': 'review #21',
-};
 
 /** A review's default name, from its PR. */
 const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
@@ -184,7 +177,7 @@ export function NewSessionDialog({
           <input
             id="ns-name"
             className="input"
-            placeholder={NAME_PLACEHOLDER[start]}
+            placeholder={START_EXAMPLES[start].name}
             value={name}
             onChange={(e) => {
               setName(e.target.value);
@@ -223,7 +216,7 @@ export function NewSessionDialog({
             id="ns-prompt"
             className="input"
             rows={review ? 2 : 5}
-            placeholder={review ? 'e.g. the migration and the polling' : undefined}
+            placeholder={START_EXAMPLES[start].prompt}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
