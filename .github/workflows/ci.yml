@@ -11,16 +11,15 @@ permissions:
   contents: read
 
 concurrency:
-  # A push or a new base branch supersedes the last run, so it cancels it. Any other edit runs
-  # only the title check, on the same commit: each such run gets a group of its own, so it
-  # neither cancels the tests nor gets cancelled by the next edit (a cancelled check on the
-  # head commit would read as failing CI).
+  # An edit that keeps the base runs only the title check, in a group of its own, so it never
+  # cancels the tests or another edit's run.
   group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edited-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
-  # PRs are squash-merged with the PR title as the commit subject, which the release workflow
-  # reads. The `base` ruleset requires this check by name, so keep the name in step with it.
+  # Merging into main requires `PR title` and both `test (...)` checks by name: renaming a job
+  # means updating the branch rules. The PR title becomes the squash commit's subject, which the
+  # release workflow reads.
   title:
     name: PR title
     if: github.event_name == 'pull_request'

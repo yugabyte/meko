@@ -114,7 +114,7 @@ describe('the PR title check in CI', () => {
   it('runs the script on the PR title, and again when the PR is edited', () => {
     expect(CI).toMatch(/^ {2}pull_request:\n(?: {4}#.*\n)* {4}types: \[opened, synchronize, reopened, edited\]$/m);
     const title = job('title');
-    // The ruleset requires the check by this name.
+    // Merging into main requires the check by this name.
     expect(title).toContain('    name: PR title\n');
     expect(title).toContain("    if: github.event_name == 'pull_request'\n");
     // The title goes through the environment, never into the script.

@@ -39,6 +39,7 @@ npm run test:integration        # needs tmux and git; uses a stub `claude`
 ```
 
 CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`).
+Changes reach `main` only through PRs, squash-merged once CI passes.
 
 ## Commits
 
@@ -52,12 +53,9 @@ Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
 The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
 and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
-for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`.
-CI's `PR title` check runs it on every PR's title, and the `base` ruleset on `main` requires that
-check. The ruleset also requires a PR for every change to `main` (no direct pushes) and allows
-only squash merges. The script can't check commits on a PR branch or tell whether the type fits;
-the commit skill covers those. See `.claude/skills/commit/SKILL.md` for the full rules,
-including: no agent attribution.
+for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`; CI
+runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules, including: no
+agent attribution.
 
 ## Dependencies
 

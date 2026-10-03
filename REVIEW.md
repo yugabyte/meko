@@ -169,5 +169,4 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes `scripts/check-title.sh`, and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
-      `chore` don't. Comment-only changes are `nit`. CI's `PR title` check runs the script, but
-      only a reviewer can tell whether the type fits. There's no agent attribution.
+      `chore` don't. Comment-only changes are `nit`. CI checks the format, not the type. There's no agent attribution.
