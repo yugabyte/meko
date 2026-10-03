@@ -899,7 +899,8 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > **Transcript capture can be turned off.** `[meko] capture_transcripts` in `config.toml`
 > defaults to `true`; set it to `false` to stop sending transcripts, for example while Meko can't
 > take the load (a restart applies a change). While it's off, the server doesn't run the plugin's
-> `capture.js checkpoint` after each turn, at startup or when a session stops, and doesn't create a named conversation per session. Sessions
+> `capture.js checkpoint` after each turn, at startup or when a session stops, and doesn't create a named conversation per session. (With it on, a
+> server that is stopping waits up to 5 seconds for captures still running.) Sessions
 > also get `MEKO_CHECKPOINT_INTERVAL=2147483`, so the plugin's checkpoint timer, which its
 > SessionStart hook starts for a resumed session, never fires in practice: that's the longest
 > interval Node's `setInterval` honours, and a larger one would fire every millisecond. With

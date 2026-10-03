@@ -81,6 +81,16 @@ export class TranscriptCapture {
     return p;
   }
 
+  /** Resolves once no capture is running (including ones started meanwhile), or after <ms>. */
+  async settled(ms: number): Promise<void> {
+    const idle = (async () => {
+      while (this.running.size) await Promise.all(this.running.values());
+    })();
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([idle, new Promise<void>((r) => (timer = setTimeout(r, ms)))]);
+    clearTimeout(timer);
+  }
+
   private runOnce(sessionId: string, transcriptPath: string): Promise<void> {
     return new Promise((resolve) => {
       const child = execFile(

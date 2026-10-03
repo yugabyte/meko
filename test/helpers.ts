@@ -194,7 +194,9 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
         /* not running */
       }
       db.close();
-      rmSync(home, { recursive: true, force: true });
+      // core.stop() waited for the transcript captures that write into fakeDir; the retries cover
+      // any other late writer (removing a folder while something writes into it fails with ENOTEMPTY).
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }

@@ -76,6 +76,29 @@ describe('TranscriptCapture', () => {
     expect(r[1].start).toBeGreaterThanOrEqual(r[0].end);
   });
 
+  it('settles once every capture has finished, including ones started while it waits', async () => {
+    const c = new TranscriptCapture(FAKE_CAPTURE, () => ({}), silentLogger);
+    await c.settled(5000);
+    process.env.FAKE_CAPTURE_MS = '200';
+    void c.capture('s1', transcript);
+    const done = c.settled(5000);
+    await new Promise((r) => setTimeout(r, 100));
+    void c.capture('s2', transcript); // ends after s1's
+    await done;
+    expect(runs()).toHaveLength(2);
+  });
+
+  it('stops waiting for captures after the time given', async () => {
+    process.env.FAKE_CAPTURE_MS = '1000';
+    const c = new TranscriptCapture(FAKE_CAPTURE, () => ({}), silentLogger);
+    const run = c.capture('s1', transcript);
+    const start = Date.now();
+    await c.settled(100);
+    expect(Date.now() - start).toBeLessThan(500);
+    expect(runs()).toEqual([]);
+    await run;
+  });
+
   it('does nothing without a script or a transcript', async () => {
     await new TranscriptCapture(null, () => ({}), silentLogger).capture('s1', transcript);
     await new TranscriptCapture(FAKE_CAPTURE, () => ({}), silentLogger).capture('s1', join(dir, 'missing.jsonl'));

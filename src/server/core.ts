@@ -61,6 +61,8 @@ const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
+/** How long stopping waits for transcript captures still running (systemd and launchd allow 15 s to stop). */
+const STOP_CAPTURE_MS = 5000;
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -264,6 +266,8 @@ export class Core extends EventEmitter {
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     await this.closeHooks();
+    // Let the last turns reach Meko; one cut off here catches up when the server starts again.
+    await this.capture.settled(STOP_CAPTURE_MS);
     await this.meko.close();
   }
 
