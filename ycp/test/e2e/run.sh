@@ -360,20 +360,20 @@ ext_of() {
   api GET /api/v1/environments/ext-check/extensions |
     python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["data"]["extensions"]))'
 }
-put_ext() {
-  curl -s -o /dev/null -w '%{http_code}' -X PUT "http://127.0.0.1:$PORT$BASE/api/v1/agent/extensions" \
+post_ext() {
+  curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT$BASE/api/v1/agent/extensions" \
     -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H "X-Meko-Api-Key-ID: $1" \
     -H 'content-type: application/json' \
     -d '{"extensions":[{"name":"pgvector","builtin":true,"preload":false}]}'
 }
 [ "$(ext_of)" = "null" ] || die "a never-reported catalog reads as $(ext_of), want null"
-code="$(put_ext "$ext_key")"
-[ "$code" = "204" ] || die "PUT /agent/extensions for an amp environment returned $code, want 204"
+code="$(post_ext "$ext_key")"
+[ "$code" = "204" ] || die "POST /agent/extensions for an amp environment returned $code, want 204"
 got_ext="$(ext_of)"
 [ "$got_ext" = '[{"name": "pgvector", "builtin": true, "preload": false}]' ] ||
   die "the relayed catalog reads back as $got_ext"
-code="$(put_ext "$API_KEY_ID")"
-[ "$code" = "400" ] || die "PUT /agent/extensions for a meko environment returned $code, want 400"
+code="$(post_ext "$API_KEY_ID")"
+[ "$code" = "400" ] || die "POST /agent/extensions for a meko environment returned $code, want 400"
 api DELETE /api/v1/environments/ext-check >/dev/null 2>&1 || true
 echo "    the extension catalog is null until relayed, then reads back; meko's is refused"
 

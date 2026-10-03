@@ -15,9 +15,9 @@ import (
 const catalogResendEvery = time.Hour
 
 // catalogRetryAfter spaces out attempts after a failure on either side. A controller
-// that predates GET /extensions, or a control plane (or YBM passthrough) that
-// predates PUT /agent/extensions, answers 404 on every try, and that must not
-// become one extra request and log line per tick.
+// that predates GET /extensions, or a control plane (or YBM passthrough) without the
+// route, answers 404 on every try — and a control plane that serves it only as PUT
+// answers 405 — which must not become one extra request and log line per tick.
 const catalogRetryAfter = 5 * time.Minute
 
 type catalogSource interface {
@@ -25,7 +25,7 @@ type catalogSource interface {
 }
 
 type catalogSink interface {
-	PutExtensions(ctx context.Context, cat api.ExtensionCatalog) error
+	PostExtensions(ctx context.Context, cat api.ExtensionCatalog) error
 }
 
 // catalogRelay forwards the controller's extension catalog to the control plane
@@ -72,7 +72,7 @@ func (r *catalogRelay) Sync(ctx context.Context) {
 	if r.sent && sum == r.lastSent && now.Sub(r.sentAt) < catalogResendEvery {
 		return
 	}
-	if err := r.dst.PutExtensions(ctx, api.ExtensionCatalog{Extensions: cat}); err != nil {
+	if err := r.dst.PostExtensions(ctx, api.ExtensionCatalog{Extensions: cat}); err != nil {
 		r.retryAt = now.Add(catalogRetryAfter)
 		r.logf("relay amp extension catalog (retrying in %s): %v", catalogRetryAfter, err)
 		return

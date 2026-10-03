@@ -252,10 +252,10 @@ no state machine of its own, it relays what the controller recorded.
 The amp controller's `GET /extensions` — builtins plus every image an operator
 registered — is what a cluster can be created with, and a console needs it to offer
 anything beyond a hardcoded list. The agent relays it on its own call,
-`PUT /api/v1/agent/extensions`, not on the heartbeat: it sends only when the catalog's
+`POST /api/v1/agent/extensions`, not on the heartbeat: it sends only when the catalog's
 digest changes, plus an hourly resend so a control plane that lost its copy recovers
 without an agent restart, and backs off for five minutes after either the controller
-read or the PUT fails, so a controller, control plane or YBM passthrough without the
+read or the POST fails, so a controller, control plane or YBM passthrough without the
 route costs one request per five minutes rather than one per tick.
 `meko_system.environment_extensions` holds one row per environment, and
 `GET /api/v1/environments/{id}/extensions` serves it.
@@ -265,7 +265,7 @@ route, a meko environment, or one that has not reported yet — and a console fa
 on it. `[]` is a reported empty catalog. Neither side writes one for the other: the
 agent sends nothing when the controller read fails, and the control plane rejects an
 absent or null `extensions` rather than storing it as empty, and refuses a non-amp
-environment's PUT outright, so a meko environment reads `null` by rule.
+environment's POST outright, so a meko environment reads `null` by rule.
 
 `POST /environments` takes `"desired": [...]` to declare an environment's resources —
 including `[]`, which is simply the same as omitting it. There is no server-side seed:

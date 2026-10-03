@@ -391,7 +391,7 @@ type Extension struct {
 	Description string `json:"description,omitempty"`
 }
 
-// ExtensionCatalog is the body of PUT /agent/extensions: the environment's whole
+// ExtensionCatalog is the body of POST /agent/extensions: the environment's whole
 // catalog, replacing what the control plane held. Extensions is never omitempty —
 // an empty catalog is a reported fact, distinct from one never reported.
 type ExtensionCatalog struct {

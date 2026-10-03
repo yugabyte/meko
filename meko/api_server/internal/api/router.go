@@ -542,7 +542,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		agentGroup.POST("/enroll", envH.AgentEnroll)
 		agentGroup.GET("/desired-state", envH.AgentDesiredState)
 		agentGroup.POST("/status", envH.AgentStatus)
-		agentGroup.PUT("/extensions", envH.AgentExtensions)
+		agentGroup.POST("/extensions", envH.AgentExtensions)
 		agentGroup.POST("/bootstrap-progress", envH.AgentBootstrapProgress)
 
 		// The fleet console, served from this binary so the control plane is one

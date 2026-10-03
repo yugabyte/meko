@@ -14,10 +14,10 @@ import (
 
 // A nil catalog must still go out as [] — null is the control plane's "never
 // reported", which it rejects on this route.
-func TestPutExtensionsSendsAnEmptyCatalogAsAnArray(t *testing.T) {
+func TestPostExtensionsSendsAnEmptyCatalogAsAnArray(t *testing.T) {
 	var got map[string]json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/agent/extensions" {
+		if r.Method != http.MethodPost || r.URL.Path != "/agent/extensions" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		raw, _ := io.ReadAll(r.Body)
@@ -28,15 +28,15 @@ func TestPutExtensionsSendsAnEmptyCatalogAsAnArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := New(srv.URL, "k", nil).PutExtensions(context.Background(), api.ExtensionCatalog{}); err != nil {
-		t.Fatalf("PutExtensions: %v", err)
+	if err := New(srv.URL, "k", nil).PostExtensions(context.Background(), api.ExtensionCatalog{}); err != nil {
+		t.Fatalf("PostExtensions: %v", err)
 	}
 	if string(got["extensions"]) != "[]" {
 		t.Fatalf("extensions = %s, want []", got["extensions"])
 	}
 }
 
-func TestPutExtensionsErrors(t *testing.T) {
+func TestPostExtensionsErrors(t *testing.T) {
 	for _, tc := range []struct {
 		status int
 		want   error
@@ -47,7 +47,7 @@ func TestPutExtensionsErrors(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(tc.status)
 		}))
-		err := New(srv.URL, "k", nil).PutExtensions(context.Background(), api.ExtensionCatalog{})
+		err := New(srv.URL, "k", nil).PostExtensions(context.Background(), api.ExtensionCatalog{})
 		srv.Close()
 		if err == nil {
 			t.Fatalf("HTTP %d: no error", tc.status)

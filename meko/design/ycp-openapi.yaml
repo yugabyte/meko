@@ -470,7 +470,7 @@ paths:
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
   /api/v1/agent/extensions:
-    put:
+    post:
       tags: [agent]
       summary: Replace this environment's extension catalog
       operationId: agentExtensions

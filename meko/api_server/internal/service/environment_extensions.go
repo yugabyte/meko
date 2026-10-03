@@ -10,7 +10,7 @@ import (
 	"meko/api_server/internal/repository"
 )
 
-// ExtensionCatalogReport is the body of PUT /agent/extensions. A pointer, so a body
+// ExtensionCatalogReport is the body of POST /agent/extensions. A pointer, so a body
 // that omits the field or sends null is told so rather than stored as empty.
 type ExtensionCatalogReport struct {
 	Extensions *[]models.EnvironmentExtension `json:"extensions"`
@@ -25,7 +25,7 @@ type ExtensionCatalog struct {
 }
 
 // SetExtensionRepo wires the catalog store. Unset, GET answers unknown and the
-// agent's PUT fails.
+// agent's POST fails.
 func (s *EnvironmentService) SetExtensionRepo(r *repository.EnvironmentExtensionRepo) {
 	s.extRepo = r
 }

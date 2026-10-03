@@ -45,7 +45,7 @@ func TestAgentExtensions_RefusesANonAmpEnvironment(t *testing.T) {
 	h, mock, done := newExtensionsHandler(t)
 	defer done()
 	expectResolveAgent(mock) // scopeRow is kind meko
-	rec := agentRequest(t, h.AgentExtensions, http.MethodPut, "/api/v1/agent/extensions",
+	rec := agentRequest(t, h.AgentExtensions, http.MethodPost, "/api/v1/agent/extensions",
 		echo.MIMEApplicationJSON, `{"extensions":[{"name":"pgvector","builtin":true}]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
@@ -63,7 +63,7 @@ func TestAgentExtensions_StoresTheCatalog(t *testing.T) {
 		WithArgs(envUUID, []byte(`[{"name":"pgvector","version":"0.8.0","builtin":true,"preload":false}]`)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	rec := agentRequest(t, h.AgentExtensions, http.MethodPut, "/api/v1/agent/extensions",
+	rec := agentRequest(t, h.AgentExtensions, http.MethodPost, "/api/v1/agent/extensions",
 		echo.MIMEApplicationJSON, `{"extensions":[{"name":"pgvector","builtin":true,"version":"0.8.0"}]}`)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204: %s", rec.Code, rec.Body.String())
@@ -83,7 +83,7 @@ func TestAgentExtensions_EmptyIsStoredButMissingIsRejected(t *testing.T) {
 		mock.ExpectExec(`INSERT INTO meko_system\.environment_extensions`).
 			WithArgs(envUUID, []byte(`[]`)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		rec := agentRequest(t, h.AgentExtensions, http.MethodPut, "/api/v1/agent/extensions",
+		rec := agentRequest(t, h.AgentExtensions, http.MethodPost, "/api/v1/agent/extensions",
 			echo.MIMEApplicationJSON, `{"extensions":[]}`)
 		if rec.Code != http.StatusNoContent {
 			t.Fatalf("status = %d, want 204: %s", rec.Code, rec.Body.String())
@@ -101,7 +101,7 @@ func TestAgentExtensions_EmptyIsStoredButMissingIsRejected(t *testing.T) {
 			h, mock, done := newExtensionsHandler(t)
 			defer done()
 			expectResolveAmpAgent(mock)
-			rec := agentRequest(t, h.AgentExtensions, http.MethodPut, "/api/v1/agent/extensions",
+			rec := agentRequest(t, h.AgentExtensions, http.MethodPost, "/api/v1/agent/extensions",
 				echo.MIMEApplicationJSON, body)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
