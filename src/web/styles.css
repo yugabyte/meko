@@ -3165,6 +3165,9 @@ a.icon-btn {
     padding: 6px 14px;
     font-size: 13px;
   }
+  .start {
+    min-height: 36px;
+  }
   .btn,
   .dp-row {
     min-height: 36px;

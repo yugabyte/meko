@@ -74,9 +74,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
       handles `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
-- [ ] `sessions.kind` keeps the old type names for tasks, so a rolled-back release still reads every
-      row: new tasks are written as `plan` (`STORED_TASK_KIND`), and code that needs the kind as
-      the API shows it goes through `kindOf()` (comparing with `review-pr` directly is fine).
+- [ ] `sessions.kind` and `Session.kind` keep the old type names for tasks, so a rolled-back release
+      and a page still on the older UI can index their stage lists with every value: new tasks are
+      stored and sent as `plan` (`STORED_TASK_KIND`), never `task`, and code that needs a session's
+      kind reads it through `kindOf()` (comparing with `review-pr` directly is fine).
 - [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
       out of Merge & Close or while AgentK is mid-turn.

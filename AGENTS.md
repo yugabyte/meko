@@ -60,7 +60,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/mekousage.ts`, `mekosavings.ts` | Meko calls in transcripts: finding them and their results (found, empty, failed), the counts per session and project, a `seed` row for what AgentK's search at start passed to Claude, and the tokens Meko brought into first turns, and for the usage stats calls by tool (`toolCounts`, naming only the lookups and saves) and the searches at start (`mekoStarts`); the fixed formula, with its constants, for what a search that found something (or a seed) saved. |
 | `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, and the web app that goes with an MCP URL (`mekoWebUrl`). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
-| `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping (`sessions.kind` keeps the old type names for tasks, shown as `task` by `kindOf()`). |
+| `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping (`sessions.kind`, and `Session.kind`, keep the old type names for tasks; `kindOf()` in `stages.ts` reads them as `task`). |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback (tarball per platform and CPU); host install. |
 | `src/server/mekosetup.ts` | Meko set up for Claude Code (plugin, MCP server, key): what's missing, and running Meko's own setup package from npm (integrity-checked) with the bundled Node. |

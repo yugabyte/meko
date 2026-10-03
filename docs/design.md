@@ -229,8 +229,11 @@ the selected one is for:
 | **2 Code** | Small tasks: straight to code, then PR, review and merge | `code`; with no first prompt the name is the task |
 | **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with AgentK assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](#reviewing-a-pr)) |
 
-A task can't start at PR & Review: it gets there through **Open PR** or a move. A session's kind
-is `task` or `review-pr` (`Session.kind`); where a task started is its first `session_stages` row,
+A task can't start at PR & Review: it gets there through **Open PR** or a move. A session is a
+task or a Review a PR (`kindOf()` in `src/shared/stages.ts`). `sessions.kind` and `Session.kind`
+keep the old type names for tasks, and new tasks are stored and sent as `plan`, because an older
+release after a rollback, and a page still running the older UI until it reloads, index their stage
+lists with it (`task` would make them throw). Where a task started is its first `session_stages` row,
 and steps before it show as skipped. The workflow line of the system prompt Claude gets lists the
 task's stages, and says what Explore means while the session is there. The old session types still
 work in `CreateSessionRequest.kind` for a page that hasn't reloaded yet (`explore`, `plan` and
@@ -524,7 +527,7 @@ CREATE TABLE sessions (
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
   status TEXT,                    -- starting | working | needs_input | idle | exited | recovered | archived
   kind TEXT,                      -- review-pr, or a task: plan for new ones, explore | plan | quick from before tasks had start
-                                  -- stages (an older release reads every row after a rollback); the API shows all three as task
+                                  -- stages (older releases and pages index their stage lists with it); kindOf() reads all three as a task
   stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done | reviewing-pr
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   pr_repo TEXT, pr_title TEXT, pr_author TEXT,  -- Review a PR only: the PR's owner/name on GitHub, title and author

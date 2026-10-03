@@ -158,7 +158,9 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     pushToPr(7, 'widget.ts');
     pr(7);
     env.core.mekoStatus = { ...env.core.mekoStatus, configured: false };
-    const s = await env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 7 } });
+    // A review's start is ignored, not checked: it always starts in Reviewing PR.
+    const s = await env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', start: 'review' as never, repoPath: clone, pr: { repo: 'acme/demo', number: 7 } });
+    expect(s).toMatchObject({ kind: 'review-pr', stage: 'reviewing-pr' });
     await idle(s.id);
     expect(transcript(s.id)).not.toContain('Meko');
     expect(systemPrompt()).not.toContain('Meko');

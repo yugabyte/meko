@@ -85,7 +85,7 @@ describe('moves: moving a task session between stages', () => {
     await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
     const sent = typed();
     const moved = await move(s.id, { stage: 'code', task: 'Add retries' });
-    expect(moved).toMatchObject({ kind: 'task', stage: 'code', hasTask: true, skippedStages: ['design'] });
+    expect(moved).toMatchObject({ kind: 'plan', stage: 'code', hasTask: true, skippedStages: ['design'] });
     expect(row(s.id).initial_prompt).toBe('Add retries');
     expect(stages(s.id)).toEqual([{ stage: 'explore', moved_by: 'you' }, { stage: 'code', moved_by: 'you' }]);
     expect(events(s.id, 'kind')).toEqual([]);
@@ -236,12 +236,12 @@ describe('moves: moving a task session between stages', () => {
     await waitFor(() => get(t.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
     await move(t.id, { stage: 'code', prompt: false });
     // No longer waiting on a design approval.
-    expect(get(t.id)).toMatchObject({ kind: 'task', stage: 'code', status: 'idle' });
+    expect(get(t.id)).toMatchObject({ kind: 'plan', stage: 'code', status: 'idle' });
   });
 
   it('goes back to Explore without a prompt, and ignores the type an older page still sends', async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
-    expect(get(s.id)).toMatchObject({ kind: 'task', stage: 'code', skippedStages: ['explore', 'design'] });
+    expect(get(s.id)).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['explore', 'design'] });
     const sent = typed();
     await move(s.id, { stage: 'explore' });
     expect(get(s.id)).toMatchObject({ stage: 'explore', skippedStages: [] });

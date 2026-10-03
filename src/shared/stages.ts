@@ -1,4 +1,9 @@
-import { KIND_STAGES, STAGE_LABELS, type MoveTarget, type SessionKind, type Stage } from './types.js';
+import { KIND_STAGES, STAGE_LABELS, type MoveTarget, type SessionKind, type Stage, type StoredKind } from './types.js';
+
+/** A session's kind as stored and sent (`Session.kind`), as the rules use it: `task` or `review-pr`. */
+export function kindOf(kind: StoredKind | SessionKind): SessionKind {
+  return kind === 'review-pr' ? 'review-pr' : 'task';
+}
 
 /** The stages a session can be moved to by hand, in stage bar order. */
 export const MOVE_TARGETS: MoveTarget[] = ['explore', 'design', 'code', 'review'];
@@ -17,8 +22,8 @@ export function moveBlockedIn(stage: Stage): string | null {
 }
 
 /** The stages a session of this kind can be moved to. */
-export function moveTargets(kind: SessionKind): MoveTarget[] {
-  return MOVE_TARGETS.filter((t) => (KIND_STAGES[kind] as Stage[]).includes(t));
+export function moveTargets(kind: StoredKind | SessionKind): MoveTarget[] {
+  return MOVE_TARGETS.filter((t) => (KIND_STAGES[kindOf(kind)] as Stage[]).includes(t));
 }
 
 /** Where the move dialog starts unless a stage is picked: the next step on, or back to Code from PR & Review. */
@@ -31,7 +36,7 @@ export function defaultTarget(current: Stage): MoveTarget {
 }
 
 /** Why the session can't be moved to this stage from where it is, or null. */
-export function moveError(from: { kind: SessionKind; stage: Stage }, to: MoveTarget): string | null {
+export function moveError(from: { kind: StoredKind | SessionKind; stage: Stage }, to: MoveTarget): string | null {
   if (!moveTargets(from.kind).includes(to)) return moveBlockedIn('reviewing-pr');
   if (stepOf(from.stage) === to) return `Nothing to change: this session is already in ${STAGE_LABELS[to]}.`;
   return null;

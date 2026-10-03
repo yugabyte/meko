@@ -9,7 +9,7 @@ import {
   type SessionAction,
   type Stage,
 } from '../../shared/types';
-import { moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
+import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
@@ -390,12 +390,13 @@ function StageBar({
       </div>
     );
   }
-  const stages: Stage[] = KIND_STAGES[session.kind];
+  const kind = kindOf(session.kind);
+  const stages: Stage[] = KIND_STAGES[kind];
   const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
   // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
-  const first = session.kind === 'task' ? 0 : 1;
+  const first = kind === 'task' ? 0 : 1;
   // Other stages the session can be moved to open the move dialog.
-  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(session.kind);
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.

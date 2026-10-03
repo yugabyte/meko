@@ -48,6 +48,14 @@ export type SessionKind = 'task' | 'review-pr';
 
 export const SESSION_KINDS: SessionKind[] = ['task', 'review-pr'];
 
+/**
+ * A session's kind as `sessions.kind` stores it and `Session.kind` sends it: `review-pr`, or a task
+ * under one of the old session types' names (`plan` for new ones). Pages and releases from before
+ * start stages index their stage lists with it, so it never says `task`; read it with `kindOf()`
+ * in `stages.ts`.
+ */
+export type StoredKind = 'explore' | 'plan' | 'quick' | 'review-pr';
+
 export const KIND_LABELS: Record<SessionKind, string> = {
   task: 'Task',
   'review-pr': 'Review a PR',
@@ -436,7 +444,8 @@ export interface Session {
   status: SessionStatus;
   /** Human-readable detail for the status, e.g. the Notification message. */
   statusDetail: string | null;
-  kind: SessionKind;
+  /** As stored (see StoredKind); `kindOf(session.kind)` is `task` or `review-pr`. */
+  kind: StoredKind;
   stage: Stage;
   /** The session has a task (its first prompt, or its name); one started at Explore without a first prompt has none. */
   hasTask: boolean;
@@ -1030,7 +1039,7 @@ export interface CreateSessionRequest {
    * Defaults to `task`. The old session types still work: `explore`, `plan` and `quick` are a task
    * starting at Explore, Design and Code (`start` wins when both are given).
    */
-  kind?: SessionKind | 'explore' | 'plan' | 'quick';
+  kind?: SessionKind | StoredKind;
   /** Where a task starts. Defaults to `design`. Ignored for a Review a PR. */
   start?: StartStage;
   /** Deprecated: use `start: 'code'`. True starts a task at Code when neither `start` nor `kind` says otherwise. */

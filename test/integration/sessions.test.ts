@@ -383,7 +383,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
   it('designs outside plan mode, guards the repo, and moves to Code when the design is approved', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'DESIGN_MD it' });
-    expect(s).toMatchObject({ kind: 'task', stage: 'design', skippedStages: ['explore'] });
+    expect(s).toMatchObject({ kind: 'plan', stage: 'design', skippedStages: ['explore'] });
     const designDir = join(env.core.paths.designs, s.id);
     const first = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args;
     expect(first).not.toContain('--permission-mode');
@@ -497,7 +497,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
   it('runs a task started at Explore with no design, PR or merge gates until it moves on', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', start: 'explore' });
-    expect(s).toMatchObject({ kind: 'task', stage: 'explore', skippedStages: [] });
+    expect(s).toMatchObject({ kind: 'plan', stage: 'explore', skippedStages: [] });
     expect(existsSync(s.worktreePath)).toBe(true);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const args = argvLog(env)[0].args;
@@ -527,8 +527,9 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
   it('starts a task at Code, stores it as plan, keeps the old types and skipDesign working, and refuses an unknown kind or start', async () => {
     const p = await newProject();
     const code = await env.core.sessions.create(p.id, { name: 'Quick one', prompt: 'hi', start: 'code' });
-    expect(code).toMatchObject({ kind: 'task', stage: 'code', skippedStages: ['explore', 'design'] });
-    // Stored under an old type's name, so an older release still reads the row after a rollback.
+    expect(code).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['explore', 'design'] });
+    // Stored and sent under an old type's name, so an older release (after a rollback) and a page
+    // from before start stages (until it reloads) can still index their stage lists with it.
     expect(env.core.sessions.row(code.id).kind).toBe('plan');
     await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch');
     const args = argvLog(env)[0].args;

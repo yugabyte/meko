@@ -202,7 +202,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(detachDedicated.statusCode).toBe(400);
     const s = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'API session', start: 'code' } });
     expect(s.statusCode).toBe(200);
-    expect(s.json()).toMatchObject({ kind: 'task', stage: 'code' });
+    expect(s.json()).toMatchObject({ kind: 'plan', stage: 'code' });
     const badKind = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Odd', kind: 'yolo' } });
     expect(badKind.statusCode).toBe(400);
     expect(badKind.json().error).toMatch(/Pick a session kind/);

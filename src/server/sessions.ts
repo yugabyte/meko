@@ -19,9 +19,10 @@ import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
 import { loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
+import { kindOf } from '../shared/stages.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
-  STORED_TASK_KIND, dedicatedDatapack, kindOf, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
+  STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
@@ -258,8 +259,11 @@ export class SessionManager {
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
     if (asked !== 'task' && asked !== 'review-pr' && !legacy) throw new HttpError(400, 'Pick a session kind: task or review-pr.');
-    if (req.start != null && !START_STAGES.includes(req.start)) throw new HttpError(400, `Pick where the session starts: ${START_STAGES.join(', ')}.`);
     const kind: SessionKind = asked === 'review-pr' ? 'review-pr' : 'task';
+    // A review starts in Reviewing PR, so its `start` is ignored rather than checked.
+    if (kind === 'task' && req.start != null && !START_STAGES.includes(req.start)) {
+      throw new HttpError(400, `Pick where the session starts: ${START_STAGES.join(', ')}.`);
+    }
     const start: StartStage = req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A review checks out the PR's head now, so a PR that can't be had starts nothing.

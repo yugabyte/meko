@@ -3,25 +3,16 @@ import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
-  CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionKind, SessionStatus, Stage,
+  CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
-import { skippedSteps, stepOf } from '../shared/stages.js';
+import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
 
 /**
- * `sessions.kind` as stored: `review-pr`, or a task under one of the old session types' names. New
- * tasks are written as `plan`, so a release from before tasks still reads every row after a
- * rollback; the API shows all three as `task` (`kindOf`).
+ * What new task sessions store in `sessions.kind` (see StoredKind): a name a release or page from
+ * before start stages can still index its stage lists with, after a rollback or before a reload.
  */
-export type StoredKind = 'explore' | 'plan' | 'quick' | 'review-pr';
-
-/** What new task sessions store in `sessions.kind`. */
 export const STORED_TASK_KIND: StoredKind = 'plan';
-
-/** A stored kind as the API shows it. */
-export function kindOf(kind: StoredKind): SessionKind {
-  return kind === 'review-pr' ? 'review-pr' : 'task';
-}
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
@@ -210,7 +201,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     desired: r.desired,
     status: r.status,
     statusDetail: r.status_detail,
-    kind: kindOf(r.kind),
+    kind: r.kind,
     stage: r.stage,
     hasTask: !!r.initial_prompt,
     prNumber: r.pr_number,

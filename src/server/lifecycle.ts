@@ -13,8 +13,8 @@ import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
 import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
-import { MOVE_TARGETS, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
-import { kindOf, parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
+import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
+import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 import { workflowLine } from './sessions.js';
 
 const POLL_MS = 15000;
@@ -322,7 +322,7 @@ export class Lifecycle {
     const blocked = moveBlockedIn(cur.stage);
     if (blocked) throw new HttpError(409, blocked);
     if (this.merging.has(id) || this.closing.has(id)) throw new HttpError(409, 'A merge is in progress.');
-    const bad = moveError({ kind: kindOf(cur.kind), stage: cur.stage }, stage);
+    const bad = moveError(cur, stage);
     if (bad) throw new HttpError(400, bad);
     if (cur.stage === 'design' && cur.plan_mode) {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");

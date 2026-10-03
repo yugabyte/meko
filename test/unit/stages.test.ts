@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  defaultTarget, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps, stepOf,
+  defaultTarget, kindOf, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps, stepOf,
 } from '../../src/shared/stages.js';
 import { KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS, type MoveTarget, type Stage } from '../../src/shared/types.js';
 
@@ -20,6 +20,15 @@ describe('stage moves', () => {
 
   it('moves a task to any stage but Merge & Close', () => {
     expect(moveTargets('task')).toEqual(['explore', 'design', 'code', 'review']);
+  });
+
+  it('reads the stored kind, old type names included, as task or review-pr', () => {
+    for (const k of ['explore', 'plan', 'quick', 'task'] as const) {
+      expect(kindOf(k)).toBe('task');
+      expect(moveTargets(k)).toEqual(['explore', 'design', 'code', 'review']);
+    }
+    expect(kindOf('review-pr')).toBe('review-pr');
+    expect(moveError({ kind: 'quick', stage: 'code' }, 'explore')).toBeNull();
   });
 
   it('refuses moving out of Merge & Close and Done only', () => {
