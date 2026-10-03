@@ -119,7 +119,9 @@ your phone can connect.
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
-  people's by default, or every reviewer's, or only people's) and CI failures to Claude.
+  people's by default, or every reviewer's, or only people's) and CI failures to Claude. Only reviews
+  from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
+  anyone else's are shown to you and ignored.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.

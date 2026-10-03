@@ -95,6 +95,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       empty folder typed under Other folder is made a repo only after the name check), never a
       reset or force.
 - [ ] `/agentk review force` is only posted when the user asks.
+- [ ] Nothing from someone without a role on the repo (`authorAssociation` other than OWNER,
+      MEMBER or COLLABORATOR, and not AgentK, an allowed bot or the user) starts a turn or counts
+      as a `/agentk review` request, and prompts that put PR text in front of Claude call it
+      untrusted, not instructions.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
 - [ ] Merge waits for AgentK only once AgentK is active on the PR, and never in *People only*.

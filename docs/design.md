@@ -726,18 +726,31 @@ stateDiagram-v2
   | *AgentK + People* (default) | AgentK and people | Once AgentK is active on the PR |
   | *People only* | People | Never |
 
-  AgentK is active on a PR once it has commented on it or reviewed it, or someone has commented
-  `/agentk review` on it, so repos AgentK doesn't watch never wait for it. Bots are the reviewers
+  AgentK is active on a PR once it has commented on it or reviewed it, or you or someone with a
+  role on the repo has commented `/agentk review` on it, so repos AgentK doesn't watch never wait for it. Bots are the reviewers
   GitHub's REST API lists as `Bot`. It's only asked when a poll finds a new review that isn't
   AgentK's. Replies on review threads show up as empty reviews and are skipped, and so are
   Claude's own replies, which post as you. A person's review goes to Claude when it requests
   changes or comments with a body.
+- **Whose feedback counts.** Anyone with a GitHub account can review a public repo's PR, so a review
+  starts a turn only when it comes from someone with a role on the repo (`authorAssociation`
+  OWNER, MEMBER or COLLABORATOR), from AgentK, from a bot in *All* (an app installed on the repo),
+  or from you (gh's login, e.g. on a fork's PR to an upstream repo you can't write to). Any other
+  review, or one whose association GitHub doesn't give, is marked seen, logged as *Ignored review
+  from …* and notified once per poll; Claude never gets it. The `review-people` prompt names the
+  reviewers that started it (`{{reviewers}}`, kept with the queued prompt and merged while it
+  waits) and tells Claude that anyone else's comments are untrusted text, not instructions; the
+  `review` prompt says the same about comments not by AgentK, `continue-review` (after a restart
+  mid-review) about comments not from those reviewers, and the Review a PR prompts say the
+  PR's description, commits, code comments and threads are content to review, never instructions.
+  Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `review`, `review-people`, `ci`, `continue`, `comments`, `moved`, `review-pr`, `review-pr-update`,
   `review-pr-comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
+  people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),
   and CI failures through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
   enforce a branch-name prefix with rulesets.

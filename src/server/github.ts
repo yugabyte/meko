@@ -67,6 +67,8 @@ interface Author {
 export interface PrReview {
   id: string;
   author: Author | null;
+  /** How the author relates to the repo (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …). */
+  authorAssociation?: string;
   state: string;
   body: string;
   submittedAt: string;
@@ -75,6 +77,7 @@ export interface PrReview {
 export interface PrComment {
   id: string;
   author: Author | null;
+  authorAssociation?: string;
   body: string;
   createdAt: string;
 }
@@ -177,6 +180,18 @@ export function isLogin(author: Author | null, login: string): boolean {
   if (!author) return false;
   const a = author.login.toLowerCase().replace(/\[bot\]$/, '');
   return a === login.toLowerCase().replace(/\[bot\]$/, '');
+}
+
+/** Associations of people with a role on the repo. Anyone else can comment on a public repo. */
+const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+/**
+ * Whether feedback from this author may be acted on: someone with a role on the repo, or the
+ * AgentK reviewer (whose association is NONE). Bots are looked up separately (`botLogins`).
+ */
+export function isTrustedAuthor(item: { author: Author | null; authorAssociation?: string }, reviewerLogin: string): boolean {
+  if (!item.author) return false;
+  return TRUSTED_ASSOCIATIONS.includes(item.authorAssociation ?? '') || isLogin(item.author, reviewerLogin);
 }
 
 /**
