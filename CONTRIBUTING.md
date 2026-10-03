@@ -81,7 +81,7 @@ Versions are `0.YYYYMMDD.N`: the UTC date of the release, and `N` counting up fr
 release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, so newer always
 sorts higher.
 
-1. Push to `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
+1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
    `scripts/next-version.sh`, and writes notes with `scripts/release-notes.sh`. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,

@@ -719,6 +719,26 @@ describe('github helpers', () => {
     expect(ciSummary([{ status: 'COMPLETED', conclusion: 'TIMED_OUT' }]).failed).toEqual([{ name: 'unnamed check', conclusion: 'TIMED_OUT', url: '' }]);
   });
 
+  it('reads only the newest run of each check on the head commit', () => {
+    // The rollup's shape after a bad title was fixed: the edit reran the CI workflow on the same commit.
+    const check = (name: string, conclusion: string, startedAt: string, extra = {}) =>
+      ({ __typename: 'CheckRun', name, workflowName: 'CI', status: 'COMPLETED', conclusion, startedAt, ...extra });
+    const first = check('PR title', 'FAILURE', '2026-10-03T15:13:31Z');
+    const tests = check('test (ubuntu-latest)', 'SUCCESS', '2026-10-03T15:13:31Z');
+    const fixed = check('PR title', 'SUCCESS', '2026-10-03T15:19:02Z');
+    const skipped = check('test', 'SKIPPED', '2026-10-03T15:19:02Z');
+    expect(ciSummary([first, tests, fixed, skipped])).toEqual({ state: 'success', pending: false, failed: [] });
+    // Whatever the order, and a cancelled run counts as superseded too.
+    expect(ciSummary([fixed, check('PR title', 'CANCELLED', '2026-10-03T15:18:00Z'), tests]).state).toBe('success');
+    // The newest run decides even when it's the failure.
+    expect(ciSummary([fixed, check('PR title', 'FAILURE', '2026-10-03T15:20:00Z')]).failed).toHaveLength(1);
+    // A queued rerun (no start time yet) is the newest: CI is pending, not failed.
+    const queued = check('PR title', '', '0001-01-01T00:00:00Z', { status: 'QUEUED' });
+    expect(ciSummary([first, queued])).toMatchObject({ state: 'pending', failed: [] });
+    // Same job name in another workflow is another check.
+    expect(ciSummary([fixed, check('PR title', 'FAILURE', '2026-10-03T15:13:31Z', { workflowName: 'Lint' })]).state).toBe('failure');
+  });
+
   it('matches bot logins with or without [bot]', () => {
     expect(isLogin({ login: 'yb-agentk-dev[bot]' }, 'yb-agentk-dev')).toBe(true);
     expect(isLogin({ login: 'yb-agentk-dev' }, 'yb-agentk-dev[bot]')).toBe(true);

@@ -11,8 +11,11 @@ permissions:
   contents: read
 
 concurrency:
-  # An edit runs only the title check, so it has its own group and never cancels the tests.
-  group: ci-${{ github.ref }}${{ github.event.action == 'edited' && '-edited' || '' }}
+  # A push or a new base branch supersedes the last run, so it cancels it. Any other edit runs
+  # only the title check, on the same commit: each such run gets a group of its own, so it
+  # neither cancels the tests nor gets cancelled by the next edit (a cancelled check on the
+  # head commit would read as failing CI).
+  group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edited-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:

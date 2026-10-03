@@ -88,6 +88,8 @@ interface CheckRun {
   status?: string;
   conclusion?: string;
   detailsUrl?: string;
+  workflowName?: string;
+  startedAt?: string;
   // StatusContext
   context?: string;
   state?: string;
@@ -156,10 +158,31 @@ export async function prStats(cwd: string, url: string): Promise<PrStats> {
 
 const FAILED = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'];
 
+/**
+ * The newest run of each check. The rollup lists every run on the head commit, so a workflow that
+ * ran again on the same commit (one that reruns when the PR is edited, say) lists its checks once
+ * per run, and an old failure or cancellation would outlive the run that replaced it. A run that
+ * hasn't started yet is the newest.
+ */
+function latestRuns(rollup: CheckRun[]): CheckRun[] {
+  const started = (c: CheckRun) => {
+    const t = c.startedAt ? Date.parse(c.startedAt) : NaN;
+    return Number.isNaN(t) || t <= 0 ? Infinity : t;
+  };
+  const out = new Map<string, CheckRun>();
+  rollup.forEach((c, i) => {
+    const name = c.name || c.context;
+    const key = name ? `${c.workflowName ?? ''}\0${name}` : `#${i}`;
+    const prev = out.get(key);
+    if (!prev || started(c) >= started(prev)) out.set(key, c);
+  });
+  return [...out.values()];
+}
+
 export function ciSummary(rollup: CheckRun[] | null): CiSummary {
   const failed: FailedCheck[] = [];
   let pending = false;
-  for (const c of rollup ?? []) {
+  for (const c of latestRuns(rollup ?? [])) {
     const conclusion = (c.conclusion ?? c.state ?? '').toUpperCase();
     const status = (c.status ?? '').toUpperCase();
     if (FAILED.includes(conclusion)) {

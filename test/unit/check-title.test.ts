@@ -124,9 +124,11 @@ describe('the PR title check in CI', () => {
     expect(title.match(/\$\{\{/g)).toHaveLength(2);
   });
 
-  it("doesn't rerun the tests for an edit, or cancel them", () => {
+  it("doesn't rerun the tests for an edit, and edits never cancel a run or each other", () => {
     expect(job('test')).toContain("    if: github.event.action != 'edited' || github.event.changes.base\n");
-    expect(CI).toContain("group: ci-${{ github.ref }}${{ github.event.action == 'edited' && '-edited' || '' }}");
+    // A new base reruns the tests, so it shares the PR's group; any other edit gets one of its own.
+    expect(CI).toContain(
+      "group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edited-{0}', github.run_id) || '' }}");
   });
 });
 
