@@ -698,16 +698,17 @@ export class Lifecycle {
     // People, and in All mode other bots too. AgentK's reviews are never counted here.
     const others = st.reviews.filter((r) => r.author && !isAgentk(r.author) && !seen.has(r.id));
     const bots = others.length ? await this.botLogins(before, st.number) : [];
-    if (others.length && bots) {
+    const isBot = (r: github.PrReview) => !!bots?.some((b) => github.isLogin(r.author, b));
+    // Replies on review threads (Claude's too: it posts as the user) are empty COMMENTED reviews.
+    const worded = others.filter((r) => (mode === 'all' || !isBot(r)) && (r.state !== 'COMMENTED' || r.body.trim()));
+    // Anyone can review a public repo's PR. Only people with a role on it, bots (apps installed
+    // on it) and the user get to start a turn; the rest are shown to the user, not to Claude.
+    const outside = bots ? worded.filter((r) => !isBot(r) && !github.isTrustedAuthor(r, settings.reviewerLogin)) : [];
+    const user = outside.length ? await this.viewerLogin(this.ghCwd(before)) : null;
+    // Like the bot lookup, an unknown login leaves the reviews unseen for the next poll, so the
+    // user's own review is never dropped as a stranger's.
+    if (others.length && bots && (user || !outside.length)) {
       others.forEach((r) => seen.add(r.id));
-      const isBot = (r: github.PrReview) => bots.some((b) => github.isLogin(r.author, b));
-      const counted = others.filter((r) => mode === 'all' || !isBot(r));
-      // Replies on review threads (Claude's too: it posts as the user) are empty COMMENTED reviews.
-      const worded = counted.filter((r) => r.state !== 'COMMENTED' || r.body.trim());
-      // Anyone can review a public repo's PR. Only people with a role on it, bots (apps installed
-      // on it) and the user get to start a turn; the rest are shown to the user, not to Claude.
-      const outside = worded.filter((r) => !isBot(r) && !github.isTrustedAuthor(r, settings.reviewerLogin));
-      const user = outside.length ? await this.viewerLogin(this.ghCwd(before)) : null;
       const ignored = outside.filter((r) => !user || !github.isLogin(r.author, user));
       const trusted = worded.filter((r) => !ignored.includes(r));
       if (ignored.length) {

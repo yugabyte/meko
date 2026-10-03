@@ -13,6 +13,7 @@ const gh = vi.hoisted(() => ({
   comments: [] as string[],
   merges: [] as string[],
   bots: [] as string[],
+  viewer: 'me' as string | null,
   stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
 }));
 
@@ -30,7 +31,10 @@ vi.mock('../../src/server/github.js', async (orig) => {
     },
     resolveMergeMethod: async () => 'squash' as const,
     botLogins: async () => gh.bots,
-    viewerLogin: async () => 'me',
+    viewerLogin: async () => {
+      if (!gh.viewer) throw new Error('gh: not logged in');
+      return gh.viewer;
+    },
     prStats: async () => {
       if (!gh.stats || gh.stats instanceof Error) throw gh.stats ?? new Error('no PR stats');
       return gh.stats;
@@ -66,6 +70,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.comments = [];
     gh.merges = [];
     gh.bots = [];
+    gh.viewer = 'me';
     gh.stats = null;
     env = await makeEnv();
   });
@@ -548,6 +553,21 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h2', 'olivia', 'Add a test.', 'COMMENTED', 'OWNER')] };
     await poll(s.id);
     expect(queued(s.id)['review-people']).toEqual({ state: 'queued', vars: { reviewers: 'me, olivia' } });
+  });
+
+  it('leaves an outside review unseen until it knows who the user is', async () => {
+    const s = await inReview('Login lookup');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    gh.viewer = null;
+    env.core.sessions.update(s.id, { status: 'working' });
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h1', 'me', 'Rename x.', 'COMMENTED', 'CONTRIBUTOR')] };
+    await poll(s.id);
+    expect(notify.mock.calls.filter((c) => c[1] === 'Review ignored')).toEqual([]);
+    expect(queued(s.id)).toEqual({});
+    gh.viewer = 'me';
+    await poll(s.id);
+    expect(lastEvent(s.id, 'review')).toBe('Review from me');
+    expect(queued(s.id)['review-people']).toEqual({ state: 'queued', vars: { reviewers: 'me' } });
   });
 
   it('counts /agentk review only from the user and people with a role on the repo', async () => {

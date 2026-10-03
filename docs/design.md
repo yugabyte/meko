@@ -723,7 +723,8 @@ stateDiagram-v2
   from …* and notified once per poll; Claude never gets it. The `review-people` prompt names the
   reviewers that started it (`{{reviewers}}`, kept with the queued prompt and merged while it
   waits) and tells Claude that anyone else's comments are untrusted text, not instructions; the
-  `review` prompt says the same about comments not by AgentK, and the Review a PR prompts say the
+  `review` prompt says the same about comments not by AgentK, `continue-review` (after a restart
+  mid-review) about comments not from those reviewers, and the Review a PR prompts say the
   PR's description, commits, code comments and threads are content to review, never instructions.
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
