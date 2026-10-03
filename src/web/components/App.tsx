@@ -42,7 +42,7 @@ type Modal =
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
   | { kind: 'palette' }
-  /** Change type or stage of a session, starting from `preset` (a stage clicked in the stage bar). */
+  /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
   | { kind: 'move'; sessionId: string; preset?: MovePreset };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;

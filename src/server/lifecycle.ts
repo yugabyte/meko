@@ -12,10 +12,10 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, SESSION_KINDS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type SessionKind, type Stage } from '../shared/types.js';
-import { MOVE_TARGETS, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
+import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
+import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
-import { WORKFLOW } from './sessions.js';
+import { workflowLine } from './sessions.js';
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
@@ -267,27 +267,23 @@ export class Lifecycle {
   }
 
   /**
-   * Types the PR prompt (with a moved session's `moved` line first): the session goes to the PR
-   * stage, and back to where it was, as it was, if the prompt can't be typed. `check` runs again
-   * after waiting on GitHub and Meko, which gave Claude and the user time to move on.
+   * Types the PR prompt (with a moved session's `moved` line first, `lead`): the session goes to the
+   * PR stage, and back to where it was if the prompt can't be typed. `check` runs again after
+   * waiting on GitHub and Meko, which gave Claude and the user time to move on.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, move?: { kind: SessionKind; lead: string }): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, lead?: string): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     const footer = await this.prFooter(row);
     const cur = this.sessions.row(row.id);
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
-    if (move) this.applyKind(cur, move.kind);
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
     try {
-      await this.sessions.submit(row.id, [move?.lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
+      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      if (this.sessions.row(row.id).stage === 'pr') {
-        if (move) this.applyKind(this.sessions.row(row.id), cur.kind);
-        this.sessions.setStage(row.id, cur.stage, 'auto');
-      }
+      if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
       throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
     }
   }
@@ -308,31 +304,31 @@ export class Lifecycle {
   // ---- moves ----
 
   /**
-   * Changes a session's type, its stage, or both, at the user's request. The rules for which
-   * moves exist are in src/shared/stages.ts, shared with the move dialog.
+   * Moves a task session to another stage at the user's request. The rules for which moves exist
+   * are in src/shared/stages.ts, shared with the move dialog. A `kind` sent by a page from before
+   * session kinds became start stages is ignored.
    */
   async move(row: SessionRow, req: MoveSessionRequest): Promise<void> {
-    const { kind, stage, prompt, task } = req ?? ({} as MoveSessionRequest);
-    if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
+    const { stage, prompt, task } = req ?? ({} as MoveSessionRequest);
     if (!MOVE_TARGETS.includes(stage)) throw new HttpError(400, `Pick a stage to move to: ${MOVE_TARGETS.join(', ')}.`);
     if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
-    await this.serial(row.id, () => this.doMove(row.id, kind, stage, prompt, (task ?? '').trim()));
+    await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim()));
   }
 
-  private async doMove(id: string, kind: SessionKind, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
+  private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
     const cur = this.sessions.row(id);
     if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     const blocked = moveBlockedIn(cur.stage);
     if (blocked) throw new HttpError(409, blocked);
     if (this.merging.has(id) || this.closing.has(id)) throw new HttpError(409, 'A merge is in progress.');
-    const bad = moveError(cur, { kind, stage });
+    const bad = moveError(cur, stage);
     if (bad) throw new HttpError(400, bad);
     if (cur.stage === 'design' && cur.plan_mode) {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
     }
     this.checkBetweenTurns(cur);
-    if (stage === 'review' && movesStep(cur.stage, stage)) return this.moveToReview(cur, kind);
+    if (stage === 'review' && movesStep(cur.stage, stage)) return this.moveToReview(cur);
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
     if (send) {
@@ -342,7 +338,6 @@ export class Lifecycle {
     if (task && !cur.initial_prompt) this.sessions.update(id, { initial_prompt: task });
     // Designs are written as markdown or an Artifact now; plan mode is only for older sessions.
     if (stage === 'design') this.sessions.update(id, { plan_mode: 0 });
-    this.applyKind(cur, kind);
     if (movesStep(cur.stage, stage)) {
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
@@ -362,7 +357,7 @@ export class Lifecycle {
    * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
    * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does.
    */
-  private async moveToReview(row: SessionRow, kind: SessionKind): Promise<void> {
+  private async moveToReview(row: SessionRow): Promise<void> {
     const cwd = this.ghCwd(row);
     const pr = await github.findPr(cwd, row.branch, row.created_at, true).catch(() => null);
     let adopt = false;
@@ -384,24 +379,17 @@ export class Lifecycle {
       await this.sendPr(cur, (r) => {
         check(r);
         this.checkPromptable(r);
-      }, kind === cur.kind && cur.stage === 'code' ? undefined : { kind, lead: this.movedLine({ ...cur, kind }, 'review') });
+      }, cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'));
       return;
     }
-    this.applyKind(cur, kind);
     if (cur.stage === 'design') this.leaveDesign(row.id, false);
     await this.adoptPr(row.id, pr, 'you');
   }
 
-  /** Sets the session's type, with an event when it changes. */
-  private applyKind(row: SessionRow, kind: SessionKind): void {
-    if (row.kind === kind) return;
-    this.sessions.update(row.id, { kind });
-    this.sessions.event(row.id, 'kind', `Changed type to ${KIND_LABELS[kind]}`);
-  }
-
-  /** The `moved` line: what the session is now, since Claude's system prompt still says what it was. */
+  /** The `moved` line: where the session is now, since Claude's system prompt still says where it was. */
   private movedLine(row: SessionRow, stage: Stage = row.stage): string {
-    return this.sessions.prompt(row, 'moved', { kind: KIND_LABELS[row.kind], stage: STAGE_LABELS[stage], workflow: WORKFLOW[row.kind] });
+    const kind = kindOf(row.kind);
+    return this.sessions.prompt(row, 'moved', { kind: KIND_LABELS[kind], stage: STAGE_LABELS[stage], workflow: workflowLine(kind, stage) });
   }
 
   /**

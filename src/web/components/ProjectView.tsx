@@ -9,7 +9,7 @@ import {
   type SessionAction,
   type Stage,
 } from '../../shared/types';
-import { moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
+import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
@@ -58,7 +58,7 @@ export function ProjectView({
   mekoWebUrl: string | null;
   meko: MekoStatus;
   onNewSession: () => void;
-  /** Opens the Change type or stage dialog for the session on screen. */
+  /** Opens the Move to another stage dialog for the session on screen. */
   onMove: (preset?: MovePreset) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
@@ -235,11 +235,6 @@ export function ProjectView({
               <button className="btn small" onClick={goHome}>
                 Project home
               </button>
-              {session && !moveBlockedIn(session.stage) && (
-                <button className="btn small" onClick={() => onMove()} title="Change the session's type, or move it to another stage">
-                  Change type
-                </button>
-              )}
               {canDesign && (
                 <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
                   Design doc
@@ -395,10 +390,13 @@ function StageBar({
       </div>
     );
   }
-  const stages: Stage[] = KIND_STAGES[session.kind];
+  const kind = kindOf(session.kind);
+  const stages: Stage[] = KIND_STAGES[kind];
   const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
+  // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
+  const first = kind === 'task' ? 0 : 1;
   // Other stages the session can be moved to open the move dialog.
-  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(session.kind);
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -412,10 +410,10 @@ function StageBar({
         <button
           className="gate"
           disabled={blocked || !!reason}
-          title={reason ?? 'Turn this exploration into a Quick Code session and open a pull request'}
-          onClick={() => onMove({ kind: 'quick', stage: 'review' })}
+          title={reason ?? 'Move this session on to Design, Code or a PR'}
+          onClick={() => onMove({ stage: 'design' })}
         >
-          Open PR…
+          Move on…
         </button>
       );
       break;
@@ -543,7 +541,7 @@ function StageBar({
             const cls = cx('stg', i < idx && !skipped && 'done', skipped && 'skipped', i === idx && 'cur');
             const inner = (
               <>
-                <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + 1}</span>
+                <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + first}</span>
                 <span className="stg-label">{STAGE_LABELS[st]}</span>
               </>
             );
@@ -572,7 +570,12 @@ function StageBar({
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>{STAGE_LABELS[session.stage]}</b>
-            {session.stage !== 'done' && stages.length > 1 && <span className="muted"> {idx + 1} of {stages.length}</span>}
+            {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (
+              <span className="muted">
+                {' '}
+                {idx + first} of {stages.length - 1 + first}
+              </span>
+            )}
           </span>
           <span className="stages-gate">{gate}</span>
         </div>

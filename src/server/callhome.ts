@@ -4,8 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
-  SESSION_KINDS,
-  type FileTypeCount, type MekoStatus, type MekoUsage, type SessionKind, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
+  type CallHomeKind, type FileTypeCount, type MekoStatus, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
   type CallHomeReport, type CallHomeTokens,
 } from '../shared/types.js';
 import { isLoopback, mekoConfigured, resolveMekoWithSource, type Config } from './config.js';
@@ -81,7 +80,21 @@ export function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-const byKind = (): Record<SessionKind, number> => ({ explore: 0, plan: 0, quick: 0, 'review-pr': 0 });
+const byKind = (): Record<CallHomeKind, number> => ({ explore: 0, plan: 0, quick: 0, 'review-pr': 0 });
+
+/** The start a task's first stage stands for, under the old session types' names. */
+const START_KINDS: Partial<Record<string, CallHomeKind>> = { explore: 'explore', design: 'plan', code: 'quick' };
+
+/**
+ * How the report counts a session: a Review a PR, or a task by the stage it started in. A session
+ * with no stage history falls back to its stored kind (the old type, or `plan` for a task).
+ */
+export function callHomeKind(kind: string, firstStage: string | null): CallHomeKind | null {
+  if (kind === 'review-pr') return 'review-pr';
+  const start = firstStage != null && Object.hasOwn(START_KINDS, firstStage) ? START_KINDS[firstStage] : undefined;
+  if (start) return start;
+  return kind === 'explore' || kind === 'plan' || kind === 'quick' ? kind : null;
+}
 const byStage = (): Record<Stage, number> => Object.fromEntries(STAGES.map((s) => [s, 0])) as Record<Stage, number>;
 
 function emptyDay(day: string): CallHomeDay {
@@ -225,12 +238,13 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     .filter((r) => currentIds.has(r.project_id));
 
   // Sessions.
-  const sessions = all<{ kind: string; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
-    'SELECT kind, stage, desired, created_at, archived_at FROM sessions');
+  const sessions = all<{ kind: string; first_stage: string | null; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
+    `SELECT kind, (SELECT stage FROM session_stages WHERE session_id = sessions.id ORDER BY entered_at, rowid LIMIT 1) AS first_stage,
+            stage, desired, created_at, archived_at FROM sessions`);
   const kinds = byKind();
   const openByStage = byStage();
   for (const s of sessions) {
-    const kind = (SESSION_KINDS as string[]).includes(s.kind) ? (s.kind as SessionKind) : null;
+    const kind = callHomeKind(s.kind, s.first_stage);
     if (kind) kinds[kind]++;
     if (s.desired === 'running' && (STAGES as string[]).includes(s.stage)) openByStage[s.stage as Stage]++;
     const c = dayOf(s.created_at);

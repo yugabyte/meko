@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { KIND_HINTS, KIND_LABELS, KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../../shared/types';
-import type { SessionKind, SessionStatus } from '../../shared/types';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
+import type { SessionStatus, StartStage } from '../../shared/types';
 import { STATUS_TEXT, cx, mekoDatapackUrl } from '../util';
 
 export function StatusDot({ status, title }: { status: SessionStatus; title?: string }) {
@@ -202,66 +202,62 @@ export function Check({ size = 10 }: { size?: number }) {
   );
 }
 
-/** First and last stage, e.g. "Design → Merge & Close", or the only one. */
-function stageSpan(kind: SessionKind): string {
-  const st = KIND_STAGES[kind];
-  return st.length === 1 ? STAGE_LABELS[st[0]] : `${STAGE_LABELS[st[0]]} → ${STAGE_LABELS[st[st.length - 1]]}`;
-}
+/** A choice in the New session dialog: the stage a task starts at, or a Review a PR. */
+export type StartChoice = StartStage | 'review-pr';
+
+const START_CHOICES: StartChoice[] = [...START_STAGES, 'review-pr'];
 
 /**
- * The session types as boxes side by side, a radio group (arrow keys move the choice). `id`
- * prefixes the element ids; `current` marks the session's type when changing it; `kinds` limits
- * the choice (a session can't be changed into a Review a PR, say).
+ * Where a new session starts: the stages a task can start at as pills joined like the stage bar
+ * (dotted from Explore, which is optional), then "or" and Review a PR. A radio group (arrow keys
+ * move the choice); `id` prefixes the element ids.
  */
-export function KindPicker({
-  id,
-  value,
-  onChange,
-  current,
-  kinds = SESSION_KINDS,
-}: {
-  id: string;
-  value: SessionKind;
-  onChange: (k: SessionKind) => void;
-  current?: SessionKind;
-  kinds?: SessionKind[];
-}) {
-  const refs = useRef<Partial<Record<SessionKind, HTMLButtonElement | null>>>({});
+export function StartPicker({ id, value, onChange }: { id: string; value: StartChoice; onChange: (c: StartChoice) => void }) {
+  const refs = useRef<Partial<Record<StartChoice, HTMLButtonElement | null>>>({});
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const next = kinds[(kinds.indexOf(value) + step + kinds.length) % kinds.length];
+    const next = START_CHOICES[(START_CHOICES.indexOf(value) + step + START_CHOICES.length) % START_CHOICES.length];
     onChange(next);
     refs.current[next]?.focus();
   };
   return (
     <div className="field">
       <span className="label" id={`${id}-label`}>
-        Session type
+        Where do you want to start?
       </span>
-      <div className={cx('kinds', kinds.length === 4 && 'four')} role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} onKeyDown={onKey}>
-        {kinds.map((k) => (
-          <button
-            key={k}
-            id={`${id}-${k}`}
-            ref={(el) => {
-              refs.current[k] = el;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={k === value}
-            tabIndex={k === value ? 0 : -1}
-            className={cx('kind', k === value && 'on')}
-            onClick={() => onChange(k)}
-          >
-            <b>{KIND_LABELS[k]}</b>
-            <span className="kind-stages">{k === current ? `Current · ${stageSpan(k)}` : stageSpan(k)}</span>
-          </button>
+      <div className="starts" role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} onKeyDown={onKey}>
+        {START_CHOICES.map((c, i) => (
+          <Fragment key={c}>
+            {i > 0 &&
+              (c === 'review-pr' ? (
+                <span className="start-or" aria-hidden="true">
+                  or
+                </span>
+              ) : (
+                <span className={cx('start-link', i === 1 && 'dotted')} aria-hidden="true" />
+              ))}
+            <button
+              id={`${id}-${c}`}
+              ref={(el) => {
+                refs.current[c] = el;
+              }}
+              type="button"
+              role="radio"
+              aria-checked={c === value}
+              tabIndex={c === value ? 0 : -1}
+              className={cx('start', c === value && 'on')}
+              onClick={() => onChange(c)}
+            >
+              {c !== 'review-pr' && <span className="n">{KIND_STAGES.task.indexOf(c)}</span>}
+              {c === 'review-pr' ? KIND_LABELS['review-pr'] : STAGE_LABELS[c]}
+            </button>
+          </Fragment>
         ))}
       </div>
       <span className="hint" id={`${id}-hint`}>
-        {KIND_HINTS[value]}
+        {START_HINTS[value]}
       </span>
     </div>
   );

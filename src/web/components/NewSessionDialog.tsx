@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Project, RepoInfo, ReviewablePr, ReviewablePrs, Session, SessionKind } from '../../shared/types';
+import type { Project, RepoInfo, ReviewablePr, ReviewablePrs, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { repoFolder, slugify } from '../util';
-import { Dialog, ErrorText, Field, KindPicker } from './common';
+import { Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
-const NAME_PLACEHOLDER: Record<SessionKind, string> = {
+const NAME_PLACEHOLDER: Record<StartChoice, string> = {
   explore: 'why is CI slow on macOS',
-  plan: 'fix retry backoff',
-  quick: 'fix typo in README',
+  design: 'fix retry backoff',
+  code: 'fix typo in README',
   'review-pr': 'review #21',
 };
 
@@ -30,8 +30,8 @@ export function NewSessionDialog({
   const [name, setName] = useState('');
   const [nameEdited, setNameEdited] = useState(false);
   const [prompt, setPrompt] = useState('');
-  const [kind, setKind] = useState<SessionKind>('plan');
-  const review = kind === 'review-pr';
+  const [start, setStart] = useState<StartChoice>('design');
+  const review = start === 'review-pr';
   const [prList, setPrList] = useState<ReviewablePrs | null>(null);
   const [prListError, setPrListError] = useState<string | null>(null);
   const [picked, setPicked] = useState<ReviewablePr | null>(null);
@@ -71,7 +71,7 @@ export function NewSessionDialog({
   }, [project.id, project.defaultBranch, repoPath, inProjectRepo]);
 
   // The project's PRs to review: looked for when Review a PR is picked, or right away for a project
-  // just opened, where they decide the type it starts on.
+  // just opened, where they decide where it starts.
   const loadPrs = useCallback(() => {
     setPrListError(null);
     api
@@ -85,7 +85,7 @@ export function NewSessionDialog({
         return null;
       })
       .then((r) => {
-        if (fresh && r?.prs.length) setKind((k) => (k === 'plan' ? 'review-pr' : k));
+        if (fresh && r?.prs.length) setStart((c) => (c === 'design' ? 'review-pr' : c));
       });
   }, [project.id, fresh]);
   const wantPrs = review || fresh;
@@ -139,7 +139,7 @@ export function NewSessionDialog({
           ? {
             name: name.trim(),
             prompt: prompt.trim() || undefined,
-            kind,
+            kind: 'review-pr',
             repoPath: inProjectRepo ? undefined : repoPath,
             pr: { repo: picked.repo, number: picked.number },
           }
@@ -147,7 +147,8 @@ export function NewSessionDialog({
             name: name.trim(),
             prompt: prompt.trim() || undefined,
             baseBranch,
-            kind,
+            kind: 'task',
+            start: start === 'review-pr' ? undefined : start,
             repoPath: inProjectRepo ? undefined : repoPath,
             branch: branch.trim() || undefined,
           },
@@ -183,7 +184,7 @@ export function NewSessionDialog({
           <input
             id="ns-name"
             className="input"
-            placeholder={NAME_PLACEHOLDER[kind]}
+            placeholder={NAME_PLACEHOLDER[start]}
             value={name}
             onChange={(e) => {
               setName(e.target.value);
@@ -192,7 +193,7 @@ export function NewSessionDialog({
             autoFocus
           />
         </Field>
-        <KindPicker id="ns-kind" value={kind} onChange={setKind} />
+        <StartPicker id="ns-start" value={start} onChange={setStart} />
         {review && (
           <ReviewPrPicker
             project={project}
@@ -213,7 +214,7 @@ export function NewSessionDialog({
           hint={
             review
               ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
-              : kind === 'explore'
+              : start === 'explore'
                 ? 'What should AgentK do? You can also type it in the terminal.'
                 : 'What should AgentK do? Left empty, AgentK starts on the name as the task.'
           }
