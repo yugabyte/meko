@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
   ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
@@ -10,7 +10,7 @@ import type { Core } from './core.js';
 import { all, get, run, tx, type Db } from './db.js';
 import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks.js';
 import {
-  canonicalRemote, cloneRepo, defaultBranch, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
+  canonicalRemote, cloneRepo, defaultBranch, ensureFirstCommit, initFolder, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
 } from './git.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
@@ -43,6 +43,15 @@ function isDatapackLimit(e: unknown): boolean {
 }
 
 /** A repo's folder that's already there (or being made by another open); <fix> says what to do instead. */
+/** <dir> is a folder with nothing in it. */
+function isEmptyFolder(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory() && readdirSync(dir).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function folderTaken(dest: string, fix = 'Pick it from the list, or choose another name.'): HttpError {
   return new HttpError(409, `${dest} already exists. ${fix}`);
 }
@@ -140,7 +149,11 @@ export class ProjectService {
     } else {
       repoPath = resolve(expandHome(req.repoPath!));
     }
-    if (!isMainRepo(repoPath)) throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree).`);
+    // An empty folder typed under Other folder is made a repo below, once the name is checked.
+    const makeRepo = !!req.repoPath && isEmptyFolder(repoPath);
+    if (!makeRepo && !isMainRepo(repoPath)) {
+      throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree). Run git init there and commit its files, or pick an empty folder and AgentK makes it a repo.`);
+    }
     // Stored as its real path, so every path to the repo (a symlink, say) names the same one.
     repoPath = repoKey(repoPath);
     // The name is taken from here until the row is written, so a second create of it (or a rename
@@ -152,7 +165,17 @@ export class ProjectService {
     let dp: { id: string; name: string } | null;
     let reopened = false;
     try {
-      // Datapack first: if Meko refuses, nothing is written locally.
+      // The repo gets what sessions need before Meko is asked, so a datapack is never made for an
+      // open that then fails here: the empty folder becomes a repo, and a repo with no commits
+      // (just `git init`) gets an empty first commit, so sessions have a base to branch from.
+      if (makeRepo) await this.makeFolderRepo(repoPath);
+      try {
+        await ensureFirstCommit(repoPath);
+      } catch (e) {
+        throw new HttpError(400, errMsg(e));
+      }
+      // Datapack before the row: if Meko refuses, no project is written. A repo or first commit
+      // made above stays, and a retry opens the repo as it is.
       dp = req.datapack.mode === 'none' ? null : await this.resolveDatapack(req.datapack, repoPath, name);
       const branch = await defaultBranch(repoPath);
       const settings = { ...DEFAULT_SETTINGS };
@@ -239,6 +262,15 @@ export class ProjectService {
       throw new HttpError(400, `Couldn't create the repo: ${errMsg(e)}`);
     }
     return dest;
+  }
+
+  /** Makes <dir>, an empty folder typed under Other folder, a repo as a new repo is made (git init and an empty first commit). */
+  private async makeFolderRepo(dir: string): Promise<void> {
+    try {
+      await initFolder(dir);
+    } catch (e) {
+      throw new HttpError(400, `Couldn't make ${dir} a repo: ${errMsg(e)}`);
+    }
   }
 
   /**

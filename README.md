@@ -63,7 +63,9 @@ your phone can connect.
 
 - **Projects** in a left rail: each is an effort to build or improve a feature, product or service,
   worked on in a git repo picked from your repos folder (`~/code` by default), cloned into it, or
-  started there as a new repo (git init and a first commit).
+  started there as a new repo (git init and a first commit). A repo with no commits yet, or an
+  empty folder, gets the same empty first commit, so sessions have a base to branch from; a repo
+  with no commits but files in it is refused until you commit them.
   A repo can back several projects, each with its own datapack, settings and sessions.
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its

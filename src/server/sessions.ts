@@ -7,7 +7,7 @@ import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addReviewWorktree, addWorktree, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, existingBranch, fetchPrHead, git,
+  BranchGoneError, addReviewWorktree, addWorktree, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fetchPrHead, git,
   gitRaw, isIdleWorktree, prRef, remoteFor, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type SyncResult,
 } from './git.js';
@@ -277,6 +277,14 @@ export class SessionManager {
     const task = review
       ? `Review PR #${review.info.number} of ${review.repo}: ${review.info.title}`
       : (req.prompt ?? '').trim() || (stage === 'explore' ? '' : name);
+    // A repo with no commits yet (one opened before AgentK gave it a first commit) gets one now.
+    if (!review) {
+      try {
+        await ensureFirstCommit(repo);
+      } catch (e) {
+        throw new HttpError(400, errMsg(e));
+      }
+    }
     const wanted = review ? '' : (req.branch ?? '').trim();
     const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
     const base = review?.info.baseRefName || (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));

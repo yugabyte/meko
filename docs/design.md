@@ -143,7 +143,20 @@ the repo.
   rather than a directory), are left out. Only the top level is scanned by default. The scan depth
   and the list of folders are both settings.
 - **Clone from URL.** Paste a git URL and the server clones it into `~/code/<name>` using your
-  existing git credentials, then selects it. "Other folder" takes any repo path on the host.
+  existing git credentials, then selects it. "Other folder" takes any repo path on the host; an
+  empty folder there is made a repo as a new repo is (below), once the project name is checked,
+  and on a failure its `.git` is removed again. A folder with files that isn't a repo is left alone, and the error says to
+  `git init` it and commit its files.
+- **A repo with no commits yet.** A worktree needs a commit to branch from, so a repo that is just
+  `git init` (picked, typed, or cloned from an empty remote) gets the same empty first commit as a
+  new repo when its project opens (`ensureFirstCommit()` in `git.ts`), and so does a session's repo
+  when the session starts (for a repo opened before AgentK did this, or another scanned repo under
+  Advanced). One with files in it (untracked or staged) is refused instead, changing nothing: an
+  empty commit would leave them out of every worktree, and what to commit is the user's call, so
+  the error says how to commit them. These run one at a time per repo, so two opens or starts at
+  once make one repo and one commit. They come before the datapack, so Meko never gets a datapack
+  for an open that then fails here; a repo or commit made for an open Meko then refuses stays, and
+  a retry opens the repo as it is.
 - **New repo.** Type a folder name (it's never filled in for you) and the server makes
   `~/code/<name>` (the clone folder):
   `git init`, `HEAD` on your `init.defaultBranch` (or `main`), and an empty first commit as you, so
@@ -449,7 +462,9 @@ closed or gets an open session elsewhere.
 
 A **project** is an effort to build or improve a feature, product or service. It works in a git
 repository on the host, picked from your repos folder (`~/code`), cloned into it, or made new there at creation.
-The project only points at the repo. The one change it makes there: when a
+The project only points at the repo. It changes two things there. A repo with no commits and
+no files gets an empty first commit on `HEAD`'s branch when its project opens or a session starts
+in it (see [Open project](#open-project)), since a worktree needs a commit to branch from. And when a
 session starts, it fast-forwards the local base branch to `origin`. That's a `merge --ff-only`
 with autostash off when your main checkout has the branch checked out (git refuses if it would
 overwrite local edits), or a non-forced local fetch (`git fetch . origin/<base>:<base>`) when no
