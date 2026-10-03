@@ -87,9 +87,9 @@ PRs are squash-merged with the PR title as the commit subject on `main`, so **th
 the subject the release workflow reads**. Give it the same format: pick the type for the PR's
 change as a whole (a PR that adds a feature and its docs and tests is `feat`), and run
 `sh scripts/check-title.sh "<title>"` before `gh pr create --title` or `gh pr edit --title`.
-When later commits change what a PR does, retitle it to match. CI rejects a title the script
-rejects, but picking the right type is up to you, and it's what keeps a fix from missing its
-release.
+When later commits change what a PR does, retitle it to match. The `PR title` check
+(`.github/workflows/pr-title.yml`) rejects a title the script rejects, but picking the right
+type is up to you, and it's what keeps a fix from missing its release.
 
 ## Steps
 

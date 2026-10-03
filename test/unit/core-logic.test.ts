@@ -720,14 +720,13 @@ describe('github helpers', () => {
   });
 
   it('reads only the newest run of each check on the head commit', () => {
-    // The rollup's shape after a bad title was fixed: the edit reran the CI workflow on the same commit.
+    // The rollup's shape after a bad title was fixed: the edit reran the PR title workflow on the same commit.
     const check = (name: string, conclusion: string, startedAt: string, extra = {}) =>
-      ({ __typename: 'CheckRun', name, workflowName: 'CI', status: 'COMPLETED', conclusion, startedAt, ...extra });
+      ({ __typename: 'CheckRun', name, workflowName: 'PR title', status: 'COMPLETED', conclusion, startedAt, ...extra });
     const first = check('PR title', 'FAILURE', '2026-10-03T15:13:31Z');
-    const tests = check('test (ubuntu-latest)', 'SUCCESS', '2026-10-03T15:13:31Z');
+    const tests = check('test (ubuntu-latest)', 'SUCCESS', '2026-10-03T15:13:31Z', { workflowName: 'CI' });
     const fixed = check('PR title', 'SUCCESS', '2026-10-03T15:19:02Z');
-    const skipped = check('test', 'SKIPPED', '2026-10-03T15:19:02Z');
-    expect(ciSummary([first, tests, fixed, skipped])).toEqual({ state: 'success', pending: false, failed: [] });
+    expect(ciSummary([first, tests, fixed])).toEqual({ state: 'success', pending: false, failed: [] });
     // Whatever the order, and a cancelled run counts as superseded too.
     expect(ciSummary([fixed, check('PR title', 'CANCELLED', '2026-10-03T15:18:00Z'), tests]).state).toBe('success');
     // The newest run decides even when it's the failure.
