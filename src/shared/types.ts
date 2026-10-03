@@ -34,40 +34,45 @@ export interface StartupState {
 
 /**
  * `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup.
- * `explore` is an Exploration session's only stage: no gates, it ends when the user archives it.
+ * `explore` is a task's optional first stage: no gates, the user moves the session on from it.
  * `reviewing-pr` is a Review a PR session's only stage: the user reviews someone else's PR, with
  * AgentK assisting, until they close the review.
  */
 export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr';
 
-/** What a session is for, picked when it's created. It decides the stages it goes through. */
-export type SessionKind = 'explore' | 'plan' | 'quick' | 'review-pr';
+/**
+ * What a session is: a task, which runs on Explore → Design → Code → PR & Review → Merge & Close
+ * from the stage it starts at, or a Review a PR (someone else's PR), which has one stage.
+ */
+export type SessionKind = 'task' | 'review-pr';
 
-export const SESSION_KINDS: SessionKind[] = ['explore', 'plan', 'quick', 'review-pr'];
+export const SESSION_KINDS: SessionKind[] = ['task', 'review-pr'];
 
 export const KIND_LABELS: Record<SessionKind, string> = {
-  explore: 'Exploration',
-  plan: 'Plan & Implement',
-  quick: 'Quick Code',
+  task: 'Task',
   'review-pr': 'Review a PR',
 };
 
-/** One line on what each kind is for, shown under the choice in the New session dialog. */
-export const KIND_HINTS: Record<SessionKind, string> = {
-  explore: 'Investigate, answer questions, build POCs and run experiments. No design, PR or merge.',
-  plan: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
-  quick: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
+/** Where a new task session starts. It gets to PR & Review only through Open PR or a move. */
+export type StartStage = 'explore' | 'design' | 'code';
+
+export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
+
+/** One line on what each start (and Review a PR) is for, shown under the choice in the New session dialog. */
+export const START_HINTS: Record<StartStage | 'review-pr', string> = {
+  explore: "Investigate, answer questions, build POCs and run experiments. Move on to Design, Code or a PR when you're ready.",
+  design: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
+  code: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
   'review-pr': "Review someone else's PR. AgentK checks it out, sums it up for you, then helps with whatever you ask. It posts to GitHub only when you say.",
 };
 
 /**
  * The steps shown in the stage bar for each kind, in order. `pr` (opening the PR) shows as part of
- * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown.
+ * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
+ * steps are numbered from 0, so Explore is 0 and Design 1.
  */
 export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> = {
-  explore: ['explore'],
-  plan: ['design', 'code', 'review', 'merge'],
-  quick: ['code', 'review', 'merge'],
+  task: ['explore', 'design', 'code', 'review', 'merge'],
   'review-pr': ['reviewing-pr'],
 };
 
@@ -320,13 +325,19 @@ export interface CallHomeMeko {
   starts: { found: number; empty: number; error: number; late: number; ms: number };
 }
 
+/**
+ * Sessions as the report counts them, by where they started: `explore`, `plan` (Design) and `quick`
+ * (Code) are the starts under the names the session types had, and `review-pr` a Review a PR.
+ */
+export type CallHomeKind = 'explore' | 'plan' | 'quick' | 'review-pr';
+
 export interface CallHomeTotals {
   projects: { current: number; deleted: number; withDatapack: number; sharedDatapacks: number; repos: number };
   sessions: {
     total: number;
     open: number;
     archived: number;
-    byKind: Record<SessionKind, number>;
+    byKind: Record<CallHomeKind, number>;
     openByStage: Record<Stage, number>;
   };
   /** prCommits, prAdditions and prDeletions cover merges recorded since this was added. */
@@ -348,7 +359,7 @@ export interface CallHomeDay {
   projectsCreated: number;
   /** Projects closed, counting closes a later reopen undid. */
   projectsDeleted: number;
-  sessionsCreated: Record<SessionKind, number>;
+  sessionsCreated: Record<CallHomeKind, number>;
   sessionsArchived: number;
   stageEntries: Record<Stage, number>;
   prsOpened: number;
@@ -427,7 +438,7 @@ export interface Session {
   statusDetail: string | null;
   kind: SessionKind;
   stage: Stage;
-  /** The session has a task (its first prompt, or its name); an Exploration started without a first prompt has none. */
+  /** The session has a task (its first prompt, or its name); one started at Explore without a first prompt has none. */
   hasTask: boolean;
   prNumber: number | null;
   prUrl: string | null;
@@ -442,8 +453,8 @@ export interface Session {
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   /**
-   * Steps before the current one that the session never went through, e.g. Design for a Quick
-   * Code session changed to Plan & Implement. The stage bar shows them as skipped.
+   * Steps before the current one that the session never went through, e.g. Explore and Design for a
+   * task started at Code. The stage bar shows them as skipped.
    */
   skippedStages: Stage[];
   hasDesign: boolean;
@@ -1003,7 +1014,7 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
-  /** The first prompt. Left out, Plan & Implement and Quick Code sessions use `name`; an Exploration starts with none. */
+  /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
   /** Defaults to the repo's default branch. */
   baseBranch?: string;
@@ -1015,9 +1026,14 @@ export interface CreateSessionRequest {
    * uses it or another checkout has it.
    */
   branch?: string;
-  /** Defaults to `plan`. */
-  kind?: SessionKind;
-  /** Deprecated: use `kind: 'quick'`. True starts a Quick Code session when `kind` is unset. */
+  /**
+   * Defaults to `task`. The old session types still work: `explore`, `plan` and `quick` are a task
+   * starting at Explore, Design and Code (`start` wins when both are given).
+   */
+  kind?: SessionKind | 'explore' | 'plan' | 'quick';
+  /** Where a task starts. Defaults to `design`. Ignored for a Review a PR. */
+  start?: StartStage;
+  /** Deprecated: use `start: 'code'`. True starts a task at Code when neither `start` nor `kind` says otherwise. */
   skipDesign?: boolean;
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
@@ -1029,16 +1045,15 @@ export interface CreateSessionRequest {
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
 export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
 
-/** Changes a session's type, its stage, or both (see `src/shared/stages.ts` for the rules). */
+/** Moves a task session to another stage (see `src/shared/stages.ts` for the rules). */
 export interface MoveSessionRequest {
-  kind: SessionKind;
   stage: MoveTarget;
   /**
    * Send the new stage's prompt. Left out, it follows promptByDefault. Ignored for PR & Review,
    * which picks up the branch's open PR, or sends the PR prompt when there's work to push.
    */
   prompt?: boolean;
-  /** The task, for a session that has none yet (an Exploration started without a first prompt). */
+  /** The task, for a session that has none yet (one started at Explore without a first prompt). */
   task?: string;
 }
 
@@ -1152,11 +1167,11 @@ export type TermServerMessage =
 //        a bare number looked up in `repoPath` (default: the project's repo); 400 for a PR that can't be found)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind, a bad branch name or a
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name or a
 //        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
-// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a type and stage that don't go together or a
+// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be typed)
 // GET    /api/sessions/:id/design              → DesignDoc

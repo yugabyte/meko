@@ -200,12 +200,15 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(attach.json().datapacks.map((d: { role: string }) => d.role)).toEqual(['dedicated', 'shared']);
     const detachDedicated = await app.inject({ method: 'DELETE', url: `/api/projects/${pid}/datapacks/dp-1`, headers: { cookie } });
     expect(detachDedicated.statusCode).toBe(400);
-    const s = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'API session', kind: 'quick' } });
+    const s = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'API session', start: 'code' } });
     expect(s.statusCode).toBe(200);
-    expect(s.json()).toMatchObject({ kind: 'quick', stage: 'code' });
+    expect(s.json()).toMatchObject({ kind: 'task', stage: 'code' });
     const badKind = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Odd', kind: 'yolo' } });
     expect(badKind.statusCode).toBe(400);
-    expect(badKind.json().error).toMatch(/Pick a session type/);
+    expect(badKind.json().error).toMatch(/Pick a session kind/);
+    const badStart = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Odd', start: 'review' } });
+    expect(badStart.statusCode).toBe(400);
+    expect(badStart.json().error).toBe('Pick where the session starts: explore, design, code.');
     const repoBranches = await app.inject({ url: `/api/repos/branches?path=${encodeURIComponent(repos.repos[0].path)}`, headers: { cookie } });
     expect(repoBranches.json()).toEqual({ defaultBranch: 'main', branches: expect.arrayContaining(['main', 'ak/api-session']) });
     expect((await app.inject({ url: '/api/repos/branches?path=/nowhere', headers: { cookie } })).statusCode).toBe(400);

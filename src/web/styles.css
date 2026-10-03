@@ -337,47 +337,76 @@ textarea.input {
   color: var(--accent);
   font-weight: 600;
 }
-/* Session types in the New session dialog: boxes side by side, on phones too. */
-.kinds {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.kind {
+/* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
+   Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
+.starts {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  padding: 9px 10px;
+  align-items: center;
+}
+.start {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
   border: 1.5px solid var(--rule);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--surface);
-  color: var(--ink);
+  color: var(--muted);
   font: inherit;
-  text-align: left;
+  font-size: 13px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.kind:hover {
-  border-color: var(--muted);
+.start:has(.n) {
+  padding-left: 6px;
 }
-.kind:focus-visible {
+.start .n {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--rule);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.start:hover {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+.start:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.kind.on {
+.start.on {
   border-color: var(--accent);
   background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
 }
-.kind b {
-  font-size: 13px;
-  line-height: 1.25;
+.start.on .n {
+  border-color: var(--accent);
+  color: var(--accent);
+  border-width: 2px;
 }
-.kind-stages {
-  font-size: 11px;
+.start-link {
+  flex: 1 1 10px;
+  min-width: 10px;
+  max-width: 40px;
+  border-top: 1.5px solid var(--rule);
+}
+.start-link.dotted {
+  border-top: 2px dotted var(--muted);
+}
+.start-or {
+  flex: none;
+  padding: 0 12px;
+  font-size: 12px;
   color: var(--muted);
-  overflow-wrap: anywhere;
 }
-/* The Change type or stage dialog: the stages as one segmented control, and what the move will do. */
+/* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
 .move-stages {
   align-self: flex-start;
   max-width: 100%;
@@ -909,7 +938,7 @@ textarea.input {
   color: var(--accent);
   border-width: 2px;
 }
-/* A stage the session can be moved to: it opens the Change type or stage dialog. */
+/* A stage the session can be moved to: it opens the Move to another stage dialog. */
 .stg-btn {
   border: 0;
   background: none;
@@ -931,7 +960,7 @@ textarea.input {
 .stg-btn:disabled {
   cursor: default;
 }
-/* A step the session never went through (a Quick Code session changed to Plan & Implement). */
+/* A step the session never went through (Explore and Design for a task started at Code). */
 .stg.skipped .n {
   border-style: dashed;
 }
@@ -3545,13 +3574,42 @@ a.icon-btn {
 }
 
 /* ---- Review a PR ---- */
-/* Four session types: side by side on a desktop, two by two on a phone. */
-.kinds.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
+/* The start pills in one column on a phone: the lines run down from each number, and "or" is a
+   divider above Review a PR. */
 @media (max-width: 760px) {
-  .kinds.four {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .starts {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .start {
+    min-height: 40px;
+  }
+  .start-link {
+    flex: none;
+    width: 0;
+    height: 12px;
+    min-width: 0;
+    margin-left: 15px;
+    border-top: 0;
+    border-left: 1.5px solid var(--rule);
+  }
+  .start-link.dotted {
+    border-top: 0;
+    border-left: 2px dotted var(--muted);
+  }
+  .start-or {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+  }
+  .start-or::before,
+  .start-or::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
   }
 }
 /* The PR picker in the New session dialog. */

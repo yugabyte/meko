@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, MoveSessionRequest, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
-import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, MoveSessionRequest, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import { START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
@@ -21,20 +21,28 @@ import { loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, m
 import { HttpError } from './projects.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
 import {
-  dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
+  STORED_TASK_KIND, dedicatedDatapack, kindOf, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
-/** What the appended system prompt (and a moved session's prompt) says about the session's workflow, per kind. */
-export const WORKFLOW: Record<SessionKind, string> = {
-  explore: 'This is an Exploration session: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK Local runs no design, PR, review or merge stages for it; the user ends the session from the AgentK Local UI.',
-  plan: 'Stages: Design → Code → PR & Review → Merge & Close; the user approves the design, opening the PR, and merging from the AgentK Local UI.',
-  quick: 'Stages: Code → PR & Review → Merge & Close; the user approves opening the PR and merging from the AgentK Local UI.',
-  'review-pr': "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK Local UI.",
-};
+/**
+ * What the appended system prompt (and a moved session's prompt) says about the session's workflow:
+ * a task's stages, with what Explore means while it's there, or what a Review a PR is.
+ */
+export function workflowLine(kind: SessionKind, stage: Stage): string {
+  if (kind === 'review-pr') {
+    return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK Local UI.";
+  }
+  const stages = 'Stages: Explore → Design → Code → PR & Review → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK Local UI.';
+  if (stage !== 'explore') return stages;
+  return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK Local runs no design approval, PR, review or merge until the user moves it on.`;
+}
+
+/** The old session types a create request may still name, and where each starts. */
+const LEGACY_STARTS: Partial<Record<string, StartStage>> = { explore: 'explore', plan: 'design', quick: 'code' };
 
 /** The PR a new Review a PR session checks out: its repo on GitHub, what GitHub says about it, the clone's remote it's fetched from, and the head fetched. */
 interface ReviewTarget {
@@ -247,20 +255,24 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     const settings = parseSettings(p.settings_json);
-    const kind: SessionKind = req.kind ?? (req.skipDesign ? 'quick' : 'plan');
-    if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
+    const asked = req.kind ?? 'task';
+    const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
+    if (asked !== 'task' && asked !== 'review-pr' && !legacy) throw new HttpError(400, 'Pick a session kind: task or review-pr.');
+    if (req.start != null && !START_STAGES.includes(req.start)) throw new HttpError(400, `Pick where the session starts: ${START_STAGES.join(', ')}.`);
+    const kind: SessionKind = asked === 'review-pr' ? 'review-pr' : 'task';
+    const start: StartStage = req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A review checks out the PR's head now, so a PR that can't be had starts nothing.
     const review = kind === 'review-pr' ? await this.reviewTarget(repo, req.pr) : null;
     const name = (req.name ?? '').trim() || (review ? `Review #${review.info.number} ${review.info.title}`.slice(0, 100).trim() : '');
     if (!name) throw new HttpError(400, 'Give the session a name.');
     const notes = review ? (req.prompt ?? '').trim() : '';
-    // A task session with no first prompt works on its name; an exploration waits for you. A
-    // review's task is the PR (the user's notes are kept apart, for its prompt).
+    const stage: Stage = review ? 'reviewing-pr' : start;
+    // A task with no first prompt works on its name, unless it starts at Explore, where it waits
+    // for you. A review's task is the PR (the user's notes are kept apart, for its prompt).
     const task = review
       ? `Review PR #${review.info.number} of ${review.repo}: ${review.info.title}`
-      : (req.prompt ?? '').trim() || (kind === 'explore' ? '' : name);
-    const stage: Stage = KIND_STAGES[kind][0];
+      : (req.prompt ?? '').trim() || (stage === 'explore' ? '' : name);
     const wanted = review ? '' : (req.branch ?? '').trim();
     const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
     const base = review?.info.baseRefName || (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
@@ -283,7 +295,7 @@ export class SessionManager {
                       pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
-        randomBytes(24).toString('base64url'), kind, stage, task || null, now, now, sessionAgentId({ id, slug }),
+        randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug }),
         review?.info.number ?? null, review?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null, review?.info.author ?? null,
         review?.sha ?? null, review?.sha ?? null, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
@@ -522,7 +534,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${WORKFLOW[row.kind]}`,
+      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${launchedAgentId(row)}" on Meko calls that write.`);

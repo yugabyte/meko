@@ -1,4 +1,4 @@
-import { KIND_LABELS, KIND_STAGES, STAGE_LABELS, type MoveTarget, type SessionKind, type Stage } from './types.js';
+import { KIND_STAGES, STAGE_LABELS, type MoveTarget, type SessionKind, type Stage } from './types.js';
 
 /** The stages a session can be moved to by hand, in stage bar order. */
 export const MOVE_TARGETS: MoveTarget[] = ['explore', 'design', 'code', 'review'];
@@ -10,7 +10,7 @@ export function stepOf(stage: Stage): Stage {
 
 /** Why a session in this stage can't be moved by hand, or null when it can. */
 export function moveBlockedIn(stage: Stage): string | null {
-  if (stage === 'reviewing-pr') return "A Review a PR session can't change type or stage.";
+  if (stage === 'reviewing-pr') return "A Review a PR session can't be moved to another stage.";
   if (stage === 'merge') return "This session is merging and closing, so it can't be moved.";
   if (stage === 'done') return "This session is done, so it can't be moved.";
   return null;
@@ -21,29 +21,30 @@ export function moveTargets(kind: SessionKind): MoveTarget[] {
   return MOVE_TARGETS.filter((t) => (KIND_STAGES[kind] as Stage[]).includes(t));
 }
 
-/** Where a move to this kind lands unless another stage is picked: the current step if the kind has it, else its first. */
-export function defaultStage(kind: SessionKind, current: Stage): MoveTarget {
-  const targets = moveTargets(kind);
+/** Where the move dialog starts unless a stage is picked: the next step on, or back to Code from PR & Review. */
+export function defaultTarget(current: Stage): MoveTarget {
   const step = stepOf(current);
-  return targets.find((t) => t === step) ?? targets[0];
+  if (step === 'explore') return 'design';
+  if (step === 'design') return 'code';
+  if (step === 'code') return 'review';
+  return 'code';
 }
 
-/** Why this kind and stage don't make a valid move from where the session is, or null. */
-export function moveError(from: { kind: SessionKind; stage: Stage }, to: { kind: SessionKind; stage: MoveTarget }): string | null {
-  if (to.kind === 'review-pr') return 'A session can\'t become a Review a PR session. Start a new session and pick the PR.';
-  if (!moveTargets(to.kind).includes(to.stage)) return `${KIND_LABELS[to.kind]} sessions have no ${STAGE_LABELS[to.stage]} stage.`;
-  if (from.kind === to.kind && stepOf(from.stage) === to.stage) return `Nothing to change: this ${KIND_LABELS[to.kind]} session is already in ${STAGE_LABELS[to.stage]}.`;
+/** Why the session can't be moved to this stage from where it is, or null. */
+export function moveError(from: { kind: SessionKind; stage: Stage }, to: MoveTarget): string | null {
+  if (!moveTargets(from.kind).includes(to)) return moveBlockedIn('reviewing-pr');
+  if (stepOf(from.stage) === to) return `Nothing to change: this session is already in ${STAGE_LABELS[to]}.`;
   return null;
 }
 
-/** True when the move changes the stage bar's step, not just the type. */
+/** True when the move changes the stage bar's step (from the PR stage, PR & Review doesn't). */
 export function movesStep(from: Stage, to: MoveTarget): boolean {
   return stepOf(from) !== to;
 }
 
 /**
  * Whether a move offers to send the new stage's prompt. PR & Review decides by itself (the PR
- * prompt goes out only when there's work to push), and a type-only change sends nothing.
+ * prompt goes out only when there's work to push).
  */
 export function offersPrompt(from: Stage, to: MoveTarget): boolean {
   return to !== 'review' && movesStep(from, to);
@@ -59,12 +60,11 @@ export function promptByDefault(from: Stage, to: MoveTarget): boolean {
 
 /** What a move changes, in plain words, for the move dialog. */
 export function moveEffect(from: { stage: Stage; prNumber: number | null }, to: MoveTarget): string {
-  if (!movesStep(from.stage, to)) return `Only the type changes. The session stays in ${STAGE_LABELS[to]}.`;
   const out: string[] = [];
   if (to === 'design') out.push('AgentK blocks edits to the repo until you approve a design.');
   else if (to === 'code' && from.stage === 'design') out.push('Skips design approval.');
   else if (to === 'review') out.push("AgentK picks up the branch's open PR, or commits, pushes and opens one.");
-  else if (to === 'explore') out.push('AgentK runs no design, PR or merge stages for this session.');
+  else if (to === 'explore') out.push('AgentK runs no design, PR or merge while the session is in Explore.');
   else out.push('The session keeps its worktree, branch and conversation.');
   if (from.prNumber && (from.stage === 'pr' || from.stage === 'review')) {
     out.push(`PR #${from.prNumber} stays open. AgentK stops handling its reviews and CI until you come back to PR & Review.`);

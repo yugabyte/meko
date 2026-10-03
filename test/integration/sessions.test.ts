@@ -12,6 +12,7 @@ import { sleep } from '../../src/server/tmux.js';
 import { transcriptPathFor } from '../../src/server/claude.js';
 import { socketId, startHookServer } from '../../src/server/hooks.js';
 import { MISSED_START_MS } from '../../src/server/sessions.js';
+import type { CreateSessionRequest } from '../../src/shared/types.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
@@ -382,7 +383,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
   it('designs outside plan mode, guards the repo, and moves to Code when the design is approved', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'DESIGN_MD it' });
-    expect(s).toMatchObject({ kind: 'plan', stage: 'design' });
+    expect(s).toMatchObject({ kind: 'task', stage: 'design', skippedStages: ['explore'] });
     const designDir = join(env.core.paths.designs, s.id);
     const first = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args;
     expect(first).not.toContain('--permission-mode');
@@ -493,17 +494,17 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toThrow(/hasn't written a design/);
   });
 
-  it('runs an Exploration session with no design, PR or merge gates', async () => {
+  it('runs a task started at Explore with no design, PR or merge gates until it moves on', async () => {
     const p = await newProject();
-    const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', kind: 'explore' });
-    expect(s).toMatchObject({ kind: 'explore', stage: 'explore' });
+    const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', start: 'explore' });
+    expect(s).toMatchObject({ kind: 'task', stage: 'explore', skippedStages: [] });
     expect(existsSync(s.worktreePath)).toBe(true);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const args = argvLog(env)[0].args;
     const system = args[args.indexOf('--append-system-prompt') + 1];
-    expect(system).toContain('This is an Exploration session');
-    expect(system).not.toContain('Merge & Close');
-    expect(args.at(-1)).toMatch(/Exploration session[\s\S]*Task: why is it slow/);
+    expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
+    expect(system).toContain("It's in Explore now");
+    expect(args.at(-1)).toMatch(/Explore stage of an AgentK Local task[\s\S]*Task: why is it slow/);
 
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409 });
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409 });
@@ -523,27 +524,35 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(env.core.sessions.get(s.id)).toMatchObject({ status: 'archived', stage: 'explore' });
   });
 
-  it('starts Quick Code in Code, keeps skipDesign working, and refuses an unknown session type', async () => {
+  it('starts a task at Code, stores it as plan, keeps the old types and skipDesign working, and refuses an unknown kind or start', async () => {
     const p = await newProject();
-    const quick = await env.core.sessions.create(p.id, { name: 'Quick one', prompt: 'hi', kind: 'quick' });
-    expect(quick).toMatchObject({ kind: 'quick', stage: 'code' });
+    const code = await env.core.sessions.create(p.id, { name: 'Quick one', prompt: 'hi', start: 'code' });
+    expect(code).toMatchObject({ kind: 'task', stage: 'code', skippedStages: ['explore', 'design'] });
+    // Stored under an old type's name, so an older release still reads the row after a rollback.
+    expect(env.core.sessions.row(code.id).kind).toBe('plan');
     await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch');
     const args = argvLog(env)[0].args;
-    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('Stages: Code → PR & Review → Merge & Close;');
-    const legacy = await env.core.sessions.create(p.id, { name: 'Old client', prompt: 'hi', skipDesign: true });
-    expect(legacy).toMatchObject({ kind: 'quick', stage: 'code' });
+    const system = args[args.indexOf('--append-system-prompt') + 1];
+    expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
+    expect(system).not.toContain("It's in Explore now");
+    const stageOf = async (req: Partial<CreateSessionRequest>) => (await env.core.sessions.create(p.id, { prompt: 'hi', ...req } as CreateSessionRequest)).stage;
+    expect(await stageOf({ name: 'Old explore', kind: 'explore' })).toBe('explore');
+    expect(await stageOf({ name: 'Old plan', kind: 'plan' })).toBe('design');
+    expect(await stageOf({ name: 'Old quick', kind: 'quick', start: 'design' })).toBe('design');
+    expect(await stageOf({ name: 'Old client', skipDesign: true })).toBe('code');
     await expect(env.core.sessions.create(p.id, { name: 'Odd', kind: 'yolo' as never })).rejects.toMatchObject({ status: 400 });
+    await expect(env.core.sessions.create(p.id, { name: 'Odd', start: 'review' as never })).rejects.toMatchObject({ status: 400 });
   });
 
-  it('uses the name as the first prompt of a task session started without one, but not of an exploration', async () => {
+  it('uses the name as the first prompt of a task started without one, but not of one started at Explore', async () => {
     const p = await newProject();
-    const quick = await env.core.sessions.create(p.id, { name: 'Fix the typo', prompt: '  ', kind: 'quick' });
+    const quick = await env.core.sessions.create(p.id, { name: 'Fix the typo', prompt: '  ', start: 'code' });
     await waitFor(() => argvLog(env), (l) => l.length === 1, 10000, 'quick launch');
     expect(argvLog(env)[0].args.at(-1)).toMatch(/^Task: Fix the typo/);
     const plan = await env.core.sessions.create(p.id, { name: 'Add retries' });
     await waitFor(() => argvLog(env), (l) => l.length === 2, 10000, 'plan launch');
     expect(argvLog(env)[1].args.at(-1)).toMatch(/Task: Add retries/);
-    const explore = await env.core.sessions.create(p.id, { name: 'Why slow', kind: 'explore' });
+    const explore = await env.core.sessions.create(p.id, { name: 'Why slow', start: 'explore' });
     await waitFor(() => argvLog(env), (l) => l.length === 3, 10000, 'explore launch');
     expect(argvLog(env)[2].args).not.toContain('--'); // a prompt always follows "--"
     const rows = [quick, plan, explore].map((s) => env.core.sessions.row(s.id).initial_prompt);

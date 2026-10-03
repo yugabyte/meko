@@ -70,11 +70,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 3. Lifecycle and GitHub
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
-- [ ] Each session kind keeps to its stages (`KIND_STAGES`): an Exploration session never leaves
-      Explore, and a Quick Code session never enters Design, unless the user changes its type
-      (`Lifecycle.move`, rules in `src/shared/stages.ts`). Code that switches on `stage` handles
-      `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
-- [ ] A move by hand leaves the session consistent: a type and stage that go together, the Review
+- [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
+      Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
+      `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
+      handles `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
+- [ ] `sessions.kind` keeps the old type names for tasks, so a rolled-back release still reads every
+      row: new tasks are written as `plan` (`STORED_TASK_KIND`), and code that needs the kind as
+      the API shows it goes through `kindOf()` (comparing with `review-pr` directly is fine).
+- [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
       out of Merge & Close or while AgentK is mid-turn.
 - [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is

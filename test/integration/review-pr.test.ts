@@ -149,8 +149,8 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     expect(sys).toContain('PR: acme/demo#7 (https://github.com/acme/demo/pull/7)');
     expect(sys).toContain("Don't review it on your own; answer what they ask.");
     expect(sys).toContain('search Meko before answering questions about why the code is the way it is');
-    // Nobody can move it to another type or stage.
-    await expect(env.core.sessions.move(s.id, { kind: 'quick', stage: 'code' })).rejects.toMatchObject({ status: 409 });
+    // Nobody can move it to another stage.
+    await expect(env.core.sessions.move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 409 });
   });
 
   it('leaves the Meko lines out with Meko off', async () => {

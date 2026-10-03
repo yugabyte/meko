@@ -231,7 +231,7 @@ export function SessionSheet({
   info: ReactNode;
   onDesign: () => void;
   onHome: () => void;
-  /** Opens the Change type or stage dialog. */
+  /** Opens the Move to another stage dialog. */
   onMove: () => void;
   onAct: (a: SessionAction) => Promise<void>;
   onClose: () => void;
@@ -261,7 +261,7 @@ export function SessionSheet({
         )}
         {!moveBlockedIn(session.stage) && (
           <SheetItem hint="›" onClick={then(onMove)}>
-            Change type or stage
+            Move to another stage
           </SheetItem>
         )}
         <SheetItem hint="›" onClick={then(onHome)}>

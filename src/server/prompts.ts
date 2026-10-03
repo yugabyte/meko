@@ -7,8 +7,8 @@ import { get, type Db } from './db.js';
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
  * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
  * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}; `comments` also gets {{count}} and
- * {{comments}}, `ci` gets {{sha}} and {{checks}}, and `moved` gets {{kind}}, {{stage}} and
- * {{workflow}}. `moved` goes before the new stage's prompt when the user moves a session by hand.
+ * {{comments}}, `ci` gets {{sha}} and {{checks}}, and `moved` gets {{stage}}, {{workflow}} and
+ * {{kind}} (always "Task", kept for overrides written when sessions had types). `moved` goes before the new stage's prompt when the user moves a session by hand.
  * The Review a PR prompts (`review-pr`, `review-pr-update`, `review-pr-comments`) get {{repo}} as
  * the PR's `owner/name`, {{title}}, {{author}}, {{sha}} (the commit checked out) and {{notes}};
  * `review-pr-update` also gets {{oldSha}} and {{count}}, and `review-pr-comments` {{count}} and {{comments}}.
@@ -18,11 +18,11 @@ export type PromptName =
   | 'moved' | 'review-pr' | 'review-pr-update' | 'review-pr-comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
-  explore: `You are in an AgentK Local Exploration session.
+  explore: `You are in the Explore stage of an AgentK Local task.
 
 Task: {{task}}
 
-Investigate: read the code, answer questions, and build POCs or run experiments in this worktree (branch {{branch}}) when they help. You can commit and push experimental branches. There is no design approval in this session, and AgentK Local doesn't run a PR, review or merge stage for it.
+Investigate: read the code, answer questions, and build POCs or run experiments in this worktree (branch {{branch}}) when they help. You can commit and push experimental branches. There is no design approval in Explore, and AgentK Local runs no PR, review or merge stage until the user moves the session on to Design, Code or a PR.
 
 Finish with a short summary of what you found and what you'd recommend next. Save durable findings to Meko.`,
 
@@ -89,7 +89,7 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 
 {{comments}}`,
 
-  moved: `AgentK Local moved this session: it's now a {{kind}} session in the {{stage}} stage. {{workflow}}`,
+  moved: `AgentK Local moved this session to the {{stage}} stage. {{workflow}}`,
 
   'review-pr': `You're assisting the user while they review PR #{{pr}} ({{prUrl}}) by {{author}}: "{{title}}".
 The user is the reviewer. Your job is to help them, not to review the PR yourself.

@@ -11,7 +11,7 @@ import type { Logger } from '../../src/server/log.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
   CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_DAY_MS, FIRST_DAY_SEND_AFTER_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, NEW_INSTALL_FIRST_CHECK_MS, REPORT_DAYS,
-  SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport,
+  SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport, callHomeKind,
   installFacts, utcDay, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
@@ -274,6 +274,20 @@ describe('the usage stats report', () => {
     expect(day('2026-09-22')).toMatchObject({ messages: 0, prsOpened: 0, fileTypes: [], tokensByModel: [] });
     // The older PR is outside the window.
     expect(r.days.reduce((n, d) => n + d.prsOpened, 0)).toBe(1);
+  });
+
+  it('counts a session by the stage it started in, under the names the session types had', () => {
+    // New tasks are stored as plan: the first stage says where they started.
+    expect(callHomeKind('plan', 'explore')).toBe('explore');
+    expect(callHomeKind('plan', 'design')).toBe('plan');
+    expect(callHomeKind('plan', 'code')).toBe('quick');
+    expect(callHomeKind('review-pr', 'reviewing-pr')).toBe('review-pr');
+    // A task changed type later still counts where it started.
+    expect(callHomeKind('quick', 'design')).toBe('plan');
+    // No stage history: the stored kind.
+    expect(callHomeKind('quick', null)).toBe('quick');
+    expect(callHomeKind('task', null)).toBeNull();
+    expect(callHomeKind('plan', 'constructor')).toBe('plan');
   });
 
   it('counts a close that a reopen undid, and the reopen as a project opened', () => {

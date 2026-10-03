@@ -1,12 +1,9 @@
 import { useState } from 'react';
-import { SESSION_KINDS, STAGE_LABELS, type MoveTarget, type Session, type SessionKind } from '../../shared/types';
-
-/** A session can be moved between these; a Review a PR is only ever started as one. */
-const MOVE_KINDS = SESSION_KINDS.filter((k) => k !== 'review-pr');
-import { defaultStage, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, stepOf } from '../../shared/stages';
+import { STAGE_LABELS, type MoveTarget, type Session } from '../../shared/types';
+import { defaultTarget, moveBlockedIn, moveEffect, moveError, moveTargets, offersPrompt, promptByDefault, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
-import { Dialog, ErrorText, Field, KindPicker } from './common';
+import { Dialog, ErrorText, Field } from './common';
 
 /** What the new stage's prompt asks AgentK to do, for the checkbox that sends it. */
 const PROMPT_TEXT: Record<Exclude<MoveTarget, 'review'>, string> = {
@@ -15,27 +12,20 @@ const PROMPT_TEXT: Record<Exclude<MoveTarget, 'review'>, string> = {
   code: "Send AgentK the Code instructions (implement the task and run the checks; don't open a PR yet)",
 };
 
-/** Where the dialog starts: a stage clicked in the stage bar, or Explore's Open PR…. */
+/** Where the dialog starts: a stage clicked in the stage bar. */
 export interface MovePreset {
-  kind?: SessionKind;
   stage?: MoveTarget;
 }
 
-/** Changes a session's type, its stage, or both. The rules are in src/shared/stages.ts, shared with the server. */
+/** Moves a session to another stage. The rules are in src/shared/stages.ts, shared with the server. */
 export function MoveSessionDialog({ session, preset, onClose }: { session: Session; preset?: MovePreset; onClose: () => void }) {
-  const [kind, setKind] = useState<SessionKind>(preset?.kind ?? session.kind);
-  const [stage, setStage] = useState<MoveTarget>(preset?.stage ?? defaultStage(preset?.kind ?? session.kind, session.stage));
+  const [stage, setStage] = useState<MoveTarget>(preset?.stage ?? defaultTarget(session.stage));
   // null: the move's default, which changes with the stage picked.
   const [prompt, setPrompt] = useState<boolean | null>(null);
   const [task, setTask] = useState(session.name);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const pickKind = (k: SessionKind) => {
-    setKind(k);
-    setStage(defaultStage(k, session.stage));
-    setPrompt(null);
-  };
   const pickStage = (t: MoveTarget) => {
     setStage(t);
     setPrompt(null);
@@ -47,10 +37,9 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
   const midTurn = session.status === 'working' || session.status === 'starting' || session.busy;
   const blocker =
     moveBlockedIn(session.stage) ??
-    moveError(session, { kind, stage }) ??
+    moveError(session, stage) ??
     (midTurn ? 'Wait for AgentK to finish its turn.' : null) ??
     (needsTask && !task.trim() ? 'Give AgentK the task.' : null);
-  const step = movesStep(session.stage, stage);
 
   const move = async () => {
     if (blocker || busy) return;
@@ -58,7 +47,6 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
     setBusy(true);
     try {
       await api.moveSession(session.id, {
-        kind,
         stage,
         ...(offers ? { prompt: send } : {}),
         ...(needsTask ? { task: task.trim() } : {}),
@@ -73,7 +61,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
 
   return (
     <Dialog
-      title="Change type or stage"
+      title="Move to another stage"
       onClose={onClose}
       footer={
         <>
@@ -81,7 +69,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
             Cancel
           </button>
           <button className="btn primary" disabled={!!blocker || busy} title={blocker ?? undefined} onClick={() => void move()}>
-            {busy ? 'Moving…' : step ? `Move to ${STAGE_LABELS[stage]}` : 'Change type'}
+            {busy ? 'Moving…' : `Move to ${STAGE_LABELS[stage]}`}
           </button>
         </>
       }
@@ -93,13 +81,12 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
           void move();
         }}
       >
-        <KindPicker id="mv-kind" value={kind} onChange={pickKind} current={session.kind} kinds={MOVE_KINDS} />
         <div className="field">
           <span className="label" id="mv-stage-label">
             Stage
           </span>
           <div className="seg move-stages" role="group" aria-labelledby="mv-stage-label">
-            {moveTargets(kind).map((t) => (
+            {moveTargets(session.kind).map((t) => (
               <button
                 key={t}
                 id={`mv-stage-${t}`}
@@ -125,7 +112,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
             <span>{PROMPT_TEXT[stage]}</span>
           </label>
         )}
-        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, { kind, stage }) ?? moveEffect(session, stage)}</p>
+        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage)}</p>
         <ErrorText error={error} />
       </form>
     </Dialog>
