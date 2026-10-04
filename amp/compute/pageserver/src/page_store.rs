@@ -1519,6 +1519,7 @@ impl PageStore {
                 application_name,
                 pool_size,
                 set_fast_path_upsert,
+                &[],
             )
             .await
             .context("opening PageStore connection")?,

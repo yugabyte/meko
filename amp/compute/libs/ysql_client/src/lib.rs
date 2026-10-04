@@ -1168,7 +1168,9 @@ mod cli_tests {
 
 #[cfg(test)]
 mod database_url_tests {
-    use super::{Duration, YbConnConfig, YsqlClient, build_pg_config, rpc_addrs_from_hosts};
+    use super::{
+        Duration, YbConnConfig, YsqlClient, add_startup_gucs, build_pg_config, rpc_addrs_from_hosts,
+    };
 
     fn cfg(host_ports: &str) -> YbConnConfig {
         YbConnConfig {
@@ -1415,6 +1417,24 @@ mod database_url_tests {
         // The server applies `statement_timeout` in milliseconds, so the
         // config value goes across unscaled.
         assert_eq!(pg.get_options(), Some("-c statement_timeout=5000"));
+    }
+
+    #[test]
+    fn startup_gucs_follow_the_statement_timeout() {
+        let cfg: YbConnConfig = toml::from_str(
+            "host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n\
+             statement_timeout_ms = 5000\n",
+        )
+        .unwrap();
+
+        let mut pg = build_pg_config(&cfg, "test").unwrap();
+        add_startup_gucs(&mut pg, &[("a.b", "on"), ("c", "1")]).unwrap();
+        assert_eq!(
+            pg.get_options(),
+            Some("-c statement_timeout=5000 -c a.b=on -c c=1")
+        );
+        assert!(add_startup_gucs(&mut pg, &[("a", "x y")]).is_err());
+        assert!(add_startup_gucs(&mut pg, &[("a", "x\\y")]).is_err());
     }
 
     /// The only bound that catches a peer which stops answering at the network
@@ -1857,24 +1877,31 @@ impl YsqlClient {
         application_name: &str,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        Self::from_yb_config_pooled(cfg, application_name, 1, set_fast_path_upsert).await
+        Self::from_yb_config_pooled(cfg, application_name, 1, set_fast_path_upsert, &[]).await
     }
 
     /// Same as [`Self::from_yb_config`] but opens `pool_size`
     /// independent connections. Use for hot paths that benefit from
     /// parallel SQL execution (e.g. the pageserver's compute-reads
     /// pool at `pool_size = 4`).
+    ///
+    /// `gucs` are sent as `-c name=value` in the startup `options`, so every
+    /// session this client opens starts with them set — including one it
+    /// reopens after the connection dies, which a `SET` issued through the
+    /// client does not survive.
     pub async fn from_yb_config_pooled(
         cfg: &YbConnConfig,
         application_name: &str,
         pool_size: usize,
         set_fast_path_upsert: bool,
+        gucs: &[(&str, &str)],
     ) -> Result<Self> {
         cfg.validate()?;
         if let Some(info) = cfg.inspect_client_certificate()? {
             YB_CLIENT_CERT_NOT_AFTER_SECONDS.set(info.not_after_unix as i64);
         }
-        let pg_config = build_pg_config(cfg, application_name)?;
+        let mut pg_config = build_pg_config(cfg, application_name)?;
+        add_startup_gucs(&mut pg_config, gucs)?;
         let disable_transactional_writes = cfg.disable_transactional_writes;
         let client = match cfg.sslmode.as_deref() {
             None | Some("disable") => {
@@ -2662,6 +2689,29 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
         pg_config.tcp_user_timeout(Duration::from_millis(cfg.tcp_user_timeout_ms));
     }
     Ok(pg_config)
+}
+
+/// Append `gucs` to the startup `options`, after anything
+/// [`build_pg_config`] put there.
+fn add_startup_gucs(pg_config: &mut tokio_postgres::Config, gucs: &[(&str, &str)]) -> Result<()> {
+    let mut options = pg_config.get_options().unwrap_or_default().to_owned();
+    for (name, value) in gucs {
+        // The server splits `options` on whitespace and treats `\` as an
+        // escape, so either would need escaping; nothing needs one yet.
+        let special = |c: char| c.is_whitespace() || c == '\\';
+        anyhow::ensure!(
+            !name.contains(special) && !value.contains(special),
+            "startup GUC `{name}={value}` contains whitespace or a backslash"
+        );
+        if !options.is_empty() {
+            options.push(' ');
+        }
+        options.push_str(&format!("-c {name}={value}"));
+    }
+    if !options.is_empty() {
+        pg_config.options(&options);
+    }
+    Ok(())
 }
 
 /// Enable both GUCs that make this connection a "fast-path-upsert"

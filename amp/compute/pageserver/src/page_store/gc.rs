@@ -3405,8 +3405,12 @@ mod tests {
     /// one process-wide `PageStore` whose pool is a single connection, so
     /// setting that GUC through it makes it global for as long as it is set —
     /// pg_hint_plan then rejects an unrelated test's statement that carried no
-    /// hint at all, whichever test runs next. The readback stays: a reconnect
-    /// between the `SET` and the EXPLAIN would silently drop it.
+    /// hint at all, whichever test runs next.
+    ///
+    /// The GUC rides in the startup options rather than a `SET`: this client
+    /// is a `static`, so its connection task lives on whichever test's runtime
+    /// opened it and dies with that test, and the reopened session would drop
+    /// a `SET` without failing. The readback checks the mechanism is in force.
     async fn explain(sql: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> String {
         explain_with(plan_client().await, "EXPLAIN", sql, params).await
     }
@@ -3428,15 +3432,19 @@ mod tests {
         .await
     }
 
+    const BAD_HINT_MODE_ERROR: (&str, &str) = ("pg_hint_plan.yb_bad_hint_mode", "error");
+
     async fn plan_client() -> &'static ysql_client::YsqlClient {
         static PLAN_CLIENT: tokio::sync::OnceCell<ysql_client::YsqlClient> =
             tokio::sync::OnceCell::const_new();
         PLAN_CLIENT
             .get_or_init(|| async {
-                ysql_client::YsqlClient::from_yb_config(
+                ysql_client::YsqlClient::from_yb_config_pooled(
                     &super::test_support::test_yb_config(),
                     "gc_plan_test",
+                    1,
                     false,
+                    &[BAD_HINT_MODE_ERROR],
                 )
                 .await
                 .expect("open the plan tests' own connection")
@@ -3451,10 +3459,12 @@ mod tests {
             tokio::sync::OnceCell::const_new();
         INDEXED_PLAN_CLIENT
             .get_or_init(|| async {
-                ysql_client::YsqlClient::from_yb_config(
+                ysql_client::YsqlClient::from_yb_config_pooled(
                     &super::test_support::test_yb_config(),
                     "gc_plan_test_indexed",
+                    1,
                     false,
+                    &[BAD_HINT_MODE_ERROR, ("enable_seqscan", "off")],
                 )
                 .await
                 .expect("open the indexed plan tests' own connection")
@@ -3469,22 +3479,14 @@ mod tests {
     /// `Sort` or an index scan depending on the fixture's size. What this
     /// asserts is the index scan's shape, so force one.
     ///
-    /// On its own connection, and never restored: a restoring `SET` does not
-    /// run if the EXPLAIN between the two panics, and the plan tests in this
-    /// binary run concurrently over one connection, so a leaked `off` would
-    /// reshape an unrelated test's plan. This GUC needs no readback: if a
-    /// reconnect drops it the plan reverts to `Seq Scan` and the caller's
-    /// assertion fails loudly.
+    /// On its own connection, so the `off` never reaches an unrelated test's
+    /// plan. It needs no readback: were it missing, the plan would revert to
+    /// `Seq Scan` and the caller's assertion fail loudly.
     async fn explain_analyze_indexed(
         sql: &str,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> String {
-        let client = indexed_plan_client().await;
-        client
-            .execute("SET enable_seqscan = off", &[])
-            .await
-            .expect("disable seqscan");
-        explain_analyze(client, sql, params).await
+        explain_analyze(indexed_plan_client().await, sql, params).await
     }
 
     async fn explain_with(
@@ -3493,10 +3495,6 @@ mod tests {
         sql: &str,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> String {
-        client
-            .execute("SET pg_hint_plan.yb_bad_hint_mode = error", &[])
-            .await
-            .expect("set yb_bad_hint_mode");
         let mode: String = client
             .query("SHOW pg_hint_plan.yb_bad_hint_mode", &[])
             .await
