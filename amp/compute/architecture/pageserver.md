@@ -647,12 +647,13 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
 8. Reads between flushes (and DURING a flush) see all in-RAM rows —
    pre-flush and durable cache — blended with PageStore via
    `read_chain` / `scan_range` (sort, dedup by LSN, truncate at the
-   first `will_init=true` row). Meta reads sample the aux buffer
-   BEFORE the YB read (a row leaves aux only after it is committed to
-   YB, so aux-first closes the window where a concurrent flush makes a
-   row momentarily invisible to both sources; on an LSN tie the durable
-   YB row wins, because a walreceiver reconnect can re-push a stale
-   same-LSN payload into aux).
+   first `will_init=true` row). Every blended read samples its in-RAM
+   rows (cache, SLRU buffer or meta buffer) BEFORE the YB read. A row
+   leaves RAM (eviction, image-install trim, aux drain) only after it
+   is committed to YB, so RAM-first closes the window where a
+   concurrent flush makes a row momentarily invisible to both sources.
+   For meta, on an LSN tie the durable YB row wins, because a
+   walreceiver reconnect can re-push a stale same-LSN payload into aux.
 
 On flush error the buffers are left untouched and the next periodic
 flush retries.

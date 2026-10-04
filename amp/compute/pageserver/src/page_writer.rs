@@ -378,6 +378,16 @@ pub struct PageWriter {
     /// through to the normal YB + aux-buffer blend, which also covers
     /// ancestor timeline segments.
     meta_cache: Option<PlMutex<LruCache<Bytes, MetaRow>>>,
+    #[cfg(test)]
+    scan_pause: PlMutex<Option<Arc<ScanPause>>>,
+}
+
+/// Test hook: holds a multi-block scan between its cache read and its YB read.
+#[cfg(test)]
+#[derive(Default)]
+struct ScanPause {
+    reached: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
 }
 
 /// Non-rel flush buffers, kept under a small `parking_lot::Mutex`.
@@ -457,6 +467,17 @@ impl PageWriter {
             flush_serialize: tokio::sync::Mutex::new(()),
             meta_cache: (meta_cache_entries > 0)
                 .then(|| PlMutex::new(LruCache::new(meta_cache_entries))),
+            #[cfg(test)]
+            scan_pause: PlMutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    async fn pause_between_cache_and_yb(&self) {
+        let pause = self.scan_pause.lock().clone();
+        if let Some(p) = pause {
+            p.reached.notify_one();
+            p.resume.notified().await;
         }
     }
 
@@ -1141,16 +1162,19 @@ impl PageWriter {
             }
             return Ok(out);
         }
+        // Cache before YB: a row leaves the cache only once it is in YB.
+        let cached: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
+            self.pages
+                .lookup_range(&range.start, &range.end, target_lsn);
+        let t_cache = t0.elapsed();
+        #[cfg(test)]
+        self.pause_between_cache_and_yb().await;
+        let t_yb_start = Instant::now();
         let persisted = self
             .compute_page_store
             .scan_range_lineage(&self.lineage, range.clone(), target_lsn)
             .await?;
-        let t_yb = t0.elapsed();
-        let t_lock_start = Instant::now();
-        let cached: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
-            self.pages
-                .lookup_range(&range.start, &range.end, target_lsn);
-        let t_cache = t_lock_start.elapsed();
+        let t_yb = t_yb_start.elapsed();
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         let cached_rows: usize = cached.values().map(|v| v.len()).sum();
         let t_merge_start = Instant::now();
@@ -1228,28 +1252,33 @@ impl PageWriter {
             return Ok(std::collections::HashMap::new());
         }
         let t0 = Instant::now();
+        // Cache before YB, as in `scan_range`.
+        let cached: Vec<(Key, Vec<Arc<PageRow>>)> = keys
+            .iter()
+            .map(|k| (*k, self.pages.lookup_chain(k, target_lsn)))
+            .collect();
+        let t_cache = t0.elapsed();
+        #[cfg(test)]
+        self.pause_between_cache_and_yb().await;
+        let t_yb_start = Instant::now();
         let persisted = self
             .compute_page_store
             .scan_scattered_set_lineage(&self.lineage, keys, target_lsn)
             .await?;
-        let t_yb = t0.elapsed();
-        let t_lock_start = Instant::now();
+        let t_yb = t_yb_start.elapsed();
         let mut out: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
             std::collections::HashMap::with_capacity(keys.len());
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         for (k, chain) in persisted {
             out.insert(k, chain);
         }
-        // In-RAM UnifiedPages (pre- + post-flush cache) per key.
         let mut cached_rows = 0usize;
-        for k in keys {
-            let cached = self.pages.lookup_chain(k, target_lsn);
-            if !cached.is_empty() {
-                cached_rows += cached.len();
-                out.entry(*k).or_default().extend(cached);
+        for (k, chain) in cached {
+            if !chain.is_empty() {
+                cached_rows += chain.len();
+                out.entry(k).or_default().extend(chain);
             }
         }
-        let t_cache = t_lock_start.elapsed();
         let t_merge_start = Instant::now();
         self.finalize_blended_chains(&mut out, target_lsn);
         let t_merge = t_merge_start.elapsed();
@@ -2190,18 +2219,22 @@ impl PageWriter {
         target_lsn: Lsn,
         mode: crate::page_store::SlruScan,
     ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
+        // Buffer before YB, as in `read_slru_chain`.
+        let buffered = self.buffered_slru_rows(kind, segno, blknum_range.clone(), target_lsn);
+        #[cfg(test)]
+        self.pause_between_cache_and_yb().await;
         let mut out = self
             .compute_page_store
             .scan_slru_range_lineage(
                 &self.lineage,
                 kind,
                 segno,
-                blknum_range.clone(),
+                blknum_range,
                 target_lsn,
                 mode,
             )
             .await?;
-        for row in self.buffered_slru_rows(kind, segno, blknum_range, target_lsn) {
+        for row in buffered {
             out.entry(row.blknum).or_default().push(row);
         }
         for chain in out.values_mut() {
@@ -3256,6 +3289,105 @@ mod tests {
         assert!(w.should_flush().await);
         w.flush().await.unwrap();
         assert!(!w.should_flush().await);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// #1679: a row flushed and evicted while a multi-block scan is in
+    /// flight must still be in its result.
+    async fn scan_misses_no_row_flushed_mid_scan(scattered: bool) {
+        let (store, schema) = make_store("scan_mid_flush").await;
+        let branch = BranchId::generate();
+        // A 1-byte cache evicts every unpinned key on each flush.
+        let w = Arc::new(PageWriter::new(
+            branch,
+            store.clone(),
+            store.clone(),
+            FlushPolicy::default(),
+            1,
+            0,
+        ));
+        w.put(&[(k(7), Lsn(100), image()), (k(8), Lsn(100), image())])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+        w.put(&[(k(7), Lsn(110), delta())]).await.unwrap();
+
+        let pause = Arc::new(ScanPause::default());
+        *w.scan_pause.lock() = Some(pause.clone());
+        let reader = {
+            let w = w.clone();
+            tokio::spawn(async move {
+                if scattered {
+                    w.scan_scattered_set(&[k(7), k(8)], Lsn(120)).await
+                } else {
+                    w.scan_range(k(7)..k(9), Lsn(120)).await
+                }
+            })
+        };
+        pause.reached.notified().await;
+        w.flush().await.unwrap();
+        assert!(
+            w.pages.lookup_chain(&k(7), Lsn(120)).is_empty(),
+            "the flush should have evicted k(7) from the cache"
+        );
+        pause.resume.notify_one();
+
+        let out = reader.await.unwrap().unwrap();
+        let lsns: Vec<Lsn> = out[&k(7)].iter().map(|r| r.lsn).collect();
+        assert_eq!(lsns, vec![Lsn(110), Lsn(100)]);
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn scan_range_misses_no_row_flushed_mid_scan() {
+        scan_misses_no_row_flushed_mid_scan(false).await;
+    }
+
+    #[tokio::test]
+    async fn scan_scattered_set_misses_no_row_flushed_mid_scan() {
+        scan_misses_no_row_flushed_mid_scan(true).await;
+    }
+
+    /// #1679: the SLRU twin of `scan_misses_no_row_flushed_mid_scan`, where
+    /// the flush drains the row from the SLRU buffer.
+    #[tokio::test]
+    async fn scan_slru_range_misses_no_row_flushed_mid_scan() {
+        use pageserver_api::key::slru_block_to_key;
+        use pageserver_api::reltag::SlruKind;
+        let (store, schema) = make_store("slru_scan_mid_flush").await;
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
+        let w = Arc::new(w);
+        let b0 = slru_block_to_key(SlruKind::Clog, 7, 0);
+        let b1 = slru_block_to_key(SlruKind::Clog, 7, 1);
+        w.put(&[(b0, Lsn(100), image()), (b1, Lsn(100), image())])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+        w.put(&[(b0, Lsn(110), delta_non_init())]).await.unwrap();
+
+        let pause = Arc::new(ScanPause::default());
+        *w.scan_pause.lock() = Some(pause.clone());
+        let reader = {
+            let w = w.clone();
+            tokio::spawn(async move {
+                w.scan_slru_range(
+                    SlruKind::Clog,
+                    7,
+                    0..2,
+                    Lsn(120),
+                    crate::page_store::SlruScan::ToAnchor,
+                )
+                .await
+            })
+        };
+        pause.reached.notified().await;
+        w.flush().await.unwrap();
+        assert_eq!(w.stats().await.buffered_slru_rows, 0);
+        pause.resume.notify_one();
+
+        let out = reader.await.unwrap().unwrap();
+        let lsns: Vec<Lsn> = out[&0].iter().map(|r| r.lsn).collect();
+        assert_eq!(lsns, vec![Lsn(110), Lsn(100)]);
         drop_schema(&store, &schema).await;
     }
 
