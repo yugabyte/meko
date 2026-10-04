@@ -70,7 +70,7 @@ func deployYBBackingCfg(ctx context.Context, t *core.T, k8sCfg ybk8s.Config, suf
 	}
 	d := ybk8s.New(k8sCfg, suffix).WithLogf(logf).WithSecretResolver(secrets.Value)
 	td.push("teardown yb-in-k8s (namespace + PVCs + client pod)", func(ctx context.Context) error {
-		return d.Teardown(ctx)
+		return core.AsEnvFailure(d.Teardown(ctx))
 	})
 
 	info, err := d.Deploy(ctx)

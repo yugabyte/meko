@@ -190,7 +190,7 @@ func (r *combinedRun) provisionBacking(ctx context.Context) error {
 	}
 	d := ybk8s.New(k8sCfg, r.suffix()).WithLogf(r.logf).WithSecretResolver(secrets.Value)
 	r.td.push("teardown yb-in-k8s (namespace + PVCs + client pod)", func(ctx context.Context) error {
-		return d.Teardown(ctx)
+		return core.AsEnvFailure(d.Teardown(ctx))
 	})
 
 	info, err := d.Deploy(ctx)

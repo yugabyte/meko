@@ -2577,6 +2577,9 @@ perf:
     # create_endpoint has shown a 0.49 coefficient of variation in one run, and
     # three iterations left each phase's median resting on two draws.
     iterations: 5
+    # backing_storage_size is each live arm's yb-in-k8s volume size. The 10Gi
+    # apps.ybk8s default runs out under five concurrent iterations.
+    backing_storage_size: "30Gi"
     # rows is the parent's dataset; ~100 bytes a row with the default payload.
     rows: 3000000
     # batch_rows is the size of one INSERT ... SELECT during the load.

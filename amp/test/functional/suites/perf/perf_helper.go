@@ -120,6 +120,9 @@ type perfConfig struct {
 	// (apps.benchbase.benchmark: tpcc | tpch | ycsb | smallbank | …); default
 	// tpcc. Lets a different BenchBase benchmark run config-only, no code change.
 	Benchmark string
+	// BackingStorageSize overrides apps.ybk8s.storage_size for a test whose data
+	// outgrows the default. Empty keeps the default.
+	BackingStorageSize string
 }
 
 // perfFromConfig reads perf.* into a perfConfig.
@@ -175,6 +178,9 @@ func maxInt(a, b int) int {
 func (c perfConfig) isolateBacking(y ybk8s.Config) ybk8s.Config {
 	if c.ArmNodeSelector != "" && y.NodeSelector == "" {
 		y.NodeSelector = c.ArmNodeSelector
+	}
+	if c.BackingStorageSize != "" {
+		y.StorageSize = c.BackingStorageSize
 	}
 	if !c.Isolation.Enabled {
 		return y

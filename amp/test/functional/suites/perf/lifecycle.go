@@ -15,9 +15,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -42,6 +44,10 @@ const (
 	DefaultLifecycleEndpointCPU   = "2"
 	DefaultLifecycleEndpointMem   = "4Gi"
 	DefaultLifecycleIterations    = 5
+	// Five concurrent 3M-row tenants filled the 10Gi default on every tserver
+	// ("Node ... has insufficient disk space"), which then surfaced as killed
+	// sessions, failed lease acquires and stalled forks.
+	DefaultLifecycleBackingStorage = "30Gi"
 )
 
 type lifecycleParams struct {
@@ -105,6 +111,8 @@ type lifecycleRun struct {
 	results  []phaseResult
 	tableMB  float64
 	deleted  bool
+	// placed is where each endpoint's compute pod first ran, by endpoint ID.
+	placed map[string]podPlacement
 }
 
 func runLifecycle(t *core.T) error {
@@ -146,6 +154,7 @@ func runLifecycle(t *core.T) error {
 // must be twins, and the env's stack has no baseline twin.
 func runLifecycleProvisioned(t *core.T, params lifecycleParams, tag string, logf func(string, ...any)) error {
 	cfg := perfFromConfig(t.Options)
+	cfg.BackingStorageSize = t.Options.GetString("perf.lifecycle.backing_storage_size", DefaultLifecycleBackingStorage)
 	load := loadFieldsLifecycle(params)
 	load.Harness += "+" + provisionedHarness + cfg.isolationSuffix()
 	id := identityFromConfig(t.Options, "", frameworkCommit(), load).forLiveArm(t.Options)
@@ -217,10 +226,22 @@ func lifecycleIterations(t *core.T, cl *controller.Client, env ampMultitenantEnv
 		attachPhases(t, all)
 	}
 	var iterErrs []error
-	for i, err := range errs {
-		if err != nil {
-			iterErrs = append(iterErrs, fmt.Errorf("iteration %d/%d: %w", i+1, iterations, err))
+	allEnv := true
+	for _, err := range errs {
+		if err != nil && !core.IsEnvFailure(err) {
+			allEnv = false
 		}
+	}
+	for i, err := range errs {
+		if err == nil {
+			continue
+		}
+		// errors.As finds an EnvError anywhere in a join, so one env iteration
+		// would hide a product failure in another unless its type is dropped.
+		if !allEnv && core.IsEnvFailure(err) {
+			err = errors.New(err.Error())
+		}
+		iterErrs = append(iterErrs, fmt.Errorf("iteration %d/%d: %w", i+1, iterations, err))
 	}
 	return all, sizes, errors.Join(iterErrs...)
 }
@@ -270,21 +291,77 @@ func runLifecycleIteration(t *core.T, cl *controller.Client, env ampMultitenantE
 		{"delete_cluster", r.deleteCluster},
 	}
 	for _, s := range steps {
-		if err := s.fn(); err != nil {
-			// The fork endpoint, once it exists, is the one the failing phases run on.
-			target := r.parent
-			if r.fork.Endpoint.ID != "" {
-				target = r.fork
-			}
-			if kube != nil && target.Endpoint.ID != "" {
-				if diag := captureEndpointDiag(t, kube, target, s.name, r.logf); diag != "" {
-					r.logf("lifecycle: endpoint at %s: %s", s.name, diag)
-				}
-			}
-			return r, fmt.Errorf("%s: %w", s.name, err)
+		err := s.fn()
+		// The fork endpoint, once it exists, is the one the failing phases run on.
+		target := r.parent
+		if r.fork.Endpoint.ID != "" {
+			target = r.fork
 		}
+		if err == nil {
+			r.notePlacement(kube, target.Endpoint.ID)
+			continue
+		}
+		if kube != nil && target.Endpoint.ID != "" {
+			if diag := captureEndpointDiag(t, kube, target, s.name, r.logf); diag != "" {
+				r.logf("lifecycle: endpoint at %s: %s", s.name, diag)
+			}
+			if gone := r.nodeRemoved(kube, target.Endpoint.ID); gone != "" {
+				return r, core.EnvFail("%s: %w (%s)", s.name, err, gone)
+			}
+		}
+		return r, fmt.Errorf("%s: %w", s.name, err)
 	}
 	return r, nil
+}
+
+type podPlacement struct{ uid, node string }
+
+func endpointPlacement(ctx context.Context, kube *k8s.Kubectl, endpointID string) (podPlacement, error) {
+	out, err := kube.GetSelector(ctx, "pod", "app.kubernetes.io/instance="+ampstack.EndpointWorkloadName(endpointID),
+		"{.items[0].metadata.uid} {.items[0].spec.nodeName}")
+	if err != nil {
+		return podPlacement{}, err
+	}
+	f := strings.Fields(out)
+	if len(f) < 2 {
+		return podPlacement{}, fmt.Errorf("endpoint %s has no scheduled pod (%q)", endpointID, out)
+	}
+	return podPlacement{uid: f[0], node: f[1]}, nil
+}
+
+func (r *lifecycleRun) notePlacement(kube *k8s.Kubectl, endpointID string) {
+	if kube == nil || endpointID == "" {
+		return
+	}
+	if _, ok := r.placed[endpointID]; ok {
+		return
+	}
+	if p, err := endpointPlacement(r.t.Context, kube, endpointID); err == nil {
+		if r.placed == nil {
+			r.placed = map[string]podPlacement{}
+		}
+		r.placed[endpointID] = p
+	}
+}
+
+// The amp-dev autoscaler drains nodes under running tests, and the endpoint
+// chart has no safe-to-evict knob: a compute whose node left the cluster was
+// killed by the environment. Returns "" unless that is proven.
+func (r *lifecycleRun) nodeRemoved(kube *k8s.Kubectl, endpointID string) string {
+	was, ok := r.placed[endpointID]
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if now, err := endpointPlacement(ctx, kube, endpointID); err == nil && now.uid == was.uid {
+		return ""
+	}
+	_, err := kube.Get(ctx, "node", was.node, "{.metadata.name}")
+	if err == nil || !strings.Contains(err.Error(), "NotFound") {
+		return ""
+	}
+	return fmt.Sprintf("endpoint %s's compute pod %s ran on node %s, which has since been removed from the cluster", endpointID, was.uid, was.node)
 }
 
 // Steps keep their bare name across iterations; the iteration is a step
@@ -734,13 +811,58 @@ func lifecycleInsert(ctx context.Context, conn *pg.Client, from, to int64, batch
 	if batch < 1 {
 		batch = 1
 	}
+	started, err := conn.QueryString(ctx, lifecyclePostmasterStart)
+	if err != nil {
+		return fmt.Errorf("read the postmaster start time before the load: %w", err)
+	}
+	stmt := fmt.Sprintf(
+		"INSERT INTO %s (id, v, pad) SELECT g, g * 7, repeat('x', %d) FROM generate_series($1::bigint, $2::bigint) g ON CONFLICT (id) DO NOTHING",
+		lifecycleTable, payload)
 	for lo := from; lo <= to; lo += int64(batch) {
 		hi := min(lo+int64(batch)-1, to)
-		if _, err := conn.Exec(ctx, fmt.Sprintf(
-			"INSERT INTO %s (id, v, pad) SELECT g, g * 7, repeat('x', %d) FROM generate_series($1::bigint, $2::bigint) g ON CONFLICT (id) DO NOTHING",
-			lifecycleTable, payload), lo, hi); err != nil {
-			return fmt.Errorf("rows %d..%d: %w", lo, hi, err)
+		for drops := 0; ; drops++ {
+			_, err := conn.Exec(ctx, stmt, lo, hi)
+			if err == nil {
+				break
+			}
+			if !core.IsConnDrop(err) || drops >= lifecycleMaxConnDrops {
+				return fmt.Errorf("rows %d..%d: %w", lo, hi, err)
+			}
+			// The batch is idempotent, so a severed port-forward is retried, but only
+			// if the same postmaster is still up: a compute restart stays a failure.
+			if aerr := samePostmaster(ctx, conn, started); aerr != nil {
+				return fmt.Errorf("rows %d..%d: %w (%v)", lo, hi, err, aerr)
+			}
+			log.Printf("perf/lifecycle: rows %d..%d: connection dropped with postmaster %s still up, retrying: %v", lo, hi, started, err)
 		}
+	}
+	return nil
+}
+
+const (
+	lifecyclePostmasterStart = "SELECT pg_postmaster_start_time()::text"
+	lifecycleMaxConnDrops    = 3
+)
+
+func samePostmaster(ctx context.Context, conn *pg.Client, started string) error {
+	var now string
+	var err error
+	deadline := time.Now().Add(time.Minute)
+	for time.Now().Before(deadline) {
+		if now, err = conn.QueryString(ctx, lifecyclePostmasterStart); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("postgres did not answer within 1m of the drop: %w", err)
+	}
+	if now != started {
+		return fmt.Errorf("the postmaster restarted (started %s, now %s)", started, now)
 	}
 	return nil
 }

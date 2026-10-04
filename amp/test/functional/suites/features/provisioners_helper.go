@@ -218,7 +218,7 @@ func (cfg Config) provisionYBK8s(ctx context.Context, t *core.T, td *teardownSta
 		return nil, nil, fmt.Errorf("secrets: %w", err)
 	}
 	d := ybk8s.New(k8sCfg, runTag).WithLogf(t.Masker().Logf(logf)).WithSecretResolver(secrets.Value)
-	td.push("teardown yb-in-k8s (namespace + PVCs)", func(ctx context.Context) error { return d.Teardown(ctx) })
+	td.push("teardown yb-in-k8s (namespace + PVCs)", func(ctx context.Context) error { return core.AsEnvFailure(d.Teardown(ctx)) })
 
 	info, err := d.Deploy(ctx)
 	if err != nil {

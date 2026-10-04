@@ -161,7 +161,11 @@ func (k *Kubectl) exec(ctx context.Context, stdin io.Reader, extra ...string) (e
 		return res, fmt.Errorf("kubectl %s: %w", strings.Join(extra, " "), err)
 	}
 	if res.ExitCode != 0 {
-		return res, fmt.Errorf("kubectl %s exited %d: %s", strings.Join(extra, " "), res.ExitCode, strings.TrimSpace(res.Stderr))
+		err := fmt.Errorf("kubectl %s exited %d: %s", strings.Join(extra, " "), res.ExitCode, strings.TrimSpace(res.Stderr))
+		if apiServerUnreachable(res.Stderr) && apiServerNeverDialed(res.Stderr) {
+			return res, &APIServerUnreachableError{Err: err}
+		}
+		return res, err
 	}
 	return res, nil
 }

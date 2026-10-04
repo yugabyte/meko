@@ -46,6 +46,9 @@ const (
 	// A ratio carries the unshaped baseline's own run-to-run swing, so a change
 	// under 10% of it is not the topology's.
 	latencyRatioFloor = 0.10
+	// A topology whose average latency is at least this multiple of the
+	// baseline's is latency-dominated, and its ratios are informational.
+	latencyDominatedRatio = 1.25
 )
 
 // The perf.latency_topology.* load shape, declared like every sibling's
@@ -441,10 +444,8 @@ func (r *latencyRun) bench(ctx context.Context, s *core.StepHandle, name string,
 	return nil
 }
 
-// gate gates BOTH each shaped topology's absolute numbers and its ratio to the
-// unshaped baseline, because which of the two is stable depends on the
-// topology, and the portal's band is per-datapoint MAD-derived so a noisy one
-// widens itself rather than firing.
+// gate gates each shaped topology's absolute numbers, plus its ratio to the
+// unshaped baseline unless latency dominates the topology.
 //
 // Measured over the first four runs of the shipped set: a topology whose
 // latency DOMINATES holds its absolute to 6-7% run to run (multi_region tps
@@ -452,8 +453,10 @@ func (r *latencyRun) bench(ctx context.Context, s *core.StepHandle, name string,
 // cluster CPU. So the ratio does NOT cancel that spread where the two arms sit
 // in different regimes — it divides a stable shaped number by a noisy
 // baseline and lands at 26-28%. Where latency is negligible beside CPU the
-// reverse holds: multi_az's absolute swings 35% and its ratio is 5.8%. Gating
-// both leaves every topology with one tight datapoint.
+// reverse holds: multi_az's absolute swings 35% and its ratio is 5.8%. A
+// five-run MAD band does not widen enough for the dominated ratios: on
+// 0.261002.0 and 0.261002.2 the baseline got faster, amp_cross_region's
+// absolute tps held within 3%, and its ratio failed the gate at -15% and -19%.
 //
 // The unshaped baseline's own absolutes stay informational: perf/sysbench and
 // perf/pgbench already gate that number.
@@ -489,10 +492,15 @@ func (r *latencyRun) gate(*core.StepHandle) error {
 		p := latencyTopologyPrefix + name + "."
 		tpsRatio := res.TPS.Median / base.TPS.Median
 		latRatio := res.LatencyAvg.Median / base.LatencyAvg.Median
-		gated = append(gated,
-			core.Datapoint{Name: p + "tps_of_baseline", Value: tpsRatio, Unit: "x", Direction: core.HigherIsBetter, MinDelta: latencyRatioFloor * tpsRatio},
-			core.Datapoint{Name: p + "latency_avg_of_baseline", Value: latRatio, Unit: "x", Direction: core.LowerIsBetter, MinDelta: latencyRatioFloor * latRatio},
-		)
+		ratios := []core.Datapoint{
+			{Name: p + "tps_of_baseline", Value: tpsRatio, Unit: "x", Direction: core.HigherIsBetter, MinDelta: latencyRatioFloor * tpsRatio},
+			{Name: p + "latency_avg_of_baseline", Value: latRatio, Unit: "x", Direction: core.LowerIsBetter, MinDelta: latencyRatioFloor * latRatio},
+		}
+		if latRatio >= latencyDominatedRatio {
+			info = append(info, ratios...)
+		} else {
+			gated = append(gated, ratios...)
+		}
 	}
 	table := latencyTopologyTable(r.order, r.results)
 	r.logf("%s", table)

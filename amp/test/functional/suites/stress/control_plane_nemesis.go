@@ -124,8 +124,15 @@ func runControlPlaneNemesis(t *core.T) error {
 	var live []churnBranch
 	for r := 1; r <= params.Rounds; r++ {
 		var fired []firedTask
+		var gate *settleGate
 
 		if err := t.Step(fmt.Sprintf("tasks_in_flight_%d", r), func(s *core.StepHandle) error {
+			// Settle before firing: a 20s settle between firing and the kill let every
+			// task finish first, so the kill interrupted nothing and no reclaim happened.
+			gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+			if err != nil {
+				return err
+			}
 			cl, err := env.AmpController(t.Context)
 			if err != nil {
 				return err
@@ -187,13 +194,19 @@ func runControlPlaneNemesis(t *core.T) error {
 			return err
 		}
 
-		var gate *settleGate
 		var killed []string
 		if err := t.Step(fmt.Sprintf("kill_controller_%d", r), func(s *core.StepHandle) error {
-			gate, err = awaitSteadyState(t, s, env, fleet.Tenants, journals, params.PayloadBytes, 0)
+			cl, err := env.AmpController(t.Context)
 			if err != nil {
 				return err
 			}
+			running := 0
+			for _, f := range fired {
+				if task, err := cl.GetTask(t.Context, f.ID); err == nil && task.Status == controller.TaskRunning {
+					running++
+				}
+			}
+			s.Set("running_at_kill", running)
 			names, err := kube.GetSelector(t.Context, "pod", controllerSelector, "{.items[*].metadata.name}")
 			if err != nil {
 				return fmt.Errorf("list controller pods (%s) in %q: %w", controllerSelector, kube.Namespace(), err)
