@@ -243,6 +243,10 @@ controller:
     # test cluster whose nodes cannot back the ratio: a 100GB GKE boot disk leaves
     # ~43.8Gi allocatable, so a 2-vCPU endpoint's 40Gi packs one per node, "10Gi" four.
     diskSizeOverride: ""
+    # -- Seconds between saves of each endpoint's local file cache contents
+    # (AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS). A restarted endpoint reloads the
+    # last save in the background instead of starting cold. 0 = neither.
+    lfcOffloadIntervalSeconds: 300
     # -- GiB of memory per endpoint vCPU (AMP_DEPLOY_MEMORY_GIB_PER_VCPU). Fills
     # in the memory when a create names only CPU, and is the floor every request
     # is held to — a pair below it is refused with a 400. 0 (default) uses the

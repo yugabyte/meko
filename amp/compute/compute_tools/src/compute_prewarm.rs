@@ -28,6 +28,15 @@ fn lfc_state_key(
     LfcStorage::key(&pspec.branch_id.to_string(), endpoint_id)
 }
 
+/// In-process only: compared against the last upload by this same compute_ctl,
+/// so the hash need not be stable across builds.
+fn lfc_state_digest(state: &[u8]) -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+    let mut h = DefaultHasher::new();
+    h.write(state);
+    h.finish()
+}
+
 impl ComputeNode {
     pub async fn lfc_prewarm_state(&self) -> LfcPrewarmState {
         self.state.lock().unwrap().lfc_prewarm_state.clone()
@@ -191,7 +200,7 @@ impl ComputeNode {
             }
         }
         let cloned = self.clone();
-        spawn(async move { cloned.offload_lfc_with_state_update().await });
+        spawn(async move { cloned.offload_lfc_with_state_update(false).await });
         true
     }
 
@@ -205,12 +214,14 @@ impl ComputeNode {
                 return;
             }
         }
-        self.offload_lfc_with_state_update().await
+        self.offload_lfc_with_state_update(true).await
     }
 
-    async fn offload_lfc_with_state_update(&self) {
+    /// `skip_unchanged` is for the periodic loop; an explicit offload request
+    /// always writes.
+    async fn offload_lfc_with_state_update(&self, skip_unchanged: bool) {
         crate::metrics::LFC_OFFLOADS.inc();
-        let state = match self.offload_lfc_impl().await {
+        let state = match self.offload_lfc_impl(skip_unchanged).await {
             Ok(state) => state,
             Err(err) => {
                 crate::metrics::LFC_OFFLOAD_ERRORS.inc();
@@ -222,7 +233,7 @@ impl ComputeNode {
         self.state.lock().unwrap().lfc_offload_state = state;
     }
 
-    async fn offload_lfc_impl(&self) -> Result<LfcOffloadState> {
+    async fn offload_lfc_impl(&self, skip_unchanged: bool) -> Result<LfcOffloadState> {
         let key = self.lfc_state_key(None)?;
         info!(%key, "requesting LFC state from Postgres");
 
@@ -240,6 +251,11 @@ impl ComputeNode {
             info!(%key, "empty LFC state, not exporting");
             return Ok(LfcOffloadState::Skipped);
         };
+        let offloaded = Some((key.clone(), lfc_state_digest(state)));
+        if skip_unchanged && self.state.lock().unwrap().lfc_offloaded_digest == offloaded {
+            info!(%key, "LFC state unchanged since the last offload, not exporting");
+            return Ok(LfcOffloadState::Skipped);
+        }
         let state_query_time_ms = now.elapsed().as_millis() as u32;
         now = Instant::now();
 
@@ -261,6 +277,7 @@ impl ComputeNode {
             .await?
             .upload(&key, Bytes::from(compressed), &cancel)
             .await?;
+        self.state.lock().unwrap().lfc_offloaded_digest = offloaded;
         let state_upload_time_ms = now.elapsed().as_millis() as u32;
 
         Ok(LfcOffloadState::Completed {
@@ -272,5 +289,19 @@ impl ComputeNode {
 
     pub fn cancel_prewarm(self: &Arc<Self>) {
         self.state.lock().unwrap().lfc_prewarm_token.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lfc_state_digest;
+
+    #[test]
+    fn digest_tracks_state_bytes() {
+        let state = vec![7u8; 4096];
+        assert_eq!(lfc_state_digest(&state), lfc_state_digest(&state));
+        let mut changed = state.clone();
+        changed[4095] ^= 1;
+        assert_ne!(lfc_state_digest(&state), lfc_state_digest(&changed));
     }
 }

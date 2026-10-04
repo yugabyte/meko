@@ -445,6 +445,38 @@ func TestDeployStorageClass(t *testing.T) {
 	}
 }
 
+func TestDeployLFCOffloadInterval(t *testing.T) {
+	c, err := Load(kubernetesDeployArgs(t))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.LFCOffloadIntervalSeconds != 300 {
+		t.Errorf("LFCOffloadIntervalSeconds = %d, want 300 by default", c.Deploy.LFCOffloadIntervalSeconds)
+	}
+
+	c, err = Load(append(kubernetesDeployArgs(t), "--deploy-lfc-offload-interval-seconds", "0"))
+	if err != nil {
+		t.Fatalf("Load(0): %v", err)
+	}
+	if c.Deploy.LFCOffloadIntervalSeconds != 0 {
+		t.Errorf("LFCOffloadIntervalSeconds = %d, want 0", c.Deploy.LFCOffloadIntervalSeconds)
+	}
+
+	if _, err := Load(append(kubernetesDeployArgs(t), "--deploy-lfc-offload-interval-seconds", "-1")); err == nil {
+		t.Error("--deploy-lfc-offload-interval-seconds -1: want error, got nil")
+	}
+
+	// Env-provided, since that is how the chart delivers it.
+	t.Setenv("AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS", "60")
+	c, err = Load(kubernetesDeployArgs(t))
+	if err != nil {
+		t.Fatalf("Load(env): %v", err)
+	}
+	if c.Deploy.LFCOffloadIntervalSeconds != 60 {
+		t.Errorf("LFCOffloadIntervalSeconds = %d, want 60 from env", c.Deploy.LFCOffloadIntervalSeconds)
+	}
+}
+
 // #602: the flat per-endpoint size override. Off by default (prod keeps the
 // per-vCPU policy); a bad quantity fails startup rather than at endpoint-create.
 func TestDeployDiskSizeOverride(t *testing.T) {

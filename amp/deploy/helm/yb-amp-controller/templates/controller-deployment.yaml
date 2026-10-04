@@ -191,6 +191,13 @@ spec:
             # per-vCPU ratio. Empty (the default) = CPU-proportional sizing.
             - name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
               value: {{ .Values.controller.endpoint.diskSizeOverride | default "" | quote }}
+            {{- /* Omitted when absent, not defaulted: --reuse-values on a release
+                   predating the key would otherwise render 0 and turn prewarm off,
+                   and `default` cannot tell that from an explicit 0. */}}
+            {{- if hasKey .Values.controller.endpoint "lfcOffloadIntervalSeconds" }}
+            - name: AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS
+              value: {{ .Values.controller.endpoint.lfcOffloadIntervalSeconds | quote }}
+            {{- end }}
             # Memory per endpoint vCPU: fills in the memory when a create names
             # only CPU, and is the floor every request is held to. 0 = the
             # built-in 8 GiB/vCPU.

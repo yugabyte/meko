@@ -232,6 +232,23 @@ func TestKubernetesValuesNoExtensionsOmitted(t *testing.T) {
 	}
 }
 
+// Autoprewarm restores only what the offload saved, so the pair moves together;
+// 0 omits the block so the chart's off default applies.
+func TestKubernetesValuesLFCPrewarm(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.LFCOffloadIntervalSeconds = 300
+	v := NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "rel")
+	want := &lfcValues{Autoprewarm: true, OffloadIntervalSeconds: "300"}
+	if !reflect.DeepEqual(v.LFC, want) {
+		t.Errorf("LFC = %+v, want %+v", v.LFC, want)
+	}
+
+	cfg.LFCOffloadIntervalSeconds = 0
+	if off := NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "rel"); off.LFC != nil {
+		t.Errorf("LFC = %+v, want nil (omitted) with offload off", off.LFC)
+	}
+}
+
 func TestKubernetesValuesPgVersionDefault(t *testing.T) {
 	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
 	for _, pg := range []int{0, -1, -100} {

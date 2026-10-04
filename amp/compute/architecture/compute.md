@@ -346,6 +346,16 @@ background workers to pull the recorded pages from the pageserver — the one pl
 the LFC drives pageserver fetches directly. A prewarm never evicts live entries;
 it stops when the cache is full.
 
+`compute_ctl` drives both: with an offload interval it saves the snapshot to
+`amp_storage.blobs` periodically, and with `autoprewarm` it reloads it in the
+background after the compute reports Running. The periodic save is skipped while
+a prewarm is in flight, and when the snapshot is unchanged since its last save.
+After a prewarm fails or is cancelled it saves the cache as it stands, which may
+be only partly reloaded: that replaces a snapshot that cannot be loaded instead
+of retrying it on every start. On Kubernetes
+the controller turns the two on together for every endpoint
+(`--deploy-lfc-offload-interval-seconds`, default 300; 0 = off).
+
 Every read, write, and (optionally) prefetch feeds a HyperLogLog estimator
 (`wss_estimation`) keyed on the block's hashed `BufferTag`. This backs
 `approximate_working_set_size()` / `approximate_working_set_size_seconds()`,

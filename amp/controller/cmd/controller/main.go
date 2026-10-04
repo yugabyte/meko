@@ -167,6 +167,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				DiskSize:                      cfg.Deploy.DiskSize,
 				DiskGiBPerVCPU:                cfg.Deploy.DiskGiBPerVCPU,
 				DiskSizeOverride:              cfg.Deploy.DiskSizeOverride,
+				LFCOffloadIntervalSeconds:     cfg.Deploy.LFCOffloadIntervalSeconds,
 				BackingYBExistingSecret:       cfg.Deploy.BackingYBExistingSecret,
 				BackingYBExistingSecretKey:    cfg.Deploy.BackingYBExistingSecretKey,
 				BackingYBTLSMode:              cfg.Deploy.BackingYBTLSMode,

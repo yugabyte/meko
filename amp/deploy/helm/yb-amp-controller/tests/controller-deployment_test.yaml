@@ -265,6 +265,36 @@ tests:
             name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
             value: "10Gi"
 
+  - it: turns LFC offload and prewarm on by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS
+            value: "300"
+
+  - it: passes an explicit 0 through, so prewarm can be turned off
+    set:
+      controller.endpoint.lfcOffloadIntervalSeconds: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS
+            value: "0"
+
+  # --reuse-values on a release predating the key: no env, so the controller's
+  # own default applies rather than a rendered 0 turning prewarm off.
+  - it: omits the LFC offload interval when the key is absent
+    set:
+      controller.endpoint.lfcOffloadIntervalSeconds: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS
+
   - it: derives the endpoint pull secret from the first imagePullSecret
     set:
       imagePullSecrets:

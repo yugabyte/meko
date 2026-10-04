@@ -199,6 +199,9 @@ type DeployConfig struct {
 	// test clusters, where nodes are too small to back the ratio and the disk is
 	// scratch nothing will fill (#602) — not for prod.
 	DiskSizeOverride string
+	// LFCOffloadIntervalSeconds is how often each endpoint saves its local file
+	// cache's contents, which it reloads on its next start. 0 turns off both.
+	LFCOffloadIntervalSeconds int
 
 	// --- Docker runtime ---
 	EndpointImage string // single-container endpoint image to run
@@ -415,6 +418,7 @@ func Load(args []string) (*Config, error) {
 	fs.IntVar(&d.DiskGiBPerVCPU, "deploy-disk-gib-per-vcpu", envInt("AMP_DEPLOY_DISK_GIB_PER_VCPU", 0), "k8s: GiB of endpoint data volume per vCPU (0 = the built-in 20 GiB/vCPU policy; override only for a pool built to a different disk-per-core shape)")
 	fs.IntVar(&d.MemoryGiBPerVCPU, "deploy-memory-gib-per-vcpu", envInt("AMP_DEPLOY_MEMORY_GIB_PER_VCPU", 0), "GiB of endpoint memory per vCPU: fills in the memory when a request names only CPU, and is the floor every request must meet (0 = the built-in 8 GiB/vCPU)")
 	fs.StringVar(&d.DiskSizeOverride, "deploy-disk-size-override", env("AMP_DEPLOY_DISK_SIZE_OVERRIDE", ""), "k8s: flat endpoint data volume size (e.g. 10Gi) for every endpoint regardless of CPU, bypassing the per-vCPU ratio and --deploy-disk-size floor; empty = CPU-proportional sizing. For test clusters whose nodes cannot back the ratio")
+	fs.IntVar(&d.LFCOffloadIntervalSeconds, "deploy-lfc-offload-interval-seconds", envInt("AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS", 300), "k8s: seconds between saves of each endpoint's local file cache contents, which a restarted endpoint reloads so it does not start cold; 0 = neither save nor reload")
 	fs.StringVar(&d.BackingYBHostPorts, "deploy-yb-host-ports", env("AMP_DEPLOY_YB_HOST_PORTS", ""), "backing YugabyteDB host:port[,...] as the deployed pods reach it")
 	fs.StringVar(&d.BackingYBUser, "deploy-yb-user", env("AMP_DEPLOY_YB_USER", "yugabyte"), "backing YugabyteDB user for deployed endpoints")
 	fs.StringVar(&d.BackingYBDBName, "deploy-yb-dbname", env("AMP_DEPLOY_YB_DBNAME", "yb_storage"), "backing YugabyteDB database for deployed endpoints")
@@ -662,6 +666,9 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	// has to fail startup rather than silently fall back to the ratio.
 	if d.DiskSizeOverride != "" && !byteQuantityRe.MatchString(d.DiskSizeOverride) {
 		return fmt.Errorf("invalid deploy disk size override %q (want a k8s quantity, e.g. 10Gi)", d.DiskSizeOverride)
+	}
+	if d.LFCOffloadIntervalSeconds < 0 {
+		return fmt.Errorf("invalid deploy LFC offload interval %d (want seconds >= 0)", d.LFCOffloadIntervalSeconds)
 	}
 	switch d.BackingYBTLSMode {
 	case "", "disable", "require", "verify-ca", "verify-full":

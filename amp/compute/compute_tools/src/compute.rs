@@ -215,6 +215,11 @@ pub struct ComputeState {
     pub lfc_prewarm_state: LfcPrewarmState,
     pub lfc_prewarm_token: CancellationToken,
     pub lfc_offload_state: LfcOffloadState,
+    /// Key and digest of the last LFC state this process uploaded, so an
+    /// unchanged cache is not rewritten every interval. The key is kept because
+    /// /promote can swap the spec, and with it the endpoint id the state is
+    /// saved under. None until the first upload.
+    pub lfc_offloaded_digest: Option<(RemotePath, u64)>,
 
     /// WAL flush LSN that is set after terminating Postgres and syncing safekeepers if
     /// mode == ComputeMode::Primary. None otherwise
@@ -237,6 +242,7 @@ impl ComputeState {
             metrics: ComputeMetrics::default(),
             lfc_prewarm_state: LfcPrewarmState::default(),
             lfc_offload_state: LfcOffloadState::default(),
+            lfc_offloaded_digest: None,
             terminate_flush_lsn: None,
             promote_state: None,
             lfc_prewarm_token: CancellationToken::new(),
@@ -2765,19 +2771,7 @@ LIMIT 100",
                 interval.tick().await;
 
                 let prewarm_state = this.state.lock().unwrap().lfc_prewarm_state.clone();
-                // Do not offload LFC state if we are currently prewarming or any issue occurred.
-                // If we'd do that, we might override the LFC state in endpoint storage with some
-                // incomplete state. Imagine a situation:
-                // 1. Endpoint started with `autoprewarm: true`
-                // 2. While prewarming is not completed, we upload the new incomplete state
-                // 3. Compute gets interrupted and restarts
-                // 4. We start again and try to prewarm with the state from 2. instead of the previous complete state
-                if matches!(
-                    prewarm_state,
-                    LfcPrewarmState::Completed { .. }
-                        | LfcPrewarmState::NotPrewarmed
-                        | LfcPrewarmState::Skipped
-                ) {
+                if offload_allowed(&prewarm_state) {
                     this.offload_lfc_async().await;
                 }
             }
@@ -2994,11 +2988,44 @@ async fn create_database_extension(
     Ok(())
 }
 
+/// Whether the periodic LFC offload may run in this prewarm state.
+///
+/// Not mid-prewarm: a restart would then reload that partial snapshot instead of
+/// the complete one it replaced. A prewarm that ended Failed or Cancelled must
+/// not block it, though — a snapshot that fails to load would otherwise fail
+/// every start and never be overwritten.
+fn offload_allowed(prewarm_state: &LfcPrewarmState) -> bool {
+    !matches!(prewarm_state, LfcPrewarmState::Prewarming)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
 
     use super::*;
+
+    #[test]
+    fn offload_runs_unless_prewarming() {
+        assert!(!offload_allowed(&LfcPrewarmState::Prewarming));
+        for state in [
+            LfcPrewarmState::NotPrewarmed,
+            LfcPrewarmState::Completed {
+                total: 0,
+                prewarmed: 0,
+                skipped: 0,
+                state_download_time_ms: 0,
+                uncompress_time_ms: 0,
+                prewarm_time_ms: 0,
+            },
+            LfcPrewarmState::Skipped,
+            LfcPrewarmState::Cancelled,
+            LfcPrewarmState::Failed {
+                error: "corrupt snapshot".into(),
+            },
+        ] {
+            assert!(offload_allowed(&state), "{state:?}");
+        }
+    }
 
     #[test]
     fn duplicate_safekeeper_connstring() {

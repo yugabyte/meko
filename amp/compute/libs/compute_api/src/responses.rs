@@ -112,7 +112,8 @@ pub enum LfcOffloadState {
     Failed {
         error: String,
     },
-    /// LFC state was empty so it wasn't offloaded
+    /// LFC state was empty, or (periodic offload only) unchanged since this
+    /// compute's last offload, so it wasn't offloaded
     Skipped,
 }
 

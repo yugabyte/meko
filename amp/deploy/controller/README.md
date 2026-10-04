@@ -152,6 +152,7 @@ the knobs the image cares about:
 | `AMP_DEPLOY_YB_DBNAME` | `yb_storage` | the storage database the endpoints use |
 | `AMP_DEPLOY_STORAGE_CLASS` | _(empty)_ | k8s: storage class for the endpoint `/data` PVC (EBS/PD); empty ⇒ ephemeral `emptyDir` |
 | `AMP_DEPLOY_DISK_SIZE` | `10Gi` | k8s: size of the `/data` PVC when `AMP_DEPLOY_STORAGE_CLASS` is set |
+| `AMP_DEPLOY_LFC_OFFLOAD_INTERVAL_SECONDS` | `300` | k8s: how often each endpoint saves its LFC contents, which it reloads on restart; `0` disables both |
 
 ## Helm chart
 

@@ -150,6 +150,9 @@ type KubernetesConfig struct {
 	// floor are both bypassed. For test clusters whose nodes cannot back the
 	// ratio (#602); empty (the default) keeps the CPU-proportional policy.
 	DiskSizeOverride string
+	// LFCOffloadIntervalSeconds turns on LFC offload at this interval and
+	// autoprewarm with it; 0 leaves both at the chart's default (off).
+	LFCOffloadIntervalSeconds int
 
 	// Optional: deliver the backing YugabyteDB password from a pre-existing
 	// Secret in the namespace instead of inline (keeps the plaintext off the
@@ -1374,6 +1377,8 @@ type chartValues struct {
 	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
 	// selector — schedules anywhere).
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	// LFC is nil (omitted) to leave prewarm and offload at the chart's default.
+	LFC *lfcValues `json:"lfc,omitempty"`
 	// CommonLabels are the endpoint's identity labels and tags, labelled onto
 	// every object of the release — never onto a selector.
 	CommonLabels map[string]string `json:"commonLabels,omitempty"`
@@ -1476,6 +1481,13 @@ const (
 	// not the probe period, so shortening the period does not shrink it.
 	progressDeadlineHeadroomSeconds = 10
 )
+
+// lfcValues mirrors the chart's lfc block. The two are only ever set together:
+// autoprewarm reloads what the offload saved, so either alone does nothing.
+type lfcValues struct {
+	Autoprewarm            bool   `json:"autoprewarm"`
+	OffloadIntervalSeconds string `json:"offloadIntervalSeconds"`
+}
 
 type persistenceValues struct {
 	// StorageClass provisions the endpoint's data volume as a PVC of that class;
@@ -1795,6 +1807,12 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	// so their emptyDir /data lands on NVMe. Omitted = schedules anywhere.
 	if len(k.cfg.NodeSelector) > 0 {
 		v.NodeSelector = k.cfg.NodeSelector
+	}
+	if k.cfg.LFCOffloadIntervalSeconds > 0 {
+		v.LFC = &lfcValues{
+			Autoprewarm:            true,
+			OffloadIntervalSeconds: strconv.Itoa(k.cfg.LFCOffloadIntervalSeconds),
+		}
 	}
 	// Identity last, though the API refuses its domain as a tag anyway.
 	if len(spec.Labels)+len(spec.Identity) > 0 {
