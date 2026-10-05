@@ -517,6 +517,7 @@ pub struct YbWalStorage {
     /// otherwise be moved ahead of YB by `truncate_wal(end_pos)` when
     /// `end_pos > submitted_max_lsn`, opening a permanent gap. Initialised
     /// from `load_max_offset` at construction (YB's current max chunk end).
+    /// `truncate_wal` lowers it to the cut.
     durable_lsn: Arc<AtomicU64>,
     /// Kept so the consumer task isn't dropped immediately on
     /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
@@ -905,7 +906,10 @@ impl YbWalStorage {
                     let state = self.watermark_rx.borrow().clone();
                     let detail = match state {
                         DurableState::Failed(msg) => format!("consumer failing: {msg}"),
-                        DurableState::Healthy(d) => format!("durable {d}, channel full"),
+                        DurableState::Healthy(_) => format!(
+                            "durable {}, channel full",
+                            Lsn(self.durable_lsn.load(Ordering::Acquire))
+                        ),
                     };
                     anyhow::bail!(
                         "YB WAL chunk queue made no room in {YB_SEND_BACKPRESSURE_MAX:?} \
@@ -957,11 +961,16 @@ impl YbWalStorage {
         // Cloned receiver: the timeout arm needs to inspect the current
         // value while the wait future's borrow is still in scope.
         let mut rx = self.watermark_rx.clone();
+        // The atomic, not the published value: `truncate_wal` lowers the atomic
+        // but cannot rewrite the watch, which stays above a truncation until the
+        // next batch lands. The watch is only the wakeup.
+        let durable_lsn = self.durable_lsn.clone();
+        let durable = || Lsn(durable_lsn.load(Ordering::Acquire));
         loop {
             let res = tokio::time::timeout(
                 self.durable_wait_log_every,
                 rx.wait_for(|state| match state {
-                    DurableState::Healthy(d) => *d >= target,
+                    DurableState::Healthy(_) => durable() >= target,
                     DurableState::Failed(_) => true,
                 }),
             )
@@ -972,10 +981,10 @@ impl YbWalStorage {
                     anyhow::bail!("YB WAL consumer task gone (watermark channel closed)");
                 }
                 Err(_elapsed) => {
-                    let durable = match self.watermark_rx.borrow().clone() {
-                        DurableState::Healthy(d) => d,
-                        DurableState::Failed(msg) => anyhow::bail!(msg),
-                    };
+                    if let DurableState::Failed(msg) = self.watermark_rx.borrow().clone() {
+                        anyhow::bail!(msg);
+                    }
+                    let durable = durable();
                     if started.elapsed() >= self.durable_wait_max {
                         anyhow::bail!(
                             "YB WAL durability wait timed out after {:?}: target {target}, \
@@ -1022,12 +1031,11 @@ impl Storage for YbWalStorage {
         // that partial tail on its next restart, so it would be advertising a
         // position it will not have after a crash.
         //
-        // Neither bound alone is enough, because each one goes stale where the other
-        // is exact. `durable_lsn` only ever rises: after `truncate_wal` deletes rows
-        // it still claims them, and `record_end` is what keeps the reported value
-        // inside the table. `record_end` advances as soon as bytes are decoded, well
-        // before they are INSERTed, so while a batch is in flight `durable_lsn` is
-        // the only honest statement about what YB can serve.
+        // `record_end` advances as soon as bytes are decoded, well before they are
+        // INSERTed, so while a batch is in flight `durable_lsn` is the only honest
+        // statement about what YB can serve. That holds only because `truncate_wal`
+        // lowers `durable_lsn` with `record_end`: left at the old end, it would let
+        // re-streamed bytes below it be acked from memory (#1626).
         let durable = Lsn(self.durable_lsn.load(Ordering::Acquire));
         std::cmp::min(self.accepted_stream.record_end(), durable)
     }
@@ -1044,7 +1052,9 @@ impl Storage for YbWalStorage {
         let segno = init_lsn.segment_number(self.wal_seg_size);
         let wal_seg =
             postgres_ffi::generate_wal_segment(segno, self.system_id, self.pg_version, init_lsn)?;
-        let end_lsn = Lsn(init_lsn.0 + wal_seg.len() as u64);
+        // The blob is the whole segment from offset 0, so it ends at the segment's
+        // end, not `init_lsn + len`.
+        let end_lsn = Lsn(segno * self.wal_seg_size as u64 + wal_seg.len() as u64);
         // Init blob is a 16 MiB zero-padded segment. Intentionally not
         // cached — see WalCache module docs. It still goes through the
         // consumer (so YB has a row), but the read path will fetch it
@@ -1133,8 +1143,16 @@ impl Storage for YbWalStorage {
             );
         }
 
+        // Nothing else lowers `durable_lsn`: left at the old end, WAL re-streamed
+        // below it is acked as soon as it is decoded. Done before the DELETE, so
+        // one that fails part way advertises nothing it may have removed. The
+        // consumer is drained and only `&mut self` feeds it, so nothing races
+        // this store.
+        self.durable_lsn.store(end_pos.0, Ordering::Release);
+        self.submitted_max_lsn = end_pos;
+
         // Physically drop any WAL past `end_pos` before resetting the
-        // in-memory watermarks. In the steady single-SK case `end_pos ==
+        // stream ends. In the steady single-SK case `end_pos ==
         // durable` and there's nothing past it (no-op), but after a torn
         // tail (find_end_of_wal capped flush_lsn below the raw max on
         // restart) or a multi-SK divergence, rows can sit past `end_pos`;
@@ -3837,6 +3855,68 @@ mod tests {
         // Restore so the consumer's shutdown path doesn't observe a
         // permanently-regressed watermark.
         storage.durable_lsn.store(start.0, Ordering::Release);
+
+        drop_wals_table(&storage.ysql_system_client, &table).await;
+    }
+
+    /// #1626: `truncate_wal` must lower `durable_lsn` to the cut. Left at the old
+    /// end, WAL re-streamed below it is acked as soon as it is decoded, before
+    /// the consumer INSERTs it. A fresh timeline is the widest window: the init
+    /// segment makes `durable_lsn` the segment end, and `handle_elected` then
+    /// truncates to `start_streaming_at`. Seeded at 0, as a fresh timeline is:
+    /// `handle_elected` initializes the segment only when `flush_lsn()` is 0.
+    ///
+    /// The consumer cannot run between `write_wal` and the first assert: a
+    /// current-thread runtime and a send with free capacity never yield (see
+    /// `consumer_coalesces_contiguous_chunks_byte_equivalent`).
+    #[tokio::test]
+    async fn truncate_wal_lowers_durable_lsn_to_the_cut() {
+        use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
+
+        let table = scratch_table("wals_test_trunc_durable");
+        let start = Lsn(SEG_SIZE);
+        let (mut storage, _tmp) = make_storage(&table, Lsn(0)).await;
+        assert_eq!(storage.flush_lsn(), Lsn(0));
+
+        storage
+            .initialize_first_segment(start)
+            .await
+            .expect("initialize_first_segment");
+        assert_eq!(
+            Lsn(storage.durable_lsn.load(Ordering::Acquire)),
+            Lsn(2 * SEG_SIZE),
+            "the init segment is durable to its end"
+        );
+
+        storage.truncate_wal(start).await.expect("truncate_wal");
+        assert_eq!(
+            Lsn(storage.durable_lsn.load(Ordering::Acquire)),
+            start,
+            "durable_lsn must follow the cut"
+        );
+
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), start);
+        let mut buf: Vec<u8> = Vec::new();
+        for _ in 0..16 {
+            let (_, bytes) = g.append_logical_message(c"t", &[7u8; 16]);
+            buf.extend_from_slice(&bytes);
+        }
+        let end = Lsn(start.0 + buf.len() as u64);
+        storage.write_wal(start, &buf).await.expect("write_wal");
+        assert_eq!(
+            storage.flush_lsn(),
+            start,
+            "flush_lsn must not ack WAL the consumer has not INSERTed"
+        );
+
+        storage.flush_wal().await.expect("flush_wal");
+        let record_end = storage.accepted_stream.record_end();
+        assert!(record_end > start && record_end <= end);
+        assert_eq!(
+            storage.flush_lsn(),
+            record_end,
+            "acked once the batch lands"
+        );
 
         drop_wals_table(&storage.ysql_system_client, &table).await;
     }

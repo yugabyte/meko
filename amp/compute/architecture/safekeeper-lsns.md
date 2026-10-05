@@ -141,7 +141,7 @@ the connection instead of freezing the watermark.
 
 | LSN | Where | Meaning |
 |-----|-------|---------|
-| `durable_lsn` | `Arc<AtomicU64>` mirrored from the watch | Highest `end_lsn` confirmed durable in `amp_storage.wals`. |
+| `durable_lsn` | `Arc<AtomicU64>` mirrored from the watch; lowered by `truncate_wal` | Highest `end_lsn` confirmed durable in `amp_storage.wals`. `wait_for_durable` reads it, not the watch value. |
 | `submitted_max_lsn` | field | Highest `end_lsn` handed to the consumer; the target a blocking flush waits for. |
 
 **The externally reported flush frontier is durability-capped:**
@@ -177,9 +177,13 @@ timeline; timing out drops the connection instead.
 (`wait_for_durable(submitted_max_lsn)`) so a buffered chunk past `end_pos`
 can't land after the DELETE, then **refuses `end_pos > durable_lsn`** —
 accepting it would move the record boundary to `end_pos` and advertise WAL
-the row store can't return. It deletes YB rows lying entirely past the cut,
-drops cached chunks past the cut (so a reader can't be served stale bytes
-that a subsequent write rewrites), and resets both watermarks to `end_pos`.
+the row store can't return. It then lowers `durable_lsn` and
+`submitted_max_lsn` to `end_pos` — left at the old end, WAL re-streamed below
+it is acked as soon as it is decoded, and doing it before the DELETE means a
+DELETE that fails part way advertises nothing it removed. It deletes YB rows
+lying entirely past the cut, drops cached chunks past the cut (so a reader
+can't be served stale bytes that a subsequent write rewrites), and resets the
+stream ends to `end_pos`.
 The chunk straddling the cut is trimmed to end exactly at it, so the table
 ends at `end_pos` with nothing past it.
 

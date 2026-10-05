@@ -349,10 +349,11 @@ Key properties:
 - **`truncate_wal(end_pos)`** first drains the consumer (notify + wait), so
   a buffered chunk past `end_pos` cannot land after the cut. It refuses an
   `end_pos` above `durable_lsn` (accepting one would advertise WAL the row
-  store cannot return). It then physically trims the table
+  store cannot return). It lowers `durable_lsn` and `submitted_max_lsn` to
+  `end_pos`, then physically trims the table
   (`truncate_wals_above`: DELETE chunks starting at/after `end_pos`, and a
   read-modify-write UPDATE that shortens the one chunk straddling it), drops
-  the affected `WalCache` range, and resets both watermarks. Both
+  the affected `WalCache` range, and resets the stream ends. Both
   statements address the cut as `(segno, offset within segment)` rather than
   as an LSN, so `segno` lands in the index condition; filtering on the
   computed `segno * seg + chunk_offset` scanned the branch's whole WAL, here
