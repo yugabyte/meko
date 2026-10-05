@@ -145,7 +145,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
-      share notifies once. Sharing features are off, with a reason, while Meko's API URL isn't known.
+      share notifies once. Sharing features are off while Meko's API URL isn't known (the project
+      home's Share says why; Share with reviewers is hidden).
 - [ ] Nothing that identifies a person or their work goes into the usage stats report
       (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
       field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and

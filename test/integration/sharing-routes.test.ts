@@ -136,7 +136,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     shareStatus = 401;
     const keyRefused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'carol@example.com', grant: 'viewer' });
     expect(keyRefused.statusCode).toBe(502);
-    expect(keyRefused.json().error).toBe("Meko: Meko didn't accept AgentK's API key (invalid or expired token). Check the key on the Meko tab in Settings.");
+    expect(keyRefused.json().error).toBe("Meko: AgentK's API key wasn't accepted (invalid or expired token). Check the key on the Meko tab in Settings.");
     expect(env.core.mekoStatus.sharing).toBe(true);
   });
 

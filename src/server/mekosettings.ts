@@ -83,7 +83,7 @@ export function applyMekoChange(c: Config, next: Config, changed: MekoKey[]): vo
  * Applies a Meko tab change to a copy of the config and checks it before anything is saved: a new
  * server and key must answer, and an API URL that comes from what was typed (the API or web app
  * URL) must answer like Meko's API. Returns the config to save, whether to reconnect, and whether
- * to sync invites again (the API URL changed); null when nothing changes.
+ * to sync invites again (a reconnect, or a new API URL); null when nothing changes.
  */
 export async function nextMekoConfig(
   core: Core,

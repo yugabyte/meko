@@ -1,5 +1,6 @@
 import type { DatapackInvite, ShareGrant } from '../shared/types.js';
 import { isProjectDatapack, remoteFromDescription } from '../shared/datapacks.js';
+import { resolveMekoApiUrl } from './config.js';
 import type { Core } from './core.js';
 import { all, get, kvDelete, kvGet, kvSet, run, tx } from './db.js';
 import { errMsg } from './log.js';
@@ -58,6 +59,11 @@ export class InviteService {
   private running: Promise<void> | null = null;
   /** Datapacks whose invite was accepted here, and when: not taken for gone while datapack_list catches up. */
   private acceptedAt = new Map<string, number>();
+  /**
+   * The last failure to list the invites waiting in Meko (with the API URL), logged once: a key the
+   * share routes refuse fails every sync until the key or URL changes. Cleared by a success.
+   */
+  private incomingError: string | null = null;
 
   constructor(private core: Core, readonly api: MekoApi) {}
 
@@ -82,7 +88,7 @@ export class InviteService {
    */
   apiFailure(e: unknown, prefix: string): Error {
     if (!(e instanceof MekoApiError)) return e instanceof Error ? e : new Error(String(e));
-    if (e.status === 401) return new HttpError(502, `${prefix}: Meko didn't accept AgentK's API key (${e.message}). Check the key on the Meko tab in Settings.`);
+    if (e.status === 401) return new HttpError(502, `${prefix}: AgentK's API key wasn't accepted (${e.message}). Check the key on the Meko tab in Settings.`);
     const status = e.status === 422 ? 400 : [400, 403, 404, 409].includes(e.status) ? e.status : 502;
     return new HttpError(status, `${prefix}: ${e.message}`);
   }
@@ -161,9 +167,12 @@ export class InviteService {
     let incoming: IncomingShare[] | null = null;
     if (this.core.mekoStatus.sharing) {
       incoming = await this.api.incomingShares().catch((e) => {
-        this.core.log.warn("couldn't list the datapack invites waiting in Meko", errMsg(e));
+        const why = `${resolveMekoApiUrl(this.core.config)}: ${errMsg(e)}`;
+        if (why !== this.incomingError) this.core.log.warn("couldn't list the datapack invites waiting in Meko (logged once until it changes)", why);
+        this.incomingError = why;
         return null;
       });
+      if (incoming) this.incomingError = null;
     }
     if (gen !== this.gen) return false;
     // Only now: a read from before a change of account must not bring back the old account's id.

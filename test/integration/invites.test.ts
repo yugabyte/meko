@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent } from '../../src/shared/types.js';
 import type { MekoDatapackRow } from '../../src/server/meko.js';
 import { makeEnv, type ApiCall, type TestEnv } from '../helpers.js';
@@ -273,6 +273,25 @@ describe('datapacks shared with us', () => {
     expect(env.core.mekoStatus.sharing).toBe(false);
     await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/API URL isn't known/) });
     expect(() => env.core.invites.later('nope')).toThrow(/no longer waiting/);
+  });
+
+  it('logs a key the share routes refuse once, not on every sync, and again after it worked', async () => {
+    const warn = vi.spyOn(env.core.log, 'warn');
+    try {
+      const refusals = () => warn.mock.calls.filter((c) => String(c[0]).startsWith("couldn't list the datapack invites"));
+      await env.core.invites.sync();
+      await env.core.invites.sync();
+      expect(env.mekoApi.calls.filter((c) => c.path === '/datapacks/incoming-shares')).toHaveLength(2);
+      expect(refusals()).toHaveLength(1);
+      expect(String(refusals()[0][1])).toMatch(/invalid or expired token/);
+      await apiMode();
+      await env.core.invites.sync();
+      env.mekoApi.handle(null);
+      await env.core.invites.sync();
+      expect(refusals()).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('accepts a viewer invite without making a project of it', async () => {

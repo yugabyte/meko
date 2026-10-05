@@ -381,7 +381,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
         />
       </Field>
       <div className="fields">
-        <Field label="Web app URL" hint="For links to datapacks.">
+        <Field label="Web app URL" hint="For links to datapacks, and sharing: the API URL defaults to it plus /api/v1.">
           <input
             id="set-meko-web"
             className="input mono"

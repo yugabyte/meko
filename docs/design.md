@@ -1092,7 +1092,9 @@ same API key (a Meko personal access token), at `[meko] api_url` (by default the
 out from the config, not by asking Meko. Without an API URL the share routes answer 409, saying to
 set the web app URL. Meko's own refusals of a share call (a bad email, an invite already pending,
 no permission) come back with their status and message; a refused key (401) is a 502 that says to
-check the key on the Meko tab; anything else is a 502.
+check the key on the Meko tab; anything else is a 502. The invite sync keeps asking every five
+minutes, but logs a failure to list the invites waiting (a refused key, say) once, until the error
+or API URL changes or a sync works.
 
 | | |
 |---|---|
