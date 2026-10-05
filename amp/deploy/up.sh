@@ -11,7 +11,7 @@
 #   5. the amp controller (controller (Helm endpoint
 #      driver) plus its MCP server and UI, via deploy/controller/redeploy.sh
 #
-# then prints the URLs for the controller UI/API and the amp_ui SPA.
+# then prints the URLs for the controller API and the amp_ui SPA.
 #
 # Step 5 is now Helm-managed: redeploy.sh runs `helm upgrade --install` of the
 # yb-amp-controller chart (which packages the controller, the MCP pod, and the
@@ -336,7 +336,7 @@ LB_ANNOTATIONS="${LB_ANNOTATIONS}" \
 # --- done ---
 say "stack is up in namespace '${NS}'"
 echo
-echo "  Controller UI / API  (UI at /, REST API under /api/v1):"
+echo "  Controller API  (REST API under /api/v1, explorer at /api/v1/docs):"
 case "${CONTROLLER_EXPOSE}" in
   nodeport)
     NP="$(kubectl -n "${NS}" get svc amp-controller-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"

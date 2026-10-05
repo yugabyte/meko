@@ -14,8 +14,8 @@ import (
 )
 
 // TestServesSpecAndExplorer checks the controller hosts the OpenAPI document
-// and the interactive explorer (Swagger UI) off the API server, and that the
-// health endpoints answer.
+// and the interactive explorer (Swagger UI) off the API server, that the server
+// root redirects to the explorer, and that the health endpoints answer.
 func TestServesSpecAndExplorer(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, core.NewMemBackend(), newFakeTaskService(), api.Provisioning{}, nil, logger)
@@ -43,6 +43,31 @@ func TestServesSpecAndExplorer(t *testing.T) {
 		// The Swagger UI index references the spec URL it renders.
 		if !strings.Contains(body, "/api/v1/openapi.yaml") {
 			t.Errorf("explorer page does not reference the spec URL")
+		}
+	})
+
+	t.Run("root redirects to the explorer", func(t *testing.T) {
+		noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
+		resp, err := noFollow.Get(ts.URL + "/")
+		if err != nil {
+			t.Fatalf("GET /: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("root status = %d, want %d", resp.StatusCode, http.StatusFound)
+		}
+		if loc := resp.Header.Get("Location"); loc != "/api/v1/docs" {
+			t.Errorf("root Location = %q, want /api/v1/docs", loc)
+		}
+
+		body, _, code := get(t, ts.URL+"/")
+		if code != http.StatusOK {
+			t.Fatalf("followed root status = %d", code)
+		}
+		if !strings.Contains(body, "/api/v1/openapi.yaml") {
+			t.Errorf("root does not land on the explorer")
 		}
 	})
 

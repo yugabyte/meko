@@ -118,7 +118,7 @@ controller:
     # /healthz and /readyz here).
     api: 8080
 
-  # External exposure of the controller UI/API. The in-cluster ClusterIP Service
+  # External exposure of the controller API. The in-cluster ClusterIP Service
   # (api + sc) is always created; this `service` block selects an EXTRA external
   # Service. The MCP server is exposed the same way (see mcp below).
   service:
@@ -460,7 +460,7 @@ ui:
   # in-cluster ClusterIP Service (amp-controller-ui) is always created, plus a
   # matching external Service (amp-controller-ui-np / amp-controller-ui-lb)
   # alongside the controller's — so the one exposure knob puts the UI wherever the
-  # controller UI/API is. With controller.service.type=internal-lb (the default),
+  # controller API is. With controller.service.type=internal-lb (the default),
   # the UI is reachable on an internal LoadBalancer (amp-controller-ui-lb) out of
   # the box — this is the front door for the SPA (it reverse-proxies /api/ to the
   # controller in-cluster).

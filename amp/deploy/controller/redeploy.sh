@@ -176,7 +176,7 @@ INGRESS_ALLOWED_CIDRS="${INGRESS_ALLOWED_CIDRS:-}"
 # when CONTROLLER_EXPOSE=internal-lb, and to endpoints via ENDPOINT_SERVICE_ANNOTATIONS.
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
 
-# How to expose the controller UI/API externally:
+# How to expose the controller API externally:
 #   nodeport     — a NodePort Service (node-ip:3xxxx), no cloud LB, VPC-reachable
 #   internal-lb  — internal LoadBalancer (private VPC IP), uses LB_ANNOTATIONS
 #   external-lb  — public LoadBalancer (public IP)
@@ -526,12 +526,12 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
   done
 fi
 
-echo ">> amp controller is up. Access (UI at /, API under /api/v1):"
+echo ">> amp controller is up. Access (API under /api/v1, explorer at /api/v1/docs):"
 case "${CONTROLLER_EXPOSE}" in
   internal-lb|external-lb)
     LBIP="$(kubectl -n "${NS}" get svc amp-controller-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
     if [ -n "${LBIP}" ]; then
-      echo "   ${CONTROLLER_EXPOSE} (UI/API):  http://${LBIP}:8080"
+      echo "   ${CONTROLLER_EXPOSE} (API):  http://${LBIP}:8080"
     else
       echo "   ${CONTROLLER_EXPOSE} IP: still provisioning — check: kubectl -n ${NS} get svc amp-controller-lb -w"
     fi
@@ -541,11 +541,11 @@ case "${CONTROLLER_EXPOSE}" in
     # Prefer an ExternalIP (matches the controller's own node-IP resolver), else InternalIP.
     NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
     [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    echo "   NodePort (UI/API):  http://<any-node-ip>:${NP:-<pending>}   (reachable at any node IP)"
+    echo "   NodePort (API):  http://<any-node-ip>:${NP:-<pending>}   (reachable at any node IP)"
     [ -n "${NODEIP}" ] && [ -n "${NP}" ] && echo "      e.g.  http://${NODEIP}:${NP}"
     ;;
 esac
-echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller 8080:8080   then http://localhost:8080"
+echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller 8080:8080   then http://localhost:8080/api/v1/docs"
 if [ "${UI_ENABLED}" = "true" ]; then
   echo ">> amp_ui SPA is up (its own pod, proxies /api/ to the controller):"
   case "${CONTROLLER_EXPOSE}" in

@@ -284,7 +284,7 @@ Notes:
   `64000+i`, gRPC `51051+i`).
 - The controller shares its port with the control-plane upcall
   API (`/upcall/v1/`); its REST API lives at `/api/v1` on the same port,
-  alongside the admin console at `/`.
+  with a Swagger explorer at `/api/v1/docs`.
 - `compute_ctl` exposes a per-endpoint HTTP control port assigned at
   `endpoint create` time (see `yb_amp_local endpoint` output).
 

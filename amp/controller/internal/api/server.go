@@ -2,8 +2,7 @@
 // API-first, versioned in the URL path). The HTTP contract is generated from
 // openapi_spec.yaml (see gen.go); the controllers in handlers.go implement the
 // generated StrictServerInterface, and the controller also serves the spec
-// itself, an interactive explorer, and an embedded admin console (ui.go) at the
-// server root that drives the API from the browser.
+// itself and an interactive explorer, which the server root redirects to.
 package api
 
 import (
@@ -74,9 +73,6 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 
 	// The OpenAPI document and the interactive explorer.
 	registerDocs(e)
-
-	// The embedded admin console (a static page that drives the API).
-	registerUI(e)
 
 	// The generated, spec-driven API. The controllers implement the strict
 	// interface; the generated router binds and validates against the spec.
@@ -170,7 +166,7 @@ func (s *Server) Handler() http.Handler { return s.echo }
 // Start begins serving and blocks until the server stops.
 func (s *Server) Start() error {
 	s.logger.Info("http server listening", "addr", s.addr,
-		"ui", uiURL, "docs", apiBaseURL+"/docs", "spec", apiBaseURL+"/openapi.yaml")
+		"docs", docsURL, "spec", specURL)
 	return s.echo.Start(s.addr)
 }
 

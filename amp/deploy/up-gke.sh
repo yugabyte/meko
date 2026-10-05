@@ -775,7 +775,7 @@ kubectl -n "${NS}" rollout status deploy/amp-controller --timeout=180s
 # --- done ---
 say "stack is up in namespace '${NS}'"
 echo
-echo "  Controller UI / API (UI at /, REST API under /api/v1):"
+echo "  Controller API (REST API under /api/v1, explorer at /api/v1/docs):"
 case "${CONTROLLER_EXPOSE}" in
   internal-lb|external-lb)
     LBIP="$(kubectl -n "${NS}" get svc amp-controller-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
@@ -797,7 +797,7 @@ case "${CONTROLLER_EXPOSE}" in
 esac
 echo
 echo "  From anywhere with kubectl access (works from outside the VPC too):"
-echo "    kubectl -n ${NS} port-forward svc/amp-controller 8080:8080     then http://localhost:8080"
+echo "    kubectl -n ${NS} port-forward svc/amp-controller 8080:8080     then http://localhost:8080/api/v1/docs"
 [ "${UI_ENABLED}" = "true" ] && \
   echo "    kubectl -n ${NS} port-forward svc/amp-controller-ui 8081:80   then http://localhost:8081"
 echo

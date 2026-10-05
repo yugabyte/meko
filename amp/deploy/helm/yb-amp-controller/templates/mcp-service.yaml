@@ -19,7 +19,7 @@ spec:
 ---
 # NodePort — the MCP server is exposed the same way as the controller
 # (controller.service.type), so its /mcp endpoint is reachable wherever the
-# controller UI/API is. Auto-assigned nodePort.
+# controller API is. Auto-assigned nodePort.
 apiVersion: v1
 kind: Service
 metadata:

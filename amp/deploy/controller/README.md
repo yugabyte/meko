@@ -71,7 +71,7 @@ port as the API.)
 [`redeploy.sh`](redeploy.sh) (re-)deploys the controller to a cluster: it applies
 the ServiceAccount + RBAC, the Deployment (wired for the Kubernetes/Helm endpoint
 driver, `AMP_DEPLOY_DRIVER=kubernetes`), the in-cluster Service (the API + the SC
-port endpoints register against), and an external-facing Service for the UI/API
+port endpoints register against), and an external-facing Service for the API
 per `CONTROLLER_EXPOSE`. It reuses an existing namespace + backing YugabyteDB and
 (re)mints the ECR image pull secret each run; override defaults via env:
 
@@ -179,6 +179,6 @@ serves the static build and reverse-proxies `/api/` to the controller's
 in-cluster Service (`CONTROLLER_URL`), so the SPA stays same-origin — no CORS.
 It is exposed the same way as the controller (`CONTROLLER_EXPOSE`) and gated by
 **`ui.enabled`** (default `true`); set `ui.enabled=false` to drop it (the
-controller still serves its own built-in console at `/`). Its image
+controller then serves only its API, with the explorer at `/api/v1/docs`). Its image
 (`amp/controller-ui`) is built and pushed separately; `redeploy.sh` exposes
 `UI_ENABLED` / `UI_IMAGE_REPO` / `UI_TAG` (the tag defaults to the controller's).

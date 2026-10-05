@@ -29,7 +29,7 @@ const (
 	LauncherUserID = "a11c0000-0000-0000-0000-0000000000d1"
 	// LauncherPoolID is the launcher's storage pool.
 	LauncherPoolID = "a11c0000-0000-0000-0000-0000000000d2"
-	// LauncherPoolName names the pool for a human reading the admin console.
+	// LauncherPoolName names the pool for a human reading the console (amp_ui).
 	LauncherPoolName = "yb-amp-local"
 )
 

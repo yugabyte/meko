@@ -1,6 +1,6 @@
 yb-amp-controller "{{ .Release.Name }}" deployed to namespace {{ .Release.Namespace }}.
 
-The amp controller (UI at /, REST API under /api/v1) is backed by the external
+The amp controller (REST API under /api/v1, explorer at /api/v1/docs) is backed by the external
 YugabyteDB at:
 
     {{ .Values.controller.databaseUrl }}
@@ -12,17 +12,17 @@ Endpoints the controller deploys reach its controller at:
 Controller exposure: {{ .Values.controller.service.type }}
 {{- if eq .Values.controller.service.type "nodeport" }}
 
-  NodePort (UI/API) — reachable at any node IP:
+  NodePort (API) — reachable at any node IP:
     kubectl -n {{ .Release.Namespace }} get svc {{ include "yb-amp-controller.controllerName" . }}-np -o jsonpath='{.spec.ports[0].nodePort}'
 {{- else if or (eq .Values.controller.service.type "internal-lb") (eq .Values.controller.service.type "external-lb") }}
 
-  LoadBalancer (UI/API) — get the address:
+  LoadBalancer (API) — get the address:
     kubectl -n {{ .Release.Namespace }} get svc {{ include "yb-amp-controller.controllerName" . }}-lb -w
 {{- end }}
 
   Or port-forward:
     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "yb-amp-controller.controllerName" . }} {{ .Values.controller.ports.api }}:{{ .Values.controller.ports.api }}
-    then http://localhost:{{ .Values.controller.ports.api }}
+    then http://localhost:{{ .Values.controller.ports.api }}/api/v1/docs
 
 {{- if .Values.ui.enabled }}
 
@@ -43,7 +43,7 @@ UI ({{ include "yb-amp-controller.uiName" . }}) is up — the amp_ui SPA, proxyi
     then http://localhost:{{ .Values.ui.port }}
 {{- else }}
 
-UI disabled (ui.enabled=false) — the controller still serves its built-in console at /.
+UI disabled (ui.enabled=false) — the controller serves only its API (explorer at /api/v1/docs).
 {{- end }}
 
 {{- if .Values.mcp.enabled }}

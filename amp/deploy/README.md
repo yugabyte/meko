@@ -23,7 +23,7 @@ deploy/
 ## One-shot bring-up — `up.sh`
 
 [`up.sh`](up.sh) stands the whole stack up on Kubernetes **from nothing**, then
-prints the controller UI URL. It is the from-scratch companion to
+prints the controller API and amp_ui URLs. It is the from-scratch companion to
 [`controller/redeploy.sh`](controller/README.md) (which redeploys only the
 controller and assumes its prerequisites already exist). In order, `up.sh`:
 

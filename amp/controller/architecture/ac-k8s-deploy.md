@@ -37,7 +37,7 @@ interface onto chart values) and lays down:
   and internal-LoadBalancer endpoints;
 - an in-cluster **Service** (`amp-controller`, ClusterIP) exposing the API (`8080`)
   and the controller port (`50051`) that endpoints register against; and
-- an **internal LoadBalancer** Service (`amp-controller-lb`) for the UI/API on a
+- an **internal LoadBalancer** Service (`amp-controller-lb`) for the API on a
   private VPC IP (the SC port stays on the ClusterIP only);
 - the **MCP server** as its own pod (`amp-controller-mcp` Deployment + Service) —
   a stateless HTTP wrapper of the controller REST API — gated by `mcp.enabled`; and

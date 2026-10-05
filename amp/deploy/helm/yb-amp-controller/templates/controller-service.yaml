@@ -16,7 +16,7 @@ spec:
       targetPort: api
 {{- if eq .Values.controller.service.type "nodeport" }}
 ---
-# NodePort for the UI/API — reachable at any node IP (VPC-internal), no cloud LB.
+# NodePort for the API — reachable at any node IP (VPC-internal), no cloud LB.
 apiVersion: v1
 kind: Service
 metadata:
@@ -36,7 +36,7 @@ spec:
       {{- end }}
 {{- else if or (eq .Values.controller.service.type "internal-lb") (eq .Values.controller.service.type "external-lb") }}
 ---
-# LoadBalancer for the UI/API ({{ .Values.controller.service.type }}); the SC port stays
+# LoadBalancer for the API ({{ .Values.controller.service.type }}); the SC port stays
 # ClusterIP-only. internal-lb carries service.annotations; external-lb gets a public IP.
 apiVersion: v1
 kind: Service

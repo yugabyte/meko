@@ -121,8 +121,7 @@ the cluster-scoped RBAC it creates is namespace-prefixed so the copies do not co
   on `ui.port`, plus an external Service (`amp-controller-ui-np` /
   `amp-controller-ui-lb`) selected by its **own `ui.service.type`**, independent of
   the controller's exposure. It defaults to `internal-lb`, so the UI gets its own
-  internal LoadBalancer out of the box; this SPA pod is the intended front door,
-  distinct from the controller's own built-in console at `/`.
+  internal LoadBalancer out of the box; this SPA pod is the console.
 
 ### UI proxy & probe
 
