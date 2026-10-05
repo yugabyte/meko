@@ -63,12 +63,20 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(found.json()).toMatchObject({ name: 'demo-repo', remote: 'github.com/acme/demo-repo' });
   });
 
-  it("shares only datapacks in a project here, only in API mode, and passes on Meko's errors", async () => {
+  it("shares only datapacks in a project here, only with Meko's API URL known, and passes on Meko's errors", async () => {
     expect((await call('GET', '/api/meko/datapacks/dp-1/people')).statusCode).toBe(404);
     await project();
-    const link = await call('GET', '/api/meko/datapacks/dp-1/people');
-    expect(link.statusCode).toBe(409);
-    expect(link.json().error).toMatch(/Share it in Meko/);
+    // A self-hosted Meko whose web app and API URLs aren't known: no sharing.
+    env.core.updateConfig((c) => {
+      c.meko.url = 'https://meko.example.com/mcp';
+    });
+    const noApi = await call('GET', '/api/meko/datapacks/dp-1/people');
+    expect(noApi.statusCode).toBe(409);
+    expect(noApi.json().error).toMatch(/Meko's API URL isn't known, so AgentK can't share datapacks. Set the web app URL/);
+    env.core.updateConfig((c) => {
+      c.meko.url = '';
+    });
+    expect(env.core.mekoStatus.sharing).toBe(true);
 
     let shareStatus = 200;
     env.mekoApi.handle((c: ApiCall) => {
@@ -82,7 +90,6 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
       }
       return { body: { data: {} } };
     });
-    await env.core.invites.checkMode();
 
     const people = await call('GET', '/api/meko/datapacks/dp-1/people');
     expect(people.json()).toEqual({
@@ -125,12 +132,12 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(partly.json()).toMatchObject({ members: [], invites: [], refreshError: expect.stringMatching(/Couldn't read the list again: boom/) });
     expect(env.mekoApi.calls.length).toBeGreaterThan(handler);
 
-    // Meko stops taking the key: link mode from then on.
+    // Meko refuses the key: an error that says to check it, and sharing stays in AgentK.
     shareStatus = 401;
     const keyRefused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'carol@example.com', grant: 'viewer' });
-    expect(keyRefused.statusCode).toBe(409);
-    expect(keyRefused.json().error).toMatch(/doesn't accept AgentK's key for sharing/);
-    expect(env.core.mekoStatus.sharing).toBe('link');
+    expect(keyRefused.statusCode).toBe(502);
+    expect(keyRefused.json().error).toBe("Meko: Meko didn't accept AgentK's API key (invalid or expired token). Check the key on the Meko tab in Settings.");
+    expect(env.core.mekoStatus.sharing).toBe(true);
   });
 
   it('lists invites in the state and puts one off with Later', async () => {
@@ -155,7 +162,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect((await call('GET', '/api/state')).json().invites).toHaveLength(1);
     expect((await call('POST', '/api/invites/dp-a/later')).statusCode).toBe(204);
     expect((await call('GET', '/api/state')).json().invites).toEqual([]);
-    // Link mode: no invites to answer here.
+    // An accepted share has no invite left to decline.
     expect((await call('POST', '/api/invites/dp-a/decline')).statusCode).toBe(409);
     // The datapack list the dialog fetches never carries account ids.
     const list = (await call('GET', '/api/meko/datapacks')).json();
@@ -187,8 +194,9 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(env.mekoTools.calls.find((c) => c.name === 'check')?.args).toEqual(['https://meko.example.com/mcp', 'mko_tkn_newkey000000']);
     expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(before + 1);
     expect(readFileSync(env.core.paths.config, 'utf8')).toContain('meko.example.com/mcp');
-    // A self-hosted MCP URL has no web app to work out until one is typed, and no API URL to check.
-    expect(env.core.state().meko.webUrl).toBeNull();
+    // A self-hosted MCP URL has no web app to work out until one is typed, and no API URL to check
+    // (or share through).
+    expect(env.core.state().meko).toMatchObject({ webUrl: null, sharing: false });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
 
     // Back on Meko Cloud, its web app and API URLs are worked out and trusted: the API URL isn't checked.
@@ -196,7 +204,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(cloud.statusCode).toBe(200);
     expect(cloud.json().meko).toMatchObject({ url: '', effectiveWebUrl: 'https://cloud.mekodata.ai', effectiveApiUrl: 'https://cloud.mekodata.ai/api/v1' });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
-    expect(env.core.state().meko.webUrl).toBe('https://cloud.mekodata.ai');
+    expect(env.core.state().meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai', sharing: true });
 
     // A typed web app URL moves the API URL: that is checked (without the key), and nothing reconnects.
     const checks = env.mekoTools.calls.length;
@@ -212,11 +220,12 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(badApi.json().error).toMatch(/doesn't look like Meko's API: it answered 404/);
     expect(env.core.config.meko.apiUrl).toBe('');
 
-    // A good one is saved, and the sharing mode is checked again.
+    // A good one is saved, and the invites waiting there are synced.
     env.mekoTools.state.apiError = null;
     env.mekoApi.handle((c) => (c.path === '/datapacks/incoming-shares' ? { body: { data: [] } } : undefined));
+    const synced = env.mekoApi.calls.filter((c) => c.path === '/datapacks/incoming-shares').length;
     expect((await call('PUT', '/api/settings', { meko: { apiUrl: 'https://api.example.com/api/v1' } })).statusCode).toBe(200);
-    await waitFor(() => env.core.mekoStatus.sharing, (m) => m === 'api', 5000, 'the sharing mode');
+    await waitFor(() => env.mekoApi.calls.filter((c) => c.path === '/datapacks/incoming-shares').length, (n) => n > synced, 5000, 'the invite sync');
   });
 
   it('saves only the Meko fields it changed, over a change made while it checked', async () => {

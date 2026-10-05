@@ -52,9 +52,8 @@ export interface CoreOptions {
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
 type InviteEvent = Extract<ServerEvent, { type: 'invite' }>;
 
-/** How often invites and shares are synced from Meko, and how often the share API is re-checked. */
+/** How often invites and shares are synced from Meko. */
 const INVITE_SYNC_MS = 5 * 60 * 1000;
-const SHARING_CHECK_MS = 60 * 60 * 1000;
 /** How often idle worktrees unused for too long are removed. */
 const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 /** How often archived sessions' Meko pins are cleared away. */
@@ -108,7 +107,7 @@ export class Core extends EventEmitter {
     this.cfg = o.config;
     this.meko = o.meko;
     const configured = mekoConfigured(o.config);
-    this.mekoStatus = { configured, webUrl: resolveMekoWebUrl(o.config), sharing: null };
+    this.mekoStatus = { configured, webUrl: resolveMekoWebUrl(o.config), sharing: configured && !!resolveMekoApiUrl(o.config) };
     this.log = o.log ?? consoleLogger;
     this.capture = new TranscriptCapture(o.mekoCaptureScript ?? null, () => {
       const m = resolveMeko(this.cfg);
@@ -147,7 +146,7 @@ export class Core extends EventEmitter {
     saveConfig(this.paths, next);
     this.cfg = next;
     const configured = mekoConfigured(next);
-    this.mekoStatus = { ...this.mekoStatus, webUrl: resolveMekoWebUrl(next), configured, ...(configured ? {} : { sharing: null }) };
+    this.mekoStatus = { configured, webUrl: resolveMekoWebUrl(next), sharing: configured && !!resolveMekoApiUrl(next) };
     this.changed();
     return next;
   }
@@ -175,28 +174,20 @@ export class Core extends EventEmitter {
     this.emit('notify', { type: 'invite', ...n } satisfies InviteEvent);
   }
 
-  /** Re-checks the share API, then syncs invites. Never throws. */
-  async refreshSharing(): Promise<void> {
+  /** Syncs the invites and shares waiting in Meko. Never throws. */
+  async syncInvites(): Promise<void> {
     if (!this.mekoStatus.configured) return;
-    await this.invites.checkMode();
     await this.invites.sync().catch((e) => this.log.warn('datapack invite sync failed', errMsg(e)));
   }
 
   /**
    * The Meko URL or key changed (or Meko was turned on or off): reconnect, forget the old
-   * account's shares, and check sharing again in the background.
+   * account's shares, and sync the new one's in the background.
    */
   async mekoChanged(): Promise<void> {
     await this.meko.reset();
     this.invites.forgetAccount();
-    this.sharingChanged();
-  }
-
-  /** Meko's API URL changed (or the account did): check the sharing mode again, in the background. */
-  sharingChanged(): void {
-    this.mekoStatus = { ...this.mekoStatus, sharing: null };
-    this.changed();
-    void this.refreshSharing();
+    void this.syncInvites();
   }
 
   state(): AppState {
@@ -252,11 +243,10 @@ export class Core extends EventEmitter {
       this.every(60000, () => this.sessions.refreshDiffStats());
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
-      this.every(SHARING_CHECK_MS, () => this.invites.checkMode());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.callHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
-      void this.refreshSharing();
+      void this.syncInvites();
       this.lifecycle.start();
     }
   }

@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
+import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo } from '../../shared/types';
 import { newRepoNameProblem } from '../../shared/types';
 import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
@@ -54,8 +54,6 @@ function tagFor(o: DpOption): string | null {
 
 export function NewProjectDialog({
   mekoConfigured,
-  mekoWebUrl,
-  sharing,
   projects,
   initialInvite,
   onClose,
@@ -63,8 +61,6 @@ export function NewProjectDialog({
 }: {
   /** Meko is on (a key is set). Off, a project is opened without a datapack. */
   mekoConfigured: boolean;
-  mekoWebUrl: string | null;
-  sharing: SharingMode | null;
   projects: Project[];
   /** A share to start with chosen (Open as project on its banner). */
   initialInvite?: DatapackInvite | null;
@@ -504,15 +500,6 @@ export function NewProjectDialog({
               })}
             </div>
             <div className="np-dp-links">
-              {sharing === 'link' && mekoWebUrl && (
-                <span className="hint">
-                  Waiting on an invite? Accept it in{' '}
-                  <a href={mekoWebUrl} target="_blank" rel="noreferrer">
-                    Meko ↗
-                  </a>
-                  , then refresh.
-                </span>
-              )}
               <button className="link-btn" disabled={dpLoading} onClick={loadDatapacks}>
                 {dpLoading ? <Busy label="Refreshing" /> : 'Refresh'}
               </button>

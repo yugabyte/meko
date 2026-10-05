@@ -39,7 +39,7 @@ describe('datapacks shared with us', () => {
     await env.cleanup();
   });
 
-  /** Turns on API mode: Meko takes our key on its share routes. */
+  /** Meko answers its share routes: it lists the invites waiting and acts on them. */
   async function apiMode() {
     env.mekoApi.handle((c: ApiCall) => {
       if (c.path === '/datapacks/incoming-shares') return { body: { data: waiting } };
@@ -50,15 +50,11 @@ describe('datapacks shared with us', () => {
       }
       return undefined;
     });
-    await env.core.invites.checkMode();
-    expect(env.core.mekoStatus.sharing).toBe('api');
   }
 
   const pending = () => env.core.invites.pending().map((i) => [i.datapackId, i.state, i.inviteId]);
 
   it('records shares that already exist on the first sync without telling, then tells once about new ones', async () => {
-    await env.core.invites.checkMode();
-    expect(env.core.mekoStatus.sharing).toBe('link');
     rows = [OWN, shared('dp-old', 'adlc/proj/demo-repo/old')];
     await env.core.invites.sync();
     expect(pending()).toEqual([]);
@@ -260,7 +256,7 @@ describe('datapacks shared with us', () => {
     expect(env.mekoApi.calls.find((c) => c.path === '/datapacks/invite-action')?.body).toMatchObject({ recipient_user_id: 'u-new' });
   });
 
-  it('declines in Meko, and refuses to answer invites in link mode', async () => {
+  it("declines in Meko, and refuses to answer invites without Meko's API URL", async () => {
     await env.core.invites.sync();
     await apiMode();
     waiting = [incoming('inv-1', 'dp-a', 'adlc/proj/demo-repo/a')];
@@ -271,8 +267,11 @@ describe('datapacks shared with us', () => {
 
     waiting = [incoming('inv-2', 'dp-b', 'adlc/proj/demo-repo/b', 'viewer')];
     await env.core.invites.sync();
-    env.core.mekoStatus = { ...env.core.mekoStatus, sharing: 'link' };
-    await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409 });
+    env.core.updateConfig((c) => {
+      c.meko.url = 'https://meko.example.com/mcp';
+    });
+    expect(env.core.mekoStatus.sharing).toBe(false);
+    await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/API URL isn't known/) });
     expect(() => env.core.invites.later('nope')).toThrow(/no longer waiting/);
   });
 

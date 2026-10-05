@@ -31,20 +31,15 @@ describe('MekoApi', () => {
     expect(e).toMatchObject({ status: 409, code: 'CONFLICT', message: 'bob@example.com is already a member' });
   });
 
-  it('reads link mode from a refused key, API mode from an answer', async () => {
+  it('passes on a refused key as an error', async () => {
     const f = fakeMekoApi();
-    expect(await f.api.sharingMode()).toBe('link');
-    f.handle(() => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'no route' } } }));
-    expect(await f.api.sharingMode()).toBe('link');
+    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED', message: 'invalid or expired token' });
     f.handle(() => ok([]));
-    expect(await f.api.sharingMode()).toBe('api');
-    f.handle(() => ({ status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'boom' } } }));
-    await expect(f.api.sharingMode()).rejects.toThrow('boom');
+    expect(await f.api.incomingShares()).toEqual([]);
   });
 
-  it('is link mode with no API URL, and says so when asked to share', async () => {
+  it('says so when asked to share with no API URL', async () => {
     const api = new MekoApi(() => ({ baseUrl: null, apiKey: 'k' }));
-    expect(await api.sharingMode()).toBe('link');
     await expect(api.share('d', 'a@b.c', 'viewer')).rejects.toThrow(/API URL/);
   });
 
@@ -52,7 +47,7 @@ describe('MekoApi', () => {
     const refused = new MekoApi(() => ({ baseUrl: 'https://meko.test/api/v1', apiKey: 'k' }), (async () => {
       throw new TypeError('fetch failed');
     }) as typeof fetch);
-    await expect(refused.sharingMode()).rejects.toThrow(/Couldn't reach Meko's API at https:\/\/meko.test\/api\/v1: fetch failed/);
+    await expect(refused.incomingShares()).rejects.toThrow(/Couldn't reach Meko's API at https:\/\/meko.test\/api\/v1: fetch failed/);
     const slow = new MekoApi(() => ({ baseUrl: 'https://meko.test/api/v1', apiKey: 'k' }), (async () => {
       throw Object.assign(new Error('aborted'), { name: 'TimeoutError' });
     }) as typeof fetch);
