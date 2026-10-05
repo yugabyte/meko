@@ -31,7 +31,8 @@ export function pageVersion(doc: DocLike): string | null {
 
 /**
  * Text a reload doesn't lose: xterm's hidden input, and fields marked `data-reload-safe` (the
- * terminal compose box keeps its draft in sessionStorage).
+ * terminal compose box keeps its draft in sessionStorage; a design answer is marked only while
+ * its text is saved on the server).
  */
 function reloadSafe(el: FieldLike): boolean {
   return el.dataset?.reloadSafe !== undefined || !!el.classList?.contains('xterm-helper-textarea');

@@ -7,7 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignAnswer, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs,
 } from '../shared/types.js';
@@ -17,6 +17,7 @@ import {
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
+import { designQuestions } from './answers.js';
 import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
@@ -375,10 +376,22 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     core.sessions.row(req.params.id);
-    const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number }>(
-      db, 'SELECT markdown, html, artifact_url, updated_at FROM designs WHERE session_id = ?', req.params.id);
-    return { markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null };
+    const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number; questions_source: string | null }>(
+      db, 'SELECT markdown, html, artifact_url, updated_at, questions_source FROM designs WHERE session_id = ?', req.params.id);
+    return {
+      markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null,
+      questions: designQuestions(db, req.params.id),
+      questionsSource: r?.questions_source === 'file' || r?.questions_source === 'markdown' ? r.questions_source : null,
+    };
   });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/design/answers', async (req): Promise<DesignAnswer[]> => core.answers.list(req.params.id));
+  app.put<{ Params: { id: string; qid: string }; Body: unknown }>('/api/sessions/:id/design/answers/:qid',
+    async (req): Promise<DesignAnswer[]> => core.answers.put(req.params.id, req.params.qid, req.body));
+  app.delete<{ Params: { id: string; qid: string } }>('/api/sessions/:id/design/answers/:qid', async (req, reply) => {
+    core.answers.remove(req.params.id, req.params.qid);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/design/answers/send', async (req): Promise<SendCommentsResult> => core.answers.send(req.params.id));
 
   // ---- settings ----
   const settings = (): Settings => ({

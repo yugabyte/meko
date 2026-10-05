@@ -66,7 +66,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
-      first in the frame's document. Markdown designs are sanitized with no forms or styles.
+      first in the frame's document. Markdown designs are sanitized with no forms or styles. A
+      design's questions (from Claude's `questions.json`) render as plain text, never HTML, and are
+      size-capped and normalized on the server.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
       (no answer means allow) so a slow or restarting server never blocks Claude.
 
@@ -84,8 +86,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
       out of Merge & Close or while AgentK is mid-turn.
-- [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is
-      idle, never into a permission or question prompt; otherwise they're queued (the review prompt
+- [ ] Prompts (stage, review, review-comment and design-answer prompts) are only typed into a session when Claude is
+      idle (or showing a design waiting for approval), never into a permission or question prompt; otherwise they're queued (the review prompt
       in `state.db`, so it survives a restart). Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
