@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AppState, DatapackInvite } from '../../shared/types';
+import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import type { Conn } from '../hooks/useEvents';
 import { Busy } from './common';
@@ -96,12 +96,46 @@ function InviteBanners({
   );
 }
 
+/** New sessions whose worktree couldn't be made after the dialog closed: try again (the dialog filled in) or dismiss. */
+function FailedStartBanners({
+  state,
+  onRetry,
+  onError,
+}: {
+  state: AppState;
+  onRetry: (f: FailedStart) => void;
+  onError: (m: string) => void;
+}) {
+  const projects = new Map(state.projects.map((p) => [p.id, p.name]));
+  const failed = (state.failedStarts ?? []).filter((f) => projects.has(f.projectId));
+  return (
+    <>
+      {failed.map((f) => (
+        <div className="banner warn" key={f.id} role="alert">
+          <span className="banner-text">
+            <b>{f.name}</b> in {projects.get(f.projectId)} didn’t start. {f.error}
+          </span>
+          <span className="banner-btns">
+            <button className="btn primary small" onClick={() => onRetry(f)}>
+              Try again
+            </button>
+            <button className="btn small" onClick={() => api.dismissFailedStart(f.id).catch((e) => onError(errorMessage(e)))}>
+              Dismiss
+            </button>
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function Banners({
   state,
   conn,
   stale,
   onError,
   onOpenInvite,
+  onRetryStart,
 }: {
   state: AppState;
   conn: Conn;
@@ -109,6 +143,7 @@ export function Banners({
   stale: string | null;
   onError: (m: string) => void;
   onOpenInvite: (i: DatapackInvite) => void;
+  onRetryStart: (f: FailedStart) => void;
 }) {
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
   const [applying, setApplying] = useState(false);
@@ -187,6 +222,7 @@ export function Banners({
           </span>
         </div>
       )}
+      <FailedStartBanners state={state} onRetry={onRetryStart} onError={onError} />
       <InviteBanners invites={state.invites ?? []} onOpen={onOpenInvite} onError={onError} />
     </div>
   );

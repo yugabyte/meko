@@ -575,6 +575,23 @@ export interface AppState {
   limits: PlanLimits | null;
   /** Project datapacks shared with you that aren't a project here yet (not the ones put off with Later). */
   invites: DatapackInvite[];
+  /** New sessions whose worktree couldn't be made, newest first, until dismissed (kept in memory: a restart forgets them). */
+  failedStarts: FailedStart[];
+}
+
+/**
+ * A new session that couldn't start: its worktree (or, for a Review a PR, the PR's head) couldn't
+ * be had after the New session dialog had closed, so the session was removed.
+ */
+export interface FailedStart {
+  /** The id the session had. */
+  id: string;
+  projectId: string;
+  name: string;
+  error: string;
+  at: number;
+  /** What was asked, so Try again can open the New session dialog filled in. */
+  request: CreateSessionRequest;
 }
 
 /** One plan usage window, as Claude Code reports it to its status line (Pro and Max plans). */
@@ -1263,9 +1280,12 @@ export type TermServerMessage =
 //        a bare number looked up in `repoPath` (default: the project's repo); 400 for a PR that can't be found)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name or a
-//        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
-//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo)
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
+//        base branch neither the repo nor its origin has, or a repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
+//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo). Answers once
+//        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
+//        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.
+// DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
