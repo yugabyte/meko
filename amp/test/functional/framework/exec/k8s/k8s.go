@@ -406,6 +406,15 @@ func (k *Kubectl) DeleteNamespace(ctx context.Context, name string) error {
 	return err
 }
 
+// DeleteSelectedEverywhere deletes every object of kind matching selector in
+// all namespaces, tolerating none.
+func (k *Kubectl) DeleteSelectedEverywhere(ctx context.Context, kind, selector string) error {
+	nk := *k
+	nk.cfg.Namespace = ""
+	_, err := nk.exec(ctx, nil, "delete", kind, "--all-namespaces", "-l", selector, "--ignore-not-found")
+	return err
+}
+
 // WaitFor blocks until a condition holds on a target (`kubectl wait`).
 // target is "kind/name" (e.g. "statefulset/yugabyted"); condition is a
 // --for value (e.g. "condition=Ready" or "jsonpath={.status.readyReplicas}=1").

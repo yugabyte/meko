@@ -3,6 +3,7 @@ package sharedk8s
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
@@ -117,6 +118,12 @@ func (p *Provider) ampStackFor(spec core.EnvSpec) ampstack.Config {
 	if _, ok := overlay["env.ampstack.yb_ready_timeout"]; ok {
 		cfg.YBReadyTimeout = ampstack.FromConfig(derived).YBReadyTimeout
 	}
+	for k := range overlay {
+		if strings.HasPrefix(k, backingAddressPrefix) {
+			cfg.BackingAddress = ampstack.FromConfig(derived).BackingAddress
+			break
+		}
+	}
 	return cfg
 }
 
@@ -217,4 +224,18 @@ func (e *Env) storageAccess() (ampstack.StorageAccess, error) {
 		return e.own.app.StorageAccess(), nil
 	}
 	return e.prov.storageAccess()
+}
+
+// backingAddressPrefix keys only change how the control plane addresses the
+// backing, so they must not buy the test a YBA of its own.
+const backingAddressPrefix = "env.ampstack.backing_address."
+
+func backingOnlyOverlay(overlay map[string]string) map[string]string {
+	out := make(map[string]string, len(overlay))
+	for k, v := range overlay {
+		if !strings.HasPrefix(k, backingAddressPrefix) {
+			out[k] = v
+		}
+	}
+	return out
 }

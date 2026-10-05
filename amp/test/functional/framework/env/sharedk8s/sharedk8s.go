@@ -542,9 +542,11 @@ func (p *Provider) provisionBackingFor(ctx context.Context, tag string, spec cor
 	}
 	cfg := p.ybDeployCfg
 	var own backingProvisioner
+	declared := false
 	if spec.BackingConfig != nil && spec.Dedicated() {
-		overlay := spec.BackingConfig(cfg)
-		if len(overlay) > 0 {
+		full := spec.BackingConfig(cfg)
+		declared = len(full) > 0
+		if overlay := backingOnlyOverlay(full); len(overlay) > 0 {
 			cfg = cfg.Derive(overlay)
 		}
 	}
@@ -577,6 +579,11 @@ func (p *Provider) provisionBackingFor(ctx context.Context, tag string, spec cor
 		// its namespace reaches the reap plan, which is the only record of it.
 		p.log("sharedk8s: %s: the declared backing failed AND its YBA could not be torn down (%v); it stays in the reap plan", tag, cerr)
 		return nil, nil, own.Plan(), own, core.AsEnvFailure(fmt.Errorf("sharedk8s: the backing %s declared for %s failed: %w (its YBA could not be torn down either: %v)", mode, tag, err, cerr))
+	}
+	if err != nil && declared {
+		// Declared by addressing alone, so the run's shared provisioner served it,
+		// but the same rule holds: no fallback to a backing it did not ask for.
+		return nil, nil, nil, nil, core.AsEnvFailure(fmt.Errorf("sharedk8s: the backing %s declared for %s failed: %w", mode, tag, err))
 	}
 	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(cfg) {
 		// The run ASKED for YBA (env.yb_deploy was set explicitly), so a

@@ -231,6 +231,14 @@ env:
       password: ""
       sslmode: ""
       admin_host_ports: ""
+    # backing_address: how the controller and endpoints address a backing in
+    # this cluster. pods (default) hands them every tserver's pod DNS name.
+    # service creates one ClusterIP Service over the tservers with YSQL and RPC
+    # (9100), the shape the operator foundation gives customers; its
+    # session_affinity is None (the foundation's default, meko#1493) or ClientIP.
+    backing_address:
+      mode: "pods"
+      session_affinity: "None"
     # tls: the controller and every endpoint authenticate to the backing with
     # cert-manager client certificates from issuer_name (the trust root
     # deploy/tls/trust-root.sh stands up; ca_configmap is its bundle). Needs an
@@ -1632,6 +1640,25 @@ stress:
     # per index, so the step can be shown to fail (a page cannot be corrupted
     # over the wire). Leave it empty in any real run.
     probe_sql: ""
+  # extension_live_enable: PostGIS enabled on a branch with a live writer,
+  # `cycles` restarts of it each writing rows_per_cycle, then empty_image (no
+  # extension tree) enabled as the stand-in for an ImageVolume the node mounted
+  # empty. ready_timeout bounds one endpoint coming back.
+  extension_live_enable:
+    cycles: 3
+    rows: 5000
+    rows_per_cycle: 500
+    postgis_image: "ghcr.io/cloudnative-pg/postgis-extension:3.6.2-18-bookworm"
+    empty_image: "registry.k8s.io/pause:3.10"
+    ready_timeout: "10m"
+  # backing_tserver_service: the same live branch on a backing addressed through
+  # one tserver Service (env.ampstack.backing_address), restarted `cycles` times.
+  # Skips below two tservers.
+  backing_tserver_service:
+    cycles: 6
+    rows: 5000
+    rows_per_cycle: 500
+    ready_timeout: "10m"
   # backing_unreachable_api: deletes the backing's serving pods, then drives
   # reads and cluster creates on a transport that retries nothing, so the 503 the
   # controller sends for an unreachable store is seen rather than retried away

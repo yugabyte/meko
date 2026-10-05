@@ -285,6 +285,10 @@ type Config struct {
 	// never torn down here).
 	Backing Backing
 
+	// BackingAddress is kept apart from Backing because providers replace
+	// Backing wholesale with the store they provisioned.
+	BackingAddress BackingAddress
+
 	// EndpointNodeSelector pins every endpoint pod the deployed control plane
 	// creates, as a "k=v,k=v" CSV of node labels. Reaches the pods through the
 	// chart's controller.endpoint.nodeSelector, which the controller forwards as
@@ -455,6 +459,10 @@ func FromConfig(get Getter) Config {
 			Password:       get.GetString("env.ampstack.backing.password", ""),
 			SSLMode:        get.GetString("env.ampstack.backing.sslmode", ""),
 			AdminHostPorts: get.GetString("env.ampstack.backing.admin_host_ports", ""),
+		},
+		BackingAddress: BackingAddress{
+			Mode:            get.GetString("env.ampstack.backing_address.mode", BackingAddressPods),
+			SessionAffinity: get.GetString("env.ampstack.backing_address.session_affinity", "None"),
 		},
 		TLS: TLS{
 			Enabled:           get.GetBool("env.ampstack.tls.enabled", false),
@@ -771,6 +779,9 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 	// pull secret on a public image is harmless.
 	if a.externalBacking() {
 		if err := a.ensureExternalStorageDB(ctx); err != nil {
+			return StackInfo{}, err
+		}
+		if err := a.ensureTserverService(ctx); err != nil {
 			return StackInfo{}, err
 		}
 	} else {
@@ -1392,7 +1403,7 @@ func (a *App) backingUser() string {
 // pod FQDN.
 func (a *App) backingHostPorts() string {
 	if a.externalBacking() {
-		return a.cfg.Backing.HostPorts
+		return a.controllerHostPorts()
 	}
 	return a.ybFQDN() + ":5433"
 }
@@ -1431,7 +1442,7 @@ func (a *App) dbURL() string {
 		// depends on which backing this is: Backing.HostPorts is empty on the
 		// built-in path, and an empty list here would produce a DSN with no
 		// host at all rather than falling through to the ybFQDN form.
-		hosts := hostPortList(a.cfg.Backing.HostPorts)
+		hosts := hostPortList(a.controllerHostPorts())
 		if !a.externalBacking() {
 			hosts = fmt.Sprintf("%s:5433", a.ybFQDN())
 		}
@@ -1439,7 +1450,7 @@ func (a *App) dbURL() string {
 			a.backingUser(), hosts, a.storageDBName(), tlsCAPath, tlsCertPath, tlsKeyPath)
 	}
 	if a.externalBacking() {
-		return backingDSN(hostPortList(a.cfg.Backing.HostPorts), a.backingUser(), a.cfg.Backing.Password, a.storageDBName(), orDefault(a.cfg.Backing.SSLMode, DefaultBackingSSLMode))
+		return backingDSN(hostPortList(a.controllerHostPorts()), a.backingUser(), a.cfg.Backing.Password, a.storageDBName(), orDefault(a.cfg.Backing.SSLMode, DefaultBackingSSLMode))
 	}
 	return fmt.Sprintf("postgres://%s@%s:5433/%s?sslmode=%s", DefaultBackingUser, a.ybFQDN(), a.cfg.DBName, DefaultBackingSSLMode)
 }
@@ -1773,6 +1784,11 @@ func reapNamespace(ctx context.Context, kube *k8s.Kubectl, namespace string) err
 	}
 	if err := deleteControllerClusterRBAC(ctx, kube, namespace); err != nil {
 		return err
+	}
+	// The tserver Service of backing_address=service lives in the backing's
+	// namespace, which deleting this one does not reach.
+	if err := kube.DeleteSelectedEverywhere(ctx, "service", tserverServiceStackLabel+"="+namespace); err != nil {
+		return fmt.Errorf("delete the tserver Service of %s: %w", namespace, err)
 	}
 	if err := kube.DeleteNamespace(ctx, namespace); err != nil {
 		return fmt.Errorf("delete namespace %s: %w", namespace, err)
