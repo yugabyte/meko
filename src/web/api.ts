@@ -7,6 +7,8 @@ import type {
   CreateSessionRequest,
   CloneRepoRequest,
   DatapackPeople,
+  DesignAnswer,
+  DesignAnswerUpdate,
   DesignDoc,
   DiscardCheck,
   InviteCheck,
@@ -151,6 +153,11 @@ export const api = {
   deleteComment: (id: string, cid: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/comments/${enc(cid)}`),
   sendComments: (id: string) => post<SendCommentsResult>(`/api/sessions/${enc(id)}/comments/send`),
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
+  designAnswers: (id: string) => get<DesignAnswer[]>(`/api/sessions/${enc(id)}/design/answers`),
+  putDesignAnswer: (id: string, qid: string, b: DesignAnswerUpdate) =>
+    request<DesignAnswer[]>('PUT', `/api/sessions/${enc(id)}/design/answers/${enc(qid)}`, b),
+  deleteDesignAnswer: (id: string, qid: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/design/answers/${enc(qid)}`),
+  sendDesignAnswers: (id: string) => post<SendCommentsResult>(`/api/sessions/${enc(id)}/design/answers/send`),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
 
   settings: () => get<Settings>('/api/settings'),

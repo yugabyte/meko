@@ -6,15 +6,16 @@ import { get, type Db } from './db.js';
  * Instructions sent to Claude at each lifecycle step. A repo can override any
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
  * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
- * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}; `comments` also gets {{count}} and
- * {{comments}}, `review-people` gets {{reviewers}} (the logins whose reviews started it), `ci` gets {{sha}} and {{checks}}, and `moved` gets {{stage}}, {{workflow}} and
+ * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}, {{questionsFile}}; `comments` also gets {{count}} and
+ * {{comments}}, `design-answers` gets {{count}} and {{answers}} (`approved-answers` only {{answers}}, and goes before
+ * `approved`), `review-people` gets {{reviewers}} (the logins whose reviews started it), `ci` gets {{sha}} and {{checks}}, and `moved` gets {{stage}}, {{workflow}} and
  * {{kind}} (always "Task", kept for overrides written when sessions had types). `moved` goes before the new stage's prompt when the user moves a session by hand.
  * The Review a PR prompts (`review-pr`, `review-pr-update`, `review-pr-comments`) get {{repo}} as
  * the PR's `owner/name`, {{title}}, {{author}}, {{sha}} (the commit checked out) and {{notes}};
  * `review-pr-update` also gets {{oldSha}} and {{count}}, and `review-pr-comments` {{count}} and {{comments}}.
  */
 export type PromptName =
-  | 'explore' | 'design' | 'design-plan' | 'approved' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments'
+  | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'ci' | 'continue' | 'continue-review' | 'comments'
   | 'moved' | 'review-pr' | 'review-pr-update' | 'review-pr-comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
@@ -44,6 +45,16 @@ Then stop and say the design is ready. The user reviews and approves it in Agent
 Task: {{task}}
 
 Read the relevant code, then write a design: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change any code yet. When the design is ready, present it with ExitPlanMode so it can be approved.`,
+
+  'design-answers': `The user sent {{count}} on your design from AgentK Local:
+
+{{answers}}
+
+Revise the design to match: update the same Artifact (republish the same file) or the same markdown file, and record each decision in it. In {{questionsFile}}, mark each answered question "resolved" with its "decision", keep the ids stable, and add any new questions the answers raise. Where the user left a question to you, go with your recommendation and say so. Don't change anything in the repo. Then stop and say the design is ready.`,
+
+  'approved-answers': `The user answered these open questions on the design as they approved it. Where an answer differs from the design, follow the answer.
+
+{{answers}}`,
 
   approved: `The design is approved. Implement it on the current branch ({{branch}}). Follow the repo's conventions (CLAUDE.md, contributing docs), add or update tests, and run the repo's tests and checks before you finish. Don't open a pull request yet.`,
 
@@ -120,6 +131,14 @@ When the user asks, help with exactly that: explain code, trace a path, check a 
 
 {{comments}}`,
 };
+
+/**
+ * The Design prompt's line on the questions file, added in code (like mekoRecallLine) so a repo's
+ * own design prompt gets it too: AgentK Local lists the questions beside the design for the user to answer.
+ */
+export function designQuestionsLine(questionsFile: string): string {
+  return `Also write the design's open questions for the user to ${questionsFile}, as JSON: {"questions": [{"id": "short-stable-id", "question": "…", "context": "why it matters (optional)", "options": [{"label": "…", "detail": "…"}], "recommended": 0, "status": "open", "decision": null}]}. AgentK Local lists them beside the design, and the user answers them there. Give options when there are real alternatives, with "recommended" as the index of the one you recommend. When you revise the design, keep each question's id, and mark a settled question "resolved" with its "decision". Write {"questions": []} when there are none. The file is outside the repo, so writing it is allowed.`;
+}
 
 /**
  * The ToolSearch query that loads the Meko search tool, under the Meko server's own name

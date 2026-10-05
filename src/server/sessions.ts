@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { kindOf } from '../shared/stages.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
@@ -231,12 +231,16 @@ export class SessionManager {
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
     const now = Date.now();
+    const from = sessionRow(this.db, id)?.stage;
     tx(this.db, () => {
       run(this.db, 'UPDATE session_stages SET left_at = ? WHERE session_id = ? AND left_at IS NULL', now, id);
       run(this.db, 'INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, ?)', id, stage, now, by);
       run(this.db, 'UPDATE sessions SET stage = ? WHERE id = ?', stage, id);
     });
     if (opts.event !== false) this.event(id, 'stage', stage === 'done' ? 'Done' : `Moved to ${STAGE_LABELS[stage]}`);
+    // However it leaves Design (approval, a move, a PR prompt), answers waiting for Claude's turn
+    // become drafts again: they only go out from Design, when the user sends them.
+    if (from === 'design' && stage !== 'design') this.core.answers.unqueue(id);
     this.core.changed();
   }
 
@@ -474,6 +478,11 @@ export class SessionManager {
     return join(this.core.paths.designs, row.id, 'design.md');
   }
 
+  /** Where Claude lists the design's open questions, beside the markdown design. */
+  questionsFile(row: SessionRow): string {
+    return join(this.core.paths.designs, row.id, 'questions.json');
+  }
+
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
     if (row.stage === 'explore') return 'explore';
@@ -510,10 +519,12 @@ export class SessionManager {
       reviewers: 'its reviewers',
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
+      questionsFile: this.questionsFile(row),
       ...review,
       ...extra,
     });
-    return meko.length ? `${text.trimEnd()}\n\n${meko.join('\n\n')}` : text;
+    const lines = [...(name === 'design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...meko];
+    return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
   /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */

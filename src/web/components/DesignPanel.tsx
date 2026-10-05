@@ -4,8 +4,10 @@ import DOMPurify from 'dompurify';
 import type { DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { designFrameDoc } from '../design-frame';
+import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
-import { designApprovalBlocker, relativeTime } from '../util';
+import { approveLabel, cx, designApprovalBlocker, relativeTime } from '../util';
+import { DesignQuestions } from './DesignQuestions';
 import { SidePanel } from './SidePanel';
 import { Busy } from './common';
 
@@ -42,8 +44,10 @@ function useDataTheme(): string | null {
 }
 
 /**
- * The session's design: a published Artifact in a sandboxed frame, or markdown. Shown as a
- * resizable side panel next to the terminal, or the whole page in its own tab (`page`).
+ * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
+ * questions to answer. Shown as a resizable side panel next to the terminal (the questions on
+ * their own tab), or the whole page in its own tab (`page`, the questions beside the design on a
+ * wide screen).
  */
 export function DesignPanel({
   session,
@@ -58,6 +62,8 @@ export function DesignPanel({
 }) {
   const [doc, setDoc] = useState<DesignDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<'design' | 'questions'>('design');
+  const mobile = useIsMobile();
 
   const theme = useDataTheme();
 
@@ -83,11 +89,66 @@ export function DesignPanel({
   }, [doc?.markdown]);
   const frame = useMemo(() => (doc?.html ? designFrameDoc(doc.html, theme) : null), [doc?.html, theme]);
 
+  // Questions show while designing (other feedback goes there too), and afterwards if there were any.
+  const hasQuestions = !!doc && !error && (session.stage === 'design' || doc.questions.length > 0);
+  const split = hasQuestions && page && !mobile;
+  const tabs = hasQuestions && !split;
+  const showDoc = !tabs || tab === 'design';
+  const open = session.stage === 'design' ? session.designQuestions.open : 0;
+  const unsent = session.stage === 'design' ? session.designQuestions.unsent : 0;
+
+  const docView = (
+    <>
+      {frame && !error ? (
+        // No allow-same-origin: the page can't reach AgentK Local's cookies or API.
+        <iframe
+          hidden={!showDoc}
+          className="design-frame"
+          title="Design artifact"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer"
+          srcDoc={frame}
+        />
+      ) : (
+        <div className="design-body" hidden={!showDoc}>
+          {error ? (
+            <p className="error-text">{error}</p>
+          ) : !doc ? (
+            <p className="muted"><Busy label="Loading" /></p>
+          ) : doc.markdown ? (
+            <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
+          ) : doc.artifactUrl ? (
+            <p className="muted">
+              The design is an Artifact on claude.ai. Its page couldn’t be read here, so open it with{' '}
+              <b>Open on claude.ai</b>.
+            </p>
+          ) : (
+            <p className="muted">
+              No design yet. AgentK is reading the code; the design shows up here as soon as it’s written, and is
+              saved to the project’s datapack.
+            </p>
+          )}
+        </div>
+      )}
+    </>
+  );
+
   const content = (
     <>
-      <div className="design-hd">
+      <div className={cx('design-hd', tabs && 'has-tabs')}>
         <b>{page ? `Design · ${session.name}` : 'Design'}</b>
-        {doc?.updatedAt && <span className="muted small">updated {relativeTime(doc.updatedAt)}</span>}
+        {doc?.updatedAt && <span className="muted small design-updated">updated {relativeTime(doc.updatedAt)}</span>}
+        {tabs && (
+          <div className="seg design-tabs" role="tablist" aria-label="Design and its questions">
+            <button role="tab" aria-selected={tab === 'design'} className={cx(tab === 'design' && 'on')} onClick={() => setTab('design')}>
+              Design
+            </button>
+            <button role="tab" aria-selected={tab === 'questions'} className={cx(tab === 'questions' && 'on')} onClick={() => setTab('questions')}>
+              Questions
+              {open > 0 && <span className="count-badge" aria-label={`${open} open`}>{open}</span>}
+            </button>
+          </div>
+        )}
         <span className="sp" />
         {session.stage === 'design' && session.hasDesign && (
           <button
@@ -96,7 +157,7 @@ export function DesignPanel({
             title={designApprovalBlocker(session) ?? undefined}
             onClick={onApprove}
           >
-            Approve design
+            {approveLabel(unsent)}
           </button>
         )}
         {doc?.artifactUrl && (
@@ -125,35 +186,30 @@ export function DesignPanel({
           </button>
         )}
       </div>
-      {frame && !error ? (
-        // No allow-same-origin: the page can't reach AgentK Local's cookies or API.
-        <iframe
-          className="design-frame"
-          title="Design artifact"
-          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-          referrerPolicy="no-referrer"
-          srcDoc={frame}
-        />
-      ) : (
-        <div className="design-body">
-          {error ? (
-            <p className="error-text">{error}</p>
-          ) : !doc ? (
-            <p className="muted"><Busy label="Loading" /></p>
-          ) : doc.markdown ? (
-            <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
-          ) : doc.artifactUrl ? (
-            <p className="muted">
-              The design is an Artifact on claude.ai. Its page couldn’t be read here, so open it with{' '}
-              <b>Open on claude.ai</b>.
-            </p>
-          ) : (
-            <p className="muted">
-              No design yet. AgentK is reading the code; the design shows up here as soon as it’s written, and is
-              saved to the project’s datapack.
-            </p>
-          )}
+      {split ? (
+        <div className="design-split">
+          <div className="design-split-doc">{docView}</div>
+          <aside className="design-qcol" aria-label="Open questions">
+            <div className="design-qcol-hd">
+              Questions{open > 0 && <span className="count-badge">{open}</span>}
+            </div>
+            <DesignQuestions session={session} doc={doc!} />
+          </aside>
         </div>
+      ) : (
+        docView
+      )}
+      {tabs && tab === 'questions' && (
+        <div className="dq-view" role="tabpanel">
+          <DesignQuestions session={session} doc={doc!} />
+        </div>
+      )}
+      {tabs && tab === 'design' && open > 0 && (
+        <button className="dq-bar" onClick={() => setTab('questions')}>
+          <span>{open === 1 ? '1 open question' : `${open} open questions`}</span>
+          <span className="sp" />
+          <span>Answer ›</span>
+        </button>
       )}
     </>
   );

@@ -19,6 +19,9 @@
   --ok: #23845a;
   --warn: #b86e00;
   --warn-soft: #fff1da;
+  /* Count badges (open questions): white on brown in both themes. */
+  --badge: #9a5b00;
+  --badge-ink: #ffffff;
   --bad: #b42318;
   --bad-soft: #fde7e4;
   /* Text on a --bad fill (danger buttons). */
@@ -53,6 +56,8 @@
     --ok: #5cc592;
     --warn: #e9a64a;
     --warn-soft: #3a2c14;
+    --badge: #8a5510;
+    --badge-ink: #ffffff;
     --bad: #f07366;
     --bad-soft: #3d1c19;
     --bad-ink: #1f0a07;
@@ -81,6 +86,8 @@
   --ok: #5cc592;
   --warn: #e9a64a;
   --warn-soft: #3a2c14;
+  --badge: #8a5510;
+  --badge-ink: #ffffff;
   --bad: #f07366;
   --bad-soft: #3d1c19;
   --bad-ink: #1f0a07;
@@ -1252,6 +1259,302 @@ textarea.input {
   flex: 1;
   overflow-y: auto;
   padding: 24px 32px 48px;
+}
+/* ---------- Design questions ---------- */
+.count-badge {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--badge);
+  color: var(--badge-ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.design-tabs button {
+  display: inline-flex;
+  align-items: center;
+}
+.design-frame[hidden],
+.design-body[hidden] {
+  display: none;
+}
+.design-split {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.design-split-doc {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.design-split-doc .design-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px 48px;
+}
+.design-qcol {
+  flex: none;
+  width: min(420px, 40%);
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+.design-qcol-hd {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  font-weight: 600;
+}
+.dq-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.dq-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dq-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+}
+.dq-foot-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dq-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dq-card {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dq-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dq-n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+.dq-q {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-chip {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.dq-chip.open {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.dq-chip.answered,
+.dq-chip.done {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.dq-chip.queued,
+.dq-chip.sent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dq-ctx,
+.dq-sent {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-sent {
+  color: var(--ink);
+}
+.dq-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dq-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.dq-opt:hover {
+  background: var(--sunk);
+}
+.dq-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.dq-opt input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  flex: none;
+}
+.dq-opt-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dq-label {
+  overflow-wrap: anywhere;
+}
+.dq-rec {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.dq-detail {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-text {
+  font-size: 13px;
+}
+.dq-clear {
+  align-self: flex-start;
+  font-size: 12px;
+}
+.dq-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dq-section h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.dq-section p {
+  margin: 0;
+}
+.dq-orphans,
+.dq-decided ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dq-orphans li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px dashed var(--rule);
+  border-radius: 6px;
+}
+.dq-decided summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.dq-decided li .dq-q {
+  font-weight: 500;
+}
+.dq-fb-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+.dq-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* At the panel's bottom edge, under a short design too. */
+  margin-top: auto;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  padding: 10px 14px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.dq-bar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .dq-opt {
+    min-height: 40px;
+    align-items: center;
+  }
+  .dq-opt input {
+    margin-top: 0;
+    width: 18px;
+    height: 18px;
+  }
+  .dq-bar,
+  .design-tabs button {
+    min-height: 40px;
+  }
+  .dq-clear,
+  .dq-orphans .link-btn {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .dq-decided summary {
+    padding: 9px 0;
+  }
 }
 a.icon-btn {
   display: inline-flex;
@@ -3442,6 +3745,18 @@ a.icon-btn {
   }
   .design-page .design-body {
     padding: 14px 14px 40px;
+  }
+  /* With the tabs in the header, its time goes so the header keeps to two rows. */
+  .design-hd.has-tabs .design-updated {
+    display: none;
+  }
+  /* On the full-page design the questions' footer and bar sit on the screen's bottom edge. */
+  .design-page .dq-foot,
+  .design-page .dq-bar {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .dq-scroll {
+    padding: 12px 12px 24px;
   }
 
   /* Dialogs become sheets from the bottom; the palette stays at the top, above the keyboard.

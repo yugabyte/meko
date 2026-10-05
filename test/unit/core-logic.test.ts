@@ -229,11 +229,12 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 4}`);
+    db.exec(`PRAGMA user_version = ${version - 5}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -253,9 +254,10 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 2}`);
+    db.exec(`PRAGMA user_version = ${version - 3}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -280,6 +282,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -316,6 +319,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -357,6 +361,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -381,6 +386,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -410,6 +416,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -441,6 +448,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -467,6 +475,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -497,6 +506,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -531,6 +541,12 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 22 (a design's questions and the answers to them), for tests that rewind the schema. */
+function dropV22(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE design_answers');
+  for (const c of ['questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
+}
 
 /** Undoes migration 21 (Review a PR sessions), for tests that rewind the schema. */
 function dropV21(db: ReturnType<typeof openDb>) {

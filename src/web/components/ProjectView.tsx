@@ -14,7 +14,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, mekoDatapackShareUrl, repoFolder, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, mekoDatapackShareUrl, repoFolder, totalTokens, usageTitle } from '../util';
 import { Busy, Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
@@ -105,6 +105,7 @@ export function ProjectView({
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
+  const openQuestions = session?.stage === 'design' ? session.designQuestions.open : 0;
   const rv = session?.reviewingPr ?? null;
   // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you.
   const gateReady = !!session && !session.busy && (
@@ -238,6 +239,11 @@ export function ProjectView({
               {canDesign && (
                 <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
                   Design doc
+                  {openQuestions > 0 && (
+                    <span className="count-badge" title={`${openQuestions} open questions`} aria-label={`, ${openQuestions} open questions`}>
+                      {openQuestions}
+                    </span>
+                  )}
                 </button>
               )}
               {session?.status === 'exited' && (
@@ -322,6 +328,7 @@ export function ProjectView({
             />
           }
           canDesign={canDesign}
+          openQuestions={openQuestions}
           acting={acting}
           info={
             <>
@@ -426,7 +433,7 @@ function StageBar({
           title={reason ?? 'Approve the design and move to Code'}
           onClick={() => onAct('approve-design')}
         >
-          Approve design
+          {approveLabel(session.designQuestions.unsent)}
         </button>
       );
       break;

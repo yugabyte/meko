@@ -213,6 +213,7 @@ export function SessionSheet({
   session,
   stage,
   canDesign,
+  openQuestions,
   acting,
   info,
   onDesign,
@@ -225,6 +226,8 @@ export function SessionSheet({
   /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
+  /** The design's open questions, shown on its row during Design. */
+  openQuestions: number;
   /** A session action is in flight: Resume and Archive wait for it. */
   acting: boolean;
   /** Branch, tokens, Meko and review lines from the desktop footer. */
@@ -252,6 +255,7 @@ export function SessionSheet({
         {canDesign && (
           <SheetItem hint="›" onClick={then(onDesign)}>
             Design doc
+            {openQuestions > 0 && <span className="count-badge">{openQuestions === 1 ? '1 open question' : `${openQuestions} open questions`}</span>}
           </SheetItem>
         )}
         {session.prUrl && (
