@@ -333,10 +333,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- sessions ----
   // Answers once the session is written: its worktree and Claude start after, which can take
-  // minutes on a big repo, so the dialog doesn't wait. A failure there is a failed start in the state.
+  // minutes on a big repo, so the dialog doesn't wait. A worktree or PR head that can't be had then
+  // is a failed start in the state; Claude failing to start leaves the session exited with the error.
   app.post<{ Params: { id: string }; Body: CreateSessionRequest }>('/api/projects/:id/sessions', async (req) => {
     const { session, done } = await core.sessions.begin(req.params.id, req.body ?? ({} as CreateSessionRequest));
-    done.catch(() => {});
+    done.catch((e: unknown) => core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
     return session;
   });
   app.delete<{ Params: { id: string } }>('/api/failed-starts/:id', async (req, reply) => {

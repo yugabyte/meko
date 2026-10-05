@@ -567,7 +567,8 @@ export class Lifecycle {
           await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
         } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
-        } else if (row.stage === 'reviewing-pr' && due) {
+        } else if (row.stage === 'reviewing-pr' && due && !this.sessions.isCreating(row.id)) {
+          // Not while its PR head is still being fetched: a push meanwhile isn't news, the fetch has it.
           await this.pollReviewedPr(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         }
         // Prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -228,8 +229,10 @@ describe('HTTP API: auth, origin checks, projects', () => {
     });
     expect(taken.statusCode).toBe(409);
     // A worktree that can't be made once it has answered is a failed start in the state, until dismissed.
+    // (ak/no-base/x leaves git no room for the branch ak/no-base.)
+    execFileSync('git', ['branch', 'ak/no-base/x'], { cwd: repos.repos[0].path });
     const failing = await app.inject({
-      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'No base', start: 'code', baseBranch: 'no-such-base' },
+      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'No base', start: 'code' },
     });
     expect(failing.statusCode).toBe(200);
     await waitFor(() => env.core.state().failedStarts, (f) => f.length === 1, 10000, 'the failed start');

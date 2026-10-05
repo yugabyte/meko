@@ -1214,8 +1214,8 @@ export type TermServerMessage =
 //        a bare number looked up in `repoPath` (default: the project's repo); 400 for a PR that can't be found)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name or a
-//        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
+//        base branch neither the repo nor its origin has, or a repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
 //        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.

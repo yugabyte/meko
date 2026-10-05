@@ -261,17 +261,23 @@ says why.
 **The dialog doesn't wait for the worktree.** On a big repo the fetch and checkout take minutes,
 so creating a session (`SessionManager.begin`) is in two parts. The quick checks come first and
 answer in the dialog: the kind and start, the repo, a Review a PR's PR on GitHub, a typed branch
-(fetched, and checked against running sessions and other checkouts), and the base branch's name.
-Then the session's row goes in and the request returns, so the dialog closes on the session's tab,
-where the startup steps tick off (see [Starting](#starting)) while you work elsewhere. Fetching a
+(fetched, and checked against running sessions and other checkouts), and the base branch, which
+must be a branch of the repo or of its origin (fetched only when it's in neither, so the usual
+start runs no fetch here). Then the session's row goes in and the request returns, so the dialog
+closes on the session's tab, where the startup steps tick off (see [Starting](#starting)) while you
+work elsewhere. The page shows the session from the reply until a state push brings it
+(`withCreated`), since the reply comes first. Fetching a
 review's PR head, making the worktree and starting Claude follow in the background. If the worktree
 or the PR head can't be had there, the session is removed (its worktree slot goes back to the pool)
 and becomes a **failed start** (`AppState.failedStarts`, kept in memory until dismissed, at most
 20): a banner says what went wrong, with **Try again**, which opens the dialog filled in as before,
 and **Dismiss** (`DELETE /api/failed-starts/:id`), and the project's notifications, when on, send
-one. Starting a session under the same name again replaces its failed start. While it's the reason
-the project's last session went away, the Close project offer stays away. Claude failing to start
-leaves the session as it always did: exited, with the error, and **Resume**.
+one. Starting a session under the same name again replaces its failed start. When a failed start
+is the reason the project's last session went away, the Close project offer stays away. Claude
+failing to start leaves the session as it always did: exited, with the error, and **Resume**.
+Archive and Discard wait up to a minute for a session that's still starting, then refuse (409) and
+ask you to try again once its startup steps are done; on a big repo the worktree can take longer
+than that, and a start can't be cancelled.
 
 **Advanced**, collapsed by default under the first prompt, holds the repo, the base branch and the
 branch; closed, it shows them on one line (`agent-k-local · from main · ak/fix-retry-backoff`).
@@ -537,7 +543,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
-| Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits for Claude to start first. |
+| Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
 | Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
 | Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](#open-project)). |
 
@@ -801,7 +807,8 @@ repo (the PR's clone, changeable to another clone of it); the base and branch co
 **Starting.** `CreateSessionRequest.pr` names the PR (`{ repo: 'owner/name', number }`), with
 `repoPath` its clone. The server checks that the clone's `upstream` or `origin` is the PR's repo
 and that the PR is open (400 otherwise, with nothing started). Then, after the dialog has closed
-(a fetch that fails is a failed start: see [New session](#new-session)), it fetches `refs/pull/<n>/head` from
+(a fetch that fails is a failed start: see [New session](#new-session); the PR isn't polled for new
+commits until the session is created), it fetches `refs/pull/<n>/head` from
 that remote into `refs/agentk/pr/<n>` (a fork's PR too) along with the PR's base, and puts the
 branch `<prefix>review-pr-<n>` (numbered like any session's, so PR #7 of two repos never collide)
 at that commit, in a new or idle worktree, with no upstream and a `pushRemote` naming a remote

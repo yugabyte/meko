@@ -113,7 +113,7 @@ function FailedStartBanners({
       {failed.map((f) => (
         <div className="banner warn" key={f.id} role="alert">
           <span className="banner-text">
-            <b>{f.name}</b> in {projects.get(f.projectId)} couldn’t start: {f.error}
+            <b>{f.name}</b> in {projects.get(f.projectId)} didn’t start. {f.error}
           </span>
           <span className="banner-btns">
             <button className="btn primary small" onClick={() => onRetry(f)}>

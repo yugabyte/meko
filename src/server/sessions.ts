@@ -7,7 +7,7 @@ import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addReviewWorktree, addWorktree, checkBranchName, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fetchPrHead, git,
+  BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fetchPrHead, git,
   gitRaw, isIdleWorktree, prRef, remoteFor, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type SyncResult,
 } from './git.js';
@@ -304,11 +304,16 @@ export class SessionManager {
     const wanted = review ? '' : (req.branch ?? '').trim();
     const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
     const base = review?.info.baseRefName || (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
-    // Checked now: once the dialog has closed, a typo would only show up as a failed start.
-    try {
-      await checkBranchName(repo, base);
-    } catch (e) {
-      throw new HttpError(400, errMsg(e));
+    // Checked now: once the dialog has closed, a typo would only show up as a failed start. A
+    // review's base comes from GitHub and is fetched with the PR.
+    if (!review) {
+      let found: boolean;
+      try {
+        found = await baseExists(repo, base);
+      } catch (e) {
+        throw new HttpError(400, errMsg(e));
+      }
+      if (!found) throw new HttpError(400, `The base branch ${base} isn't in ${basename(repo)} or on its origin. Pick another base branch.`);
     }
     // What Try again fills the New session dialog with, should the start fail.
     const request: CreateSessionRequest = {
@@ -371,7 +376,7 @@ export class SessionManager {
         throw this.failStart(id, c.request, `Couldn't fetch PR #${review.info.number} from ${review.remote}: ${errMsg(e)}`,
           () => (c.reused ? pool.unclaim(c.worktree, id) : pool.drop(c.worktree)));
       }
-      if (sha !== review.info.headRefOid) this.update(id, { review_sha: sha, pr_head_sha: sha });
+      if (sha !== review.info.headRefOid) this.update(id, { review_sha: sha, pr_head_sha: sha, pr_new_commits: 0 });
     }
     const made = await this.makeWorktree(id, c.request, repo, c.worktree, c.reused, branch, base, !!c.where, sha);
     const started = review && sha
@@ -388,7 +393,6 @@ export class SessionManager {
     } catch (e) {
       this.startup.delete(id);
       if (e instanceof HttpError && e.status === 409) throw e;
-      this.core.log.warn(`couldn't launch Claude for ${id}`, errMsg(e));
       this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
       throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
     }
@@ -453,7 +457,6 @@ export class SessionManager {
       // The oldest go first; nobody needs dozens.
       for (const old of [...this.failed.keys()].slice(0, Math.max(0, this.failed.size - MAX_FAILED_STARTS))) this.failed.delete(old);
     }
-    this.core.log.warn(`session ${id} couldn't start`, message);
     this.startup.delete(id);
     this.recall.drop(id);
     release();
@@ -465,6 +468,11 @@ export class SessionManager {
   /** New sessions that couldn't start, newest first, until dismissed. */
   failedStarts(): FailedStart[] {
     return [...this.failed.values()].reverse();
+  }
+
+  /** The session is being created (row written, Claude not launched yet): its worktree may not exist yet. */
+  isCreating(id: string): boolean {
+    return this.creating.has(id);
   }
 
   dismissFailedStart(id: string): void {
@@ -656,7 +664,7 @@ export class SessionManager {
   private async settle(id: string): Promise<void> {
     const busy = () => this.creating.has(id) || this.launching.has(id);
     for (let waited = 0; busy() && waited < SETTLE_MS; waited += 100) await sleep(100);
-    if (busy()) throw new HttpError(409, 'This session is still starting. Try again in a moment.');
+    if (busy()) throw new HttpError(409, 'This session is still starting: on a big repo its worktree can take a few minutes. Try again once its startup steps are done.');
   }
 
   /**

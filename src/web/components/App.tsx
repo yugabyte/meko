@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions } from '../../shared/types';
+import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
@@ -13,6 +13,7 @@ import {
   lastSessionClosed,
   liveSessions,
   modKey,
+  withCreated,
   withOpened,
   rememberOpenSession,
   sessionToOpen,
@@ -115,6 +116,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   // A project just opened, as Open project returned it: shown (withOpened) until a state push brings
   // it, since the push can come after the reply, or late on a slow or reconnecting events socket.
   const [opened, setOpened] = useState<Project | null>(null);
+  // A session just created, as New session returned it: shown (withCreated) until a state push
+  // brings it, since the reply comes first. `seen` is the last state looked at for it; two newer
+  // ones without it mean it's gone (a failed start, say).
+  const [created, setCreated] = useState<{ session: Session; seen: AppState | null; misses: number } | null>(null);
   const focusRef = useRef<{ projectId: string | null; sessionId: string | null }>({ projectId: null, sessionId: null });
 
   const onNotify = useCallback((n: NotifyEvent) => {
@@ -162,7 +167,15 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     return () => sw.removeEventListener('message', onMessage);
   }, [openInvite]);
 
-  const projects = useMemo(() => sortedProjects(withOpened(state?.projects ?? [], opened)), [state, opened]);
+  const projects = useMemo(
+    () => sortedProjects(withCreated(withOpened(state?.projects ?? [], opened), created?.session ?? null)),
+    [state, opened, created],
+  );
+  useEffect(() => {
+    if (!created || !state || state === created.seen) return;
+    const inState = state.projects.some((p) => p.sessions.some((s) => s.id === created.session.id));
+    setCreated(inState || created.misses >= 1 ? null : { ...created, seen: state, misses: created.misses + 1 });
+  }, [state, created]);
   // Once a push has it, the state's copy takes over. A push without it may be an older snapshot or
   // mean it was closed meanwhile: the server knows, and a 404 drops it.
   const openedId = opened?.id ?? null;
@@ -220,20 +233,26 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   // When the project on screen loses its last open session, offer to close it. Only on the
   // project's view, with no other dialog open, and in a visible page (a background tab stays quiet).
-  // Not when the session failed to start: its banner offers Try again instead.
+  // Not when that session failed to start: its banner offers Try again instead.
   const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
+  const liveIdsRef = useRef<string[]>([]);
   const currentId = currentProject?.id ?? null;
   const liveCount = live.length;
+  const liveIds = live.map((s) => s.id).join('\n');
+  const failedIds = (state?.failedStarts ?? []).map((f) => f.id).join('\n');
   const modalKind = modal.kind;
-  const failedHere = !!state?.failedStarts?.some((f) => f.projectId === currentId);
   useEffect(() => {
     const prev = liveRef.current;
+    const prevIds = liveIdsRef.current;
     const next = { projectId: currentId, live: liveCount };
     liveRef.current = next;
-    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !failedHere && !document.hidden) {
+    liveIdsRef.current = liveIds ? liveIds.split('\n') : [];
+    const failed = new Set(failedIds.split('\n'));
+    const failedStart = prevIds.some((id) => failed.has(id));
+    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !failedStart && !document.hidden) {
       setModal({ kind: 'close-project', projectId: currentId });
     }
-  }, [currentId, liveCount, route.view, modalKind, failedHere]);
+  }, [currentId, liveCount, liveIds, failedIds, route.view, modalKind]);
 
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
@@ -492,8 +511,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           initial={modal.kind === 'new-session' ? modal.retry?.request : undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
-            // The failed start it retried is done with (one under the same name is already gone).
-            if (modal.kind === 'new-session' && modal.retry) api.dismissFailedStart(modal.retry.id).catch(() => {});
+            // The failed start it retried is done with. One under the same id was cleared when the
+            // session was written, and dismissing it now could hide this start's own failure.
+            if (modal.kind === 'new-session' && modal.retry && modal.retry.id !== s.id) api.dismissFailedStart(modal.retry.id).catch(() => {});
+            setCreated({ session: s, seen: stateRef.current, misses: 0 });
             setModal({ kind: 'none' });
             navigate({ view: 'project', projectId: s.projectId, sessionId: s.id });
           }}

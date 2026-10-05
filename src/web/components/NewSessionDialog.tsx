@@ -98,16 +98,42 @@ export function NewSessionDialog({
     if (wantPrs && !prList && !prListError) loadPrs();
   }, [wantPrs, prList, prListError, loadPrs]);
 
+  // The PR a retry was for, until something is picked.
+  const retryPr = useRef(initial?.pr);
   const pick = (pr: ReviewablePr | null) => {
+    retryPr.current = undefined;
     setPicked(pr);
     if (pr?.localRepo) setRepoPath(pr.localRepo);
     if (pr && !nameEdited) setName(reviewName(pr));
   };
-  // A list that comes in after the type was switched to Review a PR starts on its newest PR, or
-  // on the PR a retry was for.
+  // A list that comes in after the type was switched to Review a PR starts on its newest PR. A
+  // retry starts on the PR it was for: from the list, or looked up as one typed by number or link
+  // (never another PR in its place).
   useEffect(() => {
-    const again = initial?.pr && prList?.prs.find((p) => p.repo === initial.pr?.repo && p.number === initial.pr.number);
-    if (review && !picked && prList?.prs.length) pick(again || prList.prs[0]);
+    if (!review || picked || !prList) return;
+    const want = retryPr.current;
+    if (!want) {
+      if (prList.prs.length) pick(prList.prs[0]);
+      return;
+    }
+    const listed = prList.prs.find((p) => p.repo === want.repo && p.number === want.number);
+    if (listed) {
+      pick(listed);
+      return;
+    }
+    let live = true;
+    api
+      .reviewPrs(project.id, { pr: `${want.repo}#${want.number}`, repoPath: initial?.repoPath })
+      .then((r) => {
+        if (live && r.prs[0]) pick(r.prs[0]);
+      })
+      .catch(() => {
+        // Nothing picked: the user picks the PR again.
+        if (live) retryPr.current = undefined;
+      });
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pick only when the list or type changes
   }, [review, prList]);
 
