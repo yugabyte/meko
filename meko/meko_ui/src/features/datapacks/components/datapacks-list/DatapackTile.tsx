@@ -13,7 +13,7 @@ import type { DatapackPath } from "@/lib/api/projectsApi";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ADD_TO_PROJECT_LABEL,
-  MOVE_INTO_PROJECT_LABEL,
+  MOVE_TO_PROJECT_LABEL,
   UNFILED_LABEL,
 } from "@/features/projects/projectsCopy";
 import {
@@ -238,7 +238,7 @@ export function DatapackTile({
               onClick={() => onFileDatapack(dp)}
             >
               <FolderInput className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-              {filed ? MOVE_INTO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
+              {filed ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
             </button>
           ) : (
             <button

@@ -5,7 +5,9 @@
 // Moving it out is what lets a folder hold thirty datapacks without the tree
 // becoming unusable, and it is where the search and paging can live.
 
-import { Database, FolderInput, Search } from "lucide-react";
+import { ArrowUpRight, Database, FolderInput, Search } from "lucide-react";
+import { Link } from "react-router-dom";
+import { datapackDetailPath } from "@/app/routes/paths";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TruncatedText } from "@/components/ui/truncated-text";
@@ -16,6 +18,7 @@ import { folderContents } from "@/features/projects/lib/folderContents";
 import {
   countLabel,
   FOLDER_EMPTY_LABEL,
+  OPEN_DATAPACK_LABEL,
   ADD_A_DATAPACK_LABEL,
 } from "@/features/projects/projectsCopy";
 import {
@@ -126,7 +129,7 @@ export function FolderContentsPane({
                     }
                   }}
                   className={cn(
-                    "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors",
+                    "group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors",
                     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand",
                     selected
                       ? "border-l-2 border-brand bg-brand/10"
@@ -144,6 +147,28 @@ export function FolderContentsPane({
                       {formatRelativeTime(d.updated_at, nowMs)}
                     </p>
                   </div>
+                  {/* Clicking the row SELECTS, which fills the detail pane; this
+                      opens the datapack itself. Two different intents, so the
+                      row keeps the cheap one and leaving the page is explicit. */}
+                  <Link
+                    to={datapackDetailPath(d.datapack_id)}
+                    onClick={(e) => e.stopPropagation()}
+                    // The row's onKeyDown handles Enter/Space for selection
+                    // and preventDefault()s. Without stopping keydown here
+                    // too, a keyboard user focused on this link selects the
+                    // row instead of opening the datapack.
+                    onKeyDown={(e) => e.stopPropagation()}
+                    aria-label={`${OPEN_DATAPACK_LABEL}: ${d.datapack_name}`}
+                    title={OPEN_DATAPACK_LABEL}
+                    className={cn(
+                      "shrink-0 rounded p-1 text-muted-foreground transition-colors",
+                      "hover:bg-foreground/10 hover:text-foreground",
+                      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand",
+                      selected ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                    )}
+                  >
+                    <ArrowUpRight className="h-4 w-4" aria-hidden />
+                  </Link>
                 </div>
               </li>
             );

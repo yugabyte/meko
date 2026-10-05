@@ -89,7 +89,7 @@ import { FileIntoProjectDialog } from "@/features/projects/components/FileIntoPr
 import {
   ADD_TO_PROJECT_LABEL,
   DATAPACK_MOVED_TOAST,
-  MOVE_DATAPACK_LABEL,
+  MOVE_TO_PROJECT_LABEL,
 } from "@/features/projects/projectsCopy";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
@@ -486,7 +486,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           open={isFileIntoOpen}
           onOpenChange={setIsFileIntoOpen}
           datapack={datapack}
-          title={projectPath ? MOVE_DATAPACK_LABEL : ADD_TO_PROJECT_LABEL}
+          title={projectPath ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
           confirmLabel={projectPath ? "Move here" : "Add here"}
           successTitle={projectPath ? DATAPACK_MOVED_TOAST : undefined}
           defaultProjectId={projectPath?.project_id}
@@ -566,7 +566,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         onSelect={() => setIsFileIntoOpen(true)}
                       >
                         <FolderInput className="h-4 w-4 shrink-0" aria-hidden />
-                        {projectPath ? MOVE_DATAPACK_LABEL : ADD_TO_PROJECT_LABEL}
+                        {projectPath ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
                       </DropdownMenuItem>
                     ) : null}
                     {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem

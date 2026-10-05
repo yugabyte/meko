@@ -13,7 +13,7 @@ import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-de
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
 import { DatapackShareGrant } from "@/lib/api/mekoApi";
 import type { DatapackPath } from "@/lib/api/projectsApi";
-import { UNFILED_LABEL } from "@/features/projects/projectsCopy";
+import { PROJECTS_TITLE, UNFILED_LABEL } from "@/features/projects/projectsCopy";
 
 /**
  * When true, shows the green “active” status pill next to the title.
@@ -136,11 +136,25 @@ export function DatapackDetailHero({
 
   return (
     <>
+      {/* A filed datapack is reached from its project far more often than from
+          the flat list, so the trail retraces that route and the way back is
+          one click. Unfiled, there is no project to return to. */}
       <DatapackBreadcrumbs
-        items={[
-          { label: "Datapacks", href: ROUTES.datapacks },
-          { label: datapackName },
-        ]}
+        items={
+          showProject && projectPath
+            ? [
+                { label: PROJECTS_TITLE, href: ROUTES.projects },
+                {
+                  label: projectPath.project_name,
+                  href: projectDetailPath(projectPath.project_id),
+                },
+                { label: datapackName },
+              ]
+            : [
+                { label: "Datapacks", href: ROUTES.datapacks },
+                { label: datapackName },
+              ]
+        }
       />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between lg:gap-6">

@@ -45,7 +45,11 @@ import {
   useProjects,
 } from "@/features/projects/hooks/useProjects";
 import { FileIntoProjectDialog } from "@/features/projects/components/FileIntoProjectDialog";
-import { DATAPACK_MOVED_TOAST } from "@/features/projects/projectsCopy";
+import {
+  ADD_TO_PROJECT_LABEL,
+  DATAPACK_MOVED_TOAST,
+  MOVE_TO_PROJECT_LABEL,
+} from "@/features/projects/projectsCopy";
 
 // Local key for tracking whether the user has seen the "What is a Datapack?"
 // explainer at least once. Used to expand the panel by default on the very
@@ -534,7 +538,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
             datapack={datapackToFile}
             // Already filed: this is a move, and it starts from where the
             // datapack currently lives rather than from a blank picker.
-            title={filingTarget ? "Move datapack" : undefined}
+            title={filingTarget ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
             confirmLabel={filingTarget ? "Move here" : undefined}
             successTitle={filingTarget ? DATAPACK_MOVED_TOAST : undefined}
             defaultProjectId={filingTarget?.project_id}

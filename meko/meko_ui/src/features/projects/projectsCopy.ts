@@ -48,11 +48,17 @@ export const UNFILED_LABEL = "Unfiled";
 /** Filing a datapack, from the Datapacks grid and the datapack header. "Add
  *  to" rather than "File into": it sits in a three-button strip and in a
  *  menu, and it is the plain thing a user is trying to do. */
-export const ADD_TO_PROJECT_LABEL = "Add to Project";
+export const ADD_TO_PROJECT_LABEL = "Add to project";
 /** Same dialog, different verb: the datapack already has a home and this
  *  changes it. Placement is an upsert keyed on the datapack, so filing and
- *  moving are the same write. */
-export const MOVE_INTO_PROJECT_LABEL = "Move";
+ *  moving are the same write.
+ *
+ *  One label wherever the action appears — the tile and the detail menu
+ *  previously said "Move" and "Move datapack", naming one action two ways
+ *  and neither saying where it moves to. */
+export const MOVE_TO_PROJECT_LABEL = "Move to project";
+/** The row action that leaves this page for the datapack itself. */
+export const OPEN_DATAPACK_LABEL = "Open datapack";
 
 export const FOLDER_EMPTY_LABEL = "No datapacks in this folder yet";
 
@@ -139,7 +145,6 @@ export const NEW_FOLDER_LABEL = "New Folder";
 export const FOLDER_DESCRIPTION_HINT =
   "Helps you and your agents pick the right folder later.";
 export const RENAME_FOLDER_LABEL = "Rename folder";
-export const MOVE_DATAPACK_LABEL = "Move datapack";
 /** The folder-contents pane's own button. "Add a datapack" rather than
  *  "File into": from inside a folder, adding to it is the plain reading. */
 export const ADD_A_DATAPACK_LABEL = "Add a datapack";
