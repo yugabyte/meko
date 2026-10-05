@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
-import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
+import { artifactUrlIn, isArtifactPublish, mekoDesignName, questionsFromMarkdown, readArtifactHtml, readDesignFile, readDesignQuestions } from './design.js';
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
@@ -12,7 +12,7 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
+import { KIND_LABELS, STAGE_LABELS, type DesignQuestion, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 import { workflowLine } from './sessions.js';
@@ -212,15 +212,47 @@ export class Lifecycle {
         this.designChanged.add(row.id);
       }
     }
+    this.collectQuestions(row);
     void this.sendDesign(row.id); // anything an earlier send couldn't deliver
     return this.designChanged.delete(row.id);
+  }
+
+  /**
+   * The design's questions for the user: the questions file Claude writes beside the design, or
+   * else the "Open questions" list of a markdown design. A file that can't be read as questions
+   * leaves the ones stored alone. A change counts as a change to the design.
+   */
+  private collectQuestions(row: SessionRow): void {
+    const d = get<{ markdown: string; questions: string; questions_source: string | null }>(
+      this.db, 'SELECT markdown, questions, questions_source FROM designs WHERE session_id = ?', row.id);
+    if (!d) return;
+    let questions: DesignQuestion[] | null;
+    try {
+      questions = readDesignQuestions(this.sessions.questionsFile(row));
+    } catch (e) {
+      this.warn(row.id, `Reading the design's questions (${this.sessions.questionsFile(row)})`, e);
+      return;
+    }
+    const source = questions ? 'file' : null;
+    questions ??= d.markdown ? questionsFromMarkdown(d.markdown) : [];
+    const from = source ?? (questions.length ? 'markdown' : null);
+    const json = JSON.stringify(questions);
+    if (json === d.questions && from === d.questions_source) return;
+    run(this.db, 'UPDATE designs SET questions = ?, questions_source = ?, open_questions = ?, updated_at = ? WHERE session_id = ?',
+      json, from, questions.filter((q) => q.status === 'open').length, Date.now(), row.id);
+    this.designChanged.add(row.id);
+    this.core.changed();
   }
 
   /** The design is waiting for the user: say so in the activity log, the header and a notification. */
   designReady(id: string): void {
     this.sessions.event(id, 'design', 'Design ready for approval');
     this.sessions.setStatus(id, 'needs_input', DESIGN_READY);
-    this.sessions.notifyUser(id, 'Design ready', 'Review and approve the design.');
+    // Answers queued meanwhile go out right after this, so AgentK isn't waiting on the user.
+    if (this.core.answers.queued(id)) return;
+    const open = get<{ n: number }>(this.db, 'SELECT open_questions AS n FROM designs WHERE session_id = ?', id)?.n ?? 0;
+    this.sessions.notifyUser(id, 'Design ready',
+      open ? `Review the design and answer ${open === 1 ? 'its open question' : `${open} open questions`}.` : 'Review and approve the design.');
   }
 
   async approveDesign(row: SessionRow): Promise<void> {
@@ -244,9 +276,17 @@ export class Lifecycle {
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
       throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     }
+    // Answers the user hasn't sent go with the approval.
+    const answers = this.core.answers.forApproval(row.id);
     this.designApproved(row.id, 'you');
     try {
-      await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'approved'));
+      const cur = this.sessions.row(row.id);
+      const lead = answers && this.sessions.prompt(cur, 'approved-answers', { answers: answers.text });
+      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'approved')].filter(Boolean).join('\n\n'));
+      if (answers) {
+        answers.sent();
+        this.sessions.event(row.id, 'design', `Approved with ${answers.count === 1 ? '1 answer' : `${answers.count} answers`}`);
+      }
     } catch (e) {
       if (this.sessions.row(row.id).stage === 'code') this.sessions.setStage(row.id, 'design', 'auto');
       throw new HttpError(502, `Couldn't type the approval into Claude's terminal: ${errMsg(e)}. Try again.`);
@@ -405,6 +445,7 @@ export class Lifecycle {
     const row = this.sessions.row(id);
     if (row.status === 'needs_input' && row.status_detail === DESIGN_READY) this.sessions.setStatus(id, 'idle');
     if (skipped) this.sessions.event(id, 'design', 'Design approval skipped');
+    this.core.answers.unqueue(id);
     void this.sendDesign(id);
   }
 
@@ -496,8 +537,9 @@ export class Lifecycle {
         await this.doPollReviewedPr(id);
       }).catch((e) => this.warn(id, 'PR status failed', e));
     }
-    // Review comments go after anything above that already gave Claude its next turn.
+    // Review comments and design answers go after anything above that already gave Claude its next turn.
     await this.core.comments.deliver(id).catch((e) => this.warn(id, 'Sending review comments', e));
+    await this.core.answers.deliver(id).catch((e) => this.warn(id, 'Sending answers to the design', e));
   }
 
   /**
@@ -573,6 +615,7 @@ export class Lifecycle {
         // Prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.
         await this.serial(row.id, () => this.deliverNext(row.id)).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
         await this.core.comments.deliver(row.id).catch((e) => this.warn(row.id, 'Sending review comments', e));
+        await this.core.answers.deliver(row.id).catch((e) => this.warn(row.id, 'Sending answers to the design', e));
       }
     } finally {
       this.polling = false;

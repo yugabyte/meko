@@ -494,6 +494,8 @@ export interface Session {
   diffStat: { added: number; removed: number } | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
+  /** The design's open questions, and the user's answers to them not yet sent to Claude (drafts or queued). */
+  designQuestions: { open: number; unsent: number };
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
@@ -965,6 +967,67 @@ export interface DesignDoc {
   html: string | null;
   artifactUrl: string | null;
   updatedAt: number | null;
+  /** The design's questions for the user, open and resolved, in the order AgentK listed them. */
+  questions: DesignQuestion[];
+  /**
+   * Where the questions came from: `file` (the questions file AgentK writes beside the design),
+   * `markdown` (the list under an "Open questions" heading of a markdown design), or null (none).
+   */
+  questionsSource: 'file' | 'markdown' | null;
+}
+
+export interface DesignQuestionOption {
+  label: string;
+  detail: string | null;
+}
+
+/** A question AgentK asks the user about its design, with the options it sees, if any. */
+export interface DesignQuestion {
+  /** Stable across revisions of the design: lowercase letters, digits and dashes. */
+  id: string;
+  question: string;
+  context: string | null;
+  options: DesignQuestionOption[];
+  /** The option AgentK recommends (an index into `options`), or null. */
+  recommended: number | null;
+  status: 'open' | 'resolved';
+  /** What was decided, once resolved. */
+  decision: string | null;
+}
+
+/** The answer id for feedback on the design that isn't about one question. */
+export const DESIGN_FEEDBACK_ID = '_feedback';
+
+/**
+ * The user's answer to one of the design's questions (or, with `questionId` DESIGN_FEEDBACK_ID,
+ * other feedback on the design). Drafts are kept until the user sends them; a question has at
+ * most one draft. `question` and `choiceLabel` are what the user saw when they answered.
+ */
+export interface DesignAnswer {
+  id: string;
+  questionId: string;
+  question: string;
+  /** The option picked (an index into the question's options), or null. */
+  choice: number | null;
+  choiceLabel: string | null;
+  /** Left to AgentK: it goes with its recommendation. */
+  yourCall: boolean;
+  /** The answer in the user's words, or a note on the option picked. */
+  text: string;
+  state: CommentState;
+  createdAt: number;
+  updatedAt: number;
+  sentAt: number | null;
+}
+
+/**
+ * PUT /api/sessions/:id/design/answers/:qid. Fields left out keep their value. Picking an option
+ * clears Your call and the other way round; an answer left with nothing in it is removed.
+ */
+export interface DesignAnswerUpdate {
+  choice?: number | null;
+  yourCall?: boolean;
+  text?: string;
 }
 
 // ---- Requests ----
@@ -1205,6 +1268,13 @@ export type TermServerMessage =
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be typed)
 // GET    /api/sessions/:id/design              → DesignDoc
+// GET    /api/sessions/:id/design/answers      → DesignAnswer[]
+// PUT    /api/sessions/:id/design/answers/:qid DesignAnswerUpdate → DesignAnswer[]   (the draft for a question, or
+//        DESIGN_FEEDBACK_ID; 400 for a bad field, an option out of range or a question that isn't in the design;
+//        409 for a question no longer open, or outside Design)
+// DELETE /api/sessions/:id/design/answers/:qid → 204   (drafts only; 404 when there's none)
+// POST   /api/sessions/:id/design/answers/send → SendCommentsResult   (409 with nothing to send, outside Design or
+//        Claude exited; 400 when the answers are too long for one prompt; 502 when typing failed: they stay queued)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)

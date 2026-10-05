@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { kindOf } from '../shared/stages.js';
 import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
@@ -474,6 +474,11 @@ export class SessionManager {
     return join(this.core.paths.designs, row.id, 'design.md');
   }
 
+  /** Where Claude lists the design's open questions, beside the markdown design. */
+  questionsFile(row: SessionRow): string {
+    return join(this.core.paths.designs, row.id, 'questions.json');
+  }
+
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
     if (row.stage === 'explore') return 'explore';
@@ -510,10 +515,12 @@ export class SessionManager {
       reviewers: 'its reviewers',
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
+      questionsFile: this.questionsFile(row),
       ...review,
       ...extra,
     });
-    return meko.length ? `${text.trimEnd()}\n\n${meko.join('\n\n')}` : text;
+    const lines = [...(name === 'design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...meko];
+    return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
   /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */

@@ -254,6 +254,20 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const nothing = await app.inject({ method: 'POST', url: `${url}/send`, headers: { cookie } });
     expect(nothing.statusCode).toBe(409);
 
+    // Answers to the design: behind login, and only in Design (this session started at Code).
+    const design = await app.inject({ url: `/api/sessions/${s.json().id}/design`, headers: { cookie } });
+    expect(design.json()).toMatchObject({ markdown: null, questions: [], questionsSource: null });
+    const answers = `/api/sessions/${s.json().id}/design/answers`;
+    expect((await app.inject({ url: answers })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'PUT', url: `${answers}/_feedback`, payload: { text: 'Hi' } })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: `${answers}/send` })).statusCode).toBe(401);
+    expect((await app.inject({ url: answers, headers: { cookie } })).json()).toEqual([]);
+    const early = await app.inject({ method: 'PUT', url: `${answers}/_feedback`, headers: { cookie }, payload: { text: 'Hi' } });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error).toMatch(/only be sent while the session is in Design/);
+    expect((await app.inject({ method: 'POST', url: `${answers}/send`, headers: { cookie } })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'DELETE', url: `${answers}/_feedback`, headers: { cookie } })).statusCode).toBe(404);
+
     // Image previews: behind login, images only, served so the browser never runs them.
     const sid = s.json().id;
     const img = (q: string, withCookie = true) => app.inject({ url: `/api/sessions/${sid}/changes/image?${q}`, headers: withCookie ? { cookie } : {} });

@@ -267,6 +267,12 @@ export function firstTurnText(t: MekoFirstTurn): { split: string | null; title: 
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
 const DESIGN_READY = 'Design ready for your approval';
 
+/** The approve button's label: answers to the design not yet sent go with the approval. */
+export function approveLabel(unsent: number): string {
+  if (!unsent) return 'Approve design';
+  return `Approve with ${unsent === 1 ? '1 answer' : `${unsent} answers`}`;
+}
+
 /** Why Approve design can't be pressed right now, or null when it can. Mirrors the server's checks. */
 export function designApprovalBlocker(session: Session): string | null {
   // A question or permission prompt from Claude isn't the design; the server refuses to approve over it.
