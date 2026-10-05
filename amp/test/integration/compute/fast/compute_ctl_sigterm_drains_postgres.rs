@@ -52,9 +52,7 @@ fn tail_from(log: &Path, offset: u64) -> anyhow::Result<String> {
 }
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Unique across the fast suite: an endpoint that outlived its scenario would
-    // take the port with it.
-    let pg_port = c.compute_port() + 135;
+    let pg_port = c.endpoint_port();
 
     step("Own cluster + endpoint (this one's compute_ctl is stopped under it)");
     let branch_id = c.cluster_create(CLUSTER)?;

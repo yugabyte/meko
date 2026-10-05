@@ -11,7 +11,7 @@ use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    let b_port = c.compute_port() + 178;
+    let b_port = c.endpoint_port();
     // Trust auth on the compute, so connecting *as* the role needs no password.
     let as_user = format!("host=127.0.0.1 port={b_port} user=integration_createuser dbname=postgres");
 

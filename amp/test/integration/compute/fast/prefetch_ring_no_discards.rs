@@ -15,7 +15,7 @@ use crate::db;
 const ROWS: u32 = 20_000;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let port = c.compute_port() + 300;
+    let port = c.endpoint_port();
 
     step("provision an endpoint with 512MB shared_buffers and the LFC off");
     let branch_id = c.branch_create_named("prf_ring", c.branch())?;

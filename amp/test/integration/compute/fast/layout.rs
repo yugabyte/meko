@@ -28,7 +28,7 @@ fn must_exist(p: &Path, what: &str) -> anyhow::Result<()> {
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Layout-test endpoint sits in the compute lane, above `main`.
-    let layout_pg_port = c.compute_port() + 128;
+    let layout_pg_port = c.endpoint_port();
     let r = c.repo_dir();
 
     step("main branch's pair is co-located under endpoints/main/");

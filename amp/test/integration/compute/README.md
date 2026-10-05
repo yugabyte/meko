@@ -160,7 +160,8 @@ Nothing central to edit — tests are auto-discovered.
   ```
 
   The build script (`build.rs`) auto-registers it; no list to edit.
-  Drive cluster operations with `c.yb(&["endpoint", "start", …])`; make
+  Drive cluster operations with `c.yb(&["endpoint", "start", …])`, and give an
+  endpoint of the scenario's own the pg port `c.endpoint_port()` returns; make
   assertions with the typed `db` helpers (or `psql` for background load
   loops). Don't print a `PASS` line — the runner does that.
 

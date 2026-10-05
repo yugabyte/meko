@@ -44,7 +44,7 @@ const SLRU_IMAGE_CHAIN_LIMIT: i64 = 1000;
 const MAX_RECLAIMED: i64 = 2 * SLRU_IMAGE_CHAIN_LIMIT;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let branch_pg_port = c.compute_port() + 260;
+    let branch_pg_port = c.endpoint_port();
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");

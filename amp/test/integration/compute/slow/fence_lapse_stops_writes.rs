@@ -46,17 +46,7 @@ const RECLAIM_BUDGET: Duration = Duration::from_secs(180);
 const THIEF: &str = "fence-lapse-test";
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Unique across the whole suite, not just this half of it. Endpoints are
-    // not torn down between scenarios — `prep_for_next_test` only touches
-    // `main` — so a port two scenarios share is a later `endpoint create` that
-    // fails on a port the earlier one is still bound to. Unique-by-construction
-    // rather than cleanup at the end, because a scenario that bails midway
-    // never reaches its cleanup and would leave the same trap behind.
-    //
-    // Small enough, too, that the endpoint's whole footprint stays in this
-    // run's port block: it takes three ports upward from this one (pg + two
-    // HTTP), the compute lane is base+700, and the run owns base+0..=base+900.
-    let branch_pg_port = c.compute_port() + 195;
+    let branch_pg_port = c.endpoint_port();
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");

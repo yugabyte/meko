@@ -35,7 +35,7 @@ fn lsn_u64(text: &str) -> anyhow::Result<u64> {
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let pg_port = c.compute_port() + 140;
+    let pg_port = c.endpoint_port();
 
     step("Create an isolated parent branch + endpoint");
     let parent_id = c.cluster_create(PARENT)?;

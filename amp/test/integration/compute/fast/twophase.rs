@@ -26,8 +26,7 @@ use crate::db;
 use crate::tee_println;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Compute lane above `main`; keep clear of multi_timeline (+138/+148).
-    let port = c.compute_port() + 158;
+    let port = c.endpoint_port();
 
     step("provision a 2PC-enabled branch endpoint (max_prepared_transactions=5)");
     // Its own amp cluster, i.e. its own lineage, independent of the shared `main`.

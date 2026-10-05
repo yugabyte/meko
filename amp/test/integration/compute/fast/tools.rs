@@ -22,7 +22,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     //
     // Its own amp cluster, i.e. its own lineage: forking the shared `main` would pin
     // main's GC cutoff for the rest of the run.
-    let tools_port = c.compute_port() + 120;
+    let tools_port = c.endpoint_port();
     step("create a dedicated branch + endpoint for this test");
     let branch = c.cluster_create("tools")?;
     if branch.is_empty() {

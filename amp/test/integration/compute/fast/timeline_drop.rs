@@ -18,7 +18,7 @@ const BRANCH_NAME: &str = "drop_me";
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Branch endpoint sits in the compute lane just above `main`.
-    let branch_pg_port = c.compute_port() + 101;
+    let branch_pg_port = c.endpoint_port();
     let main = db::compute_conn(c.compute_port());
     let branch_conn = db::compute_conn(branch_pg_port);
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());

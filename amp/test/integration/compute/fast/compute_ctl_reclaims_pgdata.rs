@@ -125,9 +125,7 @@ fn claim_pgdata(stand_in: &mut Child, pgdata: &Path) -> anyhow::Result<()> {
 }
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Offsets are unique across the fast suite: an endpoint that outlives its
-    // scenario would take the port with it.
-    let pg_port = c.compute_port() + 125;
+    let pg_port = c.endpoint_port();
 
     step("Own cluster + endpoint (this one gets killed and squatted on)");
     let branch_id = c.cluster_create(CLUSTER)?;

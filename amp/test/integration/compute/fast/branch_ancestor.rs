@@ -11,8 +11,8 @@ use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Two branch endpoints in the compute lane, above `main`.
-    let b1_port = c.compute_port() + 158;
-    let b2_port = c.compute_port() + 168;
+    let b1_port = c.endpoint_port();
+    let b2_port = c.endpoint_port();
     let main = db::compute_conn(c.compute_port());
     let b1 = db::compute_conn(b1_port);
     let b2 = db::compute_conn(b2_port);

@@ -14,7 +14,7 @@ use crate::cluster::{Cluster, step};
 use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let branch_pg_port = c.compute_port() + 160;
+    let branch_pg_port = c.endpoint_port();
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_metrics", c.branch())?;

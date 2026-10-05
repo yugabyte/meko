@@ -37,7 +37,7 @@ const WARMUP_COMMITS: i64 = 50;
 const TRIGGER_COMMITS: i64 = 1500;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let branch_pg_port = c.compute_port() + 290;
+    let branch_pg_port = c.endpoint_port();
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Branch off main + endpoint");

@@ -20,7 +20,7 @@ use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    let branch_pg_port = c.compute_port() + 130;
+    let branch_pg_port = c.endpoint_port();
 
     step("Seed the ancestor table on main, capture the branch-point checksum");
     db::batch(

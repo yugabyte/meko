@@ -9,6 +9,7 @@ use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -232,6 +233,8 @@ pub struct Cluster {
     port_base: u16,
     /// Compute port of the shared `main` endpoint.
     compute_port: u16,
+    /// Cursor for [`Cluster::endpoint_port`].
+    next_endpoint_port: AtomicU16,
     /// The shared `main` branch id, set by [`Cluster::setup`].
     branch: String,
     /// Current `-n <count>` iteration (1-based), the suffix source for
@@ -263,6 +266,25 @@ impl Cluster {
     }
     pub fn compute_port(&self) -> u16 {
         self.compute_port
+    }
+    /// A pg port for a scenario's own endpoint: the start of the next free
+    /// [`ENDPOINT_STRIDE`]-port slot above `main` in this run's block. Scenarios
+    /// take ports from here rather than picking `compute_port() + N`; hand-picked
+    /// offsets ran past the block into ports nothing probes, such as
+    /// `yb-tserver`'s 12000 (#1692).
+    pub fn endpoint_port(&self) -> u16 {
+        for _ in 0..ENDPOINT_SLOTS {
+            let slot = self.next_endpoint_port.fetch_add(1, Ordering::Relaxed) % ENDPOINT_SLOTS;
+            let port = self.compute_port + (slot + 1) * ENDPOINT_STRIDE;
+            if (port..port + ENDPOINT_STRIDE).all(port_free) {
+                return port;
+            }
+        }
+        panic!(
+            "no free {ENDPOINT_STRIDE}-port endpoint slot in {}..{}",
+            self.compute_port + ENDPOINT_STRIDE,
+            self.compute_port + (ENDPOINT_SLOTS + 1) * ENDPOINT_STRIDE
+        );
     }
     /// TLS the daemons connect to YugabyteDB with; empty for a plaintext run.
     pub fn yb_tls(&self) -> &YbTls {
@@ -400,6 +422,7 @@ impl Cluster {
             yb_tls,
             port_base: 0,
             compute_port: 0,
+            next_endpoint_port: AtomicU16::new(0),
             branch: String::new(),
             iteration: 1,
             markers: Regex::new(MARKERS).expect("static marker regex"),
@@ -714,8 +737,8 @@ impl Cluster {
     }
 
     /// Enter iteration `iter` (1-based) of a `-n <count>` run, destroying
-    /// every endpoint but `main` past the first: a scenario endpoint's
-    /// compute port is a fixed offset, so a fresh name would not free it.
+    /// every endpoint but `main` past the first, so endpoints a scenario leaves
+    /// behind don't pile up and use every [`Cluster::endpoint_port`] slot.
     /// Logs are archived first, since `--destroy` removes the directory.
     ///
     /// Best-effort, like `-n` itself: what cannot be freed is reported and
@@ -1656,8 +1679,18 @@ fn gc_old_runs(test_dir: &Path) {
 /// Offset of the compute (`main`) lane from the cluster's port base. The
 /// storage stack occupies base+0..base+600 (one 100-port lane per family;
 /// see `yb_amp_local init --port-base`); compute sits above it, and
-/// scenario branch endpoints live just above `main` at `compute_port + N`.
+/// scenario endpoints take the ports just above `main` ([`Cluster::endpoint_port`]).
 const COMPUTE_LANE: u16 = 700;
+
+/// Ports one endpoint binds from its pg port up: `yb_amp_local endpoint create`
+/// takes the pg port plus the first free external, internal and settings HTTP
+/// ports above it, and the supervisor's listeners follow (about 7 in all). The
+/// first slot sits above `main`'s own run from `compute_port`.
+const ENDPOINT_STRIDE: u16 = 10;
+
+/// Slots [`Cluster::endpoint_port`] hands out: `compute_port + 10 ..
+/// compute_port + 200`, ending where the block [`pick_port_base`] probes ends.
+const ENDPOINT_SLOTS: u16 = 19;
 
 /// How many distinct port blocks to try before giving up on bring-up.
 /// Each retry picks a fresh block, so this also bounds how many concurrent

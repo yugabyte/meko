@@ -13,7 +13,7 @@ use crate::cluster::{Cluster, step};
 use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let branch_pg_port = c.compute_port() + 120;
+    let branch_pg_port = c.endpoint_port();
 
     step("Create a child branch off main and start its endpoint");
     let b1 = c.branch_create_named("gc_fresh", c.branch())?;

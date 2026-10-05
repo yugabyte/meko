@@ -41,10 +41,7 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 const RECOVER_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Offsets stay <= 200 (the compute lane is base+700, the run's reserved block
-    // ends at base+900) and unique across the fast suite: nothing validates two
-    // scenarios asking for the same explicit `--pg-port`, it just fails to bind.
-    let pg_port = c.compute_port() + 115;
+    let pg_port = c.endpoint_port();
 
     step("Own cluster + endpoint (the kill recycles this compute)");
     let branch_id = c.cluster_create(CLUSTER)?;

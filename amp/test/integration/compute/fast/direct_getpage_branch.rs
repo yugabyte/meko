@@ -24,8 +24,7 @@ const M_AFTER: u32 = 30;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    // Distinct from branch_ancestor's +158/+168 compute lanes.
-    let br_port = c.compute_port() + 178;
+    let br_port = c.endpoint_port();
 
     step("seed ancestor rows on main (single block), capture branch-point LSN");
     db::batch(

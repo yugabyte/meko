@@ -13,8 +13,8 @@ use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Two endpoints in the compute lane, above `main`.
-    let a_port = c.compute_port() + 138;
-    let b_port = c.compute_port() + 148;
+    let a_port = c.endpoint_port();
+    let b_port = c.endpoint_port();
     step("Create two independent branches (branch A, branch B)");
     // Each gets its own amp cluster, i.e. its own independent lineage.
     let ba = c.cluster_create("mt_a")?;

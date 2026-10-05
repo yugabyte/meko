@@ -56,9 +56,7 @@ const WARMUP: Duration = Duration::from_secs(6);
 const ROUND_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Offsets must stay <= 200: the compute lane is base+700 and the run's reserved
-    // block ends at base+900, so anything above that is unprobed and can be in use.
-    let pg_port = c.compute_port() + 110;
+    let pg_port = c.endpoint_port();
 
     step("Create an own amp cluster (a fork of `main` would pin main's cutoff)");
     let branch_id = c.cluster_create(CLUSTER)?;

@@ -12,7 +12,7 @@ use crate::db;
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Branch endpoint sits in the compute lane just above `main`, so the
     // whole cluster stays inside its picked port block.
-    let branch_pg_port = c.compute_port() + 100;
+    let branch_pg_port = c.endpoint_port();
     let main = db::compute_conn(c.compute_port());
     let branch = db::compute_conn(branch_pg_port);
 
