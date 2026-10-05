@@ -20,6 +20,7 @@ const ARCHITECT_SUGGESTIONS = [
   "24 tenant DBs, multi-region sync",
   "Timeseries store for metrics",
   "Migrate Oracle → HexaBridge",
+  "Migrate SQL Server → HexaBridge",
 ];
 
 // Illustrative chips — the platform's supported workloads / topologies. These
