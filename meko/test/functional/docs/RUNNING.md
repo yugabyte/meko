@@ -83,7 +83,7 @@ go run ./framework/cmd/mekoqa run \
 ```
 
 - `--portal ""` keeps the run off the portal. Without it the run streams to
-  `http://10.150.5.246`, a local run included, and a debugging run shows up beside the team's.
+  `https://meko-qa.dev.yugabyte.com`, a local run included, and a debugging run shows up beside the team's.
 - `--out-dir` writes `<out-dir>/<runid>/` with one JSON per result, the artifacts and the
   reap plan. `--html` and `--junit` write a report file.
 - Build once with `go build -o /tmp/mekoqa ./framework/cmd/mekoqa` if you run it often, and use
@@ -116,7 +116,7 @@ namespaces by hand that you did not create.
 
 ## 2. From the portal
 
-The portal is at `http://10.150.5.246`. The Run tests dialog and the CLI send the same request
+The portal is at `https://meko-qa.dev.yugabyte.com`. The Run tests dialog and the CLI send the same request
 to the portal, which starts `meko-run-tests`.
 
 ```bash

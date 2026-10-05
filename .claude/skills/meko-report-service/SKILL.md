@@ -12,8 +12,9 @@ description: >-
 
 # meko report service, how developers use it
 
-The meko report portal is at **http://10.150.5.246** (plain HTTP, API under
-`/api/v1`). It is a copy of the amp report portal, so the routes and JSON shapes
+The meko report portal is at **https://meko-qa.dev.yugabyte.com** (API under
+`/api/v1`). The bare `http://10.150.5.246` still answers, so older links keep
+working. It is a copy of the amp report portal, so the routes and JSON shapes
 match amp's. Every mekoqa run lands here: results, steps, logs and attachments,
 perf history, known issues, schedules, and the buttons that launch the
 `meko-run-tests` Jenkins job. For "did my change break anything" or "why is this
@@ -44,7 +45,7 @@ The same binary as `yb amp`. Install or update:
 curl -fsSL https://raw.githubusercontent.com/yugabyte/qa-services/main/yb-cli/install.sh | bash
 ```
 
-The base URL defaults to `http://10.150.5.246`. Override it with `--meko-url`,
+The base URL defaults to `https://meko-qa.dev.yugabyte.com`. Override it with `--meko-url`,
 `YB_MEKO_URL`, or `YB_MEKO_API_URL`.
 
 Command families: `run` (list, get, status, wait, trigger, restart, rerun, stop,
@@ -72,17 +73,17 @@ Conventions:
 ### 2. The MCP server
 
 A stateless proxy over the same API. Streamable HTTP at
-**http://10.150.5.246/mcp**, SSE at `/sse`. No auth. Add it to Claude Code:
+**https://meko-qa.dev.yugabyte.com/mcp**, SSE at `/sse`. No auth. Add it to Claude Code:
 
 ```bash
-claude mcp add --transport http --scope user meko-qa http://10.150.5.246/mcp
+claude mcp add --transport http --scope user meko-qa https://meko-qa.dev.yugabyte.com/mcp
 ```
 
-Cursor: `{ "mcpServers": { "meko-qa": { "url": "http://10.150.5.246/mcp" } } }`.
+Cursor: `{ "mcpServers": { "meko-qa": { "url": "https://meko-qa.dev.yugabyte.com/mcp" } } }`.
 
-`curl http://10.150.5.246/mcp` hangs by design. A GET opens the event stream, and
+`curl https://meko-qa.dev.yugabyte.com/mcp` hangs by design. A GET opens the event stream, and
 a POST needs `Accept: application/json, text/event-stream` and a JSON-RPC body.
-Check health with `curl http://10.150.5.246/health` or `http://10.150.5.246:8989/health`.
+Check health with `curl https://meko-qa.dev.yugabyte.com/api/v1/health` or `http://10.150.5.246:8989/health`.
 
 Tool families: runs and results, metrics, perf, files (`read_file_lines`,
 `search_in_file`), known issues, schedules, `list_catalog`, `list_releases`,
@@ -91,7 +92,7 @@ Tool families: runs and results, metrics, perf, files (`read_file_lines`,
 
 ### 3. The web UI
 
-http://10.150.5.246 has the runs list, result pages, perf trends, known issues,
+https://meko-qa.dev.yugabyte.com has the runs list, result pages, perf trends, known issues,
 schedules, the per-release status board, and the Config page. The sidebar's
 "Connect AI agents" dialog shows the same MCP and CLI setup.
 

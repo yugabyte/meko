@@ -1025,7 +1025,7 @@ report:
   portal:
     # Portal base URL. The meko portal VM (meko-report-service, us-west1-b),
     # reachable on the corp network. "" turns streaming off.
-    url: "http://10.150.5.246"
+    url: "https://meko-qa.dev.yugabyte.com"
     # Report bucket the run files under on the portal (e.g. regression).
     report: ""
     # Adopt an existing portal run (created at trigger time) instead of

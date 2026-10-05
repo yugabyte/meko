@@ -367,7 +367,7 @@ build's container is gone afterwards, so there the namespace labels are the only
 
 `--portal <url>` streams the run to the meko report portal while it executes. That covers each result,
 step, attachment, metric and perf datapoint. `report.portal.url` defaults to
-`http://10.150.5.246`, so a run reports there unless you pass `--portal ""`. `--report
+`https://meko-qa.dev.yugabyte.com`, so a run reports there unless you pass `--portal ""`. `--report
 <bucket>` files the run under a report page. The sink is non-critical, a portal outage never
 fails or slows a run. Pipelines pass `report.portal.run_id` so the framework adopts the run
 the portal created at trigger time, and the identity stamps (`branch`, `commit`,

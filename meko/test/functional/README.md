@@ -2,7 +2,7 @@
 
 `mekoqa` deploys a complete meko stack on Kubernetes, drives it the way a customer does
 (REST, MCP, the inference gateway), injects faults, loads it, and reports every result to the
-meko report portal at `http://10.150.5.246`. It is the meko copy of amp's `ampqa`
+meko report portal at `https://meko-qa.dev.yugabyte.com`. It is the meko copy of amp's `ampqa`
 (`amp/test/functional/`). The engine is the same, and the apps, suites and deploy path are
 meko's own.
 

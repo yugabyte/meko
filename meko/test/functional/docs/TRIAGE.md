@@ -1,6 +1,6 @@
 # Triaging a failed run
 
-Every mekoqa run lands on the meko report portal at `http://10.150.5.246`. This page is the
+Every mekoqa run lands on the meko report portal at `https://meko-qa.dev.yugabyte.com`. This page is the
 path from a red run to one of two decisions. Either a product bug to file, or a test bug to fix.
 
 The rules:
@@ -25,7 +25,7 @@ yb meko --help
 
 Reinstalling resets the stored Jenkins credentials, so install once and update only when
 `yb meko` is missing a command. The portal also runs an MCP server with the same tools, over
-streamable HTTP at `http://10.150.5.246/mcp` with no auth. Add that URL to your agent's MCP
+streamable HTTP at `https://meko-qa.dev.yugabyte.com/mcp` with no auth. Add that URL to your agent's MCP
 configuration.
 
 Ids accept a full UUID, a portal URL or the 8-character id the tables print. `--json` returns

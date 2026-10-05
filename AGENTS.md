@@ -475,7 +475,7 @@ Pointers only; each skill is the authority on its own subject.
 | `amp-mcp-tools` | working on the amp controller's MCP tools. A **symlink** to `amp/controller/mcp/skills/amp-mcp-tools`, so it stays in step with the packaged skill bundle |
 | `amp-lru` | adding, changing or retiring an amp LRU (an always-on real workload on amp with its own pool, pods, checker and dashboard) — the shape every LRU follows, the portal row, the hourly sync. Also read `amp/deploy/lru/README.md` for the shape and [`amp/docs/lru-environment.md`](amp/docs/lru-environment.md) for what is deployed where today |
 | `amp-report-service` | working with the amp QA report portal — triaging runs/results, perf history, known issues, launching runs/builds/fleet deploys via the `yb` CLI or the portal's MCP server |
-| `meko-report-service` | working with the meko QA report portal (http://10.150.5.246) — triaging mekoqa runs/results, known issues, launching runs, the Config page defaults, via the `yb meko` CLI or the portal's MCP server (`claude mcp add --transport http meko-qa http://10.150.5.246/mcp`) |
+| `meko-report-service` | working with the meko QA report portal (https://meko-qa.dev.yugabyte.com) — triaging mekoqa runs/results, known issues, launching runs, the Config page defaults, via the `yb meko` CLI or the portal's MCP server (`claude mcp add --transport http meko-qa https://meko-qa.dev.yugabyte.com/mcp`) |
 
 All skills are repo-wide and live at the root, including the AMP-specific ones — there is
 no per-tree `.claude/`. The two `amp`-scoped entries above only apply when you are editing
