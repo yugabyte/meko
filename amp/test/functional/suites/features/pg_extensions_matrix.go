@@ -35,12 +35,15 @@ var DefaultExtensionsBaked = []string{
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
 // (they differ for pgvector, whose image ships the "vector" extension). Kept in
 // step with deploy/extensions/extensions.yaml — but a name belongs here only
-// once a BUILT image's catalog serves it, because require_catalog (on by
-// default) turns "the controller does not know it" into a hard failure, which is
-// the whole point. Apache AGE is built but not yet in a release image, so it
-// joins this list with the image that ships it; the canary below activates on
-// its own when it does.
-var DefaultExtensionsCatalog = []string{"pgvector:vector", "pg_cron:pg_cron", "hexabridge:hexabridge"}
+// once BOTH controllers this runs against serve it: the build pinned in
+// configs/default.yaml (env.ampstack.controller_image), which every run without
+// an image override deploys, and the latest release, which the report portal's
+// daily-regression schedule overrides it with. require_catalog (on by default)
+// turns "the controller does not know it" into a hard failure, which is the
+// whole point. documentdb is
+// absent by design: compute_ctl creates it in its own database, so the one
+// database this test creates everything in cannot hold it.
+var DefaultExtensionsCatalog = []string{"pgvector:vector", "pg_cron:pg_cron", "hexabridge:hexabridge", "age:age"}
 
 // preloadCatalogExts are the catalog extensions that must be in
 // shared_preload_libraries (the endpoint chart appends them), so they are
