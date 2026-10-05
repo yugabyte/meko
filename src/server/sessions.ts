@@ -1,13 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, MoveSessionRequest, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addReviewWorktree, addWorktree, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fetchPrHead, git,
+  BranchGoneError, addReviewWorktree, addWorktree, checkBranchName, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fetchPrHead, git,
   gitRaw, isIdleWorktree, prRef, remoteFor, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type SyncResult,
 } from './git.js';
@@ -45,12 +45,11 @@ export function workflowLine(kind: SessionKind, stage: Stage): string {
 /** The old session types a create request may still name, and where each starts. */
 const LEGACY_STARTS: Partial<Record<string, StartStage>> = { explore: 'explore', plan: 'design', quick: 'code' };
 
-/** The PR a new Review a PR session checks out: its repo on GitHub, what GitHub says about it, the clone's remote it's fetched from, and the head fetched. */
+/** The PR a new Review a PR session checks out: its repo on GitHub, what GitHub says about it, and the clone's remote it's fetched from. */
 interface ReviewTarget {
   repo: string;
   info: PrInfo;
   remote: string;
-  sha: string;
 }
 
 /** Longest setInterval delay Node honours, in whole seconds (2^31-1 ms). */
@@ -68,6 +67,8 @@ const TRANSCRIPT_ACTIVE_MS = 15_000;
 const FINAL_CAPTURE_MS = 15000;
 /** How long a new session waits for its Meko conversation to be created before Claude starts anyway. */
 const NAME_CONVERSATION_MS = 5000;
+/** How many failed starts are kept for Try again. */
+const MAX_FAILED_STARTS = 20;
 /** How long stopping a session waits for it to finish starting. */
 const SETTLE_MS = 60000;
 /** How long recovery waits before trying again after a failed restart (each try may fetch from the remote). */
@@ -137,6 +138,8 @@ export class SessionManager {
    * arrives, reconcile sets working or idle from the transcript.
    */
   private hookless = new Set<string>();
+  /** New sessions that couldn't start, oldest first (see `failStart`). */
+  private failed = new Map<string, FailedStart>();
   /** Each new session's Meko search on its task, until its SessionStart hook takes what it found. */
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
 
@@ -249,7 +252,20 @@ export class SessionManager {
 
   // ---- create / launch ----
 
+  /** Creates a session and waits for Claude to be launched in it (see `begin`). */
   async create(projectId: string, req: CreateSessionRequest): Promise<Session> {
+    return (await this.begin(projectId, req)).done;
+  }
+
+  /**
+   * Starts a new session in two parts. What's quick to check is checked first, so a bad request
+   * starts nothing; then the row goes in and this returns `session`, still starting, so the New
+   * session dialog can close and the session's tab show its startup steps. `done` does the slow
+   * part (on a big repo, minutes): fetching a review's PR head, making the worktree and launching
+   * Claude. When the worktree or the PR head can't be had there, the session is removed and kept
+   * as a failed start (`failedStarts()`) for the user to try again.
+   */
+  async begin(projectId: string, req: CreateSessionRequest): Promise<{ session: Session; done: Promise<Session> }> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
     for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch'] as const) {
@@ -266,7 +282,7 @@ export class SessionManager {
     }
     const start: StartStage = req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
-    // A review checks out the PR's head now, so a PR that can't be had starts nothing.
+    // A review must be of an open PR on GitHub; its head is fetched with the worktree.
     const review = kind === 'review-pr' ? await this.reviewTarget(repo, req.pr) : null;
     const name = (req.name ?? '').trim() || (review ? `Review #${review.info.number} ${review.info.title}`.slice(0, 100).trim() : '');
     if (!name) throw new HttpError(400, 'Give the session a name.');
@@ -288,12 +304,25 @@ export class SessionManager {
     const wanted = review ? '' : (req.branch ?? '').trim();
     const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
     const base = review?.info.baseRefName || (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
+    // Checked now: once the dialog has closed, a typo would only show up as a failed start.
+    try {
+      await checkBranchName(repo, base);
+    } catch (e) {
+      throw new HttpError(400, errMsg(e));
+    }
+    // What Try again fills the New session dialog with, should the start fail.
+    const request: CreateSessionRequest = {
+      name, prompt: (req.prompt ?? '').trim() || undefined, kind, start: review ? undefined : start,
+      baseBranch: review ? undefined : base, repoPath: req.repoPath, branch: wanted || undefined, pr: review ? { repo: review.repo, number: review.info.number } : undefined,
+    };
 
     const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
     const branch = wanted || `${settings.branchPrefix}${slug}`;
     const id = `${projectId}--${slug}`;
     const now = Date.now();
     const pool = this.core.worktrees;
+    // GitHub's head until the fetch says otherwise (the PR may move in between).
+    const sha = review?.info.headRefOid || null;
     // The row goes in first so the tab (and its "Starting…" view) shows up right away. The
     // repo's most recently idled worktree is claimed in the same write, so two sessions starting
     // at once (in any projects on the repo) never get the same one, and two starts on one typed
@@ -309,53 +338,75 @@ export class SessionManager {
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug }),
         review?.info.number ?? null, review?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null, review?.info.author ?? null,
-        review?.sha ?? null, review?.sha ?? null, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null);
+        sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
     // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
     this.creating.add(id);
-    try {
-      this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
-      // A review searches on the PR: its title and description (where the author's design is
-      // summed up), and the user's notes.
-      this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), notes].filter(Boolean).join('\n') : task);
-      const naming = this.nameConversation(this.row(id));
-      const made = await this.makeWorktree(id, repo, worktree, reused, branch, base, !!where, review?.sha);
-      const started = review
-        ? `Checked out PR #${review.info.number} of ${review.repo} at ${review.sha.slice(0, 7)} on ${branch} (base ${base})`
-        : startedText(branch, base, made.sync, !!where);
-      this.event(id, 'created', started + (made.reused ? ` in a reused worktree (${basename(worktree)})` : ''), { reused: made.reused });
+    // Starting again under the same name replaces the failed start.
+    this.failed.delete(id);
+    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+    const done = this.finishCreate(id, { request, repo, worktree, reused, branch, base, where, review, task, notes })
+      .finally(() => this.creating.delete(id));
+    return { session: this.get(id), done };
+  }
 
-      const row = this.row(id);
-      const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
-      this.setStartup(id, 'launch');
-      await within(naming, NAME_CONVERSATION_MS);
+  /** The slow part of `begin`: the PR head for a review, the worktree, then Claude. */
+  private async finishCreate(id: string, c: {
+    request: CreateSessionRequest; repo: string; worktree: string; reused: boolean; branch: string; base: string;
+    where: 'local' | 'origin' | null; review: ReviewTarget | null; task: string; notes: string;
+  }): Promise<Session> {
+    const { repo, review, branch, base, task } = c;
+    // A review searches on the PR: its title and description (where the author's design is
+    // summed up), and the user's notes.
+    this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), c.notes].filter(Boolean).join('\n') : task);
+    const naming = this.nameConversation(this.row(id));
+    let sha: string | undefined;
+    if (review) {
       try {
-        await this.launch(row, { resume: false, prompt });
+        sha = await fetchPrHead(repo, review.remote, review.info.number, review.info.baseRefName);
       } catch (e) {
-        this.startup.delete(id);
-        if (e instanceof HttpError && e.status === 409) throw e;
-        this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
-        throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
+        const pool = this.core.worktrees;
+        throw this.failStart(id, c.request, `Couldn't fetch PR #${review.info.number} from ${review.remote}: ${errMsg(e)}`,
+          () => (c.reused ? pool.unclaim(c.worktree, id) : pool.drop(c.worktree)));
       }
-      this.setStartup(id, 'loading');
-      this.core.log.info(`session created: ${id}`);
-      this.core.changed();
-      return this.get(id);
-    } finally {
-      this.creating.delete(id);
+      if (sha !== review.info.headRefOid) this.update(id, { review_sha: sha, pr_head_sha: sha });
     }
+    const made = await this.makeWorktree(id, c.request, repo, c.worktree, c.reused, branch, base, !!c.where, sha);
+    const started = review && sha
+      ? `Checked out PR #${review.info.number} of ${review.repo} at ${sha.slice(0, 7)} on ${branch} (base ${base})`
+      : startedText(branch, base, made.sync, !!c.where);
+    this.event(id, 'created', started + (made.reused ? ` in a reused worktree (${basename(made.path)})` : ''), { reused: made.reused });
+
+    const row = this.row(id);
+    const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
+    this.setStartup(id, 'launch');
+    await within(naming, NAME_CONVERSATION_MS);
+    try {
+      await this.launch(row, { resume: false, prompt });
+    } catch (e) {
+      this.startup.delete(id);
+      if (e instanceof HttpError && e.status === 409) throw e;
+      this.core.log.warn(`couldn't launch Claude for ${id}`, errMsg(e));
+      this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
+      throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
+    }
+    this.setStartup(id, 'loading');
+    this.core.log.info(`session created: ${id}`);
+    this.core.changed();
+    return this.get(id);
   }
 
   /**
    * Puts the new session's branch in its worktree: the idle one it claimed (build outputs kept)
    * or a new one. A claimed worktree that can't be reused is dropped from the pool and the
-   * session gets a new one, so reuse never makes a start fail. On failure the session is deleted.
+   * session gets a new one, so reuse never makes a start fail. On failure the session is removed
+   * and kept as a failed start.
    */
   private async makeWorktree(
-    id: string, repo: string, path: string, claimed: boolean, branch: string, base: string, fromOrigin: boolean, at?: string,
-  ): Promise<{ sync: SyncResult | null; reused: boolean }> {
+    id: string, request: CreateSessionRequest, repo: string, path: string, claimed: boolean, branch: string, base: string, fromOrigin: boolean, at?: string,
+  ): Promise<{ sync: SyncResult | null; reused: boolean; path: string }> {
     const pool = this.core.worktrees;
     let current = path;
     // A review's branch starts at the PR's head; any other at the base (or is the existing branch).
@@ -369,7 +420,7 @@ export class SessionManager {
     try {
       if (claimed) {
         try {
-          return { sync: await add(path, true), reused: true };
+          return { sync: await add(path, true), reused: true, path };
         } catch (e) {
           if (await isIdleWorktree(repo, path)) {
             // The worktree is fine; what failed was the branch or base. It goes back to the pool,
@@ -383,15 +434,41 @@ export class SessionManager {
           this.update(id, { worktree_path: current });
         }
       }
-      return { sync: await add(current, false), reused: false };
+      return { sync: await add(current, false), reused: false, path: current };
     } catch (e) {
-      this.startup.delete(id);
-      this.recall.drop(id);
-      pool.drop(current);
-      run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
-      this.core.changed();
-      throw new HttpError(400, `Couldn't create the worktree: ${errMsg(e)}`);
+      throw this.failStart(id, request, `Couldn't create the worktree: ${errMsg(e)}`, () => pool.drop(current));
     }
+  }
+
+  /**
+   * A new session whose worktree (or PR head) couldn't be had: it's removed, <release> frees its
+   * worktree, and it's kept as a failed start, with a notification, since the New session dialog
+   * has closed by now. Returns the error for the caller to throw.
+   */
+  private failStart(id: string, request: CreateSessionRequest, message: string, release: () => void): HttpError {
+    const row = sessionRow(this.db, id);
+    if (row) {
+      this.notifyUser(id, "Couldn't start", message);
+      this.failed.set(id, { id, projectId: row.project_id, name: row.name, error: message, at: Date.now(), request });
+      // The oldest go first; nobody needs dozens.
+      for (const old of [...this.failed.keys()].slice(0, Math.max(0, this.failed.size - MAX_FAILED_STARTS))) this.failed.delete(old);
+    }
+    this.core.log.warn(`session ${id} couldn't start`, message);
+    this.startup.delete(id);
+    this.recall.drop(id);
+    release();
+    run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
+    this.core.changed();
+    return new HttpError(400, message);
+  }
+
+  /** New sessions that couldn't start, newest first, until dismissed. */
+  failedStarts(): FailedStart[] {
+    return [...this.failed.values()].reverse();
+  }
+
+  dismissFailedStart(id: string): void {
+    if (this.failed.delete(id)) this.core.changed();
   }
 
   /**
@@ -443,7 +520,7 @@ export class SessionManager {
 
   /**
    * The PR a new Review a PR session is for: it must be open, and <repo> a clone of its repo (its
-   * upstream, for a fork). Fetches the PR's head, so a PR that can't be had starts nothing.
+   * upstream, for a fork). Its head is fetched later, with the worktree (`finishCreate`).
    */
   private async reviewTarget(repo: string, pr: CreateSessionRequest['pr']): Promise<ReviewTarget> {
     if (!pr || typeof pr !== 'object' || !isRepoName(pr.repo) || !Number.isInteger(pr.number) || pr.number <= 0) {
@@ -462,11 +539,7 @@ export class SessionManager {
     if (info.state !== 'OPEN') {
       throw new HttpError(400, `PR #${pr.number} of ${pr.repo} is ${info.state === 'MERGED' ? 'merged' : 'closed'}, so there's nothing to review.`);
     }
-    try {
-      return { repo: pr.repo, info, remote, sha: await fetchPrHead(repo, remote, pr.number, info.baseRefName) };
-    } catch (e) {
-      throw new HttpError(400, `Couldn't fetch PR #${pr.number} from ${remote}: ${errMsg(e)}`);
-    }
+    return { repo: pr.repo, info, remote };
   }
 
   /** Where Claude writes a markdown design during the Design stage (outside the repo). */

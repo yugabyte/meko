@@ -258,6 +258,21 @@ it (or in an idle worktree of the repo: see [Worktree reuse](#worktree-reuse)), 
 local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
 says why.
 
+**The dialog doesn't wait for the worktree.** On a big repo the fetch and checkout take minutes,
+so creating a session (`SessionManager.begin`) is in two parts. The quick checks come first and
+answer in the dialog: the kind and start, the repo, a Review a PR's PR on GitHub, a typed branch
+(fetched, and checked against running sessions and other checkouts), and the base branch's name.
+Then the session's row goes in and the request returns, so the dialog closes on the session's tab,
+where the startup steps tick off (see [Starting](#starting)) while you work elsewhere. Fetching a
+review's PR head, making the worktree and starting Claude follow in the background. If the worktree
+or the PR head can't be had there, the session is removed (its worktree slot goes back to the pool)
+and becomes a **failed start** (`AppState.failedStarts`, kept in memory until dismissed, at most
+20): a banner says what went wrong, with **Try again**, which opens the dialog filled in as before,
+and **Dismiss** (`DELETE /api/failed-starts/:id`), and the project's notifications, when on, send
+one. Starting a session under the same name again replaces its failed start. While it's the reason
+the project's last session went away, the Close project offer stays away. Claude failing to start
+leaves the session as it always did: exited, with the error, and **Resume**.
+
 **Advanced**, collapsed by default under the first prompt, holds the repo, the base branch and the
 branch; closed, it shows them on one line (`agent-k-local · from main · ak/fix-retry-backoff`).
 
@@ -336,9 +351,12 @@ approved.
 ### Starting
 
 Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session
-starts, the terminal shows its steps (updating the base branch and preparing the worktree, starting
-Claude Code, loading, sending your task) with the current one animated and timed, plus the stage
-the session opens in. The session's tab shows the current step in its tooltip.
+starts, the terminal shows its steps (updating the base branch and preparing the worktree, or for a
+Review a PR fetching the PR and preparing the worktree, starting Claude Code, loading, sending your
+task) with the current one animated and timed, plus the stage the session opens in. The session's
+tab shows the current step in its tooltip. The view shows up as soon as the New session dialog
+closes, before the worktree is made; after 10 seconds on that step it says a big repo can take a
+few minutes and that you can switch to other sessions meanwhile.
 
 The steps come from Claude's hooks. If they never arrive (the hook socket was gone, say), a
 session would stay on this view while Claude works under it. So the reconcile tick also watches
@@ -782,7 +800,8 @@ repo (the PR's clone, changeable to another clone of it); the base and branch co
 
 **Starting.** `CreateSessionRequest.pr` names the PR (`{ repo: 'owner/name', number }`), with
 `repoPath` its clone. The server checks that the clone's `upstream` or `origin` is the PR's repo
-and that the PR is open (400 otherwise, with nothing started), fetches `refs/pull/<n>/head` from
+and that the PR is open (400 otherwise, with nothing started). Then, after the dialog has closed
+(a fetch that fails is a failed start: see [New session](#new-session)), it fetches `refs/pull/<n>/head` from
 that remote into `refs/agentk/pr/<n>` (a fork's PR too) along with the PR's base, and puts the
 branch `<prefix>review-pr-<n>` (numbered like any session's, so PR #7 of two repos never collide)
 at that commit, in a new or idle worktree, with no upstream and a `pushRemote` naming a remote

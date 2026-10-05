@@ -138,6 +138,7 @@ export const api = {
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
+  dismissFailedStart: (id: string) => request<void>('DELETE', `/api/failed-starts/${enc(id)}`),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),

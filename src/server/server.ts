@@ -332,7 +332,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 
   // ---- sessions ----
-  app.post<{ Params: { id: string }; Body: CreateSessionRequest }>('/api/projects/:id/sessions', async (req) => core.sessions.create(req.params.id, req.body ?? ({} as CreateSessionRequest)));
+  // Answers once the session is written: its worktree and Claude start after, which can take
+  // minutes on a big repo, so the dialog doesn't wait. A failure there is a failed start in the state.
+  app.post<{ Params: { id: string }; Body: CreateSessionRequest }>('/api/projects/:id/sessions', async (req) => {
+    const { session, done } = await core.sessions.begin(req.params.id, req.body ?? ({} as CreateSessionRequest));
+    done.catch(() => {});
+    return session;
+  });
+  app.delete<{ Params: { id: string } }>('/api/failed-starts/:id', async (req, reply) => {
+    core.sessions.dismissFailedStart(req.params.id);
+    return reply.code(204).send();
+  });
   app.post<{ Params: { id: string; action: string } }>('/api/sessions/:id/actions/:action', async (req) => {
     const action = req.params.action as SessionAction;
     if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppState, AuthStatus, DatapackInvite, Project, ProjectWithSessions } from '../../shared/types';
+import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
@@ -37,8 +37,11 @@ type Modal =
   | { kind: 'none' }
   /** `invite`: a share to open as the project (chosen as its datapack). */
   | { kind: 'new-project'; invite?: DatapackInvite }
-  /** `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review. */
-  | { kind: 'new-session'; projectId: string; fresh?: boolean }
+  /**
+   * `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review.
+   * `retry`: a failed start to try again, filling the dialog in.
+   */
+  | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
@@ -217,18 +220,20 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   // When the project on screen loses its last open session, offer to close it. Only on the
   // project's view, with no other dialog open, and in a visible page (a background tab stays quiet).
+  // Not when the session failed to start: its banner offers Try again instead.
   const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
   const currentId = currentProject?.id ?? null;
   const liveCount = live.length;
   const modalKind = modal.kind;
+  const failedHere = !!state?.failedStarts?.some((f) => f.projectId === currentId);
   useEffect(() => {
     const prev = liveRef.current;
     const next = { projectId: currentId, live: liveCount };
     liveRef.current = next;
-    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !document.hidden) {
+    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !failedHere && !document.hidden) {
       setModal({ kind: 'close-project', projectId: currentId });
     }
-  }, [currentId, liveCount, route.view, modalKind]);
+  }, [currentId, liveCount, route.view, modalKind, failedHere]);
 
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
@@ -412,7 +417,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         open={drawer}
       />
       <div className="main">
-        <Banners state={state} conn={conn} stale={stale} onError={showToast} onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })} />
+        <Banners
+          state={state}
+          conn={conn}
+          stale={stale}
+          onError={showToast}
+          onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
+          onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
+        />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
         ) : currentProject && route.view === 'home' ? (
@@ -477,8 +489,11 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         <NewSessionDialog
           project={newSessionProject}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
+          initial={modal.kind === 'new-session' ? modal.retry?.request : undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
+            // The failed start it retried is done with (one under the same name is already gone).
+            if (modal.kind === 'new-session' && modal.retry) api.dismissFailedStart(modal.retry.id).catch(() => {});
             setModal({ kind: 'none' });
             navigate({ view: 'project', projectId: s.projectId, sessionId: s.id });
           }}

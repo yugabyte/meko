@@ -577,6 +577,45 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(env.core.sessions.get(s.id).startup).toBeNull();
   });
 
+  it('answers with the session still starting, before its worktree is made', async () => {
+    const p = await newProject();
+    const { session, done } = await env.core.sessions.begin(p.id, { name: 'Big repo', prompt: 'hi', kind: 'quick' });
+    expect(session).toMatchObject({ status: 'starting', startup: { step: 'worktree', hasPrompt: true } });
+    expect(existsSync(session.worktreePath)).toBe(false);
+    // Recovery leaves it alone meanwhile, and stopping it waits for the start.
+    await env.core.sessions.reconcile();
+    expect(env.core.sessions.row(session.id).status).toBe('starting');
+    const made = await done;
+    expect(existsSync(made.worktreePath)).toBe(true);
+    expect(made.startup?.step).toBe('loading');
+  });
+
+  it("keeps a start whose worktree can't be made as a failed start, until it's dismissed or started again", async () => {
+    const p = await newProject();
+    env.core.projects.update(p.id, { settings: { notify: true } });
+    const notes: { title: string; body: string }[] = [];
+    env.core.on('notify', (n) => notes.push(n));
+    // A base branch git takes but the repo doesn't have only fails once the worktree is made.
+    const req: CreateSessionRequest = { name: 'No base', prompt: 'the task', start: 'code', baseBranch: 'no-such-base' };
+    const { session, done } = await env.core.sessions.begin(p.id, req);
+    await expect(done).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^Couldn't create the worktree: /) });
+    expect(env.core.state().projects[0].sessions.map((s) => s.id)).not.toContain(session.id);
+    expect(get(env.core.db, 'SELECT path FROM worktrees WHERE session_id = ?', session.id)).toBeUndefined();
+    expect(env.core.state().failedStarts).toEqual([{
+      id: session.id, projectId: p.id, name: 'No base', error: expect.stringMatching(/^Couldn't create the worktree: /), at: expect.any(Number),
+      request: { name: 'No base', prompt: 'the task', kind: 'task', start: 'code', baseBranch: 'no-such-base' },
+    }]);
+    expect(notes).toEqual([expect.objectContaining({ projectId: p.id, sessionId: session.id, title: "No base: Couldn't start" })]);
+
+    // Started again under the same name, it's no longer a failed start; the other one is until dismissed.
+    await expect(env.core.sessions.create(p.id, { ...req, name: 'Other', baseBranch: 'no-such-base' })).rejects.toMatchObject({ status: 400 });
+    const again = await env.core.sessions.create(p.id, { ...req, baseBranch: 'main' });
+    expect(again.id).toBe(session.id);
+    expect(env.core.state().failedStarts.map((f) => f.name)).toEqual(['Other']);
+    env.core.sessions.dismissFailedStart('demo-repo--other');
+    expect(env.core.state().failedStarts).toEqual([]);
+  });
+
   it("follows the transcript of a session whose hooks never arrive, and binds a removed hook socket again", async () => {
     const p = await newProject();
     // As when another server removed the socket: Claude's hooks find nothing and give up quietly.

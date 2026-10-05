@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { makeEnv, type TestEnv } from '../helpers.js';
+import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { buildServer, stampVersion } from '../../src/server/server.js';
 import { shortHost } from '../../src/server/core.js';
 import { issueSetupToken, totpCode } from '../../src/server/auth.js';
@@ -202,7 +202,11 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(detachDedicated.statusCode).toBe(400);
     const s = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'API session', start: 'code' } });
     expect(s.statusCode).toBe(200);
-    expect(s.json()).toMatchObject({ kind: 'plan', stage: 'code' });
+    // It answers before the worktree is made: the session's tab shows the startup steps meanwhile.
+    expect(s.json()).toMatchObject({ kind: 'plan', stage: 'code', status: 'starting', startup: { step: 'worktree' } });
+    const started = (id: string) =>
+      waitFor(() => env.core.sessions.get(id).startup?.step, (st) => st !== 'worktree' && st !== 'launch', 10000, `${id} to start`);
+    await started(s.json().id);
     const badKind = await app.inject({ method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Odd', kind: 'yolo' } });
     expect(badKind.statusCode).toBe(400);
     expect(badKind.json().error).toMatch(/Pick a session kind/);
@@ -218,10 +222,22 @@ describe('HTTP API: auth, origin checks, projects', () => {
       payload: { name: 'Named', kind: 'quick', repoPath: repos.repos[0].path, branch: 'feature/named' },
     });
     expect(named.json()).toMatchObject({ branch: 'feature/named', repoPath: repos.repos[0].path });
+    await started(named.json().id);
     const taken = await app.inject({
       method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Again', kind: 'quick', branch: 'feature/named' },
     });
     expect(taken.statusCode).toBe(409);
+    // A worktree that can't be made once it has answered is a failed start in the state, until dismissed.
+    const failing = await app.inject({
+      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'No base', start: 'code', baseBranch: 'no-such-base' },
+    });
+    expect(failing.statusCode).toBe(200);
+    await waitFor(() => env.core.state().failedStarts, (f) => f.length === 1, 10000, 'the failed start');
+    expect((await app.inject({ url: '/api/state', headers: { cookie } })).json().failedStarts).toMatchObject([{ id: failing.json().id, name: 'No base' }]);
+    const dismiss = `/api/failed-starts/${encodeURIComponent(failing.json().id)}`;
+    expect((await app.inject({ method: 'DELETE', url: dismiss })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'DELETE', url: dismiss, headers: { cookie } })).statusCode).toBe(204);
+    expect(env.core.state().failedStarts).toEqual([]);
     const home = (await app.inject({ url: `/api/projects/${pid}/home`, headers: { cookie } })).json();
     expect(home.datapacks[0].memoryCount).toBe(3);
     expect(home.activity.length).toBeGreaterThan(0);
