@@ -22,6 +22,7 @@ func TestTaskLockViolation(t *testing.T) {
 	ref := uuid.NewString()
 	resize := TaskSpec{Kind: KindResizeEndpoint, TargetRef: &ref, Steps: []StepSpec{{Kind: StepResizeEndpoint, Args: json.RawMessage(`{}`)}}}
 	extAdd := TaskSpec{Kind: KindAddBranchExtensions, TargetRef: &ref, Steps: []StepSpec{{Kind: StepAddBranchExtensions, Args: json.RawMessage(`{}`)}}}
+	migrationRun := TaskSpec{Kind: KindVoyagerStartMigrationRun, TargetRef: &ref, Steps: []StepSpec{{Kind: StepVoyagerEnsureRun, Args: json.RawMessage(`{}`)}}}
 
 	// A YSQL unique violation: SQLSTATE and message only. ConstraintName and
 	// Detail are empty, which is exactly why they are not consulted.
@@ -51,6 +52,7 @@ func TestTaskLockViolation(t *testing.T) {
 		// YSQL error inserting an extensions task maps to that kind's own conflict.
 		// Sound because the two indexes' predicates are kind-disjoint.
 		{"extensions add maps to its own conflict", extAdd, ysql, ErrBranchExtensionsInProgress},
+		{"migration run maps to its own conflict", migrationRun, ysql, ErrMigrationRunInProgress},
 		// A unique violation while inserting a kind with no lock at all is not one:
 		// no index covers those rows.
 		{"unique violation on an unlocked kind", TaskSpec{Kind: KindCreateEndpoint}, ysql, nil},

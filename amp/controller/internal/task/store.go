@@ -31,6 +31,12 @@ var ErrResizeInProgress = errors.New("a resize is already in progress for this e
 // not remove it: two adds of different names both leave every endpoint behind.
 var ErrBranchExtensionsInProgress = errors.New("an extension add is already in progress for this branch")
 
+// ErrMigrationRunInProgress is the start_migration_run twin: the in-flight
+// launcher holds the migration until it reaches a terminal status. It closes the
+// window before the launcher writes its run row, where two concurrent assess,
+// migrate, or end requests would both pass the handler's active-run precheck.
+var ErrMigrationRunInProgress = errors.New("another migration run is already in progress")
+
 // ErrTaskNotFound and ErrTaskTerminal are what RequestCancel — the one unfenced,
 // API-originated write — reports when it matched no row. They are distinguished
 // because they are different answers to the caller: nothing to act on (404)

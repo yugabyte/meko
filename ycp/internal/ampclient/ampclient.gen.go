@@ -126,6 +126,7 @@ func (e EndpointConnectivityMode) Valid() bool {
 // Defines values for MigrationRunOperation.
 const (
 	Assess  MigrationRunOperation = "assess"
+	End     MigrationRunOperation = "end"
 	Migrate MigrationRunOperation = "migrate"
 )
 
@@ -133,6 +134,8 @@ const (
 func (e MigrationRunOperation) Valid() bool {
 	switch e {
 	case Assess:
+		return true
+	case End:
 		return true
 	case Migrate:
 		return true
@@ -201,6 +204,8 @@ const (
 	MigrationStateAssessing          MigrationState = "assessing"
 	MigrationStateCompleted          MigrationState = "completed"
 	MigrationStateCreated            MigrationState = "created"
+	MigrationStateEnded              MigrationState = "ended"
+	MigrationStateEnding             MigrationState = "ending"
 	MigrationStateFailed             MigrationState = "failed"
 	MigrationStateMigrating          MigrationState = "migrating"
 	MigrationStateProvisioningTarget MigrationState = "provisioning_target"
@@ -217,6 +222,10 @@ func (e MigrationState) Valid() bool {
 	case MigrationStateCompleted:
 		return true
 	case MigrationStateCreated:
+		return true
+	case MigrationStateEnded:
+		return true
+	case MigrationStateEnding:
 		return true
 	case MigrationStateFailed:
 		return true
@@ -1224,7 +1233,7 @@ type Migration struct {
 	Id     openapi_types.UUID `json:"id"`
 	Name   string             `json:"name"`
 
-	// Runs The latest attempt per operation (assess and/or migrate).
+	// Runs The latest attempt per operation (assess, migrate, and/or end).
 	Runs []MigrationRun `json:"runs"`
 
 	// Source The source database connection as returned in responses — the password is intentionally omitted.
@@ -1331,7 +1340,7 @@ type MigrationPhaseDataProgress struct {
 	Tables        []MigrationTableProgress `json:"tables"`
 }
 
-// MigrationRun One assess or migrate attempt. Credentials never appear here.
+// MigrationRun One assess, migrate, or end attempt. Credentials never appear here.
 type MigrationRun struct {
 	Attempt          int                           `json:"attempt"`
 	DeployerMetadata *MigrationRunDeployerMetadata `json:"deployer_metadata,omitempty"`
@@ -2413,6 +2422,9 @@ type ClientInterface interface {
 	// GetMigrationAssessment request
 	GetMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// EndMigration request
+	EndMigration(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// StartMigrationWithBody request with any body
 	StartMigrationWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -2740,6 +2752,18 @@ func (c *Client) StartMigrationAssessment(ctx context.Context, migrationId Migra
 
 func (c *Client) GetMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetMigrationAssessmentRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) EndMigration(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewEndMigrationRequest(c.Server, migrationId)
 	if err != nil {
 		return nil, err
 	}
@@ -3814,6 +3838,40 @@ func NewGetMigrationAssessmentRequest(server string, migrationId MigrationId) (*
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewEndMigrationRequest generates requests for EndMigration
+func NewEndMigrationRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/end", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -5626,6 +5684,9 @@ type ClientWithResponsesInterface interface {
 	// GetMigrationAssessmentWithResponse request
 	GetMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationAssessmentResponse, error)
 
+	// EndMigrationWithResponse request
+	EndMigrationWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*EndMigrationResponse, error)
+
 	// StartMigrationWithBodyWithResponse request with any body
 	StartMigrationWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error)
 
@@ -6172,6 +6233,40 @@ func (r GetMigrationAssessmentResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetMigrationAssessmentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type EndMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r EndMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r EndMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r EndMigrationResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -7419,6 +7514,15 @@ func (c *ClientWithResponses) GetMigrationAssessmentWithResponse(ctx context.Con
 	return ParseGetMigrationAssessmentResponse(rsp)
 }
 
+// EndMigrationWithResponse request returning *EndMigrationResponse
+func (c *ClientWithResponses) EndMigrationWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*EndMigrationResponse, error) {
+	rsp, err := c.EndMigration(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseEndMigrationResponse(rsp)
+}
+
 // StartMigrationWithBodyWithResponse request with arbitrary body returning *StartMigrationResponse
 func (c *ClientWithResponses) StartMigrationWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error) {
 	rsp, err := c.StartMigrationWithBody(ctx, migrationId, contentType, body, reqEditors...)
@@ -8415,6 +8519,60 @@ func ParseGetMigrationAssessmentResponse(rsp *http.Response) (*GetMigrationAsses
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseEndMigrationResponse parses an HTTP response from a EndMigrationWithResponse call
+func ParseEndMigrationResponse(rsp *http.Response) (*EndMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &EndMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError

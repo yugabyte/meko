@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -110,27 +111,28 @@ func TestServiceStartMigrationRunPlan(t *testing.T) {
 	}
 }
 
+// A second store plans the replay because the launcher lock rejects a second
+// in-flight launcher for the same migration in one store.
 func TestServiceStartMigrationRunUsesStableRunID(t *testing.T) {
-	store := NewMemStore()
-	svc := NewService(store, NewMemStore().Subtasks())
+	firstStore, secondStore := NewMemStore(), NewMemStore()
 	in := VoyagerStartMigrationRunInput{
 		MigrationID: uuid.New(),
 		Operation:   migration.OperationAssess,
 		Attempt:     1,
 	}
-	first, err := svc.VoyagerStartMigrationRun(t.Context(), in)
+	first, err := NewService(firstStore, firstStore.Subtasks()).VoyagerStartMigrationRun(t.Context(), in)
 	if err != nil {
 		t.Fatalf("first VoyagerStartMigrationRun: %v", err)
 	}
-	second, err := svc.VoyagerStartMigrationRun(t.Context(), in)
+	second, err := NewService(secondStore, secondStore.Subtasks()).VoyagerStartMigrationRun(t.Context(), in)
 	if err != nil {
 		t.Fatalf("second VoyagerStartMigrationRun: %v", err)
 	}
-	firstSteps, err := store.Steps(t.Context(), first.ID)
+	firstSteps, err := firstStore.Steps(t.Context(), first.ID)
 	if err != nil {
 		t.Fatalf("first Steps: %v", err)
 	}
-	secondSteps, err := store.Steps(t.Context(), second.ID)
+	secondSteps, err := secondStore.Steps(t.Context(), second.ID)
 	if err != nil {
 		t.Fatalf("second Steps: %v", err)
 	}
@@ -139,5 +141,22 @@ func TestServiceStartMigrationRunUsesStableRunID(t *testing.T) {
 	decodeArgs(t, secondSteps[0], &secondRun)
 	if firstRun.RunID == uuid.Nil || firstRun.RunID != secondRun.RunID {
 		t.Fatalf("run ids = %s and %s, want the same non-zero id", firstRun.RunID, secondRun.RunID)
+	}
+}
+
+func TestServiceStartMigrationRunRejectsConcurrentLauncher(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store, store.Subtasks())
+	migrationID := uuid.New()
+	if _, err := svc.VoyagerStartMigrationRun(t.Context(), VoyagerStartMigrationRunInput{
+		MigrationID: migrationID, Operation: migration.OperationMigrate, Attempt: 1,
+	}); err != nil {
+		t.Fatalf("first VoyagerStartMigrationRun: %v", err)
+	}
+	_, err := svc.VoyagerStartMigrationRun(t.Context(), VoyagerStartMigrationRunInput{
+		MigrationID: migrationID, Operation: migration.OperationEnd, Attempt: 1,
+	})
+	if !errors.Is(err, ErrMigrationRunInProgress) {
+		t.Fatalf("second VoyagerStartMigrationRun err = %v, want ErrMigrationRunInProgress", err)
 	}
 }

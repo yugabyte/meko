@@ -47,8 +47,8 @@ make controller-bundle BUILD_TYPE=release
 docker build -t yb-amp/controller:dev -f deploy/controller/Dockerfile .
 ```
 
-Build the Voyager job image (embeds `/opt/amp/voyager/assess.sh` and
-`/opt/amp/voyager/migrate.sh`):
+Build the Voyager job image (embeds `/opt/amp/voyager/assess.sh`,
+`/opt/amp/voyager/migrate.sh`, and `/opt/amp/voyager/end.sh`):
 
 ```bash
 docker build -t yb-amp/voyager:dev -f deploy/voyager/Dockerfile .
@@ -86,7 +86,7 @@ export SOURCE_CONTAINER=voyager-source-pg
 export CONTROLLER_CONTAINER=voyager-controller
 
 # Must be the AMP Voyager image (deploy/voyager/Dockerfile), which embeds
-# /opt/amp/voyager/assess.sh and /opt/amp/voyager/migrate.sh.
+# /opt/amp/voyager/assess.sh, /opt/amp/voyager/migrate.sh, and /opt/amp/voyager/end.sh.
 # Stock yugabytedb/yb-voyager cannot run these AMP entrypoints.
 export VOYAGER_IMAGE='yb-amp/voyager:dev'
 
@@ -530,7 +530,29 @@ docker run --rm --network "$NETWORK" \
   -c '\dt public.*'
 ```
 
-## 13. Troubleshooting
+## 13. End the migration
+
+> **Irreversible.** This scrubs Voyager metadata from source and target
+> databases and cleans up the export directory. The migration cannot be resumed
+> after this.
+
+```bash
+END_RESP=$(curl -sS -X POST "$API/migrations/$MIGRATION_ID/end")
+echo "$END_RESP" | jq
+```
+
+Poll until state reaches `ended`:
+
+```bash
+while true; do
+  STATE=$(curl -sS "$API/migrations/$MIGRATION_ID" | jq -r '.state')
+  echo "state=$STATE"
+  if [ "$STATE" = "ended" ] || [ "$STATE" = "failed" ]; then break; fi
+  sleep 5
+done
+```
+
+## 14. Troubleshooting
 
 ### `Cannot connect to the Docker daemon`
 
@@ -594,7 +616,7 @@ curl -sS "$API/tasks/$TARGET_TASK_ID" | jq
 curl -sS "$API/migrations/$MIGRATION_ID" | jq '.target'
 ```
 
-## 14. Cleanup
+## 15. Cleanup
 
 This deletes all local test state:
 
@@ -604,7 +626,7 @@ docker rm -f \
   "$SOURCE_CONTAINER" \
   "$YB_CONTAINER" 2>/dev/null || true
 
-for pat in voyager-assess- voyager-migrate- yb-ep-; do
+for pat in voyager-assess- voyager-migrate- voyager-end- yb-ep-; do
   for id in $(docker ps -aq --filter "name=$pat"); do
     docker rm -f "$id"
   done

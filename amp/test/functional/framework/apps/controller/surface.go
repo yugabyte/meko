@@ -83,7 +83,7 @@ type MigrationTarget struct {
 	Database   string `json:"database"`
 }
 
-// MigrationRun is the latest attempt of one operation (assess, migrate).
+// MigrationRun is the latest attempt of one operation (assess, migrate, end).
 type MigrationRun struct {
 	Operation    string  `json:"operation"`
 	Attempt      int     `json:"attempt"`
@@ -115,6 +115,8 @@ const (
 	MigrationTargetReady        = "target_ready"
 	MigrationMigrating          = "migrating"
 	MigrationCompleted          = "completed"
+	MigrationEnding             = "ending"
+	MigrationEnded              = "ended"
 	MigrationFailed             = "failed"
 )
 
@@ -186,6 +188,11 @@ func (c *Client) ProvisionMigrationTarget(ctx context.Context, id string, req Pr
 
 func (c *Client) StartMigration(ctx context.Context, id string) (Task, string, error) {
 	return c.async(ctx, http.MethodPost, c.apiURL+"/migrations/"+id+"/migrate", struct{}{})
+}
+
+// EndMigration irreversibly cleans up Voyager metadata and export files.
+func (c *Client) EndMigration(ctx context.Context, id string) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.apiURL+"/migrations/"+id+"/end", struct{}{})
 }
 
 func (c *Client) CancelTask(ctx context.Context, taskID string) (Task, error) {

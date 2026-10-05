@@ -8,32 +8,46 @@ import (
 
 // DeriveStatus returns the migration's current state from its persisted
 // migration/run data and its optional Voyager progress projection. The order of
-// the checks is intentional: an in-flight or successful migrate run takes
-// precedence over an earlier failed assessment.
+// the checks is intentional: any in-flight run (assess, migrate, or end) takes
+// precedence over terminal facts, so get_migration always reflects work that is
+// actually happening. Terminal end facts (ended/failed) outrank a completed
+// migrate, but a new in-flight assess or migrate — which the handler blocks
+// once an end run exists — would still surface correctly.
 func DeriveStatus(m Migration) Status {
-	assess, migrate := latestOperationRuns(m.Runs)
+	assess, migrate, endRun := LatestOperationRuns(m.Runs)
 
+	// Any in-flight run takes precedence over everything else, regardless of
+	// operation, so polling always reflects work actually happening.
+	if endRun != nil && endRun.Status.InFlight() {
+		if endRun.Status == RunPending {
+			return Status{State: StateEnding, Detail: "starting end migration"}
+		}
+		return Status{State: StateEnding, Detail: "ending migration"}
+	}
 	if migrate != nil && migrate.Status.InFlight() {
 		return Status{State: StateMigrating, Detail: migrateDetail(migrate, m.Voyager)}
-	}
-	if migrate != nil && migrate.Status == RunSucceeded {
-		return Status{State: StateCompleted, Detail: "migration complete"}
-	}
-	if failed := latestFailedRun(assess, migrate); failed != nil {
-		detail := "migration failed"
-		if failed.Operation == OperationAssess {
-			detail = "assessment failed"
-		}
-		if failed.ErrorSummary != nil && *failed.ErrorSummary != "" {
-			detail = *failed.ErrorSummary
-		}
-		return Status{State: StateFailed, Detail: detail}
 	}
 	if assess != nil && assess.Status.InFlight() {
 		if assess.Status == RunPending {
 			return Status{State: StateAssessing, Detail: "starting assessment"}
 		}
 		return Status{State: StateAssessing, Detail: "assessing schema"}
+	}
+
+	// Terminal end facts outrank a completed migrate — once an end run reaches
+	// a terminal state, that is the authoritative answer.
+	if endRun != nil && endRun.Status == RunSucceeded {
+		return Status{State: StateEnded, Detail: "migration ended"}
+	}
+	if endRun != nil && endRun.Status == RunFailed {
+		return failedRunStatus(endRun)
+	}
+
+	if migrate != nil && migrate.Status == RunSucceeded {
+		return Status{State: StateCompleted, Detail: "migration complete"}
+	}
+	if failed := latestFailedRun(assess, migrate); failed != nil {
+		return failedRunStatus(failed)
 	}
 	if m.TargetTaskID != nil && m.Target == nil {
 		return Status{State: StateProvisioningTarget, Detail: "provisioning PG compute"}
@@ -47,7 +61,10 @@ func DeriveStatus(m Migration) Status {
 	return Status{State: StateCreated, Detail: "awaiting next step"}
 }
 
-func latestOperationRuns(runs []Run) (assess, migrate *Run) {
+// LatestOperationRuns returns the newest assess, migrate, and end run in runs.
+// A missing operation is nil. Selection follows attempt, then UpdatedAt, so the
+// result does not depend on slice order.
+func LatestOperationRuns(runs []Run) (assess, migrate, endRun *Run) {
 	for i := range runs {
 		run := &runs[i]
 		switch run.Operation {
@@ -59,9 +76,13 @@ func latestOperationRuns(runs []Run) (assess, migrate *Run) {
 			if migrate == nil || laterRun(run, migrate) {
 				migrate = run
 			}
+		case OperationEnd:
+			if endRun == nil || laterRun(run, endRun) {
+				endRun = run
+			}
 		}
 	}
-	return assess, migrate
+	return assess, migrate, endRun
 }
 
 func laterRun(candidate, current *Run) bool {
@@ -71,9 +92,9 @@ func laterRun(candidate, current *Run) bool {
 	return candidate.UpdatedAt.After(current.UpdatedAt)
 }
 
-func latestFailedRun(assess, migrate *Run) *Run {
+func latestFailedRun(runs ...*Run) *Run {
 	var failed *Run
-	for _, run := range []*Run{assess, migrate} {
+	for _, run := range runs {
 		if run == nil || run.Status != RunFailed {
 			continue
 		}
@@ -82,6 +103,19 @@ func latestFailedRun(assess, migrate *Run) *Run {
 		}
 	}
 	return failed
+}
+
+func failedRunStatus(run *Run) Status {
+	detail := "migration failed"
+	if run.Operation == OperationAssess {
+		detail = "assessment failed"
+	} else if run.Operation == OperationEnd {
+		detail = "ending migration failed"
+	}
+	if run.ErrorSummary != nil && *run.ErrorSummary != "" {
+		detail = *run.ErrorSummary
+	}
+	return Status{State: StateFailed, Detail: detail}
 }
 
 // migrateDetail follows the command sequence. Voyager's visualizer reports

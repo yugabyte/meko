@@ -1590,6 +1590,33 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /migrations/{migrationId}/end:
+    parameters:
+      - $ref: '#/components/parameters/MigrationId'
+    post:
+      tags: [migrations]
+      operationId: endMigration
+      summary: End a completed migration
+      description: |
+        Irreversibly ends a successfully completed migration by launching
+        `yb-voyager end migration`. Voyager metadata and export-directory
+        contents are removed and no backups are retained. Returns `202` + the
+        launcher `Task`; poll `GET /migrations/{migrationId}` until `ended` or
+        `failed`. `404` if the migration does not exist; `409` unless migration
+        completed successfully, if another run is active, or if it already
+        ended. A failed end attempt may be retried.
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -3099,6 +3126,8 @@ components:
         - target_ready
         - migrating
         - completed
+        - ending
+        - ended
         - failed
 
     MigrationSourceRequest:
@@ -3198,12 +3227,12 @@ components:
 
     MigrationRun:
       type: object
-      description: One assess or migrate attempt. Credentials never appear here.
+      description: One assess, migrate, or end attempt. Credentials never appear here.
       required: [operation, attempt, status]
       properties:
         operation:
           type: string
-          enum: [assess, migrate]
+          enum: [assess, migrate, end]
         attempt:
           type: integer
         status:
@@ -3344,7 +3373,7 @@ components:
           description: The attached target compute; null until a target is provisioned.
         runs:
           type: array
-          description: The latest attempt per operation (assess and/or migrate).
+          description: The latest attempt per operation (assess, migrate, and/or end).
           items:
             $ref: '#/components/schemas/MigrationRun'
         voyager:

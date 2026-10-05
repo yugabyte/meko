@@ -320,3 +320,14 @@ def test_start_migration_omits_parallel_jobs_when_none():
     client = make_client(handler)
     client.start_migration("m1")
     assert handler.last_json() == {}
+
+
+def test_end_migration_posts_without_body():
+    task = {"id": "t4", "kind": "voyager_start_migration_run", "status": "pending"}
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/m1/end": (202, task)}
+    )
+    client = make_client(handler)
+    assert client.end_migration("m1") == task
+    assert handler.last.method == "POST"
+    assert handler.last_json() == {}

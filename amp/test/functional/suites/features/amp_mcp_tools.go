@@ -23,7 +23,7 @@ import (
 
 const (
 	mcpProtocolVersion = "2025-06-18"
-	mcpMinTools        = 30
+	mcpMinTools        = 33
 	mcpForwardTimeout  = 2 * time.Minute
 	mcpReadyTimeout    = 4 * time.Minute
 	// mcpPodSelector is the chart's own label for the MCP deployment's pods
@@ -37,7 +37,7 @@ var (
 	mcpExpectedTools = []string{
 		"create_storage_pool", "list_storage_pools", "create_cluster", "delete_cluster",
 		"create_branch", "delete_branch", "create_endpoint", "resize_endpoint", "delete_endpoint",
-		"get_task", "create_migration", "get_migration", "start_migration_assessment", "start_migration",
+		"get_task", "create_migration", "get_migration", "start_migration_assessment", "start_migration", "end_migration",
 	}
 	mcpAsyncTools  = []string{"create_cluster", "delete_cluster", "create_branch", "delete_branch", "create_endpoint", "resize_endpoint", "delete_endpoint"}
 	mcpAbsentTools = []string{"create_user", "list_users"}
@@ -388,7 +388,7 @@ func mcpCatalogVerdict(tools map[string]mcpTool) error {
 			return fmt.Errorf("the asynchronous tool %s does not tell the caller to poll get_task: %q", name, tools[name].Description)
 		}
 	}
-	for _, name := range []string{"start_migration_assessment", "start_migration"} {
+	for _, name := range []string{"start_migration_assessment", "start_migration", "end_migration"} {
 		if !strings.Contains(tools[name].Description, "get_migration") {
 			return fmt.Errorf("%s does not point the caller at get_migration, the surface that reports the migration's progress: %q", name, tools[name].Description)
 		}

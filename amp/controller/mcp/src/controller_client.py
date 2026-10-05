@@ -554,5 +554,8 @@ class ControllerClient:
             "POST", f"/migrations/{migration_id}/migrate", json=body
         )
 
+    def end_migration(self, migration_id: str) -> dict:
+        return self._request("POST", f"/migrations/{migration_id}/end")
+
 
 controller_client = ControllerClient()

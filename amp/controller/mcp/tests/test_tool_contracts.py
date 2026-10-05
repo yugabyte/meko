@@ -1,4 +1,4 @@
-"""Wire-contract lock for all 32 MCP tools.
+"""Wire-contract lock for all 33 MCP tools.
 
 What this solves: it pins the exact HTTP method, path, request body, and query
 params each tool sends to the controller, so silent API drift (a renamed route,
@@ -60,7 +60,7 @@ def wire():
 
 
 # (tool name, kwargs, expected method, expected path, canned response spec).
-# One row per tool — the full 32-tool surface.
+# One row per tool — the full 33-tool surface.
 CASES = [
     ("get_user", {"user_id": "u1"}, "GET", "/api/v1/users/u1", {"id": "u1"}),
     ("create_storage_pool", {"name": "n", "owner_user_id": "u9"}, "POST",
@@ -135,11 +135,13 @@ CASES = [
      "POST", "/api/v1/migrations/m1/provision-target", (202, TASK)),
     ("start_migration", {"migration_id": "m1"}, "POST",
      "/api/v1/migrations/m1/migrate", (202, TASK)),
+    ("end_migration", {"migration_id": "m1"}, "POST",
+     "/api/v1/migrations/m1/end", (202, TASK)),
 ]
 
 
 def test_cases_cover_all_tools():
-    assert len({name for name, *_ in CASES}) == 32
+    assert len({name for name, *_ in CASES}) == 33
 
 
 @pytest.mark.parametrize("name,kwargs,method,path,spec", CASES, ids=[c[0] for c in CASES])
@@ -441,7 +443,7 @@ def test_start_migration_omits_parallel_jobs_when_none(wire):
 
 def test_create_migration_is_synchronous(wire):
     # Locks the create/assess split: create_migration returns the Migration
-    # (201), not a Task — only the three launchers are async.
+    # (201), not a Task — only the four launchers are async.
     handler = wire({"POST /api/v1/migrations": (201, {"id": "m1", "state": "created"})})
     result = tools.create_migration(**CREATE_MIGRATION_KWARGS)
     assert result == {"id": "m1", "migration_id": "m1", "state": "created"}
@@ -457,6 +459,8 @@ def test_create_migration_is_synchronous(wire):
          "/api/v1/migrations/m1/provision-target"),
         ("start_migration", {"migration_id": "m1"},
          "/api/v1/migrations/m1/migrate"),
+        ("end_migration", {"migration_id": "m1"},
+         "/api/v1/migrations/m1/end"),
     ],
 )
 def test_migration_launchers_return_task_body(wire, name, kwargs, path):

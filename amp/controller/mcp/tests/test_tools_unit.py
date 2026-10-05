@@ -215,3 +215,15 @@ def test_start_migration_assessment_returns_task(wired):
     assert result["status"] == "pending"
     assert wired.last.method == "POST"
     assert wired.last_json() == {}
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"POST /api/v1/migrations/m1/end": (202, {"id": "t4", "kind": "voyager_start_migration_run", "status": "pending"})}],
+    indirect=True,
+)
+def test_end_migration_returns_task(wired):
+    result = tools.end_migration("m1")
+    assert result["status"] == "pending"
+    assert wired.last.method == "POST"
+    assert wired.last_json() == {}

@@ -1,8 +1,8 @@
 // The Voyager migration surface (ac-voyager.md) end to end on a real control
 // plane, which only a hand-run Docker runbook had covered: a source Postgres in
 // the control plane's namespace, connectivity check, create, assess, provision
-// target, migrate, and the rows on the amp target. The source password goes in
-// and must never come back out of any read.
+// target, migrate, verify the rows on the amp target, and end the migration.
+// The source password goes in and must never come back out of any read.
 package features
 
 import (
@@ -35,7 +35,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Voyager migration end to end: a source Postgres pod with a seeded table; the connectivity check reports it reachable with a server version and an unreachable host as reachable=false without an HTTP error; createMigration answers 201 in state created; assess reaches assessed and the assessment reads back; provision-target reaches target_ready with a cluster, branch and writer under the run's pool; migrate reaches completed; the target endpoint serves every seeded row with the right checksum; the migration is in the list; and no read of the migration ever carries the source password.",
+		Description: "Voyager migration end to end: a source Postgres pod with a seeded table; the connectivity check reports it reachable with a server version and an unreachable host as reachable=false without an HTTP error; createMigration answers 201 in state created; assess reaches assessed and the assessment reads back; provision-target reaches target_ready with a cluster, branch and writer under the run's pool; migrate reaches completed; the target endpoint serves every seeded row with the right checksum; end migration reaches ended; the migration is in the list; and no read of the migration ever carries the source password.",
 		Params:      []string{"functional", "functional.voyager", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     90 * time.Minute,
 		Run:         runAmpVoyagerMigration,
@@ -52,6 +52,7 @@ func runAmpVoyagerMigration(t *core.T) error {
 			{"migration_provision_target", v.provisionTarget},
 			{"migration_migrate", v.migrate},
 			{"migration_verify", v.verify},
+			{"migration_end", v.end},
 		}
 	})
 }
@@ -283,6 +284,16 @@ func (v *voyagerRun) verify(ctx context.Context) error {
 		return fmt.Errorf("migration %s is not in GET /migrations", v.mig.ID)
 	}
 	return v.noPasswordLeak(ctx)
+}
+
+func (v *voyagerRun) end(ctx context.Context) error {
+	if v.mig.ID == "" {
+		return nil
+	}
+	if _, _, err := v.cl.EndMigration(ctx, v.mig.ID); err != nil {
+		return fmt.Errorf("end the migration: %w", err)
+	}
+	return v.waitState(ctx, controller.MigrationEnded, controller.MigrationEnding)
 }
 
 // waitState polls get_migration until want, failing on `failed` or a state

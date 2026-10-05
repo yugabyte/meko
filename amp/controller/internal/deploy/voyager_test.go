@@ -26,7 +26,7 @@ func voyagerTestSpec(operation VoyagerOperation) VoyagerRunSpec {
 		},
 		ParallelJobs: 8,
 	}
-	if operation == VoyagerOperationMigrate {
+	if operation == VoyagerOperationMigrate || operation == VoyagerOperationEnd {
 		spec.Target = &VoyagerTargetConfig{
 			Host:     "target.internal",
 			Port:     55433,
@@ -49,6 +49,10 @@ func TestVoyagerDeterministicNames(t *testing.T) {
 	if got, want := voyagerRunName(voyagerTestMigrationID, VoyagerOperationMigrate, 3),
 		"voyager-migrate-90b8b0b8-a3"; got != want {
 		t.Fatalf("migrate name = %q, want %q", got, want)
+	}
+	if got, want := voyagerRunName(voyagerTestMigrationID, VoyagerOperationEnd, 1),
+		"voyager-end-90b8b0b8-a1"; got != want {
+		t.Fatalf("end name = %q, want %q", got, want)
 	}
 
 	assess, err := buildVoyagerJobSpec(voyagerTestSpec(VoyagerOperationAssess), "postgres://control")
@@ -143,10 +147,23 @@ func TestVoyagerCommandComposition(t *testing.T) {
 	if strings.Contains(migrate, "yb-voyager export schema") {
 		t.Error("migrate command still inlines the yb-voyager sequence")
 	}
+	end := endCommand()
+	if !strings.Contains(end, "/opt/amp/voyager/end.sh") {
+		t.Error("end command does not invoke /opt/amp/voyager/end.sh")
+	}
 	for _, password := range []string{"source-secret", "target-secret"} {
-		if strings.Contains(migrate, password) || strings.Contains(assess, password) {
+		if strings.Contains(migrate, password) || strings.Contains(assess, password) || strings.Contains(end, password) {
 			t.Errorf("command contains password %q", password)
 		}
+	}
+}
+
+func TestVoyagerEndRequiresTarget(t *testing.T) {
+	spec := voyagerTestSpec(VoyagerOperationEnd)
+	spec.Target = nil
+	if _, err := buildVoyagerJobSpec(spec, "postgres://control"); err == nil ||
+		!strings.Contains(err.Error(), "target connection is required for end") {
+		t.Fatalf("error = %v, want missing end target error", err)
 	}
 }
 

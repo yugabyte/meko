@@ -4,7 +4,8 @@ These scripts replace `yb-voyager assess-migration` for a PostgreSQL → AMP
 migration. They are copied into the job image at `/opt/amp/voyager/` by
 `deploy/voyager/Dockerfile`. The assess job entrypoint is
 `/opt/amp/voyager/assess.sh`. The migrate job entrypoint is
-`/opt/amp/voyager/migrate.sh`.
+`/opt/amp/voyager/migrate.sh`; completed migrations are irreversibly cleaned
+up through `/opt/amp/voyager/end.sh`.
 
 AMP compute is PostgreSQL, so voyager's YugabyteDB compatibility analysis
 (unsupported datatypes, PL/pgSQL, query constructs, colocation, sharding)
@@ -15,7 +16,8 @@ shaped like voyager's `AssessMigrationPayloadYugabyteD`, and the same
 not change.
 
 Migrate still runs stock `yb-voyager` export/import; that sequence lives in
-`migrate.sh` rather than in the controller.
+`migrate.sh` rather than in the controller. End runs stock
+`yb-voyager end migration` non-interactively with backups disabled.
 
 ## What each file does
 
@@ -23,14 +25,15 @@ Migrate still runs stock `yb-voyager` export/import; that sequence lives in
 | --- | --- | --- |
 | `assess.sh` | — | Image entrypoint. Translates AMP job env (`SOURCE_HOST`, `EXPORT_DIR`, …) into driver arguments. This is what the assess Job/container executes. |
 | `migrate.sh` | source + target | Image entrypoint. Runs stock `yb-voyager` export schema → create target DB → import schema → export data → import data → finalize. |
+| `end.sh` | target | Image entrypoint. Removes Voyager database metadata and export-directory contents after a successful migration. |
 | `amp-assess-migration.sh` | source + control plane | Driver. Sequences facts → start row → vCPU ladder → payload → completed row. |
 | `amp-source-facts.psql` | source | One cheap round trip: privileges, GUCs, identity, database size. |
 | `amp-source-os-capacity.psql` | source | The `exact` vCPU tier: real CPU limits via `pg_read_file` on `/proc` and cgroup. |
 | `amp-controlplane-bootstrap.psql` | control plane | Creates `ybvoyager_visualizer.*` with the same DDL voyager uses. |
 | `amp-create-target-db.psql` | target | Idempotent `CREATE DATABASE` before `import schema`. |
 
-`assess.sh` and `migrate.sh` are the only files the job runner needs to know
-about. The rest are implementation details of those entrypoints.
+`assess.sh`, `migrate.sh`, and `end.sh` are the files the job runner needs to
+know about. The rest are implementation details of those entrypoints.
 
 ### `assess.sh`
 

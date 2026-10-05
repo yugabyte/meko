@@ -30,13 +30,15 @@ def test_mentions_migration_workflow_and_poll_surface():
         "get_migration_assessment",
         "provision_migration_target",
         "start_migration",
+        "end_migration",
         "get_migration",
     ):
         assert tool in text
     # The key guidance: migration progress is tracked via get_migration, not
     # get_task.
     assert "get_migration" in text
-    for state in ("assessed", "target_ready", "completed"):
+    for state in ("assessed", "target_ready", "completed", "ended"):
         assert state in text
+    assert "irrevers" in text.lower()
     assert "migration_id" in text
     assert "pool_id" in text

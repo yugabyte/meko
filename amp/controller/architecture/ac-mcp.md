@@ -69,7 +69,7 @@ controller/mcp/src/
   `owner_user_id` requirement, so the model gets the same mental model a human
   reads in `ac-apis.md`.
 
-## The tool catalog — 30 tools
+## The tool catalog — 33 tools
 
 The catalog is a curated subset of the REST operations, one tool per operation,
 named in snake_case. Each carries MCP annotation hints so a client can reason
@@ -111,6 +111,7 @@ external service).
 | `start_migration_assessment` | `POST /migrations/{migrationId}/assess` | write (async) |
 | `provision_migration_target` | `POST /migrations/{migrationId}/provision-target` | write (async) |
 | `start_migration` | `POST /migrations/{migrationId}/migrate` | write (async) |
+| `end_migration` | `POST /migrations/{migrationId}/end` | destructive (async) |
 
 The list tools take the controller's pagination contract verbatim — `limit`
 (`1..1000`, default 100) and `offset` (`>= 0`, default 0) — and the response
@@ -160,7 +161,7 @@ directly.
 
 ## Migrations: poll `get_migration`, not `get_task`
 
-The eight migration tools wrap the controller's Voyager surface
+The nine migration tools wrap the controller's Voyager surface
 (`ac-voyager.md`) into one linear, agent-drivable workflow:
 
 1. `test_source_connectivity` (optional, stateless)
@@ -170,15 +171,17 @@ The eight migration tools wrap the controller's Voyager surface
 5. `get_migration_assessment` — pick `vcpu`
 6. `provision_migration_target(migration_id, pool_id, vcpu)` — poll until `target_ready`
 7. `start_migration` — poll until `completed`
+8. Verify the target data, obtain explicit confirmation, then `end_migration`
+   — irreversible cleanup with no backups; poll until `ended`
 
-The three launchers are asynchronous and return a `Task` like every other
+The four launchers are asynchronous and return a `Task` like every other
 mutation — **but that Task only covers the launch of the Voyager job, not the
 migration work itself.** Unlike the resource mutations above (where the task
 *is* the work), migration progress lives in the migration's own derived status.
 So the launcher docstrings and the server instructions point the agent at
 **`get_migration(migration_id=<id>)`**, whose `state` advances `created` →
 `assessing` → `assessed` → `provisioning_target` → `target_ready` →
-`migrating` → `completed` (or `failed`) by merging the migration row, its runs,
+`migrating` → `completed` → `ending` → `ended` (or `failed`) by merging the migration row, its runs,
 the live job state, and Voyager's visualizer rows on read. `get_task` remains
 available for the launch task's own status, but is the wrong surface for
 "is the migration done yet". Source passwords are accepted by

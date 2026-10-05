@@ -34,6 +34,7 @@ from tools import (
     delete_endpoint,
     delete_cluster,
     delete_storage_pool,
+    end_migration,
     get_branch,
     get_endpoint,
     get_cluster,
@@ -199,6 +200,7 @@ def build_server(
         (start_migration_assessment, ann["write"]),
         (provision_migration_target, ann["write"]),
         (start_migration, ann["write"]),
+        (end_migration, ann["dest"]),
     ]
     for fn, annotations in registrations:
         mcp.tool(fn, annotations=annotations)

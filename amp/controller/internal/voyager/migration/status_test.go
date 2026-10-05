@@ -45,6 +45,24 @@ func TestDeriveStatusPrecedence(t *testing.T) {
 		Status:    RunSucceeded,
 		UpdatedAt: now,
 	}
+	runningEnd := Run{
+		Operation: OperationEnd,
+		Attempt:   1,
+		Status:    RunRunning,
+		UpdatedAt: now,
+	}
+	succeededEnd := Run{
+		Operation: OperationEnd,
+		Attempt:   1,
+		Status:    RunSucceeded,
+		UpdatedAt: now,
+	}
+	failedEnd := Run{
+		Operation: OperationEnd,
+		Attempt:   1,
+		Status:    RunFailed,
+		UpdatedAt: now,
+	}
 	targetTaskID := uuid.New()
 
 	tests := []struct {
@@ -52,6 +70,26 @@ func TestDeriveStatusPrecedence(t *testing.T) {
 		m    Migration
 		want Status
 	}{
+		{
+			name: "end in flight takes precedence over completed migration",
+			m:    Migration{Runs: []Run{succeededMigration, runningEnd}},
+			want: Status{State: StateEnding, Detail: "ending migration"},
+		},
+		{
+			name: "in-flight migration takes precedence over failed end",
+			m:    Migration{Runs: []Run{failedEnd, runningMigration}},
+			want: Status{State: StateMigrating, Detail: "exporting schema"},
+		},
+		{
+			name: "successful end is terminal",
+			m:    Migration{Runs: []Run{succeededMigration, succeededEnd}},
+			want: Status{State: StateEnded, Detail: "migration ended"},
+		},
+		{
+			name: "failed end takes precedence over completed migration",
+			m:    Migration{Runs: []Run{succeededMigration, failedEnd}},
+			want: Status{State: StateFailed, Detail: "ending migration failed"},
+		},
 		{
 			name: "in-flight migration takes precedence over a failed assessment",
 			m:    Migration{Runs: []Run{failedAssessment, runningMigration}},
@@ -108,6 +146,15 @@ func TestDeriveStatusPrecedence(t *testing.T) {
 	}
 }
 
+func TestLatestOperationRunsIgnoresSliceOrder(t *testing.T) {
+	end := Run{Operation: OperationEnd, Attempt: 1, Status: RunSucceeded}
+	migrate := Run{Operation: OperationMigrate, Attempt: 1, Status: RunSucceeded}
+	_, _, got := LatestOperationRuns([]Run{end, migrate})
+	if got == nil || got.Operation != OperationEnd {
+		t.Fatalf("end run = %+v, want end", got)
+	}
+}
+
 func TestDeriveStatusUsesLatestAttempt(t *testing.T) {
 	got := DeriveStatus(Migration{Runs: []Run{
 		{Operation: OperationAssess, Attempt: 1, Status: RunFailed},
@@ -148,6 +195,11 @@ func TestDeriveStatusPendingRuns(t *testing.T) {
 			name: "pending migration",
 			run:  Run{Operation: OperationMigrate, Attempt: 1, Status: RunPending},
 			want: Status{State: StateMigrating, Detail: "starting migration"},
+		},
+		{
+			name: "pending end",
+			run:  Run{Operation: OperationEnd, Attempt: 1, Status: RunPending},
+			want: Status{State: StateEnding, Detail: "starting end migration"},
 		},
 	}
 

@@ -535,11 +535,11 @@ def get_migration(migration_id: str) -> dict[str, Any]:
     """Get a migration's full, derived status. The primary polling surface.
 
     Returns the current derived `state` (`created`, `assessing`, `assessed`,
-    `provisioning_target`, `target_ready`, `migrating`, `completed`, `failed`),
-    a human `detail`, the source (password redacted), the attached target if
-    any, the latest assess/migrate runs, and Voyager phase / per-table
-    progress. Poll THIS (not `get_task`) after any async migration launcher
-    to track progress. Passwords never appear.
+    `provisioning_target`, `target_ready`, `migrating`, `completed`, `ending`,
+    `ended`, `failed`), a human `detail`, the source (password redacted), the
+    attached target if any, the latest assess/migrate/end runs, and Voyager
+    phase / per-table progress. Poll THIS (not `get_task`) after any async
+    migration launcher to track progress. Passwords never appear.
     """
     return controller_client.get_migration(migration_id)
 
@@ -610,3 +610,19 @@ def start_migration(
     runner.
     """
     return controller_client.start_migration(migration_id, parallel_jobs)
+
+
+def end_migration(migration_id: str) -> dict[str, Any]:
+    """Irreversibly end a successfully completed migration. ASYNCHRONOUS.
+
+    This is the **final command** in the migration workflow: once it succeeds the
+    migration reaches `ended` and accepts no further runs (assess, migrate, or
+    end). Runs Voyager's native end-migration cleanup with backups disabled,
+    removing Voyager metadata and export-directory contents. This cannot be
+    undone and the migration cannot be resumed. The returned **Task** covers only the job
+    launch; poll `get_migration(migration_id=<id>)` until `state` reaches
+    `ended` (or `failed`). Errors: `not_found`; `migration_not_completed` if
+    migration has not completed successfully; `already_ended`; and
+    `run_in_progress`. A failed end attempt may be retried.
+    """
+    return controller_client.end_migration(migration_id)

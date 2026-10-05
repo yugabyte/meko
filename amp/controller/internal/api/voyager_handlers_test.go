@@ -332,6 +332,246 @@ func TestStartMigrationAssessmentReturnsTask(t *testing.T) {
 	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "start_migration_run")
 }
 
+func TestEndMigrationRequiresCompletedMigration(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateTargetReady,
+		Runs: []migration.Run{}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	resp, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("EndMigration: %v", err)
+	}
+	if resp.StatusCode() != http.StatusConflict || resp.JSON409 == nil {
+		t.Fatalf("EndMigration(incomplete) status = %d, body = %s", resp.StatusCode(), resp.Body)
+	}
+	if resp.JSON409.Error.Code != "migration_not_completed" {
+		t.Errorf("error code = %q, want migration_not_completed", resp.JSON409.Error.Code)
+	}
+}
+
+func TestEndMigrationReturnsTask(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateCompleted,
+		Runs: []migration.Run{{
+			Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunSucceeded,
+		}}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	resp, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("EndMigration: %v", err)
+	}
+	if resp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body = %s", resp.StatusCode(), resp.Body)
+	}
+	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "start_migration_run")
+}
+
+func TestEndMigrationRejectsActiveAndEnded(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		state  migration.MigrationState
+		active bool
+		code   string
+	}{
+		{name: "active", state: migration.StateEnding, active: true, code: "run_in_progress"},
+		{name: "ended", state: migration.StateEnded, code: "already_ended"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newFakeMigrationStore()
+			store.activeRun = test.active
+			id := uuid.New()
+			store.seed(migration.Migration{
+				ID: id, Name: "m", State: test.state,
+				Runs: []migration.Run{}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			})
+			client := newMigrationServer(t, store)
+			resp, err := client.EndMigrationWithResponse(context.Background(), id)
+			if err != nil {
+				t.Fatalf("EndMigration: %v", err)
+			}
+			if resp.StatusCode() != http.StatusConflict || resp.JSON409 == nil {
+				t.Fatalf("status = %d, body = %s", resp.StatusCode(), resp.Body)
+			}
+			if resp.JSON409.Error.Code != test.code {
+				t.Errorf("error code = %q, want %q", resp.JSON409.Error.Code, test.code)
+			}
+		})
+	}
+}
+
+func TestEndMigrationRetryAfterFailedEnd(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateFailed,
+		Runs: []migration.Run{
+			{Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunSucceeded},
+			{Operation: migration.OperationEnd, Attempt: 1, Status: migration.RunFailed},
+		}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	resp, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("EndMigration: %v", err)
+	}
+	if resp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (retry allowed), body = %s", resp.StatusCode(), resp.Body)
+	}
+}
+
+func TestEndMigrationRejectsFailedMigrateWithoutSuccess(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateFailed,
+		Runs: []migration.Run{
+			{Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunFailed},
+		}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	resp, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("EndMigration: %v", err)
+	}
+	if resp.StatusCode() != http.StatusConflict || resp.JSON409 == nil {
+		t.Fatalf("status = %d, want 409, body = %s", resp.StatusCode(), resp.Body)
+	}
+	if resp.JSON409.Error.Code != "migration_not_completed" {
+		t.Errorf("error code = %q, want migration_not_completed", resp.JSON409.Error.Code)
+	}
+}
+
+func TestAssessAndMigrateRejectedAfterEnd(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateEnded,
+		Target: &migration.TargetConfig{},
+		Runs: []migration.Run{
+			{Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunSucceeded},
+			{Operation: migration.OperationEnd, Attempt: 1, Status: migration.RunSucceeded},
+		}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	assessResp, err := client.StartMigrationAssessmentWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("StartMigrationAssessment: %v", err)
+	}
+	if assessResp.StatusCode() != http.StatusConflict || assessResp.JSON409 == nil {
+		t.Fatalf("assess status = %d, want 409, body = %s", assessResp.StatusCode(), assessResp.Body)
+	}
+	if assessResp.JSON409.Error.Code != "migration_ended" {
+		t.Errorf("assess error code = %q, want migration_ended", assessResp.JSON409.Error.Code)
+	}
+	if assessResp.JSON409.Error.Message != "end migration has already been called" {
+		t.Errorf("assess error message = %q, want end migration has already been called", assessResp.JSON409.Error.Message)
+	}
+
+	migrateResp, err := client.StartMigrationWithResponse(context.Background(), id, api.StartMigrationRequest{})
+	if err != nil {
+		t.Fatalf("StartMigration: %v", err)
+	}
+	if migrateResp.StatusCode() != http.StatusConflict || migrateResp.JSON409 == nil {
+		t.Fatalf("migrate status = %d, want 409, body = %s", migrateResp.StatusCode(), migrateResp.Body)
+	}
+	if migrateResp.JSON409.Error.Code != "migration_ended" {
+		t.Errorf("migrate error code = %q, want migration_ended", migrateResp.JSON409.Error.Code)
+	}
+	if migrateResp.JSON409.Error.Message != "end migration has already been called" {
+		t.Errorf("migrate error message = %q, want end migration has already been called", migrateResp.JSON409.Error.Message)
+	}
+}
+
+func TestAssessRejectedWhileEndInFlight(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateEnding,
+		Runs: []migration.Run{
+			{Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunSucceeded},
+			{Operation: migration.OperationEnd, Attempt: 1, Status: migration.RunPending},
+		}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	resp, err := client.StartMigrationAssessmentWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("StartMigrationAssessment: %v", err)
+	}
+	if resp.StatusCode() != http.StatusConflict || resp.JSON409 == nil {
+		t.Fatalf("status = %d, want 409, body = %s", resp.StatusCode(), resp.Body)
+	}
+	if resp.JSON409.Error.Code != "migration_ended" || resp.JSON409.Error.Message != "end migration has already been called" {
+		t.Errorf("error = %q %q, want migration_ended / end migration has already been called", resp.JSON409.Error.Code, resp.JSON409.Error.Message)
+	}
+}
+
+// TestConcurrentEndMigrationRejected: before the first launcher writes its run
+// row, HasActiveRun cannot see it, so the second request must be rejected by the
+// launcher task lock rather than accepted and failed later in the worker.
+func TestConcurrentEndMigrationRejected(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateCompleted,
+		Runs: []migration.Run{
+			{Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunSucceeded},
+		}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	first, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("first EndMigration: %v", err)
+	}
+	if first.StatusCode() != http.StatusAccepted {
+		t.Fatalf("first status = %d, want 202, body = %s", first.StatusCode(), first.Body)
+	}
+
+	second, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("second EndMigration: %v", err)
+	}
+	if second.StatusCode() != http.StatusConflict || second.JSON409 == nil {
+		t.Fatalf("second status = %d, want 409, body = %s", second.StatusCode(), second.Body)
+	}
+	if second.JSON409.Error.Code != "run_in_progress" {
+		t.Errorf("second error code = %q, want run_in_progress", second.JSON409.Error.Code)
+	}
+}
+
+func TestEndMigrationEligibleRegardlessOfRunOrder(t *testing.T) {
+	store := newFakeMigrationStore()
+	id := uuid.New()
+	store.seed(migration.Migration{
+		ID: id, Name: "m", State: migration.StateCompleted,
+		Runs: []migration.Run{
+			{Operation: migration.OperationMigrate, Attempt: 1, Status: migration.RunSucceeded},
+			{Operation: migration.OperationAssess, Attempt: 2, Status: migration.RunSucceeded},
+		}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	client := newMigrationServer(t, store)
+
+	resp, err := client.EndMigrationWithResponse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("EndMigration: %v", err)
+	}
+	if resp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body = %s", resp.StatusCode(), resp.Body)
+	}
+}
+
 // TestMigrationAPIDisabled: without a Voyager store the routes refuse with 501.
 func TestMigrationAPIDisabled(t *testing.T) {
 	client, _ := newTestServerWithProv(t, api.Provisioning{})

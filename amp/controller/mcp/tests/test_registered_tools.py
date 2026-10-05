@@ -37,6 +37,7 @@ EXPECTED_TOOLS = {
     "start_migration_assessment",
     "provision_migration_target",
     "start_migration",
+    "end_migration",
 }
 
 
@@ -57,7 +58,7 @@ def test_all_tools_present_in_tools_module():
     tools_src = _read(TOOLS_SRC)
     for name in EXPECTED_TOOLS:
         assert f"def {name}(" in tools_src, f"missing tool def: {name}"
-    assert len(EXPECTED_TOOLS) == 32
+    assert len(EXPECTED_TOOLS) == 33
 
 
 def test_all_tools_registered_in_server():

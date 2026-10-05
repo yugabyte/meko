@@ -135,11 +135,15 @@ func (c *Controllers) StartMigrationAssessment(ctx context.Context, request Star
 	if c.prov.VoyagerMigrations == nil || c.prov.VoyagerRunner == nil {
 		return nil, migrationAPIDisabled()
 	}
-	if _, err := c.prov.VoyagerMigrations.GetMigration(ctx, request.MigrationId); err != nil {
+	item, err := c.prov.VoyagerMigrations.GetMigration(ctx, request.MigrationId)
+	if err != nil {
 		if errors.Is(err, migration.ErrNotFound) {
 			return StartMigrationAssessment404JSONResponse{NotFoundJSONResponse(apiError("not_found", "migration not found"))}, nil
 		}
 		return nil, fmt.Errorf("get migration: %w", err)
+	}
+	if hasEndRun(item.Runs) {
+		return StartMigrationAssessment409JSONResponse{ConflictJSONResponse(apiError("migration_ended", "end migration has already been called"))}, nil
 	}
 	active, err := c.prov.VoyagerMigrations.HasActiveRun(ctx, request.MigrationId)
 	if err != nil {
@@ -157,7 +161,10 @@ func (c *Controllers) StartMigrationAssessment(ctx context.Context, request Star
 		Operation:   migration.OperationAssess,
 		Attempt:     attempt,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, task.ErrMigrationRunInProgress):
+		return StartMigrationAssessment409JSONResponse{ConflictJSONResponse(apiError("run_in_progress", "another migration run is already in progress"))}, nil
+	case err != nil:
 		return nil, fmt.Errorf("start assessment task: %w", err)
 	}
 	return StartMigrationAssessment202JSONResponse{AcceptedJSONResponse{
@@ -176,6 +183,9 @@ func (c *Controllers) StartMigration(ctx context.Context, request StartMigration
 		return StartMigration404JSONResponse{NotFoundJSONResponse(apiError("not_found", "migration not found"))}, nil
 	case err != nil:
 		return nil, fmt.Errorf("get migration: %w", err)
+	}
+	if hasEndRun(item.Runs) {
+		return StartMigration409JSONResponse{ConflictJSONResponse(apiError("migration_ended", "end migration has already been called"))}, nil
 	}
 	if item.Target == nil {
 		return StartMigration409JSONResponse{ConflictJSONResponse(apiError("target_not_attached", "migration target is not attached"))}, nil
@@ -204,10 +214,65 @@ func (c *Controllers) StartMigration(ctx context.Context, request StartMigration
 		Attempt:      attempt,
 		ParallelJobs: parallelJobs,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, task.ErrMigrationRunInProgress):
+		return StartMigration409JSONResponse{ConflictJSONResponse(apiError("run_in_progress", "another migration run is already in progress"))}, nil
+	case err != nil:
 		return nil, fmt.Errorf("start migration task: %w", err)
 	}
 	return StartMigration202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
+func (c *Controllers) EndMigration(ctx context.Context, request EndMigrationRequestObject) (EndMigrationResponseObject, error) {
+	if c.prov.VoyagerMigrations == nil || c.prov.VoyagerMigrationService == nil || c.prov.VoyagerRunner == nil {
+		return nil, migrationAPIDisabled()
+	}
+	item, err := c.prov.VoyagerMigrationService.Get(ctx, request.MigrationId)
+	switch {
+	case errors.Is(err, migration.ErrNotFound):
+		return EndMigration404JSONResponse{NotFoundJSONResponse(apiError("not_found", "migration not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get migration: %w", err)
+	}
+	active, err := c.prov.VoyagerMigrations.HasActiveRun(ctx, request.MigrationId)
+	if err != nil {
+		return nil, fmt.Errorf("check migration run: %w", err)
+	}
+	if active {
+		return EndMigration409JSONResponse{ConflictJSONResponse(apiError("run_in_progress", "another migration run is already in progress"))}, nil
+	}
+	if item.State == migration.StateEnded {
+		return EndMigration409JSONResponse{ConflictJSONResponse(apiError("already_ended", "migration has already ended"))}, nil
+	}
+	// Eligibility follows the latest migrate and end runs, not their position in
+	// the slice. A succeeded migrate with no end run is ready for its first
+	// cleanup. A failed end may be retried because Voyager's end operation is
+	// idempotent over the remaining metadata.
+	_, migrate, endRun := migration.LatestOperationRuns(item.Runs)
+	eligible := (endRun != nil && endRun.Status == migration.RunFailed) ||
+		(endRun == nil && migrate != nil && migrate.Status == migration.RunSucceeded)
+	if !eligible {
+		return EndMigration409JSONResponse{ConflictJSONResponse(apiError("migration_not_completed", "migration must complete successfully before it can be ended"))}, nil
+	}
+	attempt, err := c.prov.VoyagerMigrations.NextAttempt(ctx, request.MigrationId, migration.OperationEnd)
+	if err != nil {
+		return nil, fmt.Errorf("get end migration attempt: %w", err)
+	}
+	t, err := c.tasks.VoyagerStartMigrationRun(ctx, task.VoyagerStartMigrationRunInput{
+		MigrationID: request.MigrationId,
+		Operation:   migration.OperationEnd,
+		Attempt:     attempt,
+	})
+	switch {
+	case errors.Is(err, task.ErrMigrationRunInProgress):
+		return EndMigration409JSONResponse{ConflictJSONResponse(apiError("run_in_progress", "another migration run is already in progress"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("end migration task: %w", err)
+	}
+	return EndMigration202JSONResponse{AcceptedJSONResponse{
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
@@ -523,6 +588,14 @@ func assessmentToAPI(a migration.Assessment) MigrationAssessment {
 // ptrOf returns a pointer to v — the optional (omitempty) response fields are
 // pointers, and the domain carries plain values.
 func ptrOf[T any](v T) *T { return &v }
+
+// hasEndRun reports whether an end run exists, regardless of status or position
+// in the slice. Once an end run exists, assess and migrate must be rejected
+// because the export directory is being (or has been) cleaned up.
+func hasEndRun(runs []migration.Run) bool {
+	_, _, endRun := migration.LatestOperationRuns(runs)
+	return endRun != nil
+}
 
 // strSlicePtr returns a pointer to a copy of s, or nil for an empty slice so an
 // absent list is omitted rather than serialized as an empty array.

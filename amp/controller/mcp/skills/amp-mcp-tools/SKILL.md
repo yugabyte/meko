@@ -215,17 +215,20 @@ Voyager. They form a linear workflow keyed by a single `migration_id`:
        ↳ poll get_migration until state == "target_ready"
 7. start_migration(migration_id)                                                  → Task (launch only)
        ↳ poll get_migration until state == "completed"
+8. verify target data, get explicit user confirmation, then end_migration(migration_id)
+       ↳ IRREVERSIBLE, no backups; poll get_migration until state == "ended"
 ```
 
-**The critical difference from the resource tools:** the three launchers
-(`start_migration_assessment`, `provision_migration_target`, `start_migration`)
+**The critical difference from the resource tools:** the four launchers
+(`start_migration_assessment`, `provision_migration_target`, `start_migration`,
+`end_migration`)
 are asynchronous and return a `Task`, but that Task **only covers the launch of
 the Voyager job, not the migration itself**. Do **not** poll `get_task` to know
 when a phase is done — poll **`get_migration(migration_id)`** and watch its
 derived `state`:
 
 ```
-created → assessing → assessed → provisioning_target → target_ready → migrating → completed   (or failed)
+created → assessing → assessed → provisioning_target → target_ready → migrating → completed → ending → ended   (or failed at any step)
 ```
 
 ### Important notes
@@ -233,7 +236,8 @@ created → assessing → assessed → provisioning_target → target_ready → 
 - **`migration_id`** is the `id` returned by `create_migration` (also copied
   onto the response as `migration_id`). Save it and pass it to every later
   call: `start_migration_assessment`, `get_migration`,
-  `get_migration_assessment`, `provision_migration_target`, `start_migration`.
+  `get_migration_assessment`, `provision_migration_target`, `start_migration`,
+  `end_migration`.
 - **`pool_id`** is a **storage pool** id — the workspace that will hold the
   target cluster. Get it from `create_storage_pool` (the pool's `id`) or from
   `list_storage_pools` / `get_storage_pool`. It is the same `pool_id` used by
@@ -241,7 +245,7 @@ created → assessing → assessed → provisioning_target → target_ready → 
   because that is when the target compute is created.
 - **`get_migration`** is the "how is my migration going" surface. It returns
   the current derived `state`, a human `detail`, the source (password
-  redacted), the attached target if any, the latest assess/migrate runs, and
+  redacted), the attached target if any, the latest assess/migrate/end runs, and
   Voyager phase / per-table progress.
 - **`list_migrations`** is lighter: a page of summaries (`id`, `name`,
   `state`, `detail`, timestamps) plus `total` (all matching rows) and `count`
@@ -252,13 +256,20 @@ created → assessing → assessed → provisioning_target → target_ready → 
   entry (e.g. `["public"]`); `db_type` is `postgresql` (the only source).
 - **Source passwords are stored for the jobs but never returned** — pass
   them, but don't expect to read them back.
+- **`end_migration` is the final, irreversible command.** It is the last step
+  of the workflow: it runs Voyager's cleanup with backups disabled, deleting
+  Voyager metadata and export-directory contents. Once an end run exists the
+  migration accepts no further runs (assess, migrate, or end), it cannot be
+  undone, and the migration cannot be resumed. Verify the target data and get
+  explicit user confirmation before calling it.
 - If a launcher returns `not_implemented` (501), the controller was started
   without the Voyager job runner / endpoint deployer.
 - Migration 409s use specific codes, not generic `conflict`:
   `run_in_progress` (another run is already in flight),
   `target_not_attached` (`start_migration` before the target is ready),
   `target_conflict` (a target is already attached, or provision is already
-  in flight).
+  in flight), `migration_not_completed` (end requested too early), and
+  `already_ended`.
 
 ## Users — no create/list; owner is a per-call arg
 
@@ -285,10 +296,12 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 - `run_in_progress` — a migration launcher was called while another run is already in flight.
 - `target_not_attached` — `start_migration` before `provision_migration_target` has reached `target_ready`.
 - `target_conflict` — a target is already attached to the migration, or a provision task is already in flight.
+- `migration_not_completed` — `end_migration` before the migrate run has completed successfully.
+- `already_ended` — `end_migration` was already completed; do not retry.
 - `service_unavailable` — transient: the controller could not reach its state store, or a dependency the call needs is not up yet. Wait the `Retry-After` seconds (2) and retry the same call.
 - `internal` — controller-side failure; surface it, don't silently retry.
 
-## Tool catalog (32)
+## Tool catalog (33)
 
 **Users (1):** `get_user`
 **Storage pools (5):** `create_storage_pool`, `list_storage_pools`, `get_storage_pool`, `rename_storage_pool`, `delete_storage_pool`
@@ -296,7 +309,7 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 **Branches (6):** `create_branch`*, `list_branches`, `get_branch`, `add_branch_extensions`*, `delete_branch`*, `update_branch_settings`
 **Endpoints / compute (6):** `create_endpoint`*, `list_endpoints`, `get_endpoint`, `delete_endpoint`*, `resize_endpoint`*, `update_endpoint_settings`
 **Tasks (2):** `list_tasks`, `get_task`
-**Migrations (8):** `test_source_connectivity`, `create_migration`, `list_migrations`, `get_migration`, `get_migration_assessment`, `start_migration_assessment`†, `provision_migration_target`†, `start_migration`†
+**Migrations (9):** `test_source_connectivity`, `create_migration`, `list_migrations`, `get_migration`, `get_migration_assessment`, `start_migration_assessment`†, `provision_migration_target`†, `start_migration`†, `end_migration`†
 
 `*` = asynchronous → returns a Task, poll `get_task`.
 `†` = asynchronous launcher → returns a Task for the launch, but poll
@@ -361,6 +374,8 @@ delete_branch(...)                            → Task → poll  (conflict if it
 5. get_migration_assessment(migration_id)     → read recommended size → choose vcpu
 6. provision_migration_target(migration_id, pool_id, vcpu) → Task → poll get_migration until state=="target_ready"
 7. start_migration(migration_id)              → Task → poll get_migration until state=="completed"
+8. verify target data; confirm with the user; end_migration(migration_id)
+                                               → Task → poll get_migration until state=="ended"
 ```
 
 ## Gotchas checklist

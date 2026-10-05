@@ -20,10 +20,12 @@ import (
 // live in the voyager_step_*.go files.
 
 // Voyager task kinds. YCP does not model migrations, so neither carries a
-// ycpResource; neither is first-writer-wins either (a second run is a distinct
-// attempt, not a conflict).
+// ycpResource. start_migration_run is first-writer-wins per migration
+// (target_ref): Voyager runs for one migration must never overlap, and the lock
+// rejects a second launcher before its run row exists, which the handler's
+// active-run precheck cannot see.
 var (
-	KindVoyagerStartMigrationRun     = Kind{"start_migration_run", "", "", nil}
+	KindVoyagerStartMigrationRun     = Kind{"start_migration_run", "", "tasks_one_active_migration_run_per_migration", ErrMigrationRunInProgress}
 	KindVoyagerCreateMigrationTarget = Kind{"create_migration_target", "", "", nil}
 )
 

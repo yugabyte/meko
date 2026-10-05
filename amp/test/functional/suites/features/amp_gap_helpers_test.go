@@ -38,7 +38,7 @@ func fakeTools(names ...string) map[string]mcpTool {
 		if strings.HasPrefix(n, "create_") || strings.HasPrefix(n, "delete_") || strings.HasPrefix(n, "resize_") {
 			desc += "; poll get_task"
 		}
-		if strings.HasPrefix(n, "start_migration") {
+		if strings.HasPrefix(n, "start_migration") || n == "end_migration" {
 			desc += "; poll get_migration"
 		}
 		out[n] = mcpTool{Name: n, Description: desc, InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}

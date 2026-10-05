@@ -8,9 +8,10 @@ This doc specifies those APIs, the database schema behind them, the task/job
 orchestration, and per-API sequence diagrams.
 
 Scope of the POC: **offline migration only**, **PostgreSQL source only**,
-**`yugabytedb-amp` target only**, two operations — **assess** and **migrate**
+**`yugabytedb-amp` target only**, three operations — **assess**, **migrate**
 (migrate = export schema → import schema → export data → import data →
-finalize-schema-post-data-import, in one job).
+finalize-schema-post-data-import, in one job), and **end** (irreversible
+metadata and export-directory cleanup after a successful migrate).
 
 ---
 
@@ -28,6 +29,7 @@ controller API:
 | *(agent reads sizing)* | `GET /migrations/{id}/assessment` | sync read |
 | `provision_pg_compute` | `POST /migrations/{id}/provision-target` | async, 202 + Task |
 | `start_migrate_schema` + `start_migrate_data` (merged) | `POST /migrations/{id}/migrate` | async, 202 + Task |
+| `end_migration` | `POST /migrations/{id}/end` | async, 202 + Task |
 | *(sidebar "Recent")* | `GET /migrations` | sync read |
 
 The final chat message ("Connect to your new instance here: `postgresql://…`")
@@ -84,7 +86,7 @@ unchanged**, **reused as logic**, **reused as-is**, or **new**.
    mirroring the existing `Deployer` split (kubernetes/docker).
 1. **Tasks launch, runs live:** a task completes when the job is *submitted*; the
    long-running execution is tracked by `migration_run` + derive-on-read status.
-1. **New in AMP:** the `amp_voyager_control` schema, the seven REST APIs, a
+1. **New in AMP:** the `amp_voyager_control` schema, the migration REST APIs, a
    deployer-style `VoyagerJobRunner` abstraction for voyager jobs, and the MCP
    tools.
 1. **The yugabyted-ui read path is reused as logic, not as wire shapes.** The SQL
@@ -131,7 +133,7 @@ CREATE TABLE amp_voyager_control.migration (
 CREATE TABLE amp_voyager_control.migration_run (
     id                uuid PRIMARY KEY,
     migration_id      uuid NOT NULL REFERENCES amp_voyager_control.migration (id),
-    operation         text NOT NULL CHECK (operation IN ('assess', 'migrate')),
+    operation         text NOT NULL CHECK (operation IN ('assess', 'migrate', 'end')),
     attempt           int  NOT NULL,
     -- pending: task planned, job not yet observed running
     -- running / succeeded / failed: from deployer job state (lazily persisted)
@@ -148,7 +150,7 @@ CREATE TABLE amp_voyager_control.migration_run (
     UNIQUE (migration_id, operation, attempt)
 );
 
--- At most one in-flight run per migration (assess and migrate never overlap).
+-- At most one in-flight run per migration (assess, migrate, and end never overlap).
 CREATE UNIQUE INDEX one_active_run_per_migration
     ON amp_voyager_control.migration_run (migration_id)
     WHERE status IN ('pending', 'running');
@@ -327,7 +329,7 @@ response: 200
   updated_at: ...
 ```
 
-#### What polling looks like (assess and migrate)
+#### What polling looks like (assess, migrate, and end)
 
 Two handles answer two different questions while work is in flight: the
 launcher **Task** (existing `GET /tasks/{taskId}`) covers only the launch and
@@ -505,6 +507,15 @@ Async `202 + Task`. Task plan (`KindVoyagerStartMigrationRun`, operation=assess)
 Errors: `404` unknown migration; `409` another run is in flight (the partial
 unique index is the backstop).
 
+The handler's active-run check reads `migration_run`, but the launcher writes
+that row only when the worker runs `ensure_migration_run`. To close that window,
+`start_migration_run` is first-writer-wins per migration: the partial unique
+index `tasks_one_active_migration_run_per_migration` (controller migration 0011)
+admits at most one non-terminal launcher per `target_ref` (the migration id). A
+concurrent assess, migrate, or end request is rejected with
+`409 run_in_progress` at planning time instead of being accepted and failing in
+the worker.
+
 ### 4.7 `POST /migrations/{migrationId}/migrate` — run the offline migration
 
 Same shape and task plan as assess with operation=migrate, plus a handler
@@ -542,6 +553,16 @@ errors:
 source is 16 vCPU → 16 vCPU compute. That heuristic lives in the agent, not the
 controller.)
 
+### 4.9 `POST /migrations/{migrationId}/end` — irreversible cleanup
+
+Async `202 + Task`, using the same durable run/task plan with operation=end.
+The handler requires a successful migrate run and no active run; a failed end
+attempt may be retried, while an already-ended migration returns
+`409 already_ended`. The job executes `yb-voyager end migration --yes` with
+all backup options explicitly disabled, removing Voyager database metadata and
+the shared export-directory contents. Poll the migration until `ended` or
+`failed`.
+
 Because AMP's assess scripts emit a **lean, PostgreSQL → PostgreSQL** payload
 (see `deploy/voyager/README.md`), several of the projected fields are
 structurally present but empty: `source_database.*` is `0`,
@@ -572,7 +593,7 @@ type VoyagerJobRunner interface {
 }
 
 // VoyagerRunSpec is domain-level, like EndpointSpec: migration id, operation
-// (assess | migrate), attempt, source/target configs, parallel jobs.
+// (assess | migrate | end), attempt, source/target configs, parallel jobs.
 // RunRef is what lands in migration_run.deployer_type + deployer_metadata
 // (k8s: {namespace, job_name, job_uid, volume}; docker: {container_id, volume}).
 ```
@@ -661,7 +682,7 @@ commands pass `--target-db-type yugabytedb-amp`, which requires the explicit
 `--target-db-port` and rejects adaptive-parallelism flags (yb-voyager
 `cmd/import.go`).
 
-Because assess and migrate mount the **same volume/export-dir**, and the UUID
+Because assess, migrate, and end mount the **same volume/export-dir**, and the UUID
 is injected, one voyager migration identity spans the whole flow — the
 visualizer tables tell one coherent story per AMP migration.
 
@@ -680,14 +701,17 @@ No background watcher in the POC. `GET /migrations/{id}`:
 
 | Precedence | Condition | `state` | `detail` examples |
 |---|---|---|---|
-| 1 | latest migrate run in flight | `migrating` | from voyager phases: "exporting schema" / "importing schema" / "exporting data (X/Y rows)" / "importing data (X/Y rows)" |
-| 2 | latest migrate run succeeded | `completed` | "migration complete" |
-| 3 | latest run (either op) failed | `failed` | `error_summary` |
-| 4 | latest assess run in flight | `assessing` | "assessing schema" |
-| 5 | `target_task_id` set, target not attached | `provisioning_target` | "provisioning PG compute" |
-| 6 | target attached | `target_ready` | "ready to migrate" |
-| 7 | latest assess run succeeded | `assessed` | "assessment complete" |
-| 8 | otherwise | `created` | "awaiting next step" |
+| 1 | latest end run in flight | `ending` | "starting end migration" (pending) / "ending migration" (running) |
+| 2 | latest migrate run in flight | `migrating` | "starting migration" (pending); otherwise from voyager phases: "exporting schema" / "importing schema" / "exporting data (X/Y rows)" / "importing data (X/Y rows)" |
+| 3 | latest assess run in flight | `assessing` | "starting assessment" (pending) / "assessing schema" (running) |
+| 4 | latest end run succeeded | `ended` | "migration ended" |
+| 5 | latest end run failed | `failed` | `error_summary` |
+| 6 | latest migrate run succeeded | `completed` | "migration complete" |
+| 7 | latest assess or migrate run failed | `failed` | `error_summary` |
+| 8 | `target_task_id` set, target not attached | `provisioning_target` | "provisioning PG compute" |
+| 9 | target attached | `target_ready` | "ready to migrate" |
+| 10 | latest assess run succeeded | `assessed` | "assessment complete" |
+| 11 | otherwise | `created` | "awaiting next step" |
 
 Known trade-off (accepted): a job that fails while nobody polls remains
 `running` in the DB until the next poll. The agent polls continuously during
@@ -855,7 +879,7 @@ image is built from the patched branch.
 
 ## 9. Controller wiring summary (implementation checklist)
 
-1. `openapi_spec.yaml`: add the 7 paths + schemas → `make controller-generate`.
+1. `openapi_spec.yaml`: add the migration paths + schemas → `make controller-generate`.
 2. `internal/api/handlers.go`: implement handlers (reads: SQL over the voyager
    pool; mutations: plan tasks).
 3. New voyager DB pool + `internal/voyager/migrations/` golang-migrate dir (run at
@@ -864,17 +888,17 @@ image is built from the patched branch.
    steps `attach_target_to_migration`, `ensure_migration_run`,
    `launch_voyager_job`; register in `registry.go`.
 5. `internal/deploy/` (or sibling package): `VoyagerJobRunner` with kubernetes +
-   docker impls; assess entrypoint is `/opt/amp/voyager/assess.sh` and migrate
-   is `/opt/amp/voyager/migrate.sh`, both baked into the image
+   docker impls; assess entrypoint is `/opt/amp/voyager/assess.sh`, migrate is
+   `/opt/amp/voyager/migrate.sh`, and cleanup is `/opt/amp/voyager/end.sh`, all baked into the image
    (`deploy/voyager/scripts/`).
 6. Config: voyager DB conn string, job image ref, PVC size/storage-class,
    default `parallel_jobs`, job namespace.
 7. Helm chart: add `batch/jobs` (+ `pods/log`) to the controller Role.
 8. MCP: add tools `test_source_connectivity`, `create_migration`,
    `start_migration_assessment`, `provision_migration_target`,
-   `start_migration`, `get_migration`, `get_migration_assessment`,
+   `start_migration`, `end_migration`, `get_migration`, `get_migration_assessment`,
    `list_migrations` (`tools.py` + `controller_client.py` + `server.py`
-   registrations). The three launchers return a Task for the launch only —
+   registrations). The four launchers return a Task for the launch only —
    their docstrings and the server instructions point agents at `get_migration`
    (not `get_task`) to track progress. See `ac-mcp.md` for the catalog.
 
@@ -891,9 +915,10 @@ Deliberate POC shortcuts to revisit before anything production-shaped:
    failed phase just never completes; we infer failure from job exit only.
    Upstream failure/error events into the yugabyted control plane, and surface
    pod logs / `errs` details through the status API.
-4. **Lifecycle & cleanup**: no cancel, delete, or `end migration`; PVCs, job
-   objects, and visualizer rows accumulate forever. Add cancel (job deletion +
-   run status), delete/archive, TTL/GC.
+4. **Lifecycle & cleanup**: end migration now clears Voyager metadata and export
+   contents after success, but there is still no cancel or delete/archive; PVCs
+   and job objects accumulate forever. Add cancel (job deletion + run status),
+   delete/archive, TTL/GC.
 5. **Watcher**: replace derive-on-read lazy persistence with a background job
    watcher (or task-framework requeue) so terminal states land without polls.
 6. **Upstream the `YB_VOYAGER_MIGRATION_UUID` patch** and return to the stock

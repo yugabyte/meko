@@ -95,14 +95,17 @@ cluster in `pool_id` (the storage-pool id from step 2). Poll \
 `get_migration` until `state=target_ready`.
 7. `start_migration` — run the offline export/import. Poll `get_migration` \
 until `state=completed` (or `failed`).
+8. Verify the migrated data, then ask for explicit user confirmation before \
+calling `end_migration`. It irreversibly removes Voyager metadata and export \
+files with no backups. Poll `get_migration` until `state=ended` (or `failed`).
 
-**Poll `get_migration`, not `get_task`, for migration progress.** The three \
+**Poll `get_migration`, not `get_task`, for migration progress.** The four \
 launcher tools (`start_migration_assessment`, `provision_migration_target`, \
-`start_migration`) are asynchronous, but the Task they return only covers the \
+`start_migration`, `end_migration`) are asynchronous, but the Task they return only covers the \
 launch. Track real progress by polling `get_migration(migration_id=<id>)` and \
 watching its derived `state` advance through `created` → `assessing` → \
 `assessed` → `provisioning_target` → `target_ready` → `migrating` → \
-`completed` (or `failed`). `list_migrations` lists them, most recent first. \
+`completed` → `ending` → `ended` (or `failed`). `list_migrations` lists them, most recent first. \
 Source passwords are stored for the jobs but never returned in any response.
 
 ## Pagination

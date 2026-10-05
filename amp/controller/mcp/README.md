@@ -12,7 +12,7 @@ See `controller/architecture/ac-mcp.md` for the design.
 
 ## Tools
 
-32 tools mapped to the controller's operations:
+33 tools mapped to the controller's operations:
 
 - **Users (read-only):** `get_user`. User create/list are intentionally not
   exposed; where the API needs an owner, the tool takes `owner_user_id` as a
@@ -32,7 +32,8 @@ See `controller/architecture/ac-mcp.md` for the design.
 - **Tasks:** `list_tasks`, `get_task`.
 - **Migrations:** `test_source_connectivity`, `create_migration`,
   `list_migrations`, `get_migration`, `get_migration_assessment`,
-  `start_migration_assessment`, `provision_migration_target`, `start_migration`.
+  `start_migration_assessment`, `provision_migration_target`, `start_migration`,
+  `end_migration`.
 
 The storage-pool tools (`create_storage_pool`, `rename_storage_pool`,
 `delete_storage_pool`) and the two `update_*_settings` tools are
@@ -53,8 +54,10 @@ The migration tools form one linear workflow:
 5. `get_migration_assessment` — pick `vcpu`
 6. `provision_migration_target(migration_id, pool_id, vcpu)` — poll until `target_ready`
 7. `start_migration` — poll until `completed`
+8. Verify the target data, get explicit confirmation, then `end_migration` —
+   irreversible cleanup with no backups; poll until `ended`
 
-The three launcher tools are asynchronous, but unlike the resource mutations
+The four launcher tools are asynchronous, but unlike the resource mutations
 their `Task` only covers the launch — **track migration progress by polling
 `get_migration(migration_id=<id>)`** and watching its derived `state`, not
 `get_task`. Source passwords are stored for the Voyager jobs but never returned.

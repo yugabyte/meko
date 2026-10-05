@@ -64,12 +64,13 @@ async def test_round_trip_create_migration_is_synchronous():
 
 
 async def test_round_trip_migration_ladder_polls_get_migration():
-    """The assess/provision/migrate launchers return a Task, but progress is
+    """The assess/provision/migrate/end launchers return a Task, but progress is
     read from get_migration — exercise that full loop over a mocked controller.
     """
     assess_task = {"id": "t1", "kind": "voyager_start_migration_run", "status": "pending"}
     provision_task = {"id": "t2", "kind": "voyager_create_migration_target", "status": "pending"}
     migrate_task = {"id": "t3", "kind": "voyager_start_migration_run", "status": "pending"}
+    end_task = {"id": "t4", "kind": "voyager_start_migration_run", "status": "pending"}
     mcp, handler = build_in_memory(
         {
             "POST /api/v1/migrations/m1/assess": (202, assess_task),
@@ -77,6 +78,7 @@ async def test_round_trip_migration_ladder_polls_get_migration():
             "GET /api/v1/migrations/m1/assessment": {"complexity": "LOW"},
             "POST /api/v1/migrations/m1/provision-target": (202, provision_task),
             "POST /api/v1/migrations/m1/migrate": (202, migrate_task),
+            "POST /api/v1/migrations/m1/end": (202, end_task),
         }
     )
     async with Client(mcp) as client:
@@ -99,6 +101,9 @@ async def test_round_trip_migration_ladder_polls_get_migration():
         assert handler.last_json() == {"pool_id": "p1"}
         assert (
             await client.call_tool("start_migration", {"migration_id": "m1"})
+        ).data["status"] == "pending"
+        assert (
+            await client.call_tool("end_migration", {"migration_id": "m1"})
         ).data["status"] == "pending"
 
 
@@ -157,7 +162,7 @@ async def test_real_controller_resource_ladder():
     config.controller_url = base
     mcp = server.build_server(config)
     async with Client(mcp) as client:
-        assert len(await client.list_tools()) == 32
+        assert len(await client.list_tools()) == 33
 
         pool = (
             await client.call_tool(

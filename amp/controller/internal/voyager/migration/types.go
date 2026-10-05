@@ -48,10 +48,11 @@ type Operation string
 const (
 	OperationAssess  Operation = "assess"
 	OperationMigrate Operation = "migrate"
+	OperationEnd     Operation = "end"
 )
 
 func (o Operation) Valid() bool {
-	return o == OperationAssess || o == OperationMigrate
+	return o == OperationAssess || o == OperationMigrate || o == OperationEnd
 }
 
 type RunStatus string
@@ -71,8 +72,8 @@ func (s RunStatus) InFlight() bool {
 	return s == RunPending || s == RunRunning
 }
 
-// Run is one assess or migrate attempt. DeployerMetadata intentionally stores
-// only a safe runner reference, never source or target credentials.
+// Run is one assess, migrate, or end attempt. DeployerMetadata intentionally
+// stores only a safe runner reference, never source or target credentials.
 type Run struct {
 	ID               uuid.UUID       `json:"id"`
 	MigrationID      uuid.UUID       `json:"migration_id"`
@@ -108,6 +109,8 @@ const (
 	StateTargetReady        MigrationState = "target_ready"
 	StateMigrating          MigrationState = "migrating"
 	StateCompleted          MigrationState = "completed"
+	StateEnding             MigrationState = "ending"
+	StateEnded              MigrationState = "ended"
 	StateFailed             MigrationState = "failed"
 )
 

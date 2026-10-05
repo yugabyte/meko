@@ -26,6 +26,7 @@ type VoyagerOperation string
 const (
 	VoyagerOperationAssess  VoyagerOperation = "assess"
 	VoyagerOperationMigrate VoyagerOperation = "migrate"
+	VoyagerOperationEnd     VoyagerOperation = "end"
 )
 
 // RunState is the runtime state of a submitted Voyager run.
@@ -156,8 +157,11 @@ func buildVoyagerJobSpec(spec VoyagerRunSpec, storeDbConnectionString string) (v
 	}
 
 	command := assessCommand()
-	if spec.Operation == VoyagerOperationMigrate {
+	switch spec.Operation {
+	case VoyagerOperationMigrate:
 		command = migrateCommand()
+	case VoyagerOperationEnd:
+		command = endCommand()
 	}
 	return voyagerJobSpec{
 		Name:        voyagerRunName(spec.MigrationID, spec.Operation, spec.Attempt),
@@ -172,8 +176,9 @@ func validateVoyagerRunSpec(spec VoyagerRunSpec, storeDbConnectionString string)
 	if spec.MigrationID == uuid.Nil {
 		return errors.New("voyager migration id is required")
 	}
-	if spec.Operation != VoyagerOperationAssess && spec.Operation != VoyagerOperationMigrate {
-		return errors.New("voyager operation must be assess or migrate")
+	if spec.Operation != VoyagerOperationAssess && spec.Operation != VoyagerOperationMigrate &&
+		spec.Operation != VoyagerOperationEnd {
+		return errors.New("voyager operation must be assess, migrate, or end")
 	}
 	if spec.Attempt < 1 {
 		return errors.New("voyager attempt must be positive")
@@ -193,15 +198,15 @@ func validateVoyagerRunSpec(spec VoyagerRunSpec, storeDbConnectionString string)
 			return errors.New("voyager source schema must not be empty")
 		}
 	}
-	if spec.Operation == VoyagerOperationMigrate {
+	if spec.Operation == VoyagerOperationMigrate || spec.Operation == VoyagerOperationEnd {
 		if spec.Target == nil {
-			return errors.New("voyager target connection is required for migrate")
+			return fmt.Errorf("voyager target connection is required for %s", spec.Operation)
 		}
 		if spec.Target.Host == "" || spec.Target.Port < 1 || spec.Target.Username == "" ||
 			spec.Target.Database == "" {
 			return errors.New("voyager target connection is incomplete")
 		}
-		if spec.ParallelJobs < 1 {
+		if spec.Operation == VoyagerOperationMigrate && spec.ParallelJobs < 1 {
 			return errors.New("voyager parallel jobs must be positive for migrate")
 		}
 	}
@@ -244,4 +249,12 @@ func assessCommand() string {
 func migrateCommand() string {
 	return `set -euo pipefail
 /opt/amp/voyager/migrate.sh`
+}
+
+// endCommand runs Voyager's irreversible metadata and export-directory cleanup.
+// The API only schedules it after a successful migrate run, and end.sh supplies
+// every required backup choice explicitly for non-interactive execution.
+func endCommand() string {
+	return `set -euo pipefail
+/opt/amp/voyager/end.sh`
 }
