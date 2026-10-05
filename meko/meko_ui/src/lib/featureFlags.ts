@@ -14,15 +14,15 @@ export const FEATURE_FLAGS = {
     queryParam: "showPaymentOptions",
   },
   /**
-   * Collections & folders: the `/collections` tree and the collection/path additions to
+   * Projects & folders: the `/projects` tree and the project/path additions to
    * the Datapacks page. Unlike the flag above this one has no default of its
-   * own — unset, it follows the `MEKO_ENABLE_COLLECTIONS` deployment flag, and
-   * `?collections=true|false` overrides that for one browser. See
-   * `lib/collectionsFeature.ts`.
+   * own — unset, it follows the `MEKO_ENABLE_PROJECTS` deployment flag, and
+   * `?projects=true|false` overrides that for one browser. See
+   * `lib/projectsFeature.ts`.
    */
-  collections: {
-    storageKey: "meko:show_collections",
-    queryParam: "collections",
+  projects: {
+    storageKey: "meko:show_projects",
+    queryParam: "projects",
   },
   /**
    * Observe nav entry (the Activity-icon link under the Datapacks list). Hidden by

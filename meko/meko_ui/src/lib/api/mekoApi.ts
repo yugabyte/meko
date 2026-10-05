@@ -149,9 +149,9 @@ export type CreateDatapackPayload = {
   user_id: string;
   description?: string | null;
   agent_id?: string | null;
-  /** Files the new datapack into a collection folder. Required by the API once
-   *  Collections is enabled AND the caller already has a collection — see
-   *  `@/lib/collectionsFeature`. Omitted, the datapack is created unfiled. */
+  /** Files the new datapack into a project folder. Required by the API once
+   *  Projects is enabled AND the caller already has a project — see
+   *  `@/lib/projectsFeature`. Omitted, the datapack is created unfiled. */
   folder_id?: string | null;
 };
 
@@ -247,8 +247,8 @@ export type CurrentUser = {
 };
 
 export type LangfuseProjectKeys = {
-  collection_id?: string;
-  collection_name?: string;
+  project_id?: string;
+  project_name?: string;
   public_key: string;
   secret_key: string;
 };
@@ -1075,7 +1075,7 @@ export async function updateProfile(firstName: string, lastName: string) {
   });
 }
 
-// --- Post-signup email collection/verification (federated, no-email signups) ---
+// --- Post-signup email project/verification (federated, no-email signups) ---
 //
 // For a LinkedIn signup whose IdP sent no email, the account carries a
 // synthesized placeholder and `email_verified` is false. These three calls
@@ -1251,7 +1251,7 @@ export type ListDatapackConversationsResponse = {
   /** Langfuse project_id resolved from meko_system.langfuse_project_mapping
    *  for this datapack. Empty when no Langfuse mapping exists yet. The UI
    *  uses it to build per-conversation deep links into the embedded
-   *  Observe iframe (/observe/collection/<pid>/sessions/<sid>). */
+   *  Observe iframe (/observe/project/<pid>/sessions/<sid>). */
   langfuse_project_id?: string;
   limit: number;
   offset: number;
@@ -1455,7 +1455,7 @@ export async function getDatapackMessageTrace(
 /** Slim per-message decision-trace payload — the exact subset of fields
  *  the `DecisionTrace` card reads (reasoning / plan / retrieval hits /
  *  processing steps + per-turn telemetry). Mirrors the BE
- *  `MessageDecisionTrace` struct; the server collections it out of one
+ *  `MessageDecisionTrace` struct; the server projects it out of one
  *  message's window in the Langfuse thread, so no whole-thread payload
  *  is transferred. */
 export type DatapackMessageDecisionTrace = {
@@ -1829,13 +1829,13 @@ export async function listPendingUploads(
  *  `type` selects which side of the BE's UNION populated this row — the
  *  fields keyed off the other side stay null/undefined. */
 export type KBActivityLogItem = {
-  /** The last two are collection-feed only: a single datapack has no
-   *  folders, and where it sits describes the collection around it. */
+  /** The last two are project-feed only: a single datapack has no
+   *  folders, and where it sits describes the project around it. */
   type: "file_upload" | "memory_promotion" | "folder_created" | "datapack_filed";
   timestamp: string;
   /** Which datapack the row came from. Absent on the single-datapack feed,
    *  where it would only repeat the page you are already on; present on the
-   *  collection feed, where several datapacks interleave. */
+   *  project feed, where several datapacks interleave. */
   datapack_id?: string | null;
   datapack_name?: string | null;
   // file_upload

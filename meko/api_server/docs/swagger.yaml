@@ -221,10 +221,8 @@ definitions:
       email:
         type: string
     type: object
-  service.CreateCollectionRequest:
+  service.CreateProjectRequest:
     properties:
-      collection_name:
-        type: string
       description:
         type: string
       folders:
@@ -235,6 +233,8 @@ definitions:
         items:
           type: string
         type: array
+      project_name:
+        type: string
       theme_key:
         type: string
     type: object
@@ -246,9 +246,9 @@ definitions:
         type: string
       folder_id:
         description: |-
-          FolderID files the new datapack into a collection folder. Required once the
-          Collections feature is on and the caller has at least one collection — see
-          CollectionService.ValidateNewDatapackFolder. Ignored when the feature is
+          FolderID files the new datapack into a project folder. Required once the
+          Projects feature is on and the caller has at least one project — see
+          ProjectService.ValidateNewDatapackFolder. Ignored when the feature is
           off, so the field is additive for existing clients.
         type: string
       name:
@@ -1276,7 +1276,7 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Begin email collection/verification for the signed-in user
+      summary: Begin email project/verification for the signed-in user
       tags:
       - auth
   /auth/me/email/verify:
@@ -1510,312 +1510,6 @@ paths:
       summary: Stripe webhook receiver (no JWT, Stripe-Signature verified)
       tags:
       - billing
-  /collections:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: List collections with folder and datapack counts
-      tags:
-      - collections
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: Create request
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/service.CreateCollectionRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Create a collection from a theme
-      tags:
-      - collections
-  /collections/{collection_id}:
-    delete:
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Delete a collection
-      tags:
-      - collections
-    get:
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Get a collection, its folders, and the datapacks in them with counts
-      tags:
-      - collections
-    patch:
-      consumes:
-      - application/json
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Rename a collection
-      tags:
-      - collections
-  /collections/{collection_id}/activity-log:
-    get:
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      - description: Page size (default 10, max 50)
-        in: query
-        name: limit
-        type: integer
-      - description: Opaque cursor from the previous page
-        in: query
-        name: cursor
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Uploads, promotions, folder creations and filings across a collection,
-        newest first
-      tags:
-      - collections
-  /collections/{collection_id}/folders:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Add a folder to a collection
-      tags:
-      - collections
-  /collections/{collection_id}/folders/{folder_id}:
-    delete:
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      - description: Folder ID
-        in: path
-        name: folder_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Delete a folder and its subfolders
-      tags:
-      - collections
-    patch:
-      consumes:
-      - application/json
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      - description: Folder ID
-        in: path
-        name: folder_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Rename a folder
-      tags:
-      - collections
-  /collections/{collection_id}/stats:
-    get:
-      parameters:
-      - description: Collection ID
-        in: path
-        name: collection_id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: What a collection holds
-      tags:
-      - collections
-  /collections/placements:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: Map every filed datapack to its path
-      tags:
-      - collections
-  /collections/themes:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
-      security:
-      - BearerAuth: []
-      summary: List collection themes
-      tags:
-      - collections
   /datapacks:
     get:
       produces:
@@ -3114,7 +2808,7 @@ paths:
       - BearerAuth: []
       summary: Remove a datapack from the caller's tree
       tags:
-      - collections
+      - projects
     post:
       consumes:
       - application/json
@@ -3139,7 +2833,7 @@ paths:
       - BearerAuth: []
       summary: File or move a datapack into a folder
       tags:
-      - collections
+      - projects
   /datapacks/{datapack_id}/share:
     post:
       consumes:
@@ -4042,6 +3736,312 @@ paths:
       summary: Count memories for a datapack
       tags:
       - memories
+  /projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List projects with folder and datapack counts
+      tags:
+      - projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Create request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.CreateProjectRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a project from a theme
+      tags:
+      - projects
+  /projects/{project_id}:
+    delete:
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a project
+      tags:
+      - projects
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get a project, its folders, and the datapacks in them with counts
+      tags:
+      - projects
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Rename a project
+      tags:
+      - projects
+  /projects/{project_id}/activity-log:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      - description: Page size (default 10, max 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Opaque cursor from the previous page
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Uploads, promotions, folder creations and filings across a project,
+        newest first
+      tags:
+      - projects
+  /projects/{project_id}/folders:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Add a folder to a project
+      tags:
+      - projects
+  /projects/{project_id}/folders/{folder_id}:
+    delete:
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      - description: Folder ID
+        in: path
+        name: folder_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a folder and its subfolders
+      tags:
+      - projects
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      - description: Folder ID
+        in: path
+        name: folder_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Rename a folder
+      tags:
+      - projects
+  /projects/{project_id}/stats:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: project_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: What a project holds
+      tags:
+      - projects
+  /projects/placements:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Map every filed datapack to its path
+      tags:
+      - projects
+  /projects/themes:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List project themes
+      tags:
+      - projects
   /promote-memories:
     post:
       consumes:

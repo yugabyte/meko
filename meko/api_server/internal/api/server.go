@@ -243,12 +243,12 @@ type ServerConfig struct {
 	// MEKO_ENABLE_BYOC, the same env var that hides the hosted-only surfaces
 	// in the UI via its runtime-config key of the same name.
 	BYOCMode bool
-	// EnableCollections gates the collection tree (collections, folders, datapack
+	// EnableProjects gates the project tree (projects, folders, datapack
 	// placements) and its REST surface. Off by default; mirrors
-	// MEKO_ENABLE_COLLECTIONS, the same env var the UI reads from runtime-config
-	// to show the Collections nav. Off end to end means the endpoints do not
+	// MEKO_ENABLE_PROJECTS, the same env var the UI reads from runtime-config
+	// to show the Projects nav. Off end to end means the endpoints do not
 	// exist, rather than existing and returning empty.
-	EnableCollections bool
+	EnableProjects bool
 
 	// ControlPlaneMode gates the YCP fleet registry + agent API (BYOC control
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*

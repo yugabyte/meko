@@ -387,7 +387,7 @@ func (h *AuthHandler) Me(c echo.Context) error {
 		"email":      account.Email,
 		"first_name": account.FirstName,
 		"last_name":  account.LastName,
-		// email_verified gates the post-signup email-collection step. It's
+		// email_verified gates the post-signup email-project step. It's
 		// false for federated users (LinkedIn) whose IdP sent no email and who
 		// therefore carry a synthesized placeholder; the SPA forces them to
 		// supply + OTP-verify a real address before using the app.
@@ -526,7 +526,7 @@ func (h *AuthHandler) UpdateProfile(c echo.Context) error {
 // one (and carries a placeholder), writing it to Cognito — which emails an OTP
 // to the new address — and recording it locally as unverified.
 //
-//	@Summary	Begin email collection/verification for the signed-in user
+//	@Summary	Begin email project/verification for the signed-in user
 //	@Tags		auth
 //	@Accept		json
 //	@Produce	json

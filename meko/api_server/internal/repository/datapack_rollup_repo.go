@@ -11,8 +11,8 @@ import (
 // there?" for a whole set of datapacks in one go.
 //
 // Every table it reads is multi-tenant and keyed on the datapack id, so
-// `= ANY($1) GROUP BY` covers a collection of any size with one query per table
-// and no sequential scan. That is what keeps the collection page a fixed number
+// `= ANY($1) GROUP BY` covers a project of any size with one query per table
+// and no sequential scan. That is what keeps the project page a fixed number
 // of round trips instead of one per datapack, which is how
 // DatapackHandler.Describe does it — see MEKO-653.
 //
@@ -27,7 +27,7 @@ import (
 //     prune, so it index-scans all 128 partitions. That is inherent to the
 //     table, not to this query: MemoriesRepo.CountByDatapack pays the same
 //     fan-out for ONE datapack, and the point of grouping here is to pay it
-//     once for the collection rather than once per datapack.
+//     once for the project rather than once per datapack.
 //
 // Reads the DATA database, not meko_system.
 type DatapackRollupRepo struct {
@@ -47,15 +47,15 @@ type DatapackRollup struct {
 	// (meko_promotion_user_action IS NULL). A subset of MemoryCount, and the
 	// same definition DatapackHandler.Describe uses for learnings_count.
 	AwaitingReview int `json:"awaiting_review_count"`
-	// PromotedCount is memories published to the collection's shared knowledge.
+	// PromotedCount is memories published to the project's shared knowledge.
 	PromotedCount  int `json:"promoted_count"`
 	KnowledgeDocs  int `json:"knowledge_doc_count"`
 	KnowledgeChunk int `json:"knowledge_chunk_count"`
 }
 
-// CollectionRollups is every datapack's contents plus one collection-wide figure
+// ProjectRollups is every datapack's contents plus one project-wide figure
 // that cannot be got by summing them.
-type CollectionRollups struct {
+type ProjectRollups struct {
 	ByDatapack map[string]DatapackRollup
 	// ActiveAgents is how many distinct agents have actually written into
 	// these datapacks.
@@ -68,10 +68,10 @@ type CollectionRollups struct {
 	// wrote, so counting access rows would just restate the user count.
 	//
 	// Counted as (user, agent_id) pairs for the same reason
-	// CollectionRepo.PeopleWithAccess does: an agent_id is unique only within a
+	// ProjectRepo.PeopleWithAccess does: an agent_id is unique only within a
 	// user, and in practice everyone's default is the identical string
 	// 'meko_agent', so keying on the id alone would collapse two people's
-	// agents into one in exactly the shared collection where the number matters.
+	// agents into one in exactly the shared project where the number matters.
 	//
 	// It cannot be summed per datapack either: one agent writing in three
 	// datapacks is one agent, so the distinct set is unioned here.
@@ -83,8 +83,8 @@ type CollectionRollups struct {
 //
 // Failures are returned rather than swallowed: reporting zeros as if they
 // were counts is worse than letting the caller decide to degrade.
-func (r *DatapackRollupRepo) Rollups(datapackIDs []string) (CollectionRollups, error) {
-	out := CollectionRollups{ByDatapack: make(map[string]DatapackRollup, len(datapackIDs))}
+func (r *DatapackRollupRepo) Rollups(datapackIDs []string) (ProjectRollups, error) {
+	out := ProjectRollups{ByDatapack: make(map[string]DatapackRollup, len(datapackIDs))}
 	if len(datapackIDs) == 0 {
 		return out, nil
 	}
@@ -144,7 +144,7 @@ func (r *DatapackRollupRepo) Rollups(datapackIDs []string) (CollectionRollups, e
 	// Conversations contribute agents but no counts. An agent can hold a
 	// hundred conversations and have extracted no memories yet, which is the
 	// common case early on, so leaving this out would miss the busiest agent
-	// in a collection entirely.
+	// in a project entirely.
 	if err := r.eachConversationAgent(ids, func(userID, agent string) {
 		agents[agentKey(userID, agent)] = true
 	}); err != nil {
@@ -155,7 +155,7 @@ func (r *DatapackRollupRepo) Rollups(datapackIDs []string) (CollectionRollups, e
 	return out, nil
 }
 
-// agentKey identifies one agent instance. See CollectionRollups.ActiveAgents for
+// agentKey identifies one agent instance. See ProjectRollups.ActiveAgents for
 // why the agent_id on its own is not enough.
 func agentKey(userID, agentID string) string {
 	return userID + "\x00" + agentID

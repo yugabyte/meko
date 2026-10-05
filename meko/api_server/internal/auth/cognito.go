@@ -818,7 +818,7 @@ func (c *CognitoClient) UpdateUserName(
 // (identified by accessToken) to newEmail. Because email is an auto-verified
 // attribute, Cognito marks it unverified and emails a verification code to the
 // new address — so this both records the address and kicks off the OTP. Used by
-// the post-signup email-collection flow for federated users (e.g. LinkedIn)
+// the post-signup email-project flow for federated users (e.g. LinkedIn)
 // whose IdP didn't supply an email and who therefore carry a placeholder.
 //
 // The access token is the identity proof (no username needed), which also works

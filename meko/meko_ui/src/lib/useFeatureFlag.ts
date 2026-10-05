@@ -30,7 +30,7 @@ function readLatched(storageKey: string): boolean | null {
  *
  * `defaultValue` is used only when the user has made no choice for this flag in
  * this browser. Pass a deployment-level gate here (see
- * `lib/collectionsFeature.ts`) to get "on where the environment enables it, with a
+ * `lib/projectsFeature.ts`) to get "on where the environment enables it, with a
  * per-browser override either way".
  */
 export function useFeatureFlag(name: FeatureFlagName, defaultValue = false): boolean {

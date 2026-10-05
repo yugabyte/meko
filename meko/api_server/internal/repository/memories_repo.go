@@ -128,7 +128,7 @@ func (repo *MemoriesRepo) resolveQueryVector(ctx context.Context, filter models.
 	return vector, nil
 }
 
-// CountByDatapack returns the total number of rows in the mem0 collection
+// CountByDatapack returns the total number of rows in the mem0 project
 // for a given datapack_id. No additional filtering is applied; this is a
 // straight COUNT(*) over datapacks.meko_mem0_collection scoped by
 // meko_datapack_id.

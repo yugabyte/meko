@@ -754,7 +754,7 @@ function MemoryCard({
             metricName="Vector"
             metricValue={signals.vector}
             description="Vector rows linked to this memory (1 means it is embedded)."
-            detail="Stored embedding row in mem0 vector collection for this memory."
+            detail="Stored embedding row in mem0 vector project for this memory."
             memoryId={memoryId}
             spanDurationMs={span.duration_ms}
             entityNames={entityNames}

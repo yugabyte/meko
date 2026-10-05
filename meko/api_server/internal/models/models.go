@@ -115,7 +115,7 @@ type Memory struct {
 	CreatedAt      *time.Time `json:"created_at,omitempty"`
 }
 
-// MemoryListFilter is the filter for the Mem0 collection (datapacks.meko_mem0_collection).
+// MemoryListFilter is the filter for the Mem0 project (datapacks.meko_mem0_collection).
 // DatapackID is required; UserID is optional. UserType ("free" | "pro" | "enterprise")
 // selects the query path: only "pro" / "enterprise" run the vector-similarity ranking
 // (LLM summary + embedding + ORDER BY embeddings); everything else runs the plain SELECT.

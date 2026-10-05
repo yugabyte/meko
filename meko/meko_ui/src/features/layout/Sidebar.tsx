@@ -47,7 +47,7 @@ import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
 import { isByocEnabled } from "@/lib/byoc";
-import { useCollectionsEnabled } from "@/lib/collectionsFeature";
+import { useProjectsEnabled } from "@/lib/projectsFeature";
 
 /**
  * Cap the nested "Datapacks" list at this many rows before it starts to
@@ -111,10 +111,10 @@ export default function Sidebar() {
   //     offering it to a customer's own deployment is the intent; closing the
   //     route as well would mean teaching ProtectedRoutes about BYOC.
   const showLabsNav = isLabsEnabled() && !byoc;
-  // Collections tab — MEKO_ENABLE_COLLECTIONS, overridable per browser with
-  // ?collections=true|false. ProtectedRoutes bounces /collections on the same gate,
+  // Projects tab — MEKO_ENABLE_PROJECTS, overridable per browser with
+  // ?projects=true|false. ProtectedRoutes bounces /projects on the same gate,
   // so the surface is unreachable rather than merely unlinked.
-  const showCollectionsNav = useCollectionsEnabled();
+  const showProjectsNav = useProjectsEnabled();
   const [signOutOpen, setSignOutOpen] = useState(false);
   // Shared react-query cache — every other surface (HomePage, ObservePage,
   // WorkbenchLM, DatapacksOverviewPage) subscribes to the same key, so
@@ -443,21 +443,21 @@ export default function Sidebar() {
           </NavLink>
         ) : null}
 
-        {showCollectionsNav ? (
+        {showProjectsNav ? (
           <NavLink
-            to={ROUTES.collections}
+            to={ROUTES.projects}
             className={cn(
               "flex items-center rounded-md text-sm font-medium transition-colors",
               isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.collections ||
-                location.pathname.startsWith(`${ROUTES.collections}/`)
+              location.pathname === ROUTES.projects ||
+                location.pathname.startsWith(`${ROUTES.projects}/`)
                 ? "bg-foreground/10 text-foreground"
                 : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
             )}
-            title={isCollapsed ? "Collections" : undefined}
+            title={isCollapsed ? "Projects" : undefined}
           >
             <FolderTree className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Collections</span>}
+            {!isCollapsed && <span className="animate-in fade-in truncate">Projects</span>}
           </NavLink>
         ) : null}
 

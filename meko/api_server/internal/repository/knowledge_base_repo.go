@@ -1114,14 +1114,14 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 // embedded structs) so JSON consumers don't need polymorphic decoding.
 type ActivityLogItem struct {
 	// "file_upload" | "memory_promotion" | "folder_created" | "datapack_filed".
-	// The last two are COLLECTION-only: a datapack's own feed has no folders,
-	// and "filed into a folder" is a fact about the collection, not about the
+	// The last two are PROJECT-only: a datapack's own feed has no folders,
+	// and "filed into a folder" is a fact about the project, not about the
 	// datapack's contents.
 	Type      string `json:"type"`
 	Timestamp string `json:"timestamp"`
 
 	// DatapackID is which datapack the row came from. Redundant on the
-	// single-datapack feed, essential on the collection-wide one where ten
+	// single-datapack feed, essential on the project-wide one where ten
 	// datapacks interleave. DatapackName is filled by the caller, which is
 	// the layer that already knows the names.
 	DatapackID   string `json:"datapack_id,omitempty"`
@@ -1146,7 +1146,7 @@ type ActivityLogItem struct {
 }
 
 // Activity row types. The first two are a datapack's own content; the last
-// two describe where a datapack sits, so they appear on a collection's feed
+// two describe where a datapack sits, so they appear on a project's feed
 // only.
 const (
 	ActivityFileUpload      = "file_upload"
@@ -1159,14 +1159,14 @@ const (
 //
 // Exported because the two structural sides are fetched by the CALLER: they
 // live in meko_system, and this repo holds the data-plane pool. Without this
-// the collection feed would need a second merge implementation.
+// the project feed would need a second merge implementation.
 type ActivityLogRow struct {
 	Ts   string
 	ID   string
 	Item ActivityLogItem
 }
 
-// StructuralActivity carries the collection-only sides of the feed, already
+// StructuralActivity carries the project-only sides of the feed, already
 // fetched and keyset-paged by the caller. Nil for a single datapack's feed,
 // which is what keeps folder and placement events off the Knowledge page.
 type StructuralActivity struct {
@@ -1289,11 +1289,11 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 	// a separate COUNT.
 	perSideCap := limit + 1
 
-	// No datapacks is the ordinary state right after creating a collection,
+	// No datapacks is the ordinary state right after creating a project,
 	// and its folders still have folder_created rows. So the two
 	// datapack-scoped sides are SKIPPED rather than returned early: an early
 	// return would drop the structural rows the caller already fetched and
-	// show "No activity yet" on a collection that has folders.
+	// show "No activity yet" on a project that has folders.
 	var files, promos []activityRow
 	if len(datapackIDs) > 0 {
 		var fileErr, promoErr error

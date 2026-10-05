@@ -268,7 +268,7 @@ func (r *PromoteMemoriesRepo) Promote(
 
 	// 3. Find which mem0 IDs already exist in promoted_collection for this
 	//    datapack (and agent, when supplied). Mirrors the KB existence-check
-	//    so the promoted-collection upsert can independently choose
+	//    so the promoted-project upsert can independently choose
 	//    INSERT vs UPDATE without assuming the two tables are in lockstep.
 	promotedExistConds := []string{
 		"meko_datapack_id = $1::uuid",
@@ -444,7 +444,7 @@ func (r *PromoteMemoriesRepo) Promote(
 }
 
 // graphNodeRef is a lookup key into meko_mem0_graph_vertex_embeddings,
-// pulled from a mem0 collection row + one entry of its payload.graph_nodes[].
+// pulled from a mem0 project row + one entry of its payload.graph_nodes[].
 type graphNodeRef struct {
 	UserID      string
 	AgentID     string

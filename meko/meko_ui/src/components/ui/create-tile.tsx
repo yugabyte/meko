@@ -1,8 +1,8 @@
 // The trailing "add one" card at the end of a card grid.
 //
-// Shared: the Datapacks grid and the Collections grid both end with one, and a
+// Shared: the Datapacks grid and the Projects grid both end with one, and a
 // third grid would want the same. Was NewDatapackPlaceholderCard, local to
-// datapacks, until Collections needed the identical affordance.
+// datapacks, until Projects needed the identical affordance.
 
 import { Plus } from "lucide-react";
 import { Card } from "@/components/ui/card";

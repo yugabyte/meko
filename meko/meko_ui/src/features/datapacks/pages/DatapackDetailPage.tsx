@@ -83,14 +83,14 @@ import {
 } from "@/features/datapacks/components/datapack-detail/dialogs";
 // Breadcrumbs, title, badges, description, metadata row, and hero action slot.
 import { DatapackDetailHero } from "@/features/datapacks/components/datapack-detail/DatapackDetailHero";
-import { useCollectionsEnabled } from "@/lib/collectionsFeature";
-import { useDatapackPaths } from "@/features/collections/hooks/useCollections";
-import { FileIntoCollectionDialog } from "@/features/collections/components/FileIntoCollectionDialog";
+import { useProjectsEnabled } from "@/lib/projectsFeature";
+import { useDatapackPaths } from "@/features/projects/hooks/useProjects";
+import { FileIntoProjectDialog } from "@/features/projects/components/FileIntoProjectDialog";
 import {
-  ADD_TO_COLLECTION_LABEL,
+  ADD_TO_PROJECT_LABEL,
   DATAPACK_MOVED_TOAST,
   MOVE_DATAPACK_LABEL,
-} from "@/features/collections/collectionsCopy";
+} from "@/features/projects/projectsCopy";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
@@ -198,9 +198,9 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
 
   // Where this datapack is filed. One cached request shared with the Datapacks
   // page and the sidebar, and not issued at all with the feature off.
-  const collectionsEnabled = useCollectionsEnabled();
-  const { data: datapackPaths = {} } = useDatapackPaths({ enabled: collectionsEnabled });
-  const collectionPath = datapackPaths[routeDatapackId];
+  const projectsEnabled = useProjectsEnabled();
+  const { data: datapackPaths = {} } = useDatapackPaths({ enabled: projectsEnabled });
+  const projectPath = datapackPaths[routeDatapackId];
   const [isFileIntoOpen, setIsFileIntoOpen] = useState(false);
   // Only on a datapack shared WITH you: on your own, naming the owner tells
   // you your own name.
@@ -438,8 +438,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           isNewDatapack={isNewDatapack}
           statusLoading={statusLoading}
           ownerName={sharedOwnerName}
-          showCollection={collectionsEnabled}
-          collectionPath={collectionPath}
+          showProject={projectsEnabled}
+          projectPath={projectPath}
           actions={
             <>
               {isDatapackGrantEligibleToShare({ grant: datapackGrant }) && (
@@ -479,17 +479,17 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 error={connectError}
                 provisionStatus={provisionStatus}
               />
-              {/* Only with the feature on, so a workspace without Collections never
+              {/* Only with the feature on, so a workspace without Projects never
           builds this dialog's queries. */}
-      {collectionsEnabled && datapack ? (
-        <FileIntoCollectionDialog
+      {projectsEnabled && datapack ? (
+        <FileIntoProjectDialog
           open={isFileIntoOpen}
           onOpenChange={setIsFileIntoOpen}
           datapack={datapack}
-          title={collectionPath ? MOVE_DATAPACK_LABEL : ADD_TO_COLLECTION_LABEL}
-          confirmLabel={collectionPath ? "Move here" : "Add here"}
-          successTitle={collectionPath ? DATAPACK_MOVED_TOAST : undefined}
-          defaultCollectionId={collectionPath?.collection_id}
+          title={projectPath ? MOVE_DATAPACK_LABEL : ADD_TO_PROJECT_LABEL}
+          confirmLabel={projectPath ? "Move here" : "Add here"}
+          successTitle={projectPath ? DATAPACK_MOVED_TOAST : undefined}
+          defaultProjectId={projectPath?.project_id}
         />
       ) : null}
 
@@ -560,13 +560,13 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                       </DropdownMenuItem>
                     )}
                     {showActionsDropdownDangerSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
-                    {collectionsEnabled && isOwner ? (
+                    {projectsEnabled && isOwner ? (
                       <DropdownMenuItem
                         className="gap-2 cursor-pointer focus:bg-muted/20"
                         onSelect={() => setIsFileIntoOpen(true)}
                       >
                         <FolderInput className="h-4 w-4 shrink-0" aria-hidden />
-                        {collectionPath ? MOVE_DATAPACK_LABEL : ADD_TO_COLLECTION_LABEL}
+                        {projectPath ? MOVE_DATAPACK_LABEL : ADD_TO_PROJECT_LABEL}
                       </DropdownMenuItem>
                     ) : null}
                     {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem

@@ -3,7 +3,7 @@
  */
 import { Loader2, Pencil } from "lucide-react";
 import { DatapackNameDescriptionFields } from "@/features/datapacks/components/DatapackNameDescriptionFields";
-import { CollectionFolderSelect } from "@/features/collections/components/CollectionFolderSelect";
+import { ProjectFolderSelect } from "@/features/projects/components/ProjectFolderSelect";
 
 type Props = {
   isCreateFlow: boolean;
@@ -14,7 +14,7 @@ type Props = {
   loading: boolean;
   submitting: boolean;
   error: string | null;
-  /** Create flow only, and only with Collections enabled: a new datapack is
+  /** Create flow only, and only with Projects enabled: a new datapack is
    *  created inside a folder. */
   showFolderPicker?: boolean;
   folderId?: string;
@@ -76,11 +76,11 @@ export function ConfigureWizardConfigureStep({
       {showFolderPicker && onFolderChange ? (
         <div className="space-y-4 rounded-xl border border-border bg-card/40 p-6 shadow-sm">
           <p className="text-sm text-muted-foreground">
-            Optionally file this datapack into a collection folder. Leave it unset and the datapack
+            Optionally file this datapack into a project folder. Leave it unset and the datapack
             is created unfiled, which works exactly as it always has; you can file or move it at
             any time afterwards.
           </p>
-          <CollectionFolderSelect
+          <ProjectFolderSelect
             folderId={folderId}
             onFolderChange={onFolderChange}
             enabled={!busy}

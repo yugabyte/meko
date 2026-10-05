@@ -19,15 +19,15 @@ type DatapackHandler struct {
 	langfuse    *service.LangfuseService
 	memoriesSvc *service.MemoriesService
 	kbSvc       *service.KnowledgeBaseService
-	// collectionSvc: nil unless the Collections feature is enabled. When set, Create
+	// projectSvc: nil unless the Projects feature is enabled. When set, Create
 	// requires the new datapack to name a folder and files it there.
-	collectionSvc *service.CollectionService
+	projectSvc *service.ProjectService
 }
 
-// SetCollections enables the "new datapacks live in a folder" rule on Create.
-// Unset (the default) Create behaves exactly as it did before Collections.
-func (h *DatapackHandler) SetCollections(p *service.CollectionService) {
-	h.collectionSvc = p
+// SetProjects enables the "new datapacks live in a folder" rule on Create.
+// Unset (the default) Create behaves exactly as it did before Projects.
+func (h *DatapackHandler) SetProjects(p *service.ProjectService) {
+	h.projectSvc = p
 }
 
 // NewDatapackHandler creates a new DatapackHandler.
@@ -79,9 +79,9 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 	// Validated BEFORE the datapack exists: a bad folder_id must fail the
 	// request outright rather than leave an unplaceable datapack behind.
 	// Omitting folder_id is not an error — the datapack is created unfiled.
-	if h.collectionSvc != nil {
-		if fErr := h.collectionSvc.ValidateNewDatapackFolder(account.ID, req.FolderID); fErr != nil {
-			status, code := collectionStatus(fErr)
+	if h.projectSvc != nil {
+		if fErr := h.projectSvc.ValidateNewDatapackFolder(account.ID, req.FolderID); fErr != nil {
+			status, code := projectStatus(fErr)
 			return apiError(c, status, code, fErr.Error())
 		}
 	}
@@ -116,8 +116,8 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 	// exists — failing the response would tell the caller their datapack
 	// wasn't created when it was. It lands unfiled instead, which the
 	// Datapacks page offers a one-click fix for.
-	if h.collectionSvc != nil && strings.TrimSpace(req.FolderID) != "" {
-		if pErr := h.collectionSvc.Place(account.ID, resp.DatapackID, req.FolderID); pErr != nil {
+	if h.projectSvc != nil && strings.TrimSpace(req.FolderID) != "" {
+		if pErr := h.projectSvc.Place(account.ID, resp.DatapackID, req.FolderID); pErr != nil {
 			slog.Warn("datapack created but filing failed (non-fatal; stays unfiled)",
 				"datapack_id", resp.DatapackID, "folder_id", req.FolderID, "error", pErr)
 		}

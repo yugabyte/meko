@@ -14,7 +14,7 @@ const telemetryComponentName = "telemetry"
 
 // storedComponents decodes what is already on the environment, so a telemetry row
 // can be folded into it rather than written over it. An agent that reported no
-// components — every amp agent, and any agent whose collection failed — must not
+// components — every amp agent, and any agent whose project failed — must not
 // lose the last good report just because the control plane has something to add.
 // Unreadable stored JSON yields nil, which degrades to "record only the telemetry
 // row" rather than failing the whole status write.

@@ -1,9 +1,9 @@
-// "Activity log" panel: the SharedKnowledge page's, and the collection
+// "Activity log" panel: the SharedKnowledge page's, and the project
 // Activity tab's.
 //
 // Takes a fetcher rather than a datapack id, because the two surfaces differ
 // only in which endpoint they page through: one datapack's feed, or every
-// datapack in a collection. Everything else here (pagination, row rendering,
+// datapack in a project. Everything else here (pagination, row rendering,
 // the 429 tolerance) is identical and worth having once.
 //
 // Merged file-upload + memory-promotion feed, server-side paginated.
@@ -31,7 +31,7 @@ import {
 const DEFAULT_PAGE_SIZE = 10;
 
 type Props = {
-  /** Fetches one page. Bound to a datapack or to a collection by the caller.
+  /** Fetches one page. Bound to a datapack or to a project by the caller.
    *  Must be stable across renders (useCallback) or the feed refetches. */
   fetchPage: (args: { limit: number; cursor: string }) => Promise<KBActivityLogResponse>;
   /** Increment to reset and re-fetch from the first page (e.g. after a new KB is created). */
@@ -154,8 +154,8 @@ export function KnowledgeActivityLog({
 function ActivityRow({ item }: { item: KBActivityLogItem }) {
   const now = useNowMs();
 
-  // Structural rows: the collection gained a folder, or a datapack moved into
-  // one. Only the collection feed sends these.
+  // Structural rows: the project gained a folder, or a datapack moved into
+  // one. Only the project feed sends these.
   if (item.type === "folder_created" || item.type === "datapack_filed") {
     const relTime = formatRelativeTime(item.timestamp, now);
     const folder = item.folder_name ?? "a folder";
@@ -196,7 +196,7 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
     const displayName = basename.replace(/^\d+_/, "") || "—";
     const relTime = formatRelativeTime(item.timestamp, now);
 
-    // Datapack first: on the collection feed it is the thing that tells two
+    // Datapack first: on the project feed it is the thing that tells two
     // otherwise identical rows apart. Absent on a single-datapack feed.
     const meta: string[] = [];
     if (item.datapack_name) meta.push(item.datapack_name);

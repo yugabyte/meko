@@ -1,5 +1,5 @@
 // One datapack card in the Datapacks grid: name, description, context/savings
-// /quality metrics, where it sits in a collection, and the hover action strip.
+// /quality metrics, where it sits in a project, and the hover action strip.
 // Extracted from DatapacksTilesSection, which had grown past the size a single
 // file should carry.
 
@@ -9,13 +9,13 @@ import { cn } from "@/lib/utils";
 import type { CurrentUser, Datapack } from "@/lib/api/mekoApi";
 import { formatDatapackCreatedDateShorthand } from "@/lib/datapackDateFormat";
 import { isDatapackGrantEligibleToShare } from "@/lib/datapackShareGrants";
-import type { DatapackPath } from "@/lib/api/collectionsApi";
+import type { DatapackPath } from "@/lib/api/projectsApi";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  ADD_TO_COLLECTION_LABEL,
-  MOVE_INTO_COLLECTION_LABEL,
+  ADD_TO_PROJECT_LABEL,
+  MOVE_INTO_PROJECT_LABEL,
   UNFILED_LABEL,
-} from "@/features/collections/collectionsCopy";
+} from "@/features/projects/projectsCopy";
 import {
   SHARED,
   datapackAccessFooterLabel,
@@ -44,8 +44,8 @@ export function DatapackTile({
   onShareDatapack: (datapack: Datapack) => void;
   /** Where this datapack sits in the caller's tree; undefined means unfiled. */
   path?: DatapackPath;
-  /** Collections feature gate. Off, the tile renders exactly as it did before
-   *  collections existed — no path line, no filing action. */
+  /** Projects feature gate. Off, the tile renders exactly as it did before
+   *  projects existed — no path line, no filing action. */
   showPath?: boolean;
   onFileDatapack?: (datapack: Datapack) => void;
 }) {
@@ -53,7 +53,7 @@ export function DatapackTile({
   const createdShorthand = formatDatapackCreatedDateShorthand(dp.created_at);
   const accessLabel = datapackAccessFooterLabel(dp);
   const ownerLabel = datapackTileOwnerLabel(dp, currentUser);
-  // Filed means the server gave us a collection/folder path for it.
+  // Filed means the server gave us a project/folder path for it.
   const filed = Boolean(path?.path?.trim());
   const canShare = isDatapackGrantEligibleToShare(dp);
   const sharedByLabel = datapackSharedByLabel(dp);
@@ -181,7 +181,7 @@ export function DatapackTile({
               identifies the card. */}
           {showPath ? (
             <div className="mt-1 flex min-w-0 items-baseline gap-1 text-xs">
-              <span className="shrink-0 font-medium text-foreground/70">Collection</span>
+              <span className="shrink-0 font-medium text-foreground/70">Project</span>
               {filed ? (
                 <Tooltip delayDuration={300}>
                   <TooltipTrigger asChild>
@@ -227,7 +227,7 @@ export function DatapackTile({
           </button>
           <div className="w-px shrink-0 self-stretch bg-foreground/10" aria-hidden />
           {/* Connect is a workspace-wide affordance reachable from the header
-              and the datapack page, so with collections on this slot earns
+              and the datapack page, so with projects on this slot earns
               more as the one action this grid cannot otherwise offer.
               Owned datapacks only: placement refuses anything else, so
               offering it on a shared card is offering a guaranteed error. */}
@@ -238,7 +238,7 @@ export function DatapackTile({
               onClick={() => onFileDatapack(dp)}
             >
               <FolderInput className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-              {filed ? MOVE_INTO_COLLECTION_LABEL : ADD_TO_COLLECTION_LABEL}
+              {filed ? MOVE_INTO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
             </button>
           ) : (
             <button

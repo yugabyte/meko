@@ -359,7 +359,7 @@ func TestInstallHint_AmpTurnsOnYugabyteDBMetrics(t *testing.T) {
 		"TelemetryProvider:",
 		"provider: OTLP",
 		"passwordSecret: {name: byoc-metrics-auth, key: password}",
-		"collectionLevel: MINIMAL",
+		"projectLevel: MINIMAL",
 		"scrapeConfigTargets: [MASTER_EXPORT, TSERVER_EXPORT, YSQL_EXPORT]",
 		"telemetryProvider: byoc-metrics",
 		// The door 415s an uncompressed payload, and every send failing is
@@ -397,7 +397,7 @@ func TestInstallHint_AmpTurnsOnMetricsAfterTheSecretAndBeforeTheInstall(t *testi
 	}, "/api/v1/environments", "ycp.example.com", "", nil)
 
 	secret := strings.Index(hint, "create secret generic byoc-metrics-auth")
-	telemetry := strings.Index(hint, "collectionLevel: MINIMAL")
+	telemetry := strings.Index(hint, "projectLevel: MINIMAL")
 	install := strings.Index(hint, "helm upgrade --install yb-amp-controller")
 	if secret < 0 || telemetry < 0 || install < 0 {
 		t.Fatalf("hint is missing one of the three steps:\n%s", hint)

@@ -46,7 +46,7 @@ func run() error {
 		"slog level: debug, info, warn, error")
 
 	// Data-plane database configuration. This pool serves the per-datapack
-	// schemas (datapacks.* — mem0, promoted collections, KB chunk tables —
+	// schemas (datapacks.* — mem0, promoted projects, KB chunk tables —
 	// and dist_rag.* — sources, documents, vector indexes).
 	dbHost := flag.String("db-host", "127.0.0.1", "data-plane database host")
 	dbUserName := flag.String("db-user-name", "yugabyte", "data-plane database user name")
@@ -156,11 +156,11 @@ func run() error {
 	enableBYOC := flag.Bool("enable-byoc",
 		envBoolOrDefault("MEKO_ENABLE_BYOC", false),
 		"run as a BYOC data plane: new users are created pro (no tier caps)")
-	// Collections & folders. The SAME env var gates the UI's Collections nav via
+	// Projects & folders. The SAME env var gates the UI's Projects nav via
 	// runtime-config, so one switch turns the feature on/off end to end.
-	enableCollections := flag.Bool("enable-collections",
-		envBoolOrDefault("MEKO_ENABLE_COLLECTIONS", false),
-		"enable the collection tree (collections, folders, datapack placements)")
+	enableProjects := flag.Bool("enable-projects",
+		envBoolOrDefault("MEKO_ENABLE_PROJECTS", false),
+		"enable the project tree (projects, folders, datapack placements)")
 
 	// YCP control-plane mode (BYOC). Gates the fleet registry + agent API.
 	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable YCP fleet registry + agent API (control plane)")
@@ -587,7 +587,7 @@ func run() error {
 		ShowPGAMP:                          *showPGAMP,
 		EnableConversationSearch:           *enableConversationSearch,
 		BYOCMode:                           *enableBYOC,
-		EnableCollections:                  *enableCollections,
+		EnableProjects:                  *enableProjects,
 		ControlPlaneMode:                   *controlPlaneMode,
 		BasePath:                           *basePath,
 		AWSMarketplaceProductCode:          *awsMarketplaceProductCode,

@@ -387,7 +387,7 @@ func (r *AccountRepo) VerifyEmail(
 
 // EmailInUse reports whether an account other than excludeUserID already owns
 // the given email. It's a read-only pre-check for the federated
-// email-collection flow so we don't fire an OTP to an address that would fail
+// email-project flow so we don't fire an OTP to an address that would fail
 // the user_email uniqueness constraint anyway. Match semantics mirror the
 // unique index (exact, case-sensitive) so this and UpdateEmail agree.
 func (r *AccountRepo) EmailInUse(
@@ -409,7 +409,7 @@ func (r *AccountRepo) EmailInUse(
 }
 
 // UpdateEmail replaces a user's email and resets verification (the new address
-// is unverified until OTP-confirmed). Used by the federated email-collection
+// is unverified until OTP-confirmed). Used by the federated email-project
 // flow. Returns ErrEmailTaken when another account already owns the address.
 func (r *AccountRepo) UpdateEmail(
 	ctx context.Context,

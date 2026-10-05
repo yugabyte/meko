@@ -4,10 +4,10 @@ import (
 	"testing"
 )
 
-// A collection with folders but no datapacks is the ordinary state right
+// A project with folders but no datapacks is the ordinary state right
 // after creating one. The datapack-scoped sides have nothing to query, but
 // the structural rows the caller already fetched must still be served —
-// returning early here once made a new collection report "No activity yet"
+// returning early here once made a new project report "No activity yet"
 // while holding folder_created rows.
 func TestListActivityLog_NoDatapacks_StillServesStructural(t *testing.T) {
 	repo := &KnowledgeBaseRepo{} // no DB: the datapack sides must not be queried

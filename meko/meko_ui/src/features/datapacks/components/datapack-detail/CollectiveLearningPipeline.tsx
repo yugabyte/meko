@@ -1,11 +1,11 @@
 /**
  * “Collective learning” ribbon: Conversations → Memories → Learnings → (promote) → Collective Memory + Shared Knowledge.
  *
- * Shared by a datapack's detail page and a collection's, which is why the
+ * Shared by a datapack's detail page and a project's, which is why the
  * heading, the Conversations stage and the footer actions are optional. A
  * project has no conversation count to show (they live in Langfuse, one
  * query per datapack) and none of the footer actions have a target at
- * collection scope.
+ * project scope.
  */
 import { useEffect, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
@@ -490,7 +490,7 @@ export function CollectiveLearningPipeline({
                 onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined
               }
             >
-              {/* Only where there is somewhere to go. The collection view has no
+              {/* Only where there is somewhere to go. The project view has no
                   promotions-review surface, and a permanently disabled CTA
                   reads as broken rather than as absent. */}
               {onSelectSection ? (
@@ -594,7 +594,7 @@ export function CollectiveLearningPipeline({
           </div>
         </div>
 
-        {/* No actions at collection scope: uploading and cluster creation both
+        {/* No actions at project scope: uploading and cluster creation both
             need one datapack to target. */}
         {onUploadKnowledgeFiles || onCreateCluster ? (
           <div className="border-t border-border/55 bg-input/25 px-4 py-3 sm:px-6">

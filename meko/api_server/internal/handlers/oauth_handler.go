@@ -267,7 +267,7 @@ func buildAuthorizeURL(cognitoDomain, clientID, provider, redirectURI, state, co
 		// aws.cognito.signin.user.admin lets the resulting access token call
 		// Cognito self-service attribute APIs (UpdateUserAttributes,
 		// GetUserAttributeVerificationCode, VerifyUserAttribute) — required by
-		// the post-signup email-collection/OTP flow for federated users who
+		// the post-signup email-project/OTP flow for federated users who
 		// arrive without an email. Without it those calls 401 with
 		// "Access Token does not have required scopes". The app client's allowed
 		// OAuth scopes MUST include this scope or Cognito rejects the authorize

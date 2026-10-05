@@ -421,12 +421,12 @@ func (s *KnowledgeBaseService) ListActivityLog(
 		return ActivityLogResponse{}, fmt.Errorf("datapack is required")
 	}
 	// nil structural: a single datapack's feed has no folder or placement
-	// events, those describe the collection around it.
+	// events, those describe the project around it.
 	return s.ListActivityLogForDatapacks([]string{dp.ID}, limit, cursor, nil)
 }
 
 // ListActivityLogForDatapacks is the same feed over a SET of datapacks, for
-// the collection-wide Activity tab.
+// the project-wide Activity tab.
 //
 // The caller decides the set, and that is the access boundary: this method
 // checks nothing, so it must only ever be handed datapacks the caller can
@@ -437,10 +437,10 @@ func (s *KnowledgeBaseService) ListActivityLog(
 // (meko_datapack_id HASH, id) with nothing on the promotion timestamp, and
 // the uploads side because dist_rag.vector_index_pipeline_details is a VIEW
 // over a four-way join that the DISTINCT ON materialises before the keyset
-// filter applies. So a collection's feed costs O(collection contents) per page,
-// not O(page). Fine at the sizes a collection reaches; the fix is an event
+// filter applies. So a project's feed costs O(project contents) per page,
+// not O(page). Fine at the sizes a project reaches; the fix is an event
 // table, not a better query.
-// structural carries the collection-only sides (folders created, datapacks
+// structural carries the project-only sides (folders created, datapacks
 // filed). Nil from the single-datapack feed, which is what keeps those rows
 // off the Knowledge page.
 func (s *KnowledgeBaseService) ListActivityLogForDatapacks(

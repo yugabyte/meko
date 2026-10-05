@@ -1076,7 +1076,7 @@ func TestEnsureAccountFromIDToken_NoProvisioner_NoPanic(t *testing.T) {
 	svc.EnsureAccountFromIDToken(context.Background(), idToken)
 }
 
-// --- Email collection / verification (federated no-email) tests ---
+// --- Email project / verification (federated no-email) tests ---
 
 func TestStartEmailChange_RejectsBadEmail(t *testing.T) {
 	cases := []string{

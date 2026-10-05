@@ -12,7 +12,7 @@ import (
 	"meko/api_server/internal/service"
 )
 
-// envRoutePath is the collection route every hint is generated under — register
+// envRoutePath is the project route every hint is generated under — register
 // posts to it, get-one reads a path beneath it. Trimming it off the request path is
 // what yields the base path the control plane is mounted under, so a YCP served at
 // https://devcloud.yugabyte.com/ycp/ prints its own real URL rather than a
@@ -599,7 +599,7 @@ func ybMetricsExportHint(b *strings.Builder, envID, accountID, byocMetricsURL st
 	// show_help, and TABLE_OFF's params file defines neither of the first two, so
 	// it reaches the database as no filter at all and emits every per-table
 	// series. MINIMAL defines both and takes effect.
-	fmt.Fprintf(b, "#          collectionLevel: MINIMAL\n")
+	fmt.Fprintf(b, "#          projectLevel: MINIMAL\n")
 	fmt.Fprintf(b, "#          scrapeConfigTargets: [MASTER_EXPORT, TSERVER_EXPORT, YSQL_EXPORT]\n")
 	fmt.Fprintf(b, "#          exporters:\n")
 	fmt.Fprintf(b, "#            - telemetryProvider: %s\n", ybTelemetryProviderName)

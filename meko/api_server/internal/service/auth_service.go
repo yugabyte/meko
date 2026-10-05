@@ -71,7 +71,7 @@ var ErrForgotPasswordNoAccount = errors.New("no account exists for this email ad
 // is blank after trimming. Cognito mandates both, so we reject empties.
 var ErrInvalidProfileName = errors.New("first name and last name are required")
 
-// Email-collection (post-signup, federated-no-email) flow errors.
+// Email-project (post-signup, federated-no-email) flow errors.
 var (
 	// ErrInvalidEmail is returned when the submitted email is empty/malformed
 	// or is itself a synthesized placeholder address.
@@ -734,7 +734,7 @@ type cognitoIdentity struct {
 //
 // A synthesized placeholder address (LinkedIn signups with no IdP email) is
 // never treated as verified, regardless of the claim: doing so would let a
-// federated user past the post-signup email-collection gate without ever
+// federated user past the post-signup email-project gate without ever
 // proving a real address.
 func (c idTokenClaims) emailIsVerified() bool {
 	if isPlaceholderEmail(c.Email) {
@@ -909,7 +909,7 @@ type StartEmailChangeRequest struct {
 	Email string `json:"email"`
 }
 
-// StartEmailChange begins the post-signup email-collection flow for a federated
+// StartEmailChange begins the post-signup email-project flow for a federated
 // user (e.g. LinkedIn) who arrived without an email and carries a placeholder.
 // It validates the address, writes it to Cognito (which emails an OTP to the
 // new address), and records it locally as unverified. The account stays gated

@@ -1,4 +1,4 @@
-// The Datapacks grid: search, the owned/shared scope tabs, the collection filter,
+// The Datapacks grid: search, the owned/shared scope tabs, the project filter,
 // and the tile grid itself. A container — the tile and the add-card are their
 // own files under datapacks-list/.
 
@@ -9,13 +9,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { CurrentUser, Datapack } from "@/lib/api/mekoApi";
 import { sortDatapacksByCreatedAtDesc } from "@/lib/datapackDateFormat";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
-import type { DatapackPathMap, Collection } from "@/lib/api/collectionsApi";
-import { CollectionScopeFilter } from "@/features/collections/components/CollectionScopeFilter";
+import type { DatapackPathMap, Project } from "@/lib/api/projectsApi";
+import { ProjectScopeFilter } from "@/features/projects/components/ProjectScopeFilter";
 import {
-  COLLECTION_FILTER_ALL,
-  COLLECTION_FILTER_UNFILED,
-  filterDatapacksByCollection,
-} from "@/features/collections/lib/filterDatapacksByCollection";
+  PROJECT_FILTER_ALL,
+  PROJECT_FILTER_UNFILED,
+  filterDatapacksByProject,
+} from "@/features/projects/lib/filterDatapacksByProject";
 import {
   OWNED,
   SHARED,
@@ -39,24 +39,24 @@ type Props = {
   onConnectDatapack: (datapack: Datapack) => void;
   onShareDatapack: (datapack: Datapack) => void;
   onNewDatapack: () => void;
-  /** Collections feature gate. Off, this renders exactly as it did before
-   *  collections existed: no path line, no collection filter, no filing action. */
-  showCollections?: boolean;
-  collections?: Collection[];
-  /** True when the caller owns at least one collection. Filing needs somewhere to
-   *  file INTO, and a shared collection is not somewhere you can put things. */
+  /** Projects feature gate. Off, this renders exactly as it did before
+   *  projects existed: no path line, no project filter, no filing action. */
+  showProjects?: boolean;
+  projects?: Project[];
+  /** True when the caller owns at least one project. Filing needs somewhere to
+   *  file INTO, and a shared project is not somewhere you can put things. */
   canFile?: boolean;
   datapackPaths?: DatapackPathMap;
   onFileDatapack?: (datapack: Datapack) => void;
 };
 
-function emptyCopy(scope: ScopeTab, searchActive: boolean, collectionFilterActive: boolean): string {
+function emptyCopy(scope: ScopeTab, searchActive: boolean, projectFilterActive: boolean): string {
   if (searchActive) {
     if (scope === "owned") return "No owned datapacks match your search.";
     if (scope === "shared") return "No shared datapacks match your search.";
     return "No datapacks match your search.";
   }
-  if (collectionFilterActive) return "No datapacks in this collection yet.";
+  if (projectFilterActive) return "No datapacks in this project yet.";
   if (scope === "owned") return "You don't have any datapacks you own yet.";
   if (scope === "shared") return "You don't have any shared datapacks yet.";
   return "No datapacks to show.";
@@ -70,24 +70,24 @@ export default function DatapacksTilesSection({
   onConnectDatapack,
   onShareDatapack,
   onNewDatapack,
-  showCollections = false,
-  collections = [],
+  showProjects = false,
+  projects = [],
   canFile = false,
   datapackPaths = {},
   onFileDatapack,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [scopeTab, setScopeTab] = useState<ScopeTab>("all");
-  const [collectionFilter, setCollectionFilter] = useState<string>(COLLECTION_FILTER_ALL);
+  const [projectFilter, setProjectFilter] = useState<string>(PROJECT_FILTER_ALL);
 
-  // Collection first, then scope, then name: narrowing by location before
+  // Project first, then scope, then name: narrowing by location before
   // ownership keeps the scope counts consistent with what the grid shows.
   const scoped = useMemo(
     () =>
-      showCollections
-        ? filterDatapacksByCollection(datapacks, datapackPaths, collectionFilter)
+      showProjects
+        ? filterDatapacksByProject(datapacks, datapackPaths, projectFilter)
         : datapacks,
-    [showCollections, datapacks, datapackPaths, collectionFilter],
+    [showProjects, datapacks, datapackPaths, projectFilter],
   );
 
   const visibleDatapacks = useMemo(() => {
@@ -101,7 +101,7 @@ export default function DatapacksTilesSection({
   }, [scoped, scopeTab, searchQuery]);
 
   const searchActive = searchQuery.trim() !== "";
-  const collectionFilterActive = showCollections && collectionFilter !== COLLECTION_FILTER_ALL;
+  const projectFilterActive = showProjects && projectFilter !== PROJECT_FILTER_ALL;
   const listEmpty = !isLoading && datapacks.length > 0 && visibleDatapacks.length === 0;
 
   return (
@@ -140,11 +140,11 @@ export default function DatapacksTilesSection({
             </TabsList>
           </Tabs>
 
-          {showCollections ? (
-            <CollectionScopeFilter
-              collections={collections}
-              value={collectionFilter}
-              onChange={setCollectionFilter}
+          {showProjects ? (
+            <ProjectScopeFilter
+              projects={projects}
+              value={projectFilter}
+              onChange={setProjectFilter}
             />
           ) : null}
 
@@ -173,11 +173,11 @@ export default function DatapacksTilesSection({
         </p>
       ) : listEmpty ? (
         <p className="text-sm text-muted-foreground">
-          {emptyCopy(scopeTab, searchActive, collectionFilterActive)}
+          {emptyCopy(scopeTab, searchActive, projectFilterActive)}
         </p>
       ) : (
         // One grid, flag on or off. The table this replaced answered "where
-        // does it live" in a column; the tile answers it in a Collection row
+        // does it live" in a column; the tile answers it in a Project row
         // beside Access and Owner, because prefixing the name truncated it. A
         // second list shape for the same objects was what made the two pages
         // feel unrelated.
@@ -192,7 +192,7 @@ export default function DatapacksTilesSection({
               onConnectDatapack={onConnectDatapack}
               onShareDatapack={onShareDatapack}
               path={datapackPaths[dp.datapack_id]}
-              showPath={showCollections}
+              showPath={showProjects}
               // Nothing to file into means the slot keeps Connect rather than
               // becoming a dead button.
               onFileDatapack={canFile ? onFileDatapack : undefined}
@@ -200,7 +200,7 @@ export default function DatapacksTilesSection({
           ))}
           <CreateTile
             title="New datapack"
-            description="Connect an existing collection or start from scratch"
+            description="Connect an existing project or start from scratch"
             onClick={onNewDatapack}
           />
         </div>

@@ -5,15 +5,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Check, Copy, Database, FolderTree, Sparkles } from "lucide-react";
-import { collectionDetailPath, ROUTES } from "@/app/routes/paths";
+import { projectDetailPath, ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { copyToClipboard } from "@/lib/clipboard";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
 import { DatapackShareGrant } from "@/lib/api/mekoApi";
-import type { DatapackPath } from "@/lib/api/collectionsApi";
-import { UNFILED_LABEL } from "@/features/collections/collectionsCopy";
+import type { DatapackPath } from "@/lib/api/projectsApi";
+import { UNFILED_LABEL } from "@/features/projects/projectsCopy";
 
 /**
  * When true, shows the green “active” status pill next to the title.
@@ -34,11 +34,11 @@ type Props = {
   /** Who owns a datapack shared WITH you. Omitted on your own, where an owner
    *  line would only ever read as your own name. */
   ownerName?: string | null;
-  /** Off with the collections feature disabled, which is what keeps the whole
-   *  Collection entry out rather than showing it permanently unfiled. */
-  showCollection?: boolean;
+  /** Off with the projects feature disabled, which is what keeps the whole
+   *  Project entry out rather than showing it permanently unfiled. */
+  showProject?: boolean;
   /** Where this datapack is filed. Undefined means unfiled. */
-  collectionPath?: DatapackPath;
+  projectPath?: DatapackPath;
   /** Hero actions (e.g. Connect, Share, settings menu). */
   actions: React.ReactNode;
 };
@@ -90,8 +90,8 @@ export function DatapackDetailHero({
   isNewDatapack = false,
   statusLoading,
   ownerName,
-  showCollection = false,
-  collectionPath,
+  showProject = false,
+  projectPath,
   actions,
 }: Props) {
   const [descExpanded, setDescExpanded] = useState(false);
@@ -163,13 +163,13 @@ export function DatapackDetailHero({
 
             {/* Where this datapack lives, directly under its name. This used
                 to sit in the ID / Created / Access line and got lost among
-                three other facts; a collection is not trivia about the
+                three other facts; a project is not trivia about the
                 datapack, it is its address. */}
-            {showCollection ? (
-              collectionPath ? (
+            {showProject ? (
+              projectPath ? (
                 <Link
-                  to={collectionDetailPath(collectionPath.collection_id)}
-                  title={collectionPath.path}
+                  to={projectDetailPath(projectPath.project_id)}
+                  title={projectPath.path}
                   className={cn(
                     "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1",
                     "border-brand/25 bg-brand/10 text-xs font-medium text-brand",
@@ -178,7 +178,7 @@ export function DatapackDetailHero({
                   )}
                 >
                   <FolderTree className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  <span className="truncate font-mono">{collectionPath.path}</span>
+                  <span className="truncate font-mono">{projectPath.path}</span>
                 </Link>
               ) : (
                 <span

@@ -38,14 +38,14 @@ import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTile
 import { DatapackConnectDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
-import { useCollectionsEnabled } from "@/lib/collectionsFeature";
+import { useProjectsEnabled } from "@/lib/projectsFeature";
 import {
   DATAPACK_PATHS_QUERY_KEY,
   useDatapackPaths,
-  useCollections,
-} from "@/features/collections/hooks/useCollections";
-import { FileIntoCollectionDialog } from "@/features/collections/components/FileIntoCollectionDialog";
-import { DATAPACK_MOVED_TOAST } from "@/features/collections/collectionsCopy";
+  useProjects,
+} from "@/features/projects/hooks/useProjects";
+import { FileIntoProjectDialog } from "@/features/projects/components/FileIntoProjectDialog";
+import { DATAPACK_MOVED_TOAST } from "@/features/projects/projectsCopy";
 
 // Local key for tracking whether the user has seen the "What is a Datapack?"
 // explainer at least once. Used to expand the panel by default on the very
@@ -74,19 +74,19 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     () => getFreeTierStatus(usage, currentUser?.user_type),
     [usage, currentUser?.user_type],
   );
-  // Collections: both queries are gated on the flag, so a workspace without the
-  // feature issues no /collections requests at all.
-  const collectionsEnabled = useCollectionsEnabled();
-  const { data: collectionLists } = useCollections({ enabled: collectionsEnabled });
-  // The filter spans both lists (you may want to narrow to a shared collection),
-  // but only an OWNED collection can be filed into.
-  const ownedCollections = useMemo(() => collectionLists?.owned ?? [], [collectionLists]);
-  const filterableCollections = useMemo(
-    () => [...ownedCollections, ...(collectionLists?.shared ?? [])],
-    [ownedCollections, collectionLists],
+  // Projects: both queries are gated on the flag, so a workspace without the
+  // feature issues no /projects requests at all.
+  const projectsEnabled = useProjectsEnabled();
+  const { data: projectLists } = useProjects({ enabled: projectsEnabled });
+  // The filter spans both lists (you may want to narrow to a shared project),
+  // but only an OWNED project can be filed into.
+  const ownedProjects = useMemo(() => projectLists?.owned ?? [], [projectLists]);
+  const filterableProjects = useMemo(
+    () => [...ownedProjects, ...(projectLists?.shared ?? [])],
+    [ownedProjects, projectLists],
   );
-  const canFileIntoACollection = ownedCollections.length > 0;
-  const { data: datapackPaths = {} } = useDatapackPaths({ enabled: collectionsEnabled });
+  const canFileIntoAProject = ownedProjects.length > 0;
+  const { data: datapackPaths = {} } = useDatapackPaths({ enabled: projectsEnabled });
   // Non-null while the file/move dialog is open, and the datapack
   // it was opened for.
   const [datapackToFile, setDatapackToFile] = useState<Datapack | null>(null);
@@ -429,9 +429,9 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                 <div className="flex-1">
                   <p className="text-muted-foreground text-base mb-3 leading-relaxed max-w-2xl">
                     A datapack is everything your agent knows in one place, usually organized by a
-                    collection topic. Conversations you have with your agents, the memories they form,
+                    project topic. Conversations you have with your agents, the memories they form,
                     the docs you upload, and a traceable record of what each agent did. Create one
-                    per topic or collection. Any AI tool you connect over MCP can read and write to it,
+                    per topic or project. Any AI tool you connect over MCP can read and write to it,
                     so your context follows you when you switch tools.
                   </p>
                   <p className="mb-6 max-w-2xl text-xs italic text-muted-foreground/70">
@@ -516,17 +516,17 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           }
           onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_id))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
-          showCollections={collectionsEnabled}
-          collections={filterableCollections}
-          canFile={canFileIntoACollection}
+          showProjects={projectsEnabled}
+          projects={filterableProjects}
+          canFile={canFileIntoAProject}
           datapackPaths={datapackPaths}
           onFileDatapack={setDatapackToFile}
         />
 
-        {/* Mounted only with the feature on, so a workspace without Collections
+        {/* Mounted only with the feature on, so a workspace without Projects
             never builds the dialog's queries. */}
-        {collectionsEnabled ? (
-          <FileIntoCollectionDialog
+        {projectsEnabled ? (
+          <FileIntoProjectDialog
             open={datapackToFile !== null}
             onOpenChange={(open) => {
               if (!open) setDatapackToFile(null);
@@ -537,7 +537,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
             title={filingTarget ? "Move datapack" : undefined}
             confirmLabel={filingTarget ? "Move here" : undefined}
             successTitle={filingTarget ? DATAPACK_MOVED_TOAST : undefined}
-            defaultCollectionId={filingTarget?.collection_id}
+            defaultProjectId={filingTarget?.project_id}
           />
         ) : null}
 

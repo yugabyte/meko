@@ -116,7 +116,7 @@ Meko uses _memory_ to enhance user experience through _personalization_.
 Ask this question of your coding agent without Meko:
 
 ```text
-Propose a 5 day vacation for me. Do not use Meko or any prior recollection of my preferences in generating your response.
+Propose a 5 day vacation for me. Do not use Meko or any prior reproject of my preferences in generating your response.
 ```
 
 Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"

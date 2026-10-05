@@ -12,12 +12,12 @@ import (
 
 // ErrPlacementNotFound is returned when a datapack has no placement — i.e. it
 // is unfiled.
-var ErrPlacementNotFound = errors.New("datapack is not filed in a collection")
+var ErrPlacementNotFound = errors.New("datapack is not filed in a project")
 
 // PlacementRepo wraps meko_system.datapack_placements: where a datapack lives.
 //
 // EXACTLY ONE row per datapack. Sharing does not duplicate it: a recipient
-// sees the owner's collection read-only rather than getting a copy in a tree of
+// sees the owner's project read-only rather than getting a copy in a tree of
 // their own, so there is one home per datapack and one truth about its path.
 // Access scoping happens by filtering to the datapacks a caller can see, never
 // by giving them their own placement.
@@ -33,15 +33,15 @@ func NewPlacementRepo(db *sql.DB) *PlacementRepo {
 // statement either way: the primary key is datapack_id, so re-filing is an
 // upsert rather than a delete-then-insert that could leave it unfiled on a
 // crash.
-func (r *PlacementRepo) Place(datapackID, collectionID, folderID string) error {
+func (r *PlacementRepo) Place(datapackID, projectID, folderID string) error {
 	_, err := r.db.Exec(
-		`INSERT INTO meko_system.datapack_placements (datapack_id, collection_id, folder_id)
+		`INSERT INTO meko_system.datapack_placements (datapack_id, project_id, folder_id)
 		 VALUES ($1, $2, $3)
 		 ON CONFLICT (datapack_id) DO UPDATE
-		     SET collection_id = EXCLUDED.collection_id,
+		     SET project_id = EXCLUDED.project_id,
 		         folder_id  = EXCLUDED.folder_id,
 		         updated_at = NOW()`,
-		datapackID, collectionID, folderID,
+		datapackID, projectID, folderID,
 	)
 	if err != nil {
 		return fmt.Errorf("datapack_placements: place %s: %w", datapackID, err)
@@ -66,11 +66,11 @@ func (r *PlacementRepo) Unplace(datapackID string) error {
 func (r *PlacementRepo) Get(datapackID string) (*models.DatapackPlacement, error) {
 	var p models.DatapackPlacement
 	err := r.db.QueryRow(
-		`SELECT datapack_id, collection_id, folder_id, placed_at, updated_at
+		`SELECT datapack_id, project_id, folder_id, placed_at, updated_at
 		 FROM   meko_system.datapack_placements
 		 WHERE  datapack_id = $1`,
 		datapackID,
-	).Scan(&p.DatapackID, &p.CollectionID, &p.FolderID, &p.PlacedAt, &p.UpdatedAt)
+	).Scan(&p.DatapackID, &p.ProjectID, &p.FolderID, &p.PlacedAt, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrPlacementNotFound
 	}
@@ -81,19 +81,19 @@ func (r *PlacementRepo) Get(datapackID string) (*models.DatapackPlacement, error
 }
 
 // CountsByFolderForOwner returns the per-folder datapack count across every
-// collection userID OWNS, in one query.
+// project userID OWNS, in one query.
 //
-// Joined through collections rather than filtered on the placement row, because a
-// placement no longer carries a user: the owner of the collection is the owner of
-// everything filed in it. Served by idx_collections_user_id then
-// idx_placements_collection, so neither side is scanned.
+// Joined through projects rather than filtered on the placement row, because a
+// placement no longer carries a user: the owner of the project is the owner of
+// everything filed in it. Served by idx_projects_user_id then
+// idx_placements_project, so neither side is scanned.
 func (r *PlacementRepo) CountsByFolderForOwner(userID string) ([]models.FolderDatapackCount, error) {
 	rows, err := r.db.Query(
-		`SELECT dp.collection_id, dp.folder_id, COUNT(*)
+		`SELECT dp.project_id, dp.folder_id, COUNT(*)
 		 FROM   meko_system.datapack_placements dp
-		 JOIN   meko_system.collections p ON p.collection_id = dp.collection_id
+		 JOIN   meko_system.projects p ON p.project_id = dp.project_id
 		 WHERE  p.user_id = $1
-		 GROUP  BY dp.collection_id, dp.folder_id`,
+		 GROUP  BY dp.project_id, dp.folder_id`,
 		userID,
 	)
 	if err != nil {
@@ -104,7 +104,7 @@ func (r *PlacementRepo) CountsByFolderForOwner(userID string) ([]models.FolderDa
 	var out []models.FolderDatapackCount
 	for rows.Next() {
 		var c models.FolderDatapackCount
-		if sErr := rows.Scan(&c.CollectionID, &c.FolderID, &c.Count); sErr != nil {
+		if sErr := rows.Scan(&c.ProjectID, &c.FolderID, &c.Count); sErr != nil {
 			return nil, fmt.Errorf("datapack_placements: scan owner count: %w", sErr)
 		}
 		out = append(out, c)
@@ -126,7 +126,7 @@ func (r *PlacementRepo) ForDatapacks(datapackIDs []string) ([]models.DatapackPla
 		return nil, nil
 	}
 	rows, err := r.db.Query(
-		`SELECT datapack_id, collection_id, folder_id, placed_at, updated_at
+		`SELECT datapack_id, project_id, folder_id, placed_at, updated_at
 		 FROM   meko_system.datapack_placements
 		 WHERE  datapack_id = ANY($1)`,
 		pq.Array(datapackIDs),
@@ -140,7 +140,7 @@ func (r *PlacementRepo) ForDatapacks(datapackIDs []string) ([]models.DatapackPla
 	for rows.Next() {
 		var p models.DatapackPlacement
 		if sErr := rows.Scan(
-			&p.DatapackID, &p.CollectionID, &p.FolderID, &p.PlacedAt, &p.UpdatedAt,
+			&p.DatapackID, &p.ProjectID, &p.FolderID, &p.PlacedAt, &p.UpdatedAt,
 		); sErr != nil {
 			return nil, fmt.Errorf("datapack_placements: scan: %w", sErr)
 		}
