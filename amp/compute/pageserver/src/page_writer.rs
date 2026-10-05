@@ -406,9 +406,9 @@ struct AuxBuffers {
     /// `pages.unflushed_bytes()`. Drives the non-rel side of the
     /// size-based flush trigger.
     bytes_in_aux_buffers: usize,
-    /// Wall-clock of the first row appended after the most-recent
-    /// flush. Drives the age-based flush trigger; reset to `None`
-    /// when the buffer is empty.
+    /// Start of the current flush window. Drives the age-based flush
+    /// trigger; `None` when the buffer is empty, and restarted by a flush
+    /// that leaves rows behind.
     opened_at: Option<Instant>,
 }
 
@@ -1865,6 +1865,8 @@ impl PageWriter {
                     && aux.gc_event_buffer.is_empty()
                 {
                     aux.opened_at = None;
+                } else {
+                    aux.opened_at = Some(Instant::now());
                 }
             }
             self.dispatch_materialize_jobs(to_materialize).await;
@@ -3388,6 +3390,30 @@ mod tests {
         let out = reader.await.unwrap().unwrap();
         let lsns: Vec<Lsn> = out[&0].iter().map(|r| r.lsn).collect();
         assert_eq!(lsns, vec![Lsn(110), Lsn(100)]);
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn flush_leaving_rows_restarts_the_age_clock() {
+        let (store, schema) = make_store("flush_age_reset").await;
+        let policy = FlushPolicy {
+            max_age: Duration::from_millis(100),
+            max_bytes: 1_000_000_000,
+            backpressure_bytes: 0,
+            ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
+        };
+        let (w, _t) = writer(store.clone(), policy);
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let (flushed, put) = tokio::join!(w.flush(), async {
+            tokio::task::yield_now().await;
+            w.put(&[(k(2), Lsn(20), image())]).await
+        });
+        flushed.unwrap();
+        put.unwrap();
+        assert_eq!(w.stats().await.buffered_rows, 1);
+        assert!(!w.should_flush().await);
         drop_schema(&store, &schema).await;
     }
 
