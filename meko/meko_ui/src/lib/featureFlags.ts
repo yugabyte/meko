@@ -34,6 +34,11 @@ export const FEATURE_FLAGS = {
     storageKey: "meko:show_observe_nav",
     queryParam: "observe",
   },
+  /** Delete buttons on private and promoted memories (memory summary, Collective Memory, WorkbenchLM). Off by default. */
+  enableMemoryDeletion: {
+    storageKey: "meko:enable_memory_deletion",
+    queryParam: "enableMemoryDeletion",
+  },
 } as const;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

@@ -101,6 +101,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackId }: Prop
             embeddingModel={summary?.embedding_model ?? null}
             embeddingDimensions={summary?.embedding_dimensions ?? null}
             aiProvider={summary?.ai_provider ?? null}
+            datapackGrant={datapack.grant ?? null}
           />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">

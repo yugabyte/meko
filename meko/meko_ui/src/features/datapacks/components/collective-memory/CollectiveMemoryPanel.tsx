@@ -18,7 +18,7 @@
 //   - /datapack/<name>         → pending count (mem0 memories not yet
 //                                 promoted) passed in as `pendingCount`
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -27,10 +27,11 @@ import {
   ChevronRight,
   Loader2,
   RefreshCw,
-  Sparkles
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 import {
   CONVERSATION_SOURCE,
   LEARNINGS_SOURCE,
@@ -38,9 +39,23 @@ import {
   datapackLearningsPathFrom,
 } from "@/app/routes/paths";
 import { useArrivalFlash } from "@/hooks/useArrivalFlash";
+import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { PAGE_SIZE_OPTIONS } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
+import {
+  API_ERROR_CODE_PRE_MEM0_V2_MEMORY,
+  deletePromotedMemory,
+  getApiErrorMessage,
+  isMekoApiRequestError,
+  isPostMem0V2,
+  type PromotedMemory,
+} from "@/lib/api/mekoApi";
+import {
+  isDatapackGrantEligibleToShare,
+  type DatapackShareGrant,
+} from "@/lib/datapackShareGrants";
 import { usePromotedMemoryList } from "./usePromotedMemoryList";
 import { PromotedMemoryCard } from "./PromotedMemoryCard";
+import { PromotedMemoryDeleteDialog } from "./PromotedMemoryDeleteDialog";
 
 type Props = {
   datapackName: string;
@@ -66,6 +81,11 @@ type Props = {
   highlightMemoryId?: string;
   /** Fired after the highlight card has genuinely been found and shimmered. */
   onHighlightConsumed?: (id: string) => void;
+  /** Caller's grant on this datapack. The per-card Delete affordance is
+   *  gated to owner/maintainer (contributors/viewers see no button); the
+   *  server enforces the same rule with 403 FORBIDDEN, so this is a UX
+   *  gate and not a security boundary. */
+  datapackGrant?: DatapackShareGrant | null;
 };
 
 export function CollectiveMemoryPanel({
@@ -77,7 +97,9 @@ export function CollectiveMemoryPanel({
   embeddingDimensions = null,
   aiProvider = null,
   highlightMemoryId,
-  onHighlightConsumed, }: Props) {
+  onHighlightConsumed,
+  datapackGrant = null,
+}: Props) {
   const navigate = useNavigate();
   const {
     loading,
@@ -103,6 +125,48 @@ export function CollectiveMemoryPanel({
     if (!q) return memories;
     return memories.filter((m) => (m.data ?? "").toLowerCase().includes(q));
   }, [memories, searchQuery]);
+
+  // Owner/maintainer (via Share helper) mirrors the server's owner-or-maintainer
+  // gate on DELETE /promoted-memories/:id — do NOT switch to the Delete-named
+  // helper: that one is owner-only and would silently make the client stricter
+  // than the server.
+  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
+  const canDelete =
+    memoryDeletionEnabled &&
+    isDatapackGrantEligibleToShare({
+      grant: datapackGrant ?? undefined,
+    });
+
+  // Single-flight delete state (mirrors MemoryReadOnlySummaryPanel).
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDeleteMemory, setPendingDeleteMemory] =
+    useState<PromotedMemory | null>(null);
+
+  const handleDelete = useCallback(
+    async (memoryId: string) => {
+      if (deletingId) return;
+      setDeletingId(memoryId);
+      try {
+        await deletePromotedMemory(memoryId, datapackId);
+        toast({ title: "Collective memory deleted" });
+        setPendingDeleteMemory(null);
+        await loadMemories();
+      } catch (err) {
+        // Race safety net — UI already hides the button for pre-cutoff rows.
+        if (isMekoApiRequestError(err) && err.code === API_ERROR_CODE_PRE_MEM0_V2_MEMORY) {
+          toast({ title: "Can't delete", description: err.message });
+        } else {
+          toast({
+            title: "Couldn't delete",
+            description: getApiErrorMessage(err, "Delete failed."),
+          });
+        }
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [datapackId, deletingId, loadMemories],
+  );
 
   // Deep-link highlight: when highlightMemoryId matches a card on the
   // currently-loaded page, scroll it into view and flash it once.
@@ -356,6 +420,10 @@ export function CollectiveMemoryPanel({
                     embeddingModel={embeddingModel}
                     embeddingDimensions={embeddingDimensions}
                     aiProvider={aiProvider}
+                    canDelete={canDelete}
+                    isDeleting={deletingId === m.id}
+                    deleteInFlight={deletingId !== null}
+                    onDeleteClick={() => setPendingDeleteMemory(m)}
                   />
                 </div>
               </li>
@@ -363,6 +431,18 @@ export function CollectiveMemoryPanel({
           })}
         </ul>
       ) : null}
+
+      {/* Confirm-delete dialog. Mirrors the private-delete flow in
+          MemoryReadOnlySummaryPanel: the destructive action stays open
+          while the request is in flight so the user sees the spinner,
+          and the memory text is shown inline so they re-read what they
+          are about to erase for the whole datapack. */}
+      <PromotedMemoryDeleteDialog
+        memory={pendingDeleteMemory}
+        deleting={deletingId !== null}
+        onCancel={() => setPendingDeleteMemory(null)}
+        onConfirm={(memoryId) => void handleDelete(memoryId)}
+      />
     </div>
   );
 }

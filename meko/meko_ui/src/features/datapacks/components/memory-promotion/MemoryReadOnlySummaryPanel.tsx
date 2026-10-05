@@ -21,6 +21,7 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/hooks/use-toast";
+import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import {
   CONVERSATION_SOURCE,
   datapackConversationsPathWithSource,
@@ -29,7 +30,14 @@ import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
 import { useMemoryReadOnlyList } from "./useMemoryReadOnlyList";
 import { PAGE_SIZE_OPTIONS } from "./useMemoryPromotion";
 import { MemoryRowBody } from "./memoryRowBody";
-import { deleteMemory, getApiErrorMessage, type Memory } from "@/lib/api/mekoApi";
+import {
+  API_ERROR_CODE_PRE_MEM0_V2_MEMORY,
+  deleteMemory,
+  getApiErrorMessage,
+  isMekoApiRequestError,
+  isPostMem0V2,
+  type Memory,
+} from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;
@@ -65,6 +73,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
     goToPage,
     changePageSize,
   } = useMemoryReadOnlyList({ datapackId, q: debouncedSearch });
+  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
 
   // Memory id currently being deleted. Single-flight: at most one delete
   // in flight at a time so the row spinner is unambiguous and the user
@@ -93,10 +102,15 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
         setPendingDeleteMemory(null);
         await loadMemories();
       } catch (err) {
-        toast({
-          title: "Couldn't delete",
-          description: getApiErrorMessage(err, "Delete failed."),
-        });
+        // Race safety net — UI already hides the button for pre-cutoff rows.
+        if (isMekoApiRequestError(err) && err.code === API_ERROR_CODE_PRE_MEM0_V2_MEMORY) {
+          toast({ title: "Can't delete", description: err.message });
+        } else {
+          toast({
+            title: "Couldn't delete",
+            description: getApiErrorMessage(err, "Delete failed."),
+          });
+        }
       } finally {
         setDeletingId(null);
       }
@@ -292,8 +306,11 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                           className="flex shrink-0 items-center gap-1.5"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* // TODO: Add back delete button once delete privare and promoted memories are fixed */}
-                          {/* {isMine ? (
+                          {/* Delete is gated to (a) the memory's author
+                              — server also enforces via `meko_user_id =
+                              caller` — and (b) post-Mem0-v2 rows the
+                              backend can actually purge cleanly. */}
+                          {memoryDeletionEnabled && isMine && isPostMem0V2(m.created_at) ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <span className="inline-flex">
@@ -322,7 +339,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                               </TooltipTrigger>
                               <TooltipContent side="top">Delete this memory</TooltipContent>
                             </Tooltip>
-                          ) : null} */}
+                          ) : null}
                           {canLink ? (
                             <ObserveButton
                               projectId={langfuseProjectId}

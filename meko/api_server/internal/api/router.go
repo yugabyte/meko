@@ -1044,8 +1044,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	// (owner or accepted share) and (2) the row's meko_user_id matches the
 	// caller. Together these let any member delete their own rows while
 	// blocking revoked members and cross-member deletes.
-	// Disabled until the private-memory delete flow has end-to-end testing.
-	// g.DELETE("/memories/:memory_id", memoriesH.DeleteByID)
+	g.DELETE("/memories/:memory_id", memoriesH.DeleteByID)
 
 	patH := handlers.NewMCPPATHandler(reg.mcpPATSvc)
 	g.POST("/me/meko-tokens", patH.Create)
@@ -1070,6 +1069,8 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	dpDirect.POST("/promote-memories", promoteMemoriesH.Promote, auth.RequireScope(auth.ScopeWrite))
 	dpDirect.POST("/keep-as-memory", promoteMemoriesH.KeepAsMemory, auth.RequireScope(auth.ScopeWrite))
 	dpDirect.GET("/promoted-memories", promoteMemoriesH.ListGET, auth.RequireScope(auth.ScopeRead))
+	// Owner/maintainer gate is in-handler (datapack_id is a query param, not a path segment).
+	g.DELETE("/promoted-memories/:memory_id", promoteMemoriesH.DeleteByID)
 
 	feedbackH := handlers.NewFeedbackHandler(reg.feedbackRepo)
 	g.POST("/feedback", feedbackH.Create)

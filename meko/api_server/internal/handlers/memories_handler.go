@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/models"
+	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
 
@@ -141,6 +143,11 @@ func (handler *MemoriesHandler) DeleteByID(c echo.Context) error {
 
 	deleted, err := handler.memoriesSvc.Delete(c.Request().Context(), memoryID, datapackID, accountID)
 	if err != nil {
+		if errors.Is(err, repository.ErrPreMem0V2Memory) {
+			// UI keys on PRE_MEM0_V2_MEMORY to hide the delete affordance.
+			return apiError(c, http.StatusBadRequest, "PRE_MEM0_V2_MEMORY",
+				"This memory pre-dates the mem0 v2 rollout and cannot be deleted.")
+		}
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}

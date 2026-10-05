@@ -41,12 +41,17 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  API_ERROR_CODE_PRE_MEM0_V2_MEMORY,
   deleteMemory,
+  deletePromotedMemory,
   formatMemoryAuthor,
   getApiErrorMessage,
   getKnowledgeBaseDocuments,
+  isMekoApiRequestError,
+  isPostMem0V2,
   listMemories,
   listPromotedMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
@@ -57,6 +62,7 @@ import {
 } from "@/lib/api/mekoApi";
 import {
   isDatapackGrantEligibleToPromoteMemoryToKnowledge,
+  isDatapackGrantEligibleToShare,
   type DatapackShareGrant,
 } from "@/lib/datapackShareGrants";
 import {
@@ -207,6 +213,7 @@ export function WorkbenchLMLiveObservationPanel({
             <div style={{ marginTop: '16px' }}>
               <CollectiveMemorySection
                 datapackId={datapackId}
+                datapackGrant={datapackGrant}
                 refreshTick={effectiveTick}
               />
             </div>
@@ -235,6 +242,7 @@ export function WorkbenchLMLiveObservationPanel({
           <div style={{ marginTop: '16px' }}>
             <CollectiveMemorySection
               datapackId={datapackId}
+              datapackGrant={datapackGrant}
               refreshTick={effectiveTick}
             />
           </div>
@@ -357,6 +365,7 @@ function LearningsSection({
   const [promotingId, setPromotingId] = useState<string | null>(null);
   // Memory id currently being deleted (same single-flight pattern).
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
 
   const canPromote = isDatapackGrantEligibleToPromoteMemoryToKnowledge({
     grant: datapackGrant ?? undefined,
@@ -449,10 +458,15 @@ function LearningsSection({
         setTotal((prev) => Math.max(0, prev - 1));
         toast({ title: "Memory deleted" });
       } catch (err) {
-        toast({
-          title: "Couldn't delete",
-          description: getApiErrorMessage(err, "Delete failed."),
-        });
+        // Race safety net — UI already hides the button for pre-cutoff rows.
+        if (isMekoApiRequestError(err) && err.code === API_ERROR_CODE_PRE_MEM0_V2_MEMORY) {
+          toast({ title: "Can't delete", description: err.message });
+        } else {
+          toast({
+            title: "Couldn't delete",
+            description: getApiErrorMessage(err, "Delete failed."),
+          });
+        }
       } finally {
         setDeletingId(null);
       }
@@ -525,7 +539,8 @@ function LearningsSection({
                     {m.agent_id ? `agent · ${m.agent_id}` : " "}
                   </span>
                   <div className="flex shrink-0 items-center gap-1">
-                    {/* {isMine ? (
+                    {/* Author + post-cutoff (server enforces both). */}
+                    {memoryDeletionEnabled && isMine && isPostMem0V2(m.created_at) ? (
                       <button
                         type="button"
                         onClick={() => void handleDelete(m.id)}
@@ -544,7 +559,7 @@ function LearningsSection({
                           <Trash2 className="h-3 w-3" aria-hidden />
                         )}
                       </button>
-                    ) : null} */}
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => void handlePromote(m.id)}
@@ -603,15 +618,29 @@ const COLLECTIVE_TONE = {
 
 function CollectiveMemorySection({
   datapackId,
+  datapackGrant,
   refreshTick,
 }: {
   datapackId: string | null;
+  /** Caller's grant on the active datapack. Owner/maintainer get a per-
+   *  tile Delete button (shared-KB row → server enforces the same rule
+   *  with 403); contributors and viewers see no delete affordance. */
+  datapackGrant: DatapackShareGrant | null;
   refreshTick: number;
 }) {
   const [items, setItems] = useState<PromotedMemory[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Single-flight delete state (matches LearningsSection above).
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
+  const canDelete =
+    memoryDeletionEnabled &&
+    isDatapackGrantEligibleToShare({
+      grant: datapackGrant ?? undefined,
+    });
 
   const fetchPromoted = useCallback(
     async (signal?: AbortSignal) => {
@@ -647,6 +676,33 @@ function CollectiveMemorySection({
     return () => ac.abort();
   }, [fetchPromoted, refreshTick]);
 
+  const handleDelete = useCallback(
+    async (memoryId: string) => {
+      if (!datapackId || deletingId) return;
+      setDeletingId(memoryId);
+      try {
+        await deletePromotedMemory(memoryId, datapackId);
+        // Server confirmed — drop tile locally so it disappears before next poll.
+        setItems((prev) => prev.filter((m) => m.id !== memoryId));
+        setTotal((prev) => Math.max(0, prev - 1));
+        toast({ title: "Collective memory deleted" });
+      } catch (err) {
+        // Race safety net — UI already hides the button for pre-cutoff rows.
+        if (isMekoApiRequestError(err) && err.code === API_ERROR_CODE_PRE_MEM0_V2_MEMORY) {
+          toast({ title: "Can't delete", description: err.message });
+        } else {
+          toast({
+            title: "Couldn't delete",
+            description: getApiErrorMessage(err, "Delete failed."),
+          });
+        }
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [datapackId, deletingId],
+  );
+
   return (
     <SectionShell
       title="Collective Memories"
@@ -668,25 +724,50 @@ function CollectiveMemorySection({
         </p>
       ) : (
         <ul className="space-y-2">
-          {items.slice(0, TOP_N).map((m) => (
-            <li
-              key={m.id}
-              className={cn(
-                "rounded-lg border px-3 py-2 animate-in fade-in slide-in-from-bottom-1 duration-300",
-                COLLECTIVE_TONE.border,
-                COLLECTIVE_TONE.bg,
-              )}
-              title={m.data}
-              tabIndex={0}
-            >
-              <p className="line-clamp-2 text-xs text-foreground dark:text-white/95">{m.data}</p>
-              {m.agent_id ? (
-                <p className="mt-1 truncate text-[10px] text-sky-700 dark:text-sky-200/70">
-                  agent · {m.agent_id}
-                </p>
-              ) : null}
-            </li>
-          ))}
+          {items.slice(0, TOP_N).map((m) => {
+            const isDeleting = deletingId === m.id;
+            // Owner/maintainer + post-cutoff (server enforces both).
+            const showDelete = canDelete && isPostMem0V2(m.created_at);
+            return (
+              <li
+                key={m.id}
+                className={cn(
+                  "rounded-lg border px-3 py-2 animate-in fade-in slide-in-from-bottom-1 duration-300",
+                  COLLECTIVE_TONE.border,
+                  COLLECTIVE_TONE.bg,
+                )}
+                title={m.data}
+                tabIndex={0}
+              >
+                <p className="line-clamp-2 text-xs text-foreground dark:text-white/95">{m.data}</p>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="truncate text-[10px] text-sky-700 dark:text-sky-200/70">
+                    {m.agent_id ? `agent · ${m.agent_id}` : " "}
+                  </span>
+                  {showDelete ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(m.id)}
+                      disabled={deletingId !== null}
+                      className={cn(
+                        "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                        "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-200 hover:bg-red-500/20",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                      )}
+                      title="Remove from collective memory (owner/maintainer only)"
+                      aria-label="Delete collective memory"
+                    >
+                      {isDeleting ? (
+                        <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                      ) : (
+                        <Trash2 className="h-3 w-3" aria-hidden />
+                      )}
+                    </button>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </SectionShell>

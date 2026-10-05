@@ -4093,6 +4093,51 @@ paths:
       summary: List promoted memories (paginated)
       tags:
       - memories
+  /promoted-memories/{memory_id}:
+    delete:
+      parameters:
+      - description: Promoted memory ID (UUID)
+        in: path
+        name: memory_id
+        required: true
+        type: string
+      - description: Datapack ID owning the promoted memory
+        in: query
+        name: datapack_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a promoted memory (owner/maintainer only)
+      tags:
+      - memories
 securityDefinitions:
   BearerAuth:
     description: 'JWT access token from /auth/login. Format: Bearer {token}'

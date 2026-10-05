@@ -27,12 +27,16 @@ import {
   Cpu,
   Hash,
   Layers,
+  Loader2,
   MessageSquare,
   Sparkles,
   SquareArrowOutUpRight,
+  Trash2,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CONVERSATION_SOURCE, datapackConversationsPathWithSource } from "@/app/routes/paths";
-import type { PromotedMemory } from "@/lib/api/mekoApi";
+import { isPostMem0V2, type PromotedMemory } from "@/lib/api/mekoApi";
 import { formatRelativeTime, formatUtcAbsolute, useNowMs } from "@/lib/relativeTime";
 
 type Props = {
@@ -49,6 +53,19 @@ type Props = {
   embeddingModel: string | null;
   embeddingDimensions: number | null;
   aiProvider: string | null;
+  /** Owner/maintainer of the datapack — the only roles allowed to remove
+   *  a shared-KB row. Wire the parent's `isDatapackGrantEligibleToShare`
+   *  result through; contributors/viewers pass false and see no button. */
+  canDelete?: boolean;
+  /** True while this row's DELETE is in flight — swaps the trash icon
+   *  for a spinner. */
+  isDeleting?: boolean;
+  /** True while ANY row on the page is deleting — disables every Delete
+   *  button so the single-flight state stays coherent. */
+  deleteInFlight?: boolean;
+  /** Open the parent's confirm dialog for this row. Kept as a plain
+   *  event handler so the card doesn't own delete state or the dialog. */
+  onDeleteClick?: () => void;
 };
 
 export function PromotedMemoryCard({
@@ -58,6 +75,10 @@ export function PromotedMemoryCard({
   embeddingModel,
   embeddingDimensions,
   aiProvider,
+  canDelete = false,
+  isDeleting = false,
+  deleteInFlight = false,
+  onDeleteClick,
 }: Props) {
   const nowMs = useNowMs();
   const [sourceOpen, setSourceOpen] = useState(false);
@@ -117,6 +138,34 @@ export function PromotedMemoryCard({
             <span>
               promoted by <span className="text-foreground/85">{promotedBy}</span>
             </span>
+          ) : null}
+          {/* Owner/maintainer + post-cutoff. Gate on memory.created_at (original mem0 time), NOT promote time. */}
+          {canDelete && isPostMem0V2(memory.created_at) && onDeleteClick ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 border-destructive/40 bg-destructive/10 px-2 text-[11px] text-destructive hover:bg-destructive/20"
+                    onClick={onDeleteClick}
+                    disabled={deleteInFlight}
+                    aria-label="Delete this collective memory"
+                  >
+                    {isDeleting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
+                    Delete
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                Remove from the datapack&apos;s shared knowledge
+              </TooltipContent>
+            </Tooltip>
           ) : null}
         </div>
       </header>

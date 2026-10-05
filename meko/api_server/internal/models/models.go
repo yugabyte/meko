@@ -310,10 +310,12 @@ type KeepAsMemoryResult struct {
 // list and the index config issue both requests; callers that only
 // need the list pay nothing extra.
 type PromotedMemory struct {
-	ID              string     `json:"id"`
-	ConversationID  *string    `json:"conversation_id,omitempty"`
-	AgentID         string     `json:"agent_id,omitempty"`
-	Data            string     `json:"data"`
+	ID             string  `json:"id"`
+	ConversationID *string `json:"conversation_id,omitempty"`
+	AgentID        string  `json:"agent_id,omitempty"`
+	Data           string  `json:"data"`
+	// CreatedAt is the ORIGINAL mem0 row's created_at. UI gates delete on this vs Mem0V2CutoffTS.
+	CreatedAt       *time.Time `json:"created_at,omitempty"`
 	PromotedToKBAt  *time.Time `json:"promoted_to_kb_at,omitempty"`
 	PromotedByName  *string    `json:"promoted_by_name,omitempty"`
 	PromotedByEmail *string    `json:"promoted_by_email,omitempty"`

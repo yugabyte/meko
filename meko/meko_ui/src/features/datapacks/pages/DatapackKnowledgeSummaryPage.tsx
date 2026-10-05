@@ -394,6 +394,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
                 embeddingModel={summary?.embedding_model ?? null}
                 embeddingDimensions={summary?.embedding_dimensions ?? null}
                 aiProvider={summary?.ai_provider ?? null}
+                datapackGrant={datapack?.grant ?? null}
                 highlightMemoryId={
                   promotedMemoryId && !flashedIdsRef.current.has(promotedMemoryId)
                     ? promotedMemoryId

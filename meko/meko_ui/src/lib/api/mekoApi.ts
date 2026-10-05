@@ -2218,6 +2218,19 @@ export async function keepAsMemory(payload: KeepAsMemoryRequest) {
   return request<KeepAsMemoryResult>("/keep-as-memory", "POST", payload);
 }
 
+/** Mem0 v2 rollout cutoff — delete is disabled for pre-cutoff rows (graph residue). Keep in sync with server-side Mem0V2CutoffTS. */
+export const MEM0_V2_CUTOFF_ISO = "2026-09-09T00:00:00Z";
+export const MEM0_V2_CUTOFF_MS = Date.parse(MEM0_V2_CUTOFF_ISO);
+
+/** True when `createdAt` is on/after the cutoff. Falsy/invalid → false (hide the button). */
+export function isPostMem0V2(createdAt: string | Date | null | undefined): boolean {
+  if (!createdAt) return false;
+  const ts = typeof createdAt === "string" ? Date.parse(createdAt) : createdAt.getTime();
+  return Number.isFinite(ts) && ts >= MEM0_V2_CUTOFF_MS;
+}
+
+export const API_ERROR_CODE_PRE_MEM0_V2_MEMORY = "PRE_MEM0_V2_MEMORY" as const;
+
 /**
  * DELETE /memories/:memory_id?datapack_id=...
  *
@@ -2225,6 +2238,8 @@ export async function keepAsMemory(payload: KeepAsMemoryRequest) {
  * rows where `meko_user_id` matches that account — so the UI does not
  * pass `user_id` itself. Memories belonging to other members of a shared
  * datapack return 404 (collapsed with "doesn't exist" on purpose).
+ *
+ * Pre-cutoff rows are refused with 400 PRE_MEM0_V2_MEMORY; gate the UI with isPostMem0V2.
  */
 export async function deleteMemory(
   memoryId: string,
@@ -2299,6 +2314,8 @@ export type PromotedMemory = {
   conversation_id?: string | null;
   agent_id?: string;
   data: string;
+  /** ORIGINAL mem0 row's created_at (not promote time). Gates delete vs MEM0_V2_CUTOFF_ISO. */
+  created_at?: string | null;
   promoted_to_kb_at?: string | null;
   promoted_by_name?: string | null;
   promoted_by_email?: string | null;
@@ -2342,6 +2359,22 @@ export async function listPromotedMemories(
   return request<PromotedMemoryListResponse>(
     `/promoted-memories?${qs.toString()}`,
     "GET",
+    undefined,
+    options,
+  );
+}
+
+/** DELETE /promoted-memories/:memory_id?datapack_id=... Owner/maintainer + post-cutoff only; gate with isDatapackGrantEligibleToShare + isPostMem0V2. */
+export async function deletePromotedMemory(
+  memoryId: string,
+  datapackId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const qs = new URLSearchParams();
+  qs.set("datapack_id", datapackId);
+  await request<{ deleted: boolean }>(
+    `/promoted-memories/${encodeURIComponent(memoryId)}?${qs.toString()}`,
+    "DELETE",
     undefined,
     options,
   );

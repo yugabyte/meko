@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
+import { FEATURE_FLAGS } from "@/lib/featureFlags";
 import {
   getKnowledgeBaseDocuments,
   listMemories,
@@ -15,9 +17,11 @@ import {
 
 function renderPanel(props: WorkbenchLMLiveObservationPanelProps) {
   return render(
-    <TooltipProvider>
-      <WorkbenchLMLiveObservationPanel {...props} />
-    </TooltipProvider>,
+    <MemoryRouter>
+      <TooltipProvider>
+        <WorkbenchLMLiveObservationPanel {...props} />
+      </TooltipProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -41,7 +45,10 @@ const mockListMemories = vi.mocked(listMemories);
 const mockListPromoted = vi.mocked(listPromotedMemories);
 const mockGetKbDocs = vi.mocked(getKnowledgeBaseDocuments);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,6 +70,30 @@ describe("WorkbenchLMLiveObservationPanel — stacked layout (default, Workbench
   it("keeps the 'Live observation' title", () => {
     renderPanel({ datapackId: "dp-1", datapackName: "Test" });
     expect(screen.getByText("Live observation")).toBeTruthy();
+  });
+});
+
+describe("WorkbenchLMLiveObservationPanel — memory delete is behind enableMemoryDeletion", () => {
+  // The caller's own post-cutoff memory: every other delete gate passes, so
+  // the flag is the only thing deciding whether the button renders.
+  beforeEach(() => {
+    mockListMemories.mockResolvedValue({
+      memories: [{ id: "m-1", data: "Raj likes pencil", user_id: "user-1", created_at: new Date().toISOString() }],
+      total: 1,
+    } as never);
+  });
+
+  it("hides the delete button by default", async () => {
+    renderPanel({ datapackId: "dp-1", datapackName: "Test" });
+    await screen.findByText("Raj likes pencil");
+    expect(screen.queryByRole("button", { name: "Delete memory" })).toBeNull();
+  });
+
+  it("shows the delete button when the flag is set in localStorage", async () => {
+    localStorage.setItem(FEATURE_FLAGS.enableMemoryDeletion.storageKey, "true");
+    renderPanel({ datapackId: "dp-1", datapackName: "Test" });
+    await screen.findByText("Raj likes pencil");
+    expect(screen.getByRole("button", { name: "Delete memory" })).toBeTruthy();
   });
 });
 

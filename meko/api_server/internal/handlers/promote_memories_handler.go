@@ -1,14 +1,17 @@
 package handlers
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/models"
+	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
 
@@ -120,4 +123,66 @@ func (h *PromoteMemoriesHandler) ListGET(c echo.Context) error {
 	}
 
 	return ok(c, http.StatusOK, response)
+}
+
+// DeleteByID handles DELETE /api/v1/promoted-memories/:memory_id.
+//
+// Owner/maintainer-only: unlike private-delete (which lets any member
+// remove their own row), removing a promoted memory affects everyone
+// with access to the datapack — the row lives in the shared KB —
+// so viewers and contributors are refused with 403 in the handler.
+// The gate runs in-handler rather than via auth.RequireDatapackAccess
+// middleware because the datapack id arrives as a query param, not a
+// :datapack_id path segment (same reason as MemoriesHandler.DeleteByID).
+//
+//	@Summary	Delete a promoted memory (owner/maintainer only)
+//	@Tags		memories
+//	@Produce	json
+//	@Param		memory_id	path		string	true	"Promoted memory ID (UUID)"
+//	@Param		datapack_id	query		string	true	"Datapack ID owning the promoted memory"
+//	@Success	200			{object}	APIResponse
+//	@Failure	400			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
+//	@Failure	403			{object}	APIResponse
+//	@Failure	404			{object}	APIResponse
+//	@Failure	500			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/promoted-memories/{memory_id} [delete]
+func (h *PromoteMemoriesHandler) DeleteByID(c echo.Context) error {
+	memoryID := strings.TrimSpace(c.Param("memory_id"))
+	if memoryID == "" {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "memory_id is required")
+	}
+	if _, err := uuid.Parse(memoryID); err != nil {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "memory_id must be a valid UUID")
+	}
+	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
+	// Owner/maintainer gate in-handler (datapack_id in query, not path).
+	if _, err := RequireDatapackOwnerOrMaintainer(c, h.dpLookup, datapackID); err != nil {
+		return err
+	}
+
+	slog.Info("deleting promoted memory",
+		"layer", "handler",
+		"memory_id", memoryID,
+		"datapack_id", datapackID,
+	)
+
+	deleted, err := h.svc.DeleteByIDForDatapack(c.Request().Context(), memoryID, datapackID)
+	if err != nil {
+		if errors.Is(err, repository.ErrPreMem0V2Memory) {
+			// UI keys on PRE_MEM0_V2_MEMORY to hide the delete affordance.
+			return apiError(c, http.StatusBadRequest, "PRE_MEM0_V2_MEMORY",
+				"This memory pre-dates the mem0 v2 rollout and cannot be deleted.")
+		}
+		if isValidationErr(err) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	if !deleted {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "promoted memory not found")
+	}
+
+	return ok(c, http.StatusOK, map[string]bool{"deleted": true})
 }

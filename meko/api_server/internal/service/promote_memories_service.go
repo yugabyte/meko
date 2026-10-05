@@ -70,6 +70,14 @@ func (svc *PromoteMemoriesService) KeepAsMemory(
 	return models.KeepAsMemoryResult{Updated: n}, nil
 }
 
+// DeleteByIDForDatapack: thin passthrough. Owner/maintainer gate enforced by handler.
+func (svc *PromoteMemoriesService) DeleteByIDForDatapack(
+	ctx context.Context,
+	memoryID, datapackID string,
+) (bool, error) {
+	return svc.repo.DeleteByIDForDatapack(ctx, memoryID, datapackID)
+}
+
 // List returns paginated promoted memories from datapacks.promoted_collection.
 func (svc *PromoteMemoriesService) List(
 	ctx context.Context,
