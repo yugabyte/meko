@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -484,4 +485,144 @@ func (r *CollectionRepo) PeopleWithAccess(ownerUserID string, datapackIDs []stri
 		return 1, fmt.Errorf("collection members: %w", err)
 	}
 	return 1 + others, nil
+}
+
+// ActivityFolders returns "folder created" rows for a collection, newest
+// first, keyset-paged like every other side of the activity feed.
+//
+// Lives here rather than beside the other activity sides because this is the
+// collection repo's own table; KnowledgeBaseRepo could reach meko_system (it
+// holds that pool too) but has no business knowing about folders. The caller
+// merges the two.
+//
+// folderIDs is the SCOPED set: a recipient passes only the folders holding a
+// datapack shared with them, so this cannot leak the rest of an owner's tree.
+func (r *CollectionRepo) ActivityFolders(
+	folderIDs []string, cursorTs, cursorID string, cap int,
+) ([]ActivityLogRow, error) {
+	if len(folderIDs) == 0 {
+		return nil, nil
+	}
+	const baseQ = `SELECT created_at, folder_id::text, folder_name
+		 FROM   meko_system.collection_folders
+		 WHERE  folder_id = ANY($1) `
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if cursorTs == "" || cursorID == "" {
+		rows, err = r.db.Query(
+			baseQ+` ORDER BY created_at DESC, folder_id DESC LIMIT $2`,
+			pq.Array(folderIDs), cap,
+		)
+	} else {
+		rows, err = r.db.Query(
+			baseQ+`   AND (created_at, folder_id) < ($2::timestamptz, $3::uuid)
+				 ORDER BY created_at DESC, folder_id DESC LIMIT $4`,
+			pq.Array(folderIDs), cursorTs, cursorID, cap,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("activity log folders: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ActivityLogRow{}
+	for rows.Next() {
+		var (
+			ts   sql.NullTime
+			id   sql.NullString
+			name sql.NullString
+		)
+		if err := rows.Scan(&ts, &id, &name); err != nil {
+			return nil, fmt.Errorf("scan folder activity row: %w", err)
+		}
+		it := ActivityLogItem{Type: ActivityFolderCreated}
+		if ts.Valid {
+			it.Timestamp = ts.Time.UTC().Format(time.RFC3339Nano)
+		}
+		if id.Valid {
+			v := id.String
+			it.FolderID = &v
+		}
+		if name.Valid {
+			v := name.String
+			it.FolderName = &v
+		}
+		out = append(out, ActivityLogRow{Ts: it.Timestamp, ID: id.String, Item: it})
+	}
+	return out, rows.Err()
+}
+
+// ActivityPlacements returns "datapack filed into a folder" rows.
+//
+// Keyed on updated_at, NOT the datapack's own created_at: a datapack created
+// in March and filed here in September is a September event, and created_at
+// would sort it into the wrong place entirely. updated_at rather than
+// placed_at because placement is an upsert, so a move is the same row with a
+// new folder, and the move is the thing that happened.
+//
+// datapackIDs is the caller's already-scoped visible set.
+func (r *CollectionRepo) ActivityPlacements(
+	datapackIDs []string, cursorTs, cursorID string, cap int,
+) ([]ActivityLogRow, error) {
+	if len(datapackIDs) == 0 {
+		return nil, nil
+	}
+	const baseQ = `SELECT p.updated_at, p.datapack_id::text, f.folder_name, f.folder_id::text
+		 FROM   meko_system.datapack_placements p
+		 JOIN   meko_system.collection_folders f ON f.folder_id = p.folder_id
+		 WHERE  p.datapack_id = ANY($1) `
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if cursorTs == "" || cursorID == "" {
+		rows, err = r.db.Query(
+			baseQ+` ORDER BY p.updated_at DESC, p.datapack_id DESC LIMIT $2`,
+			pq.Array(datapackIDs), cap,
+		)
+	} else {
+		rows, err = r.db.Query(
+			baseQ+`   AND (p.updated_at, p.datapack_id) < ($2::timestamptz, $3::uuid)
+				 ORDER BY p.updated_at DESC, p.datapack_id DESC LIMIT $4`,
+			pq.Array(datapackIDs), cursorTs, cursorID, cap,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("activity log placements: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ActivityLogRow{}
+	for rows.Next() {
+		var (
+			ts         sql.NullTime
+			datapackID sql.NullString
+			folderName sql.NullString
+			folderID   sql.NullString
+		)
+		if err := rows.Scan(&ts, &datapackID, &folderName, &folderID); err != nil {
+			return nil, fmt.Errorf("scan placement activity row: %w", err)
+		}
+		it := ActivityLogItem{Type: ActivityDatapackFiled}
+		if ts.Valid {
+			it.Timestamp = ts.Time.UTC().Format(time.RFC3339Nano)
+		}
+		if datapackID.Valid {
+			it.DatapackID = datapackID.String
+		}
+		if folderName.Valid {
+			v := folderName.String
+			it.FolderName = &v
+		}
+		if folderID.Valid {
+			v := folderID.String
+			it.FolderID = &v
+		}
+		out = append(out, ActivityLogRow{Ts: it.Timestamp, ID: datapackID.String, Item: it})
+	}
+	return out, rows.Err()
 }

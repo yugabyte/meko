@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
-import { History, Loader2, Sparkles, Upload } from "lucide-react";
+import { FolderInput, FolderPlus, History, Loader2, Sparkles, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
@@ -154,6 +154,41 @@ export function KnowledgeActivityLog({
 function ActivityRow({ item }: { item: KBActivityLogItem }) {
   const now = useNowMs();
 
+  // Structural rows: the collection gained a folder, or a datapack moved into
+  // one. Only the collection feed sends these.
+  if (item.type === "folder_created" || item.type === "datapack_filed") {
+    const relTime = formatRelativeTime(item.timestamp, now);
+    const folder = item.folder_name ?? "a folder";
+    return (
+      <li className="flex items-start gap-3 rounded-lg border border-border bg-card px-4 py-3">
+        <RowIcon tone="brand">
+          {item.type === "folder_created" ? (
+            <FolderPlus className="h-3.5 w-3.5" aria-hidden />
+          ) : (
+            <FolderInput className="h-3.5 w-3.5" aria-hidden />
+          )}
+        </RowIcon>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-foreground">
+            {item.type === "folder_created" ? (
+              <>
+                Created folder <span className="font-mono font-medium">{folder}</span>
+              </>
+            ) : (
+              <>
+                Added <span className="font-medium">{item.datapack_name ?? "a datapack"}</span> to{" "}
+                <span className="font-mono font-medium">{folder}</span>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <RelTime label={relTime} title={item.timestamp} />
+        </div>
+      </li>
+    );
+  }
+
   if (item.type === "file_upload") {
     // Take only the last path segment and strip leading UUID/timestamp prefixes.
     const rawName = item.document_name ?? "";
@@ -225,18 +260,21 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
 
 /** Leading 32×32 icon square. Tone determines the background and glyph color —
  *  emerald for file uploads (knowledge), sky for promotions (collective
- *  memory) — matching the semantic color system. */
+ *  memory), brand for structural changes (folders, filing) — matching the
+ *  semantic color system. */
 function RowIcon({
   tone,
   children,
 }: {
-  tone: "emerald" | "sky";
+  tone: "emerald" | "sky" | "brand";
   children: React.ReactNode;
 }) {
   const toneClass =
     tone === "emerald"
       ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-      : "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+      : tone === "sky"
+        ? "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+        : "border-brand/30 bg-brand/10 text-brand";
   return (
     <span
       className={cn(

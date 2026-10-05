@@ -17,16 +17,25 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import type { Collection } from "@/lib/api/collectionsApi";
 import { useCreateCollection, useCollectionThemes } from "@/features/collections/hooks/useCollections";
 import {
   NEW_COLLECTION_LABEL,
+  NEW_FOLDER_LABEL,
+  layoutExampleName,
   COLLECTION_TOASTS,
   TOAST_RETRY_DESCRIPTION,
 } from "@/features/collections/collectionsCopy";
-import { CollectionThemeOption } from "@/features/collections/components/CollectionThemeOption";
+import { FolderTreePreview } from "@/features/collections/components/FolderTreePreview";
 
 export function NewCollectionDialog({
   open,
@@ -70,6 +79,17 @@ export function NewCollectionDialog({
   // A layout with no folders of its own is the signal to ask for one, rather
   // than hardcoding which theme key that happens to be.
   const needsFolderName = Boolean(selectedTheme && selectedTheme.folders.length === 0);
+  // What the preview draws. The Custom layout has no folders of its own, so
+  // it shows the one the user is typing, live, rather than an empty tree.
+  const exampleName = layoutExampleName(themeKey);
+  const previewName = name.trim() || exampleName;
+  const previewFolders = needsFolderName
+    ? [customFolder.trim() || "new_folder"]
+    : (selectedTheme?.folders ?? []);
+  const confirmQuestion = needsFolderName
+    ? `Create ${previewName} with a folder of your own?`
+    : `Create ${previewName} using the ${selectedTheme?.label ?? ""} layout?`;
+
   const canSubmit =
     name.trim() !== "" && themeKey !== "" && (!needsFolderName || customFolder.trim() !== "");
 
@@ -122,7 +142,7 @@ export function NewCollectionDialog({
                 id="collection-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="database_dev"
+                placeholder={exampleName}
                 autoFocus
               />
             </div>
@@ -138,30 +158,37 @@ export function NewCollectionDialog({
               />
             </div>
 
-            <fieldset className="space-y-2">
-              <legend className="text-sm font-medium text-foreground">Layout</legend>
+            <div className="space-y-2">
+              <Label htmlFor="collection-layout">Layout</Label>
               {themesLoading ? (
                 <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
                   <Spinner className="h-4 w-4" />
                   Loading layouts…
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {themes.map((theme) => (
-                    <CollectionThemeOption
-                      key={theme.key}
-                      theme={theme}
-                      selected={theme.key === themeKey}
-                      onSelect={setThemeKey}
-                    />
-                  ))}
-                </div>
+                <Select value={themeKey} onValueChange={setThemeKey}>
+                  <SelectTrigger id="collection-layout">
+                    <SelectValue placeholder="Choose a layout" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {themes.map((theme) => (
+                      <SelectItem key={theme.key} value={theme.key}>
+                        {theme.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
-            </fieldset>
+              {selectedTheme ? (
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {selectedTheme.description}
+                </p>
+              ) : null}
+            </div>
 
             {needsFolderName ? (
               <div className="space-y-2">
-                <Label htmlFor="collection-new-folder">New Folder</Label>
+                <Label htmlFor="collection-new-folder">{NEW_FOLDER_LABEL}</Label>
                 <Input
                   id="collection-new-folder"
                   value={customFolder}
@@ -169,8 +196,29 @@ export function NewCollectionDialog({
                   placeholder="standards"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Datapacks live inside folders, so a collection needs at least one. You can add more
-                  later.
+                  Watch it appear in the shape below. You can add more folders later.
+                </p>
+              </div>
+            ) : null}
+
+            {/* The shape you are about to create, drawn with your own name in
+                it. Keyed on the layout so switching animates rather than
+                swapping silently, which is the whole reason the picker lost
+                its three description blocks: the drawing says it faster. */}
+            {selectedTheme ? (
+              <div
+                key={themeKey}
+                className="animate-in fade-in slide-in-from-top-1 duration-200"
+              >
+                <FolderTreePreview
+                  label="You will get"
+                  name={previewName}
+                  folders={previewFolders}
+                  footer="datapacks you file into each folder"
+                  pendingFolderIndex={needsFolderName ? 0 : undefined}
+                />
+                <p className="mt-3 text-sm text-foreground">
+                  {confirmQuestion}
                 </p>
               </div>
             ) : null}

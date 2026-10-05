@@ -123,7 +123,7 @@ const (
 
 // ActivityLog handles GET /api/v1/collections/:collection_id/activity-log.
 //
-//	@Summary	Uploads and memory promotions across a collection, newest first
+//	@Summary	Uploads, promotions, folder creations and filings across a collection, newest first
 //	@Tags		collections
 //	@Produce	json
 //	@Param		collection_id	path		string	true	"Collection ID"

@@ -21,9 +21,7 @@ import {
   SHARED,
 } from "@/features/datapacks/components/datapacks-list/datapackTileLabels";
 import { DatapackTile } from "@/features/datapacks/components/datapacks-list/DatapackTile";
-import { NewDatapackPlaceholderCard } from "@/features/datapacks/components/datapacks-list/NewDatapackPlaceholderCard";
-import { DatapacksTable } from "@/features/datapacks/components/datapacks-list/DatapacksTable";
-import { DatapacksFooterNotes } from "@/features/collections/components/DatapacksFooterNotes";
+import { CreateTile } from "@/components/ui/create-tile";
 
 function filterByName(datapacks: Datapack[], q: string): Datapack[] {
   const trimmed = q.trim().toLowerCase();
@@ -178,38 +176,34 @@ export default function DatapacksTilesSection({
           {emptyCopy(scopeTab, searchActive, collectionFilterActive)}
         </p>
       ) : (
-        <>
-          {showCollections ? (
-            <>
-              <DatapacksTable
-                datapacks={visibleDatapacks}
-                datapackPaths={datapackPaths}
-                currentUser={currentUser}
-                onOpenDatapack={onOpenDatapack}
-                // Nothing to file into means every row's action stays Open
-                // rather than becoming a dead button.
-                onFileDatapack={canFile ? onFileDatapack : undefined}
-              />
-              <DatapacksFooterNotes />
-            </>
-          ) : (
-            // Collections off: the page is exactly what it was before.
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 [&>*]:min-h-0">
-              {visibleDatapacks.map((dp) => (
-                <DatapackTile
-                  key={dp.datapack_id}
-                  dp={dp}
-                  variant={isDatapackListGrantOwner(dp) ? OWNED : SHARED}
-                  currentUser={currentUser}
-                  onOpenDatapack={onOpenDatapack}
-                  onConnectDatapack={onConnectDatapack}
-                  onShareDatapack={onShareDatapack}
-                />
-              ))}
-              <NewDatapackPlaceholderCard onClick={onNewDatapack} />
-            </div>
-          )}
-        </>
+        // One grid, flag on or off. The table this replaced answered "where
+        // does it live" in a column; the tile answers it in a Collection row
+        // beside Access and Owner, because prefixing the name truncated it. A
+        // second list shape for the same objects was what made the two pages
+        // feel unrelated.
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 [&>*]:min-h-0">
+          {visibleDatapacks.map((dp) => (
+            <DatapackTile
+              key={dp.datapack_id}
+              dp={dp}
+              variant={isDatapackListGrantOwner(dp) ? OWNED : SHARED}
+              currentUser={currentUser}
+              onOpenDatapack={onOpenDatapack}
+              onConnectDatapack={onConnectDatapack}
+              onShareDatapack={onShareDatapack}
+              path={datapackPaths[dp.datapack_id]}
+              showPath={showCollections}
+              // Nothing to file into means the slot keeps Connect rather than
+              // becoming a dead button.
+              onFileDatapack={canFile ? onFileDatapack : undefined}
+            />
+          ))}
+          <CreateTile
+            title="New datapack"
+            description="Connect an existing collection or start from scratch"
+            onClick={onNewDatapack}
+          />
+        </div>
       )}
     </div>
   );

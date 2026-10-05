@@ -2058,7 +2058,7 @@ const docTemplate = `{
                 "tags": [
                     "collections"
                 ],
-                "summary": "Uploads and memory promotions across a collection, newest first",
+                "summary": "Uploads, promotions, folder creations and filings across a collection, newest first",
                 "parameters": [
                     {
                         "type": "string",

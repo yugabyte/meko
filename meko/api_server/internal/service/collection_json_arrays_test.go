@@ -45,7 +45,7 @@ func TestListActivityLogForDatapacks_EmptySetReturnsEmptyItems(t *testing.T) {
 	defer db.Close()
 
 	svc := NewKnowledgeBaseService(repository.NewKnowledgeBaseRepo(db, db), "bucket")
-	resp, err := svc.ListActivityLogForDatapacks(nil, 10, "")
+	resp, err := svc.ListActivityLogForDatapacks(nil, 10, "", nil)
 	if err != nil {
 		t.Fatalf("ListActivityLogForDatapacks: %v", err)
 	}

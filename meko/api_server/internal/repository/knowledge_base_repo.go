@@ -1113,7 +1113,11 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 // Wire shape is intentionally flat (not a discriminated union of two
 // embedded structs) so JSON consumers don't need polymorphic decoding.
 type ActivityLogItem struct {
-	Type      string `json:"type"` // "file_upload" | "memory_promotion"
+	// "file_upload" | "memory_promotion" | "folder_created" | "datapack_filed".
+	// The last two are COLLECTION-only: a datapack's own feed has no folders,
+	// and "filed into a folder" is a fact about the collection, not about the
+	// datapack's contents.
+	Type      string `json:"type"`
 	Timestamp string `json:"timestamp"`
 
 	// DatapackID is which datapack the row came from. Redundant on the
@@ -1135,6 +1139,39 @@ type ActivityLogItem struct {
 	Content        *string `json:"content,omitempty"`
 	AgentID        *string `json:"agent_id,omitempty"`
 	ConversationID *string `json:"conversation_id,omitempty"`
+
+	// folder_created / datapack_filed fields (nil on the other two)
+	FolderID   *string `json:"folder_id,omitempty"`
+	FolderName *string `json:"folder_name,omitempty"`
+}
+
+// Activity row types. The first two are a datapack's own content; the last
+// two describe where a datapack sits, so they appear on a collection's feed
+// only.
+const (
+	ActivityFileUpload      = "file_upload"
+	ActivityMemoryPromotion = "memory_promotion"
+	ActivityFolderCreated   = "folder_created"
+	ActivityDatapackFiled   = "datapack_filed"
+)
+
+// ActivityLogRow is one row with the keys the merge sorts and pages on.
+//
+// Exported because the two structural sides are fetched by the CALLER: they
+// live in meko_system, and this repo holds the data-plane pool. Without this
+// the collection feed would need a second merge implementation.
+type ActivityLogRow struct {
+	Ts   string
+	ID   string
+	Item ActivityLogItem
+}
+
+// StructuralActivity carries the collection-only sides of the feed, already
+// fetched and keyset-paged by the caller. Nil for a single datapack's feed,
+// which is what keeps folder and placement events off the Knowledge page.
+type StructuralActivity struct {
+	Folders    []ActivityLogRow
+	Placements []ActivityLogRow
 }
 
 // ActivityLogCursor is the opaque pagination state for ListActivityLog.
@@ -1160,6 +1197,12 @@ type ActivityLogCursor struct {
 	FileID  string `json:"f_id,omitempty"`
 	PromoTs string `json:"p_ts,omitempty"`
 	PromoID string `json:"p_id,omitempty"`
+	// The two structural sides. omitempty keeps a cursor issued before these
+	// existed decoding cleanly, with both sides simply starting from the top.
+	FolderTs string `json:"fo_ts,omitempty"`
+	FolderID string `json:"fo_id,omitempty"`
+	PlaceTs  string `json:"pl_ts,omitempty"`
+	PlaceID  string `json:"pl_id,omitempty"`
 }
 
 // EncodeActivityLogCursor returns the opaque wire form of a cursor, or
@@ -1235,14 +1278,8 @@ type activityRow struct {
 // ("datapacks" / "knowledge_bases").
 func (r *KnowledgeBaseRepo) ListActivityLog(
 	datapackIDs []string, schema, indexName string,
-	limit int, cursor ActivityLogCursor,
+	limit int, cursor ActivityLogCursor, structural *StructuralActivity,
 ) (items []ActivityLogItem, nextCursor ActivityLogCursor, err error) {
-	if len(datapackIDs) == 0 {
-		// Empty, not nil: `items` is a required array on the wire. A collection
-		// with no datapacks yet is the ordinary state right after creating
-		// one, so this path is hit before any other.
-		return []ActivityLogItem{}, ActivityLogCursor{}, nil
-	}
 	if limit <= 0 {
 		limit = 10
 	}
@@ -1252,31 +1289,40 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 	// a separate COUNT.
 	perSideCap := limit + 1
 
-	files, fileErr := r.listActivityFileUploads(
-		datapackIDs, schema, indexName,
-		cursor.FileTs, cursor.FileID, perSideCap,
-	)
-	promos, promoErr := r.listActivityPromotions(
-		datapackIDs, cursor.PromoTs, cursor.PromoID, perSideCap,
-	)
-
-	// If BOTH sides failed, the feed has nothing to show — propagate.
-	if fileErr != nil && promoErr != nil {
-		return nil, ActivityLogCursor{}, fmt.Errorf(
-			"activity log: both sources failed (files: %v, promotions: %v)",
-			fileErr, promoErr,
+	// No datapacks is the ordinary state right after creating a collection,
+	// and its folders still have folder_created rows. So the two
+	// datapack-scoped sides are SKIPPED rather than returned early: an early
+	// return would drop the structural rows the caller already fetched and
+	// show "No activity yet" on a collection that has folders.
+	var files, promos []activityRow
+	if len(datapackIDs) > 0 {
+		var fileErr, promoErr error
+		files, fileErr = r.listActivityFileUploads(
+			datapackIDs, schema, indexName,
+			cursor.FileTs, cursor.FileID, perSideCap,
 		)
-	}
-	// Partial failure: log + degrade. The good side serves alone.
-	if fileErr != nil {
-		slog.Warn("activity log: file uploads side failed; serving promotions only",
-			"datapack_ids", datapackIDs, "error", fileErr)
-		files = nil
-	}
-	if promoErr != nil {
-		slog.Warn("activity log: promotions side failed; serving file uploads only",
-			"datapack_ids", datapackIDs, "error", promoErr)
-		promos = nil
+		promos, promoErr = r.listActivityPromotions(
+			datapackIDs, cursor.PromoTs, cursor.PromoID, perSideCap,
+		)
+
+		// If BOTH sides failed, the feed has nothing to show — propagate.
+		if fileErr != nil && promoErr != nil {
+			return nil, ActivityLogCursor{}, fmt.Errorf(
+				"activity log: both sources failed (files: %v, promotions: %v)",
+				fileErr, promoErr,
+			)
+		}
+		// Partial failure: log + degrade. The good side serves alone.
+		if fileErr != nil {
+			slog.Warn("activity log: file uploads side failed; serving promotions only",
+				"datapack_ids", datapackIDs, "error", fileErr)
+			files = nil
+		}
+		if promoErr != nil {
+			slog.Warn("activity log: promotions side failed; serving file uploads only",
+				"datapack_ids", datapackIDs, "error", promoErr)
+			promos = nil
+		}
 	}
 
 	// Merge + sort by ts DESC, tiebreak by id DESC. Stable sort so
@@ -1284,6 +1330,16 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 	merged := make([]activityRow, 0, len(files)+len(promos))
 	merged = append(merged, files...)
 	merged = append(merged, promos...)
+	// The structural sides arrive pre-fetched from meko_system; from here they
+	// are just two more sides of the same merge.
+	if structural != nil {
+		for _, r := range structural.Folders {
+			merged = append(merged, activityRow{ts: r.Ts, id: r.ID, item: r.Item})
+		}
+		for _, r := range structural.Placements {
+			merged = append(merged, activityRow{ts: r.Ts, id: r.ID, item: r.Item})
+		}
+	}
 	sort.SliceStable(merged, func(i, j int) bool {
 		if merged[i].ts != merged[j].ts {
 			return merged[i].ts > merged[j].ts
@@ -1304,7 +1360,7 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 		take = len(merged)
 	}
 	out := make([]ActivityLogItem, 0, take)
-	var lastFile, lastPromo *activityRow
+	var lastFile, lastPromo, lastFolder, lastPlace *activityRow
 	for i := range merged[:take] {
 		row := &merged[i]
 		out = append(out, row.item)
@@ -1313,6 +1369,10 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 			lastFile = row
 		case "memory_promotion":
 			lastPromo = row
+		case ActivityFolderCreated:
+			lastFolder = row
+		case ActivityDatapackFiled:
+			lastPlace = row
 		}
 	}
 
@@ -1327,6 +1387,14 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 	if lastPromo != nil {
 		nextCursor.PromoTs = lastPromo.ts
 		nextCursor.PromoID = lastPromo.id
+	}
+	if lastFolder != nil {
+		nextCursor.FolderTs = lastFolder.ts
+		nextCursor.FolderID = lastFolder.id
+	}
+	if lastPlace != nil {
+		nextCursor.PlaceTs = lastPlace.ts
+		nextCursor.PlaceID = lastPlace.id
 	}
 
 	// Feed-exhaustion signal: the zero cursor encodes to "" at the

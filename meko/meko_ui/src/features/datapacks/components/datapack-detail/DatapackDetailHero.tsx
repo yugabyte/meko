@@ -161,6 +161,38 @@ export function DatapackDetailHero({
               {isNewDatapack ? <NewDatapackPill /> : null}
             </div>
 
+            {/* Where this datapack lives, directly under its name. This used
+                to sit in the ID / Created / Access line and got lost among
+                three other facts; a collection is not trivia about the
+                datapack, it is its address. */}
+            {showCollection ? (
+              collectionPath ? (
+                <Link
+                  to={collectionDetailPath(collectionPath.collection_id)}
+                  title={collectionPath.path}
+                  className={cn(
+                    "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1",
+                    "border-brand/25 bg-brand/10 text-xs font-medium text-brand",
+                    "transition-colors hover:border-brand/45 hover:bg-brand/15",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand",
+                  )}
+                >
+                  <FolderTree className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span className="truncate font-mono">{collectionPath.path}</span>
+                </Link>
+              ) : (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-1",
+                    "border-border text-xs text-muted-foreground",
+                  )}
+                >
+                  <FolderTree className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  {UNFILED_LABEL}
+                </span>
+              )
+            ) : null}
+
             {showDescription ? (
               <div className="w-full min-w-0 space-y-1">
                 <p
@@ -227,31 +259,6 @@ export function DatapackDetailHero({
                 </>
               ) : null}
 
-              {showCollection ? (
-                <>
-                  <MetaDot />
-                  <MetaItem label="Collection">
-                    {collectionPath ? (
-                      // Links to the collection rather than just naming it:
-                      // having found where a datapack lives, the next thing
-                      // wanted is usually the rest of what lives there.
-                      <Link
-                        to={collectionDetailPath(collectionPath.collection_id)}
-                        title={collectionPath.path}
-                        className={cn(
-                          "inline-flex max-w-[16rem] items-baseline gap-1 text-muted-foreground",
-                          "underline-offset-2 transition-colors hover:text-foreground hover:underline",
-                        )}
-                      >
-                        <FolderTree className="h-3 w-3 shrink-0 self-center" aria-hidden />
-                        <span className="truncate font-mono">{collectionPath.path}</span>
-                      </Link>
-                    ) : (
-                      <span className="italic text-muted-foreground/70">{UNFILED_LABEL}</span>
-                    )}
-                  </MetaItem>
-                </>
-              ) : null}
             </p>
           </div>
         </div>

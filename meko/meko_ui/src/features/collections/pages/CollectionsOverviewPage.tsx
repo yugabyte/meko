@@ -1,34 +1,33 @@
-// Collections list: every collection in the workspace with its folder and datapack
-// counts, plus the entry point for creating one from a layout.
+// Collections list: every collection the caller can reach, owned or shared,
+// with its folder and datapack counts, plus the entry point for creating one.
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderTree, Plus, Search } from "lucide-react";
+import { FolderTree, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineErrorBanner } from "@/components/ui/inline-error-banner";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
-import { ROUTES, collectionDetailPath } from "@/app/routes/paths";
+import { collectionDetailPath } from "@/app/routes/paths";
 import { useDatapackPaths, useCollections } from "@/features/collections/hooks/useCollections";
 import { useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import { CollectionSection } from "@/features/collections/components/CollectionSection";
 import { NewCollectionDialog } from "@/features/collections/components/NewCollectionDialog";
 import { CollectionsEmptyState } from "@/features/collections/components/CollectionsEmptyState";
-import { UnfiledDatapacksPanel } from "@/features/collections/components/UnfiledDatapacksPanel";
 import { CollectionExplainerPanel } from "@/features/collections/components/CollectionExplainerPanel";
 import { filterCollections } from "@/features/collections/lib/filterCollections";
+import { collectionLearningsByCollection } from "@/features/collections/lib/collectionLearnings";
 import {
-  collectionLearningsByCollection,
-  unfiledDatapacks,
-} from "@/features/collections/lib/collectionLearnings";
+  COLLECTION_SCOPE,
+  emptyScopeMessage,
+  scopedCollections,
+  type CollectionScope,
+} from "@/features/collections/lib/scopeCollections";
 import {
   NEW_COLLECTION_LABEL,
   COLLECTIONS_SUBTITLE,
   COLLECTIONS_TITLE,
-  SHARED_COLLECTIONS_SUBTITLE,
-  SHARED_COLLECTIONS_TITLE,
 } from "@/features/collections/collectionsCopy";
 
 /** Placeholder cards while the list loads — enough to fill the first row so
@@ -39,11 +38,12 @@ export default function CollectionsOverviewPage() {
   const navigate = useNavigate();
   const [isNewOpen, setIsNewOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [scope, setScope] = useState<CollectionScope>(COLLECTION_SCOPE.all);
   const { data: collectionLists, isLoading, error } = useCollections();
-  const collections = collectionLists?.owned ?? [];
-  const sharedCollections = collectionLists?.shared ?? [];
-  // The unfiled panel and the per-collection learnings rollup are both derived
-  // from these two, which are already cached for the Datapacks page.
+  const owned = collectionLists?.owned ?? [];
+  const shared = collectionLists?.shared ?? [];
+  // The per-collection learnings rollup is derived from these two, both
+  // already cached for the Datapacks page.
   const { data: datapacks = [] } = useDatapacks();
   const { data: datapackPaths = {} } = useDatapackPaths();
 
@@ -51,33 +51,28 @@ export default function CollectionsOverviewPage() {
     () => collectionLearningsByCollection(datapacks, datapackPaths),
     [datapacks, datapackPaths],
   );
-  const unfiled = useMemo(
-    () => unfiledDatapacks(datapacks, datapackPaths),
-    [datapacks, datapackPaths],
-  );
-  // Search runs in the browser over data the page already has: GET /collections
-  // carries folder_names, so matching a folder costs no request.
-  const ownedMatches = useMemo(
-    () => filterCollections(collections, searchQuery),
-    [collections, searchQuery],
-  );
-  const sharedMatches = useMemo(
-    () => filterCollections(sharedCollections, searchQuery),
-    [sharedCollections, searchQuery],
+
+  // Scope first, then search. Both run in the browser over data the page
+  // already has: GET /collections carries folder_names, so matching a folder
+  // costs no request.
+  const matches = useMemo(
+    () => filterCollections(scopedCollections(owned, shared, scope), searchQuery),
+    [owned, shared, scope, searchQuery],
   );
   const searchActive = searchQuery.trim() !== "";
+  const nothingAtAll = owned.length === 0 && shared.length === 0;
 
   // The busiest collection, for the explainer's diagram. It needs at least one
   // FOLDER, not at least one datapack: the diagram is about the shape, and a
   // collection with folders draws that fine while it is still empty. Without
   // folders there is nothing to draw and the built-in sample is better.
   const exampleCollection = useMemo(() => {
-    const busiest = collections.reduce<(typeof collections)[number] | undefined>(
+    const busiest = owned.reduce<(typeof owned)[number] | undefined>(
       (best, p) => (best && best.datapack_count >= p.datapack_count ? best : p),
       undefined,
     );
     return busiest && (busiest.folder_names?.length ?? 0) > 0 ? busiest : undefined;
-  }, [collections]);
+  }, [owned]);
 
   return (
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
@@ -114,25 +109,12 @@ export default function CollectionsOverviewPage() {
         </div>
 
         {error ? (
-          <InlineErrorBanner>{getApiErrorMessage(error, "Failed to load collections.")}</InlineErrorBanner>
+          <InlineErrorBanner>
+            {getApiErrorMessage(error, "Failed to load collections.")}
+          </InlineErrorBanner>
         ) : null}
 
         <CollectionExplainerPanel example={exampleCollection} />
-
-        <div className="relative w-full sm:max-w-xs">
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <Input
-            type="search"
-            placeholder="Search collections and folders..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 w-full border-border bg-input pl-9 text-foreground placeholder:text-muted-foreground"
-            aria-label="Search collections and folders by name"
-          />
-        </div>
 
         {isLoading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -140,30 +122,24 @@ export default function CollectionsOverviewPage() {
               <Skeleton key={i} className="h-44 w-full rounded-xl" />
             ))}
           </div>
-        ) : collections.length === 0 && !searchActive ? (
+        ) : nothingAtAll && !searchActive ? (
+          // Nothing anywhere is a different situation from an empty tab: the
+          // user has no concept of a collection yet, so explain rather than
+          // show an empty grid with three tabs above it.
           <CollectionsEmptyState onCreate={() => setIsNewOpen(true)} />
         ) : (
           <CollectionSection
-            title="Your collections"
-            matches={ownedMatches}
+            matches={matches}
             learningsByCollection={learningsByCollection}
-            emptyMessage={searchActive ? "No collections or folders match your search." : undefined}
+            scope={scope}
+            onScopeChange={setScope}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            emptyMessage={emptyScopeMessage(scope, searchActive)}
             onOpen={(p) => navigate(collectionDetailPath(p.collection_id))}
+            onCreate={() => setIsNewOpen(true)}
           />
         )}
-
-        <CollectionSection
-          title={SHARED_COLLECTIONS_TITLE}
-          subtitle={SHARED_COLLECTIONS_SUBTITLE}
-          matches={sharedMatches}
-          learningsByCollection={learningsByCollection}
-          onOpen={(p) => navigate(collectionDetailPath(p.collection_id))}
-        />
-
-        <UnfiledDatapacksPanel
-          datapacks={unfiled}
-          onFileInto={() => navigate(ROUTES.datapacks)}
-        />
       </main>
 
       <NewCollectionDialog

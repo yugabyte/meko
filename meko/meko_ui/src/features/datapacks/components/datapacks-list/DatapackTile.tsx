@@ -3,14 +3,19 @@
 // Extracted from DatapacksTilesSection, which had grown past the size a single
 // file should carry.
 
-import { ArrowRight, Database, Share2, Terminal } from "lucide-react";
+import { ArrowRight, Database, FolderInput, Share2, Terminal } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { CurrentUser, Datapack } from "@/lib/api/mekoApi";
 import { formatDatapackCreatedDateShorthand } from "@/lib/datapackDateFormat";
 import { isDatapackGrantEligibleToShare } from "@/lib/datapackShareGrants";
 import type { DatapackPath } from "@/lib/api/collectionsApi";
-import { DatapackPathLabel } from "@/features/collections/components/DatapackPathLabel";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ADD_TO_COLLECTION_LABEL,
+  MOVE_INTO_COLLECTION_LABEL,
+  UNFILED_LABEL,
+} from "@/features/collections/collectionsCopy";
 import {
   SHARED,
   datapackAccessFooterLabel,
@@ -48,6 +53,8 @@ export function DatapackTile({
   const createdShorthand = formatDatapackCreatedDateShorthand(dp.created_at);
   const accessLabel = datapackAccessFooterLabel(dp);
   const ownerLabel = datapackTileOwnerLabel(dp, currentUser);
+  // Filed means the server gave us a collection/folder path for it.
+  const filed = Boolean(path?.path?.trim());
   const canShare = isDatapackGrantEligibleToShare(dp);
   const sharedByLabel = datapackSharedByLabel(dp);
 
@@ -110,12 +117,6 @@ export function DatapackTile({
               >
                 {preview}
               </p>
-              {showPath ? (
-                <DatapackPathLabel
-                  path={path}
-                  onFile={onFileDatapack ? () => onFileDatapack(dp) : undefined}
-                />
-              ) : null}
             </div>
           </div>
 
@@ -173,6 +174,30 @@ export function DatapackTile({
               <span className="tabular-nums text-muted-foreground/95">{createdShorthand}</span>
             </div>
           </div>
+
+          {/* Where it lives, as one more fact beside Access and Owner rather
+              than folded into the title. Prefixing the name with the path
+              truncated away the name itself, which is the one thing that
+              identifies the card. */}
+          {showPath ? (
+            <div className="mt-1 flex min-w-0 items-baseline gap-1 text-xs">
+              <span className="shrink-0 font-medium text-foreground/70">Collection</span>
+              {filed ? (
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <span className="min-w-0 truncate font-mono text-muted-foreground/95">
+                      {path?.path}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="start" className="max-w-[320px]">
+                    <span className="font-mono text-xs">{path?.path}</span>
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <span className="italic text-muted-foreground/70">{UNFILED_LABEL}</span>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -201,14 +226,30 @@ export function DatapackTile({
             <ArrowRight className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
           </button>
           <div className="w-px shrink-0 self-stretch bg-foreground/10" aria-hidden />
-          <button
-            type="button"
-            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-foreground/95 transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
-            onClick={() => onConnectDatapack(dp)}
-          >
-            <Terminal className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-            Connect
-          </button>
+          {/* Connect is a workspace-wide affordance reachable from the header
+              and the datapack page, so with collections on this slot earns
+              more as the one action this grid cannot otherwise offer.
+              Owned datapacks only: placement refuses anything else, so
+              offering it on a shared card is offering a guaranteed error. */}
+          {showPath && onFileDatapack && variant !== SHARED ? (
+            <button
+              type="button"
+              className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-foreground/95 transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+              onClick={() => onFileDatapack(dp)}
+            >
+              <FolderInput className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+              {filed ? MOVE_INTO_COLLECTION_LABEL : ADD_TO_COLLECTION_LABEL}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-foreground/95 transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+              onClick={() => onConnectDatapack(dp)}
+            >
+              <Terminal className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+              Connect
+            </button>
+          )}
           <div className="w-px shrink-0 self-stretch bg-foreground/10" aria-hidden />
           <button
             type="button"

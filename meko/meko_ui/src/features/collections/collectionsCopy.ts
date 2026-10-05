@@ -9,12 +9,32 @@ export const COLLECTIONS_SUBTITLE =
 
 export const NEW_COLLECTION_LABEL = "New Collection";
 
-export const SHARED_COLLECTIONS_TITLE = "Shared collections";
-/** Says what is and isn't visible, because a recipient seeing "1 datapack" in
- *  someone's collection will otherwise wonder whether that is the whole collection. */
-export const SHARED_COLLECTIONS_SUBTITLE =
-  "Collections belonging to other people, holding datapacks shared with you. You see only the " +
-  "datapacks you have access to and the folders they sit in, not the rest of the collection.";
+/** Scope tabs on the collections grid. Same three words the Datapacks page
+ *  uses, so the two lists read as the same control. */
+export const SCOPE_TAB_ALL = "All";
+export const SCOPE_TAB_MINE = "Mine";
+export const SCOPE_TAB_SHARED = "Shared with me";
+
+export const COLLECTIONS_SEARCH_PLACEHOLDER = "Search collections...";
+
+/** The create tile that ends the grid. */
+export const NEW_COLLECTION_TILE_BODY =
+  "Group datapacks into folders around one outcome";
+
+/** An example name per layout, used as the Name field's placeholder and as
+ *  the name drawn in the preview before the user types one. Keyed on
+ *  theme_key; an unknown layout falls back to the generic one, so adding a
+ *  layout server-side never leaves a blank preview. */
+const LAYOUT_EXAMPLE_NAME: Record<string, string> = {
+  adlc: "adlc",
+  support: "support",
+};
+export const GENERIC_COLLECTION_EXAMPLE_NAME = "my_collection";
+
+export function layoutExampleName(themeKey: string | undefined): string {
+  if (!themeKey) return GENERIC_COLLECTION_EXAMPLE_NAME;
+  return LAYOUT_EXAMPLE_NAME[themeKey] ?? GENERIC_COLLECTION_EXAMPLE_NAME;
+}
 
 /** Empty-state copy for a workspace with no collections yet. */
 export const COLLECTIONS_EMPTY_TITLE = "No collections yet";
@@ -25,39 +45,14 @@ export const COLLECTIONS_EMPTY_BODY =
 /** Shown wherever a datapack has no placement. */
 export const UNFILED_LABEL = "Unfiled";
 
-export const UNFILED_PANEL_TITLE = "Unfiled datapacks";
-
-/** Answers the two questions a user actually has here: do I need to do
- *  something, and what happens if I do. Deliberately says nothing about "before
- *  Collections" — a version boundary is meaningful to us, not to someone looking
- *  at their own workspace. */
-export const UNFILED_PANEL_BODY =
-  "Datapacks that aren't in a collection. They work exactly as they always have, so filing them " +
-  "is optional, and a filed datapack can be moved to another folder or collection at any time.";
-
-export const FILE_INTO_COLLECTION_LABEL = "File into a collection";
+/** Filing a datapack, from the Datapacks grid and the datapack header. "Add
+ *  to" rather than "File into": it sits in a three-button strip and in a
+ *  menu, and it is the plain thing a user is trying to do. */
+export const ADD_TO_COLLECTION_LABEL = "Add to Collection";
 /** Same dialog, different verb: the datapack already has a home and this
  *  changes it. Placement is an upsert keyed on the datapack, so filing and
  *  moving are the same write. */
 export const MOVE_INTO_COLLECTION_LABEL = "Move";
-
-/** Footer notes on the Datapacks table. Each explains a behaviour the table
- *  shows but cannot justify on its own. */
-export const DATAPACKS_FOOTER_NOTES = [
-  {
-    title: "A datapack lives in one place",
-    body:
-      "A datapack belongs to at most one collection at a time. Moving it between folders, or to a " +
-      "different collection, changes where it lives rather than copying it, so there is never a " +
-      "second copy to keep in step.",
-  },
-  {
-    title: "What “Promoted” means",
-    body:
-      "Counts the memories this datapack has published to its collection. Many memories with " +
-      "zero promoted means work nobody else can benefit from.",
-  },
-] as const;
 
 export const FOLDER_EMPTY_LABEL = "No datapacks in this folder yet";
 
@@ -135,8 +130,9 @@ export const PIPELINE_SUBTITLE =
   "How memory from individual datapacks becomes knowledge the whole collection can read.";
 
 // Settings tab.
-export const FOLDER_OPERATIONS_TITLE = "Folder operations";
 export const ADD_FOLDER_LABEL = "Add folder";
+/** The field that names the one folder a Custom collection starts with. */
+export const NEW_FOLDER_LABEL = "New Folder";
 export const RENAME_FOLDER_LABEL = "Rename folder";
 export const MOVE_DATAPACK_LABEL = "Move datapack";
 export const DANGER_ZONE_TITLE = "Danger zone";
@@ -170,6 +166,7 @@ export const TOAST_RETRY_DESCRIPTION = "Something went wrong. Try again.";
 /** The Activity tab. The feed is derived from content that still exists,
  *  not from an event log, so it is honest about the two things it covers. */
 export const ACTIVITY_TAB_DESCRIPTION =
-  "Files uploaded and memories promoted across this collection, newest first. Other changes, such " +
-  "as creating a datapack or renaming a folder, are not recorded yet and do not appear here.";
+  "Files uploaded, memories promoted, folders created and datapacks filed across this " +
+  "collection, newest first. A move shows as a fresh filing. Renames and deletions are not " +
+  "recorded, so they do not appear here.";
 export const PROMOTIONS_TILE_TITLE = "Promotions";

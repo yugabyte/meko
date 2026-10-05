@@ -1663,7 +1663,8 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Uploads and memory promotions across a collection, newest first
+      summary: Uploads, promotions, folder creations and filings across a collection,
+        newest first
       tags:
       - collections
   /collections/{collection_id}/folders:

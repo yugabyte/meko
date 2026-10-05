@@ -1829,7 +1829,9 @@ export async function listPendingUploads(
  *  `type` selects which side of the BE's UNION populated this row — the
  *  fields keyed off the other side stay null/undefined. */
 export type KBActivityLogItem = {
-  type: "file_upload" | "memory_promotion";
+  /** The last two are collection-feed only: a single datapack has no
+   *  folders, and where it sits describes the collection around it. */
+  type: "file_upload" | "memory_promotion" | "folder_created" | "datapack_filed";
   timestamp: string;
   /** Which datapack the row came from. Absent on the single-datapack feed,
    *  where it would only repeat the page you are already on; present on the
@@ -1847,6 +1849,9 @@ export type KBActivityLogItem = {
   content?: string | null;
   agent_id?: string | null;
   conversation_id?: string | null;
+  // folder_created / datapack_filed
+  folder_id?: string | null;
+  folder_name?: string | null;
 };
 
 /** Activity-log page envelope.

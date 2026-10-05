@@ -114,7 +114,8 @@ type datapackDeleter interface {
 
 // activityLogger is the slice of KnowledgeBaseService the collection feed needs.
 type activityLogger interface {
-	ListActivityLogForDatapacks(datapackIDs []string, limit int, cursor string) (ActivityLogResponse, error)
+	ListActivityLogForDatapacks(datapackIDs []string, limit int, cursor string,
+		structural *repository.StructuralActivity) (ActivityLogResponse, error)
 }
 
 func NewCollectionService(
@@ -212,14 +213,14 @@ func (s *CollectionService) scopeFor(userID, collectionID string) (*collectionSc
 	}, nil
 }
 
-// ActivityLog returns the collection's file uploads and memory promotions as one
-// time-ordered feed, scoped to the datapacks the caller can see.
+// ActivityLog returns file uploads, memory promotions, folder creations and
+// datapack filings as one time-ordered feed, scoped to what the caller can see.
 //
-// It covers those two things and no others. Nothing records that a datapack
-// was created, a folder renamed or a memory written, so a feed cannot report
-// them — the rows here are derived from content that still exists rather than
-// from an event log, which also means a deleted file's upload disappears from
-// history. See KnowledgeBaseService.ListActivityLogForDatapacks for the cost.
+// Still derived from rows that exist rather than from an event log, so a
+// deleted file's upload disappears from history and a renamed folder reports
+// nothing. A MOVE does appear, as a fresh filing: placement is an upsert and
+// ActivityPlacements keys on its updated_at. See
+// KnowledgeBaseService.ListActivityLogForDatapacks for the cost.
 func (s *CollectionService) ActivityLog(
 	userID, collectionID string, limit int, cursor string,
 ) (ActivityLogResponse, error) {
@@ -235,7 +236,9 @@ func (s *CollectionService) ActivityLog(
 	for _, pl := range scope.placements {
 		datapackIDs = append(datapackIDs, pl.DatapackID)
 	}
-	resp, err := s.activity.ListActivityLogForDatapacks(datapackIDs, limit, cursor)
+
+	structural := s.structuralActivity(scope, limit, cursor)
+	resp, err := s.activity.ListActivityLogForDatapacks(datapackIDs, limit, cursor, structural)
 	if err != nil {
 		return ActivityLogResponse{}, err
 	}
@@ -248,6 +251,82 @@ func (s *CollectionService) ActivityLog(
 		}
 	}
 	return resp, nil
+}
+
+// structuralActivity fetches the two collection-only sides of the feed:
+// folders created, and datapacks filed into one.
+//
+// Both are scoped the same way the tree is. Folders come from the caller's
+// VISIBLE placements rather than from the collection, so a recipient sees
+// only folders holding a datapack shared with them; an owner additionally
+// sees their empty folders, which is the one case where the two differ.
+// Never returns an error: both sides degrade to empty rather than failing.
+func (s *CollectionService) structuralActivity(
+	scope *collectionScope, limit int, cursor string,
+) *repository.StructuralActivity {
+	c := repository.DecodeActivityLogCursor(cursor)
+	// Same over-fetch the other sides use: enough to fill a page alone, plus
+	// one so the merge can tell there is more without a COUNT.
+	perSideCap := limit + 1
+
+	// Each side degrades independently, the rule ListActivityLog already
+	// applies to its own two sides: a meko_system hiccup costs the folder or
+	// placement rows, not the uploads and promotions that would have loaded
+	// fine. Returning the error here would take the whole tab down with it.
+	folderIDs := s.visibleFolderIDs(scope)
+	folders, err := s.collections.ActivityFolders(folderIDs, c.FolderTs, c.FolderID, perSideCap)
+	if err != nil {
+		slog.Warn("activity log: folder side failed; serving the rest", "error", err)
+		folders = nil
+	}
+
+	datapackIDs := make([]string, 0, len(scope.placements))
+	for _, pl := range scope.placements {
+		datapackIDs = append(datapackIDs, pl.DatapackID)
+	}
+	placements, err := s.collections.ActivityPlacements(
+		datapackIDs, c.PlaceTs, c.PlaceID, perSideCap,
+	)
+	if err != nil {
+		slog.Warn("activity log: placement side failed; serving the rest", "error", err)
+		placements = nil
+	}
+
+	// Placement rows carry a datapack id but not its name, same as every
+	// other side; the caller labels them.
+	return &repository.StructuralActivity{Folders: folders, Placements: placements}
+}
+
+// visibleFolderIDs is every folder this caller may know exists: all of them
+// when they own the collection, otherwise only the ones their visible
+// datapacks sit in.
+func (s *CollectionService) visibleFolderIDs(scope *collectionScope) []string {
+	if scope.owned != nil {
+		folders, err := s.collections.Folders(scope.collection.ID)
+		if err != nil {
+			// The feed degrades to its other sides rather than failing: a
+			// missing folder list costs one row type, not the page.
+			slog.Warn("activity log: folder list failed; omitting folder events",
+				"collection_id", scope.collection.ID, "error", err)
+			return nil
+		}
+		out := make([]string, 0, len(folders))
+		for _, f := range folders {
+			out = append(out, f.ID)
+		}
+		return out
+	}
+
+	seen := make(map[string]bool, len(scope.placements))
+	out := make([]string, 0, len(scope.placements))
+	for _, pl := range scope.placements {
+		if pl.FolderID == "" || seen[pl.FolderID] {
+			continue
+		}
+		seen[pl.FolderID] = true
+		out = append(out, pl.FolderID)
+	}
+	return out
 }
 
 // visibleDatapackIDs returns the ids of every datapack the caller can see,

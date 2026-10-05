@@ -8,68 +8,17 @@
 // tree with their folder names in it says more than an invented one. The
 // fallback is our own default layout, not a made-up workspace.
 
-import { ChevronDown, ChevronUp, Database, Folder, FolderOpen } from "lucide-react";
+import { ChevronDown, ChevronUp, Folder } from "lucide-react";
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import type { Collection } from "@/lib/api/collectionsApi";
 import { countLabel } from "@/features/collections/collectionsCopy";
+import { FolderTreePreview } from "@/features/collections/components/FolderTreePreview";
 
 /** Shown when the user has no collection worth drawing yet. These are the
  *  folders our own Software delivery layout creates, so the illustration is
  *  something they can actually go and make. */
 const SAMPLE = { name: "adlc", folders: ["coding_standards", "features", "integration_tests"] };
-
-/** At most this many folders are drawn; the rest collapse into a count. Keeps
- *  the diagram the same height whether a collection has three folders or thirty. */
-const MAX_FOLDERS_DRAWN = 3;
-
-/** The two levels, drawn. A collection holds folders, a folder holds datapacks —
- *  folders do not nest, and the diagram is the quickest way to say so. */
-function CollectionShapeDiagram({ example }: { example?: Collection }) {
-  const name = example?.collection_name ?? SAMPLE.name;
-  const allFolders = (example?.folder_names?.length ? example.folder_names : SAMPLE.folders) ?? [];
-  const folders = allFolders.slice(0, MAX_FOLDERS_DRAWN);
-  const hidden = allFolders.length - folders.length;
-
-  return (
-    <div className="w-full shrink-0 rounded-xl border border-border bg-background/60 p-5 lg:w-72">
-      <p className="text-xs uppercase tracking-wide text-muted-foreground">
-        {example ? "Your collection" : "Example"}
-      </p>
-
-      <div className="mt-3 flex items-center gap-2">
-        <Folder className="h-4 w-4 shrink-0 text-brand" aria-hidden />
-        <span className="truncate font-mono text-sm font-semibold text-foreground" title={name}>
-          {name}
-        </span>
-      </div>
-
-      {/* The rail is the nesting: everything inside it is one level down. */}
-      <ul className="mt-2 space-y-1.5 border-l border-border pl-4">
-        {folders.map((folder) => (
-          <li key={folder} className="flex items-center gap-2">
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="truncate font-mono text-xs text-foreground/90" title={folder}>
-              {folder}
-            </span>
-          </li>
-        ))}
-        {hidden > 0 ? (
-          <li className="pl-[1.375rem] text-xs text-muted-foreground">
-            +{countLabel(hidden, "more folder")}
-          </li>
-        ) : null}
-
-        <li className="flex items-center gap-2 pt-1">
-          <Database className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="text-xs text-muted-foreground">
-            {example ? countLabel(example.datapack_count, "datapack") : "datapacks in each folder"}
-          </span>
-        </li>
-      </ul>
-    </div>
-  );
-}
 
 export function CollectionExplainerPanel({ example }: { example?: Collection }) {
   const [expanded, setExpanded] = useState(false);
@@ -111,7 +60,19 @@ export function CollectionExplainerPanel({ example }: { example?: Collection }) 
             </p>
           </div>
 
-          <CollectionShapeDiagram example={example} />
+          <FolderTreePreview
+            label={example ? "Your collection" : "Example"}
+            name={example?.collection_name ?? SAMPLE.name}
+            folders={
+              example?.folder_names?.length ? example.folder_names : SAMPLE.folders
+            }
+            footer={
+              example
+                ? countLabel(example.datapack_count, "datapack")
+                : "datapacks in each folder"
+            }
+            className="lg:w-72"
+          />
         </div>
       ) : null}
     </Card>

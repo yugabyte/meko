@@ -16,12 +16,17 @@ import (
 // datapack that was not shared with them, even though the collection holds more.
 type capturingActivity struct {
 	askedFor []string
+	// The folder ids the structural side was scoped to, so a test can assert
+	// a recipient is not handed the owner's whole tree.
+	structural *repository.StructuralActivity
 }
 
 func (c *capturingActivity) ListActivityLogForDatapacks(
 	datapackIDs []string, limit int, cursor string,
+	structural *repository.StructuralActivity,
 ) (ActivityLogResponse, error) {
 	c.askedFor = append([]string{}, datapackIDs...)
+	c.structural = structural
 	return ActivityLogResponse{Items: []repository.ActivityLogItem{}, Limit: limit}, nil
 }
 
@@ -70,8 +75,31 @@ func TestCollectionActivityLog_RecipientSeesOnlyTheSharedDatapacks(t *testing.T)
 				"description", "owner_name", "created_at", "updated_at"}).
 			AddRow("proj-1", "alice", "adlc", "adlc", "1.0", "", "Alice", now, now))
 
+	// The structural sides. Bob is not the owner, so folders come from his
+	// OWN placements: f1 only. f9 is his other collection's, and Alice's
+	// other folders never enter the query at all.
+	mock.ExpectQuery("FROM +meko_system.collection_folders").
+		WithArgs(pq.Array([]string{"f1"}), 11).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at", "folder_id", "folder_name"}).
+			AddRow(now, "f1", "perf_baselines"))
+	mock.ExpectQuery("FROM +meko_system.datapack_placements p").
+		WithArgs(pq.Array([]string{"shared-1", "shared-2"}), 11).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"updated_at", "datapack_id", "folder_name", "folder_id"}).
+			AddRow(now, "shared-1", "perf_baselines", "f1"))
+
 	if _, err := svc.ActivityLog("bob", "proj-1", 10, ""); err != nil {
 		t.Fatalf("ActivityLog: %v", err)
+	}
+
+	// The folder side is the one that could leak an owner's structure past a
+	// share, so assert it was handed the scoped set rather than trusting the
+	// datapack assertion below to cover it.
+	if activity.structural == nil {
+		t.Fatal("structural sides missing: the collection feed must carry them")
+	}
+	if n := len(activity.structural.Folders); n != 1 {
+		t.Errorf("folder events for %d folders, want only the shared one", n)
 	}
 
 	want := map[string]bool{"shared-1": true, "shared-2": true}
@@ -95,10 +123,34 @@ func TestCollectionActivityLog_OwnerSeesEveryDatapackInTheCollection(t *testing.
 
 	collectionDeleteMocks(mock, []string{"dp-a", "dp-b", "dp-c"})
 
+	now := time.Now()
+	// The owner's folder list is the whole collection, including folders
+	// holding nothing: an empty folder they created is still their event.
+	mock.ExpectQuery("FROM +meko_system.collection_folders\n\t\t WHERE +collection_id").
+		WithArgs("proj-1").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"folder_id", "collection_id", "folder_name", "created_at", "updated_at"}).
+			AddRow("f1", "proj-1", "standards", now, now).
+			AddRow("f2", "proj-1", "empty_one", now, now))
+	mock.ExpectQuery("FROM +meko_system.collection_folders").
+		WithArgs(pq.Array([]string{"f1", "f2"}), 11).
+		WillReturnRows(sqlmock.NewRows([]string{"created_at", "folder_id", "folder_name"}).
+			AddRow(now, "f2", "empty_one"))
+	mock.ExpectQuery("FROM +meko_system.datapack_placements p").
+		WithArgs(pq.Array([]string{"dp-a", "dp-b", "dp-c"}), 11).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"updated_at", "datapack_id", "folder_name", "folder_id"}).
+			AddRow(now, "dp-a", "standards", "f1"))
+
 	if _, err := svc.ActivityLog("me", "proj-1", 10, ""); err != nil {
 		t.Fatalf("ActivityLog: %v", err)
 	}
 	if len(activity.askedFor) != 3 {
 		t.Fatalf("feed asked about %v, want all three", activity.askedFor)
+	}
+	// An empty folder still produces an event for its owner, which is the
+	// case the recipient path above cannot reach.
+	if activity.structural == nil || len(activity.structural.Folders) != 1 {
+		t.Error("owner feed should carry the folder event, including for empty folders")
 	}
 }

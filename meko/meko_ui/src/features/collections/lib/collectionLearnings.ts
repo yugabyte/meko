@@ -23,8 +23,3 @@ export function collectionLearningsByCollection(
   }
   return out;
 }
-
-/** Datapacks with no placement in the caller's tree. */
-export function unfiledDatapacks(datapacks: Datapack[], paths: DatapackPathMap): Datapack[] {
-  return datapacks.filter((dp) => paths[dp.datapack_id] === undefined);
-}

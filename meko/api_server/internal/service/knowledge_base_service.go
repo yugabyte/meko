@@ -420,7 +420,9 @@ func (s *KnowledgeBaseService) ListActivityLog(
 	if dp == nil {
 		return ActivityLogResponse{}, fmt.Errorf("datapack is required")
 	}
-	return s.ListActivityLogForDatapacks([]string{dp.ID}, limit, cursor)
+	// nil structural: a single datapack's feed has no folder or placement
+	// events, those describe the collection around it.
+	return s.ListActivityLogForDatapacks([]string{dp.ID}, limit, cursor, nil)
 }
 
 // ListActivityLogForDatapacks is the same feed over a SET of datapacks, for
@@ -438,13 +440,17 @@ func (s *KnowledgeBaseService) ListActivityLog(
 // filter applies. So a collection's feed costs O(collection contents) per page,
 // not O(page). Fine at the sizes a collection reaches; the fix is an event
 // table, not a better query.
+// structural carries the collection-only sides (folders created, datapacks
+// filed). Nil from the single-datapack feed, which is what keeps those rows
+// off the Knowledge page.
 func (s *KnowledgeBaseService) ListActivityLogForDatapacks(
 	datapackIDs []string,
 	limit int, cursor string,
+	structural *repository.StructuralActivity,
 ) (ActivityLogResponse, error) {
 	c := repository.DecodeActivityLogCursor(cursor)
 	items, nextCursor, err := s.repo.ListActivityLog(
-		datapackIDs, DatapackIndexSchema, DatapackIndexName, limit, c,
+		datapackIDs, DatapackIndexSchema, DatapackIndexName, limit, c, structural,
 	)
 	if err != nil {
 		return ActivityLogResponse{}, err

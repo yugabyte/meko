@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, PlayCircle, Settings, Share2, Trash2, Upload } from "lucide-react";
+import { FolderInput, Pencil, PlayCircle, Settings, Share2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -85,6 +85,12 @@ import {
 import { DatapackDetailHero } from "@/features/datapacks/components/datapack-detail/DatapackDetailHero";
 import { useCollectionsEnabled } from "@/lib/collectionsFeature";
 import { useDatapackPaths } from "@/features/collections/hooks/useCollections";
+import { FileIntoCollectionDialog } from "@/features/collections/components/FileIntoCollectionDialog";
+import {
+  ADD_TO_COLLECTION_LABEL,
+  DATAPACK_MOVED_TOAST,
+  MOVE_DATAPACK_LABEL,
+} from "@/features/collections/collectionsCopy";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
@@ -195,6 +201,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const collectionsEnabled = useCollectionsEnabled();
   const { data: datapackPaths = {} } = useDatapackPaths({ enabled: collectionsEnabled });
   const collectionPath = datapackPaths[routeDatapackId];
+  const [isFileIntoOpen, setIsFileIntoOpen] = useState(false);
   // Only on a datapack shared WITH you: on your own, naming the owner tells
   // you your own name.
   const sharedOwnerName =
@@ -472,7 +479,21 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 error={connectError}
                 provisionStatus={provisionStatus}
               />
-              <DatapackDeleteConfirmDialog
+              {/* Only with the feature on, so a workspace without Collections never
+          builds this dialog's queries. */}
+      {collectionsEnabled && datapack ? (
+        <FileIntoCollectionDialog
+          open={isFileIntoOpen}
+          onOpenChange={setIsFileIntoOpen}
+          datapack={datapack}
+          title={collectionPath ? MOVE_DATAPACK_LABEL : ADD_TO_COLLECTION_LABEL}
+          confirmLabel={collectionPath ? "Move here" : "Add here"}
+          successTitle={collectionPath ? DATAPACK_MOVED_TOAST : undefined}
+          defaultCollectionId={collectionPath?.collection_id}
+        />
+      ) : null}
+
+      <DatapackDeleteConfirmDialog
                 open={isDeleteOpen}
                 onOpenChange={setIsDeleteOpen}
                 datapackName={displayDatapackName}
@@ -539,6 +560,15 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                       </DropdownMenuItem>
                     )}
                     {showActionsDropdownDangerSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
+                    {collectionsEnabled && isOwner ? (
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer focus:bg-muted/20"
+                        onSelect={() => setIsFileIntoOpen(true)}
+                      >
+                        <FolderInput className="h-4 w-4 shrink-0" aria-hidden />
+                        {collectionPath ? MOVE_DATAPACK_LABEL : ADD_TO_COLLECTION_LABEL}
+                      </DropdownMenuItem>
+                    ) : null}
                     {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem
                       className="gap-2 cursor-pointer focus:bg-muted/20"
                       onSelect={() => navigate(datapackConfigurePath(routeDatapackId))}
