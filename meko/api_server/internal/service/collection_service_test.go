@@ -23,6 +23,9 @@ func newCollectionService(t *testing.T) (*CollectionService, sqlmock.Sqlmock, *s
 		repository.NewPlacementRepo(db),
 		repository.NewDatapackRepo(db, "", repository.DeployEnvProd),
 		repository.NewDatapackRollupRepo(db),
+		// stats: nil, so the tests below exercise the tree and the feed
+		// without the statistics panel's queries.
+		nil,
 		nil,
 		nil,
 	)
@@ -294,7 +297,7 @@ func datapackRows(owned map[string]string, sharedWith string) *sqlmock.Rows {
 
 func folderRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"folder_id", "collection_id", "folder_name", "created_at", "updated_at",
+		"folder_id", "collection_id", "folder_name", "folder_description", "created_at", "updated_at",
 	})
 }
 
@@ -328,8 +331,8 @@ func TestDatapackPaths_ResolvesCollectionAndFolderNames(t *testing.T) {
 
 	mock.ExpectQuery("FROM +meko_system.collection_folders").
 		WillReturnRows(folderRows().
-			AddRow("folder-root", "proj-1", "coding_standards", now, now).
-			AddRow("folder-child", "proj-1", "features", now, now))
+			AddRow("folder-root", "proj-1", "coding_standards", "", now, now).
+			AddRow("folder-child", "proj-1", "features", "", now, now))
 
 	paths, err := svc.DatapackPaths("me")
 	if err != nil {
@@ -397,8 +400,8 @@ func TestListSharedWithCounts_ScopesToWhatTheRecipientCanSee(t *testing.T) {
 	// Alice's collection really has two folders; only one holds something Bob can see.
 	mock.ExpectQuery("FROM +meko_system.collection_folders").
 		WillReturnRows(folderRows().
-			AddRow("folder-features", "proj-alice", "features", now, now).
-			AddRow("folder-compliance", "proj-alice", "compliance", now, now))
+			AddRow("folder-features", "proj-alice", "features", "", now, now).
+			AddRow("folder-compliance", "proj-alice", "compliance", "", now, now))
 
 	shared, err := svc.ListSharedWithCounts("bob")
 	if err != nil {
@@ -463,9 +466,9 @@ func TestListWithCounts_UsesThreeQueriesForAnyNumberOfCollections(t *testing.T) 
 	mock.ExpectQuery("FROM +meko_system.collection_folders").
 		WithArgs(pq.Array([]string{"proj-1", "proj-2"})).
 		WillReturnRows(folderRows().
-			AddRow("f1", "proj-1", "coding_standards", now, now).
-			AddRow("f2", "proj-1", "features", now, now).
-			AddRow("f3", "proj-2", "playbooks", now, now))
+			AddRow("f1", "proj-1", "coding_standards", "", now, now).
+			AddRow("f2", "proj-1", "features", "", now, now).
+			AddRow("f3", "proj-2", "playbooks", "", now, now))
 
 	mock.ExpectQuery("FROM +meko_system.datapack_placements").
 		WithArgs("me").

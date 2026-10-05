@@ -122,19 +122,27 @@ export const READABLE_RULE_TITLE = "What a datapack here can read";
 export const READABLE_RULE_BODY =
   "Its own knowledge and memories, plus anything promoted into this collection's shared knowledge.";
 
-/** The collective-learning pipeline, scoped to one collection. */
-/** Not "Collective learning in this collection": the rename put the same
- *  root twice in one short heading. The page already says which one. */
-export const PIPELINE_TITLE = "Collective learning here";
-export const PIPELINE_SUBTITLE =
-  "How memory from individual datapacks becomes knowledge the whole collection can read.";
+export const STATS_TITLE = "What this collection holds";
+
+/** Knowledge files, and the qualifier that says which ones are counted:
+ *  a file mid-ingest is not searchable yet, so only indexed ones count. */
+export const KB_FILES_LABEL = "Knowledge files";
+export const KB_FILES_INDEXED_HINT = "indexed";
 
 // Settings tab.
 export const ADD_FOLDER_LABEL = "Add folder";
 /** The field that names the one folder a Custom collection starts with. */
 export const NEW_FOLDER_LABEL = "New Folder";
+/** Says why the description is worth filling in, since it is optional and the
+ *  payoff is later: search has to pick a folder, and a name alone rarely says
+ *  what belongs in one. */
+export const FOLDER_DESCRIPTION_HINT =
+  "Helps you and your agents pick the right folder later.";
 export const RENAME_FOLDER_LABEL = "Rename folder";
 export const MOVE_DATAPACK_LABEL = "Move datapack";
+/** The folder-contents pane's own button. "Add a datapack" rather than
+ *  "File into": from inside a folder, adding to it is the plain reading. */
+export const ADD_A_DATAPACK_LABEL = "Add a datapack";
 export const DANGER_ZONE_TITLE = "Danger zone";
 export const DANGER_ZONE_BODY =
   "Both actions are permanent and cannot be undone, and both destroy content rather than just " +

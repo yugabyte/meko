@@ -16,6 +16,7 @@ import {
   deleteCollection,
   deleteCollectionFolder,
   getCollection,
+  getCollectionStats,
   listDatapackPaths,
   listCollections,
   listCollectionThemes,
@@ -27,6 +28,7 @@ import {
   type DatapackPathMap,
   type CollectionLists,
   type CollectionDetail,
+  type CollectionStats,
   type CollectionTheme,
 } from "@/lib/api/collectionsApi";
 
@@ -35,6 +37,7 @@ import {
 export const COLLECTIONS_QUERY_KEY = "collections";
 export const COLLECTION_THEMES_QUERY_KEY = "collection-themes";
 export const DATAPACK_PATHS_QUERY_KEY = "datapack-paths";
+export const COLLECTION_STATS_QUERY_KEY = "collection-stats";
 
 /** Matches useDatapacks: long enough that navigating between surfaces inside
  *  a minute doesn't refetch, short enough that a new collection appears on the
@@ -95,6 +98,12 @@ function useInvalidateTree() {
   return () => {
     void queryClient.invalidateQueries({ queryKey: [COLLECTIONS_QUERY_KEY] });
     void queryClient.invalidateQueries({ queryKey: [DATAPACK_PATHS_QUERY_KEY] });
+    // Stats are computed over the collection's placed datapacks, so filing,
+    // unfiling or deleting one changes them. Its key sits outside the two
+    // prefixes above, so without this the memory tiles refetch from the
+    // detail query while the rest keep the old datapack set and the panel
+    // disagrees with itself until a focus refetch.
+    void queryClient.invalidateQueries({ queryKey: [COLLECTION_STATS_QUERY_KEY] });
   };
 }
 
@@ -126,7 +135,7 @@ export function useDeleteCollection() {
 export function useCreateFolder(collectionId: string) {
   const invalidate = useInvalidateTree();
   return useMutation({
-    mutationFn: (body: { folder_name: string; parent_folder_id?: string }) =>
+    mutationFn: (body: { folder_name: string; folder_description?: string }) =>
       createCollectionFolder(collectionId, body),
     onSuccess: invalidate,
   });
@@ -135,8 +144,13 @@ export function useCreateFolder(collectionId: string) {
 export function useRenameFolder(collectionId: string) {
   const invalidate = useInvalidateTree();
   return useMutation({
-    mutationFn: (args: { folderId: string; folderName: string }) =>
-      renameCollectionFolder(collectionId, args.folderId, { folder_name: args.folderName }),
+    mutationFn: (args: { folderId: string; folderName: string; description?: string }) =>
+      renameCollectionFolder(collectionId, args.folderId, {
+        folder_name: args.folderName,
+        // Always sent: the server replaces the stored description, so
+        // omitting it on a rename would clear it.
+        folder_description: args.description ?? "",
+      }),
     onSuccess: invalidate,
   });
 }
@@ -181,5 +195,18 @@ export function useDeleteDatapackInTree() {
       void queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] });
       dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
     },
+  });
+}
+
+/** The statistics panel. Its own query rather than part of useCollection so
+ *  the tree renders without waiting on four more aggregates. Memory counts
+ *  are deliberately NOT here — they come from the detail query, which already
+ *  pays the one scan that does fan out across 128 partitions. */
+export function useCollectionStats(collectionId: string | undefined) {
+  return useQuery<CollectionStats>({
+    queryKey: [COLLECTION_STATS_QUERY_KEY, collectionId],
+    queryFn: () => getCollectionStats(collectionId as string),
+    staleTime: COLLECTIONS_STALE_TIME_MS,
+    enabled: Boolean(collectionId),
   });
 }

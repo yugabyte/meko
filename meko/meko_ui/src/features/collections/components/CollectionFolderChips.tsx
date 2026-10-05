@@ -5,6 +5,7 @@
 // Shared: the collection card and the unfiled/empty states both render these.
 
 import { cn } from "@/lib/utils";
+import { LABEL_NAME_FONT } from "@/features/collections/collectionsTypography";
 
 /** Beyond this the chips wrap onto a third line and stop being scannable; the
  *  remainder collapses into a "+N" chip. */
@@ -31,7 +32,7 @@ export function CollectionFolderChips({
       {visible.map((folder) => (
         <span
           key={folder}
-          className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
+          className={cn("rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground", LABEL_NAME_FONT)}
         >
           {folder}
         </span>

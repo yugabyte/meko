@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -30,6 +31,7 @@ import { useCreateFolder, useRenameFolder } from "@/features/collections/hooks/u
 import {
   ADD_FOLDER_LABEL,
   COLLECTION_TOASTS,
+  FOLDER_DESCRIPTION_HINT,
   RENAME_FOLDER_LABEL,
   TOAST_RETRY_DESCRIPTION,
 } from "@/features/collections/collectionsCopy";
@@ -40,6 +42,7 @@ export function FolderNameDialog({
   collectionId,
   folders,
   mode,
+  initialFolderId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -47,9 +50,13 @@ export function FolderNameDialog({
   /** Only read in rename mode, to choose which folder to act on. */
   folders: CollectionFolder[];
   mode: "create" | "rename";
+  /** Preselects the folder to rename, so the pencil on a row opens the
+   *  dialog already pointed at it instead of asking again. */
+  initialFolderId?: string;
 }) {
   const [folderId, setFolderId] = useState("");
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const createMut = useCreateFolder(collectionId);
   const renameMut = useRenameFolder(collectionId);
@@ -57,15 +64,18 @@ export function FolderNameDialog({
 
   useEffect(() => {
     if (!open) return;
-    setFolderId("");
+    setFolderId(mode === "rename" ? (initialFolderId ?? "") : "");
     setName("");
+    setDescription("");
     setError(null);
-  }, [open, mode]);
+  }, [open, mode, initialFolderId]);
 
   // Renaming starts from the current name, which is what the user is editing.
   useEffect(() => {
     if (mode !== "rename" || !folderId) return;
-    setName(folders.find((f) => f.folder_id === folderId)?.folder_name ?? "");
+    const existing = folders.find((f) => f.folder_id === folderId);
+    setName(existing?.folder_name ?? "");
+    setDescription(existing?.folder_description ?? "");
   }, [mode, folderId, folders]);
 
   const trimmed = name.trim();
@@ -80,9 +90,16 @@ export function FolderNameDialog({
     setError(null);
     try {
       if (mode === "create") {
-        await createMut.mutateAsync({ folder_name: trimmed });
+        await createMut.mutateAsync({
+          folder_name: trimmed,
+          folder_description: description.trim(),
+        });
       } else {
-        await renameMut.mutateAsync({ folderId, folderName: trimmed });
+        await renameMut.mutateAsync({
+          folderId,
+          folderName: trimmed,
+          description: description.trim(),
+        });
       }
       onOpenChange(false);
       toast({ title: copy.ok, description: trimmed });
@@ -107,7 +124,7 @@ export function FolderNameDialog({
             <DialogDescription>
               {mode === "create"
                 ? "Folders group the datapacks doing similar work. They do not nest."
-                : "Datapacks inside keep their place; only the name changes."}
+                : "Datapacks inside keep their place."}
             </DialogDescription>
           </DialogHeader>
 
@@ -142,6 +159,21 @@ export function FolderNameDialog({
                 disabled={mode === "rename" && !folderId}
                 autoComplete="off"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="folder-dialog-description">Description (optional)</Label>
+              <Textarea
+                id="folder-dialog-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What belongs in here?"
+                rows={2}
+                disabled={mode === "rename" && !folderId}
+              />
+              <p className="text-xs text-muted-foreground">
+                {FOLDER_DESCRIPTION_HINT}
+              </p>
             </div>
 
             {error ? (

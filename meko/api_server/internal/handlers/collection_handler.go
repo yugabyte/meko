@@ -160,6 +160,29 @@ func (h *CollectionHandler) ActivityLog(c echo.Context) error {
 	return ok(c, http.StatusOK, resp)
 }
 
+// Stats handles GET /api/v1/collections/:collection_id/stats.
+//
+//	@Summary	What a collection holds
+//	@Tags		collections
+//	@Produce	json
+//	@Param		collection_id	path		string	true	"Collection ID"
+//	@Success	200			{object}	APIResponse
+//	@Failure	404			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/collections/{collection_id}/stats [get]
+func (h *CollectionHandler) Stats(c echo.Context) error {
+	userID, err := accountID(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
+	}
+
+	resp, err := h.svc.Stats(userID, c.Param("collection_id"))
+	if err != nil {
+		return h.fail(c, err)
+	}
+	return ok(c, http.StatusOK, resp)
+}
+
 // Create handles POST /api/v1/collections.
 //
 //	@Summary	Create a collection from a theme
@@ -272,6 +295,8 @@ func (h *CollectionHandler) Delete(c echo.Context) error {
 // createFolderRequest is the body of POST /collections/:collection_id/folders.
 type createFolderRequest struct {
 	Name string `json:"folder_name"`
+	// Optional. What the folder is for, which its name often cannot say.
+	Description string `json:"folder_description"`
 }
 
 // CreateFolder handles POST /api/v1/collections/:collection_id/folders.
@@ -295,7 +320,7 @@ func (h *CollectionHandler) CreateFolder(c echo.Context) error {
 	if bErr := c.Bind(&req); bErr != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	folder, err := h.svc.CreateFolder(userID, c.Param("collection_id"), req.Name)
+	folder, err := h.svc.CreateFolder(userID, c.Param("collection_id"), req.Name, req.Description)
 	if err != nil {
 		return h.fail(c, err)
 	}
@@ -306,6 +331,11 @@ func (h *CollectionHandler) CreateFolder(c echo.Context) error {
 // /collections/:collection_id/folders/:folder_id.
 type updateFolderRequest struct {
 	Name string `json:"folder_name"`
+	// Pointer so an omitted field is distinguishable from an explicit "":
+	// omitted leaves the stored description alone, "" clears it. A
+	// rename-only PATCH -- an older UI bundle, a PAT client, an agent -- must
+	// not wipe a description it never sent.
+	Description *string `json:"folder_description"`
 }
 
 // UpdateFolder handles PATCH /api/v1/collections/:collection_id/folders/:folder_id.
@@ -330,7 +360,9 @@ func (h *CollectionHandler) UpdateFolder(c echo.Context) error {
 	if bErr := c.Bind(&req); bErr != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	if err = h.svc.RenameFolder(userID, c.Param("collection_id"), c.Param("folder_id"), req.Name); err != nil {
+	if err = h.svc.RenameFolder(
+		userID, c.Param("collection_id"), c.Param("folder_id"), req.Name, req.Description,
+	); err != nil {
 		return h.fail(c, err)
 	}
 	return ok(c, http.StatusOK, map[string]string{"folder_id": c.Param("folder_id")})

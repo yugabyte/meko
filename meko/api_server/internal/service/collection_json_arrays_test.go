@@ -77,7 +77,7 @@ func TestFolders_EmptyCollectionReturnsEmptySlice(t *testing.T) {
 	mock.ExpectQuery("FROM +meko_system.collection_folders").
 		WithArgs("proj-1").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"folder_id", "collection_id", "folder_name", "created_at", "updated_at"}))
+			[]string{"folder_id", "collection_id", "folder_name", "folder_description", "created_at", "updated_at"}))
 
 	folders, err := repository.NewCollectionRepo(db).Folders("proj-1")
 	if err != nil {

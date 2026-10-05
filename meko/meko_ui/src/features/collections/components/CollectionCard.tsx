@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { formatDatapackCreatedDateShorthand } from "@/lib/datapackDateFormat";
 import type { Collection } from "@/lib/api/collectionsApi";
 import { CollectionFolderChips } from "@/features/collections/components/CollectionFolderChips";
+import { LABEL_NAME_FONT } from "@/features/collections/collectionsTypography";
 
 /** One count on a collection card. Two of these sit side by side. */
 function CollectionStat({
@@ -71,7 +72,7 @@ export function CollectionCard({
           </div>
           <div className="min-w-0 flex-1">
             <h3
-              className="truncate font-mono text-sm font-semibold text-foreground"
+              className={cn("truncate text-sm font-semibold text-foreground", LABEL_NAME_FONT)}
               title={collection.collection_name}
             >
               {collection.collection_name}

@@ -1760,6 +1760,30 @@ paths:
       summary: Rename a folder
       tags:
       - collections
+  /collections/{collection_id}/stats:
+    get:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collection_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: What a collection holds
+      tags:
+      - collections
   /collections/placements:
     get:
       produces:

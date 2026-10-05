@@ -96,6 +96,11 @@ type CollectionService struct {
 	// it is nil, or fails, the detail page still renders with zeros the same
 	// way DatapackHandler.Describe degrades.
 	rollups *repository.DatapackRollupRepo
+	// stats reads the collection-wide statistics panel. Optional. Each metric
+	// degrades to zero on its own (see CollectionStatsRepo.Stats); the
+	// endpoint fails only when the repo is absent or every metric failed, so
+	// a stats outage costs the panel rather than the page.
+	stats *repository.CollectionStatsRepo
 	// activity is the datapack activity feed, widened to a set of datapacks.
 	// An interface rather than *KnowledgeBaseService so this file depends on
 	// the one method it uses.
@@ -123,6 +128,7 @@ func NewCollectionService(
 	placements *repository.PlacementRepo,
 	datapacks *repository.DatapackRepo,
 	rollups *repository.DatapackRollupRepo,
+	stats *repository.CollectionStatsRepo,
 	activity activityLogger,
 	datapackDeleter datapackDeleter,
 ) *CollectionService {
@@ -131,6 +137,7 @@ func NewCollectionService(
 		placements:  placements,
 		datapacks:   datapacks,
 		rollups:     rollups,
+		stats:       stats,
 		activity:    activity,
 
 		datapackDeleter: datapackDeleter,
@@ -676,25 +683,37 @@ func (s *CollectionService) Delete(userID, collectionID string) error {
 
 // CreateFolder adds a folder to a collection the caller owns. Ownership is
 // checked before the insert so a caller cannot grow another user's tree.
-func (s *CollectionService) CreateFolder(userID, collectionID, name string) (*models.CollectionFolder, error) {
+func (s *CollectionService) CreateFolder(
+	userID, collectionID, name, description string,
+) (*models.CollectionFolder, error) {
 	if err := validateTreeName("folder", name); err != nil {
 		return nil, err
 	}
 	if _, err := s.collections.Get(userID, collectionID); err != nil {
 		return nil, err
 	}
-	return s.collections.CreateFolder(collectionID, strings.TrimSpace(name))
+	return s.collections.CreateFolder(
+		collectionID, strings.TrimSpace(name), strings.TrimSpace(description),
+	)
 }
 
 // RenameFolder renames a folder in a collection the caller owns.
-func (s *CollectionService) RenameFolder(userID, collectionID, folderID, name string) error {
+func (s *CollectionService) RenameFolder(
+	userID, collectionID, folderID, name string, description *string,
+) error {
 	if err := validateTreeName("folder", name); err != nil {
 		return err
 	}
 	if _, err := s.collections.Get(userID, collectionID); err != nil {
 		return err
 	}
-	return s.collections.RenameFolder(collectionID, folderID, strings.TrimSpace(name))
+	if description != nil {
+		trimmed := strings.TrimSpace(*description)
+		description = &trimmed
+	}
+	return s.collections.RenameFolder(
+		collectionID, folderID, strings.TrimSpace(name), description,
+	)
 }
 
 // DeleteFolder removes a folder and its children from a collection the caller
@@ -951,4 +970,26 @@ func (s *CollectionService) DatapackPaths(userID string) (map[string]models.Data
 		}
 	}
 	return out, nil
+}
+
+// Stats returns what a collection holds.
+//
+// Scoped exactly like the tree and the activity feed: the caller's visible
+// datapacks, so a recipient's numbers cover only what was shared with them
+// rather than the owner's whole collection.
+func (s *CollectionService) Stats(userID, collectionID string) (repository.CollectionStats, error) {
+	empty := repository.CollectionStats{KBFilesByType: map[string]int64{}}
+	if s.stats == nil {
+		return empty, fmt.Errorf("collection stats are unavailable")
+	}
+	scope, err := s.scopeFor(userID, collectionID)
+	if err != nil {
+		return empty, err
+	}
+
+	datapackIDs := make([]string, 0, len(scope.placements))
+	for _, pl := range scope.placements {
+		datapackIDs = append(datapackIDs, pl.DatapackID)
+	}
+	return s.stats.Stats(datapackIDs, DatapackIndexSchema, DatapackIndexName)
 }

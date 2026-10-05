@@ -223,7 +223,7 @@ func (r *CollectionRepo) Delete(userID, collectionID string) error {
 // rows, so the sort is free and the index stays a pure lookup.
 func (r *CollectionRepo) Folders(collectionID string) ([]models.CollectionFolder, error) {
 	rows, err := r.db.Query(
-		`SELECT folder_id, collection_id, folder_name, created_at, updated_at
+		`SELECT folder_id, collection_id, folder_name, COALESCE(folder_description, ''), created_at, updated_at
 		 FROM   meko_system.collection_folders
 		 WHERE  collection_id = $1`,
 		collectionID,
@@ -239,7 +239,7 @@ func (r *CollectionRepo) Folders(collectionID string) ([]models.CollectionFolder
 	for rows.Next() {
 		var f models.CollectionFolder
 		if sErr := rows.Scan(
-			&f.ID, &f.CollectionID, &f.Name, &f.CreatedAt, &f.UpdatedAt,
+			&f.ID, &f.CollectionID, &f.Name, &f.Description, &f.CreatedAt, &f.UpdatedAt,
 		); sErr != nil {
 			return nil, fmt.Errorf("collection_folders: scan: %w", sErr)
 		}
@@ -301,7 +301,7 @@ func (r *CollectionRepo) FoldersByCollections(collectionIDs []string) ([]models.
 		return nil, nil
 	}
 	rows, err := r.db.Query(
-		`SELECT folder_id, collection_id, folder_name, created_at, updated_at
+		`SELECT folder_id, collection_id, folder_name, COALESCE(folder_description, ''), created_at, updated_at
 		 FROM   meko_system.collection_folders
 		 WHERE  collection_id = ANY($1)`,
 		pq.Array(collectionIDs),
@@ -315,7 +315,7 @@ func (r *CollectionRepo) FoldersByCollections(collectionIDs []string) ([]models.
 	for rows.Next() {
 		var f models.CollectionFolder
 		if sErr := rows.Scan(
-			&f.ID, &f.CollectionID, &f.Name, &f.CreatedAt, &f.UpdatedAt,
+			&f.ID, &f.CollectionID, &f.Name, &f.Description, &f.CreatedAt, &f.UpdatedAt,
 		); sErr != nil {
 			return nil, fmt.Errorf("collection_folders: scan by collection: %w", sErr)
 		}
@@ -364,14 +364,17 @@ func (r *CollectionRepo) SortedFolders(collectionID string) ([]models.Collection
 
 // CreateFolder adds a folder to a collection. Folders do not nest, so there is
 // no parent to resolve and no depth to check.
-func (r *CollectionRepo) CreateFolder(collectionID, name string) (*models.CollectionFolder, error) {
+func (r *CollectionRepo) CreateFolder(
+	collectionID, name, description string,
+) (*models.CollectionFolder, error) {
 	var f models.CollectionFolder
 	err := r.db.QueryRow(
-		`INSERT INTO meko_system.collection_folders (collection_id, folder_name)
-		 VALUES ($1, $2)
-		 RETURNING folder_id, collection_id, folder_name, created_at, updated_at`,
-		collectionID, name,
-	).Scan(&f.ID, &f.CollectionID, &f.Name, &f.CreatedAt, &f.UpdatedAt)
+		`INSERT INTO meko_system.collection_folders
+		     (collection_id, folder_name, folder_description)
+		 VALUES ($1, $2, NULLIF($3, ''))
+		 RETURNING folder_id, collection_id, folder_name, COALESCE(folder_description, ''), created_at, updated_at`,
+		collectionID, name, description,
+	).Scan(&f.ID, &f.CollectionID, &f.Name, &f.Description, &f.CreatedAt, &f.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation23505(err) {
 			return nil, ErrFolderNameTaken
@@ -381,13 +384,27 @@ func (r *CollectionRepo) CreateFolder(collectionID, name string) (*models.Collec
 	return &f, nil
 }
 
-// RenameFolder renames a folder within its collection.
-func (r *CollectionRepo) RenameFolder(collectionID, folderID, name string) error {
+// RenameFolder renames a folder, and replaces its description only when the
+// caller sent one.
+//
+// A nil description leaves the column alone, so a rename-only PATCH cannot
+// wipe a description it never mentioned; an empty string clears it. Without
+// that distinction an older client sending just folder_name would silently
+// drop the stored text.
+func (r *CollectionRepo) RenameFolder(collectionID, folderID, name string, description *string) error {
+	var desc string
+	if description != nil {
+		desc = *description
+	}
 	res, err := r.db.Exec(
 		`UPDATE meko_system.collection_folders
-		 SET    folder_name = $3, updated_at = NOW()
+		 SET    folder_name        = $3,
+		        folder_description = CASE WHEN $4::boolean
+		                                  THEN NULLIF($5, '')
+		                                  ELSE folder_description END,
+		        updated_at         = NOW()
 		 WHERE  folder_id = $1 AND collection_id = $2`,
-		folderID, collectionID, name,
+		folderID, collectionID, name, description != nil, desc,
 	)
 	if err != nil {
 		if isUniqueViolation23505(err) {

@@ -7,9 +7,11 @@ import { formatDatapackCreatedDateShorthand } from "@/lib/datapackDateFormat";
 import type { Collection, CollectionMembers } from "@/lib/api/collectionsApi";
 import { useCollectionThemes } from "@/features/collections/hooks/useCollections";
 import { countLabel } from "@/features/collections/collectionsCopy";
+import { LABEL_NAME_FONT } from "@/features/collections/collectionsTypography";
 
-/** One fact. `mono` is for values that are identifiers the user typed or
- *  chose; a person's name or a count is prose and reads wrong in mono. */
+/** One fact. `mono` marks values that are identifiers rather than prose; the
+ *  typeface it resolves to is collectionsTypography's to decide, and today
+ *  both are sans. */
 function FactRow({
   label,
   value,
@@ -23,7 +25,7 @@ function FactRow({
     <div className="flex items-baseline justify-between gap-4 py-2.5">
       <dt className="shrink-0 text-sm text-muted-foreground">{label}</dt>
       <dd
-        className={cn("min-w-0 truncate text-right text-sm text-foreground", mono && "font-mono")}
+        className={cn("min-w-0 truncate text-right text-sm text-foreground", mono && LABEL_NAME_FONT)}
       >
         {value}
       </dd>

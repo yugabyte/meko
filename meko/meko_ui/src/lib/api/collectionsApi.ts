@@ -64,6 +64,9 @@ export type CollectionFolder = {
   folder_id: string;
   collection_id: string;
   folder_name: string;
+  /** What the folder is for. Optional; absent or "" on folders created
+   *  before descriptions existed. */
+  folder_description?: string;
   datapack_count: number;
   created_at: string;
   updated_at: string;
@@ -104,6 +107,21 @@ export type CollectionMembers = {
    *  ever registered, while the agents doing the work appear on the rows
    *  they wrote. */
   agents: number;
+};
+
+/** What the collection holds right now: standing totals, no date range.
+ *  Memory counts come from the detail response instead, so the tile and the
+ *  tree sum the same rows. */
+export type CollectionStats = {
+  searches_hybrid: number;
+  searches_kb: number;
+  searches_memory: number;
+  conversations: number;
+  kb_files: number;
+  kb_chunks: number;
+  artifacts: number;
+  artifact_bytes: number;
+  kb_files_by_type: Record<string, number>;
 };
 
 export type CollectionDetail = {
@@ -188,7 +206,7 @@ export async function deleteCollection(
 
 export async function createCollectionFolder(
   collectionId: string,
-  body: { folder_name: string },
+  body: { folder_name: string; folder_description?: string },
   options: RouteOptions = {},
 ): Promise<CollectionFolder> {
   return request<CollectionFolder>(foldersRoute(collectionId), "POST", body, options);
@@ -197,7 +215,9 @@ export async function createCollectionFolder(
 export async function renameCollectionFolder(
   collectionId: string,
   folderId: string,
-  body: { folder_name: string },
+  /** folder_description replaces the stored one outright, so omitting it on
+   *  a rename would silently clear it. Callers send both. */
+  body: { folder_name: string; folder_description?: string },
   options: RouteOptions = {},
 ): Promise<{ folder_id: string }> {
   return request<{ folder_id: string }>(
@@ -275,6 +295,20 @@ export async function listCollectionActivity(
   if (args.cursor) params.set("cursor", args.cursor);
   return request<KBActivityLogResponse>(
     `${collectionRoute(collectionId)}/activity-log?${params.toString()}`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/** Standing totals for one collection. No date range: every figure counts
+ *  what the collection holds now, so there is nothing for a window to narrow. */
+export async function getCollectionStats(
+  collectionId: string,
+  options: RouteOptions = {},
+): Promise<CollectionStats> {
+  return request<CollectionStats>(
+    `${collectionRoute(collectionId)}/stats`,
     "GET",
     undefined,
     options,

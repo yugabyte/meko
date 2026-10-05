@@ -9,6 +9,7 @@
 import { Database, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { countLabel } from "@/features/collections/collectionsCopy";
+import { LABEL_NAME_FONT } from "@/features/collections/collectionsTypography";
 
 /** At most this many folders are drawn; the rest collapse into a count. Keeps
  *  the diagram the same height whether a collection has three folders or
@@ -49,7 +50,10 @@ export function FolderTreePreview({
 
       <div className="mt-3 flex items-center gap-2">
         <Folder className="h-4 w-4 shrink-0 text-brand" aria-hidden />
-        <span className="truncate font-mono text-sm font-semibold text-foreground" title={name}>
+        <span
+          className={cn("truncate text-sm font-semibold text-foreground", LABEL_NAME_FONT)}
+          title={name}
+        >
           {name}
         </span>
       </div>
@@ -73,7 +77,8 @@ export function FolderTreePreview({
             />
             <span
               className={cn(
-                "truncate font-mono text-xs text-foreground/90",
+                "truncate text-xs text-foreground/90",
+                LABEL_NAME_FONT,
                 i === pendingFolderIndex &&
                   "rounded border border-dashed border-brand/50 px-1 text-brand",
               )}

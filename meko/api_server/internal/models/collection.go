@@ -48,6 +48,9 @@ type CollectionFolder struct {
 	ID           string    `json:"folder_id"`
 	CollectionID string    `json:"collection_id"`
 	Name         string    `json:"folder_name"`
+	// Description is what the folder is FOR, which its name often cannot say.
+	// Optional, and the column is nullable, so an existing folder reads as "".
+	Description string `json:"folder_description,omitempty"`
 	// DatapackCount is how many datapacks are filed in this folder. On a shared
 	// collection it counts only the ones the caller can see.
 	DatapackCount int `json:"datapack_count"`

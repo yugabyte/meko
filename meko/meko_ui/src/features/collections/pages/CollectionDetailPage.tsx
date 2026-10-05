@@ -1,10 +1,10 @@
-// One collection: its shape as a tree, a panel describing whatever is selected,
-// how memory becomes shared knowledge inside it, and its settings.
+// One collection: folders, the selected folder's datapacks, a panel describing
+// the selection, and its settings.
 //
-// A single GET /collections/:id feeds all of it. The response carries one row
-// per datapack with its counts, so every folder total, the collection total and
-// the learnings rollup are sums the browser does — selecting a row in the
-// tree issues no request.
+// GET /collections/:id carries one row per datapack with its counts, so every
+// folder total and the memory figures are sums the browser does, and selecting
+// a row issues no request. Two more calls sit alongside it: /stats for the
+// panel and /placements for datapack paths.
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -25,23 +25,15 @@ import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { ROUTES } from "@/app/routes/paths";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
-import { useCollection } from "@/features/collections/hooks/useCollections";
-import { CollectionTree } from "@/features/collections/components/CollectionTree";
-import { CollectionInspector } from "@/features/collections/components/CollectionInspector";
-import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
+import { useCollection, useDatapackPaths } from "@/features/collections/hooks/useCollections";
 import { CollectionRuleCards } from "@/features/collections/components/CollectionRuleCards";
 import { CollectionSettingsTab } from "@/features/collections/components/CollectionSettingsTab";
-import { CollectionFolderActions } from "@/features/collections/components/CollectionFolderActions";
+import { CollectionBrowser } from "@/features/collections/components/browser/CollectionBrowser";
+import { CollectionStatsPanel } from "@/features/collections/components/CollectionStatsPanel";
 import { CollectionActivityTab } from "@/features/collections/components/CollectionActivityTab";
-import {
-  COLLECTION_SELECTION,
-  sumNodes,
-  type TreeSelection,
-} from "@/features/collections/lib/collectionTree";
+import { sumNodes } from "@/features/collections/lib/collectionTree";
 import {
   countLabel,
-  PIPELINE_SUBTITLE,
-  PIPELINE_TITLE,
   COLLECTION_TAB_ACTIVITY,
   COLLECTION_TAB_FOLDERS,
   COLLECTION_TAB_SETTINGS,
@@ -55,9 +47,9 @@ export default function CollectionDetailPage({ collectionId }: { collectionId: s
   const { data, isLoading, error } = useCollection(collectionId);
   const { data: currentUser = null } = useCurrentUser();
   const { data: allDatapacks = [] } = useDatapacks();
-  const [selection, setSelection] = useState<TreeSelection>(COLLECTION_SELECTION);
-  // Controlled rather than defaultValue: the header's folder buttons live
-  // outside the Tabs and have to know which one is open.
+  const { data: datapackPaths = {} } = useDatapackPaths();
+  // Controlled rather than defaultValue: the tab is read elsewhere on the
+  // page, and a rename or add has to leave the Folders tab open.
   const [tab, setTab] = useState<CollectionTab>("folders");
 
   const collection = data?.collection;
@@ -134,17 +126,6 @@ export default function CollectionDetailPage({ collectionId }: { collectionId: s
                 </p>
               </div>
 
-              {/* Folders tab only. These act on the tree the tab shows, and
-                  Settings offers the same pair in its own card, so carrying
-                  them across every tab would duplicate the Settings ones and
-                  strand them above an activity feed they cannot change. */}
-              {tab === "folders" ? (
-                <CollectionFolderActions
-                  collectionId={collectionId}
-                  folders={data.folders}
-                  isOwner={isOwner}
-                />
-              ) : null}
             </div>
 
             <Tabs
@@ -163,33 +144,16 @@ export default function CollectionDetailPage({ collectionId }: { collectionId: s
               </TabsList>
 
               <TabsContent value="folders" className="space-y-6">
-                <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
-                  <CollectionTree
-                    collectionName={collection.collection_name}
-                    folders={data.folders}
-                    datapacks={data.datapacks}
-                    selection={selection}
-                    onSelect={setSelection}
-                  />
-                  <CollectionInspector detail={data} selection={selection} />
-                </div>
-
-                {/* The datapack page's ribbon, minus Conversations. Their
-                    count lives in Langfuse, one query per datapack, which is
-                    the one thing on this page that would scale with collection
-                    size. */}
-                <CollectiveLearningPipeline
-                  currentUser={currentUser}
-                  title={PIPELINE_TITLE}
-                  description={PIPELINE_SUBTITLE}
-                  showConversations={false}
-                  memoryCount={totals.memories}
+                <CollectionBrowser
+                  detail={data}
+                  isOwner={isOwner}
+                  ownDatapacks={ownDatapacks}
+                  datapackPaths={datapackPaths}
                   learningsCount={totals.awaitingReview}
-                  collectiveMemoryCount={totals.promoted}
-                  knowledgeFileCount={totals.knowledge}
-                  knowledgeFileAndPromotedCount={totals.knowledge + totals.promoted}
-                  datapackId={null}
                 />
+
+                <CollectionStatsPanel collectionId={collectionId} />
+
                 <CollectionRuleCards />
               </TabsContent>
 

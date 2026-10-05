@@ -129,9 +129,9 @@ func TestCollectionActivityLog_OwnerSeesEveryDatapackInTheCollection(t *testing.
 	mock.ExpectQuery("FROM +meko_system.collection_folders\n\t\t WHERE +collection_id").
 		WithArgs("proj-1").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"folder_id", "collection_id", "folder_name", "created_at", "updated_at"}).
-			AddRow("f1", "proj-1", "standards", now, now).
-			AddRow("f2", "proj-1", "empty_one", now, now))
+			[]string{"folder_id", "collection_id", "folder_name", "folder_description", "created_at", "updated_at"}).
+			AddRow("f1", "proj-1", "standards", "", now, now).
+			AddRow("f2", "proj-1", "empty_one", "", now, now))
 	mock.ExpectQuery("FROM +meko_system.collection_folders").
 		WithArgs(pq.Array([]string{"f1", "f2"}), 11).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at", "folder_id", "folder_name"}).

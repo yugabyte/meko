@@ -307,6 +307,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		repository.NewPlacementRepo(cfg.SystemDB),
 		dpRepo,
 		repository.NewDatapackRollupRepo(cfg.DB),
+		repository.NewCollectionStatsRepo(cfg.DB, cfg.SystemDB),
 		kbSvc,
 		dpSvc,
 	)
@@ -1366,6 +1367,7 @@ func registerCollectionRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.POST("/collections", h.Create)
 	g.GET("/collections/:collection_id", h.Detail)
 	g.GET("/collections/:collection_id/activity-log", h.ActivityLog)
+	g.GET("/collections/:collection_id/stats", h.Stats)
 	g.PATCH("/collections/:collection_id", h.Update)
 	g.DELETE("/collections/:collection_id", h.Delete)
 
