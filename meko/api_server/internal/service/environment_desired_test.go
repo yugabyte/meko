@@ -96,6 +96,8 @@ func TestSetDesired_RefusesAKindTheAgentDoesNotServe(t *testing.T) {
 		{KindMeko, []models.DesiredResource{{Kind: "controller", Name: "controller"}}, true},
 		{KindAmp, []models.DesiredResource{{Kind: "fleet-version", Name: "fleet"}}, false},
 		{KindMeko, []models.DesiredResource{{Kind: "fleet-version", Name: "fleet"}}, true},
+		{KindAmp, []models.DesiredResource{{Kind: "extension", Name: "postgis"}}, false},
+		{KindMeko, []models.DesiredResource{{Kind: "extension", Name: "postgis"}}, true},
 		// An empty set is a declaration ("run nothing"), never a bad one.
 		{KindMeko, []models.DesiredResource{}, false},
 	}

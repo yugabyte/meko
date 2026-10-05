@@ -82,6 +82,11 @@ type genServer struct {
 	// fleetMissing makes GET /fleet-version 404, as a controller predating it does.
 	fleetMissing bool
 
+	// registered is the catalog's registered (non-builtin) half, served beside
+	// builtinCatalog; extPuts records every PUT /extensions/{name} body.
+	registered []ampclient.Extension
+	extPuts    []ampclient.RegisterExtensionRequest
+
 	fleetRolls int // POST /endpoint-upgrades calls
 	resizes    []ampclient.ResizeEndpointRequest
 	extAdds    []ampclient.AddBranchExtensionsRequest
@@ -99,9 +104,25 @@ func (g *genServer) start(t *testing.T) *Backend {
 		g.settingsStatus = http.StatusOK
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r, g.registered...) {
+			return
+		}
 		p := r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case p == "/users":
+			w.WriteHeader(http.StatusCreated)
+			io.WriteString(w, `{"id":"`+ycpAdminUserID.String()+`","is_admin":true,"created_at":"2026-01-01T00:00:00Z"}`)
+		case strings.HasPrefix(p, "/extensions/") && r.Method == http.MethodPut:
+			var req ampclient.RegisterExtensionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode register-extension body: %v", err)
+			}
+			if got := r.URL.Query().Get("user_id"); got != ycpAdminUserID.String() {
+				t.Errorf("register-extension user_id = %q, want the agent's admin %s", got, ycpAdminUserID)
+			}
+			g.extPuts = append(g.extPuts, req)
+			io.WriteString(w, `{"name":"`+strings.TrimPrefix(p, "/extensions/")+`","image":"`+req.Image+`","builtin":false,"preload":false}`)
 		case p == "/version":
 			io.WriteString(w, `{"version":"`+g.controllerVersion+`","git_commit":"abc1234","build_date":"2026-01-01T00:00:00Z"}`)
 		case p == "/fleet-version":
@@ -477,6 +498,9 @@ func TestUpdateConflictIsPending(t *testing.T) {
 // right. The two paths must not be collapsed.
 func TestCreateConflictStaysSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		io.WriteString(w, `{"error":{"code":"conflict","message":"already exists"}}`)
@@ -512,8 +536,11 @@ func TestCreateConflictStaysSuccess(t *testing.T) {
 // A kind absent from allKinds, or in none of the three sets, fails the guard
 // below rather than going unasserted in either direction.
 var (
-	allKinds        = []string{KindPool, KindCluster, KindBranch, KindEndpoint, KindController, KindFleetVersion}
-	observableKinds = map[string]bool{KindController: true, KindFleetVersion: true}
+	allKinds        = []string{KindPool, KindCluster, KindBranch, KindEndpoint, KindController, KindFleetVersion, KindExtension}
+	observableKinds = map[string]bool{KindController: true, KindFleetVersion: true, KindExtension: true}
+	// synchronousKinds finish their work before Update returns, so a successful
+	// issue is nil rather than a PendingError.
+	synchronousKinds = map[string]bool{KindExtension: true}
 )
 
 // A kind added to updateFuncs without the plumbing fails here rather than in
@@ -526,6 +553,7 @@ func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 		KindEndpoint:     resizeRes(4),
 		KindController:   controllerRes(4),
 		KindFleetVersion: fleetRes(4),
+		KindExtension:    postgisRes(postgisSpec),
 	}
 	// Every kind this backend maps has to be here, or the guard below silently
 	// covers less than it claims — in either direction, since a kind absent from
@@ -557,7 +585,13 @@ func TestUpdatableKindsEchoTheirGeneration(t *testing.T) {
 				}
 				return
 			}
-			mustIssue(t, err)
+			if synchronousKinds[kind] {
+				if err != nil {
+					t.Fatalf("Update on %s = %v, want nil", kind, err)
+				}
+			} else {
+				mustIssue(t, err)
+			}
 
 			if observableKinds[kind] {
 				// No echo to assert: every field of the spec is directly observable on

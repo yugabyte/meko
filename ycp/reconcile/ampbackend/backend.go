@@ -102,6 +102,11 @@ type Backend struct {
 	// lastSeen is the key set the last successful tree read returned, guarded by
 	// mu. It is what lets a failed read name what it could not reach.
 	lastSeen []reconcile.ResourceKey
+	// lastSeenExt is the same for registered extensions, which are read apart from
+	// the tree (see listExtensions).
+	lastSeenExt []string
+	// adminReady is set once the agent's admin user exists (see ensureYCPAdmin).
+	adminReady bool
 }
 
 // updateFuncs is every kind Update can converge, mapped to how. It is the one
@@ -114,6 +119,7 @@ var updateFuncs = map[string]func(*Backend, context.Context, api.DesiredResource
 	KindEndpoint:     (*Backend).updateEndpoint,
 	KindController:   (*Backend).updateController,
 	KindFleetVersion: (*Backend).updateFleet,
+	KindExtension:    (*Backend).registerExtension,
 }
 
 // index maps a resource's hierarchical path to the controller UUIDs its
@@ -131,6 +137,8 @@ type index struct {
 	// endpointRow is the same for endpoints, kept so Update can tell a declared
 	// connectivity apart from the one the endpoint was created with.
 	endpointRow map[string]ampclient.Endpoint
+	// ext is the extension catalog as List last read it.
+	ext extensionCatalog
 }
 
 func newIndex() index {
@@ -372,15 +380,23 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 	if fleet, ok := b.fleetActual(ctx); ok {
 		singletons = append(singletons, fleet)
 	}
+	// Read apart from the tree: the catalog is not under any pool, so a tree that
+	// cannot be read is no reason to lose it, nor it a reason to lose the tree.
+	exts, cat := b.listExtensions(ctx)
+	singletons = append(singletons, exts...)
 	out, idx, err := b.listTree(ctx)
 	if err != nil {
 		partial := append(b.unreadable(err), singletons...)
 		if len(partial) == 0 {
 			return nil, err
 		}
+		b.mu.Lock()
+		b.idx.ext = cat
+		b.mu.Unlock()
 		return partial, nil
 	}
 	out = append(out, singletons...)
+	idx.ext = cat
 	b.mu.Lock()
 	b.idx = idx
 	b.mu.Unlock()
@@ -558,6 +574,11 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 		if err := unmarshalSpec(r, &req); err != nil {
 			return err
 		}
+		if req.Extensions != nil {
+			if err := notInCatalog(idx.ext, *req.Extensions); err != nil {
+				return fmt.Errorf("create cluster %q: %w", r.Name, err)
+			}
+		}
 		req.Name = name
 		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
 			return b.api.CreateCluster(c, poolID, req)
@@ -618,6 +639,8 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 	case KindFleetVersion:
 		// Absent only because this process has not been handed a declaration yet.
 		return b.updateFleet(ctx, r)
+	case KindExtension:
+		return b.registerExtension(ctx, r)
 	}
 	return fmt.Errorf("create: unknown kind %q", r.Kind)
 }
@@ -634,7 +657,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
 	apply, ok := updateFuncs[r.Kind]
 	if !ok {
-		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only branch and endpoint settings, endpoint resize, and branch extensions)", r.Kind))
+		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only branch and endpoint settings, endpoint resize, branch extensions, extension registrations, and the controller and fleet versions)", r.Kind))
 	}
 	return apply(b, ctx, r)
 }
@@ -1174,18 +1197,27 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 		send = sortedMissing(want, have)
 	}
 	adding := len(send) > 0
+	// An add naming an extension the catalog does not have yet is held back (see
+	// notInCatalog), but the settings still land. Like drift, it means the spec has
+	// not fully landed, so nothing below may claim the generation.
+	var waiting error
+	if adding {
+		if waiting = notInCatalog(idx.ext, send); waiting != nil {
+			adding = false
+		}
+	}
 
 	body, changed := branchSettingsPatch(spec, br)
 	// As in updateEndpoint: an empty body is a pure stamp. This replaces re-sending
 	// the whole extension set to get a generation recorded, which was the only way
 	// before this verb could carry one — and which cost an add_branch_extensions
 	// task on every generation bump of a branch that declares extensions.
-	if !changed && !adding && !drift.any() && b.generationBehind(r, br.YcpGeneration) {
+	if !changed && !adding && !drift.any() && waiting == nil && b.generationBehind(r, br.YcpGeneration) {
 		changed = true
 	}
 	if changed {
 		gen := r.Generation
-		if drift.any() {
+		if drift.any() || waiting != nil {
 			gen = 0 // claim nothing; see the drift note above
 		}
 		if !adding && gen > 0 {
@@ -1224,6 +1256,14 @@ func (b *Backend) updateBranch(ctx context.Context, r api.DesiredResource) error
 		}
 	}
 
+	// Retryable outranks drift here: a permanent verdict would stop the add from
+	// being retried once the extension is registered.
+	if waiting != nil {
+		if drift.any() {
+			return fmt.Errorf("update branch %q: %w; also %s", r.Name, waiting, strings.Join(drift.reasons, "; "))
+		}
+		return fmt.Errorf("update branch %q: %w", r.Name, waiting)
+	}
 	if drift.any() {
 		return drift.err("update branch %q", r.Name)
 	}
@@ -1356,6 +1396,8 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 			"delete controller %q: the controller is not deleted through desired state — it is the release this agent runs in", key.Name))
 	case KindFleetVersion:
 		return reconcile.Permanent(fmt.Errorf("delete fleet-version %q: the fleet is not deleted through desired state", key.Name))
+	case KindExtension:
+		return b.deregisterExtension(ctx, key.Name)
 	}
 	return fmt.Errorf("delete: unknown kind %q", key.Kind)
 }

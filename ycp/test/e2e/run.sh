@@ -374,8 +374,42 @@ got_ext="$(ext_of)"
   die "the relayed catalog reads back as $got_ext"
 code="$(post_ext "$API_KEY_ID")"
 [ "$code" = "400" ] || die "POST /agent/extensions for a meko environment returned $code, want 400"
-api DELETE /api/v1/environments/ext-check >/dev/null 2>&1 || true
 echo "    the extension catalog is null until relayed, then reads back; meko's is refused"
+
+#      Importing is desired state: PUT declares an extension resource, the same body
+#      again keeps its generation, DELETE withdraws it, and a meko environment is refused.
+#      The api-server rate-limits per client IP (10/s, burst 20) and every call here
+#      comes from one, so this block lets the bucket refill before and after it rather
+#      than push a neighbouring check into a 429.
+sleep 2
+import_ext() {
+  curl -s -o /dev/null -w '%{http_code}' -X "$1" \
+    "http://127.0.0.1:$PORT$BASE/api/v1/environments/$2/extensions/postgis" \
+    -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+    ${3:+-d "$3"}
+}
+ext_declared() {
+  api GET /api/v1/environments/ext-check/desired |
+    python3 -c 'import json,sys; print(",".join("%s/%s@%d" % (x["kind"], x["name"], x.get("generation", 0)) for x in json.load(sys.stdin)["data"]["resources"]))'
+}
+pg='{"image":"quay.io/acme/postgis:3.5","version":"3.5"}'
+code="$(import_ext PUT ext-check "$pg")"
+[ "$code" = "202" ] || die "importing postgis returned $code, want 202"
+code="$(import_ext PUT ext-check "$pg")"
+[ "$code" = "202" ] || die "re-importing postgis returned $code, want 202"
+[ "$(ext_declared)" = "extension/postgis@0" ] ||
+  die "after importing the same body twice, desired state reads '$(ext_declared)', want extension/postgis@0"
+code="$(import_ext PUT ext-check '{"image":"quay.io/acme/postgis:3.6"}')"
+[ "$(ext_declared)" = "extension/postgis@1" ] ||
+  die "after a changed import, desired state reads '$(ext_declared)', want extension/postgis@1"
+code="$(import_ext DELETE ext-check)"
+[ "$code" = "202" ] || die "removing postgis returned $code, want 202"
+[ -z "$(ext_declared)" ] || die "after removing postgis, desired state reads '$(ext_declared)', want nothing"
+code="$(import_ext PUT "$ENV_NAME" "$pg")"
+[ "$code" = "400" ] || die "importing into a meko environment returned $code, want 400"
+api DELETE /api/v1/environments/ext-check >/dev/null 2>&1 || true
+echo "    an import is declared, re-imported without a bump, withdrawn; meko's is refused"
+sleep 2
 
 #     A YBM-registered environment reads back the pass-through base its registration
 #     gave, which is the whole reason that value is stored: rendered from the request

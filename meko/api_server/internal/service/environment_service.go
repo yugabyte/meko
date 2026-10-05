@@ -899,7 +899,7 @@ var resourceKinds = map[string][]string{
 	// "controller" and "fleet-version" are the odd ones out: they move software
 	// rather than resources — the version the amp controller release runs, and the
 	// version its endpoints are rolled onto.
-	KindAmp: {"storage-pool", "cluster", "branch", "endpoint", "controller", "fleet-version"},
+	KindAmp: {"storage-pool", "cluster", "branch", "endpoint", "controller", "fleet-version", KindExtension},
 }
 
 // logFleetWithoutController reports a full desired set that declares a

@@ -491,6 +491,9 @@ func poolRows(names []string) string {
 func (f *ctlServer) start(t *testing.T) *Backend {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch p := r.URL.Path; {
 		case p == "/version":

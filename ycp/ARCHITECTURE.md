@@ -36,7 +36,7 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. It also converges the software the environment runs: a declared `controller` kind is a `helm upgrade` of the release the agent is itself a member of, and a declared `fleet-version` rolls the endpoints onto it. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
+| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. It also converges the software the environment runs: a declared `controller` kind is a `helm upgrade` of the release the agent is itself a member of, and a declared `fleet-version` rolls the endpoints onto it. A declared `extension` is registered in the controller's extension catalog. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
 | `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (`reconcile/ampbackend`, `reconcile/mekobackend`). Level-triggered, so a missed tick self-heals. |
 | `reconcile/mekobackend` | — | The `Backend` for meko's tenant API: the `agent` and `datapack` kinds, converged over `api_server`'s PAT-authenticated routes. Its verbs are synchronous, so unlike amp it needs no applied-generation echo. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
@@ -266,6 +266,16 @@ on it. `[]` is a reported empty catalog. Neither side writes one for the other: 
 agent sends nothing when the controller read fails, and the control plane rejects an
 absent or null `extensions` rather than storing it as empty, and refuses a non-amp
 environment's POST outright, so a meko environment reads `null` by rule.
+
+Importing goes the other way, as desired state: `PUT /environments/{id}/extensions/{name}`
+with the controller's `registerExtension` body declares an `extension` resource, and
+`DELETE` withdraws it — shorthand for editing the whole set, and the delete matches the
+kind as well as the name, so a pool of the same name is untouched. The agent registers
+or deregisters it on its next tick, and the catalog relay picks up the change in the
+same tick. Like every amp kind it is authoritative: a registered extension nobody
+declares is deregistered — so declare an environment's existing imports before rolling
+an agent with this kind onto it — and one a branch still enables is refused by the
+controller and retried until the branch goes, with the environment DEGRADED meanwhile. Mapping details: `amp/controller/architecture/ac-ycp.md`.
 
 `POST /environments` takes `"desired": [...]` to declare an environment's resources —
 including `[]`, which is simply the same as omitting it. There is no server-side seed:

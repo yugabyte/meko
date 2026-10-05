@@ -37,6 +37,9 @@ type taskFeed struct {
 
 func (f *taskFeed) serve() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		if r.URL.Path != "/tasks" {
 			f.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -394,6 +397,9 @@ func TestCollectHoldsTheWatermarkOnError(t *testing.T) {
 	base := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
 	var fail bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		if fail {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"error":"store unreachable"}`))
@@ -494,6 +500,9 @@ func TestCollectCommitsOnlyWhatItRead(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		page++
 		if page == 2 { // the second page of the first sweep
 			w.WriteHeader(http.StatusServiceUnavailable)

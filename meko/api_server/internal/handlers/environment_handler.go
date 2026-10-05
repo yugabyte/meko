@@ -395,6 +395,41 @@ func (h *EnvironmentHandler) Extensions(c echo.Context) error {
 	return ok(c, http.StatusOK, cat)
 }
 
+// ImportExtension declares an extension for the environment's agent to register in
+// its controller's catalog. 202: registration happens on the agent's next tick, and
+// its outcome is the extension resource in the environment's reported inventory.
+func (h *EnvironmentHandler) ImportExtension(c echo.Context) error {
+	var spec service.ExtensionImport
+	if !bindJSONStrict(c, &spec) {
+		return nil
+	}
+	d, found, err := h.svc.ImportExtension(c.Param("id"), accountScope(c), c.Param("name"), spec)
+	return h.extensionAnswer(c, found, err, d)
+}
+
+// RemoveExtension withdraws an extension's declaration, which the agent then
+// deregisters. 202 for the same reason as ImportExtension.
+func (h *EnvironmentHandler) RemoveExtension(c echo.Context) error {
+	found, err := h.svc.RemoveExtension(c.Param("id"), accountScope(c), c.Param("name"))
+	return h.extensionAnswer(c, found, err, nil)
+}
+
+func (h *EnvironmentHandler) extensionAnswer(c echo.Context, found bool, err error, d *models.DesiredResource) error {
+	if err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		return envLookupError(c, err)
+	}
+	if !found {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
+	}
+	if d == nil {
+		return c.NoContent(http.StatusAccepted)
+	}
+	return ok(c, http.StatusAccepted, d)
+}
+
 // resolveAgent resolves the environment from the call's API key id, returning nil
 // (having written the error) when the key is bound to no environment. A revoked
 // key and a never-registered one are deliberately the same 401.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"meko/ycp/internal/ampclient"
 	"meko/ycp/internal/api"
 )
 
@@ -64,6 +65,19 @@ func assertObservable(t *testing.T, kind string, res api.DesiredResource, diverg
 		}
 		if converged.fleetRolls != 0 {
 			t.Errorf("%s: converged Update rolled %d times, want none", kind, converged.fleetRolls)
+		}
+	case KindExtension:
+		if len(diverged.extPuts) != 1 {
+			t.Fatalf("%s: registrations = %d, want exactly one", kind, len(diverged.extPuts))
+		}
+		converged := &genServer{branchGen: gen64(1), endpointGen: gen64(1),
+			registered: []ampclient.Extension{postgisRow()}}
+		b := converged.start(t)
+		if err := b.Update(t.Context(), res); err != nil {
+			t.Fatalf("%s: Update on an already-registered extension = %v, want nil", kind, err)
+		}
+		if len(converged.extPuts) != 0 {
+			t.Errorf("%s: converged Update registered %d times, want none", kind, len(converged.extPuts))
 		}
 	default:
 		t.Fatalf("%s is observable but this test does not know what to observe for it", kind)

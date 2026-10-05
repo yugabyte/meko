@@ -47,7 +47,24 @@ declared kinds. Users are not a YCP kind — there is no user delete, so the eng
 must not List/GC them — but a pool needs an existing owner. So before creating a
 pool the backend ensures that user (`POST /api/v1/users` with the explicit id,
 idempotent on it); the owner UUID carried in the pool spec becomes a controller
-user on first use.
+user on first use. The `extension` kind does the same for the admin its verbs
+require: a fixed agent user created with `is_admin`.
+
+## Extension kind
+
+`extension`, named by catalog name, registers an image in the controller's catalog
+(`PUT /extensions/{name}?user_id=<agent admin>`, spec = that body) and withdrawing it
+deregisters it. Builtins are not listed, so they are never collected; every other
+registered extension is, like any undeclared resource — including one registered by
+hand through amp-ui, so an environment's existing imports must be declared before an
+agent with this kind reaches it. The controller refuses a deregister (409) while a
+branch enables the extension; that is retried on backoff, not `rejected`, because it
+clears without a spec change and a permanent mark on a delete never retires (a delete
+is planned at generation 0 every tick). The verbs are synchronous and the row carries every spec field, so the
+kind is observable, as below. A cluster create or branch extension add naming an
+extension not yet in the catalog is held back with a retryable error rather than sent:
+nothing orders a registration ahead of them in a tick, and the controller's 400 would
+latch them `rejected`.
 
 ## Upgrade kinds
 

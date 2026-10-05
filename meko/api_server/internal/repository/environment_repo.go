@@ -409,6 +409,46 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 	return tx.Commit()
 }
 
+// UpsertDesired writes one desired resource, replacing its spec whole, under
+// ReplaceDesired's generation rule, and returns the row as stored. Nothing else in
+// the set is read or pruned.
+func (r *EnvironmentRepo) UpsertDesired(envUUID string, d models.DesiredResource) (models.DesiredResource, error) {
+	spec := d.Spec
+	if len(spec) == 0 {
+		spec = json.RawMessage("{}")
+	}
+	err := r.db.QueryRow(
+		`INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
+		 VALUES ($1,$2,$3,$4,0)
+		 ON CONFLICT (env_uuid, kind, name) DO UPDATE
+		   SET spec = EXCLUDED.spec,
+		       generation = CASE
+		         WHEN meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec
+		         THEN meko_system.environment_desired_resources.generation + 1
+		         ELSE meko_system.environment_desired_resources.generation
+		       END
+		 RETURNING generation`,
+		envUUID, d.Kind, d.Name, []byte(spec)).Scan(&d.Generation)
+	if err != nil {
+		return models.DesiredResource{}, fmt.Errorf("upsert desired %s/%s: %w", d.Kind, d.Name, err)
+	}
+	d.Spec = spec
+	return d, nil
+}
+
+// DeleteDesired removes exactly one desired resource, matched on kind AND name.
+// Not applyDesiredPatchesTx's delete, which matches a name and its descendants
+// across every kind — withdrawing extension "postgis" that way would also take a
+// storage pool called "postgis" and everything under it.
+func (r *EnvironmentRepo) DeleteDesired(envUUID, kind, name string) error {
+	if _, err := r.db.Exec(
+		`DELETE FROM meko_system.environment_desired_resources WHERE env_uuid=$1 AND kind=$2 AND name=$3`,
+		envUUID, kind, name); err != nil {
+		return fmt.Errorf("delete desired %s/%s: %w", kind, name, err)
+	}
+	return nil
+}
+
 // applyDesiredPatchesTx applies a batch of targeted desired-state changes on an
 // EXISTING transaction, so a caller can span several environments in one atomic call
 // (the storage-pool region PATCH does). It neither begins nor commits: the caller

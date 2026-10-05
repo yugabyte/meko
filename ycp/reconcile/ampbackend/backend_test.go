@@ -25,6 +25,9 @@ func TestCreatePoolEnsuresOwnerFirst(t *testing.T) {
 	var hits []string
 	var userBody ampclient.CreateUserRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		hits = append(hits, r.Method+" "+r.URL.Path)
 		switch r.URL.Path {
 		case "/users":
@@ -76,6 +79,9 @@ func TestCreatePoolEnsuresOwnerFirst(t *testing.T) {
 func TestCreatePoolWithoutOwnerSkipsUserCreate(t *testing.T) {
 	var hits []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		hits = append(hits, r.Method+" "+r.URL.Path)
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{}`))
@@ -111,6 +117,9 @@ func TestListReportsResourceAttrs(t *testing.T) {
 		parentID   = "66666666-6666-6666-6666-666666666666"
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		p := r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -346,6 +355,9 @@ func TestBadRequestIsPermanent(t *testing.T) {
 		branchID  = "44444444-4444-4444-4444-444444444444"
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/endpoints") && r.Method == http.MethodPost:
@@ -409,6 +421,9 @@ func listedTree(t *testing.T, branchExts []string) (*Backend, *calls) {
 	}
 	got := &calls{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCatalog(w, r) {
+			return
+		}
 		p := r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet {

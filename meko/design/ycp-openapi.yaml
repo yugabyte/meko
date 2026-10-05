@@ -220,7 +220,7 @@ paths:
       security: [{ aeonOIDC: ['fleet:read'] }]
       parameters:
         - { name: name, in: query, required: true, schema: { type: string }, description: A resource's full hierarchical path; its first segment is the storage pool. Exact match by default. }
-        - { name: kind, in: query, schema: { type: string, enum: [storage-pool, cluster, branch, endpoint] }, description: Keep only this resource kind. }
+        - { name: kind, in: query, schema: { type: string, enum: [storage-pool, cluster, branch, endpoint, controller, fleet-version, extension] }, description: Keep only this resource kind. }
         - { name: subtree, in: query, schema: { type: boolean, default: false }, description: With `name`, also return the resource's descendants. }
       responses:
         '200':
@@ -471,6 +471,47 @@ paths:
                     nullable: true
                     items: { $ref: '#/components/schemas/Extension' }
                   reported_at: { type: string, format: date-time, nullable: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/environments/{envId}/extensions/{name}:
+    parameters:
+      - { $ref: '#/components/parameters/EnvId' }
+      - { name: name, in: path, required: true, schema: { type: string, examples: [postgis] }, description: The catalog name a branch opts in by. }
+    put:
+      tags: [environments]
+      summary: Import an extension into this environment's catalog
+      operationId: importEnvironmentExtension
+      description: |
+        Declares an `extension` resource, which the amp agent registers with its
+        controller (`PUT /extensions/{name}`) on its next tick. A full replace: the same
+        body again is a no-op, a changed one re-registers. Only the name and `image`
+        are checked here; the controller's refusal of anything else (a `:latest` tag,
+        a builtin name) is reported on the `extension` resource as `rejected`. Shorthand
+        for an edit of the whole set through `POST /environments/{envId}/desired`.
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ExtensionImport' } } }
+      responses:
+        '202':
+          description: Declared; the agent registers it on its next tick.
+          content: { application/json: { schema: { $ref: '#/components/schemas/DesiredResource' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [environments]
+      summary: Remove an extension from this environment's catalog
+      operationId: removeEnvironmentExtension
+      description: |
+        Withdraws the `extension` declaration; the agent deregisters it on its next tick.
+        The controller refuses while any branch enables it, and the agent retries on
+        backoff — the environment reads DEGRADED, with the reason on the `extension`
+        resource — until those branches are deleted or it is declared again. Nothing
+        takes an extension off a branch. Idempotent.
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      responses:
+        '202': { description: Withdrawn; the agent deregisters it on its next tick. }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/agent/desired-state:
@@ -754,11 +795,12 @@ components:
       required: [kind, name]
       properties:
         # Constrained by the environment's kind: a meko environment serves agent and
-        # datapack, an amp one storage-pool, cluster, branch and endpoint. Declaring
+        # datapack, an amp one storage-pool, cluster, branch, endpoint, controller,
+        # fleet-version and extension. Declaring
         # anything else is refused with 400 at declare time, on registration and on
         # POST /environments/{id}/desired, rather than reaching the agent and coming
         # back as permanent drift.
-        kind: { type: string, examples: [datapack], enum: [agent, datapack, storage-pool, cluster, branch, endpoint], description: Resource type; dispatched to a reconciler. }
+        kind: { type: string, examples: [datapack], enum: [agent, datapack, storage-pool, cluster, branch, endpoint, controller, fleet-version, extension], description: Resource type; dispatched to a reconciler. }
         name: { type: string, examples: [alpha] }
         # spec references secret NAMES only — never secret values
         spec: { type: object, additionalProperties: true, examples: [{ yugabytedb_secret_ref: meko-shared-credentials }] }
@@ -904,6 +946,28 @@ components:
         preload: { type: boolean, description: Enabling it needs a compute restart (shared_preload_libraries). }
         version: { type: string }
         description: { type: string }
+
+    ExtensionImport:
+      type: object
+      additionalProperties: false
+      required: [image]
+      description: The amp controller's registerExtension body, sent to it verbatim.
+      properties:
+        image: { type: string, examples: ['quay.io/acme/postgis:3.5'], description: 'Pinned to a tag or @sha256 digest; :latest is refused.' }
+        version: { type: string }
+        description: { type: string }
+        library: { type: string, description: Shared-library basename when it differs from the name. }
+        preload: { type: boolean, description: Must be in shared_preload_libraries. }
+        layout:
+          type: object
+          additionalProperties: false
+          description: Where the image keeps its pieces, relative to its mount root.
+          properties:
+            share_path: { type: string }
+            lib_path: { type: string }
+            library_path: { type: array, items: { type: string } }
+            env_paths: { type: object, additionalProperties: { type: string } }
+        abi_extra_exempt: { type: array, items: { type: string }, description: Modules allowed a stock-PostgreSQL ABI string. }
 
     Entitlement:
       type: object

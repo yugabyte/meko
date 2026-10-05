@@ -531,6 +531,8 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.GET("/environments/:id/tasks", tasksH.List)
 		fleet.GET("/environments/:id/tasks/:task_id", tasksH.Get)
 		fleet.GET("/environments/:id/extensions", envH.Extensions)
+		fleet.PUT("/environments/:id/extensions/:name", envH.ImportExtension)
+		fleet.DELETE("/environments/:id/extensions/:name", envH.RemoveExtension)
 		fleet.GET("/entitlements", envH.Entitlements)
 		// The agent surface has no account header — the key id names the environment
 		// on its own — so it hangs off v1 directly with its own auth pair rather
