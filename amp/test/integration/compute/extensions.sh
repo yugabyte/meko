@@ -29,6 +29,7 @@
 #   test/integration/compute/extensions.sh --ext pgvector   # explicit
 #   test/integration/compute/extensions.sh --ext pgvector,age # co-mount + smoke both
 #   test/integration/compute/extensions.sh --ext hexabridge # needs AMP_EXT_GH_TOKEN
+#   test/integration/compute/extensions.sh --ext hexabridge_mssql # likewise
 #   test/integration/compute/extensions.sh --registered ext_fixtures/postgis.json
 #   test/integration/compute/extensions.sh --registry my    # override image registry
 #   test/integration/compute/extensions.sh --cache          # layer-cache the base build
@@ -36,7 +37,7 @@
 #
 # Honoured env vars: YB_HOST, YB_PORT (the backing YugabyteDB; default
 # 127.0.0.1:5433), INTEGRATION_PORT_BASE (pin the cluster's port block),
-# YB_AMP_REPO_DIR, YB_DBNAME. For a private-source extension (hexabridge),
+# YB_AMP_REPO_DIR, YB_DBNAME. For a private-source extension (the hexabridges),
 # AMP_EXT_GH_TOKEN must be set — build.sh passes it through as the gh_token
 # BuildKit secret to fetch the source (see deploy/extensions/build.sh).
 #
@@ -1010,6 +1011,29 @@ SQL
         echo ">>> PASS hexabridge: CREATE EXTENSION (v0.1) + nanvl(1,2)=1 + utl_raw.length('AB')=2"
     else
         echo ">>> FAIL hexabridge functional checks; output:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+elif [[ "$EXT_NAME" == hexabridge_mssql ]]; then
+    # hexabridge's SQL Server sibling: same private-source build, but no preload.
+    # It installs into schema `sys`. LEN is the telling call: T-SQL ignores
+    # trailing blanks, so 'abc  ' is 3 where Postgres's own length() says 5.
+    # Same assertions as deploy/smoke-test.sh's hexabridge_mssql block.
+    out=$("${PSQL[@]}" <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS hexabridge_mssql;
+SELECT 'INSTALLED:'||extversion||':'||extnamespace::regnamespace FROM pg_extension WHERE extname='hexabridge_mssql';
+SELECT 'CHARINDEX:'||sys.charindex('b', 'abc');
+SELECT 'LEN:'||sys.len('abc  ');
+SELECT 'STUFF:'||sys.stuff('abcdef', 2, 3, 'XY');
+SQL
+)
+    if echo "$out" | grep -q '^INSTALLED:0.1:sys$' \
+       && echo "$out" | grep -q '^CHARINDEX:2$' \
+       && echo "$out" | grep -q '^LEN:3$' \
+       && echo "$out" | grep -q '^STUFF:aXYef$'; then
+        echo ">>> PASS hexabridge_mssql: CREATE EXTENSION (v0.1, schema sys) + charindex=2 + len('abc  ')=3 + stuff=aXYef"
+    else
+        echo ">>> FAIL hexabridge_mssql functional checks; output:" >&2
         echo "$out" >&2
         exit 1
     fi

@@ -296,8 +296,8 @@ jobs:
       # can be reused. Empty on forks (which get no secrets) → the Quay login below
       # skips and extensions.sh builds the base cold, without --cache.
       QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
-      # Authenticates the private hexabridge source fetch (build.sh -> gh_token
-      # BuildKit secret). Empty on forks → the hexabridge step below skips.
+      # Authenticates the private hexabridge and hexabridge_mssql source fetches
+      # (build.sh -> gh_token BuildKit secret). Empty on forks → their steps skip.
       AMP_EXT_GH_TOKEN: ${{ secrets.HEXABRIDGE_GH_PULL }}
     defaults:
       run:
@@ -434,6 +434,14 @@ jobs:
         env:
           INTEGRATION_PORT_BASE: "20000"
         run: test/integration/compute/extensions.sh --ext hexabridge --regress ${{ steps.quay.outputs.cache }}
+
+      # hexabridge_mssql is private-source too, so it skips on forks the same way.
+      # Its own port block (24000..24700), past documentdb's below.
+      - name: Local extension regression suite (hexabridge_mssql)
+        if: env.AMP_EXT_GH_TOKEN != ''
+        env:
+          INTEGRATION_PORT_BASE: "24000"
+        run: test/integration/compute/extensions.sh --ext hexabridge_mssql --regress ${{ steps.quay.outputs.cache }}
 
       # age (Apache AGE) via its own pg_regress suite. Distinct port block again
       # (21000..21700), below the ephemeral floor, so it can't collide with the

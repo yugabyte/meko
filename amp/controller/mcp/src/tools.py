@@ -90,8 +90,9 @@ def create_cluster(
     unless you have a reason to set it.
 
     `engine` picks a named bundle of extensions to provision as: `postgres`
-    (default, seeds none), `aidb` (pgvector + age + pg_cron), or `oracle`
-    (hexabridge). It is unioned with `extensions`, so the two compose. The engine
+    (default, seeds none), `aidb` (pgvector + age + pg_cron), `oracle`
+    (hexabridge), `sqlserver` (hexabridge_mssql), or `documentdb` (documentdb +
+    pgvector + pg_cron). It is unioned with `extensions`, so the two compose. The engine
     is recorded on the cluster and returned by `get_cluster` / `list_clusters`;
     it names what the cluster was created as and is not re-derived when a branch
     adds extensions later. An unknown engine is rejected with 400.

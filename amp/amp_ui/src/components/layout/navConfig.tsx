@@ -97,7 +97,7 @@ export const AGENT_PANELS: Record<AgentPanelId, AgentPanelConfig> = {
     description: (
       <>
         I migrate data &amp; databases <Hl>in bulk</Hl> into a shared pool — Oracle (via{" "}
-        <Hl>HexaBridge</Hl>), SQL Server (via <Hl>Babelfish</Hl>), MySQL or Postgres. I assess each
+        <Hl>HexaBridge</Hl>), SQL Server (via <Hl>HexaBridge</Hl>), MySQL or Postgres. I assess each
         source, flag incompatibilities, run low-downtime cutovers, and track the detail of every
         migration.
       </>

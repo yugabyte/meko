@@ -4,8 +4,8 @@ This page describes how yb-amp ships PostgreSQL extensions **outside** the
 endpoint image — each extension is built into its own tiny OCI image and mounted
 into the endpoint pod as a Kubernetes **ImageVolume**, with PostgreSQL pointed at
 it via `extension_control_path` / `dynamic_library_path` (both PG18 features).
-`pgvector`, `pg_cron`, `hexabridge`, and `age` (Apache AGE) are delivered this
-way; the pipeline is generic so adding another is a manifest row plus a catalog
+`pgvector`, `pg_cron`, `hexabridge`, `hexabridge_mssql`, and `age` (Apache AGE)
+are delivered this way; the pipeline is generic so adding another is a manifest row plus a catalog
 entry. An image amp does **not** build reaches an endpoint by a different route:
 an operator **registers** it through the API, and nothing in the product names
 it — see "[Registering an extension image](#registering-an-extension-image)".
@@ -25,9 +25,9 @@ vendored `pgsentinel`. Everything else is externalized:
   all, registration is how the customer names the image.
 - **Partner / third-party extensions.** We want to support extensions we don't
   own or build ourselves (e.g. **hexabridge**, HexaCluster's Oracle-compat layer,
-  now shipped this way), each on its own release track — an independent image per
-  extension is the natural unit. When the source is **closed and in a private
-  repo** (hexabridge), the build fetches it with a GitHub token passed as a
+  and **hexabridge_mssql**, its SQL Server sibling), each on its own release
+  track — an independent image per extension is the natural unit. When the source
+  is **closed and in a private repo** (both hexabridges), the build fetches it with a GitHub token passed as a
   BuildKit secret (see "Authenticated source fetch", below).
 - **Small, independent images.** One extension = one `FROM scratch` image
   containing just its `share/` (control + SQL) and `lib/` (the `.so`). It is
@@ -156,12 +156,16 @@ extension is tagged and released on its own cadence.
   + `lib/postgresql` into a `FROM scratch` image. The fetch takes an optional
   `gh_token` **BuildKit secret** (`--mount=type=secret,id=gh_token,required=false`):
   when present it is sent as an `Authorization: Bearer` header so a **private**
-  source (hexabridge) can be pulled; public extensions build with no secret. The
+  source (the hexabridges) can be pulled; public extensions build with no secret. The
   token is a secret mount, never a build-arg, so it never lands in a layer, and
   the checksum still gates the result (a missing/bad token fails closed).
   **Complex extensions** (Rust/pgrx, heavy system deps) get their own Dockerfile
   referenced from the manifest's `dockerfile:` field instead of this generic one —
-  the common path stays small.
+  the common path stays small. A tree whose Makefile is not at the tarball root
+  (hexabridge_mssql's is under `extension/`) is lifted by the row's `prep`, not
+  by a build-dir knob here, because this Dockerfile is in every generic row's
+  recipe hash. Lift it with a move, not a copy: a leftover copy is picked up by
+  an `OBJS = $(wildcard */*.c)` and every symbol links twice.
 - **[`extensions.yaml`](../../deploy/extensions/extensions.yaml)** — the build
   **manifest**: one row per extension (version, URL, patch, preload, prep,
   optional dedicated dockerfile, and a `regress:` block naming the upstream
@@ -205,8 +209,9 @@ extension is tagged and released on its own cadence.
   guard. A **local** build (no `--push`) rebuilds a stale or unlabelled image
   instead of refusing it, since a local tag is only a cache. `AMP_EXT_GH_TOKEN` in the environment is
   forwarded to each build as the `gh_token` secret above, so a private-source
-  extension (hexabridge) can fetch — CI sets it from the `HEXABRIDGE_GH_PULL`
-  secret; it is empty on forks, so the hexabridge steps skip there.
+  extension (either hexabridge) can fetch — CI sets it from the `HEXABRIDGE_GH_PULL`
+  secret, which must be able to read both repos; it is empty on forks, so the
+  hexabridge steps skip there.
 
 ```sh
 # build everything locally
@@ -492,6 +497,7 @@ records the engine on the cluster row (`amp_registry.clusters.engine`).
 | `postgres` (default) | nothing |
 | `aidb` | pgvector, age, pg_cron |
 | `oracle` | hexabridge |
+| `sqlserver` | hexabridge_mssql |
 | `documentdb` | documentdb, pgvector, pg_cron |
 
 **documentdb creates itself.** The gateway sidecar serves nothing until the
@@ -764,7 +770,9 @@ example.
   registration. For `hexabridge` it goes past `CREATE EXTENSION` (superuser-only)
   and calls deterministic Oracle-compat functions (`nanvl`, `utl_raw.length`) so
   the loaded `.so` is exercised; that run needs `AMP_EXT_GH_TOKEN` for the private
-  fetch and is skipped on forks. For `age` it does `LOAD 'age'`, creates a graph,
+  fetch and is skipped on forks. For `hexabridge_mssql` it checks the extension
+  landed in schema `sys` and calls T-SQL `charindex`, `len` and `stuff`. For
+  `age` it does `LOAD 'age'`, creates a graph,
   and runs a `cypher()` CREATE/MATCH round-trip. `--ext` also takes a
   comma-separated list to **co-mount** several extensions on one endpoint (e.g.
   `--ext pgvector,age` — both non-preload — mounts both trees and runs each one's
@@ -785,7 +793,8 @@ example.
   each extension's **own** upstream regression suite against the mounted
   ImageVolume — the extension analogue of `pg_regress.sh` for core Postgres (#608)
   —   driven by the manifest row's `regress:` block: `driver: pgxs` runs
-  `pg_regress` from the extension's Makefile `REGRESS` (pgvector, pg_cron, age)
+  `pg_regress` from the extension's Makefile `REGRESS` (pgvector, pg_cron, age,
+  hexabridge_mssql)
   against the live compute; `driver: script` runs the extension's own runner
   (hexabridge's `scripts/regression.sh`). The suite lives in the source tree (not
   the `FROM scratch` image), so the driver re-fetches the source as
@@ -799,6 +808,7 @@ example.
   real K8s ImageVolume path end-to-end: pgvector and `age` co-mounted on one
   endpoint (asserting both `/extensions/<name>` mounts, the pgvector data query,
   and an AGE `cypher()` round-trip), then pg_cron and hexabridge on their own,
+  then hexabridge_mssql through `engine: "sqlserver"`,
   then the **registration** path — a non-admin `PUT` refused with 403, an admin
   registering `ext_fixtures/postgis.json`, a cluster opting in, the pod carrying
   the registered layout (`share/extension`, the bundled `system/libgeos_c.so.1`,

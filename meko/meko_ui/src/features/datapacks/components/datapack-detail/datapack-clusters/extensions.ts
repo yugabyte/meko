@@ -16,6 +16,7 @@ export const AMP_EXTENSIONS: AmpExtension[] = [
   { name: "pgvector", version: "0.8.2", description: "Vector similarity search" },
   { name: "pg_cron", version: "1.6.7", description: "Cron-style job scheduler" },
   { name: "hexabridge", version: "0.1", description: "Oracle compatibility (DBMS_*/UTL_* packages)" },
+  { name: "hexabridge_mssql", version: "0.1", description: "SQL Server (T-SQL) compatibility functions" },
   { name: "age", version: "1.8.0", description: "Apache AGE — openCypher graph" },
   { name: "documentdb", version: "0.116-0", description: "MongoDB-compatible document store" },
 ];
@@ -27,13 +28,13 @@ export type DbEngine = {
   comingSoon?: boolean;
 };
 
-// Selectable engines map to a controller engine bundle; sqlserver is a roadmap
-// tile shown disabled so the direction is visible without implying support.
+// Selectable engines map to a controller engine bundle. A `comingSoon` engine is
+// a roadmap tile shown disabled, so a direction is visible without implying support.
 export const DB_ENGINES: DbEngine[] = [
   { id: "postgres", label: "PostgreSQL", sub: "18" },
   { id: "aidb", label: "AI Database" },
   { id: "oracle", label: "Oracle" },
-  { id: "sqlserver", label: "SQL Server", comingSoon: true },
+  { id: "sqlserver", label: "SQL Server" },
   { id: "documentdb", label: "DocumentDB" },
 ];
 
@@ -44,6 +45,7 @@ const ENGINE_EXTENSIONS: Record<string, string[]> = {
   postgres: [],
   aidb: ["pgvector", "age", "pg_cron"],
   oracle: ["hexabridge"],
+  sqlserver: ["hexabridge_mssql"],
   documentdb: ["documentdb", "pgvector", "pg_cron"],
 };
 

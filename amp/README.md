@@ -6,7 +6,7 @@
 
 **AMP** (Agentic Multitenant Postgres) is Yugabyte's next-generation
 data-platform service that lets you run **PostgreSQL-compatible, multi-model
-databases** (Postgres, pgvector, Apache AGE, Timeseries, Babelfish SQL Server,
+databases** (Postgres, pgvector, Apache AGE, Timeseries, HexaBridge SQL Server,
 HexaBridge Oracle, DocumentDB Mongo, …) as **managed data planes** inside the
 user's own VPC or on-prem Kubernetes clusters, while a cloud-hosted **control
 plane** handles lifecycle, security, metering and billing.

@@ -48,7 +48,7 @@ means nobody has broken this guarantee on purpose yet.
 | An endpoint answers only to the password its writer was created with, and none is stored in the clear | features/amp_endpoint_client_access | none, pod_delete | minutes | |
 | An endpoint's recorded address survives a reschedule and a redeploy | features/amp_endpoint_client_access | pod_delete | minutes | |
 | A cancelled task stops at a step boundary, ends failed as cancelled, and blocks nothing after it | features/amp_task_cancel; stress/branch_churn | none | minutes | |
-| Every extension the release commits to is present and works | features/pg_extensions_matrix, features/amp_cluster_engine, features/amp_extension_age, features/amp_extension_hexabridge, features/amp_extension_pg_cron, features/amp_extension_pgvector, features/amp_extension_registry (an operator-registered image) | none, pod_delete | minutes | |
+| Every extension the release commits to is present and works | features/pg_extensions_matrix, features/amp_cluster_engine, features/amp_extension_age, features/amp_extension_hexabridge, features/amp_extension_hexabridge_mssql, features/amp_extension_pg_cron, features/amp_extension_pgvector, features/amp_extension_registry (an operator-registered image) | none, pod_delete | minutes | |
 | The shipped deployment is what the release claims: release build, declared RBAC, working metrics | features/amp_release_build, features/amp_byoc_scope, features/amp_otel_pipeline, features/backing_config_contract | none | minutes | |
 | A migration lands every source row and never leaks the source password | features/amp_voyager_migration | none | minutes | |
 | Sustained real load does not degrade past the gate | features/amp_product_health; stress/combined_load, stress/load_sustain; perf/tpcc, perf/pgbench, perf/sysbench, perf/microbench, perf/lifecycle, perf/multitenant, perf/ops_latency, perf/idle_footprint, perf/branch_depth | none, pod_delete, process_kill, process_restart | minutes to hours | |
@@ -91,3 +91,6 @@ deletion.
 - `features/amp_extension_age`: skips itself while the controller catalog
   predates the age entry. A test that can pass by skipping needs a check that
   the skip is still legitimate.
+- `features/amp_extension_hexabridge_mssql`, and the `sqlserver` case of
+  `features/amp_cluster_engine`: the same, for the hexabridge_mssql entry and
+  the `sqlserver` engine.

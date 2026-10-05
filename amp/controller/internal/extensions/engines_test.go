@@ -27,6 +27,7 @@ func TestResolveEngine(t *testing.T) {
 		{EnginePostgres, nil},
 		{"aidb", []string{"pgvector", "age", "pg_cron"}},
 		{"oracle", []string{"hexabridge"}},
+		{"sqlserver", []string{"hexabridge_mssql"}},
 		{"documentdb", []string{"documentdb", "pgvector", "pg_cron"}},
 	} {
 		got, err := ResolveEngine(tc.name)

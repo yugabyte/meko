@@ -14,15 +14,27 @@ import (
 // "x"` 400 (controller/internal/api/handlers.go).
 var unknownExtensionRE = regexp.MustCompile(`unknown extension "([^"]+)"`)
 
+// unknownEngineRE is the same for an engine (controller/internal/extensions/engines.go).
+var unknownEngineRE = regexp.MustCompile(`unknown engine "([^"]+)"`)
+
 // unknownExtensionName returns the extension a create was rejected for as
 // unknown, or "" for any other error. Only a 400 counts: an unknown name is a
 // request the controller understood and refused, never a transport failure.
 func unknownExtensionName(err error) string {
+	return badRequestMatch(err, unknownExtensionRE)
+}
+
+// unknownEngineName is unknownExtensionName for createCluster's engine.
+func unknownEngineName(err error) string {
+	return badRequestMatch(err, unknownEngineRE)
+}
+
+func badRequestMatch(err error, re *regexp.Regexp) string {
 	var apiErr *controller.APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
 		return ""
 	}
-	if m := unknownExtensionRE.FindStringSubmatch(apiErr.Message); m != nil {
+	if m := re.FindStringSubmatch(apiErr.Message); m != nil {
 		return m[1]
 	}
 	return ""

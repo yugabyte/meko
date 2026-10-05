@@ -26,6 +26,14 @@
       ]
     },
     {
+      "name": "sqlserver",
+      "label": "SQL Server",
+      "description": "SQL Server (T-SQL) compatibility layer",
+      "extensions": [
+        "hexabridge_mssql"
+      ]
+    },
+    {
       "name": "documentdb",
       "label": "DocumentDB",
       "description": "MongoDB-compatible document store",
@@ -53,6 +61,11 @@
       "version": "0.1",
       "description": "Oracle compatibility (DBMS_*/UTL_* packages)",
       "preload": true
+    },
+    {
+      "name": "hexabridge_mssql",
+      "version": "0.1",
+      "description": "SQL Server (T-SQL) compatibility functions"
     },
     {
       "name": "age",

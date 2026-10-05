@@ -27,14 +27,18 @@ describe("EngineField", () => {
     render(<EngineField value="postgres" onChange={onChange} />);
 
     const roadmap = DB_ENGINES.filter((e) => e.comingSoon);
-    expect(roadmap.length).toBeGreaterThan(0);
     for (const e of roadmap) {
       const btn = screen.getByRole("button", { name: new RegExp(e.label, "i") });
       expect((btn as HTMLButtonElement).disabled).toBe(true);
       fireEvent.click(btn);
     }
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getAllByText(/coming soon/i)).toHaveLength(roadmap.length);
+    expect(screen.queryAllByText(/coming soon/i)).toHaveLength(roadmap.length);
+  });
+
+  it("lists each engine once, so a roadmap tile cannot shadow a shipped engine", () => {
+    const ids = DB_ENGINES.map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("fires onChange with the engine id when a supported engine is clicked", () => {
@@ -53,6 +57,7 @@ describe("EngineField", () => {
   it("engineExtensions returns the catalog's bundle, and nothing for unknowns", () => {
     expect(engineExtensions("aidb")).toEqual(["pgvector", "age", "pg_cron"]);
     expect(engineExtensions("oracle")).toEqual(["hexabridge"]);
+    expect(engineExtensions("sqlserver")).toEqual(["hexabridge_mssql"]);
     expect(engineExtensions("postgres")).toEqual([]);
     expect(engineExtensions("mysql")).toEqual([]);
   });

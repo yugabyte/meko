@@ -1,7 +1,7 @@
 // createCluster takes an engine (meko#1031): a named bundle of catalog
 // extensions unioned with the request's own, seeded on the default branch and
-// recorded on the cluster. The UI offers AI Database and Oracle; this walks all
-// three engines and proves each bundle actually works on an endpoint.
+// recorded on the cluster. This walks the engines and proves each bundle
+// actually works on an endpoint.
 package features
 
 import (
@@ -29,6 +29,9 @@ var engineCases = []engineCase{
 	{engine: "postgres"},
 	{engine: "aidb", extra: []string{"hexabridge"}, seeds: []string{"pgvector", "age", "pg_cron", "hexabridge"}, probe: probeAIDB},
 	{engine: "oracle", seeds: []string{"hexabridge"}, probe: probeOracle},
+	// hexabridge as an extra puts both HexaCluster layers on one branch: same
+	// vendor, one library preloaded and one not, and hexabridge_mssql owns `sys`.
+	{engine: "sqlserver", extra: []string{"hexabridge"}, seeds: []string{"hexabridge_mssql", "hexabridge"}, probe: probeSQLServer},
 }
 
 func init() {
@@ -39,7 +42,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Create one cluster per engine (postgres, aidb plus an explicit extension, oracle) and assert each records its engine in get and list, seeds exactly its bundle unioned with the request, re-adding a seeded extension is a no-op, and an endpoint on aidb and oracle can create and exercise every seeded extension; an unknown engine is refused with 400.",
+		Description: "Create one cluster per engine (postgres, aidb plus an explicit extension, oracle, sqlserver co-mounted with hexabridge) and assert each records its engine in get and list, seeds exactly its bundle unioned with the request, re-adding a seeded extension is a no-op, and an endpoint on each non-postgres engine can create and exercise every seeded extension; an unknown engine is refused with 400.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpClusterEngine,
 	})
@@ -77,6 +80,11 @@ func (a *ampFeatureRun) clusterEngine(ctx context.Context) error {
 			unknown = append(unknown, tc.engine)
 			continue
 		}
+		if n := unknownEngineName(err); n == tc.engine {
+			a.f.logf("engine %s: this controller does not know it, the image under test predates it", tc.engine)
+			unknown = append(unknown, tc.engine)
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("engine %s: %w", tc.engine, err)
 		}
@@ -91,7 +99,7 @@ func (a *ampFeatureRun) engineCase(ctx context.Context, cl *controller.Client, n
 	if _, err := cl.CreateClusterAndWait(ctx, a.proj.poolID, controller.CreateClusterRequest{
 		Name: name, PgVersion: a.f.cfg.PgVersion, Engine: tc.engine, Extensions: tc.extra,
 	}); err != nil {
-		if unknownExtensionName(err) != "" {
+		if unknownExtensionName(err) != "" || unknownEngineName(err) == tc.engine {
 			return err
 		}
 		return fmt.Errorf("create cluster: %w", err)
@@ -216,6 +224,19 @@ func probeOracle(ctx context.Context, c sqlConn) error {
 		return fmt.Errorf("hexabridge.to_char(123.45, '999.99') = %q, want 123.45", got)
 	}
 	return nil
+}
+
+// probeSQLServer is hexabridge_mssql's T-SQL LEN, which ignores trailing blanks
+// (Postgres's length() would say 5), then the co-mounted hexabridge.
+func probeSQLServer(ctx context.Context, c sqlConn) error {
+	n, err := c.QueryInt(ctx, "SELECT sys.len('abc  ')")
+	if err != nil {
+		return fmt.Errorf("sys.len: %w", err)
+	}
+	if n != 3 {
+		return fmt.Errorf("sys.len('abc  ') = %d, want 3 — T-SQL LEN ignores trailing blanks", n)
+	}
+	return probeOracle(ctx, c)
 }
 
 func missingNames(have, want []string) []string {

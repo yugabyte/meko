@@ -327,10 +327,11 @@ jobs:
           fromJSON(needs.decide.outputs.ddb).amp_deploy_gke_documentdb ||
           github.event.inputs.push_extensions == 'true' ||
           github.event.inputs.documentdb_functional == 'true'
-        # AMP_EXT_GH_TOKEN authenticates the private hexabridge source fetch;
-        # build.sh passes it as the gh_token BuildKit secret (public extensions
-        # ignore it). Empty on forks (no secrets) → hexabridge's fetch 404s and
-        # the checksum fails closed, so only run this on trusted (non-fork) events.
+        # AMP_EXT_GH_TOKEN authenticates the private hexabridge and
+        # hexabridge_mssql source fetches; build.sh passes it as the gh_token
+        # BuildKit secret (public extensions ignore it). Empty on forks (no
+        # secrets) → their fetch 404s and the checksum fails closed, so only run
+        # this on trusted (non-fork) events.
         env:
           AMP_EXT_GH_TOKEN: ${{ secrets.HEXABRIDGE_GH_PULL }}
         run: |

@@ -157,6 +157,12 @@ var builtin = []Extension{
 	// private repo at build time (see deploy/extensions).
 	{Name: "hexabridge", Version: "0.1", Default: false, Preload: true,
 		Description: "Oracle compatibility (DBMS_*/UTL_* packages)"},
+	// hexabridge_mssql: hexabridge's SQL Server-compatibility sibling, from the
+	// same vendor and the same private-source build. Preload: false — its
+	// _PG_init only defines a GUC, so opting in on a live endpoint is a mount, not
+	// a restart. CREATE EXTENSION hexabridge_mssql installs into schema `sys`.
+	{Name: "hexabridge_mssql", Version: "0.1", Default: false, Preload: false,
+		Description: "SQL Server (T-SQL) compatibility functions"},
 	// age: Apache AGE, the openCypher graph extension. Opt-in per branch like the
 	// others and NOT a default. Preload: false — AGE loads per session via
 	// `LOAD 'age'` and does not require shared_preload_libraries (like pgvector),

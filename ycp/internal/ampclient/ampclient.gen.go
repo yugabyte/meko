@@ -24,6 +24,7 @@ const (
 	Documentdb CreateClusterRequestEngine = "documentdb"
 	Oracle     CreateClusterRequestEngine = "oracle"
 	Postgres   CreateClusterRequestEngine = "postgres"
+	Sqlserver  CreateClusterRequestEngine = "sqlserver"
 )
 
 // Valid indicates whether the value is a known member of the CreateClusterRequestEngine enum.
@@ -36,6 +37,8 @@ func (e CreateClusterRequestEngine) Valid() bool {
 	case Oracle:
 		return true
 	case Postgres:
+		return true
+	case Sqlserver:
 		return true
 	default:
 		return false
@@ -450,7 +453,7 @@ type Cluster struct {
 	DefaultBranch Branch    `json:"default_branch"`
 
 	// Engine The engine the cluster was provisioned as (`postgres`, `aidb`,
-	// `oracle`) — see createCluster. Provenance: it named the extensions
+	// `oracle`, `sqlserver`, `documentdb`) — see createCluster. Provenance: it named the extensions
 	// seeded at create, and is not re-derived when a branch adds more.
 	Engine *string `json:"engine,omitempty"`
 
@@ -511,8 +514,9 @@ type CreateClusterRequest struct {
 
 	// Engine The database engine to provision as — a named bundle of externalized
 	// extensions. `postgres` (the default) seeds none, `aidb` seeds
-	// pgvector + age + pg_cron, `oracle` seeds hexabridge, and `documentdb`
-	// seeds documentdb + pgvector + pg_cron. The bundle is
+	// pgvector + age + pg_cron, `oracle` seeds hexabridge, `sqlserver` seeds
+	// hexabridge_mssql, and `documentdb` seeds documentdb + pgvector +
+	// pg_cron. The bundle is
 	// unioned with `extensions` and written onto the default branch, and the
 	// engine is recorded on the cluster and returned by getCluster /
 	// listClusters. An unknown engine is rejected (400), as is any non-default
@@ -561,8 +565,9 @@ type CreateClusterRequest struct {
 
 // CreateClusterRequestEngine The database engine to provision as — a named bundle of externalized
 // extensions. `postgres` (the default) seeds none, `aidb` seeds
-// pgvector + age + pg_cron, `oracle` seeds hexabridge, and `documentdb`
-// seeds documentdb + pgvector + pg_cron. The bundle is
+// pgvector + age + pg_cron, `oracle` seeds hexabridge, `sqlserver` seeds
+// hexabridge_mssql, and `documentdb` seeds documentdb + pgvector +
+// pg_cron. The bundle is
 // unioned with `extensions` and written onto the default branch, and the
 // engine is recorded on the cluster and returned by getCluster /
 // listClusters. An unknown engine is rejected (400), as is any non-default

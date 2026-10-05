@@ -56,6 +56,10 @@ engines:
     label: Oracle
     description: Oracle compatibility layer
     extensions: [hexabridge]
+  - name: sqlserver
+    label: SQL Server
+    description: SQL Server (T-SQL) compatibility layer
+    extensions: [hexabridge_mssql]
   - name: documentdb
     label: DocumentDB
     description: MongoDB-compatible document store
@@ -146,6 +150,32 @@ extensions:
     regress:
       driver: script
       script: scripts/regression.sh
+
+  - name: hexabridge_mssql
+    description: SQL Server (T-SQL) compatibility functions
+    # HexaCluster's SQL Server-compatibility layer, hexabridge's sibling. Same
+    # private-repo, commit-pinned fetch (AMP_EXT_GH_TOKEN); no upstream release yet.
+    version: "0.1"
+    url: https://api.github.com/repos/HexaCluster/hexabridge-mssql-ybamp/tarball/d0b159b31fb5f71d9ebb9f9da6ea1871df8f205c
+    patch: ""
+    # Installs into schema `sys` (the .control pins it, not relocatable).
+    control: hexabridge_mssql
+    # The .control ships no `trusted`, so CREATE EXTENSION is superuser-only.
+    trusted: false
+    # _PG_init only defines a GUC (hexabridge_mssql.passphrase_version): no
+    # background worker, no shared memory, so opting in is a mount, not a restart.
+    preload: false
+    # The PGXS tree is under extension/, and extension.Dockerfile builds at the
+    # tarball root. Lifting it up here keeps that Dockerfile — part of every
+    # generic extension's recipe hash — unchanged. The tree also installs
+    # hexabridge_mssql_spatial, which `requires` postgis: amp ships none built
+    # in, so it only creates on a branch that also mounts a registered postgis.
+    prep: cp -a extension/. . && rm -rf extension
+    dockerfile: ""
+    # Upstream's self-contained pg_regress suite (`make installcheck`). Its
+    # differential suite (installcheck-diff) needs a live SQL Server and is not run.
+    regress:
+      driver: pgxs
 
   - name: age
     description: Apache AGE — openCypher graph

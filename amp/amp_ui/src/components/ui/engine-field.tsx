@@ -28,10 +28,9 @@ const SUPPORTED: EngineOption[] = catalog.engines.map((e) => ({
   extensions: e.extensions,
 }));
 
-/** Roadmap engines — no controller support, so they stay unselectable. */
-const ROADMAP: EngineOption[] = [
-  { id: "sqlserver", label: "SQL Server", comingSoon: true },
-];
+/** Roadmap engines — no controller support, so they stay unselectable. An id
+ *  here must not also be in the catalog, or the picker shows it twice. */
+const ROADMAP: EngineOption[] = [];
 
 export const DB_ENGINES: EngineOption[] = [...SUPPORTED, ...ROADMAP];
 

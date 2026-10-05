@@ -27,6 +27,9 @@ func TestCatalogHasKnownAndUnknown(t *testing.T) {
 	if !c.Has("hexabridge") {
 		t.Fatal("Has(hexabridge) = false, want true (a known catalog extension)")
 	}
+	if !c.Has("hexabridge_mssql") {
+		t.Fatal("Has(hexabridge_mssql) = false, want true (a known catalog extension)")
+	}
 	if !c.Has("age") {
 		t.Fatal("Has(age) = false, want true (a known catalog extension)")
 	}
@@ -65,6 +68,16 @@ func TestCatalogResolveHexabridge(t *testing.T) {
 	want := []Resolved{{Name: "hexabridge", Image: "quay.io/yugabyte/amp-ext-hexabridge:0.1", Preload: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Resolve(hexabridge) = %+v, want %+v", got, want)
+	}
+}
+
+func TestCatalogResolveHexabridgeMSSQL(t *testing.T) {
+	// Unlike its Oracle sibling it does not preload: _PG_init only defines a GUC.
+	c := NewCatalog("quay.io/yugabyte")
+	got := c.Resolve([]string{"hexabridge_mssql"})
+	want := []Resolved{{Name: "hexabridge_mssql", Image: "quay.io/yugabyte/amp-ext-hexabridge_mssql:0.1", Preload: false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resolve(hexabridge_mssql) = %+v, want %+v", got, want)
 	}
 }
 
@@ -147,7 +160,7 @@ func TestCatalogResolveRequiresDeduplicates(t *testing.T) {
 // what every other extension does.
 func TestCatalogResolveWithoutRequiresIsUnchanged(t *testing.T) {
 	c := NewCatalog("quay.io/yugabyte")
-	for _, n := range []string{"pgvector", "pg_cron", "hexabridge", "age"} {
+	for _, n := range []string{"pgvector", "pg_cron", "hexabridge", "hexabridge_mssql", "age"} {
 		if got := names(c.Resolve([]string{n})); !reflect.DeepEqual(got, []string{n}) {
 			t.Errorf("Resolve([%s]) = %v, want [%s]", n, got, n)
 		}

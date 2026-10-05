@@ -42,7 +42,9 @@
 # the pod mounts it with the registered layout, bundled libraries and ABI waiver;
 # a cluster with extensions:["hexabridge"], assert the ImageVolume mounted at
 # /extensions/hexabridge, `CREATE EXTENSION hexabridge` (superuser-only), and an
-# Oracle-compat function returns its expected value. Then the other half of the
+# Oracle-compat function returns its expected value; and its SQL Server sibling
+# through engine:"sqlserver", which must seed hexabridge_mssql, mount it, and
+# answer T-SQL calls in schema sys. Then the other half of the
 # API: addBranchExtensions on the still-live pgvector+age branch — union pg_cron
 # in, assert getBranch reports the unioned set, the live endpoint is redeployed
 # with the new mount, and its address survives the redeploy unchanged. Finally,
@@ -702,6 +704,49 @@ SQL
   else
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$HPROJ")
     st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster cascade deleted" || bad "hexabridge cluster delete task=$st"
+  fi
+
+  hdr "sqlserver engine: seeds hexabridge_mssql, mounts it, T-SQL functions answer"
+
+  # Through the engine rather than extensions:[...], so the bundle is covered on
+  # a real cluster too. No preload: the mount alone makes it creatable.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"msproj","engine":"sqlserver"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "sqlserver cluster created (engine:sqlserver)" || bad "sqlserver cluster task=$st"
+  MPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="msproj")|.id')
+  mcl=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$MPROJ")
+  MDEF=$(echo "$mcl" | jq -r '.default_branch.branch_id')
+  [ "$(echo "$mcl" | jq -r '.engine')" = sqlserver ] && echo "$mcl" | jq -e '.extensions | index("hexabridge_mssql")' >/dev/null \
+    && ok "getCluster reports engine sqlserver + hexabridge_mssql seeded" || bad "sqlserver cluster engine/extensions wrong: $(echo "$mcl" | jq -c '{engine,extensions}')"
+
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$MPROJ/branches/$MDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge_mssql) succeeded" || bad "create_endpoint(hexabridge_mssql) task=$st"
+  MEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$MPROJ/branches/$MDEF/endpoints" | jq -r '.endpoints[0].id')
+  MPOD=$(wait_ready_pod "$MEP")
+  [ -n "$MPOD" ] && ok "hexabridge_mssql endpoint pod Ready ($MPOD)" || bad "hexabridge_mssql endpoint pod not Ready"
+
+  kubectl -n "$NS" exec "$MPOD" -- test -f /extensions/hexabridge_mssql/share/postgresql/extension/hexabridge_mssql.control \
+    && ok "hexabridge_mssql ImageVolume mounted (/extensions/hexabridge_mssql)" || bad "hexabridge_mssql ImageVolume not mounted"
+
+  # LEN ignores trailing blanks in T-SQL (3, where Postgres's length() says 5),
+  # so it proves the sys.* function is the one answering.
+  out=$(psql_pod "$MPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS hexabridge_mssql;
+SELECT 'INSTALLED:'||extversion||':'||extnamespace::regnamespace FROM pg_extension WHERE extname='hexabridge_mssql';
+SELECT 'CHARINDEX:'||sys.charindex('b', 'abc');
+SELECT 'LEN:'||sys.len('abc  ');
+SELECT 'STUFF:'||sys.stuff('abcdef', 2, 3, 'XY');
+SQL
+)
+  { echo "$out" | grep -q '^INSTALLED:0.1:sys$' && echo "$out" | grep -q '^CHARINDEX:2$' \
+    && echo "$out" | grep -q '^LEN:3$' && echo "$out" | grep -q '^STUFF:aXYef$'; } \
+    && ok "hexabridge_mssql CREATE EXTENSION (v0.1, schema sys) + charindex=2 + len('abc  ')=3 + stuff=aXYef" \
+    || bad "hexabridge_mssql function checks failed (got: $(echo "$out" | tr '\n' ' '))"
+
+  if [ "$KEEP" = "1" ]; then
+    echo "  KEEP set: leaving sqlserver cluster $MPROJ (endpoint pod $MPOD) up for inspection"
+  else
+    IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$MPROJ")
+    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "sqlserver cluster cascade deleted" || bad "sqlserver cluster delete task=$st"
   fi
 
   hdr "extension registry: an admin registers a third-party image, a branch mounts it"

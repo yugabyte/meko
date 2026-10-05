@@ -64,9 +64,10 @@ fc8ef2d081d9388b9016d74826f4a229d213a2813708d26063d771ab12e457cb  https://github
 69f4019389af05dc1c9548deb8628e62878e6e207c03907f2b8af2016472cdaa  https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.2.tar.gz
 10218d05dc02299562252a9484775178b14a1d8edb92a2d1672ef488530f7778  https://github.com/pgvector/pgvector/raw/refs/tags/v0.7.4/sql/vector.sql
 d950bc29155f31017567e23a31d268ff672e98276c0e9d062512fb7870351f03  https://github.com/citusdata/pg_cron/archive/refs/tags/v1.6.7.tar.gz
-# Private repo: fetched with a GitHub token. The API serves a tarball of the
+# Private repos: fetched with a GitHub token. The API serves a tarball of the
 # named commit, which is what makes this reproducible.
 0bcb960953db2d139535d1a4deb7e66264015bfd82937a4c6d11dd5433f7b499  https://api.github.com/repos/HexaCluster/hexabridge-ybamp/tarball/4f1bb16db442d8b3fe66246bc9c1f0ad79ed949a
+f8f91063cb3f511d8e4eb8a2b54ae282d833b961deca9e4e622c4b63953d54f3  https://api.github.com/repos/HexaCluster/hexabridge-mssql-ybamp/tarball/d0b159b31fb5f71d9ebb9f9da6ea1871df8f205c
 c9036f9fb6fe545aa20e333743c661810966288cda9922ac89f4d82d9ee6e99b  https://github.com/apache/age/archive/refs/tags/PG18/v1.8.0-rc0.tar.gz
 09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d  https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
 
