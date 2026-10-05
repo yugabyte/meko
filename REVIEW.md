@@ -16,6 +16,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Nothing respawns a live pane, and a tmux error other than "no server" is never read as every
       pane being gone.
+- [ ] Creating a session answers once its row is in (`begin()`): only the checks that must fail in
+      the New session dialog run before that, never a worktree checkout. A failure after the answer
+      is a failed start or an exited session with its error, never silent.
 - [ ] Values in the launcher are set after the login shell's profile runs, and inherited
       `AK_HOME`/`MEKO_CHECKPOINT_INTERVAL` are cleared.
 - [ ] Auto-continue guards hold (once per 15 minutes; after two auto-continues in an hour the next

@@ -182,6 +182,16 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     await expect(env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 8 } }))
       .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/Couldn't read PR #8 of acme\/demo/) });
     expect(sessions()).toBe(0);
+
+    // A head that can't be fetched shows up after the dialog has closed: a failed start, to try again.
+    pr(9);
+    const { session, done } = await env.core.sessions.begin(p.id, { name: '', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 9 }, prompt: 'notes' });
+    expect(session).toMatchObject({ status: 'starting', startup: { step: 'worktree' } });
+    await expect(done).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^Couldn't fetch PR #9 from origin: /) });
+    expect(sessions()).toBe(0);
+    expect(env.core.state().failedStarts).toMatchObject([{
+      name: 'Review #9 Add the widget', request: { kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 9 }, prompt: 'notes' },
+    }]);
   });
 
   it("fetches a fork's PR from upstream, and gives the same number in two repos its own branch", async () => {

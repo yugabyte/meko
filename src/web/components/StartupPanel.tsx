@@ -1,6 +1,7 @@
 import { useEffect, useReducer } from 'react';
 import type { Session, StartupStep } from '../../shared/types';
 import { STAGE_LABELS, STARTUP_STEPS } from '../../shared/types';
+import { kindOf } from '../../shared/stages';
 import { cx } from '../util';
 import { Busy, Check } from './common';
 
@@ -34,13 +35,15 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
   }, []);
 
   const st = session.startup;
+  const review = kindOf(session.kind) === 'review-pr';
   const steps = STARTUP_STEPS.filter(
     (s) => !(s.step === 'worktree' && st?.resumed) && !(s.step === 'prompt' && st && !st.hasPrompt),
-  );
+  ).map((s) => (review && s.step === 'worktree' ? { ...s, label: 'Fetching the PR and preparing the worktree' } : s));
   const current: StartupStep = st?.step ?? 'loading';
   const currentIdx = steps.findIndex((s) => s.step === current);
   const now = Date.now();
   const slow = current === 'loading' && st && now - st.stepSince > 20000;
+  const slowWorktree = current === 'worktree' && st && now - st.stepSince > 10000;
   const stuck = (current === 'loading' || current === 'prompt') && st && now - st.stepSince > STUCK_MS;
   const currentLabel = steps[currentIdx]?.label;
 
@@ -78,6 +81,9 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
         </div>
       ) : (
         slow && <p className="startup-note">Claude Code loads its plugins, MCP servers and startup hooks first. This can take up to a minute.</p>
+      )}
+      {slowWorktree && (
+        <p className="startup-note">On a big repo this can take a few minutes. You can switch to other sessions meanwhile; this one keeps starting.</p>
       )}
       <p className="startup-stage">
         <span className="stchip">{STAGE_LABELS[session.stage]}</span> {STAGE_HINT[session.stage] ?? `This session is in the ${STAGE_LABELS[session.stage]} stage.`}

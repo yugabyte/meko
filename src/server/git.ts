@@ -192,6 +192,18 @@ export async function existingBranch(repo: string, branch: string): Promise<'loc
 }
 
 /**
+ * True when <base> is a branch of <repo>, locally or on origin. Only a name found in neither is
+ * fetched from origin (a branch pushed since the last fetch), so the usual case runs no fetch.
+ */
+export async function baseExists(repo: string, base: string): Promise<boolean> {
+  await checkBranchName(repo, base);
+  const here = async () => !!(await revParse(repo, `refs/heads/${base}`)) || !!(await revParse(repo, `refs/remotes/origin/${base}`));
+  if (await here()) return true;
+  await tryGit(repo, 'fetch', '--quiet', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`);
+  return here();
+}
+
+/**
  * Creates a worktree. A new branch starts from the local <base>, fast-forwarded
  * to origin/<base> first (after a fetch) so new work starts from the latest
  * upstream. If <base> can't be fast-forwarded, the branch starts from

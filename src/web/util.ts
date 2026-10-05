@@ -43,6 +43,15 @@ export function withOpened(projects: ProjectWithSessions[], opened: Project | nu
   return [...projects, { ...opened, sessions: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 } }];
 }
 
+/**
+ * The projects with a session just created (as New session returned it) in its project until a
+ * state push brings it: the reply comes before the push, and its tab shows the startup steps.
+ */
+export function withCreated(projects: ProjectWithSessions[], created: Session | null): ProjectWithSessions[] {
+  if (!created || projects.some((p) => p.sessions.some((s) => s.id === created.id))) return projects;
+  return projects.map((p) => (p.id === created.projectId ? { ...p, sessions: [...p.sessions, created] } : p));
+}
+
 /** The project on screen just lost its last open session (not a switch to a project without any). */
 export function lastSessionClosed(prev: LiveCount, next: LiveCount): boolean {
   return !!next.projectId && prev.projectId === next.projectId && prev.live > 0 && next.live === 0;

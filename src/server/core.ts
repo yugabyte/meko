@@ -211,6 +211,7 @@ export class Core extends EventEmitter {
       serverHost: this.hostFull,
       limits: this.limits.current(),
       invites: this.invites.pending(),
+      failedStarts: this.sessions.failedStarts(),
     };
   }
 
