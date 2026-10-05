@@ -14,7 +14,9 @@ import { Busy } from './common';
 
 /**
  * A textarea whose text is saved as you type (after a pause, on blur, and when it goes away).
- * Text from the server replaces it only while it isn't being edited.
+ * Text from the server replaces it only while it isn't being edited. It's reload-safe only while
+ * its text is what the server has, so the reload after an update waits for unsaved text (one
+ * still being typed, or a save that failed).
  */
 function AutosaveText({
   id,
@@ -66,7 +68,7 @@ function AutosaveText({
       disabled={disabled}
       placeholder={placeholder}
       aria-label={label}
-      data-reload-safe
+      data-reload-safe={text === value ? '' : undefined}
       onFocus={() => {
         editing.current = true;
       }}
@@ -121,6 +123,11 @@ function QuestionCard({
       </div>
       {q.context && <p className="dq-ctx">{q.context}</p>}
       {sent && !unsent && <p className="dq-sent">You sent: {answerSummary(sent)}</p>}
+      {unsent && unsent.choice === null && unsent.choiceLabel !== null && (
+        <p className="dq-sent">
+          You picked “{unsent.choiceLabel}”, which is no longer one of AgentK’s options. Pick again, or send it as it is.
+        </p>
+      )}
       <div className="dq-opts" role="radiogroup" aria-label={`Answer to Q${n}`}>
         {q.options.map((o, i) => (
           <label key={i} className={cx('dq-opt', unsent?.choice === i && 'on')}>
@@ -182,8 +189,8 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
       .then((a) => n === seq.current && setAnswers(a))
       .catch((e) => n === seq.current && setError(errorMessage(e)));
   }, [session.id]);
-  // Again when the design is revised, or answers change elsewhere (another tab, a send, an approval).
-  useEffect(load, [load, session.designUpdatedAt, session.designQuestions.unsent, session.stage]);
+  // Again when the design is revised, or any answer changes (here, in another tab, a send, an approval).
+  useEffect(load, [load, session.designUpdatedAt, session.designQuestions.changedAt, session.stage]);
 
   const save = async (qid: string, b: DesignAnswerUpdate) => {
     const n = ++seq.current;
@@ -338,7 +345,7 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
           ) : queued ? (
             `${plural(queued, 'answer')} waiting for AgentK’s turn to end.`
           ) : drafts.length && session.status === 'working' ? (
-            'AgentK is working; your answers go when its turn ends.'
+            'AgentK is working. Send now, and your answers go when its turn ends.'
           ) : (
             blocker && drafts.length ? blocker : ''
           )}

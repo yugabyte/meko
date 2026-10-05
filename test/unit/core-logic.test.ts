@@ -542,13 +542,13 @@ describe('config and db', () => {
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
-/** Undoes migration 21 (Review a PR sessions), for tests that rewind the schema. */
 /** Undoes migration 22 (a design's questions and the answers to them), for tests that rewind the schema. */
 function dropV22(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE design_answers');
   for (const c of ['questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
 }
 
+/** Undoes migration 21 (Review a PR sessions), for tests that rewind the schema. */
 function dropV21(db: ReturnType<typeof openDb>) {
   for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
     db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);

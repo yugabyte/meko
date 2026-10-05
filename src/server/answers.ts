@@ -41,11 +41,15 @@ export function designQuestions(db: Db, sessionId: string): DesignQuestion[] {
   }
 }
 
-/** The design's open questions, and the answers not yet sent to Claude, for `Session.designQuestions`. */
-export function designQuestionCounts(db: Db, sessionId: string): { open: number; unsent: number } {
+/**
+ * The design's open questions, the answers not yet sent to Claude, and when any answer last
+ * changed, for `Session.designQuestions`.
+ */
+export function designQuestionCounts(db: Db, sessionId: string): { open: number; unsent: number; changedAt: number | null } {
   const open = get<{ n: number }>(db, 'SELECT open_questions AS n FROM designs WHERE session_id = ?', sessionId)?.n ?? 0;
-  const unsent = get<{ n: number }>(db, `SELECT COUNT(*) AS n FROM design_answers WHERE session_id = ? AND state != 'sent'`, sessionId)?.n ?? 0;
-  return { open, unsent };
+  const a = get<{ unsent: number; at: number | null }>(db,
+    `SELECT COALESCE(SUM(state != 'sent'), 0) AS unsent, MAX(updated_at) AS at FROM design_answers WHERE session_id = ?`, sessionId);
+  return { open, unsent: a?.unsent ?? 0, changedAt: a?.at ?? null };
 }
 
 /**
@@ -104,24 +108,29 @@ export class DesignAnswerService {
 
     const unsent = get<AnswerRow>(this.db, `SELECT * FROM design_answers WHERE session_id = ? AND question_id = ? AND state != 'sent'`, sessionId, questionId);
     if (unsent?.state === 'queued') throw new HttpError(409, 'Your answer to this question is waiting to be sent to AgentK, so it can no longer be changed.');
+    // The option is kept by its label too: what the user picked, even after a revision changes the
+    // options (see realign). An index is only used here once checked against the current options.
     let choice = unsent?.choice ?? null;
+    let label = unsent?.choice_label ?? null;
     let yourCall = !!unsent?.your_call;
     if (b.choice !== undefined) {
       choice = b.choice as number | null;
+      label = choice === null ? null : q!.options[choice].label;
       if (choice !== null) yourCall = false;
     }
     if (b.yourCall !== undefined) {
       yourCall = b.yourCall as boolean;
-      if (yourCall) choice = null;
+      if (yourCall) {
+        choice = null;
+        label = null;
+      }
     }
     const text = typeof b.text === 'string' ? b.text : unsent?.text ?? '';
     const now = Date.now();
-    if (choice === null && !yourCall && !text.trim()) {
+    if (label === null && !yourCall && !text.trim()) {
       if (unsent) run(this.db, 'DELETE FROM design_answers WHERE id = ?', unsent.id);
     } else {
-      // The question and option as the user sees them now, so a later revision doesn't change what they answered.
       const question = q?.question ?? 'Other feedback';
-      const label = choice === null ? null : q!.options[choice].label;
       if (unsent) {
         run(this.db, 'UPDATE design_answers SET question = ?, choice = ?, choice_label = ?, your_call = ?, text = ?, updated_at = ? WHERE id = ?',
           question, choice, label, yourCall ? 1 : 0, text, now, unsent.id);
@@ -150,10 +159,7 @@ export class DesignAnswerService {
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session to send your answers.');
     const pending = this.rows(sessionId, `state != 'sent'`).map(toAnswer);
     if (!pending.length) throw new HttpError(409, 'There are no answers to send.');
-    const size = formatAnswers(pending, designQuestions(this.db, sessionId)).length;
-    if (size > ANSWERS_PROMPT_MAX) {
-      throw new HttpError(400, `Your answers come to ${size.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to AgentK at once. Shorten some, or send part of them first.`);
-    }
+    this.checkSize(formatAnswers(pending, designQuestions(this.db, sessionId)).length);
     run(this.db, `UPDATE design_answers SET state = 'queued', updated_at = ? WHERE session_id = ? AND state = 'draft'`, Date.now(), sessionId);
     this.core.changed();
     let sent: number;
@@ -196,16 +202,39 @@ export class DesignAnswerService {
 
   /**
    * For approving the design: the answers not yet sent, formatted for the approval prompt, and
-   * `sent()` to mark them sent once it's typed. Null when there are none.
+   * `sent()` to mark them sent once it's typed. Null when there are none; throws when they're too
+   * long for one prompt, as send does.
    */
   forApproval(sessionId: string): { text: string; count: number; sent: () => void } | null {
     const pending = this.rows(sessionId, `state != 'sent'`).map(toAnswer);
     if (!pending.length) return null;
-    return {
-      text: formatAnswers(pending, designQuestions(this.db, sessionId)),
-      count: pending.length,
-      sent: () => this.markSent(pending),
-    };
+    const text = formatAnswers(pending, designQuestions(this.db, sessionId));
+    this.checkSize(text.length);
+    return { text, count: pending.length, sent: () => this.markSent(pending) };
+  }
+
+  private checkSize(size: number): void {
+    if (size > ANSWERS_PROMPT_MAX) {
+      throw new HttpError(400, `Your answers come to ${size.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to AgentK at once. Shorten some, or send part of them first.`);
+    }
+  }
+
+  /**
+   * After a revision changed the design's questions: each unsent answer's option is found again
+   * by its label, since the options may have moved, gone or been replaced. One that's gone keeps
+   * its label, which still goes to Claude, with no option picked, so nothing is picked for the user.
+   */
+  realign(sessionId: string, questions: DesignQuestion[]): void {
+    const byId = new Map(questions.map((q) => [q.id, q]));
+    let changed = false;
+    for (const a of this.rows(sessionId, `state != 'sent' AND choice_label IS NOT NULL`)) {
+      const at = byId.get(a.question_id)?.options.findIndex((o) => o.label === a.choice_label) ?? -1;
+      const choice = at >= 0 ? at : null;
+      if (choice === a.choice) continue;
+      run(this.db, 'UPDATE design_answers SET choice = ?, updated_at = ? WHERE id = ?', choice, Date.now(), a.id);
+      changed = true;
+    }
+    if (changed) this.core.changed();
   }
 
   /** Leaving Design: answers waiting for Claude's turn go back to drafts, sent again only from Design. */

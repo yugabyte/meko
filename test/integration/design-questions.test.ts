@@ -28,7 +28,7 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     const s = await env.core.sessions.create(p.id, { name: 'Ask me', prompt: 'DESIGN_QUESTIONS it' });
     const ready = await designReady(s.id, 'design with questions');
     expect(transcript(s.id)).toContain(join(env.core.paths.designs, s.id, 'questions.json')); // the prompt names the file
-    expect(ready.designQuestions).toEqual({ open: 2, unsent: 0 });
+    expect(ready.designQuestions).toEqual({ open: 2, unsent: 0, changedAt: null });
     expect(designQuestions(env.core.db, s.id).map((q) => [q.id, q.status, q.recommended])).toEqual([['store', 'open', 0], ['tabs', 'open', null]]);
 
     // One draft per question, changed field by field; one left empty is removed.
@@ -44,7 +44,7 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     expect(() => put(s.id, 'store', { text: 5 })).toThrow(expect.objectContaining({ status: 400 }));
     expect(() => put(s.id, 'nope', { text: 'x' })).toThrow(expect.objectContaining({ status: 400 }));
     expect(() => put(s.id, DESIGN_FEEDBACK_ID, { choice: 0 })).toThrow(expect.objectContaining({ status: 400 }));
-    expect(get(s.id).designQuestions).toEqual({ open: 2, unsent: 2 });
+    expect(get(s.id).designQuestions).toMatchObject({ open: 2, unsent: 2, changedAt: expect.any(Number) });
 
     // While the design waits for approval, they're typed in at once.
     await expect(env.core.answers.send(s.id)).resolves.toEqual({ sent: 2, queued: 0 });
@@ -95,10 +95,46 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     await designReady(s.id, 'design with questions', (x) => x.designQuestions.open === 2);
     expect(designQuestions(env.core.db, s.id).map((q) => q.question)).toEqual(['Tabs or one column?', 'Keep the fallback?']);
 
-    // A broken questions file leaves the questions alone.
-    writeFileSync(join(env.core.paths.designs, s.id, 'questions.json'), '{oops');
-    await env.core.lifecycle.collectDesign(env.core.sessions.row(s.id));
-    expect(get(s.id).designQuestions.open).toBe(2);
+    // A broken or oversized questions file leaves the questions alone.
+    for (const bad of ['{oops', `{"questions": []}${' '.repeat(300 * 1024)}`]) {
+      writeFileSync(join(env.core.paths.designs, s.id, 'questions.json'), bad);
+      await env.core.lifecycle.collectDesign(env.core.sessions.row(s.id));
+      expect(get(s.id).designQuestions.open).toBe(2);
+    }
+  });
+
+  it('keeps a draft on the option the user picked when a revision changes the options', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Shift', prompt: 'DESIGN_QUESTIONS it' });
+    await designReady(s.id, 'design with questions');
+    put(s.id, 'store', { choice: 1 }); // Repo
+    const file = join(env.core.paths.designs, s.id, 'questions.json');
+    const revise = async (options: string[]) => {
+      writeFileSync(file, JSON.stringify({ questions: [{ id: 'store', question: 'Where do designs live?', options }] }));
+      await env.core.lifecycle.collectDesign(env.core.sessions.row(s.id));
+      return env.core.answers.list(s.id)[0];
+    };
+    // Moved: the pick follows its label.
+    expect(await revise(['Repo', 'Datapack'])).toMatchObject({ choice: 0, choiceLabel: 'Repo' });
+    // Gone: nothing is picked for the user, and their pick still goes to Claude.
+    expect(await revise(['Datapack'])).toMatchObject({ choice: null, choiceLabel: 'Repo' });
+    expect(put(s.id, 'store', { text: 'A note' })[0]).toMatchObject({ choice: null, choiceLabel: 'Repo', text: 'A note' });
+    expect(env.core.answers.forApproval(s.id)!.text).toBe('### Q1 (id: store): Where do designs live?\nAnswer: Repo\nNote: A note');
+    // Picking again replaces it.
+    expect(put(s.id, 'store', { choice: 0 })[0]).toMatchObject({ choice: 0, choiceLabel: 'Datapack' });
+  });
+
+  it('refuses to approve with answers too long for one prompt', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Long', prompt: 'DESIGN_QUESTIONS it' });
+    await designReady(s.id, 'design with questions');
+    const now = Date.now();
+    for (let i = 0; i < 6; i++) {
+      run(env.core.db, `INSERT INTO design_answers(id, session_id, question_id, question, text, state, created_at, updated_at)
+                        VALUES (?, ?, ?, 'Old?', ?, 'draft', ?, ?)`, `a${i}`, s.id, `old-${i}`, 'x'.repeat(10_000), now, now);
+    }
+    await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/Shorten some/) });
+    expect(get(s.id).stage).toBe('design');
   });
 
   it('turns queued answers back into drafts when the session leaves Design', async () => {
@@ -114,5 +150,12 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     // The draft can still be dropped.
     env.core.answers.remove(s.id, 'store');
     expect(env.core.answers.list(s.id)).toEqual([]);
+
+    // Every way out of Design does it, the PR prompt's too (it sets the stage itself).
+    await env.core.lifecycle.move(env.core.sessions.row(s.id), { stage: 'design', prompt: false });
+    put(s.id, 'store', { choice: 1 });
+    run(env.core.db, `UPDATE design_answers SET state = 'queued' WHERE session_id = ?`, s.id);
+    env.core.sessions.setStage(s.id, 'pr', 'you');
+    expect(env.core.answers.list(s.id).map((a) => a.state)).toEqual(['draft']);
   });
 });

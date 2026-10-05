@@ -219,8 +219,9 @@ export class Lifecycle {
 
   /**
    * The design's questions for the user: the questions file Claude writes beside the design, or
-   * else the "Open questions" list of a markdown design. A file that can't be read as questions
-   * leaves the ones stored alone. A change counts as a change to the design.
+   * else the "Open questions" list of a markdown design. A file that's too large, unreadable or
+   * not questions is logged and leaves the ones stored alone. A change counts as a change to the
+   * design, and drafts are matched to the new options (see DesignAnswerService.realign).
    */
   private collectQuestions(row: SessionRow): void {
     const d = get<{ markdown: string; questions: string; questions_source: string | null }>(
@@ -240,6 +241,7 @@ export class Lifecycle {
     if (json === d.questions && from === d.questions_source) return;
     run(this.db, 'UPDATE designs SET questions = ?, questions_source = ?, open_questions = ?, updated_at = ? WHERE session_id = ?',
       json, from, questions.filter((q) => q.status === 'open').length, Date.now(), row.id);
+    this.core.answers.realign(row.id, questions);
     this.designChanged.add(row.id);
     this.core.changed();
   }
@@ -445,7 +447,6 @@ export class Lifecycle {
     const row = this.sessions.row(id);
     if (row.status === 'needs_input' && row.status_detail === DESIGN_READY) this.sessions.setStatus(id, 'idle');
     if (skipped) this.sessions.event(id, 'design', 'Design approval skipped');
-    this.core.answers.unqueue(id);
     void this.sendDesign(id);
   }
 

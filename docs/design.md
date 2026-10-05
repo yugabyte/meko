@@ -332,11 +332,14 @@ The line asking for it is added to the Design prompt in code (`designQuestionsLi
 own `design` prompt gets it too. At each Design turn end the server reads it, capped (256 KB, 30
 questions, 6 options each, text cut short) and normalized (ids lowercased to letters, digits and
 dashes; entries without an id or question, and repeated ids, dropped; a recommendation must point
-at an option). A file that can't be read as questions is logged and leaves the stored ones alone.
+at an option). A file that's too large, can't be read or isn't questions is logged and leaves the
+stored ones alone.
 Without the file, a markdown design's top-level list items under an "Open questions" heading are
 its questions (only those with a "?" under a heading that also names risks), with ids from their
 text. A change to the questions counts as a change to the design: the panel refreshes and the
-session is *Design ready* again.
+session is *Design ready* again. A draft keeps its option by label: when a revision moves the
+option, the pick follows it; when it's gone, the draft keeps the label (still sent to Claude) with
+nothing picked, and its card says to pick again.
 
 The panel then has two tabs, **Design** and **Questions** (with the open count, also shown on the
 Design doc button and the ⋯ sheet's row); on the Design tab a bar says how many questions are open
@@ -345,6 +348,8 @@ instead. Each open question is a card: the question, its context, the options as
 AgentK's recommendation marked, **Your call** (AgentK goes with its recommendation), and a note
 (the answer itself when there are no options). Choices are saved at once and text as you type, as
 server-side drafts (`design_answers`, one per question), so they follow you to another device.
+A note's textarea counts as reload-safe only while its text is what the server has, so the reload
+after an update waits for text not yet saved.
 Resolved questions collapse under **Decided** with their decision; an answer to a question AgentK
 since changed or resolved is kept under *Answers to questions no longer open*, still sent with the
 others. **Other feedback** takes anything else about the design. Question text renders as plain
@@ -355,8 +360,10 @@ it's at its prompt: between turns, or with the design waiting for approval (neve
 permission or question prompt); otherwise they wait for its turn to end, like review comments.
 AgentK then revises the same design and marks each answered question resolved. **Approve design**
 reads **Approve with N answers** while answers are unsent: they go ahead of the Code prompt
-(`approved-answers`) and count as sent. A queued answer can't change; leaving Design by hand turns
-queued answers back into drafts, which can only be sent from Design again. Sent answers reach Meko
+(`approved-answers`) and count as sent. Answers too long for one prompt (50,000 characters) are
+refused, on send and on approval. A queued answer can't change; however the session leaves Design
+other than by approval (a move by hand, the PR prompt), queued answers turn back into drafts,
+which can only be sent from Design again. Sent answers reach Meko
 in the revised design and the session's conversation.
 
 ### Side panels

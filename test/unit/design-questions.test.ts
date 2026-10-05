@@ -74,15 +74,16 @@ describe('reading the questions file', () => {
     });
     afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-    it('is null when the file is missing, empty or too large', () => {
+    it('is null when the file is missing or empty, and throws when it is too large or not a file', () => {
       const f = join(dir, 'questions.json');
       expect(readDesignQuestions(f)).toBeNull();
       writeFileSync(f, '  \n');
       expect(readDesignQuestions(f)).toBeNull();
-      writeFileSync(f, ' '.repeat(MAX_QUESTIONS_FILE + 1));
-      expect(readDesignQuestions(f)).toBeNull();
       writeFileSync(f, '{"questions": []}');
       expect(readDesignQuestions(f)).toEqual([]);
+      writeFileSync(f, ' '.repeat(MAX_QUESTIONS_FILE + 1));
+      expect(() => readDesignQuestions(f)).toThrow(/larger than 256 KB/);
+      expect(() => readDesignQuestions(dir)).toThrow(/not a file/);
     });
   });
 });

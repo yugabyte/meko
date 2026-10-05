@@ -494,8 +494,11 @@ export interface Session {
   diffStat: { added: number; removed: number } | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
-  /** The design's open questions, and the user's answers to them not yet sent to Claude (drafts or queued). */
-  designQuestions: { open: number; unsent: number };
+  /**
+   * The design's open questions, the user's answers to them not yet sent to Claude (drafts or
+   * queued), and when any answer last changed (null before there's one).
+   */
+  designQuestions: { open: number; unsent: number; changedAt: number | null };
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;

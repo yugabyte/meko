@@ -128,12 +128,23 @@ export function parseDesignQuestions(text: string): DesignQuestion[] {
 }
 
 /**
- * The questions file AgentK writes beside the design: null when there's none (or it's empty or
- * too large); throws when it can't be read as questions.
+ * The questions file AgentK writes beside the design: null when there's none (or it's empty);
+ * throws when it's too large, can't be read, or isn't questions, so a bad file is never taken
+ * for a missing one.
  */
 export function readDesignQuestions(file: string): DesignQuestion[] | null {
-  const text = readCapped(file, MAX_QUESTIONS_FILE);
-  return text?.trim() ? parseDesignQuestions(text) : null;
+  let size: number;
+  try {
+    const st = statSync(file);
+    if (!st.isFile()) throw new Error('not a file');
+    size = st.size;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
+  if (size > MAX_QUESTIONS_FILE) throw new Error(`larger than ${MAX_QUESTIONS_FILE / 1024} KB`);
+  const text = readFileSync(file, 'utf8');
+  return text.trim() ? parseDesignQuestions(text) : null;
 }
 
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
