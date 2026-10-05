@@ -177,6 +177,9 @@ spec:
             {{- /* Env rather than a flag, so an image predating the listener ignores it. */}}
             - name: MEKO_METRICS_PORT
               value: {{ $metricsPort | quote }}
+            {{- with $c.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - containerPort: 8000
               name: http

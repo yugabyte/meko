@@ -88,7 +88,7 @@ pass `MODE=release` explicitly to publish those.
 A tag already on quay is skipped, so a rerun after a partial failure only builds what is
 missing.
 
-Runs daily at 07:00 UTC, and can be started by hand any time. The scheduled build is
+Runs daily at 14:00 Pacific, and can be started by hand any time. The scheduled build is
 parameterless, so `MODE=auto` resolves to release; a day with no product change under
 `meko/` publishes nothing and ends green.
 

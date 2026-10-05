@@ -1,0 +1,1102 @@
+# mekoqa canonical defaults: the ONE place every framework default lives.
+#
+# Embedded into the binary (configs/configs.go) and loaded first as layer zero.
+# Precedence (later wins): embedded default.yaml → -c files (deep-merged, in
+# order) → -jc JSON files → -o typed key=value overrides.
+#
+# Every default the code reads lives here (core/defaults_test.go asserts this).
+# A commented-out key, or a struct field with no key, has no sensible default:
+# the owning provider/task requires the caller to set it (e.g. env.k8s.context).
+# --no-default-config skips this file entirely (debugging only).
+
+# owner is stamped as the yb_owner ownership tag/label on every cloud resource
+# this framework creates (apps/cloud/aws, apps/cloud/gcp, apps/yba universe
+# instance tags) and used as the resource name prefix. The dev-account
+# governance SCP conditions RunInstances on yb_owner being present, so the tag
+# itself is mandatory, only its value is configurable. Override per run with
+# -o owner=<name> (e.g. your username) to make resources identifiable as yours.
+owner: "mekoqa"
+
+# --- Scheduler (sched/scheduler.go, sched/lease.go) ---
+sched:
+  # Total environments that may exist at once across the whole run.
+  capacity: 8
+  # cluster_slots caps the stacks tests (EnvSpec.ClusterSlots) stand up on the
+  # run's k8s cluster, across EVERY run pointed at it, via the ConfigMap
+  # default/ampqa-cluster-slots, which mekoqa shares with ampqa so the two
+  # frameworks cannot overcommit one cluster between them. A test waits for its
+  # slots before its body and its timeout start. Only runs naming a cluster
+  # (apps.ybk8s.kubecontext/kubeconfig, env.k8s.context) take part. 0 turns the
+  # cap off.
+  cluster_slots:
+    capacity: 12
+  # Worker-pool size (default for --parallel; an explicit flag wins).
+  parallel: 1
+  # SHARED tests packed onto one shared env (default for --per-env-parallelism).
+  per_env_parallelism: 4
+  # Extra attempts after a SCHEDULING-CLASS env failure (unschedulable,
+  # insufficient cpu/memory, PV node affinity, readiness timeout). 0 = off.
+  env_retries: 1
+  # Pause before a retry. 60s is about one GKE node add.
+  env_retry_backoff: 60s
+  # Lease weight per env Shape (used when a test's EnvSpec sets no Weight).
+  # Shapes not listed fall back to 1 (2 for dedicated_stack).
+  weights:
+    single_stack: 1
+    dedicated_stack: 2
+    remote: 1
+
+# --- Per-test / lifecycle timeouts (core/timeouts.go, core/lifecycle.go) ---
+# time.ParseDuration strings (bare numbers = seconds).
+timeouts:
+  # Category default test-body timeout (when a Test sets none).
+  functional: 10m
+  stress: 60m
+  perf: 150m
+  long_running: 24h
+  # EnvProvider.Provision deadline (a pod wait pays a node add + image pull).
+  # Single-node budget. Left UNSET on purpose: when the stack database is not the chart's the
+  # effective default scales with the store's node count (10m base + 2m30s per
+  # node beyond the first), while a stuck single-node run should still fail
+  # fast. Setting a value here overrides the scaling verbatim.
+  # provision: 10m
+  # Provision deadline for a Shape: DedicatedStack test, whose provision stands
+  # up a whole stack (and its own backing) before the cluster.
+  provision_dedicated: 45m
+  # EnvProvider.Teardown deadline (runs even after a body timeout, own budget).
+  teardown: 5m
+  # Environment.Collect deadline (best-effort, before teardown).
+  collect: 2m
+  # Health probe of a shared stack after a test faulted it. It has to outlast the
+  # stack's own recovery, not the test body.
+  shared_infra_probe: 16m
+  # Factor applied to EVERY provisioning wait above (provision,
+  # provision_dedicated). One knob for a slow or contended cluster, instead of
+  # raising each constant. <= 0 reads as 1.0.
+  provision_multiplier: 1.0
+
+# --- The stack's database and the universes tests create ---
+# db.* describes the YugabyteDB under the meko stack, and is the default for any
+# universe a test creates in its body. A DedicatedStack test may declare its own
+# in EnvSpec.Database. Every key is overridable with -o db.<key>=...
+db:
+  # provider: yugabyted (yugabyted in pods), yba (YugabyteDB Anywhere, one per
+  # run), or chart (the meko chart's bundled single-node database, kept to test
+  # the install a BYOC customer gets. It ignores the keys below).
+  provider: yugabyted
+  # Replication factor and tserver count (0 means rf). Nodes spread evenly over
+  # zones. Any rf and node count the provider can place is accepted.
+  rf: 3
+  nodes: 0
+  zones: []
+  # Node shape, one pod per node. A yugabyted node runs a master and a tserver
+  # in one container. A meko stack needs about 2 CPU and 6 GiB per node: at 1
+  # CPU its migrations hold the advisory lock for over ten minutes and the
+  # api-server's migrate container gives up.
+  cpu: 2
+  memory_gib: 6
+  disk_gib: 10
+  # "" takes the cluster's default storage class.
+  storage_class: ""
+  # image is a full reference, version a tag of the image's repository. Empty
+  # means env.mekostack.images.database, the build meko needs.
+  image: ""
+  version: ""
+  # Extra server flags. A stack's database always gets ysql_yb_enable_mage and
+  # names it in allowed_preview_flags_csv, which it adds to whatever is here.
+  master_gflags: {}
+  tserver_gflags: {}
+  # yugabyted: how long a universe may take to come up.
+  yugabyted:
+    namespace_prefix: "mekoqa-yu"
+    ready_timeout: 20m
+
+# --- Environment providers ---
+env:
+  # stack: move every stack test between the two stack shapes for one run.
+  # "dedicated" gives each test a stack of its own, "shared" packs them onto the
+  # run's. Empty keeps what each test declares (stress and perf tests declare
+  # dedicated, regression tests shared).
+  stack: ""
+
+  # mekostack: the meko stack deployed by apps/mekostack, one Helm release of the
+  # meko chart per namespace.
+  mekostack:
+    # Chart directory. A relative path is resolved against this module's root, so
+    # the default works from any working directory.
+    chart: "../../deploy/helm/meko"
+    # Helm release name, the same in every stack namespace.
+    release: "meko"
+    # Presets inside the chart, laid over it left to right, then the generated
+    # values file. The mode preset (byoc) goes last.
+    values_files: ["values-gcp.yaml", "values-dev.yaml", "values-byoc.yaml"]
+    # One tag for every meko image: a meko-build release (<version>-<sha>) or a
+    # custom build (custom-<sha>). Every meko-* repository has it on
+    # quay.io/yugabyte. --image-version overrides it for one run.
+    image_version: "0.261002.0-b75b2a658"
+    # Per-component tags, for a meko-build custom build of one component at its own
+    # ref. Empty means image_version. The repository is always
+    # quay.io/yugabyte/meko-<name>, and a meko image from anywhere else is refused.
+    images:
+      # Tag of meko-api-server.
+      api_server: {tag: ""}
+      # Tag of meko-mcp-server.
+      mcp_server: {tag: ""}
+      # Tag of meko-ui.
+      ui: {tag: ""}
+      # Tag of meko-inference-gateway.
+      inference_gateway: {tag: ""}
+      # Tag of meko-rag-agent, used by all three workers.
+      rag_agent: {tag: ""}
+      # Tag of meko-langfuse-web.
+      langfuse_web: {tag: ""}
+      # Tag of meko-langfuse-worker.
+      langfuse_worker: {tag: ""}
+      # The bundled YugabyteDB, a full reference. It follows YugabyteDB's cadence,
+      # not meko's, and meko-build does not publish it.
+      database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2"
+    # api-server replicas. Three, so a migration runs while other replicas serve.
+    api_replicas: 3
+    # Deploy the rag workers (text, conversations, pdf) on CPU nodes, no GPU and no
+    # node selector.
+    rag_workers: true
+    # LLM provider for every caller (mem0 and conversation search in the mcp-server,
+    # the rag workers, the inference gateway, the api-server). "mock" deploys
+    # llmmock into the namespace and points all of them at it through
+    # OPENAI_BASE_URL and AWS_ENDPOINT_URL_BEDROCK_RUNTIME, so a run makes no call
+    # to OpenAI or Bedrock and needs no key. "off" leaves them on the real
+    # providers.
+    llm: "mock"
+    # Who the api-server believes. none is the BYOC default: no identity provider,
+    # every request runs as one dev account and a Bearer header is ignored.
+    # cognito_mock runs the api-server's Cognito path against a mock pool deployed
+    # beside it, which gives a test several accounts and makes PAT scopes real.
+    auth: "none"
+    # auth=cognito_mock: the mock pool.
+    cognito_mock:
+      # Region of the pool. The api-server dials cognito-idp.<region>.amazonaws.com
+      # and the mock answers for that name inside its pod.
+      region: "us-east-1"
+      # The pool and app client ids the api-server is configured with.
+      pool_id: "us-east-1_MekoQa001"
+      client_id: "mekoqa0client0id0000000000"
+      # Lifetime of the tokens the mock signs. Cognito's own is an hour, and a test
+      # that needs a short one mints it through the control API.
+      token_ttl: 24h
+    # How the LLM and Cognito mock pods get their program. Both run `mekoqa mock`,
+    # the framework's own binary, on a public image with a shell and tar, and the
+    # binary is copied in once the pod is up (a ConfigMap holds 1 MiB, the binary is
+    # far larger). The binary is this process's own executable when it is a static
+    # linux binary for arch, else mekoqa is cross-compiled once per run with
+    # CGO_ENABLED=0 GOOS=linux GOARCH=<arch> and cached in the user cache dir, which
+    # needs a Go toolchain and the source checkout.
+    mocks:
+      image: "mirror.gcr.io/library/alpine:3.20"
+      # CPU architecture of the cluster's nodes.
+      arch: "amd64"
+      # A ready linux mekoqa binary. Empty means the two sources above.
+      binary: ""
+    # The key every OpenAI caller gets. The inference gateway exits at startup
+    # without one. The mock takes any value, so this only matters with llm "off".
+    openai_api_key: "sk-mekoqa-unused"
+    # Name of the declared secret holding the Quay credential as "<user>:<token>".
+    # Every meko image and the database image are private.
+    quay_secret: "quay"
+    # Used when no secret of that name is declared (the pipelines pass these).
+    quay_user: ""
+    # The Quay robot token paired with quay_user.
+    quay_token: ""
+    # Knowledge-base object storage, MinIO in the stack's namespace.
+    # The in-cluster S3 the stack and universe backups write to. Chainguard's
+    # free tier serves only `latest`, so the images are pinned by digest.
+    minio:
+      server_image: "cgr.dev/chainguard/minio@sha256:4cf4831a2bbcf13ddca09c1cbcc9faff716dd3c4247e0babc32864b8ee8e0034"
+      client_image: "cgr.dev/chainguard/minio-client@sha256:b20bdc339b3f2596c8f731793f861d2445fd13a9a3cfb517ff020969f4e4bf71"
+    s3:
+      # One bucket, created at deploy.
+      bucket: "mekoqa"
+      # Region the api-server and the rag workers sign S3 requests for. MinIO
+      # accepts any.
+      region: "us-east-1"
+      # S3_PUBLIC_ENDPOINT for the api-server, the host presigned URLs are signed
+      # for. Empty signs them for the in-cluster MinIO address.
+      public_endpoint: ""
+    timeouts:
+      # helm upgrade --wait: every pod Ready, the bundled database included.
+      provision: 20m
+      # After helm: init containers, health and the schema request.
+      ready: 10m
+      # Each Deployment's rollout after the S3 settings are applied.
+      rollout: 10m
+      # The whole bring-up of a run-scoped stack, which a test's provision timeout
+      # does not bound. Covers provision, ready and the rollouts with margin.
+      deploy: 45m
+    # How the coordinator reaches the api-server and mcp-server. tailnet dials the
+    # cluster-internal address and falls back to a kubectl port-forward when it does
+    # not answer. port_forward forwards straight away.
+    reach: tailnet
+    # Age after which a janitor may reap a stack namespace, stamped as an
+    # annotation. A kept environment is marked separately and is not reaped.
+    ttl: 12h
+    # Where the generated values file goes. Empty means <report.out_dir>/<run
+    # id>/mekostack, else the system temp dir. It holds the stack's secrets, so the
+    # file is 0600 and its attached copy has them masked.
+    values_dir: ""
+    # Where failure diagnostics and teardown logs go. Empty means <report.out_dir>/
+    # <run id>/diagnostics, else nothing is written.
+    diag_dir: ""
+
+  # env/k8s: the provider that builds stacks on a cluster. A SingleStack test
+  # shares one run-scoped stack in mekoqa-st-<run>, and each DedicatedStack test
+  # gets its own mekoqa-ds-<run>-<n>.
+  k8s:
+    # Kube context the run builds on, overridden by --kube-context. Empty means the
+    # ambient current context for provider selection, and no cluster for the shared
+    # slot cap and the YB apps.
+    context: ""
+    # Attach to the stack already running in this namespace instead of building
+    # one (what `run --env <id>` sets). Nothing is created and nothing deleted.
+    namespace: ""
+    # Remote shape: the api-server of a deployment that exists already, and its
+    # mcp-server endpoint. Both empty means Remote tests skip.
+    remote_url: ""
+    remote_mcp_url: ""
+
+apps:
+  # apps/mekoload: meko-load, the HTTP-controlled load client from
+  # yugabyte/qa-services, run in pods next to a stack for stress and perf tests.
+  # The binary comes from the first of these that is set: binary, source, or the
+  # newest qa-services release. A release needs a GitHub token, declared as the
+  # secret named by github_secret (-o secrets.github=env:GITHUB_TOKEN).
+  mekoload:
+    # A ready linux binary on the coordinator.
+    binary: ""
+    # A meko-load checkout, built with CGO_ENABLED=0 GOOS=linux GOARCH=<arch>.
+    source: ""
+    release:
+      repo: "yugabyte/qa-services"
+      # An exact release tag. Empty takes the newest one with tag_prefix.
+      tag: ""
+      tag_prefix: "meko-load-"
+      api_base: "https://api.github.com"
+    github_secret: "github"
+    # Where downloaded and built binaries are kept. Empty is the user cache dir.
+    cache_dir: ""
+    # CPU architecture of the cluster's nodes.
+    arch: "amd64"
+    # A public image with a shell and tar. The binary is copied in, so the image
+    # needs nothing else.
+    image: "mirror.gcr.io/library/alpine:3.20"
+    # Control API port in the pod.
+    port: 7080
+    # Request and limit of each client pod.
+    cpu: "1"
+    memory: "512Mi"
+    # Pod ready, binary released and control API answering.
+    ready_timeout: 3m
+
+  # apps/cloud/aws: EC2 lifecycle app, shelling the ambient-authed `aws` CLI. The
+  # shared us-west-2 dev-VPC settings (AWS_TEST_INSTANCES.md) are real defaults.
+  # key_name is the SHARED yb-dev-aws-2 keypair, this app NEVER mints one.
+  cloud:
+    aws:
+      region: "us-west-2"
+      subnet: "subnet-11798e59"
+      security_groups:
+        - "sg-0427247c274837cdc"
+        - "sg-0ab0af5e93728f73a"
+        - "sg-05b6d45d3ab93c852"
+        - "sg-0271332bdd9fa1313"
+      key_name: "yb-dev-aws-2"
+      key_file: "~/.ssh/yb-dev-aws-2.pem"
+      ami: "ami-0eb514f4c0f885334" # AlmaLinux 9 ARM (aarch64), must match instance_type arch
+      instance_type: "m7g.xlarge"
+      ssh_user: "ec2-user"
+      # reach: "private" (default) is the VPC private IP, the only inbound path
+      # the dev VPC's SGs allow. Instances still get a public IP for outbound
+      # (artifact downloads). Set "public" only for a VPC allowing public SSH.
+      reach: "private"
+      # Prefix of instance names. Empty means owner.
+      name_prefix: ""
+      # WaitSSH budget: an unreachable instance fails here instead of hanging the
+      # whole provision, so teardown can reclaim it promptly.
+      ssh_wait_timeout: "4m"
+      # access_key_secret/secret_key_secret name secrets holding static AWS creds.
+      # Both empty (default) → the aws CLI uses its AMBIENT chain (the working
+      # default; don't set unless you need explicit creds). Set BOTH or neither
+      # (partial errors); values go into the process env only, never argv/logs.
+      access_key_secret: ""
+      secret_key_secret: ""
+
+    # apps/cloud/gcp: GCE lifecycle app, shelling `gcloud`. project/zone/region/
+    # network/subnetwork/disk_type/ssh_user are the shared dev-project values.
+    gcp:
+      project: "yugabyte"
+      zone: "us-west1-b"
+      region: "us-west1"
+      network: "yugabyte-network"
+      subnetwork: "subnet-us-west1"
+      disk_type: "pd-standard"
+      machine_type: "e2-standard-4"
+      # image/image_family/image_project: one of image or image_family MUST be
+      # set before a live GCP run (no reusable shared image identified).
+      # image_family (`--image-family`, e.g. almalinux-8) resolves to the current
+      # family image; image (`--image`) pins a build; image_family wins if both.
+      image: ""
+      image_family: ""
+      image_project: ""
+      ssh_user: "centos"
+      # key_file/public_key_file: no GCP shared key exists yet, MUST be filled
+      # before a live run. public_key_file's CONTENT is injected into instance
+      # metadata so RunInstances never mints a key or uses OS Login.
+      key_file: ""
+      public_key_file: ""
+      # reach/ssh_wait_timeout mirror aws.
+      reach: "private"
+      # Prefix of instance names. Empty means owner.
+      name_prefix: ""
+      ssh_wait_timeout: "4m"
+      # service_account_secret names a secret resolving to a PATH to a
+      # service-account JSON key. Empty (default) → ambient `gcloud auth`. The
+      # path is injected as CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, never logged.
+      service_account_secret: ""
+
+  # apps/yba: YugabyteDB Anywhere REST app. base_url/customer_uuid/
+  # api_token_secret (NAME of a secret) have NO default, all three required to
+  # reach a YBA. aws.*/gcp.*/k8s.* are provider specs, universe.* the universe spec.
+  yba:
+    base_url: ""
+    customer_uuid: ""
+    api_token_secret: ""
+    # provider_type: backing cloud the provision_yba flow stands a universe on.
+    #   aws (default), EC2 provider (apps.yba.aws.*); teardown backstop is the
+    #     mekoqa-run=<tag> EC2 tag sweep.
+    #   kubernetes, universe ON the same k8s cluster the YBA runs in (cheapest,
+    #     fully-in-cluster); reads apps.yba.k8s.*; needs kubecontext + quay.
+    #   gcp, GCE VMs (apps.yba.gcp.*); needs the gcp_key SA-JSON secret.
+    # Default kubernetes: a YBA-provisioned RF=3 universe co-located in the same
+    # cluster as the stack (no cloud creds).
+    provider_type: "kubernetes"
+    # release_url: DB-release tarball the provision_yba flow imports before
+    # universe-create. Empty → derived from versions.yugabytedb + aws.arch as the
+    # public software.yugabyte.com el8 tarball.
+    release_url: ""
+    aws:
+      # provider_name is the idempotent identity: an existing provider with this
+      # name is REUSED, never duplicated.
+      provider_name: "mekoqa-aws"
+      ssh_user: "ec2-user"
+      arch: "arm"
+      # keypair_name+keypair_file are the SHARED yb-dev-aws-2 keypair, passed with
+      # skipKeyValidateAndUpload so YBA REUSES it and NEVER mints a new AWS key.
+      keypair_name: "yb-dev-aws-2"
+      keypair_file: "~/.ssh/yb-dev-aws-2.pem"
+      # access_key_secret/secret_key_secret name secrets with the static AWS creds
+      # baked into the provider, REQUIRED (YBA stores them; unlike ambient chain).
+      access_key_secret: "aws_access_key"
+      secret_key_secret: "aws_secret_key"
+      # regions → zones → subnets. security_group_id/vpc_id empty (env-specific).
+      # ami is the region ybImage and MUST match arch, an empty ami makes YBA
+      # default to x86_64, which RunInstances rejects against the arm64 m7g.xlarge.
+      # Default is the shared us-west-2 ARM server AMI; for x86 set arch: x86 +
+      # an x86_64 ami + an x86 instance_type.
+      regions:
+        - code: "us-west-2"
+          security_group_id: ""
+          vpc_id: ""
+          ami: "ami-03cd4ec64de195719"
+          zones:
+            - name: "us-west-2a"
+              subnet: "subnet-11798e59"
+    universe:
+      # name_prefix tags every universe (name = "<prefix>-<run-tag>") so it is
+      # identifiable and reapable.
+      name_prefix: "mekoqa"
+      num_nodes: 3
+      replication_factor: 3
+      instance_type: "m7g.xlarge"
+      # instance_num_cores/instance_mem_gb describe instance_type (m7g.xlarge =
+      # 4 vCPU / 16 GiB) and are registered on the provider, YBA does not
+      # auto-populate an API-created provider's instance-type catalog.
+      instance_num_cores: 4
+      instance_mem_gb: 16
+      region: "us-west-2"
+      # yb_version empty → fall back to versions.yugabytedb.
+      yb_version: ""
+      volume_size_gb: 100
+      volume_count: 1
+      # storage_type EBS class. GP3 (default) requires disk_iops+throughput (YBA
+      # 400s without them; these are the GP3 baseline). IO1/IO2 use disk_iops
+      # only; gp2/other ignore both.
+      storage_type: "GP3"
+      disk_iops: 3000
+      throughput: 125
+      # instance_tags stamp every node. The dev-account SCP conditions
+      # ec2:RunInstances on ownership tags, so a universe missing them is DENIED.
+      # The mandatory set (yb_owner/yb_task/yb_dept/autoclean/mekoqa) is always
+      # applied; keys here override/extend it; mekoqa-run is added automatically.
+      instance_tags: {}
+      # enable_ybc toggles YBC install. false skips it + the WaitForYbcServer
+      # subtask, which on a VM universe times out pinging a yb-controller
+      # nothing here installs, a create-task failure with cloud nodes already
+      # launched. Set true only for a VM universe a backup test will drive; the kubernetes universe has its own
+      # apps.yba.k8s.enable_ybc, which is on.
+      enable_ybc: false
+      # master_gflags/tserver_gflags go onto every universe built from a
+      # UniverseSpec, whatever the provider. Both default to empty. They are set
+      # at create because they are cluster-wide. NOT read by
+      # db.provider=yba creating a universe, which posts
+      # a hand-written create body straight to YBA and so has to carry its own
+      # gflags, nor by an attached universe someone else created.
+      master_gflags: {}
+      tserver_gflags: {}
+    # k8s.*: KUBERNETES provider+universe (provider_type "kubernetes"): a universe
+    # ON the same k8s cluster the YBA runs in (apps.ybastack.kubecontext), no VMs.
+    k8s:
+      # provider_name idempotent identity. kube_provider = KUBECONFIG_PROVIDER
+      # hint. service_account = in-namespace ServiceAccount YBA uses.
+      provider_name: "mekoqa-k8s"
+      kube_provider: "gke"
+      service_account: "yugabyte-helm"
+      # universe DB image registry (quay itest), k8s universes pull from here.
+      image_registry: "quay.io/yugabyte/yugabyte-itest"
+      # in-cluster image-pull Secret YBA references.
+      pull_secret_name: "quay-secret"
+      # StorageClass the universe PVCs bind to; must bind WaitForFirstConsumer.
+      storage_class: "standard-rwo"
+      # cluster DNS domain (KUBE_DOMAIN); empty → cluster.local.
+      kube_domain: ""
+      # use_in_cluster true → YBA uses its OWN in-cluster service account (no
+      # kubeconfig sent); false (default) → kubeconfig from kubeconfig_secret.
+      # On GKE the in-cluster namespace SA lacks universe-create RBAC, so the run
+      # pipeline hands YBA a cluster-admin ServiceAccount-token kubeconfig
+      # (apps.yba.k8s.kubeconfig_secret), which requires use_in_cluster=false.
+      # kubeconfig_secret/pull_secret_secret name secrets; kubeconfig required at
+      # a live run unless use_in_cluster.
+      use_in_cluster: false
+      kubeconfig_secret: ""
+      pull_secret_secret: ""
+      # region + zones (co-located GKE; shared dev us-west1). empty → single zone.
+      region: "us-west1"
+      zones:
+        - code: "us-west1-b"
+      # Universe shape: RF3.
+      num_nodes: 3
+      replication_factor: 3
+      # enable_ybc: on here, unlike the VM default above, because the chart
+      # brings yb-controller.
+      enable_ybc: true
+      volume_count: 1
+      # 200G, not the old 50. Measured on the depth ladder: 25 TPC-C warehouses
+      # (~2.5G logical) put 36G on EACH tserver before YugabyteDB started
+      # rejecting writes below its 5% free threshold, roughly 14x amplification
+      # once WAL retention and uncollected page versions are counted. A 50G
+      # volume could not survive the SMALLEST rung.
+      # 200 fits what runs by default (every functional and stress test writes
+      # single-digit GB) and clears the ladder's first rungs. The high rungs
+      # want more than any sane default: pass volume_size_gb explicitly there.
+      volume_size_gb: 200
+      # master/tserver K8SNodeResourceSpec cpu cores + memory GiB (within YBA's
+      # MIN_CPU 0.5 / MIN_MEMORY 2.0 GiB bounds).
+      master_cpu: 2
+      master_mem_gib: 4
+      tserver_cpu: 2
+      tserver_mem_gib: 4
+      # Encryption in transit for the universe. Off (plaintext) by default. A TLS
+      # universe may need a permissive HBA rule: there is no key for it here,
+      # write it into apps.yba.universe.tserver_gflags (ysql_hba_conf_csv)
+      # above. root_ca is the UUID of a K8S cert-manager certificate already
+      # added to YBA, issued by the issuer named on the provider region
+      # (cert_manager_issuer_*).
+      cert_manager_issuer_kind: ""
+      cert_manager_issuer_name: ""
+      cert_manager_issuer_group: ""
+      tls:
+        node_to_node: false
+        client_to_node: false
+        root_ca: ""
+        root_and_client_root_ca_same: true
+        # The gflags TLS needs (client certificates demanded on RPC, an HBA with
+        # cert login for the stack's role) go under apps.yba.universe.*_gflags
+        # above, which every provider already merges over its defaults.
+    # gcp.*: GCP provider+universe (provider_type "gcp"): a universe on GCE VMs.
+    gcp:
+      # provider_name idempotent identity. project/network/subnetwork/region/zone
+      # are the shared dev-project values; network is the existing VPC (destVpcId).
+      provider_name: "mekoqa-gcp"
+      project: "yugabyte"
+      network: "yugabyte-network"
+      subnetwork: "subnet-us-west1"
+      region: "us-west1"
+      zone: "us-west1-b"
+      ssh_user: "centos"
+      ssh_port: 22
+      # arch x86 by default (GCP universes run x86); tarball+image bundle resolve
+      # for this arch.
+      arch: "x86"
+      # credentials_secret names a secret resolving to a PATH to the SA JSON key.
+      # Contents go into gceApplicationCredentials (never logged); the path
+      # re-auths gcloud for the teardown reap. REQUIRED for a live gcp run.
+      credentials_secret: "gcp_key"
+      # keypair_name+keypair_file: the SAME shared yb-dev-aws-2 key the aws
+      # provider reuses, passed with skipKeyValidateAndUpload so YBA never mints
+      # one. GCE has no registered-keypair concept (YBA injects the public half
+      # as instance metadata), so the key material is cloud-agnostic, this is
+      # what the stress framework hands its own GCP provider. A host without the
+      # key still builds a provider: an unreadable DEFAULT omits the
+      # allAccessKeys block (YBA falls back to project/OS-login keys), while a
+      # path set explicitly here is required and errors when it is absent.
+      keypair_name: "yb-dev-aws-2"
+      keypair_file: "~/.ssh/yb-dev-aws-2.pem"
+      # image: optional GCE image (name or family) for the default image bundle;
+      # empty → YBA's default GCP image. regions optional; empty → single us-west1.
+      image: ""
+      # placement pins tservers per zone per region and preferred_region marks
+      # where tablet leaders sit (isAffinitized on its zones). Every placement
+      # region must be one of `regions` above. Empty → YBA spreads num_nodes
+      # over the single region.
+      #   placement:
+      #     - region: us-west1
+      #       zones: [{name: us-west1-b, nodes: 1}]
+      #     - region: us-east1
+      #       zones: [{name: us-east1-b, nodes: 1}]
+      #   preferred_region: us-west1
+      placement: []
+      preferred_region: ""
+      # Universe shape (cheap RF1). instance_type is the GCE machine type
+      # (n2-standard-4, analogous to AWS m7g.xlarge). storage_type Persistent.
+      instance_type: "n2-standard-4"
+      num_nodes: 1
+      replication_factor: 1
+      volume_size_gb: 100
+      volume_count: 1
+      storage_type: "Persistent"
+
+  # apps/ybastack: YugabyteDB-Anywhere-in-Kubernetes deploy App. Stands up our
+  # OWN YBA in a per-run namespace and returns a token-bootstrapped yba.Client
+  # (what a yba universe provider needs). kubectl/helm shelled, ambient-authed.
+  ybastack:
+    # kubecontext empty → current context. kubeconfig empty → ambient KUBECONFIG;
+    # set → exported into the shelled child env only (parallel-safe).
+    kubecontext: ""
+    kubeconfig: ""
+    namespace_prefix: "mekoqa-yba"
+    # chart_version empty → versions.yugabytedb. Chart tarball:
+    # s3://releases.yugabyte.com/<chart_version>/helm/yugaware-<short>.tgz
+    # (<short> = first three version components).
+    chart_version: ""
+    # image_registry patches the chart's YBA control-plane image repo.
+    # yb_image_registry is the SEPARATE universe image registry (provider wave).
+    image_registry: "quay.io/yugabyte/yugaware-itest"
+    yb_image_registry: "quay.io/yugabyte/yugabyte-itest"
+    # quay_secret is the NAME of the secret with the quay pull credential;
+    # pull_secret_name is the in-cluster Secret it becomes.
+    quay_secret: "quay_images"
+    pull_secret_name: "quay-secret"
+    service_account: "yw-sa"
+    # Must bind WaitForFirstConsumer (an Immediate class zone-pins yugaware-0).
+    storage_class: "standard-rwo"
+    # rbac_dir: optional universe-management RBAC templates; each
+    # ClusterRoleBinding is renamed "<name>-<namespace>" so parallel YBAs never
+    # clobber a cluster-scoped binding. Empty → the chart's own namespaced RBAC.
+    rbac_dir: ""
+    # reach: tailnet (default) resolves the yugaware Service cluster-internal
+    # address and talks direct; loadbalancer reads the external ingress IP.
+    # tailnet PROBES the address it picks and falls back to a kubectl
+    # port-forward when neither the ClusterIP nor the pod IP answers, on a
+    # cluster whose pod CIDR is shadowed by another advertised tailnet route,
+    # every pod-IP dial times out rather than being refused.
+    reach: "tailnet"
+    # empty → service_name "<release>-yugaware-ui", pod_selector
+    # "app=<release>-yugaware", helm_release "<namespace>-yugaware".
+    service_name: ""
+    pod_selector: ""
+    helm_release: ""
+    service_port: 80
+    # local_port is the port-forward fallback's local port; 0 lets kubectl pick
+    # one, which is what parallel runs on one agent need.
+    local_port: 0
+    helm_timeout: "40m"
+    # insecure_tls true (default) → reach client skips TLS verify (self-signed).
+    insecure_tls: true
+    # bootstrap.* are the first-customer credentials (well-known non-secret YBA
+    # dev default, routed through config not hardcoded). bootstrap_timeout bounds
+    # the retry-until-the-pod-answers loop.
+    bootstrap:
+      name: "demo"
+      email: "demo@yugabyte.com"
+      password: "Password#123"
+    bootstrap_timeout: "10m"
+
+  # apps/ybk8s: YugabyteDB-in-Kubernetes deploy App. Stands up a YB cluster in a
+  # per-run namespace via the upstream `yugabyte` helm chart, for the cheapest
+  # fully-GCP CO-LOCATED mode (YB and the stack in one GKE cluster).
+  ybk8s:
+    # kubecontext empty → env.k8s.context (the context the run already
+    # provides), then the ambient current context. For co-location the stack
+    # must target the SAME cluster.
+    kubecontext: ""
+    kubeconfig: ""
+    namespace_prefix: "mekoqa-yb"
+    # chart_version empty → versions.yb (the run-level YB version a CI run
+    # sets), then the pinned versions.yugabytedb. Chart tarball:
+    # s3://releases.yugabyte.com/<chart_version>/helm/yugabyte-<short>.tgz.
+    chart_version: ""
+    # chart_path is a local chart, a .tgz or a directory, used instead of the
+    # release bucket's tarball (which needs ambient AWS credentials). With it set,
+    # chart_version may stay empty. 
+    chart_path: ""
+    # image_registry is the chart Image.repository; image_tag empty → chart_version.
+    # quay itest carries unreleased builds.
+    image_registry: "quay.io/yugabyte/yugabyte-itest"
+    image_tag: ""
+    # image_pull_secret: NAME of a secrets: entry whose value is a "<user>:<pass>"
+    # registry token, for pulling build-specific images from a PRIVATE registry
+    # (e.g. quay.io/yugabyte/yugabyte-itest, where -bNNN builds live but public
+    # Docker Hub does not). "" → no pull secret (public yugabytedb/yugabyte,
+    # unchanged). image_pull_registry is the registry the token authenticates
+    # (the dockerconfigjson "auths" key); image_pull_secret_name is the k8s Secret
+    # object created in the YB namespace and set as the chart's Image.pullSecretName.
+    image_pull_secret: ""
+    image_pull_registry: "quay.io"
+    image_pull_secret_name: "yb-pull-secret"
+    # replication_factor drives default master/tserver counts (RF3 = 3+3, what a
+    # production database is. RF1 = cheap: 1+1). master_replicas/tserver_replicas
+    # (0 → RF) override each.
+    replication_factor: 3
+    master_replicas: 0
+    tserver_replicas: 0
+    # gflags are server flags passed to the chart, per process. A meko stack's
+    # yb_k8s backing adds ysql_yb_enable_mage and the preview-flag allowance it
+    # needs to whatever is set here.
+    gflags:
+      master: {}
+      tserver: {}
+    # load_balancer: false renders none of the chart's LoadBalancer Services, which
+    # on GKE are an external IP each. True keeps what a deploy has always had,
+    # including the yb-tserver-service the in-cluster address names.
+    load_balancer: true
+    # Must bind WaitForFirstConsumer (an Immediate class zone-pins the pods).
+    storage_class: "standard-rwo"
+    storage_size: "10Gi"
+    # service_name is the tserver Service whose in-cluster DNS the stack
+    # connects at, the product's own connection target, so it is NOT changed to
+    # suit the harness. The framework itself reaches YSQL through kubectl
+    # (exec / port-forward), never a routable address.
+    service_name: "yb-tserver-service"
+    ysql_port: 5433
+    # Small resource requests keep a real run cheap.
+    master_cpu: "0.5"
+    master_memory: "1Gi"
+    tserver_cpu: "0.5"
+    tserver_memory: "2Gi"
+    # Limits equal to requests (Guaranteed QoS). Off: the chart's own limits
+    # stand and the pods burst into whatever their neighbours leave.
+    guaranteed_qos: false
+    # reach: tailnet (default, only mode) resolves tserver pod IPs (a ClusterIP is
+    # not routable from the coordinator).
+    reach: "tailnet"
+    # node_selector pins the universe pods, "key=value". Empty schedules anywhere.
+    node_selector: ""
+    # helm_release empty → the per-run namespace name.
+    helm_release: ""
+    helm_timeout: "45m"
+    # TLS via the chart's cert-manager mode: TLS on YSQL and tserver RPC,
+    # client certificates demanded on RPC, certificate login for storage_role.
+    # Needs an issuer already in the cluster and root_ca_file, the PEM CA chain
+    # it signs with. permissive keeps plaintext admitted beside TLS. Off by
+    # default.
+    tls:
+      enabled: false
+      issuer_kind: "ClusterIssuer"
+      issuer_name: "mekoqa-ca"
+      issuer_group: "cert-manager.io"
+      root_ca_file: ""
+      permissive: true
+      storage_role: "meko"
+
+  # apps/ybpod: yugabyted-in-pod deploy App. Stands up a single-node (RF1)
+  # YugabyteDB inside a bare pod by installing the release TARBALL and running
+  # `yugabyted start` by hand, image-promotion-INDEPENDENT (unlike ybk8s, which
+  # needs a promoted container image at a tag). The tarball always exists in the
+  # S3 release bucket for every build.
+  ybpod:
+    # kubecontext/kubeconfig as ybk8s. For co-location the stack must target
+    # the SAME cluster: set env.k8s.context to match (or both empty).
+    kubecontext: ""
+    kubeconfig: ""
+    namespace_prefix: "mekoqa-ybpod"
+    # base_image: a PUBLIC el8 base that can run the el8 tarball, needs glibc,
+    # tar/gzip (remote untar) and dnf (yugabyted needs Python 3.7+; almalinux:8's
+    # stock python3 is 3.6, provisioned on start). base_image_pull_secret: NAME of
+    # a PRE-EXISTING docker-registry Secret in the namespace for a PRIVATE base
+    # image; "" → public.
+    base_image: "almalinux:8"
+    base_image_pull_secret: ""
+    # version empty → versions.yugabytedb. arch selects the S3 tarball variant:
+    # x86_64 → yugabyte-<ver>-centos-x86_64.tar.gz, aarch64 → -almalinux8-aarch64.
+    # The k8s node the pod lands on MUST match arch.
+    version: ""
+    arch: "x86_64"
+    # tarball_url: release-tarball source. Empty (default) → the S3 release-bucket
+    # form (s3://releases.yugabyte.com/<ver>/yugabyte-<ver>-<osarch>.tar.gz). A
+    # template over {yugabytedb}/{yugabytedb_base}/{osarch} placeholders, e.g.
+    # "https://mirror/{yugabytedb_base}/yugabyte-{yugabytedb}-{osarch}.tar.gz" for
+    # an http mirror. tarball_secret: NAME of a declared secret authenticating the
+    # fetch (private/authenticated http only); "" → anonymous (S3 is ambient-authed
+    # on the coordinator). Either way the tarball is fetched coordinator-side and
+    # pushed into the pod, so the pod never needs fetch credentials.
+    tarball_url: ""
+    tarball_secret: ""
+    # install_dir: pod dir the tarball lands in + unpacks under (install root is
+    # <install_dir>/yugabyte-<base>). base_dir: yugabyted --base_dir. Both under
+    # /root (the pod runs as root, unlike the awsvm ec2-user default).
+    install_dir: "/root/yb-software"
+    base_dir: "/root/yugabyte-data"
+    # service_name: the YSQL Service whose in-cluster DNS the stack connects at; the framework reaches YSQL over the tailnet via the pod IP.
+    service_name: "ybpod-ysql"
+    ysql_port: 5433
+    ready_timeout: "10m"
+
+  # apps/metrics: the background server-metrics sampler. Any test holding a
+  # namespace-scoped kubectl can start it. ON by default, and a test that does
+  # not compose the app is unaffected.
+  #
+  # Every sample_interval it reads, per sampled pod:
+  #   - container CPU + memory from the cgroup (v2 and v1 both handled) in one
+  #     exec; CPU is a counter, reported as cores used over wall-clock. These are
+  #     emitted as "[<section>] CPU" / "[<section>] Memory" and need no entry.
+  #   - the pod's prometheus exposition, /prometheus-metrics on tserver_port /
+  #     master_port for YB, keeping only what `collect` declares.
+  # max_points caps each line (drop-oldest): 15s over 1h is 240 points, so 2000
+  # is generous headroom for a soak.
+  #
+  # collect is the SET, and it carries the DISPLAY METADATA:
+  # every emitted key is "[<section>] <title>", never a raw prometheus name.
+  # The raw names ride along on the metric's `raw` field instead. Replace the
+  # list to collect a different set, no code change. Per entry:
+  #   match         REGEX over the bare metric name (labels stripped, same-name
+  #                 lines summed). Required.
+  #   title         the human name in the key. Required.
+  #   kind          gauge (default) | counter | latency
+  #                   gauge, value passes through
+  #                   counter, per-second rate of the delta
+  #                   latency, the entry matches a histogram's _count AND _sum
+  #                             and yields TWO series: `title` = rate(count),
+  #                             and `latency_title` = delta(sum)/delta(count),
+  #                             the MEAN LATENCY, emitted in ms. This is the
+  #                             point of the structured list: two raw rates
+  #                             ("sum per second") tell a reader nothing.
+  #   unit          display unit; defaults to "/s" for counter and latency
+  #   divide_by     divides the emitted value (1048576 for bytes → MiB)
+  #   round         display decimals, default 2 (a derived latency uses 3)
+  #   latency_title name of the derived mean-latency series; default
+  #                 "<title> latency"
+  #   sum_unit      time unit of the histogram _sum: ns | us | ms | s. Default
+  #                 us, YB handler latencies are microseconds.
+  #
+  # cpu_utime / cpu_stime are deliberately absent: "[<section>] CPU" from the
+  # cgroup already measures the container's CPU in cores, counting every thread.
+
+  metrics:
+    # enabled turns on the background server-metrics sampler. Best-effort
+    # throughout: a sampler that cannot start is logged, never a test failure.
+    enabled: true
+    # sample_interval paces every scrape. 5s resolves a 3-minute measured window
+    # into ~36 points per series, enough to see a stall inside a window, which
+    # 15s flattened away, while max_points still bounds a long soak.
+    sample_interval: "5s"
+    max_points: 2000
+    tserver_port: 9000
+    master_port: 7000
+    collect:
+      - match: "^handler_latency_yb_tserver_TabletServerService_Read_(count|sum)$"
+        title: "Read RPCs"
+        kind: "latency"
+        latency_title: "Read latency"
+        sum_unit: "us"
+      - match: "^handler_latency_yb_tserver_TabletServerService_Write_(count|sum)$"
+        title: "Write RPCs"
+        kind: "latency"
+        latency_title: "Write latency"
+        sum_unit: "us"
+      - match: "^log_append_latency_(count|sum)$"
+        title: "WAL appends"
+        kind: "latency"
+        latency_title: "WAL append latency"
+        sum_unit: "us"
+      - match: "^log_sync_latency_(count|sum)$"
+        title: "WAL syncs"
+        kind: "latency"
+        latency_title: "WAL sync latency"
+        sum_unit: "us"
+      - match: "^log_bytes_logged$"
+        title: "WAL bytes"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rocksdb_compact_read_bytes$"
+        title: "Compactions read"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rocksdb_compact_write_bytes$"
+        title: "Compactions written"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rocksdb_flush_write_bytes$"
+        title: "Flushes written"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rpc_inbound_calls_created$"
+        title: "Inbound RPCs"
+        kind: "counter"
+      - match: "^rpcs_in_queue_yb_(tserver|master)_"
+        title: "RPC queue depth"
+        unit: "rpcs"
+      - match: "^total_sst_files_size$"
+        title: "SST files size"
+        unit: "MiB"
+        divide_by: 1048576
+      - match: "^mem_tracker$"
+        title: "Memory tracker"
+        unit: "MiB"
+        divide_by: 1048576
+
+# --- Artifacts (artifact/artifact.go, artifact/deploy.go) ---
+artifact:
+  # Local download cache dir. Empty (default) → ~/.mekoqa/artifacts at use.
+  cache_dir: ""
+
+# versions{}: short name → version string, consumed by {name} placeholder
+# substitution in artifacts{} (artifact.Resolve) and the pre-provision version
+# gate (versions.product/versions.yb, cmd/mekoqa/run.go).
+#
+# yugabytedb is the framework-owned entry: the release the YB deploy apps
+# (apps/ybk8s, apps/ybpod, apps/ybastack) use when no versions.yb run override
+# is set. A single build-suffixed string; consumers derive the bare form
+# ({yugabytedb_base}, "-bNNN" stripped, the public release DIRECTORY) from it.
+versions:
+  yugabytedb: "2025.2.1.0-b141"
+
+# artifacts{}: fetchable artifacts by name (glob_path, url, type, target, secret,
+# delivery flags). Consumed by artifact.Resolve and the deploy-artifact task.
+# Declared per project, none by default.
+artifacts: {}
+
+# --- Secrets (core/secret.go) ---
+# Named credentials, resolved by name and NEVER recorded into results (the
+# secrets subtree is redacted from every config snapshot; resolved values are
+# masked in logs/errors). Each entry supplies its value EXACTLY ONE way:
+#
+#   secrets:
+#     gh_package:     {env: GH_PACKAGE_TOKEN}   # value = the env var's value
+#     gcp_key:        {file: /path/to/key.json} # value = file CONTENTS; Path() = path
+#     inline_token:   {token: "ghp_..."}        # literal (prefer env/file)
+#
+# Referenced BY NAME elsewhere (an artifact's `secret:`, apps.cloud.aws.
+# access_key_secret, ...). Empty by default; declare per-project.
+#
+# A credential set as a plain knob instead (quay_token, *.password) is redacted
+# from the config snapshot by key name, and masked everywhere else once it
+# differs from the default here, but declare it as a secret where you can.
+secrets: {}
+
+# --- Stress tests (suites/stress) ---
+# Each test loads a dedicated stack from client pods inside the cluster. Concurrency
+# is per pod. The account allows 10 active PATs: credentials plus client_pods times
+# max_active_pats must stay at 8 or fewer, and a plan over that is refused.
+stress:
+  client_pods: 2
+  # PATs minted for the MCP calls and spread over the virtual users.
+  credentials: 3
+  # The api-server limits /api/v1 to 10 requests a second per client IP
+  # (ManagementRateLimiter) and reads the IP from X-Forwarded-For. per_request
+  # sends a new address on every call, per_vu one per virtual user, empty none. One
+  # user alone makes more than 10 fast calls a second, so per_vu is not enough.
+  forwarded_for: "per_request"
+  # Failed calls over all calls.
+  max_error_rate: 0.02
+  # 5xx answers the load may receive. Anything the stack answers with a 5xx is a finding.
+  http_5xx_allowed: 0
+  # How long after the duration the pods get to stop, before the run is a failure.
+  drain_timeout: 10m
+  datapack_churn_soak:
+    duration: 15m
+    concurrency: 8
+    think_time: 100ms
+    # Datapacks a virtual user keeps alive before deleting its oldest.
+    datapack_keep: 2
+    # PATs one pod holds at once.
+    max_active_pats: 2
+    datapack_weight: 6
+    pat_weight: 1
+  mcp_conversations_soak:
+    duration: 15m
+    concurrency: 8
+    think_time: 100ms
+    credentials: 4
+    messages: 3
+    # Shared datapacks the conversations run on, per credential.
+    datapacks: 1
+    reuse_session: false
+    # Weights of conversation iterations and memory_add plus memory_search ones.
+    conversation_weight: 8
+    memory_weight: 1
+  churn_with_api_pod_kills:
+    duration: 10m
+    concurrency: 6
+    think_time: 100ms
+    datapack_keep: 2
+    max_active_pats: 1
+    datapack_weight: 6
+    pat_weight: 1
+    # An api-server pod is deleted at first_kill_after, then every kill_interval
+    # after the previous one's replicas are back.
+    first_kill_after: 60s
+    kill_interval: 90s
+    # After a kill the load must reach recovery_window seconds that each carry
+    # successful calls and together stay under recovery_error_rate, within this.
+    recover_within: 90s
+    recovery_error_rate: 0.2
+    # Over the whole run, with the kills in it.
+    max_error_rate: 0.10
+
+# --- Perf tests (suites/perf) ---
+# A closed loop at each concurrency of the ladder, on a dedicated stack, one
+# fresh run per level. Latency datapoints are recorded only for levels that ran
+# clean.
+perf:
+  client_pods: 1
+  credentials: 3
+  forwarded_for: "per_request"
+  # An unmeasured run before the first level.
+  warmup: 30s
+  step_duration: 60s
+  # An op with fewer successful calls records no percentile.
+  min_samples: 10
+  max_error_rate: 0.01
+  drain_timeout: 10m
+  api_latency:
+    concurrency: [1, 8, 32]
+    think_time: 0s
+    max_active_pats: 2
+    datapack_weight: 4
+    pat_weight: 2
+  mcp_latency:
+    concurrency: [1, 8, 32]
+    think_time: 0s
+    credentials: 4
+    messages: 2
+    datapacks: 1
+    reuse_session: false
+
+# --- Service guard (core/guard.go) ---
+# Around every test body on a self-built stack: a container restart, a panic or
+# traceback in a service log, or a 5xx the api-server served fails the test,
+# unless the test lists the kind in Tolerates. ERROR log lines are counted on the
+# result and never fail it.
+guard:
+  enabled: true
+
+# --- functional/upgrade_previous_release ---
+upgrade:
+  # Release version to install before upgrading to the run's images, e.g.
+  # 0.260930.0. Empty takes the newest release tag older than the run's.
+  from: ""
+  # Longest stretch the API may fail every poll during the rolling upgrade.
+  max_outage: 30s
+
+# --- Reporting sinks (cmd/mekoqa/run.go, report/jsonfile, report/junit, report/portal) ---
+report:
+  # Per-result JSON dir, under <out_dir>/<runid>/. Empty → sink not attached.
+  out_dir: ""
+  # JUnit XML path. Empty → sink not attached.
+  junit_path: ""
+  # Self-contained HTML report path, rendered when the run finishes (same output
+  # as `mekoqa report --from`). Empty → sink not attached.
+  html_path: ""
+  # Live streaming to the meko report portal (--portal / --report override).
+  # url empty → sink not attached. The sink is non-critical: a portal outage
+  # never fails or slows a run. A local run streams here too, so pass
+  # --portal "" to keep a debugging run off the portal.
+  portal:
+    # Portal base URL. The meko portal VM (meko-report-service, us-west1-b),
+    # reachable on the corp network. "" turns streaming off.
+    url: "http://10.150.5.246"
+    # Report bucket the run files under on the portal (e.g. regression).
+    report: ""
+    # Adopt an existing portal run (created at trigger time) instead of
+    # opening a new one, CI passes the trigger's run id here.
+    run_id: ""
+    # Run-identity stamps, all optional (CI sets them; empty ones are omitted).
+    branch: ""
+    commit: ""
+    build_tag: ""
+    trigger_type: ""
+    triggered_by: ""
+  # Per-test caps on how many steps/metrics a single Result retains in memory.
+  # The live sink already got every event; these only bound the snapshot so a
+  # 24h soak emitting per-cycle events can't balloon RAM. Beyond the cap the
+  # oldest are dropped and a dropped-count is recorded. 0 → unbounded.
+  max_steps_retained: 10000
+  max_metrics_retained: 10000
+  # When to collect Kubernetes diagnostics (stack and YB pod logs,
+  # current AND previous-instance, plus namespace events and pod describes)
+  # into the run's artifacts BEFORE teardown deletes the namespace. on_failure
+  # (default) collects only for a run that needs explaining, nobody reads a
+  # green run's stack logs, and collecting them costs a pod-log pull per
+  # pod at teardown and tens of megabytes of stored blobs per run. always
+  # collects every run; never disables it.
+  collect_diagnostics: on_failure
+
+# task.* keys are per-invocation `mekoqa task <name>` arguments (task.host,
+# task.artifact, ...), not framework defaults, so they are not declared here
+# (task.dry_run's "false" default is the zero value, no entry needed).
+
+# --- Chaos engine (chaos/chaos.go, chaos/config.go) ---
+# The fault-injection ("nemesis") loop: named, always-recoverable disruptions run
+# against resources a test OWNS (YB pods on k8s / YB nodes on a host) while a
+# workload runs. Severity/cadence are deliberately moderate so a background loop
+# disrupts a workload without permanently wedging it. chaos.FromConfig reads these.
+chaos:
+  # actions restricts the loop to these action names (empty → every registered
+  # action, in a stable order). Names: pod_delete, process_kill, process_restart,
+  # node_restart, network_partition, network_slowdown, packet_loss, node_stop,
+  # process_stall, pod_freeze.
+  actions: []
+  # owner_prefix guards which resources may be targeted: a pod whose namespace
+  # does not CONTAIN this marker is refused (the loop will not start). Contains,
+  # not prefix: a YBA-provisioned universe lives in yb-dev-mekoqa-<tag>.
+  owner_prefix: "mekoqa-"
+  # net_device is the interface tc/iptables actions operate on.
+  net_device: "eth0"
+  # partition_ports are the TCP ports network_partition drops (YB RPC/SQL/CQL).
+  partition_ports: [7100, 9100, 5433, 9042]
+  # delay_ms / loss_percent are the network_slowdown latency and packet_loss rate.
+  delay_ms: 200
+  loss_percent: 30
+  # process_pattern / service_unit are the pkill match and systemd unit the
+  # process_* actions signal/recover; node_units are the units node_restart cycles.
+  process_pattern: "yb-tserver"
+  service_unit: "yb-tserver"
+  node_units: ["yb-master", "yb-tserver"]
+  stall:
+    # pattern matches the process process_stall SIGSTOPs and SIGCONTs (pkill -f).
+    pattern: "yb-tserver"
+  freeze:
+    # helper_image is the privileged hostPID pod pod_freeze writes the target's
+    # cgroup.freeze from (a frozen pod cannot be exec-ed into). It needs nsenter.
+    helper_image: "nicolaka/netshoot:v0.13"
+  # hold_min/max bound how long a fault stays applied; gap_min/max the quiet
+  # interval between recovery and the next injection.
+  hold_min: "15s"
+  hold_max: "45s"
+  gap_min: "20s"
+  gap_max: "60s"
+  # wait_timeout bounds "wait until healthy again" recovery steps; recover_timeout
+  # bounds each Recover's own background context so recovery survives cancellation.
+  wait_timeout: "3m"
+  recover_timeout: "2m"

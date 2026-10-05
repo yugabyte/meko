@@ -1,0 +1,98 @@
+# apiServer.hostAliases, extraEnv, extraVolumes and extraVolumeMounts add to the
+# serving pod without a template edit. Nothing renders unless they are set, so a
+# release that never mentions them keeps byte-identical pods, and extraEnv and
+# the mounts reach only the serving container.
+#
+#   helm unittest charts/meko
+suite: api-server pod extras
+templates:
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+tests:
+  - it: renders none of them by default
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostAliases
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/extra/ca.crt
+
+  - it: adds host aliases, env, volumes and mounts to the serving container
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.hostAliases:
+        - ip: 10.1.2.3
+          hostnames: [idp.example.com]
+      apiServer.extraEnv:
+        - name: SSL_CERT_FILE
+          value: /etc/extra/ca.crt
+      apiServer.extraVolumes:
+        - name: extra
+          secret:
+            secretName: extra
+      apiServer.extraVolumeMounts:
+        - name: extra
+          mountPath: /etc/extra
+          readOnly: true
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases
+          value:
+            - ip: 10.1.2.3
+              hostnames: [idp.example.com]
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: extra
+              secret:
+                secretName: extra
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/extra/ca.crt
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: extra
+              mountPath: /etc/extra
+              readOnly: true
+
+  - it: keeps the extras off the migrate init container
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.migrate.enabled: true
+      apiServer.extraEnv:
+        - name: SSL_CERT_FILE
+          value: /etc/extra/ca.crt
+      apiServer.extraVolumeMounts:
+        - name: extra
+          mountPath: /etc/extra
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/extra/ca.crt
+      - notExists:
+          path: spec.template.spec.initContainers[0].volumeMounts

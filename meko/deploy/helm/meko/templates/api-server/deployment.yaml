@@ -2,6 +2,10 @@
 {{- $c := .Values.apiServer }}
 {{- /* dig: --reuse-values on a release predating the key leaves it unset. */}}
 {{- $metricsPort := dig "metricsPort" 9464 $c }}
+{{- $hostAliases := dig "hostAliases" nil $c }}
+{{- $extraEnv := dig "extraEnv" nil $c }}
+{{- $extraVolumes := dig "extraVolumes" nil $c }}
+{{- $extraVolumeMounts := dig "extraVolumeMounts" nil $c }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,6 +27,14 @@ spec:
     spec:
       {{- include "meko.imagePullSecrets" . }}
       serviceAccountName: meko-api-server
+      {{- with $hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- if $c.migrate.enabled }}
       # DB migration runs as an initContainer: blocks the main container until it
       # succeeds, shares the ConfigMap/SA/Secrets, and works under `helm --wait`
@@ -107,6 +119,13 @@ spec:
                    listener ignores an unknown variable, but exits on an unknown flag. */}}
             - name: MEKO_METRICS_PORT
               value: {{ $metricsPort | quote }}
+            {{- with $extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: {{ $c.containerPort }}
               protocol: TCP

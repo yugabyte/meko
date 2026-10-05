@@ -51,6 +51,7 @@ Meko is a polyglot monorepo. Each top-level directory is an independently-built 
 | `docs/` | Hugo | Public documentation site. |
 | `jenkins/` | Groovy + bash | The image build pipeline: builds every meko component image on ephemeral AWS builders and pushes it to `quay.io/yugabyte/meko-*`. See `jenkins/README.md`. |
 | `deploy/helm/meko/` | Helm | One flat chart deploying the whole platform — every component above plus langfuse — toggled per component and rendered for EKS or GKE from the same templates via values presets. See `deploy/helm/meko/README.md`. |
+| `test/functional/` | Go | `mekoqa`, the system-test framework: deploys a stack from the chart and runs its functional, stress and perf suites against it. Start at `test/functional/README.md`. It links the guides for running tests (`docs/RUNNING.md`), writing them (`docs/WRITING_TESTS.md`), triaging a failed run (`docs/TRIAGE.md`) and how a run works (`docs/ARCHITECTURE.md`). Rules for changes are in `test/functional/framework/AGENTS.md`. `PLAN.md` is the original plan, not current behavior. |
 
 `ycp/` is **not** part of this tree — it is the shared control-plane surface between
 meko and amp and lives at the repository root. See the root `AGENTS.md`.

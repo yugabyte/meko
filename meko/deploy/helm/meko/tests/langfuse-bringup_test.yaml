@@ -117,6 +117,66 @@ tests:
           path: stringData.REDIS_AUTH
           value: ""
 
+  - it: builds DATABASE_URL from an external database with its own user and port
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: false
+      apiServer.config.LANGFUSE_DB_HOST: yb.example.internal
+      apiServer.config.DB_HOST: other.example.internal
+      apiServer.config.DB_USER_NAME: meko
+      apiServer.config.DB_PORT: "6433"
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.DATABASE_URL
+          value: postgresql://meko:pw@yb.example.internal:6433/langfuse
+
+  - it: falls back to DB_HOST when LANGFUSE_DB_HOST is unset
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: false
+      apiServer.config.DB_HOST: other.example.internal
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.DATABASE_URL
+          value: postgresql://yugabyte:pw@other.example.internal:5433/langfuse
+
+  - it: fails the render when langfuse.migrate.enabled has no database at all
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: false
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled) or name an external one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."
+
   - it: fills NEXTAUTH_URL with a browser-reachable default, not the cluster-internal Service name
     template: templates/langfuse/configmap.yaml
     release:
@@ -284,3 +344,75 @@ tests:
       - equal:
           path: stringData.REDIS_AUTH
           value: s3cr3t
+
+  - it: builds DATABASE_URL from an external database when the bundled one is off
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: false
+      apiServer.config.DB_HOST: yb-tservers.backing.svc.cluster.local.
+      apiServer.config.DB_PORT: "5433"
+      apiServer.config.DB_USER_NAME: yugabyte
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.DATABASE_URL
+          value: postgresql://yugabyte:pw@yb-tservers.backing.svc.cluster.local.:5433/langfuse
+      - equal:
+          path: stringData.TRACING_DATABASE_URL
+          value: postgresql://yugabyte:pw@yb-tservers.backing.svc.cluster.local.:5433/langfuse?schema=clickhouse
+
+  - it: prefers LANGFUSE_DB_HOST over DB_HOST on an external database
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: false
+      apiServer.config.DB_HOST: main.example
+      apiServer.config.LANGFUSE_DB_HOST: langfuse.example
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - matchRegex:
+          path: stringData.DATABASE_URL
+          pattern: "@langfuse\\.example:"
+
+  - it: fails the render when there is neither a bundled nor an external database for langfuse
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: false
+      apiServer.config.DB_HOST: ""
+      apiServer.config.LANGFUSE_DB_HOST: ""
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled) or name an external one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."

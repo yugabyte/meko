@@ -24,9 +24,10 @@ pipeline {
     }
 
     // A parameterless main build is MODE=auto -> release, and the gate publishes
-    // nothing when meko/ has not changed since the last tag. 07:00 keeps clear of
-    // amp's 05:00 build, which draws from the same builder pool.
-    triggers { cron('TZ=Etc/UTC\n0 7 * * *') }
+    // nothing when meko/ has not changed since the last tag. 14:00 Pacific is an
+    // hour before the portal's daily regression, and clear of amp's 18:00 build,
+    // which draws from the same builder pool.
+    triggers { cron('TZ=America/Los_Angeles\n0 14 * * *') }
 
     parameters {
         choice(name: 'MODE', choices: ['auto', 'release', 'custom'],

@@ -1,0 +1,281 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/yugabyte/meko/meko/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/meko/meko/test/functional/framework/core"
+	"github.com/yugabyte/meko/meko/test/functional/framework/env/registry"
+)
+
+// cloudVMForReap builds the cloud VM client `env reap` drives. A package var so
+// unit tests substitute a fake that records ReapByTag/ReapStale without touching
+// a real cloud.
+var cloudVMForReap = func(name string, cfg cloud.ConfigGetter, resolve cloud.SecretResolver) (cloud.VM, error) {
+	return cloud.New(name, cfg, resolve)
+}
+
+func newEnvCmd() *cobra.Command {
+	var regPath string
+	cmd := &cobra.Command{
+		Use:   "env",
+		Short: "Standing environment registry (file store until the portal)",
+	}
+	cmd.PersistentFlags().StringVar(&regPath, "registry", "", "registry file path (default ~/.mekoqa/envs.json)")
+	cmd.AddCommand(newEnvLsCmd(&regPath), newEnvRmCmd(&regPath), newEnvReapCmd())
+	return cmd
+}
+
+// newEnvReapCmd builds `mekoqa env reap`: the recovery tool for cloud
+// infrastructure a killed or lost run leaked. It drives the cloud driver's own
+// ownership-tag / age-based safety nets, ReapByTag terminates a specific run's
+// instances (`--tag`), ReapStale terminates aged autoclean instances whose run
+// tag is unknown (`--stale`). It is the CLI that was missing for these
+// long-existing but un-wired reap functions. (k8s-namespace recovery for a
+// recorded standing/run env goes through `mekoqa env rm <id>`, which executes the
+// recorded reap.Plan.)
+func newEnvReapCmd() *cobra.Command {
+	var (
+		configFiles []string
+		jsonConfigs []string
+		overrides   []string
+		cloudName   string
+		stale       time.Duration
+		tag         string
+		planFile    string
+		noDefaults  bool
+	)
+	cmd := &cobra.Command{
+		Use:   "reap",
+		Short: "Reap leaked cloud infrastructure from killed or lost runs",
+		Long: `Reap cloud infrastructure that a killed or lost run left behind, using the
+cloud driver's ownership-tag and age-based safety nets:
+
+  --tag <runTag>   terminate every instance of one run's ownership tag
+                   (mekoqa-run=<runTag>), the recovery for a specific killed run.
+  --stale <dur>    terminate managed autoclean instances older than <dur> whose
+                   run tag is unknown (an operator lost track of a run).
+
+  --plan <file>    reclaim exactly what a killed run recorded (its namespaces
+                   and/or cloud tag), the file "mekoqa run --reap-plan" leaves
+                   behind when it never reached its own teardown.
+
+At least one of --tag / --stale / --plan is required. The cloud is --cloud
+(default: aws).`,
+		Args: cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			staleSet := c.Flags().Changed("stale")
+			if tag == "" && !staleSet && planFile == "" {
+				return &exitError{code: 2, err: fmt.Errorf("env reap needs --plan <file>, --tag <runTag> and/or --stale <dur>")}
+			}
+			if planFile != "" {
+				return reapPlanFile(c, planFile, configFiles, jsonConfigs, overrides, noDefaults)
+			}
+			loadConfig := core.LoadConfig
+			if noDefaults {
+				loadConfig = core.LoadConfigNoDefaults
+			}
+			cfg, err := loadConfig(configFiles, jsonConfigs, overrides)
+			if err != nil {
+				return &exitError{code: 2, err: err}
+			}
+			secrets, err := core.NewSecrets(cfg)
+			if err != nil {
+				return &exitError{code: 2, err: err}
+			}
+			cl := cloudName
+			if cl == "" {
+				cl = "aws"
+			}
+			vm, err := cloudVMForReap(cl, cfg, secrets.Value)
+			if err != nil {
+				return &exitError{code: 2, err: err}
+			}
+
+			var (
+				done []string
+				errs []string
+			)
+			if tag != "" {
+				if rerr := vm.ReapByTag(c.Context(), tag); rerr != nil {
+					errs = append(errs, fmt.Sprintf("reap by tag %s: %v", tag, rerr))
+				} else {
+					done = append(done, "tag="+tag)
+				}
+			}
+			if staleSet {
+				if rerr := vm.ReapStale(c.Context(), stale); rerr != nil {
+					errs = append(errs, fmt.Sprintf("reap stale >%s: %v", stale, rerr))
+				} else {
+					done = append(done, "stale>"+stale.String())
+				}
+			}
+			if len(errs) > 0 {
+				return &exitError{code: 1, err: fmt.Errorf("env reap incomplete (%s): %s", cl, strings.Join(errs, "; "))}
+			}
+			if jsonOutput {
+				return printEnvelope(c.OutOrStdout(), "mekoqa.env.reap", "env reap", map[string]any{"cloud": cl, "reaped": done})
+			}
+			fmt.Fprintf(c.OutOrStdout(), "reaped on %s: %s\n", cl, strings.Join(done, ", "))
+			return nil
+		},
+	}
+	cmd.Flags().StringArrayVarP(&configFiles, "config", "c", nil, "YAML/HOCON config file, deep-merged in order (repeatable)")
+	cmd.Flags().StringArrayVar(&jsonConfigs, "jc", nil, "JSON config file, merged after -c (repeatable)")
+	cmd.Flags().StringArrayVarP(&overrides, "option", "o", nil, "key=value override with typed prefixes (repeatable)")
+	cmd.Flags().StringVar(&cloudName, "cloud", "", "cloud to reap: aws|gcp (default: aws)")
+	cmd.Flags().DurationVar(&stale, "stale", 0, "reap managed autoclean instances older than this (age-based net)")
+	cmd.Flags().StringVar(&tag, "tag", "", "reap every instance of this run's ownership tag (mekoqa-run=<tag>)")
+	cmd.Flags().StringVar(&planFile, "plan", "", "reclaim what this recorded reap plan names (written by mekoqa run --reap-plan)")
+	cmd.Flags().BoolVar(&noDefaults, "no-default-config", false, "skip the embedded configs/default.yaml base layer (debugging only)")
+	return cmd
+}
+
+func openRegistry(path string) (*registry.Registry, error) {
+	if path == "" {
+		p, err := registry.DefaultPath()
+		if err != nil {
+			return nil, err
+		}
+		path = p
+	}
+	return registry.New(path), nil
+}
+
+func newEnvLsCmd(regPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "ls",
+		Short: "List standing environments",
+		RunE: func(c *cobra.Command, _ []string) error {
+			reg, err := openRegistry(*regPath)
+			if err != nil {
+				return &exitError{code: 1, err: err}
+			}
+			entries, err := reg.List()
+			if err != nil {
+				return &exitError{code: 1, err: err}
+			}
+			if jsonOutput {
+				rows := make([]map[string]any, 0, len(entries))
+				for _, e := range entries {
+					rows = append(rows, envRow(e))
+				}
+				return printEnvelope(c.OutOrStdout(), "mekoqa.env.list", "env ls", map[string]any{"count": len(entries), "envs": rows})
+			}
+			out := c.OutOrStdout()
+			for _, e := range entries {
+				fmt.Fprintf(out, "%-10s name=%-20s shape=%-14s provider=%-10s created=%s ttl=%s\n",
+					e.ID, e.Name, e.Shape, e.Provider, e.CreatedAt.Format(time.RFC3339), e.TTL)
+			}
+			fmt.Fprintf(out, "%d environment(s)\n", len(entries))
+			return nil
+		},
+	}
+}
+
+func newEnvRmCmd(regPath *string) *cobra.Command {
+	var (
+		configFiles []string
+		jsonConfigs []string
+		overrides   []string
+		envProvider string
+		skipTD      bool
+		force       bool
+		noDefaults  bool
+	)
+	cmd := &cobra.Command{
+		Use:   "rm <id>",
+		Short: "Tear a standing environment down and remove it from the registry",
+		Long: `Reconstruct the standing environment's REAL teardown from its registry
+record and run it (cloud/universe/YBA/VM reap), then remove the record. Use
+--skip-teardown to only drop the record (leaving any infrastructure running),
+or --force to remove the record even when teardown errors.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reg, err := openRegistry(*regPath)
+			if err != nil {
+				return &exitError{code: 1, err: err}
+			}
+			entry, ok, err := reg.Get(args[0])
+			if err != nil {
+				return &exitError{code: 1, err: err}
+			}
+			if !ok {
+				return &exitError{code: 3, err: fmt.Errorf("env %s not found", args[0])}
+			}
+
+			var tdErr error
+			if !skipTD {
+				loadConfig := core.LoadConfig
+				if noDefaults {
+					loadConfig = core.LoadConfigNoDefaults
+				}
+				cfg, cerr := loadConfig(configFiles, jsonConfigs, overrides)
+				if cerr != nil {
+					return &exitError{code: 2, err: cerr}
+				}
+				secrets, serr := core.NewSecrets(cfg)
+				if serr != nil {
+					return &exitError{code: 2, err: serr}
+				}
+				masker := core.NewMaskerFromRun(secrets, cfg)
+				detected := core.DetectedVersions{
+					Product: cfg.GetString("versions.product", ""),
+					YB:      cfg.GetString("versions.yb", ""),
+				}
+				tdErr = reapStandingEnv(c.Context(), entry, cfg, secrets, masker, envProvider, detected, force)
+				if tdErr != nil && !force {
+					return &exitError{code: 1, err: fmt.Errorf("teardown of %s failed (record kept; retry, or --force to remove anyway, or --skip-teardown): %w", args[0], tdErr)}
+				}
+			}
+
+			removed, err := reg.Remove(args[0])
+			if err != nil {
+				return &exitError{code: 1, err: err}
+			}
+			if !removed {
+				return &exitError{code: 3, err: fmt.Errorf("env %s not found", args[0])}
+			}
+			if jsonOutput {
+				data := map[string]any{"id": args[0], "removed": true, "teardown_skipped": skipTD}
+				if tdErr != nil {
+					data["teardown_error"] = tdErr.Error()
+				}
+				return printEnvelope(c.OutOrStdout(), "mekoqa.env.rm", "env rm", data)
+			}
+			switch {
+			case skipTD:
+				fmt.Fprintf(c.OutOrStdout(), "removed %s (teardown skipped)\n", args[0])
+			case tdErr != nil:
+				fmt.Fprintf(c.OutOrStdout(), "removed %s (teardown errored, forced): %v\n", args[0], tdErr)
+			default:
+				fmt.Fprintf(c.OutOrStdout(), "removed %s (torn down)\n", args[0])
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringArrayVarP(&configFiles, "config", "c", nil, "YAML/HOCON config file, deep-merged in order (repeatable)")
+	cmd.Flags().StringArrayVar(&jsonConfigs, "jc", nil, "JSON config file, merged after -c (repeatable)")
+	cmd.Flags().StringArrayVarP(&overrides, "option", "o", nil, "key=value override with typed prefixes (repeatable)")
+	cmd.Flags().StringVar(&envProvider, "env-provider", "", "override the provider used to reconstruct teardown (default: the entry's own)")
+	cmd.Flags().BoolVar(&skipTD, "skip-teardown", false, "only drop the registry record; leave infrastructure running")
+	cmd.Flags().BoolVar(&force, "force", false, "remove the record even if teardown errors")
+	cmd.Flags().BoolVar(&noDefaults, "no-default-config", false, "skip the embedded configs/default.yaml base layer (debugging only)")
+	return cmd
+}
+
+func envRow(e registry.Entry) map[string]any {
+	return map[string]any{
+		"id":         e.ID,
+		"name":       e.Name,
+		"shape":      e.Shape,
+		"provider":   e.Provider,
+		"created_at": e.CreatedAt.Format(time.RFC3339),
+		"ttl":        e.TTL.String(),
+		"data":       e.Data,
+	}
+}

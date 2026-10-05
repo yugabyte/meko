@@ -1,0 +1,49 @@
+# mekoMcpServer.extraEnv adds container env entries and renders nothing when
+# empty. The test stack uses it to point the mcp-server's OpenAI and AWS SDKs at a
+# mock.
+#
+#   helm unittest charts/meko
+suite: mcp-server extra env
+templates:
+  - templates/meko-mcp-server/deployment.yaml
+  - templates/meko-mcp-server/configmap.yaml
+tests:
+  - it: adds no env to the mcp-server when extraEnv is empty
+    template: templates/meko-mcp-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      mekoMcpServer.image.tag: t
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAI_BASE_URL
+            value: http://llm.example/v1
+
+  - it: adds the mcp-server's extraEnv after its own env
+    template: templates/meko-mcp-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      mekoMcpServer.image.tag: t
+      mekoMcpServer.extraEnv:
+        - name: OPENAI_BASE_URL
+          value: http://llm.example/v1
+        - name: AWS_ACCESS_KEY_ID
+          value: dummy
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENAI_BASE_URL
+            value: http://llm.example/v1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_ACCESS_KEY_ID
+            value: dummy

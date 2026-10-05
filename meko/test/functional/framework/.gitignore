@@ -1,0 +1,11 @@
+# never commit local secrets
+.env
+
+# build artifacts (go build ./cmd/mekoqa drops the binary in-tree)
+/mekoqa
+/cmd/mekoqa/mekoqa
+*.test
+
+# local run output (--out-dir / reports)
+/mekoqa-out/
+/out/

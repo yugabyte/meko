@@ -216,6 +216,13 @@ apiServer:
     type: LoadBalancer
     port: 80
     annotations: {}
+  # Pod-level additions for the api-server Deployment, none set by default.
+  # extraEnv and extraVolumeMounts apply to the serving container only, not the
+  # migrate init containers. hostAliases and extraVolumes apply to the whole pod.
+  hostAliases: []
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
   # --deploy-env value
   deployEnv: dev
   # BYOC data plane: new users are created 'pro' rather than taking the
@@ -734,6 +741,8 @@ mekoMcpServer:
   metricsPort: 9464
   namespace: meko-mcp
   replicas: 3
+  # Extra container env entries (name/value or valueFrom). Nothing renders when empty.
+  extraEnv: []
   image:
     repository: meko/meko-mcp-server
     tag: ""

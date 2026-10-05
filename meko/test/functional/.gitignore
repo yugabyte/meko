@@ -1,0 +1,2 @@
+# go build ./framework/cmd/mekoqa drops the binary here
+/mekoqa
