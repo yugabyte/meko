@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -56,8 +57,9 @@ func init() {
 		// Both sides of this race are control-plane statements, and what it
 		// prevents is a compute the control plane can no longer see.
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Race an endpoint create against a drop of its branch; assert a branch the API says is gone never leaves a compute pod running (the create-endpoint <-> branch-drop interlock).",
+		Description: "Race an endpoint create against a drop of its branch, and against a delete of its whole cluster; assert a branch or cluster the API says is gone never leaves a compute pod running (the create-endpoint <-> branch-drop interlock), and a refused delete leaves the cluster listed.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
+		Timeout:     60 * time.Minute,
 		Run:         runAmpEndpointDropRace,
 	})
 }
@@ -73,8 +75,119 @@ func (a *ampFeatureRun) endpointDropRace(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return endpointDropRaceSteps(ctx, cl, a.proj, "ep-drop-race-"+a.f.suffix(),
-		a.f.endpointSQL, a.f.branchComputePods, a.f.logf)
+	if err := endpointDropRaceSteps(ctx, cl, a.proj, "ep-drop-race-"+a.f.suffix(),
+		a.f.endpointSQL, a.f.branchComputePods, a.f.logf); err != nil {
+		return err
+	}
+	for i, delay := range endpointDropRaceDelays {
+		name := fmt.Sprintf("cl-drop-race-%s-%d", a.f.suffix(), i)
+		if err := clusterDropRaceRound(ctx, cl, a.proj.poolID, name, a.f.cfg.PgVersion, delay, a.f.register, a.f.branchComputePods, a.f.logf); err != nil {
+			return fmt.Errorf("cluster round %d (endpoint create fired %s after the cluster delete): %w", i, delay, err)
+		}
+	}
+	return nil
+}
+
+// clusterDropRaceRound races an endpoint create against a delete of the whole
+// cluster. Either the delete wins and nothing of the cluster is left running,
+// or it is refused and the cluster is still there with its endpoints.
+func clusterDropRaceRound(ctx context.Context, cl ampCtl, poolID, name string, pgVersion int, delay time.Duration,
+	register func(string, func(context.Context) error), branchCompute branchComputeLister, logf func(string, ...any)) error {
+	target, err := createClusterOnPool(ctx, cl, poolID, name, pgVersion, func(string, func(context.Context) error) {})
+	if err != nil {
+		return err
+	}
+	// Bounded like dropRaceCleanup: the raced read_only create can stay unsettled
+	// (meko#833), and an unbounded delete would spend the shared teardown budget.
+	register("delete "+name+" if the race left it", func(ctx context.Context) error {
+		cctx, cancel := context.WithTimeout(ctx, dropRaceCleanupBudget)
+		defer cancel()
+		if gone, err := clusterAbsent(cctx, cl, poolID, target.projID); err != nil || gone {
+			if err != nil {
+				logf("cleanup: look up cluster %s: %v", target.projID, err)
+			}
+			return nil
+		}
+		if _, err := cl.DeleteClusterAndWait(cctx, poolID, target.projID); err != nil {
+			logf("cleanup: delete cluster %s: %v", target.projID, err)
+		}
+		return nil
+	})
+	seed, err := createEndpoint(ctx, cl, poolID, target.projID, target.branchID)
+	if err != nil {
+		return err
+	}
+	seeded, err := branchCompute(ctx, target.branchID)
+	if err != nil {
+		return err
+	}
+	if len(seeded) == 0 {
+		return fmt.Errorf("no compute pod found for cluster %s's default branch right after its endpoint was created, so the leak check would see nothing", name)
+	}
+
+	dropTask, _, err := cl.DeleteCluster(ctx, poolID, target.projID)
+	if err != nil {
+		if apiErrorStatus(err) == http.StatusConflict {
+			logf("cluster delete refused synchronously: %v", err)
+			return nil
+		}
+		return fmt.Errorf("plan the cluster delete: %w", err)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(delay):
+	}
+	createTask, _, createErr := cl.CreateEndpoint(ctx, poolID, target.projID, target.branchID,
+		controller.CreateEndpointRequest{Role: roleReadOnly})
+	if createErr != nil {
+		logf("endpoint create refused synchronously (the cluster delete won the pre-check): %v", createErr)
+	}
+	dropStatus := joinRaceTask(ctx, cl, dropTask, "delete_cluster", logf)
+	createStatus := joinRaceTaskWithin(ctx, cl, createTask, "create_endpoint", dropRaceCreateJoinBudget, logf)
+	logf("race on cluster %s: delete=%s create=%s", target.projID, dropStatus, createStatus)
+
+	gone, err := clusterAbsent(ctx, cl, poolID, target.projID)
+	if err != nil {
+		return err
+	}
+	if gone {
+		if dropStatus != controller.TaskSucceeded {
+			return fmt.Errorf("delete_cluster task for %s ended %s but the cluster is no longer listed", target.projID, dropStatus)
+		}
+		return assertNoOrphanedCompute(ctx, branchCompute, target.branchID, createStatus)
+	}
+	if dropStatus == controller.TaskSucceeded {
+		return fmt.Errorf("delete_cluster task for %s succeeded but the cluster is still listed", target.projID)
+	}
+	eps, err := cl.ListAllEndpoints(ctx, poolID, target.projID, target.branchID)
+	if err != nil {
+		return fmt.Errorf("list the endpoints of cluster %s, whose delete ended %s: %w", target.projID, dropStatus, err)
+	}
+	for _, e := range eps {
+		if e.ID == seed.ID {
+			return nil
+		}
+	}
+	return fmt.Errorf("delete_cluster task for %s ended %s and left the cluster listed, but without its endpoint %s", target.projID, dropStatus, seed.ID)
+}
+
+func clusterAbsent(ctx context.Context, cl ampCtl, poolID, clusterID string) (bool, error) {
+	const page = 100
+	for offset := 0; ; offset += page {
+		list, err := cl.ListClusters(ctx, poolID, page, offset)
+		if err != nil {
+			return false, fmt.Errorf("list clusters: %w", err)
+		}
+		for _, c := range list.Clusters {
+			if c.ID == clusterID {
+				return false, nil
+			}
+		}
+		if list.Count < page || offset+len(list.Clusters) >= list.Total {
+			return true, nil
+		}
+	}
 }
 
 // branchComputeLister reports the compute the CLUSTER still has for a branch,

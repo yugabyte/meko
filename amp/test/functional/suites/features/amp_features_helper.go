@@ -68,6 +68,7 @@ type ampCtl interface {
 	// at once, so it plans them itself (the 202 + Task) and joins on WaitTask
 	// afterwards. See amp_endpoint_drop_race.go.
 	DeleteBranch(context.Context, string, string, string) (controller.Task, string, error)
+	DeleteCluster(context.Context, string, string) (controller.Task, string, error)
 	CreateEndpoint(context.Context, string, string, string, controller.CreateEndpointRequest) (controller.Task, string, error)
 	WaitTask(context.Context, string) (controller.Task, error)
 }

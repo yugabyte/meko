@@ -3,6 +3,8 @@ package features
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strconv"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -18,7 +20,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Delete a forked branch (endpoint first, then branch) and assert it is gone from the list, the parent's data and endpoint are untouched, and no task is left failed.",
+		Description: "Delete a forked branch (endpoint first, then branch) and assert it is gone from the list, the parent's data and endpoint are untouched, and no task is left failed. Deleting a cluster's default branch is either refused with 409 or leaves the cluster listed and readable.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpBranchDelete,
 	})
@@ -26,7 +28,7 @@ func init() {
 
 func runAmpBranchDelete(t *core.T) error {
 	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
-		return []phase{{"branch_delete", a.branchDelete}}
+		return []phase{{"branch_delete", a.branchDelete}, {"default_branch_delete", a.defaultBranchDelete}}
 	})
 }
 
@@ -36,6 +38,63 @@ func (a *ampFeatureRun) branchDelete(ctx context.Context) error {
 		return err
 	}
 	return branchDeleteSteps(ctx, cl, a.proj, "branch-del-"+a.f.suffix(), a.f.endpointSQL)
+}
+
+// The registry lists a cluster through its live default branch, so a default
+// branch the API lets go can take the cluster out of GET /clusters with it.
+func (a *ampFeatureRun) defaultBranchDelete(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	pool := a.proj.poolID
+	target, err := createClusterOnPool(ctx, cl, pool, "default-del-"+a.f.suffix(), a.f.cfg.PgVersion, a.f.register)
+	if err != nil {
+		return err
+	}
+	task, loc, err := cl.DeleteBranch(ctx, pool, target.projID, target.branchID)
+	if apiErrorStatus(err) == http.StatusConflict {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete the default branch of cluster %s: %w", target.projID, err)
+	}
+	// Runs before createClusterOnPool's delete (LIFO). A cluster whose default
+	// branch is gone is invisible to the API (meko#1722), so its delete would 404
+	// and leave it on the shared control plane: bring the branch back first.
+	a.f.register("make cluster "+target.projID+" visible again for its delete", func(ctx context.Context) error {
+		if _, err := cl.GetCluster(ctx, pool, target.projID); apiErrorStatus(err) != http.StatusNotFound {
+			return nil
+		}
+		storage, err := a.f.ampStorageSQL(ctx)
+		if err != nil {
+			return err
+		}
+		defer storage.Close()
+		_, err = storage.Exec(ctx, "UPDATE amp_registry.branches SET dropped_at = NULL WHERE branch_id = $1::uuid AND gc_completed_at IS NULL", target.branchID)
+		return err
+	})
+	done, err := cl.WaitTask(ctx, controller.TaskRef(task, loc))
+	if err != nil && done.Status == "" {
+		return fmt.Errorf("wait for the default-branch delete: %w", err)
+	}
+	gone, err := clusterAbsent(ctx, cl, pool, target.projID)
+	if err != nil {
+		return err
+	}
+	_, gerr := cl.GetCluster(ctx, pool, target.projID)
+	if !gone && gerr == nil {
+		return nil
+	}
+	live := "unknown (no route to the amp storage database)"
+	if storage, err := a.f.ampStorageSQL(ctx); err == nil {
+		n, qerr := storage.QueryInt(ctx, "SELECT count(*) FROM amp_registry.clusters WHERE id = $1::uuid AND dropped_at IS NULL", target.projID)
+		storage.Close()
+		if qerr == nil {
+			live = strconv.FormatBool(n == 1)
+		}
+	}
+	return fmt.Errorf("deleting cluster %s's default branch ended %s, and the cluster is missing from GET /clusters (%v) or GET /clusters/{id} (%v); its registry row is live: %s", target.projID, done.Status, gone, gerr, live)
 }
 
 func branchDeleteSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector) error {

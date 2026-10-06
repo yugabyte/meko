@@ -42,7 +42,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, SharedLock: core.LockEndpointFleetUpgrade},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Roll two named endpoints through POST /endpoint-upgrades onto the previous release's endpoint image and back, max_parallel 1, and assert each roll's parent task succeeds with one upgraded line and one succeeded upgrade_endpoint subtask per endpoint, both compute pods are replaced and run the target image, each endpoint records the target version and serves its seeded rows intact; a second roll while one is in flight is refused 409, an empty version and an out-of-range max_parallel are refused 400, and a roll naming an unknown endpoint reports it skipped rather than failing. Writers run on the base endpoint through both rolls: every acknowledged id must still be served with its value, the bank total must be unchanged, and the longest stretch with no acknowledged write is recorded as upgrade.write_gap_seconds.",
+		Description: "Roll two named endpoints through POST /endpoint-upgrades onto the previous release's endpoint image and back, max_parallel 1, and assert each roll's parent task succeeds with one upgraded line and one succeeded upgrade_endpoint subtask per endpoint, both compute pods are replaced and run the target image, each endpoint records the target version and serves its seeded rows intact; a second roll while one is in flight is refused 409, an empty version and an out-of-range max_parallel are refused 400, and a roll naming an unknown endpoint reports it skipped rather than failing. Writers run on the base endpoint through both rolls: every acknowledged id must still be served with its value, the bank total must be unchanged, and the longest stretch with no acknowledged write is recorded as upgrade.write_gap_seconds. On a controller that pins endpoints to its own release (every one that serves GET /fleet-version), no roll moves the fleet, and GET /fleet-version must name no roll and report that release as both version and target_version.",
 		Params:      []string{"functional", "functional.upgrade", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     40 * time.Minute,
 		Run:         runAmpEndpointUpgradeRoll,
@@ -58,7 +58,26 @@ func runAmpEndpointUpgradeRoll(t *core.T) error {
 			{"start_write_load", r.startLoad},
 			{"roll_refusals", r.refusals},
 			{"roll_to_previous_release", func(ctx context.Context) error { return r.roll(ctx, r.previous, true) }},
-			{"roll_back_to_current", func(ctx context.Context) error { return r.roll(ctx, r.version, false) }},
+			{"roll_back_to_current", func(ctx context.Context) error {
+				if err := r.roll(ctx, r.version, false); err != nil {
+					return err
+				}
+				// GET /fleet-version shipped after the pin, so an unpinned controller has no route.
+				if !r.pinned || r.version == "" {
+					return nil
+				}
+				fv, err := r.readFleetVersion(ctx)
+				if err != nil {
+					return err
+				}
+				if fv.Roll != nil {
+					return fmt.Errorf("GET /fleet-version still names roll %s (%s) after both rolls settled", fv.Roll.ID, fv.Roll.Status)
+				}
+				if fv.Version != r.version || fv.TargetVersion != r.version {
+					return fmt.Errorf("GET /fleet-version reports version %q target %q on a controller pinned to %q, whose endpoints all run that release", fv.Version, fv.TargetVersion, r.version)
+				}
+				return nil
+			}},
 			{"verify_write_load", r.verifyLoad},
 			{"roll_unknown_endpoint_is_skipped", r.unknownSkipped},
 		}
@@ -330,7 +349,6 @@ func (r *rollRun) roll(ctx context.Context, target string, checkConcurrent bool)
 		return fmt.Errorf("plan the roll of %v to %q: %w", ids, target, err)
 	}
 	taskID := controller.TaskRef(task, loc)
-
 	// One roll at a time: the second is refused while the first is non-terminal.
 	// Only probed once, since a probe that were admitted would be a real roll
 	// nothing joins.
@@ -415,6 +433,20 @@ func (r *rollRun) roll(ctx context.Context, target string, checkConcurrent bool)
 		}
 	}
 	return nil
+}
+
+type fleetVersion struct {
+	Version       string           `json:"version"`
+	TargetVersion string           `json:"target_version"`
+	Roll          *controller.Task `json:"roll"`
+}
+
+func (r *rollRun) readFleetVersion(ctx context.Context) (fleetVersion, error) {
+	var fv fleetVersion
+	if _, err := r.cl.GetRaw(ctx, "/fleet-version", nil, &fv); err != nil {
+		return fv, fmt.Errorf("GET /fleet-version: %w", err)
+	}
+	return fv, nil
 }
 
 // unknownSkipped: an id that no longer exists is a skipped line, not a refusal

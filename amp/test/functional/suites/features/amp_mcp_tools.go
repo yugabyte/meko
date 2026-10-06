@@ -12,10 +12,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -51,9 +53,9 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "The MCP server over its http transport: /healthz answers, initialize negotiates, tools/list carries at least 30 tools including every resource and migration tool and neither user tool, every tool has an object inputSchema, every asynchronous mutation's description points the caller at get_task; then create_branch is called with arguments derived from its schema, returns the controller's Task, get_task polls it to succeeded, and the branch exists through the REST API; a call with a missing required argument is an error, not a branch.",
+		Description: "The MCP server over its http transport: /healthz answers, initialize negotiates, tools/list carries at least 30 tools including every resource and migration tool and neither user tool, every tool has an object inputSchema, every asynchronous mutation's description points the caller at get_task; then create_branch is called with arguments derived from its schema, returns the controller's Task, get_task polls it to succeeded, and the branch exists through the REST API; a call with a missing required argument is an error, not a branch. A cluster is then driven through the tools alone: create_cluster, get_cluster, create_endpoint, list_endpoints, get_endpoint (the endpoint serves SQL), resize_endpoint, update_endpoint_settings (in force on the compute), list_tasks, delete_endpoint and delete_cluster, each asynchronous one polled through get_task. A control plane deployed with mcp.enabled=false gets the amp-mcp image matching its controller deployed by the test.",
 		Params:      []string{"functional", "functional.mcp", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Timeout:     20 * time.Minute,
+		Timeout:     45 * time.Minute,
 		Run:         runAmpMCPTools,
 	})
 }
@@ -182,14 +184,19 @@ func (a *ampFeatureRun) mcpTools(ctx context.Context) error {
 	}
 	svc := a.f.t.Options.GetString("functional.mcp.service", "amp-controller-mcp")
 	port := a.f.t.Options.GetInt("functional.mcp.port", 8000)
+	selector, own := mcpPodSelector, false
 	if _, err := kube.Get(ctx, "service", svc, "{.metadata.name}"); err != nil {
-		a.f.t.Skip(fmt.Sprintf("no Service %s in namespace %s (mcp.enabled=false on this control plane): %v", svc, kube.Namespace(), err))
-		return nil
+		if !k8s.IsNotFound(err) {
+			return core.AsEnvFailure(fmt.Errorf("look up the MCP Service %s: %w", svc, err))
+		}
+		if err := a.deployOwnMCP(ctx, kube, svc, port); err != nil {
+			return err
+		}
+		selector, own = "app="+svc, true
 	}
-	// The Service exists, so the release asked for an MCP server; a pod that never
-	// serves is that release failing, not this test's environment. Waiting first
-	// also keeps the port-forward error from standing in for the real reason.
-	if err := mcpPodReady(ctx, kube, mcpReadyTimeout); err != nil {
+	// Waiting first keeps the port-forward error from standing in for the real
+	// reason a pod never serves.
+	if err := mcpPodReady(ctx, kube, selector, own, mcpReadyTimeout); err != nil {
 		return err
 	}
 	fctx, cancel := context.WithTimeout(ctx, mcpForwardTimeout)
@@ -251,6 +258,11 @@ func (a *ampFeatureRun) mcpTools(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the pool: %w", err)
 	}
+	// A fork without fork_point_lsn takes the parent's current LSN, which only a
+	// running endpoint on the parent can report.
+	if _, err := createEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID); err != nil {
+		return fmt.Errorf("create an endpoint on the parent branch: %w", err)
+	}
 	branch := "mcp-" + a.f.suffix()
 	known := map[string]any{
 		"pool_id": a.proj.poolID, "storage_pool_id": a.proj.poolID,
@@ -303,6 +315,234 @@ func (a *ampFeatureRun) mcpTools(ctx context.Context) error {
 	if err == nil && !res.IsError {
 		return fmt.Errorf("create_branch without its name argument returned a non-error result: %s", mcpText(res))
 	}
+	return a.mcpLifecycle(ctx, m, tools, cl)
+}
+
+// mcpAsync calls an asynchronous tool and polls get_task until it settles.
+func (a *ampFeatureRun) mcpAsync(ctx context.Context, m *mcpClient, tools map[string]mcpTool, name string, known, extra map[string]any) error {
+	args, err := mcpArgs(tools[name], known)
+	if err != nil {
+		return err
+	}
+	maps.Copy(args, extra)
+	var task controller.Task
+	if err := mcpCallJSON(ctx, m, name, args, &task); err != nil {
+		return fmt.Errorf("tools/call %s: %w", name, err)
+	}
+	if task.ID == "" {
+		return fmt.Errorf("%s returned no Task", name)
+	}
+	var done controller.Task
+	err = a.f.t.WaitFor("get_task to settle "+name, 15*time.Minute, 3*time.Second, func() (bool, error) {
+		targs, err := mcpArgs(tools["get_task"], map[string]any{"task_id": task.ID, "id": task.ID})
+		if err != nil {
+			return false, err
+		}
+		if err := mcpCallJSON(ctx, m, "get_task", targs, &done); err != nil {
+			return false, err
+		}
+		return done.Status == controller.TaskSucceeded || done.Status == controller.TaskFailed, nil
+	})
+	if err != nil {
+		return fmt.Errorf("polling get_task(%s) for %s: %w", task.ID, name, err)
+	}
+	if done.Status != controller.TaskSucceeded {
+		msg := ""
+		if done.Error != nil {
+			msg = *done.Error
+		}
+		return fmt.Errorf("the %s task %s failed: %s", name, task.ID, msg)
+	}
+	return nil
+}
+
+// mcpSync calls a synchronous tool with its schema-derived arguments plus extra.
+func mcpSync(ctx context.Context, m *mcpClient, tools map[string]mcpTool, name string, known, extra map[string]any, out any) error {
+	args, err := mcpArgs(tools[name], known)
+	if err != nil {
+		return err
+	}
+	maps.Copy(args, extra)
+	if err := mcpCallJSON(ctx, m, name, args, out); err != nil {
+		return fmt.Errorf("tools/call %s: %w", name, err)
+	}
+	return nil
+}
+
+// mcpLifecycle drives a cluster and its endpoint from create to delete through
+// the tools alone, reading the REST API only to confirm what the tools did.
+func (a *ampFeatureRun) mcpLifecycle(ctx context.Context, m *mcpClient, tools map[string]mcpTool, cl *controller.Client) error {
+	pool := a.proj.poolID
+	name := "mcp-cl-" + a.f.suffix()
+	if err := a.mcpAsync(ctx, m, tools, "create_cluster", map[string]any{"pool_id": pool, "name": name}, nil); err != nil {
+		return err
+	}
+	c, err := findClusterCtl(ctx, cl, pool, name)
+	if err != nil {
+		return fmt.Errorf("the cluster create_cluster reported succeeded: %w", err)
+	}
+	deleted := false
+	a.f.register("delete MCP cluster "+name, func(ctx context.Context) error {
+		if deleted {
+			return nil
+		}
+		_, err := cl.DeleteClusterAndWait(ctx, pool, c.ID)
+		return err
+	})
+	ids := map[string]any{"pool_id": pool, "cluster_id": c.ID, "branch_id": c.DefaultBranch.BranchID}
+	var got controller.Cluster
+	if err := mcpSync(ctx, m, tools, "get_cluster", ids, nil, &got); err != nil {
+		return err
+	}
+	if got.ID != c.ID || got.DefaultBranch.BranchID != c.DefaultBranch.BranchID {
+		return fmt.Errorf("get_cluster returned id %q default branch %q, want %s and %s", got.ID, got.DefaultBranch.BranchID, c.ID, c.DefaultBranch.BranchID)
+	}
+
+	if err := a.mcpAsync(ctx, m, tools, "create_endpoint", ids, map[string]any{"password": controller.DefaultEndpointPassword}); err != nil {
+		return err
+	}
+	var eps controller.EndpointList
+	if err := mcpSync(ctx, m, tools, "list_endpoints", ids, nil, &eps); err != nil {
+		return err
+	}
+	if len(eps.Endpoints) != 1 {
+		return fmt.Errorf("list_endpoints returned %d endpoints after one create_endpoint", len(eps.Endpoints))
+	}
+	ids["endpoint_id"] = eps.Endpoints[0].ID
+	var ep controller.Endpoint
+	if err := mcpSync(ctx, m, tools, "get_endpoint", ids, nil, &ep); err != nil {
+		return err
+	}
+	if ep.ID != eps.Endpoints[0].ID || ep.Address == "" {
+		return fmt.Errorf("get_endpoint returned id %q address %q for endpoint %s", ep.ID, ep.Address, eps.Endpoints[0].ID)
+	}
+	conn, err := a.f.endpointSQL(ctx, ep)
+	if err != nil {
+		return fmt.Errorf("connect the endpoint create_endpoint made: %w", err)
+	}
+	conn.Close()
+
+	if ep.Resources == nil || ep.Resources.Memory == "" {
+		return fmt.Errorf("get_endpoint returned no resources for endpoint %s", ep.ID)
+	}
+	if err := a.mcpAsync(ctx, m, tools, "resize_endpoint", ids, map[string]any{"memory": ep.Resources.Memory}); err != nil {
+		return err
+	}
+
+	var settings controller.SettingsUpdateResult
+	if err := mcpSync(ctx, m, tools, "update_endpoint_settings", ids, map[string]any{"pg_settings": map[string]string{"work_mem": "48MB"}}, &settings); err != nil {
+		return err
+	}
+	if !settings.Applied {
+		return fmt.Errorf("update_endpoint_settings returned applied=false for a reloadable setting on a running endpoint")
+	}
+	conn, err = a.f.endpointSQL(ctx, ep)
+	if err != nil {
+		return err
+	}
+	wm, err := conn.QueryString(ctx, "SHOW work_mem")
+	conn.Close()
+	if err != nil {
+		return err
+	}
+	if wm != "48MB" {
+		return fmt.Errorf("work_mem is %s after update_endpoint_settings set 48MB", wm)
+	}
+
+	var tasks controller.TaskList
+	if err := mcpSync(ctx, m, tools, "list_tasks", map[string]any{}, map[string]any{"cluster_id": c.ID}, &tasks); err != nil {
+		return err
+	}
+	if len(tasks.Tasks) == 0 {
+		return fmt.Errorf("list_tasks for cluster %s returned no tasks after it was created and given an endpoint", c.ID)
+	}
+
+	if err := a.mcpAsync(ctx, m, tools, "delete_endpoint", ids, nil); err != nil {
+		return err
+	}
+	if err := a.mcpAsync(ctx, m, tools, "delete_cluster", ids, nil); err != nil {
+		return err
+	}
+	deleted = true
+	gone, err := clusterAbsent(ctx, cl, pool, c.ID)
+	if err != nil {
+		return err
+	}
+	if !gone {
+		return fmt.Errorf("cluster %s is still listed after delete_cluster succeeded", c.ID)
+	}
+	return nil
+}
+
+// deployOwnMCP stands up the MCP server the chart would have, for a control
+// plane deployed with mcp.enabled=false: the controller's own image tag from
+// the amp-mcp repository next to it, so the tools match the controller's API.
+func (a *ampFeatureRun) deployOwnMCP(ctx context.Context, kube *k8s.Kubectl, svc string, port int) error {
+	st := ampstack.FromConfig(a.f.t.Options)
+	img, err := kube.Get(ctx, "deployment", st.ControllerName, "{.spec.template.spec.containers[0].image}")
+	if err != nil {
+		return core.AsEnvFailure(fmt.Errorf("read the controller image: %w", err))
+	}
+	repo, tag, ok := strings.Cut(strings.TrimSpace(img), ":")
+	slash := strings.LastIndex(repo, "/")
+	if !ok || !strings.HasSuffix(repo, "amp-controller") {
+		return core.AsEnvFailure(fmt.Errorf("controller image %q is not <registry>/amp-controller:<tag>, so there is no matching amp-mcp image", img))
+	}
+	mcpImage := repo[:slash+1] + "amp-mcp:" + tag
+	secrets, _ := kube.Get(ctx, "deployment", st.ControllerName, "{.spec.template.spec.imagePullSecrets[*].name}")
+	pull := ""
+	for _, n := range strings.Fields(secrets) {
+		pull += fmt.Sprintf("\n      - name: %s", n)
+	}
+	if pull != "" {
+		pull = "\n      imagePullSecrets:" + pull
+	}
+	manifest := fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: %[1]s
+  labels: {app: %[1]s}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: %[1]s}
+  template:
+    metadata:
+      labels: {app: %[1]s}
+    spec:%[5]s
+      containers:
+      - name: mcp
+        image: %[2]s
+        ports: [{name: mcp, containerPort: %[3]d}]
+        env:
+        - {name: AMP_CONTROLLER_URL, value: "%[4]s"}
+        - {name: AMP_MCP_TRANSPORT, value: http}
+        - {name: AMP_MCP_HOST, value: "0.0.0.0"}
+        - {name: AMP_MCP_PORT, value: "%[3]d"}
+        readinessProbe:
+          httpGet: {path: /healthz, port: mcp}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: %[1]s
+  labels: {app: %[1]s}
+spec:
+  selector: {app: %[1]s}
+  ports: [{name: mcp, port: %[3]d, targetPort: mcp}]
+`, svc, mcpImage, port, fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", st.ControllerService, kube.Namespace(), st.ControllerPort), pull)
+	if err := kube.Apply(ctx, manifest); err != nil {
+		return core.AsEnvFailure(fmt.Errorf("deploy %s for a control plane with mcp.enabled=false: %w", mcpImage, err))
+	}
+	a.f.registerLast("delete the test's own MCP server", func(ctx context.Context) error {
+		for _, kind := range []string{"service", "deployment"} {
+			if err := kube.Delete(ctx, kind, svc); err != nil && !k8s.IsNotFound(err) {
+				return err
+			}
+		}
+		return nil
+	})
+	a.f.logf("amp_mcp_tools: the control plane has no MCP Service, deployed %s as %s", mcpImage, svc)
 	return nil
 }
 
@@ -310,28 +550,33 @@ func (a *ampFeatureRun) mcpTools(ctx context.Context) error {
 // does not, fails with what the pod actually says. The reason matters: an image
 // tag the registry does not carry is a packaging defect, and it reaches a caller
 // as an unexplained "pod is not running" from the port-forward otherwise.
-func mcpPodReady(ctx context.Context, kube *k8s.Kubectl, timeout time.Duration) error {
+// own marks a deployment the test made itself: its image is the test's guess,
+// so a pod that never serves is the environment, not the release.
+func mcpPodReady(ctx context.Context, kube *k8s.Kubectl, selector string, own bool, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var last string
 	for time.Now().Before(deadline) {
-		ready, err := kube.GetSelector(ctx, "pod", mcpPodSelector,
+		ready, err := kube.GetSelector(ctx, "pod", selector,
 			`{.items[*].status.containerStatuses[*].ready}`)
 		if err == nil && strings.Contains(ready, "true") {
 			return nil
 		}
-		last = mcpPodTrouble(ctx, kube)
+		last = mcpPodTrouble(ctx, kube, selector)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
 	}
+	if own {
+		return core.AsEnvFailure(fmt.Errorf("the MCP server this test deployed (pods %s) did not become ready within %s: %s", selector, timeout, last))
+	}
 	return fmt.Errorf("the release deployed an MCP Service but no MCP pod became ready within %s: %s", timeout, last)
 }
 
 // mcpPodTrouble is the pod's own account of why it is not up.
-func mcpPodTrouble(ctx context.Context, kube *k8s.Kubectl) string {
-	names, err := kube.GetSelector(ctx, "pod", mcpPodSelector, "{.items[*].metadata.name}")
+func mcpPodTrouble(ctx context.Context, kube *k8s.Kubectl, selector string) string {
+	names, err := kube.GetSelector(ctx, "pod", selector, "{.items[*].metadata.name}")
 	if err != nil || strings.TrimSpace(names) == "" {
 		return "no pod matches the MCP deployment's selector"
 	}

@@ -33,7 +33,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint credentials and client address: a writer create without a password, with one under 8 characters, a read_only create carrying one, and a with_writer cluster create without one are refused with 400. A writer answers to exactly the password it was created with (a wrong one and the old well-known cloud_admin are refused), a read_only endpoint answers to its writer's password, a fork's writer answers to the password its parent's catalog holds and not to the one its create carried (the catalog stays the authority so forking cannot mint a new login to the parent's data, meko#1648 and meko#1662), the parent is unchanged, and neither plaintext appears in the endpoint, task or pod/ConfigMap/Secret objects, and the writer stores a SCRAM-SHA-256 verifier with password_encryption scram-sha-256. Each cluster_ip endpoint records its Service DNS as its address, and that address and the password both survive a compute restart and an add_branch_extensions redeploy.",
+		Description: "Endpoint credentials and client address: a writer create without a password, with one under 8 characters, a read_only create carrying one, and a with_writer cluster create without one are refused with 400. A writer answers to exactly the password it was created with (a wrong one and the old well-known cloud_admin are refused), a read_only endpoint answers to its writer's password, a fork's writer answers to the password its parent's catalog holds and not to the one its create carried (the catalog stays the authority so forking cannot mint a new login to the parent's data, meko#1648 and meko#1662), the parent is unchanged, and neither plaintext appears in the endpoint, task or pod/ConfigMap/Secret objects, and the writer stores a SCRAM-SHA-256 verifier with password_encryption scram-sha-256, which appears in no task, task detail or subtask either. GET .../endpoints/{id}/ca tells the truth: with compute TLS off it reports no bundle needed and the compute refuses TLS, with it on the bundle alone passes sslmode=verify-full against verify_name. Each cluster_ip endpoint records its Service DNS as its address, and that address and the password both survive a compute restart and an add_branch_extensions redeploy.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     50 * time.Minute,
 		Run:         runAmpEndpointClientAccess,
@@ -58,6 +58,7 @@ func runAmpEndpointClientAccess(t *core.T) error {
 			{"password_validation", r.validation},
 			{"writer_password", r.writerPassword},
 			{"verifier_is_scram", r.verifierIsSCRAM},
+			{"ca_bundle", r.caBundle},
 			{"fork_inherits_parent_password", r.forkPassword},
 			{"no_plaintext_at_rest", r.noPlaintext},
 			{"address_survives_restart", r.survivesRestart},
@@ -239,9 +240,13 @@ func (r *clientAccessRun) noPlaintext(ctx context.Context) error {
 	}
 	scan := func(where, body string) error {
 		for what, s := range secrets {
-			if strings.Contains(body, s) {
-				return fmt.Errorf("%s carries %s in the clear: the controller must keep only the pg_authid verifier", where, what)
+			if !strings.Contains(body, s) {
+				continue
 			}
+			if s == scramVerifierPrefix {
+				return fmt.Errorf("%s carries %s: the verifier belongs in pg_authid only and must never reach a task payload", where, what)
+			}
+			return fmt.Errorf("%s carries %s in the clear: the controller must keep only the pg_authid verifier", where, what)
 		}
 		return nil
 	}
@@ -263,11 +268,108 @@ func (r *clientAccessRun) noPlaintext(ctx context.Context) error {
 			return err
 		}
 	}
+	secrets["a SCRAM verifier"] = scramVerifierPrefix
 	var tasks json.RawMessage
 	if _, err := r.cl.GetRaw(ctx, "/tasks", map[string][]string{"cluster_id": {r.a.proj.projID}, "limit": {"100"}}, &tasks); err != nil {
 		return fmt.Errorf("list the cluster's tasks: %w", err)
 	}
-	return scan("GET /tasks for the cluster", string(tasks))
+	if err := scan("GET /tasks for the cluster", string(tasks)); err != nil {
+		return err
+	}
+	var list struct {
+		Tasks []struct {
+			ID string `json:"id"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(tasks, &list); err != nil {
+		return fmt.Errorf("decode GET /tasks: %w", err)
+	}
+	for _, t := range list.Tasks {
+		for _, path := range []string{"/tasks/" + t.ID, "/tasks/" + t.ID + "/subtasks"} {
+			var raw json.RawMessage
+			if _, err := r.cl.GetRaw(ctx, path, nil, &raw); err != nil {
+				return fmt.Errorf("GET %s: %w", path, err)
+			}
+			if err := scan("GET "+path, string(raw)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// caBundle checks GET .../endpoints/{id}/ca against what the compute really
+// offers: with compute TLS off it must say no bundle is needed, and with it on
+// the bundle alone must be enough for sslmode=verify-full.
+func (r *clientAccessRun) caBundle(ctx context.Context) error {
+	var ca struct {
+		Required   bool   `json:"required"`
+		CACrt      string `json:"ca_crt"`
+		VerifyName string `json:"verify_name"`
+	}
+	path := "/storage-pools/" + r.a.proj.poolID + "/clusters/" + r.a.proj.projID + "/branches/" + r.writer.BranchID + "/endpoints/" + r.writer.ID + "/ca"
+	if _, err := r.cl.GetRaw(ctx, path, nil, &ca); err != nil {
+		return fmt.Errorf("GET %s: %w", path, err)
+	}
+	a, err := r.auth(r.writer, r.pwMain)
+	if err != nil {
+		return err
+	}
+	pod, err := ampstack.EndpointPodName(ctx, r.kube, r.writer.ID)
+	if err != nil {
+		return err
+	}
+	ex := r.kube.ForPod(pod, endpointPodContainer)
+	psql := func(env string) (string, int, error) {
+		res, err := ex.Run(ctx, fmt.Sprintf("%s PGPASSWORD=%s PGCONNECT_TIMEOUT=10 timeout 30 psql -h %s -p %d -U %s -d %s -tAc 'select ssl from pg_stat_ssl where pid = pg_backend_pid()' 2>&1",
+			env, shellQuoteArg(a.Password), shellQuoteArg(a.Host), a.Port, a.User, a.Database))
+		if err != nil {
+			return "", 0, fmt.Errorf("exec psql in %s: %w", pod, err)
+		}
+		return strings.TrimSpace(res.Stdout), res.ExitCode, nil
+	}
+	if !ca.Required {
+		if ca.CACrt != "" {
+			return fmt.Errorf("GET %s says required=false but returns a %d-byte ca_crt", path, len(ca.CACrt))
+		}
+		out, code, err := psql("PGSSLMODE=require")
+		if err != nil {
+			return err
+		}
+		if code == 0 && out == "t" {
+			r.a.f.logf("endpoint %s answers TLS with a publicly trusted certificate, so no bundle is needed", r.writer.ID)
+			return nil
+		}
+		if !strings.Contains(out, "does not support SSL") {
+			return fmt.Errorf("GET %s says no bundle is needed, but sslmode=require to the writer neither negotiated TLS nor was refused for lack of it: %s", path, out)
+		}
+		return nil
+	}
+	if !strings.Contains(ca.CACrt, "BEGIN CERTIFICATE") {
+		return fmt.Errorf("GET %s says required=true but ca_crt is not a PEM certificate: %q", path, ca.CACrt)
+	}
+	if ca.VerifyName == "" {
+		return fmt.Errorf("GET %s says required=true but names no verify_name to connect to", path)
+	}
+	bundle := "/tmp/ampqa-ca-" + r.a.f.suffix() + ".crt"
+	if res, err := ex.RunStdin(ctx, strings.NewReader(ca.CACrt), "cat > "+bundle); err != nil || res.ExitCode != 0 {
+		return fmt.Errorf("write the CA bundle into pod %s: %v (%+v)", pod, err, res)
+	}
+	a.Host = ca.VerifyName
+	out, code, err := psql("PGSSLMODE=verify-full PGSSLROOTCERT=" + bundle)
+	if err != nil {
+		return err
+	}
+	if code != 0 || out != "t" {
+		return fmt.Errorf("sslmode=verify-full to %s with only the bundle GET %s returned failed (exit %d): %s", ca.VerifyName, path, code, out)
+	}
+	return nil
+}
+
+const scramVerifierPrefix = "SCRAM-SHA-256$"
+
+func shellQuoteArg(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
 func (r *clientAccessRun) verifierIsSCRAM(ctx context.Context) error {

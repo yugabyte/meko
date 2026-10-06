@@ -1,13 +1,14 @@
 // The two settings paths amp_endpoint_settings never takes: a branch with no
 // writer to ask (the check is skipped, the row is written, the next endpoint
-// picks it up), and a writer that cannot be reached (reported in `unreachable`,
-// the row still written). Both are the common case for a user editing settings
-// before or while their compute is down.
+// picks it up), and a writer with no pod at all (reported in `unreachable`, the
+// row still written, applied at the next start). Both are the common case for a
+// user editing settings before or while their compute is down.
 package features
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -28,7 +29,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "gapcoverage"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Branch settings written with no writer on the branch are stored (applied=true, no endpoint outcomes) and in force on the first endpoint created afterwards, an unknown dotted name is accepted unchecked; an endpoint settings write fired while the compute pod is being replaced is either acknowledged normally or reported in `unreachable`, and either way the value is in force once the compute is back.",
+		Description: "Branch settings written with no writer on the branch are stored (applied=true, no endpoint outcomes) and in force on the first endpoint created afterwards, an unknown dotted name is accepted unchecked; an endpoint settings write (one reloadable, one postmaster setting) made while the endpoint's Deployment is scaled to zero is stored and reported in `unreachable`, and both values are in force once the compute is back.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     30 * time.Minute,
 		Run:         runAmpSettingsNoWriter,
@@ -105,16 +106,30 @@ func (a *ampFeatureRun) settingsUnreachableWriter(ctx context.Context) error {
 		return fmt.Errorf("the branch has no writer from the previous phase")
 	}
 	roller := &kubeComputeRoller{kube: kube, timeout: restartReadyTimeout}
-	pod, err := roller.podName(ctx, ep.ID)
-	if err != nil {
-		return fmt.Errorf("resolve the compute pod: %w", err)
+	deploy := endpointDeployName(ep.ID)
+	scale := func(n int) error {
+		return kube.Patch(ctx, "deployment", deploy, "merge", fmt.Sprintf(`{"spec":{"replicas":%d}}`, n))
 	}
-	if err := roller.deletePod(ctx, pod); err != nil {
-		return fmt.Errorf("delete pod %s: %w", pod, err)
+	if err := scale(0); err != nil {
+		return fmt.Errorf("scale endpoint Deployment %s to zero: %w", deploy, err)
 	}
-	reply, err := cl.UpdateEndpointSettings(ctx, proj.poolID, proj.projID, proj.branchID, ep.ID, pgSettings(map[string]string{noWriterSetting: unreachableValue}))
+	scaledDown := true
+	defer func() {
+		if scaledDown {
+			_ = scale(1)
+		}
+	}()
+	err = pollUntil(ctx, 3*time.Minute, 2*time.Second, func() (bool, error) {
+		pods, err := kube.GetSelector(ctx, "pod", roller.instanceSelector(ep.ID), "{.items[*].metadata.name}")
+		return err == nil && strings.TrimSpace(pods) == "", nil
+	})
 	if err != nil {
-		return fmt.Errorf("write endpoint settings while pod %s is being replaced: %w (the write must land whether or not the compute answers)", pod, err)
+		return fmt.Errorf("endpoint %s still has a pod after its Deployment was scaled to zero: %w", ep.ID, err)
+	}
+	want := map[string]string{noWriterSetting: unreachableValue, settingsRestartName: settingsRestartValue}
+	reply, err := cl.UpdateEndpointSettings(ctx, proj.poolID, proj.projID, proj.branchID, ep.ID, pgSettings(want))
+	if err != nil {
+		return fmt.Errorf("write a reloadable and a postmaster setting while the endpoint has no pod: %w (the controller stores the change whether or not the compute answers)", err)
 	}
 	if !reply.Applied {
 		return fmt.Errorf("applied=false while the compute was down: the row must be written regardless")
@@ -122,30 +137,29 @@ func (a *ampFeatureRun) settingsUnreachableWriter(ctx context.Context) error {
 	if len(reply.Endpoints) != 1 {
 		return fmt.Errorf("want one endpoint outcome, got %d", len(reply.Endpoints))
 	}
-	out := reply.Endpoints[0]
-	switch {
-	case out.Unreachable != "":
-		a.f.logf("the write was stored with the compute unreachable: %s", out.Unreachable)
-	case len(out.Reloaded)+len(out.Restarted) > 0:
-		a.f.logf("the replacement pod was already up: reloaded=%v restarted=%v", out.Reloaded, out.Restarted)
-	default:
-		return fmt.Errorf("the outcome names neither unreachable nor a reload/restart: %+v", out)
+	if out := reply.Endpoints[0]; out.Unreachable == "" {
+		return fmt.Errorf("the endpoint has no pod, yet its outcome does not report it unreachable: %+v", out)
 	}
+	if err := scale(1); err != nil {
+		return fmt.Errorf("scale endpoint Deployment %s back to one: %w", deploy, err)
+	}
+	scaledDown = false
 	if err := roller.waitReady(ctx, ep.ID); err != nil {
-		return fmt.Errorf("compute not ready after the pod delete: %w", err)
+		return fmt.Errorf("compute not ready after scaling back up: %w", err)
 	}
 	c, err := reconnect(ctx, a.f.endpointSQL, ep)
 	if err != nil {
-		return fmt.Errorf("reconnect after the pod delete: %w", err)
+		return fmt.Errorf("reconnect after scaling back up: %w", err)
 	}
 	defer c.Close()
-	var got string
-	err = a.f.t.WaitFor(noWriterSetting+" to reach the replacement compute", 3*time.Minute, 5*time.Second, func() (bool, error) {
-		got, err = c.QueryString(ctx, "SHOW "+noWriterSetting)
-		return err == nil && got == unreachableValue, nil
-	})
-	if err != nil {
-		return fmt.Errorf("%s = %q on the replacement compute, want %s: a write stored while the compute was unreachable must be picked up when it next starts", noWriterSetting, got, unreachableValue)
+	for name, value := range want {
+		got, err := c.QueryString(ctx, "SHOW "+name)
+		if err != nil {
+			return fmt.Errorf("SHOW %s: %w", name, err)
+		}
+		if got != value {
+			return fmt.Errorf("%s = %q after the compute came back, want %s: a write stored while the endpoint had no pod must be in force when it next starts", name, got, value)
+		}
 	}
 	return nil
 }

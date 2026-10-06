@@ -31,7 +31,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Prove storage/compute separation: delete an endpoint and recreate it on the same branch, asserting the dataset survives.",
+		Description: "Prove storage/compute separation: delete an endpoint and recreate it on the same branch, asserting the dataset survives. The delete must leave no Kubernetes object of the endpoint's release behind: Deployment, pods, Services, Secrets (helm's and cert-manager's included), ConfigMap, PVC, Certificates and ingress objects.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpEndpointLifecycle,
 	})
@@ -57,13 +57,13 @@ func (a *ampFeatureRun) endpointLifecycle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return endpointLifecycleSteps(ctx, cl, a.proj, a.f.endpointSQL, a.f.endpointConnectRefused)
+	return endpointLifecycleSteps(ctx, cl, a.proj, a.f.endpointSQL, a.f.endpointConnectRefused, a.f.releaseInventory)
 }
 
 // endpointLifecycleSteps drives the lifecycle assertions over the ampCtl,
 // endpoint-connector, and connection-probe seams, so create → write → delete →
 // (gone + refused) → recreate → (data survives) is unit-testable with fakes.
-func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector, refused endpointProbe) error {
+func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector, refused endpointProbe, inventory releaseInventory) error {
 	// Create an endpoint and write a known dataset.
 	e1, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
@@ -90,6 +90,13 @@ func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampCluster, con
 		return fmt.Errorf("after seeding, table %s has %d rows, want %d (the generate_series seed insert did not produce the expected row count)", lifecycleTable, seeded, lifecycleRows)
 	}
 
+	var leftovers func(context.Context) error
+	if inventory != nil {
+		if leftovers, err = inventory(ctx, e1); err != nil {
+			return err
+		}
+	}
+
 	// Delete the endpoint: it must vanish from the list and refuse connections.
 	if _, err := cl.DeleteEndpointAndWait(ctx, proj.poolID, proj.projID, proj.branchID, e1.ID); err != nil {
 		return fmt.Errorf("delete endpoint: %w", err)
@@ -105,6 +112,11 @@ func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampCluster, con
 	}
 	if err := refused(ctx, e1); err == nil {
 		return fmt.Errorf("a connection to deleted endpoint %s succeeded, want it refused (a retired endpoint's compute is gone and must not accept connections)", e1.ID)
+	}
+	if leftovers != nil {
+		if err := leftovers(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Recreate an endpoint on the SAME branch: the data survives (shared storage).

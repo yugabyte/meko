@@ -74,7 +74,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SingleContainer},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Create a table+index, CHECKPOINT, restart the endpoint, and verify the table, the index, an index-backed lookup, and the data all survive the crash boundary.",
+		Description: "Create a table+index and an unlogged table+index, CHECKPOINT, restart the endpoint, and verify the table, the index, an index-backed lookup, and the data all survive the crash boundary. The unlogged table must still exist, come back empty or whole, accept writes and serve its index.",
 		Run:         runDDLSurvivesRestart,
 	})
 
@@ -491,6 +491,7 @@ func runDDLSurvivesRestart(t *core.T) error {
 
 	table := "ddl_" + suffix(t)
 	index := "ddlv_" + suffix(t)
+	unlogged := "ddlu_" + suffix(t)
 	rows := genDistinctRows(t, 200)
 	var wantSum int64
 	for _, r := range rows {
@@ -506,6 +507,15 @@ func runDDLSurvivesRestart(t *core.T) error {
 		}
 		for _, r := range rows {
 			if _, err := client.Exec(t, fmt.Sprintf("INSERT INTO %s (id, v) VALUES ($1, $2)", table), r.id, r.v); err != nil {
+				return err
+			}
+		}
+		for _, stmt := range []string{
+			fmt.Sprintf("CREATE UNLOGGED TABLE %s (id int PRIMARY KEY, v text NOT NULL)", unlogged),
+			fmt.Sprintf("CREATE INDEX %s_v ON %s (v)", unlogged, unlogged),
+			fmt.Sprintf("INSERT INTO %s SELECT g, 'before' FROM generate_series(1, %d) g", unlogged, unloggedRows),
+		} {
+			if _, err := client.Exec(t, stmt); err != nil {
 				return err
 			}
 		}
@@ -570,8 +580,52 @@ func runDDLSurvivesRestart(t *core.T) error {
 		if gotSum != wantSum {
 			return fmt.Errorf("after restarting the endpoint, sum(v) over %s = %d, want %d", table, gotSum, wantSum)
 		}
-		return nil
+		return verifyUnloggedAfterRestart(t, client, unlogged, s)
 	})
+}
+
+const unloggedRows = 100
+
+// An unlogged relation's data lives on the compute's local disk and only its
+// init fork is in storage, so a restart may bring it back empty; it must never
+// be missing, partial or unwritable.
+func verifyUnloggedAfterRestart(t *core.T, client *pg.Client, table string, s *core.StepHandle) error {
+	defer func() { _, _ = client.Exec(t, "DROP TABLE IF EXISTS "+table) }()
+	persistence, err := client.QueryString(t, "SELECT coalesce(max(relpersistence::text), 'missing') FROM pg_class WHERE relname = $1", table)
+	if err != nil {
+		return err
+	}
+	if persistence != "u" {
+		return fmt.Errorf("after restarting the endpoint, unlogged table %s reads relpersistence %q from pg_class, want u", table, persistence)
+	}
+	n, err := client.QueryInt(t, "SELECT count(*) FROM "+table)
+	if err != nil {
+		return fmt.Errorf("after restarting the endpoint, unlogged table %s cannot be read: %w", table, err)
+	}
+	s.Set("unlogged_rows_after_restart", n)
+	if n != 0 && n != unloggedRows {
+		return fmt.Errorf("after restarting the endpoint, unlogged table %s holds %d of its %d rows: an unlogged table comes back empty or whole, never partial", table, n, unloggedRows)
+	}
+	if _, err := client.Exec(t, fmt.Sprintf("INSERT INTO %s VALUES (%d, 'after')", table, unloggedRows+1)); err != nil {
+		return fmt.Errorf("after restarting the endpoint, unlogged table %s does not accept writes: %w", table, err)
+	}
+	sess, err := client.Pin(t)
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+	if _, err := sess.Exec(t, "SET enable_seqscan = off"); err != nil {
+		return err
+	}
+	got, err := sess.QueryInt(t, fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'after'", table))
+	if err != nil {
+		return fmt.Errorf("after restarting the endpoint, an index scan on unlogged table %s failed: %w", table, err)
+	}
+	if got != 1 {
+		return fmt.Errorf("after restarting the endpoint, the index on unlogged table %s finds %d rows for a value written once", table, got)
+	}
+	_, _ = sess.Exec(t, "RESET enable_seqscan")
+	return nil
 }
 
 // runMultiDBWorkload creates K separate databases on one amp endpoint, runs a

@@ -79,9 +79,9 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
-		Description: "DROP TABLE reclamation end to end: on an endpoint whose GC retention is tightened via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive. The pageserver exports its three GC counters, every emitted producer path included, before any GC has run, and its rows-deleted counter moves with the drain.",
+		Description: "DROP TABLE reclamation end to end: on an endpoint whose GC retention is tightened via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive. The pageserver exports its three GC counters, every emitted producer path included, before any GC has run, and its rows-deleted counter moves with the drain. DROP DATABASE on the parent while a fork taken before the drop is live: a cold read of that database on the fork matches its checksum after the parent's GC ran, and once the fork is dropped and reclaimed the parent's page rows for the database drain to zero.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Timeout:     25 * time.Minute,
+		Timeout:     75 * time.Minute,
 		Run:         runAmpGCReclaim,
 	})
 }
@@ -107,7 +107,7 @@ func runAmpGCReclaim(t *core.T) error {
 			}
 			defer storage.Close()
 			return gcReclaimSteps(ctx, cl, a.proj, a.f.endpointSQL, a.f.endpointPageserver, storage, a.f.t.Metric, a.f.logf, a.f.t.Skip)
-		}}}
+		}}, {"drop_database_under_fork", a.gcDropDatabaseUnderFork}}
 	})
 }
 

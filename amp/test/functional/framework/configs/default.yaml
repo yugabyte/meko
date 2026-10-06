@@ -390,6 +390,15 @@ functional:
     base_dir: ""
     rf: 0
     ysql_port: 5433
+  # features/amp_backing_states_*: one YBA operation on a universe of the
+  # test's own, with every AMP lane to YB probed before and after it.
+  # upgrade_from is the release the software_upgrade universe is created on: an
+  # earlier build behind the portal's default YB version. It has to be 2026.1.2
+  # or later, the first release with the thin-client RPC AMP needs.
+  backing_states:
+    upgrade_from: "2026.1.2.0-b120"
+    restart_wait: "60s"
+    move_timeout: "30m"
   # features/amp_tls_ca_rotation: rehearse a CA rotation (runbooks/tls.md) on a
   # TLS stack (apps.ybk8s.tls + env.ampstack.tls). It adds a root to
   # roots_configmap, repoints the configured ClusterIssuer at it, renews every

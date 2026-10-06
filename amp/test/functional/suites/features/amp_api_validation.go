@@ -24,7 +24,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Request validation the spec promises: disk_type=local is refused 400 as unsupported and an unknown disk_type 400, an unsupported pg_version 400, a pool for an unknown owner 404; GET /version carries a version and commit; the user the run created is listed and readable with its admin flag; and a cluster or branch created twice under one name leaves exactly one of it (a 409 up front or a failed second task, never two rows).",
+		Description: "Request validation the spec promises: disk_type=local is refused 400 as unsupported and an unknown disk_type 400, an unsupported pg_version 400, a pool for an unknown owner 404; GET /version carries a version and commit; the user the run created is listed and readable with its admin flag; GET of the default branch returns it with is_default and an unknown branch is 404; and a cluster or branch created twice under one name leaves exactly one of it (a 409 up front or a failed second task, never two rows).",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     35 * time.Minute,
 		Run:         runAmpAPIValidation,
@@ -134,6 +134,19 @@ func (a *ampFeatureRun) versionAndUsers(ctx context.Context) error {
 	}
 	if _, err := cl.GetUser(ctx, unknownUUID); apiErrorStatus(err) != http.StatusNotFound {
 		return fmt.Errorf("GET /users/%s returned %v, want 404", unknownUUID, err)
+	}
+
+	branches := "/storage-pools/" + a.proj.poolID + "/clusters/" + a.proj.projID + "/branches/"
+	var b controller.Branch
+	if _, err := cl.GetRaw(ctx, branches+a.proj.branchID, nil, &b); err != nil {
+		return fmt.Errorf("GET the cluster's default branch: %w", err)
+	}
+	if b.BranchID != a.proj.branchID || b.ClusterID != a.proj.projID || !b.IsDefault {
+		return fmt.Errorf("GET branch %s returned branch_id %q cluster_id %q is_default %v", a.proj.branchID, b.BranchID, b.ClusterID, b.IsDefault)
+	}
+	var none controller.Branch
+	if _, err := cl.GetRaw(ctx, branches+unknownUUID, nil, &none); apiErrorStatus(err) != http.StatusNotFound {
+		return fmt.Errorf("GET branch %s returned %v, want 404", unknownUUID, err)
 	}
 	return nil
 }

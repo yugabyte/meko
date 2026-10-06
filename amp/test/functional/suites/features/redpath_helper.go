@@ -27,6 +27,8 @@ const (
 
 const redpathCreateDeadline = 55 * time.Minute
 
+const orphanListingGrace = 2 * time.Minute
+
 type redpathConfig struct {
 	Inject           bool
 	WedgeDeadline    time.Duration
@@ -127,14 +129,24 @@ func taskErrorNames(task controller.Task, what string, want []string) error {
 
 func (r *redpathRun) noOrphans(ctx context.Context, branchID string, within time.Duration) error {
 	var last map[string]string
+	start := time.Now()
+	// A failed listing is retried once one has succeeded: returning it would
+	// report whatever the previous poll saw as orphans long before the sweeper's
+	// budget is spent. One that never succeeds is not going to.
+	retry := func(err error) (bool, error) {
+		if last == nil && time.Since(start) > orphanListingGrace {
+			return false, core.AsEnvFailure(fmt.Errorf("no listing of branch %s's compute succeeded within %s: %w", branchID, orphanListingGrace, err))
+		}
+		return false, nil
+	}
 	err := pollUntil(ctx, within, 15*time.Second, func() (bool, error) {
 		live, err := r.a.f.branchComputePods(ctx, branchID)
 		if err != nil {
-			return false, fmt.Errorf("list compute for branch %s: %w", branchID, err)
+			return retry(fmt.Errorf("list compute for branch %s: %w", branchID, err))
 		}
 		rows, err := r.endpointRowPods(ctx, branchID)
 		if err != nil {
-			return false, err
+			return retry(err)
 		}
 		for k, v := range rows {
 			live[k] = v
@@ -153,7 +165,7 @@ func (r *redpathRun) noOrphans(ctx context.Context, branchID string, within time
 		pods = append(pods, instance+" ("+pod+")")
 	}
 	return fmt.Errorf("%d compute pod(s) for branch %s are still there %s after the task failed: %s; a create that failed must leave nothing behind, or the pod and the reservation it holds are nobody's to reclaim (meko#486)",
-		len(pods), branchID, within, strings.Join(pods, ", "))
+		len(pods), branchID, time.Since(start).Round(time.Second), strings.Join(pods, ", "))
 }
 
 // A rolled-back release takes the ConfigMap branchComputePods matches on, so the endpoint rows the API still carries are the other half of "nothing left running".
