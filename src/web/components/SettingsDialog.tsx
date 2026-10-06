@@ -97,6 +97,7 @@ function GeneralTab() {
         serverName: s.serverName.trim(),
         idleWorktreesPerRepo: clampIdle(),
         idleWorktreeDays: clampIdleDays(),
+        resolveConflicts: s.resolveConflicts,
       });
       setS(next);
       setRoots(next.reposRoots);
@@ -192,6 +193,21 @@ function GeneralTab() {
             />
           </Field>
         </div>
+      </div>
+      <div className="field">
+        <label className="check">
+          <input
+            id="set-resolve-conflicts"
+            type="checkbox"
+            checked={s.resolveConflicts}
+            onChange={(e) => setS({ ...s, resolveConflicts: e.target.checked })}
+          />
+          <span>Resolve merge conflicts on PRs</span>
+        </label>
+        <span className="hint">
+          When a PR in PR &amp; Review conflicts with its base, AgentK merges the base into the branch, resolves the
+          conflicts and pushes. Off leaves them to you.
+        </span>
       </div>
       <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
         <input

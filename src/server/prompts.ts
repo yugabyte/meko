@@ -100,7 +100,7 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 
 1. If the PR's head has moved past {{sha}}, check the new head first (\`gh pr view {{pr}} --json mergeable\`), and stop if it's MERGEABLE. (UNKNOWN means GitHub is still working it out: wait a minute and ask again.)
 2. Fetch {{base}} from the remote the PR merges into (usually origin) and merge it into this branch: \`git fetch origin {{base}}\`, then \`git merge origin/{{base}}\`. Don't rebase or force-push: the PR's review threads point at its commits.
-3. Resolve each conflict so both sides' intent survives: read what {{base}} changed in those files (\`git log -p HEAD...origin/{{base}} -- <file>\`) before choosing. If a conflict needs a decision only the user can make, abort the merge (\`git merge --abort\`), say which files and why, and stop.
+3. Resolve each conflict so both sides' intent survives: read what each side changed in those files before choosing (\`git log -p HEAD..origin/{{base}} -- <file>\` for {{base}}, \`git log -p origin/{{base}}..HEAD -- <file>\` for this branch). If a conflict needs a decision only the user can make, abort the merge (\`git merge --abort\`), say which files and why, and stop.
 4. Run the repo's checks, commit the merge and push. Update any docs the merge makes stale.
 
 Don't comment \`/agentk review\`. Requesting another round is the user's decision.`,
@@ -176,9 +176,10 @@ export function mekoRecallLine(name: PromptName): string {
       return 'Before reading code, search Meko for earlier designs, decisions and gotchas about this task. If AgentK already listed what Meko knows, search only for what that doesn\'t cover.';
     case 'review':
     case 'review-people':
-    case 'conflicts':
     case 'ci':
       return 'Before changing code, search Meko for gotchas about the code each finding (or failure) is in.';
+    case 'conflicts':
+      return 'Before resolving, search Meko for gotchas about the code in each conflicting file.';
     case 'review-pr':
       return 'Before the summary, search Meko for the design (design-*.md) and the decisions behind this PR. A `meko_conversation_id:` line at the end of the PR description names the author\'s session there.';
     default:

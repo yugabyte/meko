@@ -835,6 +835,8 @@ export interface Settings {
   idleWorktreeDays: number;
   /** `[call_home] enabled`: send anonymous usage stats (the Account tab's checkbox). */
   callHomeEnabled: boolean;
+  /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
+  resolveConflicts: boolean;
   meko: MekoSettings;
 }
 
@@ -1312,7 +1314,8 @@ export type TermServerMessage =
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
-//                                                           '' goes back to the host name; callHomeEnabled is a boolean)
+//                                                           '' goes back to the host name; callHomeEnabled and
+//                                                           resolveConflicts are booleans)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus

@@ -742,7 +742,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(lastEvent(s.id, 'conflicts')).toBe('Merge conflicts with main. Still there after 3 attempts; over to you');
   });
 
-  it('leaves merge conflicts to the user when config.toml turns it off, and drops a queued prompt', async () => {
+  it('leaves merge conflicts to the user when Settings turns it off, and drops a queued prompt', async () => {
     const s = await inReview('Conflicts off');
     slowTurns();
     await env.core.sessions.submit(s.id, 'something else');
@@ -750,7 +750,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, mergeable: 'CONFLICTING' };
     await poll(s.id);
     expect(queued(s.id).conflicts).toMatchObject({ state: 'queued' });
-    env.core.config.pr.resolveConflicts = false;
+    env.core.updateConfig((c) => void (c.pr.resolveConflicts = false));
     await poll(s.id);
     expect(queued(s.id)).toEqual({});
     await idle(s.id, 'turn end');
@@ -759,6 +759,16 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(queued(s.id)).toEqual({});
     expect(transcript(s.id)).not.toContain('has merge conflicts with');
     expect(env.core.sessions.get(s.id).mergeBlockers).toContain('The branch has merge conflicts.');
+  });
+
+  it('never sends a queued conflicts prompt once turned off, even when GitHub is unreachable', async () => {
+    const s = await inReview('Conflicts off, GitHub down');
+    env.core.sessions.update(s.id, { pending_prompts: JSON.stringify({ conflicts: { state: 'queued', vars: { sha: 'abc1234' } } }) });
+    env.core.updateConfig((c) => void (c.pr.resolveConflicts = false));
+    gh.status = null; // prStatus throws
+    await pollAll();
+    expect(queued(s.id)).toEqual({});
+    expect(transcript(s.id)).not.toContain('has merge conflicts with');
   });
 
   it('holds a conflicts prompt while the branch has unpushed commits, and sends it before a CI fix', async () => {
@@ -774,9 +784,11 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     slowTurns();
     await env.core.sessions.submit(s.id, 'something else');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
     gh.status = { ...gh.status!, headRefOid: '', statusCheckRollup: [failing()] };
     await poll(s.id);
     expect(queued(s.id)).toMatchObject({ conflicts: { state: 'queued' }, ci: { state: 'queued' } });
+    expect(notify).toHaveBeenCalledWith(s.id, 'CI failed', 'test (macos-15). AgentK will look at it after resolving the merge conflicts.');
     await waitFor(() => transcript(s.id), (t) => t.includes('has merge conflicts with'), 10000, 'conflicts prompt');
     expect(transcript(s.id)).not.toContain('CI failed on PR');
   });

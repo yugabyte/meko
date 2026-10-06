@@ -108,7 +108,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
       Merge-conflict prompts follow the same rules (between reviews and CI in the queue), act only on
       `mergeable` CONFLICTING (never UNKNOWN), have Claude merge the base rather than rebase or
-      force-push, and are never sent with `[pr] resolve_conflicts = false`.
+      force-push, and are never sent once `[pr] resolve_conflicts` is off (`deliverNext` drops a queued one, even when
+      the poll fails).
 - [ ] Merge waits for AgentK only once AgentK is active on the PR, and never in *People only*.
 - [ ] A Review a PR session only gets ready and sums up on its own: its prompts and workflow line
       never have Claude review, post on GitHub, commit or push unless the user asks, and nothing

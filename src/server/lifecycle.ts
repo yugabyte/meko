@@ -840,15 +840,16 @@ export class Lifecycle {
     const checks = ci.failed.map((c) => `- ${c.name}: ${c.conclusion.toLowerCase()}${c.url ? ` (${c.url})` : ''}`).join('\n');
     this.enqueue(id, 'ci', { sha: head, checks });
     const next = this.queue(id);
-    const afterReview = !!(next.review || next['review-people']);
-    this.sessions.notifyUser(id, 'CI failed', `${names}. ${afterReview ? 'AgentK will fix it after the review.' : 'AgentK is fixing it.'}`);
+    const later = next.review || next['review-people'] ? 'AgentK will fix it after the review.'
+      : next.conflicts ? 'AgentK will look at it after resolving the merge conflicts.' : 'AgentK is fixing it.';
+    this.sessions.notifyUser(id, 'CI failed', `${names}. ${later}`);
   }
 
   /**
    * Queues a prompt to resolve merge conflicts when GitHub says the PR's head conflicts with its
    * base: once per head, never while the branch has unpushed commits, and for at most
-   * MAX_CONFLICT_FIXES heads in a row before it's left to the user. `[pr] resolve_conflicts = false`
-   * in config.toml turns it off (the conflicts stay a merge blocker).
+   * MAX_CONFLICT_FIXES heads in a row before it's left to the user. `[pr] resolve_conflicts` (Settings
+   * → General) turns it off: the conflicts stay a merge blocker, and deliverNext drops a queued prompt.
    */
   private watchConflicts(row: SessionRow, st: github.PrStatus, unpushed: boolean): void {
     const id = row.id;
@@ -897,6 +898,11 @@ export class Lifecycle {
    */
   private async deliverNext(id: string): Promise<void> {
     const q = this.queue(id);
+    // Turned off since it was queued: never sent, even when the poll that would drop it failed.
+    if (q.conflicts?.state === 'queued' && !this.core.config.pr.resolveConflicts) {
+      delete q.conflicts;
+      this.setQueue(id, q);
+    }
     const row = this.sessions.row(id);
     const order = queueOrder(row.stage);
     const name = order.find((n) => q[n]?.state === 'queued');

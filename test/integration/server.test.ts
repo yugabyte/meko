@@ -177,6 +177,25 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain('call_home');
   });
 
+  it('turns resolving merge conflicts off and on from Settings', async () => {
+    const cookie = await setup();
+    const put = (resolveConflicts: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { resolveConflicts } });
+    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().resolveConflicts).toBe(true);
+
+    const off = await put(false);
+    expect(off.statusCode).toBe(200);
+    expect(off.json().resolveConflicts).toBe(false);
+    expect(env.core.config.pr.resolveConflicts).toBe(false);
+    expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[pr\]\nresolve_conflicts = false/);
+
+    const bad = await put('no');
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('resolveConflicts must be true or false.');
+
+    expect((await put(true)).json().resolveConflicts).toBe(true);
+    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain('resolve_conflicts');
+  });
+
   it('refuses cross-origin writes', async () => {
     const cookie = await setup();
     const res = await app.inject({

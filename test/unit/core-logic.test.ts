@@ -647,6 +647,7 @@ describe('Meko recall in prompts', () => {
     expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'review', 'review-people', 'review-pr']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
+    expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
   });
 
   it('names the ToolSearch query that loads the Meko tools under any server name', () => {
