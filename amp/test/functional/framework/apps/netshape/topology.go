@@ -132,6 +132,8 @@ func Signature(tps []Topology) string {
 // nothing.
 const jitterSlack = 500 * time.Microsecond
 
+const clearedAttempts = 3
+
 // Within holds a measured round trip to native + want, the delay being ADDED
 // to a path that already costs something: not much below (a direction went
 // unshaped) and not far above (something else is in the path). Judging against
@@ -317,13 +319,21 @@ func (f *Fleet) VerifyCleared(ctx context.Context, tp Topology) ([]Measurement, 
 			if !ok {
 				return out, fmt.Errorf("no unshaped round trip measured for %s -> %s", m.Label, o.Label)
 			}
-			got, err := m.Helper.Ping(ctx, o.IP, f.Pings)
-			if err != nil {
-				return out, err
+			// A leftover qdisc delays every echo, so it fails every attempt; one
+			// jittery average on a busy node (1.43 ms against 350 µs native) does not.
+			var got time.Duration
+			var werr, err error
+			for attempt := 0; attempt < clearedAttempts; attempt++ {
+				if got, err = m.Helper.Ping(ctx, o.IP, f.Pings); err != nil {
+					return out, err
+				}
+				if werr = Within(got, native, 0, f.Tolerance); werr == nil {
+					break
+				}
 			}
 			out = append(out, Measurement{From: m.Label, To: o.Label, Got: got, Native: native})
-			if err := Within(got, native, 0, f.Tolerance); err != nil {
-				errs = append(errs, fmt.Errorf("%s -> %s still shaped: %w", m.Label, o.Label, err))
+			if werr != nil {
+				errs = append(errs, fmt.Errorf("%s -> %s still shaped after %d measurements: %w", m.Label, o.Label, clearedAttempts, werr))
 			}
 		}
 	}

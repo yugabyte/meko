@@ -195,3 +195,38 @@ func TestBaselineIsMeasuredOnce(t *testing.T) {
 		t.Errorf("the second Baseline returned %v, want the first's %v", again, first)
 	}
 }
+
+func TestVerifyClearedRemeasuresBeforeCallingAPairShaped(t *testing.T) {
+	ping := func(avg string) []execpkg.Result {
+		return []execpkg.Result{{Stdout: "11\n"}, {Stdout: "rtt min/avg/max/mdev = 0.3/" + avg + "/2.0/0.1 ms\n"}}
+	}
+	tp, err := ParseTopology("t: 0-1=12")
+	if err != nil {
+		t.Fatalf("ParseTopology: %v", err)
+	}
+	for _, c := range []struct {
+		name    string
+		pings   []string
+		wantErr bool
+	}{
+		{"one jittery average, then native", []string{"1.43", "0.35"}, false},
+		{"slow on every measurement", []string{"12.4", "12.3", "12.5"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var results []execpkg.Result
+			for _, p := range c.pings {
+				results = append(results, ping(p)...)
+			}
+			s := &scripted{results: results}
+			f := fleetOf(s)
+			f.native = map[[2]string]time.Duration{pairKey("a", "b"): 350 * time.Microsecond}
+			_, err := f.VerifyCleared(context.Background(), tp)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("VerifyCleared err = %v, want error %v", err, c.wantErr)
+			}
+			if n := strings.Count(strings.Join(s.cmds, "\n"), "ping "); n != len(c.pings) {
+				t.Errorf("pinged %d times, want %d", n, len(c.pings))
+			}
+		})
+	}
+}

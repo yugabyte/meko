@@ -2717,6 +2717,10 @@ perf:
     # each, and the cold scan into that many disjoint ctid block ranges; each
     # datapoint is the median, so no write or scan rests on one statement.
     repeats: 5
+    # scan_passes is how many times a gated rung's cold scan runs, rolling the
+    # pod before each extra pass, and the datapoint is the median pass. One
+    # pass is one pod on one node, and a busy neighbour slows all its slices.
+    scan_passes: 3
     # gate_depths are the rungs whose numbers become GATED datapoints; every
     # other depth still reports its numbers as informational. Gating all 21
     # rungs would put 105 series on the portal, most of them saying what their

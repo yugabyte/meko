@@ -71,7 +71,9 @@ const (
 	// them; the depth-N series from the earlier harnesses measured less work.
 	// "4" = each write and the cold scan is the median of perf.branch_depth.repeats
 	// statements over disjoint slices, not one statement over the whole band.
-	branchDepthHarnessRev = "4"
+	// "5" = a gated rung's cold scan is the median of perf.branch_depth.scan_passes
+	// passes on rolled pods, and its writes run on the last rolled pod.
+	branchDepthHarnessRev = "5"
 
 	DefaultBranchDepthMaxDepth     = 20
 	DefaultBranchDepthRows         = 2000000
@@ -85,12 +87,18 @@ const (
 	DefaultBranchDepthEndpointMem  = "4Gi"
 	DefaultBranchDepthReadyTimeout = 10 * time.Minute
 	DefaultBranchDepthRepeats      = 5
+	DefaultBranchDepthScanPasses   = 3
 
 	// Absolute floors on the gated datapoints: a history delta smaller than these
 	// is run-to-run noise at this dataset size, whatever percent it comes to.
 	branchDepthColdFloorMS  = 1.0
 	branchDepthScanFloorMS  = 200.0
 	branchDepthWriteFloorMS = 100.0
+	// Cold reads pay one backing round trip per ancestor, so the whole ladder
+	// moves with the shared cluster's load: 0.261002.2 and 0.261003.0 carry the
+	// same amp code and measured 73.5 ms at depth 20 against a 54.9 ms median.
+	// A percent of the baseline, see coldFloorMS.
+	branchDepthColdFloorPct = 40.0
 )
 
 // Every depth is measured and charted; these are the rungs whose numbers become
@@ -112,6 +120,7 @@ type branchDepthParams struct {
 	EndpointMem  string
 	ReadyTimeout time.Duration
 	Repeats      int
+	ScanPasses   int
 }
 
 func branchDepthParamsFromConfig(c *core.Config) (branchDepthParams, error) {
@@ -128,6 +137,7 @@ func branchDepthParamsFromConfig(c *core.Config) (branchDepthParams, error) {
 		EndpointMem:  c.GetString("perf.branch_depth.endpoint_memory", DefaultBranchDepthEndpointMem),
 		ReadyTimeout: c.GetDuration("perf.branch_depth.ready_timeout", DefaultBranchDepthReadyTimeout),
 		Repeats:      max(c.GetInt("perf.branch_depth.repeats", DefaultBranchDepthRepeats), 1),
+		ScanPasses:   max(c.GetInt("perf.branch_depth.scan_passes", DefaultBranchDepthScanPasses), 1),
 	}
 	if p.MaxDepth < 1 {
 		return p, fmt.Errorf("perf.branch_depth.max_depth is %d; the test compares at least one fork with the root", p.MaxDepth)
@@ -240,11 +250,13 @@ type branchLevel struct {
 	cold     []float64
 	warm     []float64
 	// The *MS fields are the medians of the matching per-slice timings.
-	scanMS     float64
-	insertMS   float64
-	updateMS   float64
-	deleteMS   float64
-	scanRuns   []float64
+	scanMS   float64
+	insertMS float64
+	updateMS float64
+	deleteMS float64
+	scanRuns []float64
+	// One per-slice median per cold scan pass, set on gated rungs only.
+	scanPasses []float64
 	insertRuns []float64
 	updateRuns []float64
 	deleteRuns []float64
@@ -346,6 +358,11 @@ func (r *branchDepthRun) level(depth int) error {
 	if err := r.readLevel(l); err != nil {
 		return err
 	}
+	if slices.Contains(r.params.GateDepths, depth) {
+		if err := r.rescanCold(l); err != nil {
+			return err
+		}
+	}
 	if err := r.mutate(l); err != nil {
 		if lostTheEndpoint(err) {
 			return fmt.Errorf("the endpoint went away during the writes at depth %d, which leaves the band half-written and the rungs above it unmeasurable: %w", l.depth, err)
@@ -383,35 +400,67 @@ func (r *branchDepthRun) flushAndRestartRoot() error {
 	if err := r.flush(root, "flush_root"); err != nil {
 		return err
 	}
-	return r.t.Step("restart_root_endpoint", func(s *core.StepHandle) error {
-		root.ten.Conn.Close()
-		root.ten.Conn = nil
+	return r.restartEndpoint(root, "restart_root_endpoint")
+}
+
+// A pod roll drops the compute's caches and nothing on the branch.
+func (r *branchDepthRun) restartEndpoint(l *branchLevel, step string) error {
+	return r.t.Step(step, func(s *core.StepHandle) error {
+		l.ten.Conn.Close()
+		l.ten.Conn = nil
 		start := time.Now()
-		pod, err := ampstack.EndpointPodName(r.t.Context, r.kube, root.ten.Endpoint.ID)
+		pod, err := ampstack.EndpointPodName(r.t.Context, r.kube, l.ten.Endpoint.ID)
 		if err != nil {
 			return err
 		}
 		if err := r.kube.Delete(r.t.Context, "pod", pod); err != nil {
-			return fmt.Errorf("delete endpoint %s compute pod %s: %w", root.ten.Endpoint.ID, pod, err)
+			return fmt.Errorf("delete endpoint %s compute pod %s: %w", l.ten.Endpoint.ID, pod, err)
 		}
-		if err := ampstack.WaitEndpointWorkloadReady(r.t.Context, r.kube, root.ten.Endpoint.ID, r.params.ReadyTimeout); err != nil {
-			return fmt.Errorf("%w%s", err, captureEndpointDiag(r.t, r.kube, root.ten, "after-restart", r.logf))
+		if err := ampstack.WaitEndpointWorkloadReady(r.t.Context, r.kube, l.ten.Endpoint.ID, r.params.ReadyTimeout); err != nil {
+			return fmt.Errorf("%w%s", err, captureEndpointDiag(r.t, r.kube, l.ten, "after-restart", r.logf))
 		}
-		conn, err := r.env.ConnectEndpoint(r.t.Context, root.ten.Endpoint)
+		conn, err := r.env.ConnectEndpoint(r.t.Context, l.ten.Endpoint)
 		if err != nil {
-			return fmt.Errorf("%w%s", err, captureEndpointDiag(r.t, r.kube, root.ten, "after-restart", r.logf))
+			return fmt.Errorf("%w%s", err, captureEndpointDiag(r.t, r.kube, l.ten, "after-restart", r.logf))
 		}
 		if _, err := conn.QueryInt(r.t.Context, "SELECT 1"); err != nil {
 			conn.Close()
 			return err
 		}
-		root.ten.Conn = conn
-		// endpointMS stays the CREATE captured in standUp, which is what every
-		// fork's endpoint_ms measures. A pod roll is a different operation, so
-		// it is a step timing only and never joins that series.
+		l.ten.Conn = conn
+		// endpointMS stays the endpoint CREATE. A pod roll is a different
+		// operation, so it is a step timing only and never joins that series.
 		s.Set("roll_ms", fmt.Sprintf("%.0f", msSince(start)))
 		return nil
 	})
+}
+
+// One cold scan is one pod on one node at one moment, so a busy neighbour moves
+// all of its slices together and their spread cannot tell: 0.261003.0 scanned
+// depth 1 in 698, 717 and 721 ms and then 1256 ms. A gated rung is scanned
+// again on a rolled pod and gates the median pass.
+func (r *branchDepthRun) rescanCold(l *branchLevel) error {
+	l.scanPasses = []float64{l.scanMS}
+	for pass := 2; pass <= r.params.ScanPasses; pass++ {
+		suffix := fmt.Sprintf("_pass%d", pass)
+		if err := r.restartEndpoint(l, fmt.Sprintf("restart_endpoint_depth%d%s", l.depth, suffix)); err != nil {
+			return err
+		}
+		ms, _, err := r.scanCold(l, suffix)
+		if lostTheEndpoint(err) {
+			r.logf("branch_depth: depth %d lost its endpoint mid-scan (%v); scanning again on the replacement", l.depth, err)
+			if err := r.reconnect(l); err != nil {
+				return err
+			}
+			ms, _, err = r.scanCold(l, suffix+"_retry")
+		}
+		if err != nil {
+			return err
+		}
+		l.scanPasses = append(l.scanPasses, ms)
+	}
+	l.scanMS = median(l.scanPasses)
+	return nil
 }
 
 func (r *branchDepthRun) fork(depth int) error {
@@ -540,7 +589,12 @@ func (r *branchDepthRun) measureLevel(l *branchLevel, attempt string) error {
 	if l.warm, err = r.timedReads(l, "warm", attempt, ids); err != nil {
 		return err
 	}
-	return r.t.Step(fmt.Sprintf("scan_cold_depth%d%s", l.depth, attempt), func(s *core.StepHandle) error {
+	l.scanMS, l.scanRuns, err = r.scanCold(l, attempt)
+	return err
+}
+
+func (r *branchDepthRun) scanCold(l *branchLevel, attempt string) (ms float64, runs []float64, err error) {
+	err = r.t.Step(fmt.Sprintf("scan_cold_depth%d%s", l.depth, attempt), func(s *core.StepHandle) error {
 		blocks, err := l.ten.Conn.QueryInt(r.t.Context,
 			fmt.Sprintf("SELECT pg_relation_size('%s') / current_setting('block_size')::bigint", branchDepthTable))
 		if err != nil {
@@ -563,7 +617,7 @@ func (r *branchDepthRun) measureLevel(l *branchLevel, attempt string) error {
 		if len(slices) > 1 && !strings.Contains(strings.Join(plan, " "), "Tid Range Scan") {
 			return fmt.Errorf("the planner does not scan a ctid slice by TID range (%q), so the slices are not disjoint reads", plan)
 		}
-		l.scanRuns = nil
+		runs = nil
 		var total int64
 		for _, q := range slices {
 			start := time.Now()
@@ -571,17 +625,18 @@ func (r *branchDepthRun) measureLevel(l *branchLevel, attempt string) error {
 			if err != nil {
 				return err
 			}
-			l.scanRuns = append(l.scanRuns, msSince(start))
+			runs = append(runs, msSince(start))
 			total += n
 		}
-		l.scanMS = median(l.scanRuns)
+		ms = median(runs)
 		if total != int64(r.params.Rows) {
-			return fmt.Errorf("count(*) over the %d block slices = %d on depth %d, want %d", len(l.scanRuns), total, l.depth, r.params.Rows)
+			return fmt.Errorf("count(*) over the %d block slices = %d on depth %d, want %d", len(runs), total, l.depth, r.params.Rows)
 		}
-		s.Set("slices", len(l.scanRuns))
-		s.Set("ms", fmt.Sprintf("%.0f", l.scanMS))
+		s.Set("slices", len(runs))
+		s.Set("ms", fmt.Sprintf("%.0f", ms))
 		return nil
 	})
+	return ms, runs, err
 }
 
 // branchScanSlices cuts the table into n disjoint ctid block ranges, so each
@@ -848,7 +903,9 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 			bucket = &gated
 		}
 		if len(l.cold) > 0 {
-			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "read_cold_p50_ms" + suffix, Value: median(l.cold), Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthColdFloorMS})
+			cold := median(l.cold)
+			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "read_cold_p50_ms" + suffix, Value: cold, Unit: "ms", Direction: core.LowerIsBetter,
+				MinDelta: coldFloorMS(cold)})
 			// p99 of the sample set is ~3 reads, so one slow read triples it.
 			info = append(info, core.Datapoint{Name: branchDepthPrefix + "read_cold_p99_ms" + suffix, Value: percentile(l.cold, 99), Unit: "ms", Direction: core.LowerIsBetter})
 		}
@@ -857,12 +914,17 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 			info = append(info, core.Datapoint{Name: branchDepthPrefix + "read_warm_p50_ms" + suffix, Value: median(l.warm), Unit: "ms", Direction: core.LowerIsBetter})
 		}
 		if l.scanMS > 0 {
+			runs := l.scanRuns
+			if len(l.scanPasses) > 1 {
+				runs = l.scanPasses
+			}
+			// Spread across rolled pods is the history band's job, as in splitDatapoints.
 			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "scan_cold_ms" + suffix, Value: l.scanMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthScanFloorMS,
-				N: len(l.scanRuns), Samples: l.scanRuns})
+				N: len(runs), Samples: runs, SpreadPct: spreadPct(aggregate(l.scanRuns))})
 		}
 		if l.updateMS > 0 {
 			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "update_ms" + suffix, Value: l.updateMS, Unit: "ms", Direction: core.LowerIsBetter, MinDelta: branchDepthWriteFloorMS,
-				N: len(l.updateRuns), Samples: l.updateRuns})
+				N: len(l.updateRuns), Samples: l.updateRuns, SpreadPct: spreadPct(aggregate(l.updateRuns))})
 		}
 		for _, w := range []struct {
 			name string
@@ -892,6 +954,12 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 			p.RatioDepth, ratio, p.MaxRatio, len(levels[p.RatioDepth].cold))
 	}
 	return gated, info, err
+}
+
+// coldFloorMS is the delta a cold read v must clear to be flagged. Both gates
+// test |v - baseline| against it, so v*p/(100+p) flags exactly v >= baseline*(1+p/100).
+func coldFloorMS(v float64) float64 {
+	return max(branchDepthColdFloorMS, v*branchDepthColdFloorPct/(100+branchDepthColdFloorPct))
 }
 
 func branchDepthCharts(levels []*branchLevel) []core.Chart {
@@ -935,7 +1003,7 @@ func branchDepthCharts(levels []*branchLevel) []core.Chart {
 
 func loadFieldsBranchDepth(p branchDepthParams) LoadFields {
 	return LoadFields{
-		Script:  fmt.Sprintf("branch_depth@%s/%s/d%d/t%d/r%d", p.EndpointCPU, p.EndpointMem, p.MaxDepth, p.TouchRows, p.Repeats),
+		Script:  fmt.Sprintf("branch_depth@%s/%s/d%d/t%d/r%d/p%d", p.EndpointCPU, p.EndpointMem, p.MaxDepth, p.TouchRows, p.Repeats, p.ScanPasses),
 		Rows:    p.Rows,
 		Clients: p.Samples,
 		Scale:   p.PayloadBytes,

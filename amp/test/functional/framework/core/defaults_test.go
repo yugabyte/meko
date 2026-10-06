@@ -1937,6 +1937,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"perf.branch_depth.samples":       perf.DefaultBranchDepthSamples,
 		"perf.branch_depth.touch_rows":    perf.DefaultBranchDepthTouchRows,
 		"perf.branch_depth.ratio_depth":   perf.DefaultBranchDepthRatioDepth,
+		"perf.branch_depth.scan_passes":   perf.DefaultBranchDepthScanPasses,
 	} {
 		if got := cfg.GetInt(key, -1); got != want {
 			t.Errorf("%s = %d, want %d", key, got, want)

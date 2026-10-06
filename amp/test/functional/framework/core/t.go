@@ -257,6 +257,19 @@ func (t *T) Failed() bool {
 	return t.failed
 }
 
+// StepFailed reports whether a top-level step ended failed or broken, which
+// Failed does not see.
+func (t *T) StepFailed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.result.Steps {
+		if s.Status == StatusFailed || s.Status == StatusBroken {
+			return true
+		}
+	}
+	return false
+}
+
 // maskAttachment masks secret values in a TEXT attachment (collected pod logs,
 // kubectl output). Only the text kinds are touched — masking a binary blob
 // would corrupt it, and no secret survives a base64 or gzip boundary intact

@@ -183,7 +183,8 @@ tests need (a single run would demand every cloud credential at once):
   contract outright, `branch_depth` measures cold and warm point reads, a cold
   scan, an insert, an update and a delete at each depth of a 20-deep fork chain,
   each write and the scan split into `perf.branch_depth.repeats` disjoint slices
-  timed one statement each, and asserts the first fork's cold p50 within `perf.branch_depth.max_ratio` of
+  timed one statement each, a gated rung's cold scan run `perf.branch_depth.scan_passes`
+  times on a rolled pod, and asserts the first fork's cold p50 within `perf.branch_depth.max_ratio` of
   the root's, and `idle_footprint` reads /proc inside an untouched
   endpoint's container for its per-process idle CPU and RSS, gating the median
   over the hold's intervals. `client_window` runs every operation

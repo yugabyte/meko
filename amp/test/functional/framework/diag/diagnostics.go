@@ -185,6 +185,52 @@ func CollectYBADiagnostics(ctx context.Context, kube Kube, namespace string, sin
 	collect(ctx, kube, namespace, sink, logf, ybaScheme())
 }
 
+// CollectPods gathers the current and previous logs and a describe of every pod
+// whose name starts with one of prefixes, under "<dir>/<pod>/". It is for a test
+// that deletes its own pods before the env's collection runs.
+func CollectPods(ctx context.Context, kube Kube, prefixes []string, dir string, sink apps.ArtifactSink, logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	states, err := kube.PodStates(ctx)
+	if err != nil {
+		logf("diagnostics: pod states in %s (best-effort): %v", kube.Namespace(), err)
+		return
+	}
+	for _, st := range states {
+		if !hasAnyPrefix(st.Name, prefixes) {
+			continue
+		}
+		base := dir + "/" + st.Name
+		if out, err := kube.LogsAll(ctx, st.Name, logTailLines); err != nil {
+			logf("diagnostics: logs %s (best-effort): %v", st.Name, err)
+		} else {
+			for container, blob := range splitByContainer(out) {
+				add(sink, logf, base+"/"+container+".log", "log", blob)
+			}
+		}
+		if out, err := kube.LogsAllPrevious(ctx, st.Name, logTailLines); err == nil {
+			for container, blob := range splitByContainer(out) {
+				add(sink, logf, base+"/"+container+".previous.log", "log", blob)
+			}
+		}
+		if out, err := kube.Describe(ctx, "pod", st.Name); err != nil {
+			logf("diagnostics: describe %s (best-effort): %v", st.Name, err)
+		} else {
+			add(sink, logf, base+"/describe.txt", "txt", out)
+		}
+	}
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func collect(ctx context.Context, kube Kube, namespace string, sink apps.ArtifactSink, logf func(string, ...any), sc scheme) {
 	if logf == nil {
 		logf = func(string, ...any) {}

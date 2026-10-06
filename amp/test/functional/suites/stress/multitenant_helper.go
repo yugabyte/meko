@@ -26,6 +26,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/diag"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
@@ -107,6 +108,7 @@ func (ten *tenant) nextRowID() int64 {
 // tenantFleet owns the tenants' lifecycle: create them, hand them out, and
 // delete them whatever happened.
 type tenantFleet struct {
+	t      *core.T
 	cl     *controller.Client
 	poolID string
 	env    ampTenantEnv
@@ -129,7 +131,7 @@ func newTenantFleet(t *core.T, env ampTenantEnv, logf func(string, ...any)) (*te
 	if err != nil {
 		return nil, err
 	}
-	return &tenantFleet{cl: cl, poolID: env.AmpPoolID(), env: env, logf: logf}, nil
+	return &tenantFleet{t: t, cl: cl, poolID: env.AmpPoolID(), env: env, logf: logf}, nil
 }
 
 // Create stands n MORE tenants up, each with its own cluster, endpoint and
@@ -202,6 +204,7 @@ func (f *tenantFleet) endpointResources() *controller.EndpointResources {
 func (f *tenantFleet) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	f.collectEndpoints(ctx)
 	for i := len(f.Tenants) - 1; i >= 0; i-- {
 		if f.Tenants[i].Conn != nil {
 			f.Tenants[i].Conn.Close()
@@ -210,6 +213,48 @@ func (f *tenantFleet) Close() {
 			f.logf("multitenant: could not delete tenant %d's cluster %s: %v", i, f.Tenants[i].ClusterID, err)
 		}
 	}
+}
+
+// collectEndpoints keeps a failed test's tenant endpoint pods' logs: the env's
+// own collection runs after Close has deleted them.
+func (f *tenantFleet) collectEndpoints(ctx context.Context) {
+	if f.t == nil || !diag.ShouldCollect(f.t.Options.GetString("report.collect_diagnostics", core.DefaultCollectDiagnostics),
+		f.t.Failed() || f.t.StepFailed()) {
+		return
+	}
+	kenv, ok := f.env.(ampKubeEnv)
+	if !ok || kenv.AmpKube() == nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	// Endpoint.ID is set only once the endpoint served a connection, so a compute
+	// that never came up is found by listing its tenant's branch.
+	ids := map[string]bool{}
+	for _, ten := range f.Tenants {
+		if ten.Endpoint.ID != "" {
+			ids[ten.Endpoint.ID] = true
+		}
+		if ten.ClusterID == "" || ten.BranchID == "" {
+			continue
+		}
+		eps, err := f.cl.ListAllEndpoints(cctx, f.poolID, ten.ClusterID, ten.BranchID)
+		if err != nil {
+			f.logf("multitenant: list tenant %d's endpoints for diagnostics: %v", ten.Index, err)
+			continue
+		}
+		for _, ep := range eps {
+			ids[ep.ID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	prefixes := make([]string, 0, len(ids))
+	for id := range ids {
+		prefixes = append(prefixes, "yb-ep-"+id)
+	}
+	diag.CollectPods(cctx, kenv.AmpKube(), prefixes, "Tenant endpoints", attachSink{t: f.t}, f.logf)
 }
 
 func (f *tenantFleet) findCluster(ctx context.Context, name string) (controller.Cluster, error) {
