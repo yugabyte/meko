@@ -430,7 +430,16 @@ To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl
 Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it
 runs on, which is the browser's only when both are on one computer, so the page uploads each image
 (`POST /api/sessions/:id/images`, the image as the body) and pastes the path the server saved it at;
-Claude Code reads a pasted path to an image as that image and shows `[Image #1]`. The server takes
+Claude Code reads a pasted path to an image as that image and shows `[Image #1]`. The paths wait
+until you send: each image shows in a strip of thumbnails under the terminal (above the compose box
+on touch screens) while it uploads and after, with ✕ to take it out, and the next Enter typed into
+the terminal (or the key bar's ⏎, or the compose box's Send) pastes the held paths one at a time,
+200 ms apart, after anything you typed, then sends Enter, so `fix this [Image #1]` goes as one
+message (`heldImages.ts`, `flush()` in `terminals.ts`). Keys typed while that runs are queued and
+follow it. Pasted text and Option+Enter (a new line in Claude Code) don't send held images. If the
+terminal isn't connected, or an upload failed, nothing is sent and the images stay held; an image
+taken out of the strip stays on the host until the session's pastes are removed. Held images live
+in the page, so an update's reload waits while they show (see Releases and auto-update). The server takes
 PNG, JPEG, GIF and WebP, checked by their bytes, up to 20 MB each, and saves them owner-only under
 `~/.agent-k-local/pastes/<session>/`; they're removed when the session is archived or its project
 closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
@@ -438,10 +447,10 @@ them) pastes the text, unless the text is only the copied files' names. The page
 Claude Code shares its computer (a tunnel to a remote host is localhost too), so `Ctrl+V` works the
 same either way. On Linux and Windows it's the browser's paste, so it pastes text as well, where it
 used to send `Ctrl+V` to Claude. On a Mac, `Ctrl+V` reads the clipboard through the async Clipboard
-API (Chrome asks once, Safari before each read): an image is pasted the same way, and otherwise
-Claude gets `Ctrl+V` as before. The images are saved first, and their paths wait up to 15 seconds
-for the terminal to reconnect (a phone's image picker hides the page, which can release it). On a
-phone, the image button beside the compose box picks images to paste.
+API (Chrome asks once, Safari before each read): an image is held the same way, and otherwise
+Claude gets `Ctrl+V` as before. On a phone, an image pasted into the compose box is held too (text
+still pastes into the box), and the image key at the end of the key bar's ▾ row picks images to
+hold.
 
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
 names no session) reopens the session last open there in this browser, kept in `localStorage`.
@@ -481,11 +490,12 @@ touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mo
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,
 Home, End, Page Up and Page Down; the row stays open until ▾ is tapped again, and ▾ stays lit while
 Ctrl is armed with the row closed; with Ctrl lit, the next letter typed in the compose box or in typing mode goes to
-Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape), an image button that picks
-images to paste for Claude (see Keyboard), and a compose box (it grows with its text to about a fifth
-of the visible screen, then scrolls) whose text goes in as one bracketed
-paste (with any Escape characters removed), then Enter; if the terminal isn't connected, the text
-stays in the box. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
+Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape; last in
+the row, an image key picks images for Claude and closes the row once they're picked), and a compose
+box (it grows with its text to about a fifth of the visible screen, then scrolls) whose text goes
+in as one bracketed paste (with any Escape characters removed), then any held images (see
+Keyboard; images pasted into the box are held above it), then Enter; Send works with images alone,
+and if the terminal isn't connected, the text and images stay. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
 runs full screen and takes the mouse). The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
@@ -1737,7 +1747,8 @@ window, because they never touch tmux.
 event socket reconnects to a server on another version (an update, a reinstall or a rollback), the
 page reloads, keeping its route, so it never keeps running the old UI (`src/web/reload.ts`,
 `hooks/useReload.ts`). It waits while a reload could lose something: a dialog, sheet or popover is
-open, a text field has focus, or a textarea holds unsent text. Fields whose text survives a reload
+open, something unsent that lives only in the page is showing (`data-unsent`: images held for
+Claude), a text field has focus, or a textarea holds unsent text. Fields whose text survives a reload
 are marked `data-reload-safe` and don't count (the terminal compose box keeps its draft in
 `sessionStorage`), and neither does xterm's input. While it waits, a banner offers **Reload**, and
 it checks again when focus leaves a field, the tab is shown or hidden, and every 5 seconds. A tab

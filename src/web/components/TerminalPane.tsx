@@ -3,6 +3,7 @@ import type { Session } from '../../shared/types';
 import { useTouch } from '../hooks/useMedia';
 import { getTerminal } from '../terminals';
 import { Busy } from './common';
+import { HeldImages } from './HeldImages';
 import { StartupPanel } from './StartupPanel';
 import { TermKeys } from './TermKeys';
 
@@ -67,6 +68,8 @@ export function TerminalPane({ session }: { session: Session }) {
           <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
         )}
       </div>
+      {/* Touch screens show held images above the compose box instead. */}
+      {!touch && <HeldImages term={term} touch={false} />}
       {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} />}
     </div>
   );

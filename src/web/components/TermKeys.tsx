@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { pastedImages } from '../clipboard';
 import { BAR_KEYS, MORE_KEYS, insertedChar, type BarKey } from '../keys';
 import type { SessionTerminal } from '../terminals';
-import { cx } from '../util';
+import { cx, keepFocus } from '../util';
+import { HeldImages } from './HeldImages';
 
 const draftKey = (id: string) => `ak-compose-${id}`;
 
@@ -24,9 +26,6 @@ function saveDraft(id: string, text: string) {
 
 const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnects.';
 
-/** Keeps focus (and the on-screen keyboard) where it is when a bar button is tapped. */
-const keepFocus = (e: SyntheticEvent) => e.preventDefault();
-
 /** A bar key that sends its bytes to the terminal. */
 function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKey; label: string; title: string }; disabled: boolean }) {
   return (
@@ -48,7 +47,8 @@ function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKe
 
 /**
  * For touch screens: keys a phone keyboard lacks, and a compose box that gets the phone's
- * autocorrect, dictation and paste. The terminal font size is in the session sheet.
+ * autocorrect, dictation and paste. Images (pasted into the box, or picked with the image key in the
+ * ▾ row) wait above the box and go with the message. The terminal font size is in the session sheet.
  */
 export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal; sessionId: string; disabled: boolean }) {
   const [text, setText] = useState(() => readDraft(sessionId));
@@ -67,14 +67,24 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
     el.style.height = `${el.scrollHeight + 2}px`; // + borders
   }, [text]);
 
-  /** Returns whether anything was sent. The text stays in the box when it couldn't be. */
+  const held = term.held.size > 0;
+  const canSend = (!!text.trim() || held) && !disabled && !term.sending;
+
+  /**
+   * Sends the text and any held images. Returns whether sending started. The text comes back to the
+   * box if it couldn't be sent (the terminal says why).
+   */
   const send = () => {
-    if (!text.trim() || disabled) return false;
-    if (!term.submit(text)) {
+    if (!canSend) return false;
+    if (term.conn !== 'open') {
       term.showNotice('Not connected to the session. Your message is kept; send it again once it reconnects.', 4000);
       return false;
     }
+    const sent = text.trim() ? text : '';
     setText('');
+    void term.submit(sent).then((ok) => {
+      if (!ok) setText((t) => t || sent);
+    });
     return true;
   };
 
@@ -119,7 +129,7 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           aria-expanded={more}
           // The row is only in the page while it's open.
           aria-controls={more ? `more-keys-${sessionId}` : undefined}
-          title={more ? 'Fewer keys' : 'More keys: Ctrl, Esc, Shift+Tab…'}
+          title={more ? 'Fewer keys' : 'More keys: Ctrl, Esc, Shift+Tab, image…'}
           aria-label="More keys"
           // Its keys can't be used while the session is stopped, but an open row can still be closed.
           disabled={disabled && !more}
@@ -154,8 +164,42 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           {MORE_KEYS.map((k) => (
             <SendKey key={k.key} term={term} k={k} disabled={disabled} />
           ))}
+          {/* A phone has no paste or drop of images into the terminal: pick them instead. */}
+          <button
+            className="key"
+            title="Paste an image for Claude"
+            aria-label="Paste an image for Claude"
+            disabled={disabled}
+            onPointerDown={keepFocus}
+            onMouseDown={keepFocus}
+            onClick={() => picker.current?.click()}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="9" cy="10" r="1.6" />
+              <path d="M21 16l-5-5-9 9" />
+            </svg>
+          </button>
         </div>
       )}
+      {/* Outside the ▾ row, so the picker's choice arrives whatever the row does meanwhile. */}
+      <input
+        ref={picker}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          // Cleared, so picking the same image again still fires a change.
+          e.target.value = '';
+          if (!files.length) return;
+          term.holdImages(files);
+          // Picked: the row has done its job, so give the terminal its space back.
+          setMore(false);
+        }}
+      />
+      <HeldImages term={term} touch />
       <form
         className="compose"
         onSubmit={(e) => {
@@ -164,36 +208,6 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           if (send()) box.current?.blur();
         }}
       >
-        {/* A phone has no paste or drop of images into the terminal: pick one instead. */}
-        <button
-          type="button"
-          className="compose-attach"
-          aria-label="Paste an image for Claude"
-          title="Paste an image for Claude"
-          disabled={disabled}
-          onPointerDown={keepFocus}
-          onMouseDown={keepFocus}
-          onClick={() => picker.current?.click()}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <circle cx="9" cy="10" r="1.6" />
-            <path d="M21 16l-5-5-9 9" />
-          </svg>
-        </button>
-        <input
-          ref={picker}
-          type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp,image/*"
-          multiple
-          hidden
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            // Cleared, so picking the same image again still fires a change.
-            e.target.value = '';
-            void term.pasteImages(files);
-          }}
-        />
         <textarea
           ref={box}
           id={`compose-${sessionId}`}
@@ -209,6 +223,13 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           // An armed Ctrl takes one letter as it is: no autocorrect or capitals rewriting it.
           autoCorrect={term.ctrl ? 'off' : undefined}
           autoCapitalize={term.ctrl ? 'none' : undefined}
+          onPaste={(e) => {
+            // Images wait above the box and go with the message; text pastes into the box as usual.
+            const images = pastedImages(e.clipboardData);
+            if (!images.length) return;
+            e.preventDefault();
+            term.holdImages(images);
+          }}
           onChange={(e) => {
             const next = e.target.value;
             // With Ctrl armed, a typed character goes to Claude as Ctrl+character instead of the box.
@@ -241,7 +262,7 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           className="compose-send"
           aria-label="Send to Claude"
           title="Send to Claude"
-          disabled={disabled || !text.trim()}
+          disabled={!canSend}
           onPointerDown={keepFocus}
           onMouseDown={keepFocus}
         >
