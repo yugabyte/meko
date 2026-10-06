@@ -429,7 +429,7 @@ describe('the usage stats report', () => {
 });
 
 describe('what the report says about the install', () => {
-  const meko: MekoStatus = { configured: true, webUrl: null, sharing: true };
+  const meko: MekoStatus = { configured: true, webUrl: null, sharing: true, claude: { gaps: [], unchecked: [], checking: false } };
   const probe = (answers: Record<string, string | Error>): Probe => async (cmd) => {
     const a = answers[cmd];
     if (a instanceof Error || a === undefined) throw a ?? new Error('not found');
@@ -518,7 +518,7 @@ describe('sending the report', () => {
     const logs: string[] = [];
     const log: Logger = { info: (m) => logs.push(`info ${m}`), warn: (m) => logs.push(`warn ${m}`), error: (m) => logs.push(`error ${m}`) };
     const service = () => new CallHomeService({
-      db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false }), log,
+      db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false, claude: { gaps: [], unchecked: [], checking: false } }), log,
       fetch: fetchImpl, now: () => clock.now, bakedUrl: () => o.baked ?? '', probe: async () => { throw new Error('no probes in tests'); },
       maxReportBytes: o.maxReportBytes,
     });
@@ -572,7 +572,7 @@ describe('sending the report', () => {
   it("stamps a report with its check's time, however long the send takes", async () => {
     const t = setup();
     const svc = new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false }),
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false, claude: { gaps: [], unchecked: [], checking: false } }),
       log: { info() {}, warn() {}, error() {} }, now: () => t.clock.now, probe: async () => '',
       fetch: (async () => {
         t.clock.now += 6 * 60_000;
@@ -695,7 +695,7 @@ describe('sending the report', () => {
     vi.useFakeTimers();
     const t = setup();
     const service = () => new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false }),
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false, claude: { gaps: [], unchecked: [], checking: false } }),
       log: { info() {}, warn() {}, error() {} }, fetch: (async () => new Response(null, { status: 204 })) as typeof fetch,
       now: () => Date.now(), probe: async () => '', random: () => 0.5,
     });

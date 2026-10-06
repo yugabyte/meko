@@ -10,8 +10,10 @@ import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { openDb } from './db.js';
 import { assertFree, InstanceBusyError } from './instance.js';
-import { checkMeko } from './meko.js';
-import { MekoSetupError, claudeHasMekoMcp, ensureMekoInClaude, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, runMekoSetup } from './mekosetup.js';
+import { checkMeko, tryMekoToken } from './meko.js';
+import { claudeConfigPath } from './trust.js';
+import { MekoSetupError, claudeHasMekoMcp, ensureMekoInClaude, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup } from './mekosetup.js';
+import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
 import { hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { writeTmuxConf } from './tmux.js';
@@ -376,9 +378,12 @@ export async function runInstall(args: string[]): Promise<void> {
       canAsk,
       check: checkMeko,
       ensureInClaude: async (url, apiKey) => {
-        // The plugin, its MCP server, and the key where its hooks read it. Anything missing is set
-        // up by Meko's own installer, after asking.
-        const gaps = () => mekoClaudeGaps({ claudeDir: claudeUserDir(), mcpRegistered: claudeHasMekoMcp, apiKey });
+        // The plugin, its MCP server and the key where its hooks read it, all on this Meko, with
+        // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking.
+        const gaps = async () => {
+          const c = readClaudeMeko(claudeUserDir(), claudeConfigPath());
+          return [...mekoClaudeGaps(c, url, claudeHasMekoMcp), ...(await claudeTokenGaps(c, url, apiKey, tryMekoToken))];
+        };
         await ensureMekoInClaude(
           { url, apiKey, canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },

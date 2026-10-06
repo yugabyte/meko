@@ -221,6 +221,42 @@ function FailedStartBanners({
   );
 }
 
+/**
+ * Claude Code's sessions don't reach AgentK's Meko (another server, or a token that doesn't work
+ * there). AgentK never fixes it on its own: the user sets Claude Code up from here or the Meko tab.
+ */
+function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDetails: () => void; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const gaps = state.meko.claude?.gaps ?? [];
+  if (!state.meko.configured || !gaps.length) return null;
+  const setUp = async () => {
+    setBusy(true);
+    try {
+      await api.mekoClaudeSetup();
+    } catch (e) {
+      onError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="banner warn" role="alert">
+      <span className="banner-text">
+        Claude Code sessions may not reach AgentK’s Meko datapacks. {gaps.join(' ')} Setting it up changes Claude Code’s own
+        settings; new sessions pick it up, and running ones keep what they started with.
+      </span>
+      <span className="banner-btns">
+        <button className="btn primary small" disabled={busy} onClick={() => void setUp()}>
+          {busy ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
+        </button>
+        <button className="btn small" disabled={busy} onClick={onDetails}>
+          Details
+        </button>
+      </span>
+    </div>
+  );
+}
+
 export function Banners({
   state,
   conn,
@@ -228,6 +264,7 @@ export function Banners({
   onError,
   onOpenInvite,
   onRetryStart,
+  onMekoSettings,
 }: {
   state: AppState;
   conn: Conn;
@@ -236,6 +273,8 @@ export function Banners({
   onError: (m: string) => void;
   onOpenInvite: (i: DatapackInvite) => void;
   onRetryStart: (f: FailedStart) => void;
+  /** Opens the Meko tab in Settings. */
+  onMekoSettings: () => void;
 }) {
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
   const [applying, setApplying] = useState(false);
@@ -311,6 +350,7 @@ export function Banners({
         </div>
       )}
       <ClaudeCodeBanners state={state} onError={onError} />
+      <MekoClaudeBanner state={state} onDetails={onMekoSettings} onError={onError} />
       <FailedStartBanners state={state} onRetry={onRetryStart} onError={onError} />
       <InviteBanners invites={state.invites ?? []} onOpen={onOpenInvite} onError={onError} />
     </div>

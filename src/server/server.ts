@@ -409,7 +409,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     resolveConflicts: core.config.pr.resolveConflicts,
     meko: mekoSettings(core.config),
   });
-  app.get('/api/settings', async () => settings());
+  app.get('/api/settings', async () => {
+    // Opening Settings checks Claude Code's Meko again (in the background, reusing recent results).
+    void core.claudeMeko.refresh();
+    return settings();
+  });
   app.put<{ Body: SettingsUpdate }>('/api/settings', async (req) => {
     const b = req.body ?? {};
     if (b.reposRoots !== undefined && (!Array.isArray(b.reposRoots) || !b.reposRoots.length || b.reposRoots.some((r) => typeof r !== 'string' || !r.trim()))) {
@@ -460,8 +464,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return settings();
   });
   app.post('/api/settings/meko/claude-setup', async (): Promise<Settings> => {
-    await setUpClaudeMeko(core, core.mekoTools);
-    audit(db, 'meko_claude_setup', { url: mekoSettings(core.config).effectiveUrl });
+    try {
+      await setUpClaudeMeko(core, core.mekoTools);
+      audit(db, 'meko_claude_setup', { url: mekoSettings(core.config).effectiveUrl });
+    } finally {
+      // Whatever the setup managed, the banner shows what's left (the saved token results are stale now).
+      await core.claudeMeko.refresh(true);
+    }
     return settings();
   });
 

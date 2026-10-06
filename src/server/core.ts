@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
-import { ensureWorkspaceTrust } from './trust.js';
+import { claudeConfigPath, ensureWorkspaceTrust } from './trust.js';
 import { hostname, userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
@@ -12,18 +12,20 @@ import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
-import { writeHookFiles, writeModFiles } from './claude.js';
+import { claudeUserDir, writeHookFiles, writeModFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { MekoClient } from './meko.js';
+import { MekoClaudeWatch } from './mekoclaude.js';
+import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
 import { defaultMekoTools, type MekoTools } from './mekosettings.js';
 import type { Paths } from './paths.js';
 import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Lifecycle } from './lifecycle.js';
-import { projectRows, pruneSessionEvents, toProject } from './store.js';
+import { openProjectDatapacks, projectRows, pruneSessionEvents, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { Tmux, writeTmuxConf } from './tmux.js';
@@ -86,6 +88,8 @@ export class Core extends EventEmitter {
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
   readonly mekoTools: MekoTools;
+  /** Whether Claude Code's sessions reach AgentK's Meko (MekoStatus.claude). */
+  readonly claudeMeko: MekoClaudeWatch;
   readonly callHome: CallHomeService;
   /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
@@ -111,8 +115,6 @@ export class Core extends EventEmitter {
     this.version = o.version;
     this.cfg = o.config;
     this.meko = o.meko;
-    const configured = mekoConfigured(o.config);
-    this.mekoStatus = { configured, webUrl: resolveMekoWebUrl(o.config), sharing: configured && !!resolveMekoApiUrl(o.config) };
     this.log = o.log ?? consoleLogger;
     this.capture = new TranscriptCapture(o.mekoCaptureScript ?? null, () => {
       const m = resolveMeko(this.cfg);
@@ -136,6 +138,20 @@ export class Core extends EventEmitter {
     this.prReview = new PrReviewService(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
+    this.claudeMeko = new MekoClaudeWatch({
+      config: () => this.cfg,
+      read: () => readClaudeMeko(claudeUserDir(), claudeConfigPath()),
+      mcpRegistered: () => this.mekoTools.claudeHasMcp(),
+      projectDatapacks: () => openProjectDatapacks(this.db),
+      ownDatapacks: async () => (await this.meko.listDatapacks()).map((d) => d.id),
+      tryToken: (url, token) => this.mekoTools.tryToken(url, token),
+      changed: () => {
+        this.mekoStatus = { ...this.mekoStatus, claude: this.claudeMeko.status };
+        this.changed();
+      },
+      log: this.log,
+    });
+    this.mekoStatus = this.mekoStatusFor(o.config);
     this.callHome = new CallHomeService({
       db: this.db, config: () => this.cfg, version: this.version, meko: () => this.mekoStatus, log: this.log, fetch: o.callHomeFetch,
     });
@@ -151,10 +167,16 @@ export class Core extends EventEmitter {
     fn(next);
     saveConfig(this.paths, next);
     this.cfg = next;
-    const configured = mekoConfigured(next);
-    this.mekoStatus = { configured, webUrl: resolveMekoWebUrl(next), sharing: configured && !!resolveMekoApiUrl(next) };
+    this.mekoStatus = this.mekoStatusFor(next);
     this.changed();
+    // A Meko change can make Claude Code's Meko differ (or match again).
+    void this.claudeMeko.refresh();
     return next;
+  }
+
+  private mekoStatusFor(cfg: Config): MekoStatus {
+    const configured = mekoConfigured(cfg);
+    return { configured, webUrl: resolveMekoWebUrl(cfg), sharing: configured && !!resolveMekoApiUrl(cfg), claude: this.claudeMeko.status };
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */
@@ -249,6 +271,8 @@ export class Core extends EventEmitter {
     if (noWebUrl) this.log.warn(noWebUrl);
     // Before any turn can end, so the first one after a restart can tell whether its design's questions changed.
     this.questions.preload();
+    // Not awaited: startup doesn't wait on Meko.
+    void this.claudeMeko.refresh();
     await this.bindHooks();
     this.hooksOn = true;
     // A tmux service that is down must not keep the web server from starting: the UI stays

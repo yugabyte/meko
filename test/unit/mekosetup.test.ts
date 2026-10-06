@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, ensureMekoInClaude, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, runMekoSetup, type MekoSetupPackage,
+  MekoSetupError, claudeMekoTokens, ensureMekoInClaude, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+  sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
 
 let dir: string;
@@ -27,36 +28,96 @@ describe('Meko in Claude Code: what is missing', () => {
     mkdirSync(join(claudeDir(), 'p'), { recursive: true });
   };
 
+  const CLOUD = 'https://mcp.mekodata.ai/mcp';
+  const OWN = 'https://meko.example.com/mcp';
+  const configPath = () => join(dir, 'claude.json');
+  const register = (entry: unknown) => writeFileSync(configPath(), JSON.stringify({ mcpServers: { meko: entry } }));
+  const read = () => readClaudeMeko(claudeDir(), configPath());
+  const ready = (env: Record<string, string> = { MEKO_API_KEY: 'k' }) => {
+    installPlugin();
+    settings({ enabledPlugins: { 'meko-agent-skills@meko-agent-skills': true }, env });
+  };
+  const never = () => {
+    throw new Error('asked claude mcp get although ~/.claude.json has the server');
+  };
+
   it('lists the plugin, the key and the MCP server when none is there', () => {
-    expect(mekoClaudeGaps({ claudeDir: claudeDir(), mcpRegistered: () => false, apiKey: 'k' })).toEqual([
-      'the meko-agent-skills plugin',
-      "MEKO_API_KEY in Claude Code's settings",
-      'the Meko MCP server in Claude Code',
+    expect(mekoClaudeGaps(read(), CLOUD, () => false)).toEqual([
+      "The meko-agent-skills plugin isn't installed in Claude Code.",
+      "Claude Code's settings have no MEKO_API_KEY.",
+      'Claude Code has no meko MCP server.',
     ]);
   });
 
-  it('is empty once everything is set up with the verified key', () => {
-    installPlugin();
-    settings({ enabledPlugins: { 'meko-agent-skills@meko-agent-skills': true }, env: { MEKO_API_KEY: 'k' } });
-    expect(mekoClaudeGaps({ claudeDir: claudeDir(), mcpRegistered: () => true, apiKey: 'k' })).toEqual([]);
+  it('is empty when both places use this server, whatever tokens they hold', () => {
+    ready({ MEKO_API_KEY: 'settings-token' });
+    register({ type: 'http', url: `${CLOUD}/`, headers: { Authorization: 'Bearer server-token' } });
+    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual([]);
+    expect(claudeMekoTokens(read(), 'https://MCP.MekoData.ai/mcp')).toEqual([
+      { place: 'settings', token: 'settings-token' },
+      { place: 'server', token: 'server-token' },
+    ]);
   });
 
-  it('counts a different key in the settings, a disabled plugin, and never a key only in the environment', () => {
+  it('counts a disabled plugin, and never a key only in the environment', () => {
     installPlugin();
-    settings({ enabledPlugins: { 'meko-agent-skills@meko-agent-skills': true }, env: { MEKO_API_KEY: 'old' } });
-    expect(mekoClaudeGaps({ claudeDir: claudeDir(), mcpRegistered: () => true, apiKey: 'new' })).toEqual([
-      "the current key in Claude Code's settings (it has a different MEKO_API_KEY)",
-    ]);
     settings({ enabledPlugins: { 'meko-agent-skills@meko-agent-skills': false } });
     process.env.MEKO_API_KEY = 'k'; // sessions don't inherit the installer's environment
     try {
-      expect(mekoClaudeGaps({ claudeDir: claudeDir(), mcpRegistered: () => true, apiKey: 'k' })).toEqual([
-        'the meko-agent-skills plugin (installed, not enabled)',
-        "MEKO_API_KEY in Claude Code's settings",
+      expect(mekoClaudeGaps(read(), CLOUD, () => true)).toEqual([
+        "The meko-agent-skills plugin is installed in Claude Code but not enabled.",
+        "Claude Code's settings have no MEKO_API_KEY.",
       ]);
     } finally {
       delete process.env.MEKO_API_KEY;
     }
+  });
+
+  it('names the other server when either place points elsewhere, by host only', () => {
+    ready({ MEKO_API_KEY: 'k', MEKO_MCP_URL: 'https://user:secret@meko.example.com/mcp?x=1' });
+    register({ type: 'http', url: 'https://other.example.org/mcp', headers: { Authorization: 'Bearer k' } });
+    const gaps = mekoClaudeGaps(read(), CLOUD, never);
+    expect(gaps).toEqual([
+      "Claude Code's settings point at meko.example.com, not mcp.mekodata.ai.",
+      "Claude Code's meko MCP server points at other.example.org, not mcp.mekodata.ai.",
+    ]);
+    expect(gaps.join(' ')).not.toMatch(/secret|user/);
+    // Neither token is on this server, so neither is tried.
+    expect(claudeMekoTokens(read(), CLOUD)).toEqual([]);
+  });
+
+  it('counts unset MEKO_MCP_URL as Meko Cloud, which the hooks then use', () => {
+    ready();
+    register({ type: 'http', url: OWN, headers: { Authorization: 'Bearer k' } });
+    expect(mekoClaudeGaps(read(), OWN, never)).toEqual(["Claude Code's settings point at mcp.mekodata.ai, not meko.example.com."]);
+  });
+
+  it('reads the MCP server token from its header, expanding ${VAR}, and counts a missing one', () => {
+    ready();
+    register({ type: 'http', url: CLOUD, headers: { authorization: 'Bearer ${AKL_TEST_TOKEN}' } });
+    process.env.AKL_TEST_TOKEN = 'from-env';
+    try {
+      expect(read().server).toEqual({ url: CLOUD, token: 'from-env' });
+    } finally {
+      delete process.env.AKL_TEST_TOKEN;
+    }
+    register({ type: 'http', url: CLOUD });
+    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual(["Claude Code's meko MCP server sends no token."]);
+  });
+
+  it('checks neither URL nor token of a server without a URL, and asks claude only when there is no entry', () => {
+    ready();
+    register({ type: 'stdio', command: 'meko-proxy' });
+    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual([]);
+    expect(claudeMekoTokens(read(), CLOUD)).toEqual([{ place: 'settings', token: 'k' }]);
+    rmSync(configPath());
+    expect(mekoClaudeGaps(read(), CLOUD, () => true)).toEqual([]);
+  });
+
+  it('compares URLs without a trailing slash and with the host in any case', () => {
+    expect(sameMekoUrl('https://MCP.mekodata.ai/mcp/', CLOUD)).toBe(true);
+    expect(sameMekoUrl('https://mcp.mekodata.ai/other', CLOUD)).toBe(false);
+    expect(sameMekoUrl('http://mcp.mekodata.ai/mcp', CLOUD)).toBe(false);
   });
 });
 
@@ -69,7 +130,7 @@ describe('the install step for Meko in Claude Code', () => {
     const promise = ensureMekoInClaude(
       { url: 'https://meko.example/mcp', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: false, ...o },
       {
-        gaps: () => (ran ? (d.after ?? []) : (d.before ?? ['the meko-agent-skills plugin'])),
+        gaps: async () => (ran ? (d.after ?? []) : (d.before ?? ['The meko-agent-skills plugin isn\'t installed in Claude Code.'])),
         latest: async () => (calls.push('latest'), PKG),
         run: async () => ((ran = true), calls.push('run'), d.code ?? 0),
         ask: async (q) => (calls.push(`ask ${q}`), d.answer ?? 'y'),
@@ -101,13 +162,13 @@ describe('the install step for Meko in Claude Code', () => {
     expect(calls).toEqual(['latest', "ask Run Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)? (Y/n)"]);
   });
 
-  it('says only "missing", not the list of gaps', async () => {
+  it('says it in a few words, not the list of gaps', async () => {
     const warned: string[] = [];
     await ensureMekoInClaude(
       { url: 'u', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true },
-      { gaps: () => ['the meko-agent-skills plugin'], latest: async () => PKG, run: async () => 0, ask: async () => 'y', say: () => undefined, warn: (l, t) => warned.push(`${l}: ${t}`) },
+      { gaps: async () => ['Claude Code has no meko MCP server.'], latest: async () => PKG, run: async () => 0, ask: async () => 'y', say: () => undefined, warn: (l, t) => warned.push(`${l}: ${t}`) },
     ).catch(() => undefined);
-    expect(warned).toEqual(['Meko in Claude: missing']);
+    expect(warned).toEqual(['Meko in Claude: not set up for this Meko']);
   });
 
   it('runs the setup on yes, or with --install-deps without asking but saying what it runs', async () => {
@@ -122,7 +183,7 @@ describe('the install step for Meko in Claude Code', () => {
 
   it('fails when the setup exits non-zero or leaves something missing', async () => {
     await expect(step({ installDeps: true }, { code: 1 }).promise).rejects.toThrow(/didn't finish/);
-    await expect(step({ installDeps: true }, { after: ['the Meko MCP server in Claude Code'] }).promise).rejects.toThrow(/still missing: the Meko MCP server/);
+    await expect(step({ installDeps: true }, { after: ['Claude Code has no meko MCP server.'] }).promise).rejects.toThrow(/Still: Claude Code has no meko MCP server\./);
   });
 });
 

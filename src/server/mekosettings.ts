@@ -2,9 +2,12 @@ import type { MekoSettings, MekoSettingsUpdate } from '../shared/types.js';
 import { DEFAULT_MEKO_URL, envMekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
-import { checkMeko, strOrNull } from './meko.js';
+import { checkMeko, tryMekoToken, type TokenTry } from './meko.js';
 import { looksLikeMekoApi } from './mekoapi.js';
-import { claudeHasMekoMcp, latestMekoSetup, manualMekoSetup, mekoClaudeGaps, mekoKeyForConfig, runMekoSetup } from './mekosetup.js';
+import {
+  claudeHasMekoMcpAsync, latestMekoSetup, manualMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+} from './mekosetup.js';
+import { claudeConfigPath } from './trust.js';
 import { claudeUserDir } from './claude.js';
 import { HttpError } from './projects.js';
 
@@ -15,6 +18,10 @@ export interface MekoTools {
   checkApi: (apiUrl: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   /** Runs Meko's setup for Claude Code against this server and key; rejects when it doesn't finish. */
   setUpClaude: (url: string, apiKey: string, log: (line: string) => void) => Promise<void>;
+  /** Tries one of Claude Code's tokens on a Meko server: the datapacks it sees, or why not. */
+  tryToken: (url: string, token: string) => Promise<TokenTry>;
+  /** Claude Code has a `meko` MCP server (`claude mcp get meko`), asked when ~/.claude.json has no user-scope one. */
+  claudeHasMcp: () => Promise<boolean>;
 }
 
 export const defaultMekoTools: MekoTools = {
@@ -26,16 +33,19 @@ export const defaultMekoTools: MekoTools = {
       throw new Error(`Couldn't look up Meko's setup on npm (${errMsg(e)}). Run it yourself: ${manual}`);
     });
     const code = await runMekoSetup(pkg, { url, apiKey, log });
-    const left = mekoClaudeGaps({ claudeDir: claudeUserDir(), mcpRegistered: claudeHasMekoMcp, apiKey });
+    const c = readClaudeMeko(claudeUserDir(), claudeConfigPath());
+    const registered = c.server ? true : await claudeHasMekoMcpAsync();
+    const left = mekoClaudeGaps(c, url, () => registered);
     if (code !== 0 || left.length) {
-      throw new Error(`Meko's setup didn't finish${left.length ? ` (still missing: ${left.join(', ')})` : ''}. Run it yourself: ${manual}`);
+      throw new Error(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} Run it yourself: ${manual}`);
     }
   },
+  tryToken: tryMekoToken,
+  claudeHasMcp: claudeHasMekoMcpAsync,
 };
 
 export function mekoSettings(cfg: Config): MekoSettings {
   const eff = resolveMekoWithSource(cfg);
-  const claude = readClaudeSettingsEnv();
   return {
     enabled: cfg.meko.enabled,
     url: cfg.meko.url,
@@ -50,8 +60,6 @@ export function mekoSettings(cfg: Config): MekoSettings {
     // Never the key itself; short keys get no hint at all.
     keyHint: eff.apiKey ? (eff.apiKey.length >= 12 ? eff.apiKey.slice(-4) : '') : null,
     keySource: eff.keySource,
-    claudeUrl: strOrNull(claude.MEKO_MCP_URL)?.trim() ?? null,
-    claudeKeyMatches: !!eff.apiKey && claude.MEKO_API_KEY === eff.apiKey,
   };
 }
 
