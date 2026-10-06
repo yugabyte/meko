@@ -62,8 +62,9 @@ export function tokenOutcomeText(place: ClaudeTokenPlace, o: TokenOutcome, url: 
 
 /**
  * The installer's token check: each of Claude Code's tokens that isn't AgentK's must be accepted by
- * AgentK's server (there are no projects yet to check datapacks against). One that couldn't be
- * checked isn't a gap: the install goes on, and the server checks again.
+ * AgentK's server. It deliberately stops there, even on a reinstall whose projects already have
+ * datapacks: whether a token sees them is the server's check (MekoClaudeWatch), which runs once it
+ * starts. One that couldn't be checked isn't a gap: the install goes on.
  */
 export async function claudeTokenGaps(c: ClaudeMeko, url: string, apiKey: string, tryToken: (url: string, token: string) => Promise<TokenTry>): Promise<string[]> {
   const gaps: string[] = [];
@@ -85,8 +86,11 @@ export interface MekoClaudeWatchDeps {
   config: () => Config;
   /** Claude Code's Meko as its files say now. */
   read: () => ClaudeMeko;
-  /** Claude Code has a `meko` MCP server some other way; asked only when ~/.claude.json has no user-scope one. */
-  mcpRegistered: () => Promise<boolean>;
+  /**
+   * Claude Code has a `meko` MCP server some other way; asked only when ~/.claude.json has no
+   * user-scope one. Null when Claude Code couldn't be asked: that's unchecked, never a gap.
+   */
+  mcpRegistered: () => Promise<boolean | null>;
   /** Every open project's datapacks. */
   projectDatapacks: () => { id: string; name: string }[];
   /** The datapacks AgentK's own token sees. */
@@ -150,12 +154,21 @@ export class MekoClaudeWatch {
       return;
     }
     const c = this.o.read();
-    let registered = true;
+    const fileUnchecked: string[] = [];
+    let registered: boolean | null = true;
     if (!c.server) {
       if (force || !this.registered || now - this.registered.at >= CLAUDE_MEKO_TTL_MS) {
-        this.registered = { at: now, value: await this.o.mcpRegistered() };
+        const value = await this.o.mcpRegistered();
+        // An answer is kept; not being able to ask is tried again next time.
+        this.registered = value === null ? null : { at: now, value };
+        registered = value;
+      } else {
+        registered = this.registered.value;
       }
-      registered = this.registered.value;
+      if (registered === null) fileUnchecked.push("Couldn't ask Claude Code whether it has a meko MCP server (`claude mcp get meko` didn't answer).");
+    }
+    if (c.server?.unresolved) {
+      fileUnchecked.push(`Couldn't check ${PLACE.server}: it comes from \${${c.server.unresolved}}, which AgentK can't see (it isn't in Claude Code's settings env).`);
     }
     const gaps = mekoClaudeGaps(c, url, () => registered);
     const tokens = claudeMekoTokens(c, url).filter((t) => t.token !== apiKey);
@@ -175,7 +188,7 @@ export class MekoClaudeWatch {
       outcomes.set(t.token, outcome);
     }
     const tokenGaps: string[] = [];
-    const unchecked: string[] = [];
+    const unchecked: string[] = [...fileUnchecked];
     for (const t of tokens) {
       const outcome = outcomes.get(t.token)!;
       const text = tokenOutcomeText(t.place, outcome, url);

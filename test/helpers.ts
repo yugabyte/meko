@@ -103,8 +103,8 @@ export function stubMekoTools() {
     checkError: string | null; apiError: string | null; setupError: string | null;
     /** What trying each of Claude Code's tokens finds; a token not listed is rejected. */
     tokens: Record<string, TokenTry>;
-    /** Whether `claude mcp get meko` finds a server. */
-    claudeHasMcp: boolean;
+    /** Whether `claude mcp get meko` finds a server (null: it couldn't be asked). */
+    claudeHasMcp: boolean | null;
   } = { checkError: null, apiError: null, setupError: null, tokens: {}, claudeHasMcp: false };
   const tools: MekoTools = {
     async check(url, apiKey) {
@@ -124,8 +124,8 @@ export function stubMekoTools() {
       calls.push({ name: 'tryToken', args: [url, token] });
       return state.tokens[token] ?? { ok: false, rejected: true, error: 'invalid_token' };
     },
-    async claudeHasMcp() {
-      calls.push({ name: 'claudeHasMcp', args: [] });
+    async claudeHasMcp(command) {
+      calls.push({ name: 'claudeHasMcp', args: [command] });
       return state.claudeHasMcp;
     },
   };

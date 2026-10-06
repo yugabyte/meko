@@ -1192,7 +1192,10 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY` in Claude Code's
 >   settings (sessions don't inherit the installer's environment), and the `meko` MCP server
 >   registered, both on this Meko server, with tokens it accepts (they may differ from AgentK's
->   key). If anything is missing or wrong it
+>   key; the installer deliberately stops at accepted, and the server checks datapacks once it
+>   runs). A key it took from its own environment (`MEKO_API_KEY`, not typed) isn't stored in
+>   `config.toml`, so a different key in Claude Code's settings counts too: the service, with no
+>   `MEKO_*` environment, would switch to it. If anything is missing or wrong it
 >   offers, after showing what will change, to run Meko's own setup (`@yugabytedb/meko-mcp
 >   --client claude-code`), fetched from npm, checked against the registry's integrity hash and run
 >   with the bundled Node, with the key passed in the environment. Declining it (or, without
@@ -1246,16 +1249,19 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > - **Claude Code on AgentK's Meko:** Claude Code keeps its own copy of the Meko server and token
 >   in two places: its settings' `env` (`MEKO_MCP_URL`, unset meaning Meko Cloud, and
 >   `MEKO_API_KEY`), which the Meko hooks read, and the user-scope `meko` MCP server in
->   `~/.claude.json` (its URL and `Authorization: Bearer` header, `${VAR}` expanded), which the
->   tools call. Local- and project-scope registrations aren't checked. `MekoStatus.claude`
+>   `~/.claude.json` (its URL and `Authorization: Bearer` header, `${VAR}` expanded with the
+>   settings' `env` over AgentK's environment, as a session sees it), which the tools call. A
+>   variable set in neither (a session may get it from its login shell) leaves that token
+>   unchecked, not missing. Local- and project-scope registrations aren't checked. `MekoStatus.claude`
 >   (`mekoclaude.ts`) lists what keeps sessions off AgentK's Meko: the plugin, a missing key or
 >   token, either place on another server (named by host only), and each token that isn't AgentK's
 >   own failing on AgentK's server: turned down (HTTP 401 or 403), or unable to see a project
 >   datapack that AgentK's own token sees (another account's token). Tokens are only tried on
 >   AgentK's server, and only where Claude Code is set up for it. A token that couldn't be checked
 >   (Meko slow or down) is listed apart and never raises the banner. The file checks are cheap;
->   token results (and AgentK's own datapack list, and `claude mcp get meko` when `~/.claude.json`
->   has no user-scope server) are reused for 10 minutes. It's refreshed at startup, on a config
+>   token results (and AgentK's own datapack list, and `<[claude] command> mcp get meko` when
+>   `~/.claude.json` has no user-scope server: exit 1 means none, and a command that couldn't be
+>   asked is unchecked) are reused for 10 minutes. It's refreshed at startup, on a config
 >   change, when Settings opens, at each session launch, and after Claude Code's setup (which
 >   starts over). While the list isn't empty, a banner says what's wrong, with **Set up Claude Code
 >   with this Meko** and **Details** (the Meko tab). AgentK never fixes it on its own: not at

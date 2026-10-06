@@ -18,8 +18,8 @@ function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; se
       calls.push('check');
       return o.checkError ? { ok: false, error: o.checkError } : { ok: true };
     },
-    ensureInClaude: async () => {
-      calls.push('claude');
+    ensureInClaude: async (_url, _key, keyFromEnv) => {
+      calls.push(keyFromEnv ? 'claude (key from env)' : 'claude');
       if (o.setupError) throw new MekoSetupError(o.setupError);
     },
     ui: {
@@ -108,6 +108,20 @@ describe('installer: Meko is optional', () => {
 
     const no = deps({ answers: ['n'], checkError: 'invalid token' });
     await expect(installMeko(cfg(), { keyArg: 'bad', noMeko: false }, no.d)).rejects.toThrow(/Run the installer again/);
+  });
+
+  it("tells Claude Code's check when the key came only from the installer's environment", async () => {
+    process.env.MEKO_API_KEY = 'mko_tkn_env';
+    try {
+      const fromEnv = deps({ canAsk: false });
+      expect(await installMeko(cfg(), { noMeko: false }, fromEnv.d)).toBe(true);
+      expect(fromEnv.calls).toEqual(['check', 'claude (key from env)']);
+      const typed = deps({ canAsk: false });
+      expect(await installMeko(cfg(), { keyArg: 'mko_tkn_typed', noMeko: false }, typed.d)).toBe(true);
+      expect(typed.calls).toEqual(['check', 'claude']);
+    } finally {
+      delete process.env.MEKO_API_KEY;
+    }
   });
 
   it("only warns when Meko's setup for Claude Code is declined", async () => {

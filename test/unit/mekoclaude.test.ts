@@ -32,7 +32,7 @@ function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?
     claude: o.claude ?? claude(),
     tokens: o.tokens ?? {},
     own: o.own ?? ['dp1', 'dp2'],
-    registered: true,
+    registered: true as boolean | null,
   };
   const watch = new MekoClaudeWatch({
     config: () => t.cfg,
@@ -161,6 +161,29 @@ describe("Claude Code's Meko: the watch", () => {
     await s.watch.refresh();
     expect(s.watch.status.gaps).toEqual([]);
     expect(s.registeredCalls()).toBe(1);
+  });
+
+  it("lists a meko MCP server Claude Code couldn't be asked about as unchecked, and asks again next time", async () => {
+    const s = setup({ claude: { ...claude(), server: null } });
+    s.t.registered = null;
+    await s.watch.refresh();
+    expect(s.watch.status).toEqual({
+      gaps: [],
+      unchecked: ["Couldn't ask Claude Code whether it has a meko MCP server (`claude mcp get meko` didn't answer)."],
+      checking: false,
+    });
+    await s.watch.refresh();
+    expect(s.registeredCalls()).toBe(2);
+  });
+
+  it("lists a token from a variable AgentK can't see as unchecked, never as a gap", async () => {
+    const s = setup({ claude: { ...claude(), server: { url: CLOUD, token: null, unresolved: 'MY_TOKEN' } } });
+    await s.watch.refresh();
+    expect(s.watch.status.gaps).toEqual([]);
+    expect(s.watch.status.unchecked).toEqual([
+      "Couldn't check the token on Claude Code's meko MCP server: it comes from ${MY_TOKEN}, which AgentK can't see (it isn't in Claude Code's settings env).",
+    ]);
+    expect(s.tried).toEqual([]);
   });
 
   it('runs refreshes one at a time; ones asked for meanwhile share the next run', async () => {

@@ -141,7 +141,7 @@ export class Core extends EventEmitter {
     this.claudeMeko = new MekoClaudeWatch({
       config: () => this.cfg,
       read: () => readClaudeMeko(claudeUserDir(), claudeConfigPath()),
-      mcpRegistered: () => this.mekoTools.claudeHasMcp(),
+      mcpRegistered: () => this.mekoTools.claudeHasMcp(this.cfg.claude.command),
       projectDatapacks: () => openProjectDatapacks(this.db),
       ownDatapacks: async () => (await this.meko.listDatapacks()).map((d) => d.id),
       tryToken: (url, token) => this.mekoTools.tryToken(url, token),

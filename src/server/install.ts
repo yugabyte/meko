@@ -7,12 +7,16 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
 import { claudeUserDir } from './claude.js';
-import { DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
+import {
+  DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
+} from './config.js';
 import { openDb } from './db.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
 import { claudeConfigPath } from './trust.js';
-import { MekoSetupError, claudeHasMekoMcp, ensureMekoInClaude, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup } from './mekosetup.js';
+import {
+  MekoSetupError, claudeHasMekoMcp, ensureMekoInClaude, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+} from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
 import { hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
@@ -217,8 +221,11 @@ export interface InstallMekoDeps {
   /** A person is there to answer. */
   canAsk: boolean;
   check: (url: string, apiKey: string) => Promise<{ ok: true } | { ok: false; error: string }>;
-  /** Sets up Meko for Claude Code; throws MekoSetupError when that's declined or doesn't finish. */
-  ensureInClaude: (url: string, apiKey: string) => Promise<void>;
+  /**
+   * Sets up Meko for Claude Code; throws MekoSetupError when that's declined or doesn't finish.
+   * `keyFromEnv`: the key came from the installer's MEKO_API_KEY, so it isn't stored in config.toml.
+   */
+  ensureInClaude: (url: string, apiKey: string, keyFromEnv: boolean) => Promise<void>;
   ui: Pick<typeof ui, 'ok' | 'warn' | 'note' | 'section'>;
 }
 
@@ -285,7 +292,9 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boo
 
   let inClaude = true;
   try {
-    await d.ensureInClaude(meko.url, meko.apiKey);
+    // Not typed, and not from config.toml or Claude Code's settings: only this process has it.
+    const keyFromEnv = !storeKey && resolveMekoWithSource(cfg).keySource === 'env' && meko.apiKey === process.env.MEKO_API_KEY;
+    await d.ensureInClaude(meko.url, meko.apiKey, keyFromEnv);
   } catch (e) {
     if (!(e instanceof MekoSetupError)) throw e;
     inClaude = false;
@@ -377,12 +386,18 @@ export async function runInstall(args: string[]): Promise<void> {
       ask,
       canAsk,
       check: checkMeko,
-      ensureInClaude: async (url, apiKey) => {
+      ensureInClaude: async (url, apiKey, keyFromEnv) => {
         // The plugin, its MCP server and the key where its hooks read it, all on this Meko, with
-        // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking.
+        // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking. A key
+        // from the environment must also end up in Claude Code's settings: the service has no
+        // MEKO_* environment, so it would take a different key from there.
         const gaps = async () => {
           const c = readClaudeMeko(claudeUserDir(), claudeConfigPath());
-          return [...mekoClaudeGaps(c, url, claudeHasMekoMcp), ...(await claudeTokenGaps(c, url, apiKey, tryMekoToken))];
+          return [
+            ...mekoClaudeGaps(c, url, () => claudeHasMekoMcp(cfg.claude.command)),
+            ...envKeyGap(c, apiKey, keyFromEnv),
+            ...(await claudeTokenGaps(c, url, apiKey, tryMekoToken)),
+          ];
         };
         await ensureMekoInClaude(
           { url, apiKey, canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] },

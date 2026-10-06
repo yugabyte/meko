@@ -17,24 +17,27 @@ export interface MekoTools {
   /** Whether a URL answers like Meko's REST API (asked without the key). */
   checkApi: (apiUrl: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   /** Runs Meko's setup for Claude Code against this server and key; rejects when it doesn't finish. */
-  setUpClaude: (url: string, apiKey: string, log: (line: string) => void) => Promise<void>;
+  setUpClaude: (url: string, apiKey: string, log: (line: string) => void, claudeCommand: string) => Promise<void>;
   /** Tries one of Claude Code's tokens on a Meko server: the datapacks it sees, or why not. */
   tryToken: (url: string, token: string) => Promise<TokenTry>;
-  /** Claude Code has a `meko` MCP server (`claude mcp get meko`), asked when ~/.claude.json has no user-scope one. */
-  claudeHasMcp: () => Promise<boolean>;
+  /**
+   * Claude Code (`[claude] command`) has a `meko` MCP server (`mcp get meko`), asked when
+   * ~/.claude.json has no user-scope one; null when it couldn't be asked.
+   */
+  claudeHasMcp: (claudeCommand: string) => Promise<boolean | null>;
 }
 
 export const defaultMekoTools: MekoTools = {
   check: checkMeko,
   checkApi: (apiUrl) => looksLikeMekoApi(apiUrl),
-  async setUpClaude(url, apiKey, log) {
+  async setUpClaude(url, apiKey, log, claudeCommand) {
     const manual = manualMekoSetup(url);
     const pkg = await latestMekoSetup().catch((e: unknown) => {
       throw new Error(`Couldn't look up Meko's setup on npm (${errMsg(e)}). Run it yourself: ${manual}`);
     });
     const code = await runMekoSetup(pkg, { url, apiKey, log });
     const c = readClaudeMeko(claudeUserDir(), claudeConfigPath());
-    const registered = c.server ? true : await claudeHasMekoMcpAsync();
+    const registered = c.server ? true : await claudeHasMekoMcpAsync(claudeCommand);
     const left = mekoClaudeGaps(c, url, () => registered);
     if (code !== 0 || left.length) {
       throw new Error(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} Run it yourself: ${manual}`);
@@ -162,7 +165,7 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<voi
       core.log.info(`meko setup: ${line}`);
       tail.push(line);
       if (tail.length > 5) tail.shift();
-    });
+    }, core.config.claude.command);
   } catch (e) {
     const why = errMsg(e).replace(/([^.!?])$/, '$1.');
     throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);

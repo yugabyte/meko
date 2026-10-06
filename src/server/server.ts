@@ -468,8 +468,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       await setUpClaudeMeko(core, core.mekoTools);
       audit(db, 'meko_claude_setup', { url: mekoSettings(core.config).effectiveUrl });
     } finally {
-      // Whatever the setup managed, the banner shows what's left (the saved token results are stale now).
-      await core.claudeMeko.refresh(true);
+      // Whatever the setup managed, the banner shows what's left (the saved token results are
+      // stale now). In the background: the answer doesn't wait on Meko, the state stream updates.
+      void core.claudeMeko.refresh(true);
     }
     return settings();
   });

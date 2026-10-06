@@ -312,7 +312,8 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     };
     expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
     expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([{ name: 'setUpClaude', args: ['https://meko.example.com/mcp', 'mko_tkn_abcdefghij1234'] }]);
-    expect(env.core.state().meko.claude.gaps).toEqual([]);
+    // The check after it runs in the background; the state stream carries what it finds.
+    await waitFor(() => env.core.state().meko.claude, (c) => !c.gaps.length && !c.checking, 5000, "the check after Claude Code's setup");
     expect((await call('GET', '/api/settings')).json().meko).not.toHaveProperty('claudeUrl');
   });
 

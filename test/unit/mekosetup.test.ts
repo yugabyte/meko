@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, claudeMekoTokens, ensureMekoInClaude, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoInClaude, envKeyGap, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
   sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
 
@@ -103,6 +103,55 @@ describe('Meko in Claude Code: what is missing', () => {
     }
     register({ type: 'http', url: CLOUD });
     expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual(["Claude Code's meko MCP server sends no token."]);
+  });
+
+  it('expands ${VAR} with Claude Code\'s settings env over the environment, as a session sees it', () => {
+    ready({ MEKO_API_KEY: 'from-settings' });
+    register({ type: 'http', url: CLOUD, headers: { Authorization: 'Bearer ${MEKO_API_KEY}' } });
+    process.env.MEKO_API_KEY = 'the-servers-own';
+    try {
+      expect(read().server).toEqual({ url: CLOUD, token: 'from-settings' });
+    } finally {
+      delete process.env.MEKO_API_KEY;
+    }
+  });
+
+  it("doesn't call a token from a variable AgentK can't see missing, and doesn't try it", () => {
+    ready();
+    register({ type: 'http', url: CLOUD, headers: { Authorization: 'Bearer ${ONLY_IN_MY_PROFILE}' } });
+    expect(read().server).toEqual({ url: CLOUD, token: null, unresolved: 'ONLY_IN_MY_PROFILE' });
+    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual([]);
+    expect(claudeMekoTokens(read(), CLOUD)).toEqual([{ place: 'settings', token: 'k' }]);
+    // A default makes it resolved.
+    register({ type: 'http', url: CLOUD, headers: { Authorization: 'Bearer ${ONLY_IN_MY_PROFILE:-fallback}' } });
+    expect(read().server).toEqual({ url: CLOUD, token: 'fallback' });
+  });
+
+  it("doesn't count a meko MCP server Claude Code couldn't be asked about", () => {
+    ready();
+    expect(mekoClaudeGaps(read(), CLOUD, () => null)).toEqual([]);
+    expect(mekoClaudeGaps(read(), CLOUD, () => false)).toEqual(['Claude Code has no meko MCP server.']);
+  });
+
+  it("asks [claude] command, telling 'not there' (exit 1) from 'couldn't ask'", async () => {
+    const script = (name: string, body: string) => {
+      const f = join(dir, name);
+      writeFileSync(f, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+      return f;
+    };
+    expect(await claudeHasMekoMcpAsync(script('has', '[ "$1 $2 $3" = "mcp get meko" ] && exit 0; exit 3'))).toBe(true);
+    expect(await claudeHasMekoMcpAsync(script('hasnt', 'exit 1'))).toBe(false);
+    expect(await claudeHasMekoMcpAsync(script('broken', 'exit 2'))).toBe(null);
+    expect(await claudeHasMekoMcpAsync(join(dir, 'no-such-claude'))).toBe(null);
+  });
+
+  it("flags a different key in Claude Code's settings only when AgentK's key came from the installer's environment", () => {
+    ready({ MEKO_API_KEY: 'other-account' });
+    expect(envKeyGap(read(), 'from-env', true)).toEqual([
+      "Claude Code's settings hold a different MEKO_API_KEY, which AgentK would use instead of this one once it runs as a service.",
+    ]);
+    expect(envKeyGap(read(), 'from-env', false)).toEqual([]);
+    expect(envKeyGap(read(), 'other-account', true)).toEqual([]);
   });
 
   it('checks neither URL nor token of a server without a URL, and asks claude only when there is no entry', () => {
