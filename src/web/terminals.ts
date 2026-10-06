@@ -8,8 +8,8 @@ import type { WebglAddon } from '@xterm/addon-webgl';
 import { MAX_PASTE_BYTES, type TermClientMessage, type TermServerMessage } from '../shared/types';
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
+import { HeldImages, type HeldImage } from './heldImages';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
-import { whenSettled } from './util';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
   type BarKey, type TouchSample,
@@ -70,12 +70,8 @@ const FLING_STOP = 0.05;
 const SUBMIT_DELAY = 300;
 /** Pause between the paths of several pasted images, so Claude Code takes each paste on its own. */
 const IMAGE_PASTE_GAP = 200;
-/**
- * How long saved images wait for the terminal to (re)connect before their paths are pasted. A phone's
- * image picker hides the page, which can release the terminal (HIDDEN_RELEASE_MS) until it's shown again.
- */
-const PASTE_CONNECT_WAIT_MS = 15_000;
 const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnects.';
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /**
  * A connection that stays up this long resets the reconnect backoff. An open alone proves nothing:
  * the server upgrades first, then may turn the socket away (a lost login, a failed attach).
@@ -133,12 +129,28 @@ class SessionTerminal {
   retrying = false;
   /** The server said why it can't attach (in `message`): no reconnecting until reconnect(). */
   failed = false;
-  /** A short-lived note after copying ("Copied", or why it failed), or while pasting images. */
+  /** A short-lived note after copying ("Copied", or why it failed), or while sending images. */
   notice: string | null = null;
   /** `notice` is something still going on: the UI shows it with moving dots. */
   noticeBusy = false;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
+  /**
+   * Images for Claude, held until the next Enter or Send (flush). Claude Code can't see this browser's
+   * clipboard, so each image uploads to the host as it's added, and sending pastes its saved path,
+   * which Claude Code reads as the image.
+   */
+  readonly held = new HeldImages<Blob>({
+    upload: async (image) => (await api.pasteImage(this.sessionId, image)).path,
+    thumb: (image) => URL.createObjectURL(image),
+    revoke: (url) => URL.revokeObjectURL(url),
+    onChange: () => this.listeners.forEach((l) => l()),
+    onError: (e) => this.showNotice(`Couldn’t add the image: ${errorMessage(e)}`, 6000),
+  });
+  /** Input typed while held images are being sent (non-null only then); it follows them. */
+  private queued: string[] | null = null;
+  /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
+  private cancelWait: (() => void) | null = null;
 
   constructor(readonly sessionId: string) {
     this.el = document.createElement('div');
@@ -188,7 +200,7 @@ class SessionTerminal {
     this.term.onData((data) => {
       // In typing mode the phone keyboard types here; a sticky Ctrl applies to its next character.
       if (this.ctrl && this.typeCtrl(data)) return;
-      this.send({ type: 'input', data });
+      this.input(data);
     });
     this.term.onBinary((data) => this.send({ type: 'input', data }));
     // tmux sends a mouse selection as OSC 52 (set-clipboard on); put it on the browser clipboard.
@@ -258,43 +270,98 @@ class SessionTerminal {
     this.listeners.forEach((l) => l());
   }
 
-  /**
-   * Pastes images for Claude. Claude Code can't see this browser's clipboard, so each image is saved
-   * on the host and its path is pasted, which Claude Code reads as the image.
-   */
-  async pasteImages(images: Blob[]): Promise<void> {
+  /** Holds images for Claude until the next Enter or Send; each starts uploading now. */
+  holdImages(images: Blob[]) {
     if (!images.length) return;
-    // Not connected right now is fine: the images upload over HTTP, and the paths wait for the socket.
-    const what = images.length === 1 ? 'the image' : 'the images';
     if (images.some((i) => i.size > MAX_PASTE_BYTES)) {
-      this.showNotice(`Couldn’t paste ${what}: images over ${MAX_PASTE_BYTES / 1024 / 1024} MB can’t be pasted.`, 6000);
+      const what = images.length === 1 ? 'the image' : 'the images';
+      this.showNotice(`Couldn’t add ${what}: images over ${MAX_PASTE_BYTES / 1024 / 1024} MB can’t be pasted.`, 6000);
       return;
     }
-    this.showNotice(images.length === 1 ? 'Pasting image' : `Pasting ${images.length} images`, 120_000, true);
-    try {
-      const paths: string[] = [];
-      for (const image of images) paths.push((await api.pasteImage(this.sessionId, image)).path);
-      if (!(await this.whenOpen(PASTE_CONNECT_WAIT_MS))) {
-        this.showNotice(`Couldn’t paste ${what}: ${NOT_CONNECTED}`, 4000);
-        return;
-      }
-      for (const [i, path] of paths.entries()) {
-        if (i) await new Promise((r) => setTimeout(r, IMAGE_PASTE_GAP));
-        if (!this.send({ type: 'input', data: pastePath(path, this.term.modes.bracketedPasteMode) })) {
-          this.showNotice(`Couldn’t paste ${what}: ${NOT_CONNECTED}`, 4000);
-          return;
-        }
-      }
-      this.hideNotice();
-    } catch (e) {
-      this.showNotice(`Couldn’t paste ${what}: ${errorMessage(e)}`, 6000);
-    }
+    this.held.add(images);
   }
 
-  /** Resolves true once the terminal is connected, or false after `ms` (at once when it won't reconnect). */
-  private whenOpen(ms: number): Promise<boolean> {
-    const check = () => (this.conn === 'open' ? true : this.disposed || this.failed ? false : null);
-    return whenSettled(check, (fn) => this.subscribe(fn), ms);
+  /** Held images are being sent: Send waits, and typed keys are queued. */
+  get sending(): boolean {
+    return this.queued !== null;
+  }
+
+  /**
+   * Typed input. An Enter with images held sends them first; while they're sent, input waits its
+   * turn. Returns false when the input couldn't be sent or queued (not connected).
+   */
+  private input(data: string): boolean {
+    if (this.queued) {
+      // Esc or Ctrl+C while a send waits on an upload calls the send off, then goes through.
+      if (data === '\x1b' || data === '\x03') this.cancelWait?.();
+      this.queued.push(data);
+      return true;
+    }
+    if (data === '\r' && this.held.size) {
+      void this.flush('', NOT_CONNECTED);
+      return true;
+    }
+    return this.send({ type: 'input', data });
+  }
+
+  /**
+   * Sends `text` (the compose box's), then the held images' paths, then Enter, letting go of each
+   * image once its path is out. Resolves whether anything reached Claude. False means nothing did (not
+   * connected, an upload failed, or Esc or Ctrl+C called it off while it waited on an upload): the
+   * images stay held. True can still mean the connection dropped partway: what went out isn't sent
+   * again, and the notice says to check Claude's prompt.
+   */
+  private async flush(text: string, offline: string): Promise<boolean> {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      this.showNotice(offline, 4000);
+      return false;
+    }
+    this.queued = [];
+    this.listeners.forEach((l) => l());
+    let sent = false;
+    const cutOff = () => {
+      this.showNotice(sent ? 'The connection dropped while sending. Part of it is in Claude’s prompt: check it once the terminal reconnects.' : offline, 6000);
+      return sent;
+    };
+    try {
+      let images: HeldImage[] | null;
+      if (this.held.uploading) {
+        const waiting = `Sending once ${this.held.size === 1 ? 'the image uploads' : 'the images upload'}. Esc cancels.`;
+        // Until the uploads finish: an upload can stall, and nothing bounds it.
+        this.showNotice(waiting, 3_600_000);
+        const cancelled = new Promise<null>((r) => (this.cancelWait = () => r(null)));
+        images = await Promise.race([this.held.ready(), cancelled]);
+        this.cancelWait = null;
+        // A failed upload's notice replaced this one: leave that showing.
+        if (this.notice === waiting) this.hideNotice();
+      } else images = await this.held.ready();
+      if (!images) return false;
+      const bracketed = this.term.modes.bracketedPasteMode;
+      const pastes: { data: string; image?: HeldImage }[] = [
+        ...(text ? [{ data: pasteText(text, bracketed) }] : []),
+        ...images.map((image) => ({ data: pastePath(image.path!, bracketed), image })),
+      ];
+      for (const [i, p] of pastes.entries()) {
+        // One paste at a time, so Claude Code makes each image path an [Image #N].
+        if (i) await sleep(IMAGE_PASTE_GAP);
+        if (!this.send({ type: 'input', data: p.data })) return cutOff();
+        sent = true;
+        if (p.image) this.held.release([p.image]);
+      }
+      if (pastes.length) await sleep(SUBMIT_DELAY);
+      if (!this.send({ type: 'input', data: '\r' })) return cutOff();
+      return true;
+    } finally {
+      this.cancelWait = null;
+      const queued = this.queued ?? [];
+      this.queued = null;
+      this.listeners.forEach((l) => l());
+      // An Enter in here may start another send, which queues what's left behind it.
+      let dropped = false;
+      for (const data of queued) if (!this.input(data)) dropped = true;
+      // Say so, unless a notice already says why (the connection dropped).
+      if (dropped && !this.notice) this.showNotice(NOT_CONNECTED, 4000);
+    }
   }
 
   private onPaste = (e: ClipboardEvent) => {
@@ -302,16 +369,19 @@ class SessionTerminal {
     if (!images.length) return; // text: xterm pastes it
     e.preventDefault();
     e.stopPropagation();
-    void this.pasteImages(images);
+    this.holdImages(images);
   };
 
   /**
-   * Ctrl+V on a Mac: an image on the clipboard is pasted; otherwise Claude gets Ctrl+V, as before (on
+   * Ctrl+V on a Mac: an image on the clipboard is held for Claude; otherwise Claude gets Ctrl+V, as before (on
    * the same computer, Claude Code then reads the clipboard itself). Safari asks before each read.
    */
   private async ctrlV() {
     const images = await readClipboardImages();
-    if (images?.length) return this.pasteImages(images);
+    if (images?.length) {
+      this.holdImages(images);
+      return;
+    }
     this.send({ type: 'input', data: '\x16' });
     if (images === null) this.showNotice('To paste an image, press ⌘V.', 4000);
   }
@@ -322,12 +392,12 @@ class SessionTerminal {
     e.dataTransfer.dropEffect = 'copy';
   };
 
-  /** Images dropped on the terminal are pasted; the browser would otherwise open the file. */
+  /** Images dropped on the terminal are held for Claude; the browser would otherwise open the file. */
   private onDrop = (e: DragEvent) => {
     if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     const images = pastedImages(e.dataTransfer);
-    if (images.length) void this.pasteImages(images);
+    if (images.length) this.holdImages(images);
     else this.showNotice('Only images can be dropped here: PNG, JPEG, GIF or WebP.', 4000);
   };
 
@@ -451,9 +521,12 @@ class SessionTerminal {
     if (!this.ws && this.started && !this.failed) this.connect();
   }
 
-  /** Presses a key from the key bar. Returns false when not connected (nothing was sent). */
+  /**
+   * Presses a key from the key bar. Returns false when not connected (nothing was sent). While held
+   * images are being sent, the key is queued behind them.
+   */
   sendKey(key: BarKey): boolean {
-    return this.send({ type: 'input', data: keySequence(key, this.term.modes.applicationCursorKeysMode) });
+    return this.input(keySequence(key, this.term.modes.applicationCursorKeysMode));
   }
 
   /** Arms or cancels the sticky Ctrl. */
@@ -469,16 +542,19 @@ class SessionTerminal {
    */
   typeCtrl(ch: string): boolean {
     const seq = ctrlSequence(ch);
-    if (!seq || !this.send({ type: 'input', data: seq })) return false;
+    // Through input(), so a Ctrl+letter typed while images are being sent waits behind them.
+    if (!seq || !this.input(seq)) return false;
     this.setCtrl(false);
     return true;
   }
 
-  /** Types text from the compose box and submits it with Enter. Returns false when not connected. */
-  submit(text: string): boolean {
-    if (!this.send({ type: 'input', data: pasteText(text, this.term.modes.bracketedPasteMode) })) return false;
-    setTimeout(() => this.send({ type: 'input', data: '\r' }), SUBMIT_DELAY);
-    return true;
+  /**
+   * Types text from the compose box, then any held images, and submits them with Enter. Resolves
+   * false when nothing reached Claude (see flush), so the box can put its text back.
+   */
+  submit(text: string): Promise<boolean> {
+    if (this.sending) return Promise.resolve(false);
+    return this.flush(text, 'Not connected to the session. Your message is kept; send it again once it reconnects.');
   }
 
   /**
@@ -795,6 +871,7 @@ class SessionTerminal {
     if (this.flushFrame) cancelAnimationFrame(this.flushFrame);
     this.stopFling();
     this.disableWebgl();
+    this.held.clear();
     this.resizeObs?.disconnect();
     this.ws?.close();
     this.term.dispose();
@@ -811,6 +888,15 @@ export function getTerminal(sessionId: string): SessionTerminal {
     cache.set(sessionId, t);
   }
   return t;
+}
+
+/**
+ * Whether any session's terminal holds images for Claude. They live only in the page, on terminals
+ * that outlast their pane (switching sessions keeps them), so an update's reload waits on this.
+ */
+export function hasHeldImages(): boolean {
+  for (const t of cache.values()) if (t.held.size) return true;
+  return false;
 }
 
 export function peekTerminal(sessionId: string): SessionTerminal | undefined {

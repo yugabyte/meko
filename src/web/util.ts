@@ -1,4 +1,5 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
+import type { SyntheticEvent } from 'react';
 import type { MekoFirstTurn, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
@@ -212,6 +213,9 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
+/** For a button's pointer and mouse down: tapping it keeps focus (and the on-screen keyboard) where it is. */
+export const keepFocus = (e: SyntheticEvent) => e.preventDefault();
+
 export function totalTokens(u: TokenUsage): number {
   return u.input + u.output + u.cacheRead + u.cacheWrite;
 }
@@ -289,26 +293,4 @@ export function designApprovalBlocker(session: Session): string | null {
   if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
   if (otherPrompt) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
-}
-
-/**
- * Waits for `check` to settle: it's asked now and after each change `subscribe` reports, and answers
- * true (done), false (give up) or null (keep waiting). Resolves false after `ms` without an answer.
- */
-export function whenSettled(check: () => boolean | null, subscribe: (fn: () => void) => () => void, ms: number): Promise<boolean> {
-  const now = check();
-  if (now !== null) return Promise.resolve(now);
-  return new Promise((resolve) => {
-    let unsub = () => {};
-    const done = (ok: boolean) => {
-      clearTimeout(timer);
-      unsub();
-      resolve(ok);
-    };
-    const timer = setTimeout(() => done(false), ms);
-    unsub = subscribe(() => {
-      const v = check();
-      if (v !== null) done(v);
-    });
-  });
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { isBusy, pageVersion, planReload, RELOADED_FOR_KEY } from '../reload';
+import { hasHeldImages } from '../terminals';
 
 /** How often a stale page that's waiting on the user checks again (a dialog has no close event). */
 const RECHECK_MS = 5000;
@@ -23,7 +24,8 @@ function writeReloadedFor(v: string | null): void {
 
 /**
  * Reloads the page once the server runs another version than the one that served it, unless the
- * user is busy (see isBusy); then it checks again until they aren't. Returns the server's version
+ * user is busy (see isBusy) or a session's terminal holds images for Claude (hasHeldImages); then it
+ * checks again until neither is true. Returns the server's version
  * while the page is stale and waiting, for the Reload banner, else null.
  */
 export function useReload(serverVersion: string | undefined): string | null {
@@ -35,7 +37,7 @@ export function useReload(serverVersion: string | undefined): string | null {
     if (!serverVersion) return;
     loaded.current ??= serverVersion;
     const check = () => {
-      const plan = planReload({ loaded: loaded.current!, server: serverVersion, busy: isBusy(document), reloadedFor: readReloadedFor() });
+      const plan = planReload({ loaded: loaded.current!, server: serverVersion, busy: isBusy(document) || hasHeldImages(), reloadedFor: readReloadedFor() });
       if (plan === 'current') {
         writeReloadedFor(null);
         setStale(null);
