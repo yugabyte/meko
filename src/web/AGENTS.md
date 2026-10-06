@@ -47,9 +47,9 @@ by opacity (Safari doesn't animate `content`) and stay still with reduced motion
 ## Reloads after an update
 
 An open page reloads itself when the server comes back on another version (`reload.ts`), unless
-the user is busy: a `role="dialog"` element is open, an element marked `data-unsent` is showing
-(unsent state that lives only in the page, like images held for Claude), a text field has focus,
-or a `textarea` holds text. A field whose text survives a reload (kept in `sessionStorage`, like the terminal compose box)
+the user is busy: a `role="dialog"` element is open, a text field has focus, a `textarea` holds
+text, or a session's terminal holds images for Claude (`hasHeldImages()`, checked in
+`useReload.ts`, since terminals outlast their pane). A field whose text survives a reload (kept in `sessionStorage`, like the terminal compose box)
 gets `data-reload-safe` so it doesn't hold the reload up. Text kept anywhere else in a field that
 isn't a focused input or a textarea is lost on the reload, so keep drafts that matter in a
 textarea, a dialog, or storage.

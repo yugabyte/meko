@@ -435,11 +435,16 @@ until you send: each image shows in a strip of thumbnails under the terminal (ab
 on touch screens) while it uploads and after, with ✕ to take it out, and the next Enter typed into
 the terminal (or the key bar's ⏎, or the compose box's Send) pastes the held paths one at a time,
 200 ms apart, after anything you typed, then sends Enter, so `fix this [Image #1]` goes as one
-message (`heldImages.ts`, `flush()` in `terminals.ts`). Keys typed while that runs are queued and
-follow it. Pasted text and Option+Enter (a new line in Claude Code) don't send held images. If the
-terminal isn't connected, or an upload failed, nothing is sent and the images stay held; an image
-taken out of the strip stays on the host until the session's pastes are removed. Held images live
-in the page, so an update's reload waits while they show (see Releases and auto-update). The server takes
+message (`heldImages.ts`, `flush()` in `terminals.ts`). Keys typed while that runs, sticky-Ctrl
+letters included, are queued and follow it; Enter waits for uploads still running, and Esc or
+`Ctrl+C` meanwhile calls the send off (✕ on a stalled image also ends the wait). Pasted text and
+Option+Enter (a new line in Claude Code) don't send held images. If the terminal isn't connected,
+or an upload failed, nothing is sent and the images stay held. If the connection drops partway,
+what went out isn't sent again (each image leaves the strip once its path is out, and the compose
+box doesn't get its text back), and a notice says to check Claude's prompt. An image taken out of
+the strip stays on the host until the session's pastes are removed. Held images live in the page,
+on each session's terminal, so an update's reload waits while any session holds some (see Releases
+and auto-update). The server takes
 PNG, JPEG, GIF and WebP, checked by their bytes, up to 20 MB each, and saves them owner-only under
 `~/.agent-k-local/pastes/<session>/`; they're removed when the session is archived or its project
 closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
@@ -1747,8 +1752,8 @@ window, because they never touch tmux.
 event socket reconnects to a server on another version (an update, a reinstall or a rollback), the
 page reloads, keeping its route, so it never keeps running the old UI (`src/web/reload.ts`,
 `hooks/useReload.ts`). It waits while a reload could lose something: a dialog, sheet or popover is
-open, something unsent that lives only in the page is showing (`data-unsent`: images held for
-Claude), a text field has focus, or a textarea holds unsent text. Fields whose text survives a reload
+open, a session's terminal holds images for Claude (`hasHeldImages()` in `terminals.ts`, whether
+or not that session is on screen), a text field has focus, or a textarea holds unsent text. Fields whose text survives a reload
 are marked `data-reload-safe` and don't count (the terminal compose box keeps its draft in
 `sessionStorage`), and neither does xterm's input. While it waits, a banner offers **Reload**, and
 it checks again when focus leaves a field, the tab is shown or hidden, and every 5 seconds. A tab

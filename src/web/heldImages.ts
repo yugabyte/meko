@@ -23,8 +23,11 @@ export interface HeldImagesDeps<B> {
 
 export class HeldImages<B> {
   private items: HeldImage[] = [];
-  /** Each image's upload, resolving to whether it succeeded. */
-  private uploads = new Map<number, Promise<boolean>>();
+  /**
+   * Each image's upload (`done`: whether it succeeded), and `drop`, which settles `done` at once when
+   * the image is removed, so ready() never waits on an upload nobody wants (a stalled fetch included).
+   */
+  private uploads = new Map<number, { done: Promise<boolean>; drop: () => void }>();
   private nextId = 1;
 
   constructor(private deps: HeldImagesDeps<B>) {}
@@ -58,12 +61,16 @@ export class HeldImages<B> {
         (e: unknown) => {
           // Removed while it uploaded: nobody is waiting on it.
           if (!this.has(id)) return true;
+          // Not through drop(): a waiting ready() has to see this upload fail.
+          this.uploads.delete(id);
           this.remove(id);
           this.deps.onError(e);
           return false;
         },
       );
-      this.uploads.set(id, upload);
+      let drop = () => {};
+      const dropped = new Promise<boolean>((r) => (drop = () => r(true)));
+      this.uploads.set(id, { done: Promise.race([upload, dropped]), drop });
     }
     this.deps.onChange();
   }
@@ -73,7 +80,7 @@ export class HeldImages<B> {
     if (!item) return;
     this.deps.revoke(item.thumb);
     this.items = this.items.filter((i) => i.id !== id);
-    this.uploads.delete(id);
+    this.forget(id);
     this.deps.onChange();
   }
 
@@ -84,7 +91,7 @@ export class HeldImages<B> {
     if (!gone.length) return;
     for (const i of gone) {
       this.deps.revoke(i.thumb);
-      this.uploads.delete(i.id);
+      this.forget(i.id);
     }
     this.items = this.items.filter((i) => !ids.has(i.id));
     this.deps.onChange();
@@ -100,10 +107,15 @@ export class HeldImages<B> {
    */
   async ready(): Promise<HeldImage[] | null> {
     const ids = this.items.map((i) => i.id);
-    const ok = await Promise.all(ids.map((id) => this.uploads.get(id) ?? true));
+    const ok = await Promise.all(ids.map((id) => this.uploads.get(id)?.done ?? true));
     if (ok.includes(false)) return null;
     // An image removed while this waited is left out.
     return this.items.filter((i) => ids.includes(i.id) && i.path !== null);
+  }
+
+  private forget(id: number) {
+    this.uploads.get(id)?.drop();
+    this.uploads.delete(id);
   }
 
   private has(id: number): boolean {

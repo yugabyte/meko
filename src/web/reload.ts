@@ -48,13 +48,11 @@ function editable(el: FieldLike): boolean {
 }
 
 /**
- * Whether a reload now could lose something: a dialog, sheet or popover is open, something unsent
- * that lives only in the page is showing (`data-unsent`, like images held for Claude), the user is in
- * a text field, or a textarea holds unsent text (say, a review comment being written).
+ * Whether a reload now could lose something: a dialog, sheet or popover is open, the user is in a
+ * text field, or a textarea holds unsent text (say, a review comment being written).
  */
 export function isBusy(doc: DocLike): boolean {
   if (doc.querySelector('[role="dialog"]')) return true;
-  if (doc.querySelector('[data-unsent]')) return true;
   const a = doc.activeElement;
   if (a && editable(a) && !reloadSafe(a)) return true;
   const areas = doc.getElementsByTagName('textarea');

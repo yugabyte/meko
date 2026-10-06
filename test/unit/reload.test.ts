@@ -10,16 +10,12 @@ const field = (tagName: string, o: Partial<FieldLike> & { classes?: string[]; sa
   classList: { contains: (c) => (o.classes ?? []).includes(c) },
 });
 
-/**
- * A page with these textareas, this focused element, and optionally an open dialog, something unsent
- * (held images) or a version meta tag.
- */
-function page(o: { active?: FieldLike; textareas?: FieldLike[]; dialog?: boolean; unsent?: boolean; version?: string } = {}): DocLike {
+/** A page with these textareas, this focused element, and optionally an open dialog or a version meta tag. */
+function page(o: { active?: FieldLike; textareas?: FieldLike[]; dialog?: boolean; version?: string } = {}): DocLike {
   return {
     activeElement: o.active ?? field('BODY'),
     querySelector: (sel) => {
       if (sel === '[role="dialog"]') return o.dialog ? {} : null;
-      if (sel === '[data-unsent]') return o.unsent ? {} : null;
       if (sel === 'meta[name="ak-version"]') return o.version === undefined ? null : { getAttribute: () => o.version! };
       throw new Error(`unexpected selector ${sel}`);
     },
@@ -46,11 +42,6 @@ describe('whether the user is busy', () => {
 
   it('is while a dialog, sheet or popover is open', () => {
     expect(isBusy(page({ dialog: true }))).toBe(true);
-  });
-
-  it('is while images wait to go to Claude', () => {
-    expect(isBusy(page({ unsent: true }))).toBe(true);
-    expect(isBusy(page())).toBe(false);
   });
 
   it('is while a text field has focus', () => {

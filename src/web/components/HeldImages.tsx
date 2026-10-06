@@ -4,14 +4,14 @@ import { cx, keepFocus } from '../util';
 /**
  * The images waiting to go to Claude with the next Enter (or the compose box's Send on touch
  * screens), each with a ✕ to take it out. Under the terminal on a desktop, above the compose box on
- * touch screens. While it shows, an update's reload waits (data-unsent, reload.ts).
+ * touch screens.
  */
 export function HeldImages({ term, touch }: { term: SessionTerminal; touch: boolean }) {
   const images = term.held.list;
   if (!images.length) return null;
   const count = images.length === 1 ? '1 image' : `${images.length} images`;
   return (
-    <div className="held-images" role="group" aria-label="Images to send" data-unsent="">
+    <div className="held-images" role="group" aria-label="Images to send">
       <div className="held-list">
         {images.map((img, i) => (
           <div key={img.id} className={cx('held', !img.path && 'uploading')}>

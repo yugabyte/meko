@@ -72,7 +72,7 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
 
   /**
    * Sends the text and any held images. Returns whether sending started. The text comes back to the
-   * box if it couldn't be sent (the terminal says why).
+   * box if none of it reached Claude (the terminal says why), ahead of anything typed meanwhile.
    */
   const send = () => {
     if (!canSend) return false;
@@ -83,7 +83,7 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
     const sent = text.trim() ? text : '';
     setText('');
     void term.submit(sent).then((ok) => {
-      if (!ok) setText((t) => t || sent);
+      if (!ok && sent) setText((t) => (t ? `${sent}\n${t}` : sent));
     });
     return true;
   };

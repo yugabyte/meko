@@ -82,6 +82,16 @@ describe('held images', () => {
     expect(t.errors).toEqual([]);
   });
 
+  it('stop waiting on an upload that never ends once its image is removed', async () => {
+    const t = setup();
+    t.held.add(['a.png', 'stalled.png']);
+    await t.finish('a.png');
+    const waiting = t.held.ready();
+    // stalled.png's upload never settles: removing it must be enough.
+    t.held.remove(t.held.list[1].id);
+    expect((await waiting)?.map((i) => i.path)).toEqual(['/pastes/a.png']);
+  });
+
   it('let go of only the images sent, keeping ones added meanwhile', async () => {
     const t = setup();
     t.held.add(['a.png']);

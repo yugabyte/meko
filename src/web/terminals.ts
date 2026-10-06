@@ -8,7 +8,7 @@ import type { WebglAddon } from '@xterm/addon-webgl';
 import { MAX_PASTE_BYTES, type TermClientMessage, type TermServerMessage } from '../shared/types';
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
-import { HeldImages } from './heldImages';
+import { HeldImages, type HeldImage } from './heldImages';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
@@ -149,6 +149,8 @@ class SessionTerminal {
   });
   /** Input typed while held images are being sent (non-null only then); it follows them. */
   private queued: string[] | null = null;
+  /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
+  private cancelWait: (() => void) | null = null;
 
   constructor(readonly sessionId: string) {
     this.el = document.createElement('div');
@@ -284,9 +286,14 @@ class SessionTerminal {
     return this.queued !== null;
   }
 
-  /** Typed input. An Enter with images held sends them first; while they're sent, input waits its turn. */
+  /**
+   * Typed input. An Enter with images held sends them first; while they're sent, input waits its
+   * turn. Returns false when the input couldn't be sent or queued (not connected).
+   */
   private input(data: string): boolean {
     if (this.queued) {
+      // Esc or Ctrl+C while a send waits on an upload calls the send off, then goes through.
+      if (data === '\x1b' || data === '\x03') this.cancelWait?.();
       this.queued.push(data);
       return true;
     }
@@ -298,9 +305,11 @@ class SessionTerminal {
   }
 
   /**
-   * Sends `text` (the compose box's), then the held images' paths, then Enter, and lets go of the
-   * images sent. Resolves false when that couldn't be done: the images stay held, and `offline` (or
-   * why an upload failed) is shown.
+   * Sends `text` (the compose box's), then the held images' paths, then Enter, letting go of each
+   * image once its path is out. Resolves whether anything reached Claude. False means nothing did (not
+   * connected, an upload failed, or Esc or Ctrl+C called it off while it waited on an upload): the
+   * images stay held. True can still mean the connection dropped partway: what went out isn't sent
+   * again, and the notice says to check Claude's prompt.
    */
   private async flush(text: string, offline: string): Promise<boolean> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
@@ -309,35 +318,49 @@ class SessionTerminal {
     }
     this.queued = [];
     this.listeners.forEach((l) => l());
+    let sent = false;
+    const cutOff = () => {
+      this.showNotice(sent ? 'The connection dropped while sending. Part of it is in Claude’s prompt: check it once the terminal reconnects.' : offline, 6000);
+      return sent;
+    };
     try {
-      const uploading = this.held.uploading;
-      if (uploading) this.showNotice(this.held.size === 1 ? 'Uploading the image' : 'Uploading the images', 120_000, true);
-      const images = await this.held.ready();
-      if (!images) return false; // the failed upload was reported
-      if (uploading && this.noticeBusy) this.hideNotice();
+      let images: HeldImage[] | null;
+      if (this.held.uploading) {
+        const waiting = `Sending once ${this.held.size === 1 ? 'the image uploads' : 'the images upload'}. Esc cancels.`;
+        // Until the uploads finish: an upload can stall, and nothing bounds it.
+        this.showNotice(waiting, 3_600_000);
+        const cancelled = new Promise<null>((r) => (this.cancelWait = () => r(null)));
+        images = await Promise.race([this.held.ready(), cancelled]);
+        this.cancelWait = null;
+        // A failed upload's notice replaced this one: leave that showing.
+        if (this.notice === waiting) this.hideNotice();
+      } else images = await this.held.ready();
+      if (!images) return false;
       const bracketed = this.term.modes.bracketedPasteMode;
-      const pastes = [...(text ? [pasteText(text, bracketed)] : []), ...images.map((i) => pastePath(i.path!, bracketed))];
-      for (const [i, data] of pastes.entries()) {
+      const pastes: { data: string; image?: HeldImage }[] = [
+        ...(text ? [{ data: pasteText(text, bracketed) }] : []),
+        ...images.map((image) => ({ data: pastePath(image.path!, bracketed), image })),
+      ];
+      for (const [i, p] of pastes.entries()) {
         // One paste at a time, so Claude Code makes each image path an [Image #N].
         if (i) await sleep(IMAGE_PASTE_GAP);
-        if (!this.send({ type: 'input', data })) {
-          this.showNotice(offline, 4000);
-          return false;
-        }
+        if (!this.send({ type: 'input', data: p.data })) return cutOff();
+        sent = true;
+        if (p.image) this.held.release([p.image]);
       }
       if (pastes.length) await sleep(SUBMIT_DELAY);
-      if (!this.send({ type: 'input', data: '\r' })) {
-        this.showNotice(offline, 4000);
-        return false;
-      }
-      this.held.release(images);
+      if (!this.send({ type: 'input', data: '\r' })) return cutOff();
       return true;
     } finally {
+      this.cancelWait = null;
       const queued = this.queued ?? [];
       this.queued = null;
       this.listeners.forEach((l) => l());
       // An Enter in here may start another send, which queues what's left behind it.
-      for (const data of queued) this.input(data);
+      let dropped = false;
+      for (const data of queued) if (!this.input(data)) dropped = true;
+      // Say so, unless a notice already says why (the connection dropped).
+      if (dropped && !this.notice) this.showNotice(NOT_CONNECTED, 4000);
     }
   }
 
@@ -498,7 +521,10 @@ class SessionTerminal {
     if (!this.ws && this.started && !this.failed) this.connect();
   }
 
-  /** Presses a key from the key bar. Returns false when not connected (nothing was sent). */
+  /**
+   * Presses a key from the key bar. Returns false when not connected (nothing was sent). While held
+   * images are being sent, the key is queued behind them.
+   */
   sendKey(key: BarKey): boolean {
     return this.input(keySequence(key, this.term.modes.applicationCursorKeysMode));
   }
@@ -516,14 +542,15 @@ class SessionTerminal {
    */
   typeCtrl(ch: string): boolean {
     const seq = ctrlSequence(ch);
-    if (!seq || !this.send({ type: 'input', data: seq })) return false;
+    // Through input(), so a Ctrl+letter typed while images are being sent waits behind them.
+    if (!seq || !this.input(seq)) return false;
     this.setCtrl(false);
     return true;
   }
 
   /**
    * Types text from the compose box, then any held images, and submits them with Enter. Resolves
-   * false when nothing was sent (not connected, or an upload failed), so the box can keep its text.
+   * false when nothing reached Claude (see flush), so the box can put its text back.
    */
   submit(text: string): Promise<boolean> {
     if (this.sending) return Promise.resolve(false);
@@ -861,6 +888,15 @@ export function getTerminal(sessionId: string): SessionTerminal {
     cache.set(sessionId, t);
   }
   return t;
+}
+
+/**
+ * Whether any session's terminal holds images for Claude. They live only in the page, on terminals
+ * that outlast their pane (switching sessions keeps them), so an update's reload waits on this.
+ */
+export function hasHeldImages(): boolean {
+  for (const t of cache.values()) if (t.held.size) return true;
+  return false;
 }
 
 export function peekTerminal(sessionId: string): SessionTerminal | undefined {
