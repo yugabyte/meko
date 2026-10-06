@@ -35,7 +35,7 @@ Read the relevant code, then design the change: the goal, the approach, the file
 
 Put the design in exactly one place:
 - If the design is complex (several components, a data flow, UI, or a state machine) and you have the Artifact tool, publish it as an Artifact, with diagrams where they help. Don't also write a markdown copy.
-- Otherwise, write it as markdown to {{designFile}}.
+- Otherwise, write it as markdown to {{designFile}}; \`\`\`mermaid blocks render as diagrams there.
 
 Then stop and say the design is ready. The user reviews and approves it in AgentK Local. If they send feedback, revise the same Artifact (republish the same file) or the same markdown file.`,
 

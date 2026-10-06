@@ -1,47 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import type { DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
+import { useDataTheme } from '../theme';
 import { approveLabel, cx, designApprovalBlocker, relativeTime } from '../util';
 import { DesignQuestions } from './DesignQuestions';
+import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
 import { Busy } from './common';
-
-// Markdown designs render in the app's own page, so they get no forms or styles (an invisible
-// form button could post to the API with the user's cookie, and a <style> could restyle the
-// app), and their links open in a new tab instead of replacing the workbench.
-const PURIFY = {
-  FORBID_TAGS: ['form', 'button', 'select', 'textarea', 'style', 'link', 'meta', 'base'],
-  FORBID_ATTR: ['style', 'action', 'formaction'],
-};
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  // Task-list checkboxes (`- [x] done`) are the one kind of input kept: any input becomes a
-  // read-only tick, and with no forms or buttons it can't send anything.
-  if (node.tagName === 'INPUT') {
-    node.setAttribute('type', 'checkbox');
-    node.setAttribute('disabled', '');
-  }
-  if (node.tagName === 'A' && node.hasAttribute('href')) {
-    node.setAttribute('target', '_blank');
-    node.setAttribute('rel', 'noopener noreferrer');
-  }
-});
-
-/** The app's explicit theme (`data-theme` on <html>), or null when it follows the system. */
-function useDataTheme(): string | null {
-  const read = () => document.documentElement.getAttribute('data-theme');
-  const [theme, setTheme] = useState(read);
-  useEffect(() => {
-    const obs = new MutationObserver(() => setTheme(read()));
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => obs.disconnect();
-  }, []);
-  return theme;
-}
 
 /**
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
@@ -88,10 +56,6 @@ export function DesignPanel({
     if (page) document.title = `${session.name} · Design · AgentK Local`;
   }, [page, session.name]);
 
-  const html = useMemo(() => {
-    if (!doc?.markdown) return '';
-    return DOMPurify.sanitize(marked.parse(doc.markdown, { async: false }) as string, PURIFY);
-  }, [doc?.markdown]);
   const frame = useMemo(() => (doc?.html ? designFrameDoc(doc.html, theme) : null), [doc?.html, theme]);
 
   // Questions show while designing (other feedback goes there too), and afterwards if there were any.
@@ -131,7 +95,7 @@ export function DesignPanel({
           ) : !doc ? (
             <p className="muted"><Busy label="Loading" /></p>
           ) : doc.markdown ? (
-            <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
+            <MarkdownView markdown={doc.markdown} />
           ) : doc.artifactUrl ? (
             <p className="muted">
               The design is an Artifact on claude.ai. Its page couldn’t be read here, so open it with{' '}

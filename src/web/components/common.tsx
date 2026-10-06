@@ -45,6 +45,7 @@ export function Dialog({
   footer,
   wide,
   aside,
+  className,
 }: {
   title: ReactNode;
   onClose: () => void;
@@ -52,6 +53,7 @@ export function Dialog({
   footer?: ReactNode;
   wide?: boolean;
   aside?: ReactNode;
+  className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -74,7 +76,7 @@ export function Dialog({
   }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cx('dialog', wide && 'wide')} role="dialog" aria-modal="true" ref={ref}>
+      <div className={cx('dialog', wide && 'wide', className)} role="dialog" aria-modal="true" ref={ref}>
         <div className="dialog-hd">
           <h2>{title}</h2>
           {aside}

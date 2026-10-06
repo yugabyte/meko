@@ -43,3 +43,30 @@ export function useTheme(): [ThemePref, () => void] {
   }, []);
   return [pref, cycle];
 }
+
+/** The app's explicit theme (`data-theme` on <html>), or null when it follows the system. */
+export function useDataTheme(): string | null {
+  const read = () => document.documentElement.getAttribute('data-theme');
+  const [theme, setTheme] = useState(read);
+  useEffect(() => {
+    const obs = new MutationObserver(() => setTheme(read()));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
+}
+
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+/** Whether the app shows dark: the theme picked, else the system's. */
+export function useDarkTheme(): boolean {
+  const theme = useDataTheme();
+  const [systemDark, setSystemDark] = useState(() => matchMedia(DARK_QUERY).matches);
+  useEffect(() => {
+    const mq = matchMedia(DARK_QUERY);
+    const on = () => setSystemDark(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return theme ? theme === 'dark' : systemDark;
+}
