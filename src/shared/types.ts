@@ -499,6 +499,11 @@ export interface Session {
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
+  /**
+   * How full Claude's context window is, in percent, as AgentK's mod last measured it (after each
+   * turn); null without the mod, or before its first reading since Claude started or was cleared.
+   */
+  contextPercent: number | null;
   /** Set while status is `starting`. */
   startup: StartupState | null;
   lastEventAt: number | null;
@@ -572,6 +577,30 @@ export interface AppState {
   invites: DatapackInvite[];
   /** New sessions whose worktree couldn't be made, newest first, until dismissed (kept in memory: a restart forgets them). */
   failedStarts: FailedStart[];
+  /** The Claude Code sessions launch with, and whether it runs AgentK's mod. */
+  claudeCode: ClaudeCodeStatus;
+}
+
+/**
+ * The Claude Code the next session launch gets (`[claude] command`), as AgentK's mod needs it. A
+ * running session keeps the version it started with until Claude restarts in it.
+ */
+export interface ClaudeCodeStatus {
+  /** What `claude --version` printed, or null when it can't be read (or hasn't been yet). */
+  version: string | null;
+  /** The oldest Claude Code AgentK's mod runs in. */
+  minModVersion: string;
+  /** Whether `version` runs the mod; null while the version is unknown. */
+  supportsMod: boolean | null;
+  /** `[claude] mod`: when it's off, the version doesn't matter to AgentK. */
+  modEnabled: boolean;
+  /** `claude update` is running (POST /api/claude/update). */
+  updating: boolean;
+  /**
+   * The last update's outcome until the server restarts: whether it worked, the versions before and
+   * after, and the last lines Claude Code printed.
+   */
+  lastUpdate: { ok: boolean; from: string | null; to: string | null; message: string; at: number } | null;
 }
 
 /**
@@ -1284,11 +1313,11 @@ export type TermServerMessage =
 //        when AgentK's questions changed since, or in plan mode)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
-//        502 when the move was made but its prompt couldn't be typed)
+//        502 when the move was made but its prompt couldn't be sent)
 // GET    /api/sessions/:id/design              → DesignDoc
-// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (types them in for AgentK to revise the design;
+// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design;
 //        409 outside Design, while AgentK works or Claude waits on something else, or when AgentK's questions changed
-//        since; 400 for a bad answer or answers too long for one prompt; 502 when typing failed)
+//        since; 400 for a bad answer or answers too long for one prompt; 502 when sending failed)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
@@ -1309,6 +1338,8 @@ export type TermServerMessage =
 //                                                           '' goes back to the host name; callHomeEnabled and
 //                                                           resolveConflicts are booleans)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
+// POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
+//        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus
 // POST   /api/update/apply                     → UpdateStatus

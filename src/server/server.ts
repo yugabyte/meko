@@ -466,6 +466,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   // ---- updates ----
+  app.post('/api/claude/update', async () => core.claudeCode.update());
   app.get('/api/update', async () => (opts.updater ? opts.updater.status() : core.updateStatus()));
   app.post('/api/update/check', async () => (opts.updater ? opts.updater.check() : core.updateStatus()));
   app.post('/api/update/apply', async () => {
@@ -534,6 +535,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       pending = null;
       if (clients.size) broadcast({ type: 'state', state: core.state() });
     }, 100);
+  });
+  // A push still due when the server closes would read state after the database may be closed.
+  app.addHook('onClose', async () => {
+    if (pending) clearTimeout(pending);
+    pending = null;
   });
   core.on('notify', (ev: ServerEvent) => broadcast(ev));
 

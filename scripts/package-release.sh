@@ -12,7 +12,7 @@
 #     node/bin/node            bundled Node runtime
 #     node/LICENSE
 #     lib/package.json
-#     lib/dist/                compiled server + web assets
+#     lib/dist/                compiled server + web assets, and AgentK's mod for Claude Code (dist/mod)
 #     lib/node_modules/        production dependencies only
 #     lib/packaging/systemd/   service templates used by `agent-k-local install` (Linux)
 #     lib/packaging/launchd/   service templates used by `agent-k-local install` (macOS)
@@ -42,7 +42,7 @@ case $(uname -s) in
 esac
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-for p in "$repo/dist/server/cli.js" "$repo/dist/web/index.html" "$repo/node_modules" "$node_dir/bin/node"; do
+for p in "$repo/dist/server/cli.js" "$repo/dist/web/index.html" "$repo/dist/mod/agentk/hooks/register.ts" "$repo/node_modules" "$node_dir/bin/node"; do
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
 

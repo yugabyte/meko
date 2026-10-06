@@ -5,9 +5,47 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 
 const args = process.argv.slice(2);
+// Like `claude --version`; the version is the `version` file in the fake's dir, if there is one.
+if (args[0] === '--version') {
+  let v = '2.1.287';
+  try {
+    v = readFileSync(join(process.env.FAKE_CLAUDE_DIR ?? '', 'version'), 'utf8').trim();
+  } catch {
+    /* the default */
+  }
+  process.stdout.write(`${v} (Claude Code)\n`);
+  process.exit(0);
+}
+// Like `claude update`: an `update-to` file in the fake's dir is the version it updates to (written
+// to `version`); an `update-fail` file makes it fail with that file's text.
+if (args[0] === 'update') {
+  const fake = process.env.FAKE_CLAUDE_DIR ?? '';
+  const read = (f) => {
+    try {
+      return readFileSync(join(fake, f), 'utf8').trim();
+    } catch {
+      return null;
+    }
+  };
+  const fail = read('update-fail');
+  if (fail !== null) {
+    process.stderr.write(`${fail}\n`);
+    process.exit(1);
+  }
+  const from = read('version') ?? '2.1.287';
+  const to = read('update-to');
+  if (to && to !== from) {
+    writeFileSync(join(fake, 'version'), to);
+    process.stdout.write(`Current version: ${from}\nSuccessfully updated from ${from} to version ${to}\n`);
+  } else {
+    process.stdout.write(`Claude Code is up to date (${from})\n`);
+  }
+  process.exit(0);
+}
 const opt = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : null;
@@ -17,11 +55,11 @@ let sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
 let transcript = join(dir, `${sessionId}.jsonl`);
-appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL } }) + '\n');
+appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
-const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir']);
+const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--') {
@@ -58,6 +96,72 @@ function hook(event, extra = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let planWaiting = false;
+
+// Like AgentK's mod (src/mod/agentk) loaded with --plugin-dir: when the fake's dir has a `mod` file,
+// it polls the hook socket for prompts, acks each and takes it as a typed prompt (mod-prompts.jsonl
+// records them, mod-acks.jsonl the server's answer to each ack), and reports a measurement after
+// each turn. A `mod-silent` file makes it take prompts without acking them; a `mod-drop` file makes
+// it ack them, then report them refused (their text put in the prompt box).
+const pluginDir = opt('--plugin-dir');
+const modOn = !!pluginDir && existsSync(join(pluginDir, 'hooks', 'register.ts')) && existsSync(join(dir, 'mod'));
+
+function modPost(path, body) {
+  return new Promise((resolve, reject) => {
+    const headers = { 'Content-Type': 'application/json', 'X-AK-Token': process.env.AK_HOOK_TOKEN ?? '' };
+    const req = request({ socketPath: process.env.AK_HOOK_SOCK, path, method: 'POST', headers }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+// Turns from the mod run one at a time, as the engine holds a plugin's prompt until it's idle.
+let modTurns = Promise.resolve();
+
+async function modLoop() {
+  await modPost('/mod/hello', { protocol: 1 }).catch(() => undefined);
+  for (;;) {
+    try {
+      const r = await modPost('/mod/poll', {});
+      if (r.status === 200) {
+        for (const p of JSON.parse(r.text).prompts) {
+          appendFileSync(join(dir, 'mod-prompts.jsonl'), JSON.stringify(p) + '\n');
+          if (existsSync(join(dir, 'mod-silent'))) continue;
+          // Like the mod: only a 204 means AgentK still wants it run.
+          const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
+          appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
+          if (ack.status !== 204) continue;
+          if (existsSync(join(dir, 'mod-drop'))) {
+            await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin', filled: true });
+            continue;
+          }
+          modTurns = modTurns.then(() => turn(p.text));
+        }
+      } else if (r.status !== 204) await sleep(500);
+    } catch {
+      await sleep(500);
+    }
+  }
+}
+
+/** Like the mod's session.measure: the context fill (the `context-pct` file, else 37%) and plan limits. */
+function modMeasure() {
+  if (!modOn) return;
+  let percent = 37;
+  try {
+    percent = Number(readFileSync(join(dir, 'context-pct'), 'utf8'));
+  } catch {
+    /* the default */
+  }
+  void modPost('/mod/measure', {
+    context: { tokens: percent * 2000, window: 200000, percent },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 21, resetsAt: '2100-01-01T00:00:00.000Z' }, { kind: 'seven_day', percentUsed: 9, resetsAt: '2100-01-01T00:00:00.000Z' }],
+  }).catch(() => undefined);
+}
 
 async function turn(text) {
   writeFileSync(transcript, JSON.stringify({ type: 'user', text }) + '\n', { flag: 'a' });
@@ -122,6 +226,7 @@ async function turn(text) {
   if (text.includes('MEKO_SEARCH')) mekoSearch();
   respond();
   hook('Stop', {});
+  modMeasure();
 }
 
 // Like Claude Code calling the Meko MCP server: a memory_search that finds one memory.
@@ -173,6 +278,7 @@ writeFileSync(transcript, '', { flag: 'a' });
   const context = hook('SessionStart', { source });
   appendFileSync(join(dir, 'session-start.jsonl'), JSON.stringify({ sessionId, source, context }) + '\n');
 }
+if (modOn) void modLoop();
 if (prompt) await turn(prompt);
 
 let buf = '';

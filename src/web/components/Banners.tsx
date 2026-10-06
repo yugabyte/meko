@@ -6,12 +6,104 @@ import { Busy } from './common';
 
 const DISMISS_KEY = 'ak-dismissed-updated-from';
 
-function readDismissed(): string | null {
+function readDismissed(key = DISMISS_KEY): string | null {
   try {
-    return localStorage.getItem(DISMISS_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
+}
+
+function saveDismissed(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** The Claude Code version whose too-old banner was dismissed, and the update outcome dismissed (its time). */
+const CLAUDE_OLD_KEY = 'ak-dismissed-claude-old';
+const CLAUDE_UPDATE_KEY = 'ak-dismissed-claude-update';
+
+/**
+ * The Claude Code sessions launch with, when it's too old for AgentK's mod: update it here (its own
+ * `claude update`), or dismiss the banner for that version. Then the update's outcome.
+ */
+function ClaudeCodeBanners({ state, onError }: { state: AppState; onError: (m: string) => void }) {
+  const c = state.claudeCode;
+  const [oldDismissed, setOldDismissed] = useState(() => readDismissed(CLAUDE_OLD_KEY));
+  const [updateDismissed, setUpdateDismissed] = useState(() => readDismissed(CLAUDE_UPDATE_KEY));
+  const [starting, setStarting] = useState(false);
+  if (!c?.modEnabled) return null;
+  const last = c.lastUpdate;
+  const lastKey = last ? String(last.at) : null;
+  const old = c.supportsMod === false && !!c.version && oldDismissed !== c.version;
+  const update = async () => {
+    setStarting(true);
+    try {
+      await api.updateClaude();
+    } catch (e) {
+      onError(errorMessage(e));
+    } finally {
+      setStarting(false);
+    }
+  };
+  return (
+    <>
+      {c.updating && (
+        <div className="banner info">
+          <span>
+            <Busy label="Updating Claude Code" /> Running sessions aren’t affected.
+          </span>
+        </div>
+      )}
+      {!c.updating && last && lastKey !== updateDismissed && (
+        <div className={last.ok ? 'banner info' : 'banner warn'} role={last.ok ? undefined : 'alert'}>
+          <span className="banner-text">
+            {!last.ok
+              ? `Couldn’t update Claude Code${last.message ? `: ${last.message}` : ''}. Run claude update on ${state.serverName}, or update it the way it was installed.`
+              : last.from && last.to && last.from !== last.to
+                ? `Claude Code was updated to ${last.to} (from ${last.from}). Running sessions keep their version until Claude restarts in them.`
+                : c.supportsMod === false
+                  ? `claude update found nothing newer than ${last.to ?? 'this version'}. Its release channel, or your organization’s settings, may be holding it back.`
+                  : `Claude Code is up to date${last.to ? ` (${last.to})` : ''}.`}
+          </span>
+          <button
+            className="link-btn"
+            onClick={() => {
+              saveDismissed(CLAUDE_UPDATE_KEY, lastKey!);
+              setUpdateDismissed(lastKey);
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {!c.updating && old && (
+        <div className="banner warn">
+          <span className="banner-text">
+            Claude Code {c.version} on {state.serverName} is older than {c.minModVersion}, the first version AgentK’s mod
+            runs in, so AgentK types its prompts into the terminal.
+          </span>
+          <span className="banner-btns">
+            <button className="btn primary small" disabled={starting} onClick={update}>
+              {starting ? <Busy label="Updating" /> : 'Update Claude Code'}
+            </button>
+            <button
+              className="btn small"
+              onClick={() => {
+                saveDismissed(CLAUDE_OLD_KEY, c.version!);
+                setOldDismissed(c.version);
+              }}
+            >
+              Dismiss
+            </button>
+          </span>
+        </div>
+      )}
+    </>
+  );
 }
 
 /** Past this many, invite banners collapse into one line with Show. */
@@ -182,11 +274,7 @@ export function Banners({
           <button
             className="link-btn"
             onClick={() => {
-              try {
-                localStorage.setItem(DISMISS_KEY, updatedKey);
-              } catch {
-                /* ignore */
-              }
+              saveDismissed(DISMISS_KEY, updatedKey);
               setDismissed(updatedKey);
             }}
           >
@@ -222,6 +310,7 @@ export function Banners({
           </span>
         </div>
       )}
+      <ClaudeCodeBanners state={state} onError={onError} />
       <FailedStartBanners state={state} onRetry={onRetryStart} onError={onError} />
       <InviteBanners invites={state.invites ?? []} onOpen={onOpenInvite} onError={onError} />
     </div>

@@ -127,7 +127,8 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(first.args.at(-1)).toContain('do it');
     const agentId = sessionAgentId(env.core.sessions.row(s.id));
     expect(agentId).toMatch(/^claude_code:fix-the-thing-[0-9a-f]{8}$/);
-    expect(first.env).toEqual({ MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo' });
+    // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: AgentK's mod is on (the fake reports a Claude Code new enough).
+    expect(first.env).toEqual({ MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
 
     await env.core.sessions.submit(s.id, 'second turn');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');

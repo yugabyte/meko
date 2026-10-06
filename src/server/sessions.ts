@@ -11,7 +11,7 @@ import {
   gitRaw, isIdleWorktree, prRef, remoteFor, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type SyncResult,
 } from './git.js';
-import type { GuardDecision, HookContext, HookPayload } from './hooks.js';
+import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
 import { isRepoName, issueText, prInfo, type PrInfo } from './github.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
@@ -21,7 +21,10 @@ import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLi
 import { HttpError } from './projects.js';
 import { removePastes, savePastedImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
-import { EDIT_TOOLS, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher } from './claude.js';
+import {
+  EDIT_TOOLS, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
+} from './claude.js';
+import { ModLinks, type DroppedPrompt } from './modlink.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
@@ -143,6 +146,10 @@ export class SessionManager {
   private failed = new Map<string, FailedStart>();
   /** Each new session's Meko search on its task, until its SessionStart hook takes what it found. */
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
+  /** Each session's link to AgentK's mod in its Claude (modlink.ts): prompts go through it while it's live. */
+  readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped));
+  /** How full each session's context window is (percent), from the mod's measurements. */
+  private contextFill = new Map<string, number>();
 
   setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
     const prev = this.startup.get(id);
@@ -178,6 +185,7 @@ export class SessionManager {
       diffStat: this.diffs.get(id) ?? null,
       canMerge: m?.canMerge ?? false,
       mergeBlockers: m?.blockers ?? [],
+      contextPercent: this.contextFill.get(id) ?? null,
     };
   }
 
@@ -618,7 +626,7 @@ export class SessionManager {
     return this.core.mekoStatus.configured ? projectDatapacks(this.db, projectId) : [];
   }
 
-  private env(row: SessionRow): Record<string, string> {
+  private env(row: SessionRow, mod: boolean): Record<string, string> {
     const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
     // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
@@ -636,8 +644,21 @@ export class SessionManager {
       // resumed session) mustn't send transcripts either. It runs setInterval(tick, seconds * 1000),
       // and Node turns a delay past 2^31-1 ms into 1 ms, so this is the longest safe interval.
       ...(this.core.capture.enabled ? {} : { MEKO_CHECKPOINT_INTERVAL: String(MAX_TIMER_SECS) }),
+      // Plugins' hooks modules are early access in Claude Code, off unless this says otherwise.
+      ...(mod ? { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } : {}),
     };
   }
+
+  /**
+   * The folder of AgentK's mod for a launch (`--plugin-dir`), or null when it's off: turned off in
+   * the config, its files missing, or the Claude Code too old (or its version unreadable).
+   */
+  async modDir(): Promise<string | null> {
+    const dir = modDirPath(this.core.paths);
+    if (!this.core.config.claude.mod || !existsSync(join(dir, 'hooks', 'register.ts'))) return null;
+    return (await this.core.claudeCode.supportsMod()) ? dir : null;
+  }
+
 
   private systemPrompt(row: SessionRow): string {
     const p = projectRow(this.db, row.project_id);
@@ -718,6 +739,7 @@ export class SessionManager {
     this.pinDatapack(row);
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
+    const mod = await this.modDir();
     const script = writeLauncher(this.core.paths, {
       sessionId: row.id,
       worktree: row.worktree_path,
@@ -727,9 +749,10 @@ export class SessionManager {
       name: row.name,
       planMode: row.stage === 'design' && !!row.plan_mode,
       addDirs: [designDir],
+      pluginDirs: mod ? [mod] : [],
       appendSystemPrompt: this.systemPrompt(row),
       prompt: opts.prompt,
-      env: this.env(row),
+      env: this.env(row, !!mod),
       unsetEnv: SESSION_ENV_UNSET,
     });
     const command = `exec sh ${shq(script)}`;
@@ -739,6 +762,9 @@ export class SessionManager {
     // Never replace a live Claude: respawn-pane -k would end it (or start this one twice).
     if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
     this.awaitingStart.add(row.id);
+    // A new Claude process: the last one's mod and measurements are gone with it.
+    this.mod.reset(row.id);
+    this.contextFill.delete(row.id);
     try {
       if (pane) await this.core.tmux.respawn(row.tmux_name, row.worktree_path, command);
       else await this.core.tmux.newSession(row.tmux_name, row.worktree_path, command);
@@ -766,8 +792,9 @@ export class SessionManager {
   }
 
   /**
-   * Types a prompt into the session's Claude TUI and submits it. Submissions to one session
-   * go one at a time; one that had to wait is refused if the one before it started a turn.
+   * Submits a prompt to the session's Claude: through AgentK's mod while it's live and `[claude] mod`
+   * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
+   * that had to wait is refused if the one before it started a turn.
    */
   submit(id: string, text: string): Promise<void> {
     const prev = this.submitting.get(id);
@@ -775,7 +802,8 @@ export class SessionManager {
       const r = this.row(id);
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
-      await this.core.tmux.submit(r.tmux_name, text);
+      if (this.core.config.claude.mod && this.mod.live(id)) await this.mod.send(id, text);
+      else await this.core.tmux.submit(r.tmux_name, text);
       this.setStatus(id, 'working');
     });
     const tail = next.catch(() => undefined);
@@ -825,6 +853,67 @@ export class SessionManager {
     return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : null;
   }
 
+  /**
+   * AgentK's mod in the session's Claude (src/mod/agentk), on the hook socket's `/mod/*` routes:
+   * hello when it loads, polls for prompts, acks them, and reports measurements after each turn.
+   */
+  async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
+    const row = this.byToken(token);
+    if (!row || row.desired !== 'running') return { status: 403 };
+    switch (route) {
+      case '/mod/hello':
+        if (this.mod.hello(row.id)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
+        return { status: 204 };
+      case '/mod/poll': {
+        // The socket is closing (a rebind or a stop), or the mod was turned off in the config: the
+        // mod waits a few seconds and polls again. Sessions keep the mod until they're relaunched.
+        if (!this.mod.accepting || !this.core.config.claude.mod) return { status: 503 };
+        const answer = await this.mod.poll(row.id, signal);
+        return answer ? { status: 200, body: answer } : { status: 204 };
+      }
+      case '/mod/ack':
+        if (body.state === 'dropped') {
+          this.mod.dropped(row.id, body.id, body.reason, body.filled);
+          return { status: 204 };
+        }
+        // 204: submit it. 410: AgentK gave up on it (it reported the send failed), so don't.
+        return { status: body.state === 'accepted' && this.mod.accept(row.id, body.id) ? 204 : 410 };
+      case '/mod/measure':
+        this.measured(row.id, body);
+        return { status: 204 };
+    }
+    return { status: 404 };
+  }
+
+  /** A measurement from the mod: the context window's fill, and the account's plan limits. */
+  private measured(id: string, m: Record<string, unknown>): void {
+    this.core.limits.reportMeasured(m.rateLimits);
+    const ctx = m.context && typeof m.context === 'object' ? (m.context as { percent?: unknown }) : null;
+    const pct = typeof ctx?.percent === 'number' && Number.isFinite(ctx.percent) ? Math.round(Math.min(100, Math.max(0, ctx.percent))) : null;
+    if (pct === (this.contextFill.get(id) ?? null)) return;
+    if (pct === null) this.contextFill.delete(id);
+    else this.contextFill.set(id, pct);
+    this.core.changed();
+  }
+
+  /**
+   * Another plugin in Claude refused a prompt AgentK sent through the mod, after the send had
+   * resolved (its caller counts it delivered): the user has to step in, so the detail names the
+   * prompt and says how to send it.
+   */
+  private promptDropped(id: string, d: DroppedPrompt): void {
+    const line = d.text?.split('\n').find((l) => l.trim())?.trim() ?? '';
+    const name = line ? ` "${line.length > 80 ? `${line.slice(0, 79)}…` : line}"` : '';
+    const detail = `A plugin in Claude refused AgentK's prompt${name}: ${d.reason}. ` + (d.filled
+      ? "Its text is in Claude's prompt box: press Enter in the terminal to send it, or edit it first."
+      : 'Ask AgentK for it in the terminal.');
+    this.core.log.warn(`${id}: ${detail}`);
+    if (sessionRow(this.db, id)?.desired !== 'running') return;
+    this.event(id, 'mod', detail);
+    this.notifyUser(id, 'Needs you', detail);
+    this.setStatus(id, 'needs_input', detail);
+  }
+
   /** A status line run: only its plan usage limits are kept. */
   onStatusLine(token: string, input: unknown): void {
     const row = this.byToken(token);
@@ -845,6 +934,8 @@ export class SessionManager {
         this.awaitingStart.delete(id);
         if (p.transcript_path) run(this.db, 'UPDATE sessions SET transcript_path = ? WHERE id = ?', p.transcript_path, id);
         // /clear (or /resume in the TUI) moves Claude to another conversation; resume that one from now on.
+        // After /clear the context is a new one; the mod measures it after the next turn.
+        if (p.source === 'clear') this.contextFill.delete(id);
         if (typeof p.session_id === 'string' && /^[\w-]{1,100}$/.test(p.session_id) && p.session_id !== row.claude_session_id) {
           run(this.db, 'UPDATE sessions SET claude_session_id = ? WHERE id = ?', p.session_id, id);
           this.event(id, 'conversation', 'Claude moved to a new conversation; Resume continues that one');
@@ -926,6 +1017,7 @@ export class SessionManager {
         this.ingestUsage(id);
         // /clear ends one conversation and starts the next (SessionStart follows); Claude keeps running.
         if (p.reason === 'clear') break;
+        this.mod.reset(id, 'Claude exited before taking the prompt');
         this.clearStartup(id);
         if (this.stopping.has(id)) break;
         if (row.status === 'working') this.update(id, { interrupted: 1 });
@@ -1299,6 +1391,8 @@ export class SessionManager {
       this.recoverRetryAt.delete(row.id);
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
+      this.mod.reset(row.id, 'The session was archived');
+      this.contextFill.delete(row.id);
       if (opts.force) {
         this.event(row.id, 'discarded', {
           idle: `Discarded; changes and branch ${row.branch} deleted, worktree kept for the next session`,
@@ -1377,6 +1471,8 @@ export class SessionManager {
         this.stopping.delete(row.id);
         this.awaitingStart.delete(row.id);
         this.recoverRetryAt.delete(row.id);
+        this.mod.reset(row.id, 'The project was deleted');
+        this.contextFill.delete(row.id);
       }
       // A worktree that went idle or to another session (maybe another project's) isn't this one's to remove.
       if (p && this.ownsWorktree(row) && !FREED.includes(await this.freeWorktree(row, sessionRepo(this.db, row) ?? p.repo_path, false))) {

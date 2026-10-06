@@ -1,6 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Paths } from './paths.js';
 
 /**
@@ -231,6 +234,100 @@ export function writeHookFiles(paths: Paths): void {
   writeFileSync(hooksSettingsPath(paths), JSON.stringify(settings, null, 2));
 }
 
+/**
+ * The oldest Claude Code AgentK's mod runs in: plugins' hooks modules, `$.prompt.submit` with
+ * `asUser` (older ones frame the prompt as a plugin's message) and `session.measure`.
+ */
+export const MIN_MOD_CLAUDE = '2.1.286';
+
+/**
+ * The mod's files, relative to its folder: src/mod/agentk in the repo (tsx, tests), dist/mod/agentk
+ * in a build. Its tests stay behind.
+ */
+const MOD_FILES = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.ts'];
+const MOD_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk');
+
+/** Where sessions load AgentK's mod from (`--plugin-dir`). */
+export function modDirPath(paths: Paths): string {
+  return join(paths.run, 'mod', 'agentk');
+}
+
+/**
+ * Copies AgentK's mod to the run folder. Claude reloads a `--plugin-dir` mod when its files change,
+ * so only files that differ are written (a server restart reloads nothing), each through a temp
+ * file renamed into place (a session never reads half a module). Every source file is read first:
+ * when one is missing, or a write fails, the run copy is removed, so sessions start without the
+ * mod (`modDir()` checks for it) rather than with an old or half-updated one. False then; a failed
+ * write also throws.
+ */
+export function writeModFiles(paths: Paths, source = MOD_SOURCE): boolean {
+  const dest = modDirPath(paths);
+  const texts: string[] = [];
+  for (const f of MOD_FILES) {
+    try {
+      texts.push(readFileSync(join(source, f), 'utf8'));
+    } catch {
+      rmSync(dest, { recursive: true, force: true });
+      return false;
+    }
+  }
+  try {
+    MOD_FILES.forEach((f, i) => {
+      const to = join(dest, f);
+      try {
+        if (readFileSync(to, 'utf8') === texts[i]) return;
+      } catch {
+        /* not there yet */
+      }
+      mkdirSync(dirname(to), { recursive: true });
+      const tmp = `${to}.${randomBytes(4).toString('hex')}.tmp`;
+      writeFileSync(tmp, texts[i]);
+      renameSync(tmp, to);
+    });
+  } catch (e) {
+    rmSync(dest, { recursive: true, force: true });
+    throw e;
+  }
+  return true;
+}
+
+/** The version `<command> --version` prints (`2.1.287 (Claude Code)` → `2.1.287`), or null. */
+export function claudeVersion(command: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(command, ['--version'], { timeout: 10_000, env: { ...process.env, NO_COLOR: '1' } }, (err, stdout) => {
+      resolve(err ? null : (/(\d+\.\d+\.\d+)/.exec(String(stdout))?.[1] ?? null));
+    });
+  });
+}
+
+/** How long `claude update` may run before it's stopped. */
+const CLAUDE_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Runs `<command> update`, Claude Code's own updater, and resolves whether it exited 0 and what it
+ * printed (stdout, then stderr). Never rejects: a command that can't start is `ok: false`.
+ */
+export function runClaudeUpdate(command: string): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    execFile(command, ['update'], { timeout: CLAUDE_UPDATE_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: { ...process.env, NO_COLOR: '1' } }, (err, stdout, stderr) => {
+      const output = [String(stdout ?? ''), String(stderr ?? '')].join('\n').trim();
+      resolve({ ok: !err, output: output || (err ? err.message : '') });
+    });
+  });
+}
+
+/** Whether dotted version `v` is `min` or later (numeric parts; `2.1.10` is after `2.1.9`). */
+export function versionAtLeast(v: string, min: string): boolean {
+  const a = v.split('.').map(Number);
+  const b = min.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
 export interface LaunchSpec {
   sessionId: string;
   worktree: string;
@@ -242,6 +339,8 @@ export interface LaunchSpec {
   planMode: boolean;
   /** Extra directories Claude may work in (the session's design folder). */
   addDirs: string[];
+  /** Plugins Claude loads for the session (AgentK's mod), each a `--plugin-dir`. */
+  pluginDirs?: string[];
   appendSystemPrompt: string;
   prompt: string | null;
   env: Record<string, string>;
@@ -287,6 +386,7 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
   }
   if (spec.planMode) args.push('--permission-mode', 'plan');
   for (const d of spec.addDirs) args.push('--add-dir', d);
+  for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', d);
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);

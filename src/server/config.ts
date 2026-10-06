@@ -23,7 +23,12 @@ export interface Config {
   meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
   state: { dbPath: string };
   tmux: { socket: string };
-  claude: { command: string };
+  /**
+   * command: how Claude Code is run. mod: load AgentK's mod into sessions (Claude Code 2.1.286 or
+   * later), which takes AgentK's prompts and reports the context fill; off, prompts are typed into
+   * the terminal.
+   */
+  claude: { command: string; mod: boolean };
   /**
    * idlePerRepo: worktrees each repo keeps for the next session, build outputs and all (0 to 20; 0 removes them).
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
@@ -52,7 +57,7 @@ export const DEFAULT_CONFIG: Config = {
   meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: true },
   state: { dbPath: '' },
   tmux: { socket: 'agentk' },
-  claude: { command: 'claude' },
+  claude: { command: 'claude', mod: true },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '' },
   pr: { resolveConflicts: true },

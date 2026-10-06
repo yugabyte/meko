@@ -11,3 +11,6 @@ state.db
 .DS_Store
 state.db-*
 *.bak-*
+# Laid beside the mod by Claude Code when it loads it from here (claude --plugin-dir src/mod/agentk).
+src/mod/agentk/.claude-plugin/types/
+src/mod/agentk/tsconfig.json

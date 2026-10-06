@@ -284,7 +284,7 @@ export class Lifecycle {
       if (answers) this.sessions.event(row.id, 'design', `Approved with ${answers.count}`);
     } catch (e) {
       if (this.sessions.row(row.id).stage === 'code') this.sessions.setStage(row.id, 'design', 'auto');
-      throw new HttpError(502, `Couldn't type the approval into Claude's terminal: ${errMsg(e)}. Try again.`);
+      throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
     }
   }
 
@@ -302,7 +302,7 @@ export class Lifecycle {
     try {
       await this.sessions.submit(row.id, this.sessions.prompt(row, 'design-answers', { count: answers.count, answers: answers.text }));
     } catch (e) {
-      throw new HttpError(502, `Couldn't type your answers into Claude's terminal: ${errMsg(e)}. Try again.`);
+      throw new HttpError(502, `Couldn't send your answers to Claude: ${errMsg(e)}. Try again.`);
     }
     this.sessions.event(row.id, 'design', `Sent ${answers.count} to AgentK`);
   }
@@ -343,7 +343,7 @@ export class Lifecycle {
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
-      throw new HttpError(502, `Couldn't type the PR prompt into Claude's terminal: ${errMsg(e)}. Try again.`);
+      throw new HttpError(502, `Couldn't send the PR prompt to Claude: ${errMsg(e)}. Try again.`);
     }
   }
 
@@ -408,7 +408,7 @@ export class Lifecycle {
     try {
       await this.sessions.submit(id, `${this.movedLine(row)}\n\n${body}`);
     } catch (e) {
-      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't type the ${STAGE_LABELS[stage]} prompt into Claude's terminal: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send the ${STAGE_LABELS[stage]} prompt to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
     }
   }
 

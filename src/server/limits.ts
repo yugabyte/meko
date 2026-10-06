@@ -23,6 +23,22 @@ export function parseRateLimits(input: unknown, now: number): PlanLimits | null 
   return fiveHour || sevenDay ? { fiveHour, sevenDay, updatedAt: now } : null;
 }
 
+/**
+ * The plan limits AgentK's mod reports (`session.measure`'s `rateLimits`: `{ kind, percentUsed,
+ * resetsAt }`, the reset time as an ISO date), or null when it has none.
+ */
+export function parseMeasuredLimits(list: unknown, now: number): PlanLimits | null {
+  if (!Array.isArray(list)) return null;
+  const windowOf = (kind: string): LimitWindow | null => {
+    const w = list.find((x): x is Record<string, unknown> => !!x && typeof x === 'object' && (x as { kind?: unknown }).kind === kind);
+    const at = typeof w?.resetsAt === 'string' ? Date.parse(w.resetsAt) : NaN;
+    return w ? parseWindow({ used_percentage: w.percentUsed, resets_at: at }) : null;
+  };
+  const fiveHour = windowOf('five_hour');
+  const sevenDay = windowOf('seven_day');
+  return fiveHour || sevenDay ? { fiveHour, sevenDay, updatedAt: now } : null;
+}
+
 /** Drops windows whose reset time has passed: their numbers no longer apply. */
 export function currentLimits(l: PlanLimits | null, now: number): PlanLimits | null {
   if (!l) return null;
@@ -62,12 +78,22 @@ export class PlanLimitsStore {
     }
   }
 
-  /**
-   * Takes a status line input; saves and broadcasts when the merged numbers moved, or when a
-   * report confirms them and a minute has passed (so "as of" stays close).
-   */
+  /** Takes a status line input (see `take`). */
   report(input: unknown, now = Date.now()): void {
-    const reported = currentLimits(parseRateLimits(input, now), now);
+    this.take(parseRateLimits(input, now), now);
+  }
+
+  /** Takes the limits AgentK's mod measured (see `take`). */
+  reportMeasured(rateLimits: unknown, now = Date.now()): void {
+    this.take(parseMeasuredLimits(rateLimits, now), now);
+  }
+
+  /**
+   * Takes a reading; saves and broadcasts when the merged numbers moved, or when a reading
+   * confirms them and a minute has passed (so "as of" stays close).
+   */
+  private take(reading: PlanLimits | null, now: number): void {
+    const reported = currentLimits(reading, now);
     if (!reported) return; // nothing, or only windows that have already reset
     const prev = currentLimits(this.last, now);
     const next: PlanLimits = {

@@ -188,6 +188,7 @@ export interface SessionRuntime {
   diffStat: { added: number; removed: number } | null;
   canMerge: boolean;
   mergeBlockers: string[];
+  contextPercent: number | null;
 }
 
 export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
@@ -224,6 +225,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     designQuestions: { open: openQuestions },
     reviewingPr: reviewingPr(r),
     usage: rt.usage,
+    contextPercent: rt.contextPercent,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     createdAt: r.created_at,

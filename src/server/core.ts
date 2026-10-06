@@ -12,7 +12,7 @@ import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
-import { writeHookFiles } from './claude.js';
+import { writeHookFiles, writeModFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
@@ -25,6 +25,7 @@ import { SessionManager } from './sessions.js';
 import { Lifecycle } from './lifecycle.js';
 import { projectRows, pruneSessionEvents, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
+import { ClaudeCode } from './claudecode.js';
 import { Tmux, writeTmuxConf } from './tmux.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
@@ -86,6 +87,8 @@ export class Core extends EventEmitter {
   readonly invites: InviteService;
   readonly mekoTools: MekoTools;
   readonly callHome: CallHomeService;
+  /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
+  readonly claudeCode: ClaudeCode;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -96,6 +99,8 @@ export class Core extends EventEmitter {
   private hookSockId: string | null = null;
   /** Between start() and stop(): the hook socket should be bound (and is bound again when it goes). */
   private hooksOn = false;
+  /** stop() has run: changes are no longer broadcast. */
+  private stopped = false;
   /** A rebind of the hook socket in progress; stop() waits for it. */
   private hookCheck: Promise<void> | null = null;
 
@@ -121,6 +126,7 @@ export class Core extends EventEmitter {
       current: this.version, channel: this.cfg.update.channel, latest: null, available: false, applying: false,
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
     });
+    this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.changed() });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
@@ -161,9 +167,12 @@ export class Core extends EventEmitter {
     return this.cfg.server.name.trim() || this.hostName();
   }
 
-  /** Something visible changed; the server debounces and broadcasts state. */
+  /**
+   * Something visible changed; the server debounces and broadcasts state. Nothing after stop():
+   * work still finishing then (a Claude Code version read) must not read state from a closed database.
+   */
   changed(): void {
-    this.emit('change');
+    if (!this.stopped) this.emit('change');
   }
 
   notify(n: Omit<NotifyEvent, 'type'>): void {
@@ -212,12 +221,21 @@ export class Core extends EventEmitter {
       limits: this.limits.current(),
       invites: this.invites.pending(),
       failedStarts: this.sessions.failedStarts(),
+      claudeCode: this.claudeCode.status(),
     };
   }
 
   async start(): Promise<void> {
+    this.stopped = false;
     writeTmuxConf(this.paths);
     writeHookFiles(this.paths);
+    try {
+      if (!writeModFiles(this.paths)) this.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
+    } catch (e) {
+      this.log.warn("couldn't write AgentK's mod for Claude Code; sessions start without it", errMsg(e));
+    }
+    // Reads the Claude Code version now, so the first launch doesn't wait for it and the banner shows.
+    void this.claudeCode.version().catch(() => undefined);
     mkdirSync(this.paths.worktrees, { recursive: true });
     try {
       if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);
@@ -244,6 +262,8 @@ export class Core extends EventEmitter {
       this.every(5000, () => this.sessions.reconcile());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
+      // Claude Code updates itself: read its version again once the last read is stale.
+      this.every(60000, () => this.claudeCode.version());
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
@@ -255,12 +275,14 @@ export class Core extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     for (const i of this.intervals) clearInterval(i);
     this.intervals = [];
     this.callHome.stop();
     this.lifecycle.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
+    this.sessions.mod.closeAll();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again.
     await this.capture.settled(STOP_CAPTURE_MS);
@@ -276,8 +298,10 @@ export class Core extends EventEmitter {
       (token, payload) => this.sessions.guard(token, payload),
       (token, input) => this.sessions.onStatusLine(token, input),
       (token, payload) => this.sessions.context(token, payload),
+      (token, route, body, signal) => this.sessions.onMod(token, route, body, signal),
     );
     this.hookSockId = socketId(this.paths.hookSock);
+    this.sessions.mod.resume();
   }
 
   /** Stops the hook server. Its socket file is removed only if it is still ours. */
@@ -285,6 +309,9 @@ export class Core extends EventEmitter {
     const server = this.hookServer;
     this.hookServer = null;
     if (!server) return;
+    // Held mod polls would keep the socket open until they time out (20 s), and no hook could
+    // reach the server meanwhile: answer them now, and hold none until it's bound again.
+    this.sessions.mod.pause();
     await new Promise<void>((r) => server.close(() => r()));
     if (this.hookSockId && socketId(this.paths.hookSock) === this.hookSockId) rmSync(this.paths.hookSock, { force: true });
     this.hookSockId = null;

@@ -111,6 +111,15 @@ your phone can connect.
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
+- **AgentK's mod in Claude:** with Claude Code 2.1.286 or later, each session loads a small Claude
+  Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
+  never land in a permission dialog or a running turn. After each turn the footer shows how full
+  Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml` and restart
+  the server (the file is read at startup): AgentK then types its prompts into the terminal, running
+  sessions included, though those keep the mod loaded until they're relaunched
+  ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early
+  access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
+  When the host's Claude Code is too old for the mod, a banner says so and can update it.
 - **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
   Merge & Close, and a new session asks where to start: *Explore* for investigating, POCs and
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
