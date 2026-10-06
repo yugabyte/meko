@@ -149,8 +149,8 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     expect(sys).toContain('PR: acme/demo#7 (https://github.com/acme/demo/pull/7)');
     expect(sys).toContain("Don't review it on your own; answer what they ask.");
     expect(sys).toContain('search Meko before answering questions about why the code is the way it is');
-    // Nobody can move it to another type or stage.
-    await expect(env.core.sessions.move(s.id, { kind: 'quick', stage: 'code' })).rejects.toMatchObject({ status: 409 });
+    // Nobody can move it to another stage.
+    await expect(env.core.sessions.move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 409 });
   });
 
   it('leaves the Meko lines out with Meko off', async () => {
@@ -158,7 +158,9 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     pushToPr(7, 'widget.ts');
     pr(7);
     env.core.mekoStatus = { ...env.core.mekoStatus, configured: false };
-    const s = await env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 7 } });
+    // A review's start is ignored, not checked: it always starts in Reviewing PR.
+    const s = await env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', start: 'review' as never, repoPath: clone, pr: { repo: 'acme/demo', number: 7 } });
+    expect(s).toMatchObject({ kind: 'review-pr', stage: 'reviewing-pr' });
     await idle(s.id);
     expect(transcript(s.id)).not.toContain('Meko');
     expect(systemPrompt()).not.toContain('Meko');
@@ -180,6 +182,16 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     await expect(env.core.sessions.create(p.id, { name: 'r', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 8 } }))
       .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/Couldn't read PR #8 of acme\/demo/) });
     expect(sessions()).toBe(0);
+
+    // A head that can't be fetched shows up after the dialog has closed: a failed start, to try again.
+    pr(9);
+    const { session, done } = await env.core.sessions.begin(p.id, { name: '', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 9 }, prompt: 'notes' });
+    expect(session).toMatchObject({ status: 'starting', startup: { step: 'worktree' } });
+    await expect(done).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^Couldn't fetch PR #9 from origin: /) });
+    expect(sessions()).toBe(0);
+    expect(env.core.state().failedStarts).toMatchObject([{
+      name: 'Review #9 Add the widget', request: { kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 9 }, prompt: 'notes' },
+    }]);
   });
 
   it("fetches a fork's PR from upstream, and gives the same number in two repos its own branch", async () => {

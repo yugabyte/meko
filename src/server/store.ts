@@ -1,12 +1,19 @@
+import { designQuestionCounts } from './answers.js';
 import { commentCounts } from './comments.js';
 import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
-  CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionKind, SessionStatus, Stage,
+  CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
-import { skippedSteps, stepOf } from '../shared/stages.js';
+import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
+
+/**
+ * What new task sessions store in `sessions.kind` (see StoredKind): a name a release or page from
+ * before start stages can still index its stage lists with, after a rollback or before a reload.
+ */
+export const STORED_TASK_KIND: StoredKind = 'plan';
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
@@ -50,7 +57,7 @@ export interface SessionRow {
   desired: 'running' | 'archived';
   status: SessionStatus;
   status_detail: string | null;
-  kind: SessionKind;
+  kind: StoredKind;
   stage: Stage;
   pr_number: number | null;
   pr_url: string | null;
@@ -73,6 +80,10 @@ export interface SessionRow {
   ci_fix_head: string | null;
   /** CI-fix prompts for consecutive failing heads since CI was last green. */
   ci_fixes: number;
+  /** The PR head that last got a prompt to resolve merge conflicts (or was handed to the user after the cap). */
+  conflict_head: string | null;
+  /** Conflict prompts for consecutive conflicting heads since the PR last merged cleanly. */
+  conflict_fixes: number;
   agentk_seen: number;
   /** The dedicated datapack the session was last launched with (see sessionDatapack). */
   meko_datapack_id: string | null;
@@ -212,6 +223,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
     comments: commentCounts(db, r.id),
+    designQuestions: designQuestionCounts(db, r.id),
     reviewingPr: reviewingPr(r),
     usage: rt.usage,
     contextPercent: rt.contextPercent,
@@ -239,12 +251,13 @@ function reviewingPr(r: SessionRow): ReviewingPr | null {
 
 /**
  * Steps before the current one that the session never went through. Only a session past its
- * type's first step can have one, so the stage history is read only then.
+ * kind's first step can have one, so the stage history is read only then.
  */
 function skippedStages(db: Db, r: SessionRow): Stage[] {
-  if (r.desired !== 'running' || (KIND_STAGES[r.kind] as Stage[]).indexOf(stepOf(r.stage)) <= 0) return [];
+  const kind = kindOf(r.kind);
+  if (r.desired !== 'running' || (KIND_STAGES[kind] as Stage[]).indexOf(stepOf(r.stage)) <= 0) return [];
   const visited = all<{ stage: Stage }>(db, 'SELECT DISTINCT stage FROM session_stages WHERE session_id = ?', r.id);
-  return skippedSteps(r.kind, r.stage, visited.map((x) => x.stage));
+  return skippedSteps(kind, r.stage, visited.map((x) => x.stage));
 }
 
 /** Lowercase, [a-z0-9-] only; the same rule Meko uses for agent ids. */

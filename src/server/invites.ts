@@ -1,5 +1,6 @@
-import type { DatapackInvite, ShareGrant, SharingMode } from '../shared/types.js';
+import type { DatapackInvite, ShareGrant } from '../shared/types.js';
 import { isProjectDatapack, remoteFromDescription } from '../shared/datapacks.js';
+import { resolveMekoApiUrl } from './config.js';
 import type { Core } from './core.js';
 import { all, get, kvDelete, kvGet, kvSet, run, tx } from './db.js';
 import { errMsg } from './log.js';
@@ -43,7 +44,7 @@ function toInvite(r: InviteRow): DatapackInvite {
 }
 
 /**
- * Project datapacks (named `adlc/proj/…`) shared with us: invites waiting in Meko (API mode)
+ * Project datapacks (named `adlc/proj/…`) shared with us: invites waiting in Meko
  * and shares already accepted that aren't a project here yet. Synced from Meko periodically.
  */
 export class InviteService {
@@ -58,6 +59,11 @@ export class InviteService {
   private running: Promise<void> | null = null;
   /** Datapacks whose invite was accepted here, and when: not taken for gone while datapack_list catches up. */
   private acceptedAt = new Map<string, number>();
+  /**
+   * The last failure to list the invites waiting in Meko (with the API URL), logged once: a key the
+   * share routes refuse fails every sync until the key or URL changes. Cleared by a success.
+   */
+  private incomingError: string | null = null;
 
   constructor(private core: Core, readonly api: MekoApi) {}
 
@@ -65,41 +71,24 @@ export class InviteService {
     return this.core.db;
   }
 
-  get sharing(): SharingMode | null {
-    return this.core.mekoStatus.sharing;
-  }
-
-  /** Checks whether Meko takes our key for sharing. Leaves the mode as it was when Meko can't be reached. */
-  async checkMode(): Promise<void> {
-    if (!this.core.mekoStatus.configured) return;
-    let mode: SharingMode;
-    try {
-      mode = await this.api.sharingMode();
-    } catch (e) {
-      this.core.log.warn("couldn't check Meko's share API", errMsg(e));
-      return;
-    }
-    this.setMode(mode);
-  }
-
-  private setMode(mode: SharingMode): void {
-    if (mode === this.sharing) return;
-    this.core.mekoStatus = { ...this.core.mekoStatus, sharing: mode };
-    this.core.log.info(`datapack sharing: ${mode === 'api' ? "through Meko's API" : "in Meko's web app (link mode)"}`);
-    this.core.changed();
+  /**
+   * Refuses when AgentK can't use Meko's share API: Meko is off, or its API URL isn't known. `what`
+   * finishes "AgentK can't …".
+   */
+  requireSharing(what: string): void {
+    const m = this.core.mekoStatus;
+    if (!m.configured) throw new HttpError(409, `Meko is off, so AgentK can't ${what}. Add a Meko API key on the Meko tab in Settings.`);
+    if (!m.sharing) throw new HttpError(409, `Meko's API URL isn't known, so AgentK can't ${what}. Set the web app URL on the Meko tab in Settings.`);
   }
 
   /**
    * A Meko API failure as the HTTP error to answer with. Meko's own refusals (a bad email, an invite
-   * that's already there, no permission) keep their status; a refused key also means link mode from
-   * now on; anything else (Meko down, a server error) is a 502.
+   * that's already there, no permission) keep their status; a refused key and anything else (Meko
+   * down, a server error) is a 502.
    */
   apiFailure(e: unknown, prefix: string): Error {
     if (!(e instanceof MekoApiError)) return e instanceof Error ? e : new Error(String(e));
-    if (e.status === 401) {
-      this.setMode('link');
-      return new HttpError(409, `${prefix}: Meko doesn't accept AgentK's key for sharing (${e.message}). Do it in Meko's web app.`);
-    }
+    if (e.status === 401) return new HttpError(502, `${prefix}: AgentK's API key wasn't accepted (${e.message}). Check the key on the Meko tab in Settings.`);
     const status = e.status === 422 ? 400 : [400, 403, 404, 409].includes(e.status) ? e.status : 502;
     return new HttpError(status, `${prefix}: ${e.message}`);
   }
@@ -176,11 +165,14 @@ export class InviteService {
     const list = listed && listed.stamp === gen ? listed.rows : await this.core.meko.listDatapacks();
     const self = list.find((d) => d.grant === 'owner' && d.ownerUserId)?.ownerUserId ?? null;
     let incoming: IncomingShare[] | null = null;
-    if (this.sharing === 'api') {
+    if (this.core.mekoStatus.sharing) {
       incoming = await this.api.incomingShares().catch((e) => {
-        this.core.log.warn("couldn't list the datapack invites waiting in Meko", errMsg(e));
+        const why = `${resolveMekoApiUrl(this.core.config)}: ${errMsg(e)}`;
+        if (why !== this.incomingError) this.core.log.warn("couldn't list the datapack invites waiting in Meko (logged once until it changes)", why);
+        this.incomingError = why;
         return null;
       });
+      if (incoming) this.incomingError = null;
     }
     if (gen !== this.gen) return false;
     // Only now: a read from before a change of account must not bring back the old account's id.
@@ -276,7 +268,7 @@ export class InviteService {
   }
 
   private async act(inviteId: string, action: 'accept' | 'decline'): Promise<void> {
-    if (this.sharing !== 'api') throw new HttpError(409, "This Meko doesn't let AgentK answer invites yet. Answer it in Meko.");
+    this.requireSharing(`${action} the invite`);
     try {
       await this.api.inviteAction(inviteId, action, this.selfUserId);
     } catch (e) {

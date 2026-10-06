@@ -7,16 +7,17 @@ import fastifyWebsocket from '@fastify/websocket';
 import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
+  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignAnswer, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
+  EventsClientMessage, MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs,
 } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
-  deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, totpAccept, validateAuthSession, validatePassword,
+  deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
+import { designQuestions } from './answers.js';
 import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
@@ -130,8 +131,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const tokenOutstanding = setupTokenOutstanding(db);
     const isLocal = local(req);
     const loggedIn = isLocal || authed(req);
+    const setupRequired = !isLocal && (!owner || (tokenOutstanding && !loggedIn));
     return {
-      setupRequired: !isLocal && (!owner || (tokenOutstanding && !loggedIn)),
+      setupRequired,
+      reset: setupRequired && !!owner,
       loggedIn,
       username: owner && loggedIn ? owner.username : null,
       totpEnabled: !!owner?.totp_secret,
@@ -142,7 +145,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Body: SetupRequest }>('/api/auth/setup', async (req, reply) => {
     const { token, username, password } = req.body ?? ({} as SetupRequest);
     const ip = req.ip;
-    if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
+    // A valid setup link gets past the limit: it's how a locked-out owner gets back in. The token
+    // is 192 random bits, so letting it through doesn't help anyone guess it.
+    if (limiter.blocked(ip) && !setupTokenValid(db, token)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
     if (typeof username !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(username)) return reply.code(400).send({ error: 'Use letters, digits, dots, dashes or underscores for the username.' });
     const bad = validatePassword(password ?? '');
     if (bad) return reply.code(400).send({ error: bad });
@@ -245,13 +250,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return rows.map(toDatapack);
   });
 
-  // ---- sharing (Meko's share API; link mode shares in Meko's web app instead) ----
+  // ---- sharing (Meko's share API) ----
   /** Runs a share API call for a datapack one of our projects uses; Meko's errors become HTTP errors (see apiFailure). */
   const sharing = async <T>(datapackId: string, fn: () => Promise<T>): Promise<T> => {
     const inUse = get(db, `SELECT 1 AS x FROM project_datapacks d JOIN projects p ON p.id = d.project_id
                            WHERE d.datapack_id = ? AND p.deleted_at IS NULL`, datapackId);
     if (!inUse) throw new HttpError(404, "That datapack isn't in any of your projects.");
-    if (core.mekoStatus.sharing !== 'api') throw new HttpError(409, "This Meko doesn't let AgentK share datapacks yet. Share it in Meko.");
+    core.invites.requireSharing('share datapacks');
     try {
       return await fn();
     } catch (e) {
@@ -282,7 +287,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- datapacks shared with us ----
   app.post('/api/invites/check', async (): Promise<InviteCheck> => {
     if (!core.mekoStatus.configured) return { datapacks: [], invites: [], closed: [] };
-    if (core.mekoStatus.sharing === null) await core.invites.checkMode();
     let rows: MekoDatapackRow[];
     try {
       // One datapack_list serves both the dialog's list and the sync; the stamp catches a change here in between.
@@ -309,6 +313,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- projects ----
   app.post<{ Body: CreateProjectRequest }>('/api/projects', async (req) => core.projects.create(req.body));
+  app.get<{ Params: { id: string } }>('/api/projects/:id', async (req) => core.projects.get(req.params.id));
   app.patch<{ Params: { id: string }; Body: UpdateProjectRequest }>('/api/projects/:id', async (req) => core.projects.update(req.params.id, req.body ?? {}));
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     await core.projects.delete(req.params.id);
@@ -327,7 +332,18 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 
   // ---- sessions ----
-  app.post<{ Params: { id: string }; Body: CreateSessionRequest }>('/api/projects/:id/sessions', async (req) => core.sessions.create(req.params.id, req.body ?? ({} as CreateSessionRequest)));
+  // Answers once the session is written: its worktree and Claude start after, which can take
+  // minutes on a big repo, so the dialog doesn't wait. A worktree or PR head that can't be had then
+  // is a failed start in the state; Claude failing to start leaves the session exited with the error.
+  app.post<{ Params: { id: string }; Body: CreateSessionRequest }>('/api/projects/:id/sessions', async (req) => {
+    const { session, done } = await core.sessions.begin(req.params.id, req.body ?? ({} as CreateSessionRequest));
+    done.catch((e: unknown) => core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
+    return session;
+  });
+  app.delete<{ Params: { id: string } }>('/api/failed-starts/:id', async (req, reply) => {
+    core.sessions.dismissFailedStart(req.params.id);
+    return reply.code(204).send();
+  });
   app.post<{ Params: { id: string; action: string } }>('/api/sessions/:id/actions/:action', async (req) => {
     const action = req.params.action as SessionAction;
     if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
@@ -359,10 +375,22 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     core.sessions.row(req.params.id);
-    const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number }>(
-      db, 'SELECT markdown, html, artifact_url, updated_at FROM designs WHERE session_id = ?', req.params.id);
-    return { markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null };
+    const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number; questions_source: string | null }>(
+      db, 'SELECT markdown, html, artifact_url, updated_at, questions_source FROM designs WHERE session_id = ?', req.params.id);
+    return {
+      markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null,
+      questions: designQuestions(db, req.params.id),
+      questionsSource: r?.questions_source === 'file' || r?.questions_source === 'markdown' ? r.questions_source : null,
+    };
   });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/design/answers', async (req): Promise<DesignAnswer[]> => core.answers.list(req.params.id));
+  app.put<{ Params: { id: string; qid: string }; Body: unknown }>('/api/sessions/:id/design/answers/:qid',
+    async (req): Promise<DesignAnswer[]> => core.answers.put(req.params.id, req.params.qid, req.body));
+  app.delete<{ Params: { id: string; qid: string } }>('/api/sessions/:id/design/answers/:qid', async (req, reply) => {
+    core.answers.remove(req.params.id, req.params.qid);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/design/answers/send', async (req): Promise<SendCommentsResult> => core.answers.send(req.params.id));
 
   // ---- settings ----
   const settings = (): Settings => ({
@@ -377,6 +405,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     idleWorktreesPerRepo: core.worktrees.cap(),
     idleWorktreeDays: core.worktrees.idleDays(),
     callHomeEnabled: core.config.callHome.enabled,
+    resolveConflicts: core.config.pr.resolveConflicts,
     meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => settings());
@@ -399,6 +428,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       throw new HttpError(400, 'Server name must be 64 characters or fewer, with no line breaks.');
     }
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
+    if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -412,6 +442,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
+      if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
@@ -423,7 +454,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       audit(db, 'meko_settings_changed', { url: mekoSettings(core.config).effectiveUrl });
       core.log.info(`Meko settings changed (${mekoSettings(core.config).effectiveUrl})`);
       if (meko.reconnect) await core.mekoChanged();
-      else if (meko.recheck) core.sharingChanged();
+      else if (meko.resync) void core.syncInvites();
     }
     return settings();
   });
@@ -521,6 +552,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!wsGuard(socket, req)) return;
     clients.add(socket);
     socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+    // A page checking that its socket is still there (src/web/events.ts).
+    socket.on('message', (data) => {
+      let msg: EventsClientMessage | null;
+      try {
+        msg = JSON.parse(String(data)) as EventsClientMessage;
+      } catch {
+        return;
+      }
+      if (msg?.type === 'ping' && socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'pong' } satisfies ServerEvent));
+    });
     socket.on('close', () => clients.delete(socket));
   });
 

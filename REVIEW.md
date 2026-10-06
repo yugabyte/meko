@@ -16,6 +16,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Nothing respawns a live pane, and a tmux error other than "no server" is never read as every
       pane being gone.
+- [ ] Creating a session answers once its row is in (`begin()`): only the checks that must fail in
+      the New session dialog run before that, never a worktree checkout. A failure after the answer
+      is a failed start or an exited session with its error, never silent.
 - [ ] Values in the launcher are set after the login shell's profile runs, and inherited
       `AK_HOME`/`MEKO_CHECKPOINT_INTERVAL` are cleared.
 - [ ] Auto-continue guards hold (once per 15 minutes; after two auto-continues in an hour the next
@@ -71,32 +74,50 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
-      first in the frame's document. Markdown designs are sanitized with no forms or styles.
+      first in the frame's document. Markdown designs are sanitized with no forms or styles. A
+      design's questions (from Claude's `questions.json`) render as plain text, never HTML, and are
+      size-capped and normalized on the server.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
       (no answer means allow) so a slow or restarting server never blocks Claude.
 
 ## 3. Lifecycle and GitHub
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
-- [ ] Each session kind keeps to its stages (`KIND_STAGES`): an Exploration session never leaves
-      Explore, and a Quick Code session never enters Design, unless the user changes its type
-      (`Lifecycle.move`, rules in `src/shared/stages.ts`). Code that switches on `stage` handles
-      `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
-- [ ] A move by hand leaves the session consistent: a type and stage that go together, the Review
+- [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
+      Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
+      `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
+      handles `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
+- [ ] `sessions.kind` and `Session.kind` keep the old type names for tasks, so a rolled-back release
+      and a page still on the older UI can index their stage lists with every value: new tasks are
+      stored and sent as `plan` (`STORED_TASK_KIND`), never `task`, and code that needs a session's
+      kind reads it through `kindOf()` (comparing with `review-pr` directly is fine).
+- [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
       out of Merge & Close or while AgentK is mid-turn.
-- [ ] Prompts (stage, review and review-comment prompts) are only typed into a session when Claude is
-      idle, never into a permission or question prompt; otherwise they're queued (the review prompt
+- [ ] Prompts (stage, review, review-comment and design-answer prompts) are only typed into a session when Claude is
+      idle (or showing a design waiting for approval), never into a permission or question prompt; otherwise they're queued (the review prompt
       in `state.db`, so it survives a restart). Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
-- [ ] The only change made in the user's main checkout is fast-forwarding the base branch when a
+- [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
-      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), never a reset or force.
+      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), and an
+      empty first commit on HEAD's branch of a repo with no commits and no files
+      (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
+      empty folder typed under Other folder is made a repo only after the name check), never a
+      reset or force.
 - [ ] `/agentk review force` is only posted when the user asks.
+- [ ] Nothing from someone without a role on the repo (`authorAssociation` other than OWNER,
+      MEMBER or COLLABORATOR, and not AgentK, an allowed bot or the user) starts a turn or counts
+      as a `/agentk review` request, and prompts that put PR text in front of Claude call it
+      untrusted, not instructions.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
+      Merge-conflict prompts follow the same rules (between reviews and CI in the queue), act only on
+      `mergeable` CONFLICTING (never UNKNOWN), have Claude merge the base rather than rebase or
+      force-push, and are never sent once `[pr] resolve_conflicts` is off (`deliverNext` drops a queued one, even when
+      the poll fails).
 - [ ] Merge waits for AgentK only once AgentK is active on the PR, and never in *People only*.
 - [ ] A Review a PR session only gets ready and sums up on its own: its prompts and workflow line
       never have Claude review, post on GitHub, commit or push unless the user asks, and nothing
@@ -112,7 +133,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
       (tmux names, lookups) is keyed by project id, not repo path, and git work on the repo only
-      touches the session's own branch. The one exception is idle worktrees, which belong to the repo
+      touches the session's own branch. The exceptions are a repo's empty first commit (§3), and idle worktrees, which belong to the repo
       (keyed by its real path) and are shared by all its projects: a claim is one SQLite write, so
       two sessions never get the same worktree, and closing a project leaves idle worktrees another
       project on the repo can use. A project's `repo_path` is the repo's real path (`repoKey()`), so
@@ -139,7 +160,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
-      share notifies once. Sharing features work in both API and link mode.
+      share notifies once. Sharing features are off while Meko's API URL isn't known (the project
+      home's Share says why; Share with reviewers is hidden).
 - [ ] Nothing that identifies a person or their work goes into the usage stats report
       (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
       field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and
@@ -165,5 +187,4 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes `scripts/check-title.sh`, and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
-      `chore` don't. Comment-only changes are `nit`. Nothing on GitHub checks the title, so check
-      it here. There's no agent attribution.
+      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type. There's no agent attribution.

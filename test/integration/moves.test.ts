@@ -44,7 +44,7 @@ function status(over: Partial<PrStatus> = {}): PrStatus {
   };
 }
 
-describe('moves: changing a session type and stage', () => {
+describe('moves: moving a task session between stages', () => {
   let env: TestEnv;
   let projectId: string | null;
   beforeEach(async () => {
@@ -80,28 +80,29 @@ describe('moves: changing a session type and stage', () => {
     return () => spy.mock.calls.map((c) => String(c[1]));
   };
 
-  it('turns an Exploration into Quick Code, saving the task and sending the Code prompt', async () => {
-    const s = await session({ kind: 'explore' });
-    await expect(move(s.id, { kind: 'quick', stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
+  it('moves on from Explore to Code, saving the task and sending the Code prompt', async () => {
+    const s = await session({ start: 'explore' });
+    await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
     const sent = typed();
-    const moved = await move(s.id, { kind: 'quick', stage: 'code', task: 'Add retries' });
-    expect(moved).toMatchObject({ kind: 'quick', stage: 'code', hasTask: true });
+    const moved = await move(s.id, { stage: 'code', task: 'Add retries' });
+    expect(moved).toMatchObject({ kind: 'plan', stage: 'code', hasTask: true, skippedStages: ['design'] });
     expect(row(s.id).initial_prompt).toBe('Add retries');
     expect(stages(s.id)).toEqual([{ stage: 'explore', moved_by: 'you' }, { stage: 'code', moved_by: 'you' }]);
-    expect(events(s.id, 'kind')).toEqual(['Changed type to Quick Code']);
+    expect(events(s.id, 'kind')).toEqual([]);
     const text = sent()[0];
-    expect(text).toMatch(/^AgentK Local moved this session: it's now a Quick Code session in the Code stage\. Stages: Code → PR & Review → Merge & Close/);
+    expect(text).toMatch(/^AgentK Local moved this session to the Code stage\. Stages: Explore → Design → Code → PR & Review → Merge & Close/);
+    expect(text).not.toContain("It's in Explore now");
     expect(text).toContain('Task: Add retries');
     expect(text).toContain("Don't open a pull request yet.");
   });
 
-  it('opens a PR from an Exploration in one move, then picks the PR up with one PR & Review line', async () => {
-    const s = await session({ kind: 'explore', prompt: 'look around' });
+  it('opens a PR from Explore in one move, then picks the PR up with one PR & Review line', async () => {
+    const s = await session({ start: 'explore', prompt: 'look around' });
     const sent = typed();
-    await move(s.id, { kind: 'quick', stage: 'review' });
-    expect(row(s.id).kind).toBe('quick');
+    await move(s.id, { stage: 'review' });
+    expect(row(s.id).kind).toBe('plan');
     expect(['pr', 'review']).toContain(row(s.id).stage);
-    expect(sent()[0]).toMatch(/^AgentK Local moved this session: it's now a Quick Code session in the PR & Review stage\./);
+    expect(sent()[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
     expect(sent()[0]).toContain('Open a pull request for this work.');
     await idle(s.id, 'PR turn');
     gh.pr = PR;
@@ -110,38 +111,38 @@ describe('moves: changing a session type and stage', () => {
     await waitFor(() => get(s.id), (x) => x.stage === 'review' && x.prNumber === 7, 10000, 'review stage');
     expect(events(s.id, 'pr')).toEqual(['Opened PR #7']);
     expect(events(s.id, 'stage').filter((t) => t === 'Moved to PR & Review')).toHaveLength(1);
-    expect(get(s.id).skippedStages).toEqual(['code']);
+    expect(get(s.id).skippedStages).toEqual(['design', 'code']);
   });
 
   it('picks up an open PR with nothing to push, without a prompt, and sends the PR prompt when there is', async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
+    const s = await session({ start: 'code', prompt: 'do it' });
     gh.pr = PR;
     gh.status = status({ headRefOid: '0123456789abcdef0123456789abcdef01234567' });
     const sent = typed();
     // The PR's head isn't the branch tip: the branch has work to push.
-    await move(s.id, { kind: 'quick', stage: 'review' });
+    await move(s.id, { stage: 'review' });
     expect(sent()[0]).toMatch(/^Open a pull request for this work\./); // the same as Open PR: no moved line
     await waitFor(() => get(s.id), (x) => x.stage === 'review' && x.status === 'idle', 10000, 'review stage');
 
-    const t = await session({ kind: 'quick', prompt: 'do it', name: 'Already opened' });
+    const t = await session({ start: 'code', prompt: 'do it', name: 'Already opened' });
     gh.status = status();
     const before = sent().length;
-    await move(t.id, { kind: 'quick', stage: 'review' });
+    await move(t.id, { stage: 'review' });
     expect(get(t.id)).toMatchObject({ stage: 'review', prNumber: 7, prUrl: PR.url });
     expect(sent()).toHaveLength(before);
     expect(events(t.id, 'pr')).toEqual(['Picked up PR #7']);
   });
 
   it('moves back to Code from PR & Review, keeps the PR, and holds reviews until it comes back', async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
+    const s = await session({ start: 'code', prompt: 'do it' });
     gh.pr = PR;
     gh.status = status();
-    await move(s.id, { kind: 'quick', stage: 'review' });
+    await move(s.id, { stage: 'review' });
     // A CI prompt for an old head, and one whose turn is over (its Stop not handled yet).
     env.core.sessions.update(s.id, { pending_prompts: JSON.stringify({ ci: { state: 'queued', vars: { sha: 'abc', checks: '- test' } }, review: { state: 'sent' } }) });
 
     const sent = typed();
-    await move(s.id, { kind: 'quick', stage: 'code' });
+    await move(s.id, { stage: 'code' });
     expect(get(s.id)).toMatchObject({ stage: 'code', prNumber: 7 });
     expect(JSON.parse(queue(s.id))).toEqual({ ci: { state: 'queued', vars: { sha: 'abc', checks: '- test' } } });
     expect(sent()).toEqual([]); // back from PR & Review, the Code prompt is off by default
@@ -155,7 +156,7 @@ describe('moves: changing a session type and stage', () => {
     expect(sent()).toEqual([]);
 
     // Back in PR & Review: the same PR, and the review goes out once.
-    await move(s.id, { kind: 'quick', stage: 'review' });
+    await move(s.id, { stage: 'review' });
     expect(events(s.id, 'pr-again')).toEqual(['Back on PR #7']);
     expect(events(s.id, 'pr')).toEqual(['Picked up PR #7']);
     await waitFor(() => transcript(s.id), (x) => x.includes('A review from yb-agentk-dev arrived on PR #7'), 10000, 'review prompt');
@@ -166,22 +167,22 @@ describe('moves: changing a session type and stage', () => {
   });
 
   it("keeps an AgentK approval when it comes back to the same PR", async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
+    const s = await session({ start: 'code', prompt: 'do it' });
     gh.pr = PR;
     gh.status = status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
-    await move(s.id, { kind: 'quick', stage: 'review' });
+    await move(s.id, { stage: 'review' });
     expect(get(s.id)).toMatchObject({ reviewState: 'approved', canMerge: true });
-    await move(s.id, { kind: 'quick', stage: 'code' });
-    await move(s.id, { kind: 'quick', stage: 'review' });
+    await move(s.id, { stage: 'code' });
+    await move(s.id, { stage: 'review' });
     expect(get(s.id)).toMatchObject({ stage: 'review', reviewState: 'approved', canMerge: true });
   });
 
   it("never takes back the PR it had once that PR is merged, and waits for the new one", async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
+    const s = await session({ start: 'code', prompt: 'do it' });
     gh.pr = PR;
     gh.status = status();
-    await move(s.id, { kind: 'quick', stage: 'review' });
-    await move(s.id, { kind: 'quick', stage: 'code' });
+    await move(s.id, { stage: 'review' });
+    await move(s.id, { stage: 'code' });
     // PR #7 is merged on GitHub while the session is back in Code; Open PR asks for a new one.
     gh.pr = { ...PR, state: 'MERGED' };
     gh.status = status({ state: 'MERGED' });
@@ -201,16 +202,16 @@ describe('moves: changing a session type and stage', () => {
     await waitFor(() => get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
     gh.pr = PR;
     gh.status = status();
-    await move(s.id, { kind: 'plan', stage: 'review' });
+    await move(s.id, { stage: 'review' });
     expect(get(s.id)).toMatchObject({ stage: 'review', status: 'idle', prNumber: 7 });
   });
 
   it('goes back to Design: guards the repo again, sends the Design prompt, and can be approved', async () => {
-    const s = await session({ kind: 'quick', prompt: 'DESIGN_MD it' });
+    const s = await session({ start: 'code', prompt: 'DESIGN_MD it' });
     const sent = typed();
-    await move(s.id, { kind: 'plan', stage: 'design' });
-    expect(row(s.id)).toMatchObject({ kind: 'plan', stage: 'design', plan_mode: 0 });
-    expect(sent()[0]).toMatch(/^AgentK Local moved this session: it's now a Plan & Implement session in the Design stage\./);
+    await move(s.id, { stage: 'design' });
+    expect(row(s.id)).toMatchObject({ stage: 'design', plan_mode: 0 });
+    expect(sent()[0]).toMatch(/^AgentK Local moved this session to the Design stage\./);
     expect(sent()[0]).toContain('You are in the Design stage of an AgentK Local task.');
     const wt = row(s.id).worktree_path;
     const decision = env.core.sessions.guard(row(s.id).hook_token, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(wt, 'x.ts') }, cwd: wt });
@@ -221,11 +222,11 @@ describe('moves: changing a session type and stage', () => {
     expect(row(s.id).stage).toBe('code');
   });
 
-  it('skips design approval, and a Plan to Quick Code change in Design lands in Code', async () => {
+  it('skips design approval when it moves on to Code, with or without the Code prompt', async () => {
     const s = await session({ prompt: 'DESIGN_MD it' });
     await waitFor(() => get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
     const sent = typed();
-    await move(s.id, { kind: 'plan', stage: 'code' });
+    await move(s.id, { stage: 'code' });
     expect(row(s.id).stage).toBe('code');
     expect(events(s.id, 'design')).toContain('Design approval skipped');
     expect(sent()[0]).toContain('Implement this on the current branch');
@@ -233,70 +234,71 @@ describe('moves: changing a session type and stage', () => {
 
     const t = await session({ prompt: 'DESIGN_MD it', name: 'Too small to design' });
     await waitFor(() => get(t.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
-    await move(t.id, { kind: 'quick', stage: 'code', prompt: false });
+    await move(t.id, { stage: 'code', prompt: false });
     // No longer waiting on a design approval.
-    expect(get(t.id)).toMatchObject({ kind: 'quick', stage: 'code', status: 'idle' });
+    expect(get(t.id)).toMatchObject({ kind: 'plan', stage: 'code', status: 'idle' });
   });
 
-  it('changes only the type when the stage stays, and shows a Design it never had as skipped', async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
+  it('goes back to Explore without a prompt, and ignores the type an older page still sends', async () => {
+    const s = await session({ start: 'code', prompt: 'do it' });
+    expect(get(s.id)).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['explore', 'design'] });
     const sent = typed();
-    await move(s.id, { kind: 'plan', stage: 'code' });
-    expect(get(s.id)).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['design'] });
-    expect(stages(s.id).map((x) => x.stage)).toEqual(['code']);
+    await move(s.id, { stage: 'explore' });
+    expect(get(s.id)).toMatchObject({ stage: 'explore', skippedStages: [] });
     expect(sent()).toEqual([]);
+    await move(s.id, { kind: 'quick', stage: 'design', prompt: false } as MoveSessionRequest);
+    expect(row(s.id)).toMatchObject({ stage: 'design' });
+    expect(events(s.id, 'kind')).toEqual([]);
   });
 
   it('gets a PR stage out of waiting when the turn ended without a PR', async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
+    const s = await session({ start: 'code', prompt: 'do it' });
     await env.core.sessions.action(s.id, 'open-pr');
     await idle(s.id, 'PR turn without a PR');
     expect(row(s.id).stage).toBe('pr');
-    await move(s.id, { kind: 'quick', stage: 'code' });
+    await move(s.id, { stage: 'code' });
     expect(row(s.id).stage).toBe('code');
   });
 
   it('refuses moves that make no sense, and while AgentK or the session is busy', async () => {
-    const s = await session({ kind: 'quick', prompt: 'do it' });
-    await expect(move(s.id, { kind: 'explore', stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Exploration sessions have no Code stage.' });
-    await expect(move(s.id, { kind: 'quick', stage: 'code' })).rejects.toMatchObject({ status: 400 });
-    await expect(move(s.id, { kind: 'nope', stage: 'code' } as unknown as MoveSessionRequest)).rejects.toMatchObject({ status: 400 });
-    await expect(move(s.id, { kind: 'quick', stage: 'merge' } as unknown as MoveSessionRequest)).rejects.toMatchObject({ status: 400 });
+    const s = await session({ start: 'code', prompt: 'do it' });
+    await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Nothing to change: this session is already in Code.' });
+    await expect(move(s.id, { stage: 'merge' } as unknown as MoveSessionRequest)).rejects.toMatchObject({ status: 400 });
 
     env.core.sessions.setStatus(s.id, 'working');
-    await expect(move(s.id, { kind: 'explore', stage: 'explore' })).rejects.toMatchObject({ status: 409, message: 'AgentK is still working. Wait for the turn to finish.' });
+    await expect(move(s.id, { stage: 'explore' })).rejects.toMatchObject({ status: 409, message: 'AgentK is still working. Wait for the turn to finish.' });
     // Waiting on the user: a move that types nothing is fine, one that types a prompt isn't.
     env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
-    await expect(move(s.id, { kind: 'plan', stage: 'design' })).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
+    await expect(move(s.id, { stage: 'design' })).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
     env.core.sessions.setStatus(s.id, 'exited');
-    await expect(move(s.id, { kind: 'plan', stage: 'design' })).rejects.toMatchObject({ status: 409, message: 'Claude has exited. Resume the session first.' });
-    await move(s.id, { kind: 'explore', stage: 'explore' });
-    expect(row(s.id)).toMatchObject({ kind: 'explore', stage: 'explore' });
+    await expect(move(s.id, { stage: 'design' })).rejects.toMatchObject({ status: 409, message: 'Claude has exited. Resume the session first.' });
+    await move(s.id, { stage: 'explore' });
+    expect(row(s.id).stage).toBe('explore');
 
     env.core.sessions.setStatus(s.id, 'idle');
     env.core.sessions.setStage(s.id, 'merge', 'auto');
-    await expect(move(s.id, { kind: 'quick', stage: 'code' })).rejects.toMatchObject({ status: 409, message: "This session is merging and closing, so it can't be moved." });
+    await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 409, message: "This session is merging and closing, so it can't be moved." });
 
     const legacy = await session({ prompt: 'plan it', name: 'Old style' });
     env.core.sessions.update(legacy.id, { plan_mode: 1 });
-    await expect(move(legacy.id, { kind: 'plan', stage: 'code' })).rejects.toMatchObject({ status: 409, message: /plan mode/ });
+    await expect(move(legacy.id, { stage: 'code' })).rejects.toMatchObject({ status: 409, message: /plan mode/ });
   });
 
   it("keeps a move whose prompt couldn't be typed, but rolls back a PR prompt that couldn't", async () => {
-    const s = await session({ kind: 'explore', prompt: 'look around' });
+    const s = await session({ start: 'explore', prompt: 'look around' });
     vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
-    await expect(move(s.id, { kind: 'quick', stage: 'code' })).rejects.toMatchObject({ status: 502, message: /^Moved to Code, but couldn't type the Code prompt/ });
-    expect(row(s.id)).toMatchObject({ kind: 'quick', stage: 'code' });
+    await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 502, message: /^Moved to Code, but couldn't type the Code prompt/ });
+    expect(row(s.id).stage).toBe('code');
 
-    const t = await session({ kind: 'explore', prompt: 'look around', name: 'Ship it' });
+    const t = await session({ start: 'explore', prompt: 'look around', name: 'Ship it' });
     vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
-    await expect(move(t.id, { kind: 'quick', stage: 'review' })).rejects.toMatchObject({ status: 502 });
-    expect(get(t.id)).toMatchObject({ kind: 'explore', stage: 'explore', busy: false });
+    await expect(move(t.id, { stage: 'review' })).rejects.toMatchObject({ status: 502 });
+    expect(get(t.id)).toMatchObject({ stage: 'explore', busy: false });
   });
 
   it('refuses to move an archived session', async () => {
-    const s = await session({ kind: 'explore' });
+    const s = await session({ start: 'explore' });
     await env.core.sessions.action(s.id, 'archive');
-    await expect(move(s.id, { kind: 'quick', stage: 'code', task: 'x' })).rejects.toMatchObject({ status: 409, message: 'This session is archived.' });
+    await expect(move(s.id, { stage: 'code', task: 'x' })).rejects.toMatchObject({ status: 409, message: 'This session is archived.' });
   });
 });

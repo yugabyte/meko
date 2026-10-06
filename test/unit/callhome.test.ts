@@ -10,7 +10,8 @@ import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, s
 import type { Logger } from '../../src/server/log.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, REPORT_DAYS, SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport,
+  CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_DAY_MS, FIRST_DAY_SEND_AFTER_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, NEW_INSTALL_FIRST_CHECK_MS, REPORT_DAYS,
+  SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport, callHomeKind,
   installFacts, utcDay, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
@@ -275,6 +276,20 @@ describe('the usage stats report', () => {
     expect(r.days.reduce((n, d) => n + d.prsOpened, 0)).toBe(1);
   });
 
+  it('counts a session by the stage it started in, under the names the session types had', () => {
+    // New tasks are stored as plan: the first stage says where they started.
+    expect(callHomeKind('plan', 'explore')).toBe('explore');
+    expect(callHomeKind('plan', 'design')).toBe('plan');
+    expect(callHomeKind('plan', 'code')).toBe('quick');
+    expect(callHomeKind('review-pr', 'reviewing-pr')).toBe('review-pr');
+    // A task changed type later still counts where it started.
+    expect(callHomeKind('quick', 'design')).toBe('plan');
+    // No stage history: the stored kind.
+    expect(callHomeKind('quick', null)).toBe('quick');
+    expect(callHomeKind('task', null)).toBeNull();
+    expect(callHomeKind('plan', 'constructor')).toBe('plan');
+  });
+
   it('counts a close that a reopen undid, and the reopen as a project opened', () => {
     const db = seeded();
     // p3 was closed on the 26th and opened again on the 28th: deleted_at is cleared.
@@ -414,7 +429,7 @@ describe('the usage stats report', () => {
 });
 
 describe('what the report says about the install', () => {
-  const meko: MekoStatus = { configured: true, webUrl: null, sharing: 'link' };
+  const meko: MekoStatus = { configured: true, webUrl: null, sharing: true };
   const probe = (answers: Record<string, string | Error>): Probe => async (cmd) => {
     const a = answers[cmd];
     if (a instanceof Error || a === undefined) throw a ?? new Error('not found');
@@ -429,8 +444,11 @@ describe('what the report says about the install', () => {
     const facts = await installFacts({ config: cfg, version: '0.20260928.0', meko, firstDay: '2026-09-28', probe: probe({ tmux: 'tmux 3.2a\n', claude: '2.4.1 (Claude Code)\n' }) });
     expect(facts).toMatchObject({
       version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
-      tmux: '3.2a', claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'link' }, firstDay: '2026-09-28',
+      tmux: '3.2a', claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
     });
+    // Without Meko's API URL, AgentK can't share.
+    const noApi = await installFacts({ config: cfg, version: '0.20260928.0', meko: { ...meko, sharing: false }, firstDay: '2026-09-28', probe: probe({}) });
+    expect(noApi.meko).toEqual({ enabled: true, keySource: 'config', sharing: 'none' });
   });
 
   it('takes only versions the collector keeps: numbers, one letter after them, and a lane or number as prerelease', () => {
@@ -500,7 +518,7 @@ describe('sending the report', () => {
     const logs: string[] = [];
     const log: Logger = { info: (m) => logs.push(`info ${m}`), warn: (m) => logs.push(`warn ${m}`), error: (m) => logs.push(`error ${m}`) };
     const service = () => new CallHomeService({
-      db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: null }), log,
+      db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false }), log,
       fetch: fetchImpl, now: () => clock.now, bakedUrl: () => o.baked ?? '', probe: async () => { throw new Error('no probes in tests'); },
       maxReportBytes: o.maxReportBytes,
     });
@@ -508,7 +526,7 @@ describe('sending the report', () => {
     return { db, cfg, clock, calls, answer, logs, service, body };
   }
 
-  it('sends a first report of 30 days, then 7 days once a day', async () => {
+  it('sends a first report of 30 days, then 7 days every hour for a day, then once a day', async () => {
     const t = setup();
     const svc = t.service();
     expect(await svc.tick()).toBe(true);
@@ -520,15 +538,63 @@ describe('sending the report', () => {
     expect(first.days).toHaveLength(FIRST_REPORT_DAYS);
     expect(first.install.firstDay).toBe('2026-09-28');
     expect(validate(first, SCHEMA)).toEqual([]);
+    expect(kvGet(t.db, 'call_home_first_sent')).toBe(String(NOW));
 
-    t.clock.now += SEND_AFTER_MS - 60_000;
+    // The first day: a report at every hourly check, not between them.
+    t.clock.now = NOW + FIRST_DAY_SEND_AFTER_MS - 60_000;
     expect(await svc.tick()).toBe(false);
-    t.clock.now += 60_000;
+    t.clock.now = NOW + CHECK_EVERY_MS;
     expect(await svc.tick()).toBe(true);
     const second = t.body(1);
     expect(second.days).toHaveLength(REPORT_DAYS);
     expect(second.installId).toBe(first.installId);
     expect(second.install.firstDay).toBe('2026-09-28');
+    while (t.clock.now + CHECK_EVERY_MS < NOW + FIRST_DAY_MS) {
+      t.clock.now += CHECK_EVERY_MS;
+      expect(await svc.tick()).toBe(true);
+    }
+    expect(t.calls).toHaveLength(24);
+    // The first report's time stays put.
+    expect(kvGet(t.db, 'call_home_first_sent')).toBe(String(NOW));
+
+    // Then once a day.
+    const lastHourly = t.clock.now;
+    t.clock.now += CHECK_EVERY_MS;
+    expect(t.clock.now - NOW).toBeGreaterThanOrEqual(FIRST_DAY_MS);
+    expect(await svc.tick()).toBe(false);
+    t.clock.now = lastHourly + SEND_AFTER_MS - 60_000;
+    expect(await svc.tick()).toBe(false);
+    t.clock.now += 60_000;
+    expect(await svc.tick()).toBe(true);
+    expect(t.calls).toHaveLength(25);
+  });
+
+  it("stamps a report with its check's time, however long the send takes", async () => {
+    const t = setup();
+    const svc = new CallHomeService({
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false }),
+      log: { info() {}, warn() {}, error() {} }, now: () => t.clock.now, probe: async () => '',
+      fetch: (async () => {
+        t.clock.now += 6 * 60_000;
+        return new Response(null, { status: 204 });
+      }) as typeof fetch,
+    });
+    expect(await svc.tick()).toBe(true);
+    expect(kvGet(t.db, 'call_home_first_sent')).toBe(String(NOW));
+    expect(kvGet(t.db, 'call_home_last_sent')).toBe(String(NOW));
+    t.clock.now = NOW + CHECK_EVERY_MS;
+    expect(await svc.tick()).toBe(true);
+    expect(kvGet(t.db, 'call_home_last_sent')).toBe(String(NOW + CHECK_EVERY_MS));
+  });
+
+  it('reports once a day from an install that reported before the first report was kept', async () => {
+    const t = setup();
+    kvSet(t.db, 'call_home_last_sent', String(NOW - CHECK_EVERY_MS));
+    const svc = t.service();
+    expect(await svc.tick()).toBe(false);
+    t.clock.now += SEND_AFTER_MS - CHECK_EVERY_MS;
+    expect(await svc.tick()).toBe(true);
+    expect(kvGet(t.db, 'call_home_first_sent')).toBeNull();
   });
 
   it('drops the oldest days of a report too big for the collector until it fits', async () => {
@@ -562,9 +628,14 @@ describe('sending the report', () => {
   it("doesn't send again after a restart", async () => {
     const t = setup();
     await t.service().tick();
-    t.clock.now += 3600_000;
+    t.clock.now += FIRST_DAY_SEND_AFTER_MS - 60_000;
     expect(await t.service().tick()).toBe(false);
-    expect(t.calls).toHaveLength(1);
+    // Past the first day, a restart sends nothing until a day after the last report.
+    t.clock.now = NOW + FIRST_DAY_MS;
+    expect(await t.service().tick()).toBe(true);
+    t.clock.now += CHECK_EVERY_MS;
+    expect(await t.service().tick()).toBe(false);
+    expect(t.calls).toHaveLength(2);
   });
 
   it('sends nothing, and builds nothing, while turned off', async () => {
@@ -620,23 +691,44 @@ describe('sending the report', () => {
     expect(t.calls).toHaveLength(1);
   });
 
-  it('checks first after a random delay, then every hour', async () => {
+  it('checks first after a random delay, sooner for a new install, then every hour', async () => {
     vi.useFakeTimers();
     const t = setup();
-    const svc = new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: null }),
+    const service = () => new CallHomeService({
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false }),
       log: { info() {}, warn() {}, error() {} }, fetch: (async () => new Response(null, { status: 204 })) as typeof fetch,
-      now: () => t.clock.now, probe: async () => '', random: () => 0.5,
+      now: () => Date.now(), probe: async () => '', random: () => 0.5,
     });
-    const every: number[] = [];
-    const tick = vi.spyOn(svc, 'tick');
-    svc.start((ms) => void every.push(ms));
-    const delay = FIRST_CHECK_MS[0] + Math.floor(0.5 * (FIRST_CHECK_MS[1] - FIRST_CHECK_MS[0]));
-    await vi.advanceTimersByTimeAsync(delay - 1);
-    expect(tick).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(tick).toHaveBeenCalledTimes(1);
-    expect(every).toEqual([CHECK_EVERY_MS]);
+    vi.setSystemTime(NOW);
+    const firstCheck = async ([lo, hi]: [number, number]) => {
+      const svc = service();
+      const every: number[] = [];
+      const tick = vi.spyOn(svc, 'tick');
+      svc.start((ms) => void every.push(ms));
+      const delay = lo + Math.floor(0.5 * (hi - lo));
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(tick).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(tick).toHaveBeenCalledTimes(1);
+      expect(every).toEqual([CHECK_EVERY_MS]);
+      await tick.mock.results[0].value;
+    };
+
+    // No report yet: the first one goes out within 5 minutes.
+    expect(NEW_INSTALL_FIRST_CHECK_MS[1]).toBeLessThanOrEqual(5 * 60 * 1000);
+    await firstCheck(NEW_INSTALL_FIRST_CHECK_MS);
+    expect(kvGet(t.db, 'call_home_first_sent')).not.toBeNull();
+    // Restarted in its first day: still soon, but not before the next report is due, so the
+    // hourly checks that follow don't skip one.
+    const sent = Number(kvGet(t.db, 'call_home_first_sent'));
+    vi.setSystemTime(sent + 50 * 60_000);
+    await firstCheck([FIRST_DAY_SEND_AFTER_MS - 50 * 60_000, FIRST_DAY_SEND_AFTER_MS - 50 * 60_000]);
+    expect(Number(kvGet(t.db, 'call_home_last_sent'))).toBe(sent + FIRST_DAY_SEND_AFTER_MS);
+    vi.setSystemTime(sent + FIRST_DAY_MS - 60_000);
+    await firstCheck(NEW_INSTALL_FIRST_CHECK_MS);
+    // Past its first day: the usual spread.
+    vi.setSystemTime(sent + FIRST_DAY_MS);
+    await firstCheck(FIRST_CHECK_MS);
 
     // Stopped before the first check: it never runs.
     const other = setup();

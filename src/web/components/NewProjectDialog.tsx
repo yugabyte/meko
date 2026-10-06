@@ -1,13 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo, SharingMode } from '../../shared/types';
+import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo } from '../../shared/types';
+import { newRepoNameProblem } from '../../shared/types';
 import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
 } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
 import { cx, relativeTime } from '../util';
-import { Dialog, ErrorText, Field } from './common';
+import { Busy, Dialog, ErrorText, Field } from './common';
 
-type Source = 'list' | 'clone' | 'folder';
+type Source = 'list' | 'clone' | 'folder' | 'new';
 
 function nameFromPath(p: string): string {
   return p.trim().replace(/\/+$/, '').split('/').pop() ?? '';
@@ -53,8 +54,6 @@ function tagFor(o: DpOption): string | null {
 
 export function NewProjectDialog({
   mekoConfigured,
-  mekoWebUrl,
-  sharing,
   projects,
   initialInvite,
   onClose,
@@ -62,8 +61,6 @@ export function NewProjectDialog({
 }: {
   /** Meko is on (a key is set). Off, a project is opened without a datapack. */
   mekoConfigured: boolean;
-  mekoWebUrl: string | null;
-  sharing: SharingMode | null;
   projects: Project[];
   /** A share to start with chosen (Open as project on its banner). */
   initialInvite?: DatapackInvite | null;
@@ -72,6 +69,7 @@ export function NewProjectDialog({
 }) {
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
+  const [cloneInto, setCloneInto] = useState('');
   const [reposError, setReposError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<'recent' | 'az'>('recent');
@@ -80,6 +78,8 @@ export function NewProjectDialog({
   const [cloneUrl, setCloneUrl] = useState('');
   const [folder, setFolder] = useState('');
   const [name, setName] = useState('');
+  // A new repo's folder name, always typed by the user (never filled in from the project name).
+  const [newName, setNewName] = useState('');
 
   const [datapacks, setDatapacks] = useState<MekoDatapack[] | null>(null);
   const [invites, setInvites] = useState<DatapackInvite[]>(initialInvite ? [initialInvite] : []);
@@ -133,6 +133,7 @@ export function NewProjectDialog({
       .then((r) => {
         setRepos(r.repos);
         setRoots(r.roots);
+        setCloneInto(r.cloneInto);
       })
       .catch((e) => setReposError(errorMessage(e)));
   }, []);
@@ -162,7 +163,9 @@ export function NewProjectDialog({
         : ''
       : source === 'clone'
         ? remoteRepoName(cloneUrl)
-        : folderRepo
+        : source === 'new'
+          ? newName.trim()
+          : folderRepo
           ? canonicalRepoName(folderRepo)
           : nameFromPath(folder);
   const defaultDp = defaultProjectDatapackName(repoName, name);
@@ -289,12 +292,20 @@ export function NewProjectDialog({
 
   // The repo picked, when it isn't the one the closed project being opened again was on.
   const pickedRepo = source === 'list' ? (selected?.path ?? null) : source === 'folder' ? folder.trim().replace(/\/+$/, '') || null : null;
-  const movesFrom = dpMode === 'existing' && dpChosen?.closed && (source === 'clone' || (pickedRepo && pickedRepo !== dpChosen.closed.repoPath))
+  const movesFrom = dpMode === 'existing' && dpChosen?.closed && (source === 'clone' || source === 'new' || (pickedRepo && pickedRepo !== dpChosen.closed.repoPath))
     ? dpChosen.closed.repoPath
     : null;
 
+  // Checked as typed, as the server checks it; an empty name only keeps Open project off.
+  const newProblem = newRepoNameProblem(newName);
   const repoChosen =
-    source === 'list' ? !!selected : source === 'clone' ? cloneUrl.trim().length > 0 : folder.trim().length > 0;
+    source === 'list'
+      ? !!selected
+      : source === 'clone'
+        ? cloneUrl.trim().length > 0
+        : source === 'new'
+          ? !newProblem
+          : folder.trim().length > 0;
   const dpReady = dpMode === 'none' ? true : dpMode === 'create' ? dpName.trim().length > 0 : !!dpChosen;
   const canCreate = repoChosen && dpReady && name.trim().length > 0 && (dpMode === 'none' || mekoUsable) && !busy;
   const accepting = dpMode === 'existing' && !!dpChosen?.inviteId;
@@ -313,6 +324,7 @@ export function NewProjectDialog({
       const p = await api.openProject({
         repoPath: source === 'list' ? selected!.path : source === 'folder' ? folder.trim() : undefined,
         cloneUrl: source === 'clone' ? cloneUrl.trim() : undefined,
+        newRepo: source === 'new' ? newName.trim() : undefined,
         name: name.trim(),
         datapack,
       });
@@ -356,14 +368,21 @@ export function NewProjectDialog({
                 Other folder…
               </button>
             )}
+            {source !== 'new' && (
+              <button className="link-btn" onClick={() => setSource('new')}>
+                New repo…
+              </button>
+            )}
           </div>
           <button className="btn primary" disabled={!canCreate} onClick={() => void create()}>
             {busy
               ? accepting
-                ? 'Accepting…'
+                ? <Busy label="Accepting" />
                 : source === 'clone'
-                  ? 'Cloning…'
-                  : 'Opening…'
+                  ? <Busy label="Cloning" />
+                  : source === 'new'
+                    ? <Busy label="Creating" />
+                    : <Busy label="Opening" />
               : accepting
                 ? 'Accept and open project'
                 : 'Open project'}
@@ -440,7 +459,9 @@ export function NewProjectDialog({
             />
             <div className="dp-list" role="listbox" aria-label="Datapacks">
               {dpError && <p className="error-text pad">{dpError}</p>}
-              {!datapacks && !dpError && <p className="muted pad">Loading datapacks…</p>}
+              {!datapacks && !dpError && <p className="muted pad">
+                <Busy label="Loading datapacks" />
+              </p>}
               {datapacks && dpShown.length === 0 && (
                 <p className="muted pad">{showAll ? 'No datapacks match.' : 'No adlc/proj/ datapacks match.'}</p>
               )}
@@ -479,17 +500,8 @@ export function NewProjectDialog({
               })}
             </div>
             <div className="np-dp-links">
-              {sharing === 'link' && mekoWebUrl && (
-                <span className="hint">
-                  Waiting on an invite? Accept it in{' '}
-                  <a href={mekoWebUrl} target="_blank" rel="noreferrer">
-                    Meko ↗
-                  </a>
-                  , then refresh.
-                </span>
-              )}
               <button className="link-btn" disabled={dpLoading} onClick={loadDatapacks}>
-                {dpLoading ? 'Refreshing…' : 'Refresh'}
+                {dpLoading ? <Busy label="Refreshing" /> : 'Refresh'}
               </button>
               {(showAll || hiddenCount > 0) && (
                 <button className="link-btn" onClick={() => setShowAll((v) => !v)}>
@@ -528,7 +540,9 @@ export function NewProjectDialog({
             </div>
             <div className="repos" role="listbox" aria-label="Repositories">
               {reposError && <p className="error-text pad">{reposError}</p>}
-              {!repos && !reposError && <p className="muted pad">Scanning {roots.join(', ') || 'your repos folder'}…</p>}
+              {!repos && !reposError && <p className="muted pad">
+                  <Busy label={`Scanning ${roots.join(', ') || 'your repos folder'}`} />
+                </p>}
               {repos && shown.length === 0 && <p className="muted pad">No repos match.</p>}
               {shown.map((r) => {
                 const used = r.projects.length > 0;
@@ -587,6 +601,26 @@ export function NewProjectDialog({
               placeholder="~/work/some-repo"
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
+            />
+          </Field>
+        )}
+        {source === 'new' && (
+          <Field
+            label="Repo name"
+            hint={
+              newName.trim() && newProblem ? (
+                <span className="error-text">{newProblem}</span>
+              ) : (
+                `Created in ${(cloneInto || '~/code').replace(/\/+$/, '')}/${newName.trim() || '…'} with git init and an empty first commit. It has no remote, so add one before opening a PR.`
+              )
+            }
+          >
+            <input
+              id="np-new"
+              className="input mono"
+              placeholder="my-new-repo"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
             />
           </Field>
         )}

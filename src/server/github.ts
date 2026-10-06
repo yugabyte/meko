@@ -67,6 +67,8 @@ interface Author {
 export interface PrReview {
   id: string;
   author: Author | null;
+  /** How the author relates to the repo (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …). */
+  authorAssociation?: string;
   state: string;
   body: string;
   submittedAt: string;
@@ -75,6 +77,7 @@ export interface PrReview {
 export interface PrComment {
   id: string;
   author: Author | null;
+  authorAssociation?: string;
   body: string;
   createdAt: string;
 }
@@ -85,6 +88,8 @@ interface CheckRun {
   status?: string;
   conclusion?: string;
   detailsUrl?: string;
+  workflowName?: string;
+  startedAt?: string;
   // StatusContext
   context?: string;
   state?: string;
@@ -153,10 +158,31 @@ export async function prStats(cwd: string, url: string): Promise<PrStats> {
 
 const FAILED = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'];
 
+/**
+ * The newest run of each check. The rollup lists every run on the head commit, so a workflow that
+ * ran again on the same commit (one that reruns when the PR is edited, say) lists its checks once
+ * per run, and an old failure or cancellation would outlive the run that replaced it. A run that
+ * hasn't started yet is the newest.
+ */
+function latestRuns(rollup: CheckRun[]): CheckRun[] {
+  const started = (c: CheckRun) => {
+    const t = c.startedAt ? Date.parse(c.startedAt) : NaN;
+    return Number.isNaN(t) || t <= 0 ? Infinity : t;
+  };
+  const out = new Map<string, CheckRun>();
+  rollup.forEach((c, i) => {
+    const name = c.name || c.context;
+    const key = name ? `${c.workflowName ?? ''}\0${name}` : `#${i}`;
+    const prev = out.get(key);
+    if (!prev || started(c) >= started(prev)) out.set(key, c);
+  });
+  return [...out.values()];
+}
+
 export function ciSummary(rollup: CheckRun[] | null): CiSummary {
   const failed: FailedCheck[] = [];
   let pending = false;
-  for (const c of rollup ?? []) {
+  for (const c of latestRuns(rollup ?? [])) {
     const conclusion = (c.conclusion ?? c.state ?? '').toUpperCase();
     const status = (c.status ?? '').toUpperCase();
     if (FAILED.includes(conclusion)) {
@@ -177,6 +203,18 @@ export function isLogin(author: Author | null, login: string): boolean {
   if (!author) return false;
   const a = author.login.toLowerCase().replace(/\[bot\]$/, '');
   return a === login.toLowerCase().replace(/\[bot\]$/, '');
+}
+
+/** Associations of people with a role on the repo. Anyone else can comment on a public repo. */
+const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+/**
+ * Whether feedback from this author may be acted on: someone with a role on the repo, or the
+ * AgentK reviewer (whose association is NONE). Bots are looked up separately (`botLogins`).
+ */
+export function isTrustedAuthor(item: { author: Author | null; authorAssociation?: string }, reviewerLogin: string): boolean {
+  if (!item.author) return false;
+  return TRUSTED_ASSOCIATIONS.includes(item.authorAssociation ?? '') || isLogin(item.author, reviewerLogin);
 }
 
 /**

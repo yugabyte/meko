@@ -1,7 +1,8 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '../../shared/types';
 import { useTouch } from '../hooks/useMedia';
 import { getTerminal } from '../terminals';
+import { Busy } from './common';
 import { StartupPanel } from './StartupPanel';
 import { TermKeys } from './TermKeys';
 
@@ -34,11 +35,12 @@ export function TerminalPane({ session }: { session: Session }) {
     prevStatus.current = status;
   }, [status, term]);
 
-  let overlay: string | null = null;
+  let overlay: ReactNode = null;
   if (showStartup) overlay = null; // the startup panel covers this
-  else if (term.conn === 'connecting' && status !== 'exited') overlay = 'Connecting to the session…';
-  else if (term.conn === 'closed') overlay = 'Connection lost. Reconnecting…';
-  else if (term.conn === 'ended' && status !== 'exited') overlay = term.message ?? 'The terminal closed.';
+  else if (term.conn === 'connecting' && status !== 'exited') overlay = <Busy label="Connecting to the session" />;
+  else if (term.conn === 'closed') overlay = <Busy label="Connection lost. Reconnecting" />;
+  else if (term.conn === 'ended' && status !== 'exited')
+    overlay = term.retrying && term.message ? <Busy label={term.message} /> : (term.message ?? 'The terminal closed.');
 
   return (
     <div className="term-col">

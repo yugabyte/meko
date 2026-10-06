@@ -4,8 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
-  SESSION_KINDS,
-  type FileTypeCount, type MekoStatus, type MekoUsage, type SessionKind, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
+  type CallHomeKind, type FileTypeCount, type MekoStatus, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
   type CallHomeReport, type CallHomeTokens,
 } from '../shared/types.js';
 import { isLoopback, mekoConfigured, resolveMekoWithSource, type Config } from './config.js';
@@ -15,8 +14,9 @@ import { errMsg, type Logger } from './log.js';
 import { mekoCalls, mekoStarts, summarizeMeko, toolCounts, type MekoStart } from './mekousage.js';
 import { usageOverview } from './usage.js';
 
-// Anonymous usage stats ("Call Home"). Once a day each install sends counts to a collector run
-// by the AgentK Local team: no names, paths, prompts, code or anything that says who someone is.
+// Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each install
+// sends counts to a collector run by the AgentK Local team: no names, paths, prompts, code or
+// anything that says who someone is.
 // Every string in the report is an enum, a version, a model id or a file extension, and the
 // report's shape is the collector's contract (CallHomeReport, docs/call-home-report.schema.json;
 // the collector is yugabyte/agent-k's services/ak-local-call-home).
@@ -33,8 +33,13 @@ export const FIRST_REPORT_DAYS = 30;
 export const CHECK_EVERY_MS = 3600 * 1000;
 /** A report is due this long after the last one: just under a day, so hourly checks don't drift later each day. */
 export const SEND_AFTER_MS = 23 * 3600 * 1000;
+/** For a day after its first report, an install reports at every hourly check: just under an hour, for the same reason. */
+export const FIRST_DAY_MS = DAY_MS;
+export const FIRST_DAY_SEND_AFTER_MS = CHECK_EVERY_MS - 5 * 60 * 1000;
 /** The first check after start waits a random time in this range, so a release doesn't make every install report at once. */
 export const FIRST_CHECK_MS: [number, number] = [10 * 60 * 1000, 60 * 60 * 1000];
+/** A new install (no report yet, or its first one under a day ago) checks sooner: its first report goes out within 5 minutes. */
+export const NEW_INSTALL_FIRST_CHECK_MS: [number, number] = [60 * 1000, 5 * 60 * 1000];
 /**
  * The largest body the collector takes. A busy install's 30-day first report can be bigger (every
  * day's file types and models full); a report over it drops its oldest days until it fits.
@@ -48,6 +53,8 @@ const MODEL_LIMIT = 20;
 const KV_INSTALL_ID = 'call_home_install_id';
 const KV_LAST_SENT = 'call_home_last_sent';
 const KV_FIRST_DAY = 'call_home_first_day';
+/** When the first report was received. Installs that reported before it was kept have none and report daily. */
+const KV_FIRST_SENT = 'call_home_first_sent';
 
 /** Plain model ids (`claude-opus-5-5`), as the collector's schema has them. Anything else is `other`. */
 export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
@@ -73,7 +80,21 @@ export function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-const byKind = (): Record<SessionKind, number> => ({ explore: 0, plan: 0, quick: 0, 'review-pr': 0 });
+const byKind = (): Record<CallHomeKind, number> => ({ explore: 0, plan: 0, quick: 0, 'review-pr': 0 });
+
+/** The start a task's first stage stands for, under the old session types' names. */
+const START_KINDS: Partial<Record<string, CallHomeKind>> = { explore: 'explore', design: 'plan', code: 'quick' };
+
+/**
+ * How the report counts a session: a Review a PR, or a task by the stage it started in. A session
+ * with no stage history falls back to its stored kind (the old type, or `plan` for a task).
+ */
+export function callHomeKind(kind: string, firstStage: string | null): CallHomeKind | null {
+  if (kind === 'review-pr') return 'review-pr';
+  const start = firstStage != null && Object.hasOwn(START_KINDS, firstStage) ? START_KINDS[firstStage] : undefined;
+  if (start) return start;
+  return kind === 'explore' || kind === 'plan' || kind === 'quick' ? kind : null;
+}
 const byStage = (): Record<Stage, number> => Object.fromEntries(STAGES.map((s) => [s, 0])) as Record<Stage, number>;
 
 function emptyDay(day: string): CallHomeDay {
@@ -217,12 +238,13 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     .filter((r) => currentIds.has(r.project_id));
 
   // Sessions.
-  const sessions = all<{ kind: string; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
-    'SELECT kind, stage, desired, created_at, archived_at FROM sessions');
+  const sessions = all<{ kind: string; first_stage: string | null; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
+    `SELECT kind, (SELECT stage FROM session_stages WHERE session_id = sessions.id ORDER BY entered_at, rowid LIMIT 1) AS first_stage,
+            stage, desired, created_at, archived_at FROM sessions`);
   const kinds = byKind();
   const openByStage = byStage();
   for (const s of sessions) {
-    const kind = (SESSION_KINDS as string[]).includes(s.kind) ? (s.kind as SessionKind) : null;
+    const kind = callHomeKind(s.kind, s.first_stage);
     if (kind) kinds[kind]++;
     if (s.desired === 'running' && (STAGES as string[]).includes(s.stage)) openByStage[s.stage as Stage]++;
     const c = dayOf(s.created_at);
@@ -384,7 +406,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     meko: {
       enabled: meko,
       keySource: (meko && resolveMekoWithSource(o.config).keySource) || 'none',
-      sharing: (meko && o.meko.sharing) || 'none',
+      sharing: meko && o.meko.sharing ? 'api' : 'none',
     },
     firstDay: o.firstDay,
   };
@@ -427,7 +449,7 @@ export interface CallHomeOptions {
   maxReportBytes?: number;
 }
 
-/** Sends the daily report while `[call_home] enabled` is on and there is a collector URL. */
+/** Sends the report (hourly in an install's first day, then daily) while `[call_home] enabled` is on and there is a collector URL. */
 export class CallHomeService {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
@@ -463,6 +485,18 @@ export class CallHomeService {
     return id;
   }
 
+  /** When the last report was received; 0 before the first. */
+  private lastSent(): number {
+    return Number(kvGet(this.o.db, KV_LAST_SENT) ?? 0);
+  }
+
+  /** True until a day after the first report: no report yet, or the first one under FIRST_DAY_MS ago. */
+  private firstDay(last: number, now: number): boolean {
+    if (!last) return true;
+    const first = Number(kvGet(this.o.db, KV_FIRST_SENT) ?? 0);
+    return first > 0 && now - first < FIRST_DAY_MS;
+  }
+
   /**
    * The body the next send carries. One over the collector's limit would be refused every hour from
    * then on, so it drops its oldest days until it fits (the totals don't depend on the days).
@@ -495,8 +529,11 @@ export class CallHomeService {
     if (!this.enabled()) return false;
     const url = this.endpoint();
     if (!url) return false;
-    const last = Number(kvGet(this.o.db, KV_LAST_SENT) ?? 0);
-    if (last && this.now() - last < SEND_AFTER_MS) return false;
+    // Reports are stamped with the check's time, not the send's, so time spent building and
+    // sending one doesn't push the next hourly check under FIRST_DAY_SEND_AFTER_MS.
+    const now = this.now();
+    const last = this.lastSent();
+    if (last && now - last < (this.firstDay(last, now) ? FIRST_DAY_SEND_AFTER_MS : SEND_AFTER_MS)) return false;
     try {
       const body = await this.body();
       // Turned off while the report was being built.
@@ -508,7 +545,8 @@ export class CallHomeService {
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`the collector answered ${res.status}`);
-      kvSet(this.o.db, KV_LAST_SENT, String(this.now()));
+      if (!last) kvSet(this.o.db, KV_FIRST_SENT, String(now));
+      kvSet(this.o.db, KV_LAST_SENT, String(now));
       if (this.failing) this.o.log.info('usage stats sent');
       this.failing = false;
       return true;
@@ -519,10 +557,18 @@ export class CallHomeService {
     }
   }
 
-  /** Checks after a random first delay, then through `every` (Core's timers) once an hour. */
+  /**
+   * Checks after a random first delay, then through `every` (Core's timers) once an hour. A new
+   * install's first delay is short, and no earlier than its next hourly report is due, so a restart
+   * in its first day doesn't skip one.
+   */
   start(every: (ms: number, fn: () => Promise<unknown>) => void): void {
-    const [lo, hi] = FIRST_CHECK_MS;
-    const delay = lo + Math.floor((this.o.random ?? Math.random)() * (hi - lo));
+    const now = this.now();
+    const last = this.lastSent();
+    const first = this.firstDay(last, now);
+    const [lo, hi] = first ? NEW_INSTALL_FIRST_CHECK_MS : FIRST_CHECK_MS;
+    let delay = lo + Math.floor((this.o.random ?? Math.random)() * (hi - lo));
+    if (first && last) delay = Math.max(delay, last + FIRST_DAY_SEND_AFTER_MS - now);
     this.firstCheck = setTimeout(() => {
       this.firstCheck = null;
       void this.tick();

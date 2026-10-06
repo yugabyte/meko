@@ -4,7 +4,7 @@ import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
-import { trapTab } from './common';
+import { Busy, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -153,7 +153,7 @@ export function EndSessionButton({
           Archive (keep branch)
         </button>
         <button className="btn danger" disabled={busy || disabled || step === 'checking'} onClick={askDiscard}>
-          {step === 'checking' ? 'Checking…' : 'Discard…'}
+          {step === 'checking' ? <Busy label="Checking" /> : 'Discard…'}
         </button>
         {cancel}
       </span>
@@ -213,6 +213,7 @@ export function SessionSheet({
   session,
   stage,
   canDesign,
+  openQuestions,
   acting,
   info,
   onDesign,
@@ -225,13 +226,15 @@ export function SessionSheet({
   /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
+  /** The design's open questions, shown on its row during Design. */
+  openQuestions: number;
   /** A session action is in flight: Resume and Archive wait for it. */
   acting: boolean;
   /** Branch, tokens, Meko and review lines from the desktop footer. */
   info: ReactNode;
   onDesign: () => void;
   onHome: () => void;
-  /** Opens the Change type or stage dialog. */
+  /** Opens the Move to another stage dialog. */
   onMove: () => void;
   onAct: (a: SessionAction) => Promise<void>;
   onClose: () => void;
@@ -252,6 +255,7 @@ export function SessionSheet({
         {canDesign && (
           <SheetItem hint="›" onClick={then(onDesign)}>
             Design doc
+            {openQuestions > 0 && <span className="count-badge">{openQuestions === 1 ? '1 open question' : `${openQuestions} open questions`}</span>}
           </SheetItem>
         )}
         {session.prUrl && (
@@ -261,7 +265,7 @@ export function SessionSheet({
         )}
         {!moveBlockedIn(session.stage) && (
           <SheetItem hint="›" onClick={then(onMove)}>
-            Change type or stage
+            Move to another stage
           </SheetItem>
         )}
         <SheetItem hint="›" onClick={then(onHome)}>

@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { cx, relativeTime } from '../util';
-import { ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { MekoGetKey } from './MekoGetKey';
 
 type Tab = 'general' | 'meko' | 'account' | 'updates';
 
@@ -73,7 +74,7 @@ function GeneralTab() {
       .catch((e) => setError(errorMessage(e)));
   }, []);
 
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
@@ -96,6 +97,7 @@ function GeneralTab() {
         serverName: s.serverName.trim(),
         idleWorktreesPerRepo: clampIdle(),
         idleWorktreeDays: clampIdleDays(),
+        resolveConflicts: s.resolveConflicts,
       });
       setS(next);
       setRoots(next.reposRoots);
@@ -192,6 +194,21 @@ function GeneralTab() {
           </Field>
         </div>
       </div>
+      <div className="field">
+        <label className="check">
+          <input
+            id="set-resolve-conflicts"
+            type="checkbox"
+            checked={s.resolveConflicts}
+            onChange={(e) => setS({ ...s, resolveConflicts: e.target.checked })}
+          />
+          <span>Resolve merge conflicts on PRs</span>
+        </label>
+        <span className="hint">
+          When a PR in PR &amp; Review conflicts with its base, AgentK merges the base into the branch, resolves the
+          conflicts and pushes. Off leaves them to you.
+        </span>
+      </div>
       <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
         <input
           id="set-server-name"
@@ -214,7 +231,7 @@ function GeneralTab() {
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn primary" disabled={busy}>
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? <Busy label="Saving" /> : 'Save'}
         </button>
         {saved && <span className="muted small">Saved</span>}
       </div>
@@ -227,14 +244,6 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
   env: 'from the MEKO_API_KEY environment variable',
   claude: 'from Claude Code’s settings',
 };
-
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).host.toLowerCase();
-  } catch {
-    return null;
-  }
-}
 
 /** The Meko server and key AgentK uses, its links, and whether Claude Code's sessions use the same. */
 function MekoTab({ status }: { status: MekoStatus }) {
@@ -264,7 +273,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
       .catch((e) => setError(errorMessage(e)));
   }, []);
 
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted">Loading…</p>;
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
   const m = s.meko;
 
   const save = async (e: FormEvent) => {
@@ -276,8 +285,8 @@ function MekoTab({ status }: { status: MekoStatus }) {
     if (apiUrl.trim() !== m.apiUrl) next.apiUrl = apiUrl.trim();
     if (!Object.keys(next).length) return;
     // Datapacks live on one Meko: moving to another server leaves existing projects' behind.
-    const newHost = hostOf(url.trim() || m.defaultUrl);
-    if (next.url !== undefined && newHost && newHost !== hostOf(m.effectiveUrl) && confirmHost !== newHost) {
+    const newHost = httpHost(url.trim() || m.defaultUrl);
+    if (next.url !== undefined && newHost && newHost !== httpHost(m.effectiveUrl) && confirmHost !== newHost) {
       setConfirmHost(newHost);
       return;
     }
@@ -362,11 +371,18 @@ function MekoTab({ status }: { status: MekoStatus }) {
           }}
         />
       </Field>
+      {m.keyHint === null && (
+        <MekoGetKey
+          title="No Meko API key yet."
+          webUrl={mekoKeyLinkBase({ url, webUrl }, m)}
+          fallback={`Fill in the web app URL below to get links to sign up and make a key on ${httpHost(url.trim() || m.fallbackUrl) ?? 'this Meko'}.`}
+        />
+      )}
       <Field
         label="API key"
         hint={
           m.keyHint === null
-            ? 'No key is set. Paste the key from your Meko account.'
+            ? 'Paste the key you generated in Meko.'
             : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
         }
       >
@@ -381,7 +397,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
         />
       </Field>
       <div className="fields">
-        <Field label="Web app URL" hint="For links to datapacks, and sharing in link mode.">
+        <Field label="Web app URL" hint="For links to datapacks, and sharing: the API URL defaults to it plus /api/v1.">
           <input
             id="set-meko-web"
             className="input mono"
@@ -406,7 +422,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
       </p>
       {status.configured && !m.effectiveWebUrl && (
         <p className="confirm-warn" role="status">
-          AgentK can’t work out the web app for {hostOf(m.effectiveUrl) ?? 'this Meko'}, so datapack links
+          AgentK can’t work out the web app for {httpHost(m.effectiveUrl) ?? 'this Meko'}, so datapack links
           {m.effectiveApiUrl ? ' are' : ' and sharing are'} off. Set the web app URL to turn them on.
         </p>
       )}
@@ -419,12 +435,8 @@ function MekoTab({ status }: { status: MekoStatus }) {
         </div>
         <div className="meko-status-row">
           <span>Sharing</span>
-          <span className={cx('tag', status.sharing !== 'api' && 'shared')}>
-            {!status.configured ? 'off' : status.sharing === 'api' ? 'in AgentK' : status.sharing === 'link' ? 'link mode' : 'not checked yet'}
-          </span>
-          {status.sharing === 'link' && (
-            <span className="hint">This Meko doesn’t accept API keys for sharing yet, so sharing happens in Meko’s web app.</span>
-          )}
+          <span className={cx('tag', !status.sharing && 'shared')}>{status.sharing ? 'on' : 'off'}</span>
+          {status.configured && !status.sharing && <span className="hint">Needs Meko’s API URL: set the web app or API URL above.</span>}
         </div>
         <div className="meko-status-row">
           <span>Claude Code</span>
@@ -436,7 +448,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
           </span>
           {!claudeMatches && (
             <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
-              {busy === 'claude' ? 'Setting up…' : 'Set up Claude Code with this Meko'}
+              {busy === 'claude' ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
             </button>
           )}
           {claudeDone && <span className="ok-text">Claude Code now uses this Meko.</span>}
@@ -445,14 +457,14 @@ function MekoTab({ status }: { status: MekoStatus }) {
 
       {confirmHost && (
         <p className="confirm-warn" role="alert">
-          Existing projects’ datapacks live on {hostOf(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
+          Existing projects’ datapacks live on {httpHost(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
           won’t work after the switch. Save again to switch anyway.
         </p>
       )}
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn primary" disabled={busy !== null}>
-          {busy === 'save' ? 'Checking…' : confirmHost ? 'Switch Meko' : 'Save'}
+          {busy === 'save' ? <Busy label="Checking" /> : confirmHost ? 'Switch Meko' : 'Save'}
         </button>
         {saved && <span className="muted small">Saved</span>}
       </div>
@@ -635,7 +647,7 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
         {pwMsg && <p className="ok-text">{pwMsg}</p>}
         <div>
           <button className="btn primary" disabled={!current || !next || pwBusy}>
-            {pwBusy ? 'Changing…' : 'Change password'}
+            {pwBusy ? <Busy label="Changing" /> : 'Change password'}
           </button>
         </div>
       </form>
@@ -644,7 +656,7 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
         <h3>Two-step sign-in</h3>
         <p className="muted">
           {totpOn === null
-            ? 'Checking…'
+            ? <Busy label="Checking" />
             : totpOn
               ? 'On. Sign-in asks for a code from your authenticator app.'
               : 'Off. Add a code from an authenticator app to every sign-in.'}
@@ -751,11 +763,11 @@ function UpdatesTab({ initial }: { initial: UpdateStatus }) {
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn" disabled={!!busy || u.channel === 'off'} onClick={() => run('check')}>
-          {busy === 'check' ? 'Checking…' : 'Check now'}
+          {busy === 'check' ? <Busy label="Checking" /> : 'Check now'}
         </button>
         {u.available && (
           <button className="btn primary" disabled={!!busy || u.applying} onClick={() => run('apply')}>
-            {busy === 'apply' || u.applying ? 'Updating…' : `Update to v${u.latest}`}
+            {busy === 'apply' || u.applying ? <Busy label="Updating" /> : `Update to v${u.latest}`}
           </button>
         )}
         {u.releaseUrl && (

@@ -1,4 +1,5 @@
-import type { MekoFirstTurn, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
+import type { MekoFirstTurn, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<SessionStatus, number> = {
@@ -32,9 +33,67 @@ export interface LiveCount {
   live: number;
 }
 
+/**
+ * The projects to show: the state's, plus a project just opened (as Open project returned it, with
+ * no sessions yet) until a state push brings it, so the route, the rail and the New session dialog
+ * don't wait on the events socket.
+ */
+export function withOpened(projects: ProjectWithSessions[], opened: Project | null): ProjectWithSessions[] {
+  if (!opened || projects.some((p) => p.id === opened.id)) return projects;
+  return [...projects, { ...opened, sessions: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 } }];
+}
+
+/**
+ * The projects with a session just created (as New session returned it) in its project until a
+ * state push brings it: the reply comes before the push, and its tab shows the startup steps.
+ */
+export function withCreated(projects: ProjectWithSessions[], created: Session | null): ProjectWithSessions[] {
+  if (!created || projects.some((p) => p.sessions.some((s) => s.id === created.id))) return projects;
+  return projects.map((p) => (p.id === created.projectId ? { ...p, sessions: [...p.sessions, created] } : p));
+}
+
 /** The project on screen just lost its last open session (not a switch to a project without any). */
 export function lastSessionClosed(prev: LiveCount, next: LiveCount): boolean {
   return !!next.projectId && prev.projectId === next.projectId && prev.live > 0 && next.live === 0;
+}
+
+const LAST_OPEN_KEY = 'ak-last-session';
+
+/** The session last open in each project in this browser, by project id. */
+function readLastOpen(): Record<string, string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(LAST_OPEN_KEY) ?? '{}');
+    return v && typeof v === 'object' ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function lastOpenSession(projectId: string): string | undefined {
+  return readLastOpen()[projectId];
+}
+
+/** Remembers the session open in a project, so switching back to the project reopens it. */
+export function rememberOpenSession(projectId: string, sessionId: string) {
+  const all = readLastOpen();
+  if (all[projectId] === sessionId) return;
+  all[projectId] = sessionId;
+  try {
+    localStorage.setItem(LAST_OPEN_KEY, JSON.stringify(all));
+  } catch {
+    /* storage blocked or full: this session isn't remembered */
+  }
+}
+
+/**
+ * The session to open when switching to a project: the one last open there while it's still
+ * open, else the one with the most recent activity.
+ */
+export function sessionToOpen(live: Session[], lastOpenId: string | undefined): Session | undefined {
+  return (
+    live.find((s) => s.id === lastOpenId) ??
+    [...live].sort((a, b) => (b.lastEventAt ?? b.createdAt) - (a.lastEventAt ?? a.createdAt))[0]
+  );
 }
 
 export function aggregateStatus(p: ProjectWithSessions): SessionStatus {
@@ -108,10 +167,37 @@ export function mekoDatapackUrl(webUrl: string | null, datapackId: string): stri
   return webUrl ? `${webUrl}/datapacks/${encodeURIComponent(datapackId)}` : null;
 }
 
-/** The datapack's Share page in the Meko web app (how sharing works in link mode). */
-export function mekoDatapackShareUrl(webUrl: string | null, datapackId: string): string | null {
-  const u = mekoDatapackUrl(webUrl, datapackId);
-  return u ? `${u}/share` : null;
+/** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */
+export function httpHost(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.host.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Meko web app pages for getting an account and an API key (keys are under Settings →
+ * Security). Signing in or up with `return_to` lands on Settings. Null when the web app is unknown.
+ */
+export function mekoKeyLinks(webUrl: string | null): { signup: string; signin: string; settings: string } | null {
+  const base = webUrl?.trim().replace(/\/+$/, '') ?? '';
+  if (!httpHost(base)) return null;
+  const back = `return_to=${encodeURIComponent('/settings')}`;
+  return { signup: `${base}/signup?${back}`, signin: `${base}/signin?${back}`, settings: `${base}/settings` };
+}
+
+/**
+ * Which Meko web app the sign-up links point to, from the MCP and web app URLs as typed (saved or
+ * not): worked out the way the server will once they're saved (`mekoWebUrl`), with an empty field
+ * falling back to what the environment or Claude Code's settings give. Null when it isn't known
+ * (your own Meko with no web app URL); `mekoKeyLinks` drops anything that isn't http(s).
+ */
+export function mekoKeyLinkBase(typed: { url: string; webUrl: string }, m: Pick<MekoSettings, 'fallbackUrl' | 'envWebUrl'>): string | null {
+  // The server saves Meko Cloud's URL as empty, like a cleared field.
+  const url = typed.url.trim().replace(/\/+$/, '');
+  return mekoWebUrl(url && url !== DEFAULT_MEKO_URL ? url : m.fallbackUrl, typed.webUrl.trim() || m.envWebUrl);
 }
 
 export function isMac(): boolean {
@@ -183,6 +269,12 @@ export function firstTurnText(t: MekoFirstTurn): { split: string | null; title: 
 
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
 const DESIGN_READY = 'Design ready for your approval';
+
+/** The approve button's label: answers to the design not yet sent go with the approval. */
+export function approveLabel(unsent: number): string {
+  if (!unsent) return 'Approve design';
+  return `Approve with ${unsent === 1 ? '1 answer' : `${unsent} answers`}`;
+}
 
 /** Why Approve design can't be pressed right now, or null when it can. Mirrors the server's checks. */
 export function designApprovalBlocker(session: Session): string | null {

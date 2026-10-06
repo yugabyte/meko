@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { ProjectWithSessions, ReviewablePr, ReviewablePrs } from '../../shared/types';
+import type { Project, ReviewablePr, ReviewablePrs } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { cx, relativeTime, repoFolder } from '../util';
-import { ErrorText } from './common';
+import { Busy, ErrorText } from './common';
 
 const key = (pr: ReviewablePr) => `${pr.repo}#${pr.number}`;
 
@@ -20,7 +20,7 @@ export function ReviewPrPicker({
   onPick,
   lookupRepo,
 }: {
-  project: ProjectWithSessions;
+  project: Project;
   /** null while loading. */
   list: ReviewablePrs | null;
   listError: string | null;
@@ -108,7 +108,7 @@ export function ReviewPrPicker({
           <div className="pr-pick-note">
             <span>{pr.repo} isn't cloned here.</span>
             <button type="button" className="btn small" disabled={cloning} onClick={() => void clone(pr)}>
-              {cloning ? 'Cloning…' : `Clone ${pr.repo}`}
+              {cloning ? <Busy label="Cloning" /> : `Clone ${pr.repo}`}
             </button>
           </div>
         )}
@@ -122,7 +122,11 @@ export function ReviewPrPicker({
         Pull request
       </span>
       <div className="dp-list pr-pick" role="radiogroup" aria-labelledby="ns-pr-label">
-        {!list && !listError && <p className="muted pr-pick-empty">Looking for this project's PRs…</p>}
+        {!list && !listError && (
+          <p className="muted pr-pick-empty">
+            <Busy label="Looking for this project's PRs" />
+          </p>
+        )}
         {list && !prs.length && (
           <p className="muted pr-pick-empty">{list.error ?? 'No open PR names this project\'s datapack yet. Type one below.'}</p>
         )}
@@ -148,7 +152,7 @@ export function ReviewPrPicker({
               }}
             />
             <button type="button" className="btn small" disabled={!other.trim() || looking} onClick={() => void lookUp()}>
-              {looking ? 'Looking…' : 'Find'}
+              {looking ? <Busy label="Looking" /> : 'Find'}
             </button>
           </span>
         </div>
@@ -157,7 +161,7 @@ export function ReviewPrPicker({
         <div className="pr-pick-note">
           <span>This PR's project datapack isn't in this project, so AgentK can't read its design.</span>
           <button type="button" className="btn small" disabled={attach === 'busy'} onClick={() => void attachDatapack(picked.otherDatapackId!)}>
-            {attach === 'busy' ? 'Attaching…' : 'Attach it'}
+            {attach === 'busy' ? <Busy label="Attaching" /> : 'Attach it'}
           </button>
         </div>
       )}

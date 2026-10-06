@@ -75,9 +75,9 @@ const STABLE_MS = 5000;
 /** On phones, a terminal taken off screen lets go of its tmux window after this long. */
 const DETACH_RELEASE_MS = 5000;
 
-/** Why the pty behind a terminal exited, in words. */
+/** Why the pty behind a terminal exited, in words (the UI adds the dots while it reconnects). */
 const EXIT_REASONS: Record<string, string> = {
-  detached: 'The terminal was detached. Reconnecting…',
+  detached: 'The terminal was detached. Reconnecting',
 };
 
 class SessionTerminal {
@@ -120,6 +120,8 @@ class SessionTerminal {
   selecting = false;
   conn: TermConn = 'connecting';
   message: string | null = null;
+  /** `message` says what is being retried ("Reconnecting"): the UI shows it with moving dots. */
+  retrying = false;
   /** The server said why it can't attach (in `message`): no reconnecting until reconnect(). */
   failed = false;
   /** A short-lived note after copying ("Copied", or why it failed). */
@@ -220,9 +222,10 @@ class SessionTerminal {
     }, ms);
   }
 
-  private setConn(c: TermConn, message: string | null = null) {
+  private setConn(c: TermConn, message: string | null = null, retrying = false) {
     this.conn = c;
     this.message = message;
+    this.retrying = retrying;
     this.listeners.forEach((l) => l());
   }
 
@@ -269,11 +272,11 @@ class SessionTerminal {
         } catch {
           return;
         }
-        if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting…');
+        if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
         else if (msg.type === 'error') {
           // A missing or archived session is final (Try again); a failed attach may pass, so back off and retry.
           this.failed = !msg.retry;
-          this.setConn('ended', msg.retry ? `${msg.error} Retrying…` : msg.error);
+          this.setConn('ended', msg.retry ? `${msg.error} Retrying` : msg.error, msg.retry);
         }
         return;
       }
@@ -323,7 +326,13 @@ class SessionTerminal {
     this.paused = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    this.ws?.close();
+    // Let go of it now: a socket the server already dropped may not report its close for minutes,
+    // and resume() reconnects only once there's no socket.
+    const old = this.ws;
+    this.ws = null;
+    this.openedAt = 0;
+    old?.close();
+    if (old && this.conn !== 'ended') this.setConn('closed');
   }
 
   resume() {
@@ -735,16 +744,23 @@ export function setTerminalFontSize(size: number) {
  */
 const HIDDEN_RELEASE_MS = 30_000;
 let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+/** When a phone's page was hidden, or 0. */
+let hiddenAt = 0;
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (hiddenTimer) clearTimeout(hiddenTimer);
     hiddenTimer = null;
     if (document.hidden) {
       if (!matches(MOBILE_QUERY)) return;
+      hiddenAt = Date.now();
       hiddenTimer = setTimeout(() => {
         for (const t of cache.values()) t.pause();
       }, HIDDEN_RELEASE_MS);
     } else {
+      // A phone that suspends a hidden page runs no timers, so the release above may never have
+      // happened, and the server has likely dropped the sockets since. Measured by the clock.
+      if (hiddenAt && Date.now() - hiddenAt >= HIDDEN_RELEASE_MS) for (const t of cache.values()) t.pause();
+      hiddenAt = 0;
       // Only terminals on screen: ones taken off screen on a phone stay released until shown.
       for (const t of cache.values()) if (t.el.isConnected) t.resume();
     }

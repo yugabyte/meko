@@ -13,6 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Merging into main requires both `test (...)` checks by name: renaming the job or a matrix
+  # entry means updating the branch rules.
   test:
     strategy:
       fail-fast: false

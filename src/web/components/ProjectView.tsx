@@ -9,13 +9,13 @@ import {
   type SessionAction,
   type Stage,
 } from '../../shared/types';
-import { moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
+import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, cx, designApprovalBlocker, formatTokens, mekoDatapackShareUrl, repoFolder, totalTokens, usageTitle } from '../util';
-import { Check, ConfirmButton, DatapackName, StatusDot } from './common';
+import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, repoFolder, totalTokens, usageTitle } from '../util';
+import { Busy, Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -61,7 +61,7 @@ export function ProjectView({
   mekoWebUrl: string | null;
   meko: MekoStatus;
   onNewSession: () => void;
-  /** Opens the Change type or stage dialog for the session on screen. */
+  /** Opens the Move to another stage dialog for the session on screen. */
   onMove: (preset?: MovePreset) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
@@ -108,15 +108,15 @@ export function ProjectView({
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
+  const openQuestions = session?.stage === 'design' ? session.designQuestions.open : 0;
   const rv = session?.reviewingPr ?? null;
   // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you.
   const gateReady = !!session && !session.busy && (
     (session.stage === 'design' && session.hasDesign)
     || (session.stage === 'review' && session.canMerge)
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)));
-  // Sharing the project with a PR's reviewers is sharing its dedicated datapack (Meko on, and a share mode known).
-  const shareUrl = dedicated && meko.sharing === 'link' ? mekoDatapackShareUrl(mekoWebUrl, dedicated.id) : null;
-  const canShare = !!dedicated && meko.configured && (meko.sharing === 'api' || !!shareUrl);
+  // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
+  const canShare = !!dedicated && meko.sharing;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -247,14 +247,14 @@ export function ProjectView({
               <button className="btn small" onClick={goHome}>
                 Project home
               </button>
-              {session && !moveBlockedIn(session.stage) && (
-                <button className="btn small" onClick={() => onMove()} title="Change the session's type, or move it to another stage">
-                  Change type
-                </button>
-              )}
               {canDesign && (
                 <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
                   Design doc
+                  {openQuestions > 0 && (
+                    <span className="count-badge" title={`${openQuestions} open questions`} aria-label={`, ${openQuestions} open questions`}>
+                      {openQuestions}
+                    </span>
+                  )}
                 </button>
               )}
               {session?.status === 'exited' && (
@@ -340,6 +340,7 @@ export function ProjectView({
             />
           }
           canDesign={canDesign}
+          openQuestions={openQuestions}
           acting={acting}
           info={
             <>
@@ -363,7 +364,6 @@ export function ProjectView({
           projectName={project.name}
           datapack={dedicated}
           focusSessionId={session.id}
-          shareUrl={shareUrl}
           onClose={() => setSharing(false)}
         />
       )}
@@ -409,10 +409,13 @@ function StageBar({
       </div>
     );
   }
-  const stages: Stage[] = KIND_STAGES[session.kind];
+  const kind = kindOf(session.kind);
+  const stages: Stage[] = KIND_STAGES[kind];
   const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
+  // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
+  const first = kind === 'task' ? 0 : 1;
   // Other stages the session can be moved to open the move dialog.
-  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(session.kind);
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -426,10 +429,10 @@ function StageBar({
         <button
           className="gate"
           disabled={blocked || !!reason}
-          title={reason ?? 'Turn this exploration into a Quick Code session and open a pull request'}
-          onClick={() => onMove({ kind: 'quick', stage: 'review' })}
+          title={reason ?? 'Move this session on to Design, Code or a PR'}
+          onClick={() => onMove({ stage: 'design' })}
         >
-          Open PR…
+          Move on…
         </button>
       );
       break;
@@ -442,7 +445,7 @@ function StageBar({
           title={reason ?? 'Approve the design and move to Code'}
           onClick={() => onAct('approve-design')}
         >
-          Approve design
+          {approveLabel(session.designQuestions.unsent)}
         </button>
       );
       break;
@@ -461,7 +464,9 @@ function StageBar({
       );
       break;
     case 'pr':
-      gate = <span className="gate-pill">Opening PR…</span>;
+      gate = <span className="gate-pill">
+          <Busy label="Opening PR" />
+        </span>;
       break;
     case 'review':
       gate = (
@@ -503,7 +508,7 @@ function StageBar({
       );
       break;
     case 'merge':
-      gate = <span className="gate-pill">Merging and closing…</span>;
+      gate = <span className="gate-pill"><Busy label="Merging and closing" /></span>;
       break;
     case 'done':
       gate = <span className="gate-pill done">Done</span>;
@@ -557,7 +562,7 @@ function StageBar({
             const cls = cx('stg', i < idx && !skipped && 'done', skipped && 'skipped', i === idx && 'cur');
             const inner = (
               <>
-                <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + 1}</span>
+                <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + first}</span>
                 <span className="stg-label">{STAGE_LABELS[st]}</span>
               </>
             );
@@ -586,7 +591,12 @@ function StageBar({
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>{STAGE_LABELS[session.stage]}</b>
-            {session.stage !== 'done' && stages.length > 1 && <span className="muted"> {idx + 1} of {stages.length}</span>}
+            {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (
+              <span className="muted">
+                {' '}
+                {idx + first} of {stages.length - 1 + first}
+              </span>
+            )}
           </span>
           <span className="stages-gate">{gate}</span>
         </div>

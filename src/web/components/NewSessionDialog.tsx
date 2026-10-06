@@ -1,16 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { ProjectWithSessions, RepoInfo, ReviewablePr, ReviewablePrs, Session, SessionKind } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { repoFolder, slugify } from '../util';
-import { Dialog, ErrorText, Field, KindPicker } from './common';
+import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { ReviewPrPicker } from './ReviewPrPicker';
-
-const NAME_PLACEHOLDER: Record<SessionKind, string> = {
-  explore: 'why is CI slow on macOS',
-  plan: 'fix retry backoff',
-  quick: 'fix typo in README',
-  'review-pr': 'review #21',
-};
 
 /** A review's default name, from its PR. */
 const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
@@ -18,30 +11,38 @@ const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slic
 export function NewSessionDialog({
   project,
   fresh = false,
+  initial,
   onClose,
   onCreated,
 }: {
-  project: ProjectWithSessions;
+  project: Project;
   /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
   fresh?: boolean;
+  /** What a failed start asked for, to try it again. */
+  initial?: CreateSessionRequest;
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
-  const [name, setName] = useState('');
-  const [nameEdited, setNameEdited] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const [kind, setKind] = useState<SessionKind>('plan');
-  const review = kind === 'review-pr';
+  const [name, setName] = useState(initial?.name ?? '');
+  const [nameEdited, setNameEdited] = useState(!!initial?.name);
+  const [prompt, setPrompt] = useState(initial?.prompt ?? '');
+  const [start, setStart] = useState<StartChoice>(initial?.kind === 'review-pr' ? 'review-pr' : (initial?.start ?? 'design'));
+  const review = start === 'review-pr';
   const [prList, setPrList] = useState<ReviewablePrs | null>(null);
   const [prListError, setPrListError] = useState<string | null>(null);
   const [picked, setPicked] = useState<ReviewablePr | null>(null);
-  const [advanced, setAdvanced] = useState(false);
+  // A retry opens Advanced when it asked for more than the defaults there.
+  const [advanced, setAdvanced] = useState(
+    !!initial && (!!initial.repoPath || !!initial.branch || (!!initial.baseBranch && initial.baseBranch !== project.defaultBranch)),
+  );
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [reposError, setReposError] = useState<string | null>(null);
-  const [repoPath, setRepoPath] = useState(project.repoPath);
+  const [repoPath, setRepoPath] = useState(initial?.repoPath ?? project.repoPath);
   const [branches, setBranches] = useState<string[] | null>(null);
-  const [baseBranch, setBaseBranch] = useState(project.defaultBranch);
-  const [branch, setBranch] = useState('');
+  const [baseBranch, setBaseBranch] = useState(initial?.baseBranch ?? project.defaultBranch);
+  const [branch, setBranch] = useState(initial?.branch ?? '');
+  // A retry's base branch outlasts the first load of another repo's branches.
+  const keepBase = useRef(initial?.baseBranch);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inProjectRepo = repoPath === project.repoPath;
@@ -57,10 +58,14 @@ export function NewSessionDialog({
       .then((r) => {
         if (!live) return;
         setBranches(r.branches.includes(r.defaultBranch) ? r.branches : [r.defaultBranch, ...r.branches]);
-        if (!inProjectRepo) setBaseBranch(r.defaultBranch);
+        const kept = keepBase.current;
+        keepBase.current = undefined;
+        // A retry's base that isn't there (the reason it failed, say) goes back to the default.
+        if (!inProjectRepo || (kept && !r.branches.includes(kept))) setBaseBranch(kept && r.branches.includes(kept) ? kept : r.defaultBranch);
       })
       .catch(() => {
         if (!live) return;
+        keepBase.current = undefined;
         // Left empty, the server starts from the repo's default branch.
         setBranches(inProjectRepo ? [project.defaultBranch] : []);
         if (!inProjectRepo) setBaseBranch('');
@@ -71,7 +76,7 @@ export function NewSessionDialog({
   }, [project.id, project.defaultBranch, repoPath, inProjectRepo]);
 
   // The project's PRs to review: looked for when Review a PR is picked, or right away for a project
-  // just opened, where they decide the type it starts on.
+  // just opened, where they decide where it starts.
   const loadPrs = useCallback(() => {
     setPrListError(null);
     api
@@ -85,7 +90,7 @@ export function NewSessionDialog({
         return null;
       })
       .then((r) => {
-        if (fresh && r?.prs.length) setKind((k) => (k === 'plan' ? 'review-pr' : k));
+        if (fresh && r?.prs.length) setStart((c) => (c === 'design' ? 'review-pr' : c));
       });
   }, [project.id, fresh]);
   const wantPrs = review || fresh;
@@ -93,14 +98,42 @@ export function NewSessionDialog({
     if (wantPrs && !prList && !prListError) loadPrs();
   }, [wantPrs, prList, prListError, loadPrs]);
 
+  // The PR a retry was for, until something is picked.
+  const retryPr = useRef(initial?.pr);
   const pick = (pr: ReviewablePr | null) => {
+    retryPr.current = undefined;
     setPicked(pr);
     if (pr?.localRepo) setRepoPath(pr.localRepo);
     if (pr && !nameEdited) setName(reviewName(pr));
   };
-  // A list that comes in after the type was switched to Review a PR starts on its newest PR.
+  // A list that comes in after the type was switched to Review a PR starts on its newest PR. A
+  // retry starts on the PR it was for: from the list, or looked up as one typed by number or link
+  // (never another PR in its place).
   useEffect(() => {
-    if (review && !picked && prList?.prs.length) pick(prList.prs[0]);
+    if (!review || picked || !prList) return;
+    const want = retryPr.current;
+    if (!want) {
+      if (prList.prs.length) pick(prList.prs[0]);
+      return;
+    }
+    const listed = prList.prs.find((p) => p.repo === want.repo && p.number === want.number);
+    if (listed) {
+      pick(listed);
+      return;
+    }
+    let live = true;
+    api
+      .reviewPrs(project.id, { pr: `${want.repo}#${want.number}`, repoPath: initial?.repoPath })
+      .then((r) => {
+        if (live && r.prs[0]) pick(r.prs[0]);
+      })
+      .catch(() => {
+        // Nothing picked: the user picks the PR again.
+        if (live) retryPr.current = undefined;
+      });
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pick only when the list or type changes
   }, [review, prList]);
 
@@ -139,7 +172,7 @@ export function NewSessionDialog({
           ? {
             name: name.trim(),
             prompt: prompt.trim() || undefined,
-            kind,
+            kind: 'review-pr',
             repoPath: inProjectRepo ? undefined : repoPath,
             pr: { repo: picked.repo, number: picked.number },
           }
@@ -147,7 +180,8 @@ export function NewSessionDialog({
             name: name.trim(),
             prompt: prompt.trim() || undefined,
             baseBranch,
-            kind,
+            kind: 'task',
+            start: start === 'review-pr' ? undefined : start,
             repoPath: inProjectRepo ? undefined : repoPath,
             branch: branch.trim() || undefined,
           },
@@ -167,7 +201,7 @@ export function NewSessionDialog({
       footer={
         <>
           <button className="btn primary" disabled={!canStart} onClick={create}>
-            {busy ? 'Starting…' : review ? 'Start review' : 'Start session'}
+            {busy ? <Busy label="Starting" /> : review ? 'Start review' : 'Start session'}
           </button>
         </>
       }
@@ -183,7 +217,7 @@ export function NewSessionDialog({
           <input
             id="ns-name"
             className="input"
-            placeholder={NAME_PLACEHOLDER[kind]}
+            placeholder={START_EXAMPLES[start].name}
             value={name}
             onChange={(e) => {
               setName(e.target.value);
@@ -192,7 +226,7 @@ export function NewSessionDialog({
             autoFocus
           />
         </Field>
-        <KindPicker id="ns-kind" value={kind} onChange={setKind} />
+        <StartPicker id="ns-start" value={start} onChange={setStart} />
         {review && (
           <ReviewPrPicker
             project={project}
@@ -213,7 +247,7 @@ export function NewSessionDialog({
           hint={
             review
               ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
-              : kind === 'explore'
+              : start === 'explore'
                 ? 'What should AgentK do? You can also type it in the terminal.'
                 : 'What should AgentK do? Left empty, AgentK starts on the name as the task.'
           }
@@ -222,7 +256,7 @@ export function NewSessionDialog({
             id="ns-prompt"
             className="input"
             rows={review ? 2 : 5}
-            placeholder={review ? 'e.g. the migration and the polling' : undefined}
+            placeholder={START_EXAMPLES[start].prompt}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {

@@ -34,40 +34,74 @@ export interface StartupState {
 
 /**
  * `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup.
- * `explore` is an Exploration session's only stage: no gates, it ends when the user archives it.
+ * `explore` is a task's optional first stage: no gates, the user moves the session on from it.
  * `reviewing-pr` is a Review a PR session's only stage: the user reviews someone else's PR, with
  * AgentK assisting, until they close the review.
  */
 export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr';
 
-/** What a session is for, picked when it's created. It decides the stages it goes through. */
-export type SessionKind = 'explore' | 'plan' | 'quick' | 'review-pr';
+/**
+ * What a session is: a task, which runs on Explore → Design → Code → PR & Review → Merge & Close
+ * from the stage it starts at, or a Review a PR (someone else's PR), which has one stage.
+ */
+export type SessionKind = 'task' | 'review-pr';
 
-export const SESSION_KINDS: SessionKind[] = ['explore', 'plan', 'quick', 'review-pr'];
+export const SESSION_KINDS: SessionKind[] = ['task', 'review-pr'];
+
+/**
+ * A session's kind as `sessions.kind` stores it and `Session.kind` sends it: `review-pr`, or a task
+ * under one of the old session types' names (`plan` for new ones). Pages and releases from before
+ * start stages index their stage lists with it, so it never says `task`; read it with `kindOf()`
+ * in `stages.ts`.
+ */
+export type StoredKind = 'explore' | 'plan' | 'quick' | 'review-pr';
 
 export const KIND_LABELS: Record<SessionKind, string> = {
-  explore: 'Exploration',
-  plan: 'Plan & Implement',
-  quick: 'Quick Code',
+  task: 'Task',
   'review-pr': 'Review a PR',
 };
 
-/** One line on what each kind is for, shown under the choice in the New session dialog. */
-export const KIND_HINTS: Record<SessionKind, string> = {
-  explore: 'Investigate, answer questions, build POCs and run experiments. No design, PR or merge.',
-  plan: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
-  quick: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
+/** Where a new task session starts. It gets to PR & Review only through Open PR or a move. */
+export type StartStage = 'explore' | 'design' | 'code';
+
+export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
+
+/** One line on what each start (and Review a PR) is for, shown under the choice in the New session dialog. */
+export const START_HINTS: Record<StartStage | 'review-pr', string> = {
+  explore: "Investigate, answer questions, build POCs and run experiments. Move on to Design, Code or a PR when you're ready.",
+  design: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
+  code: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
   'review-pr': "Review someone else's PR. AgentK checks it out, sums it up for you, then helps with whatever you ask. It posts to GitHub only when you say.",
 };
 
 /**
+ * An example of the work each start (and Review a PR) suits, shown as the placeholders of the New
+ * session dialog's Name and First prompt fields.
+ */
+export const START_EXAMPLES: Record<StartStage | 'review-pr', { name: string; prompt: string }> = {
+  explore: {
+    name: 'why is CI slow on macOS',
+    prompt: 'e.g. CI takes twice as long on macOS as on Linux. Find out where the time goes and what we could cut.',
+  },
+  design: {
+    name: 'add rate limiting to the API',
+    prompt:
+      "e.g. Add per-user rate limits to the public API so one client can't starve the rest: a limit per route, and a 429 with Retry-After when one is hit.",
+  },
+  code: {
+    name: 'fix typo in README',
+    prompt: 'e.g. The install section of the README says "npm instal". Make it "npm install".',
+  },
+  'review-pr': { name: 'review #21', prompt: 'e.g. the migration and the polling' },
+};
+
+/**
  * The steps shown in the stage bar for each kind, in order. `pr` (opening the PR) shows as part of
- * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown.
+ * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
+ * steps are numbered from 0, so Explore is 0 and Design 1.
  */
 export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> = {
-  explore: ['explore'],
-  plan: ['design', 'code', 'review', 'merge'],
-  quick: ['code', 'review', 'merge'],
+  task: ['explore', 'design', 'code', 'review', 'merge'],
   'review-pr': ['reviewing-pr'],
 };
 
@@ -254,8 +288,8 @@ export interface UsageOverview {
 
 // ---- usage stats (Call Home) ----
 //
-// The report each install sends once a day to the usage stats collector (yugabyte/agent-k,
-// services/ak-local-call-home). docs/call-home-report.schema.json is the same contract as a JSON
+// The report each install sends once a day (hourly in its first day) to the usage stats collector
+// (yugabyte/agent-k, services/ak-local-call-home). docs/call-home-report.schema.json is the same contract as a JSON
 // Schema, and the collector keeps an identical copy; change all three together.
 // Only counts, enums, version strings, model ids and file extensions: never a name, path, prompt
 // or anything else that says who someone is or what they work on.
@@ -287,8 +321,8 @@ export interface CallHomeInstall {
   claudeCode: string;
   access: 'local' | 'remote';
   service: 'systemd' | 'launchd' | 'none';
-  /** 'none' when Meko is off (or the sharing mode isn't known yet). */
-  meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: SharingMode | 'none' };
+  /** Sharing is 'api' when AgentK shares through Meko's API, 'none' when it can't (Meko off, or no API URL). */
+  meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: 'api' | 'none' };
   /** The UTC day this install first built a report. */
   firstDay: string;
 }
@@ -320,13 +354,19 @@ export interface CallHomeMeko {
   starts: { found: number; empty: number; error: number; late: number; ms: number };
 }
 
+/**
+ * Sessions as the report counts them, by where they started: `explore`, `plan` (Design) and `quick`
+ * (Code) are the starts under the names the session types had, and `review-pr` a Review a PR.
+ */
+export type CallHomeKind = 'explore' | 'plan' | 'quick' | 'review-pr';
+
 export interface CallHomeTotals {
   projects: { current: number; deleted: number; withDatapack: number; sharedDatapacks: number; repos: number };
   sessions: {
     total: number;
     open: number;
     archived: number;
-    byKind: Record<SessionKind, number>;
+    byKind: Record<CallHomeKind, number>;
     openByStage: Record<Stage, number>;
   };
   /** prCommits, prAdditions and prDeletions cover merges recorded since this was added. */
@@ -348,7 +388,7 @@ export interface CallHomeDay {
   projectsCreated: number;
   /** Projects closed, counting closes a later reopen undid. */
   projectsDeleted: number;
-  sessionsCreated: Record<SessionKind, number>;
+  sessionsCreated: Record<CallHomeKind, number>;
   sessionsArchived: number;
   stageEntries: Record<Stage, number>;
   prsOpened: number;
@@ -425,9 +465,10 @@ export interface Session {
   status: SessionStatus;
   /** Human-readable detail for the status, e.g. the Notification message. */
   statusDetail: string | null;
-  kind: SessionKind;
+  /** As stored (see StoredKind); `kindOf(session.kind)` is `task` or `review-pr`. */
+  kind: StoredKind;
   stage: Stage;
-  /** The session has a task (its first prompt, or its name); an Exploration started without a first prompt has none. */
+  /** The session has a task (its first prompt, or its name); one started at Explore without a first prompt has none. */
   hasTask: boolean;
   prNumber: number | null;
   prUrl: string | null;
@@ -442,8 +483,8 @@ export interface Session {
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   /**
-   * Steps before the current one that the session never went through, e.g. Design for a Quick
-   * Code session changed to Plan & Implement. The stage bar shows them as skipped.
+   * Steps before the current one that the session never went through, e.g. Explore and Design for a
+   * task started at Code. The stage bar shows them as skipped.
    */
   skippedStages: Stage[];
   hasDesign: boolean;
@@ -453,6 +494,11 @@ export interface Session {
   diffStat: { added: number; removed: number } | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
+  /**
+   * The design's open questions, the user's answers to them not yet sent to Claude (drafts or
+   * queued), and when any answer last changed (null before there's one).
+   */
+  designQuestions: { open: number; unsent: number; changedAt: number | null };
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
@@ -512,13 +558,11 @@ export interface MekoStatus {
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
-   * How datapacks are shared: `api` through Meko's share API with our key, `link` in Meko's web
-   * app (this Meko doesn't take API keys for sharing yet), null before it has been checked.
+   * AgentK shares datapacks and answers invites through Meko's share API with our key: Meko is on
+   * and its API URL is known.
    */
-  sharing: SharingMode | null;
+  sharing: boolean;
 }
-
-export type SharingMode = 'api' | 'link';
 
 export interface AppState {
   projects: ProjectWithSessions[];
@@ -534,6 +578,23 @@ export interface AppState {
   limits: PlanLimits | null;
   /** Project datapacks shared with you that aren't a project here yet (not the ones put off with Later). */
   invites: DatapackInvite[];
+  /** New sessions whose worktree couldn't be made, newest first, until dismissed (kept in memory: a restart forgets them). */
+  failedStarts: FailedStart[];
+}
+
+/**
+ * A new session that couldn't start: its worktree (or, for a Review a PR, the PR's head) couldn't
+ * be had after the New session dialog had closed, so the session was removed.
+ */
+export interface FailedStart {
+  /** The id the session had. */
+  id: string;
+  projectId: string;
+  name: string;
+  error: string;
+  at: number;
+  /** What was asked, so Try again can open the New session dialog filled in. */
+  request: CreateSessionRequest;
 }
 
 /** One plan usage window, as Claude Code reports it to its status line (Pro and Max plans). */
@@ -573,6 +634,8 @@ export interface RepoBranches {
 
 export interface ReposResponse {
   roots: string[];
+  /** Where Clone from URL and New repo put repos (`[repos] clone_into`, as configured). */
+  cloneInto: string;
   repos: RepoInfo[];
 }
 
@@ -746,6 +809,8 @@ export interface SearchResult {
 
 export interface AuthStatus {
   setupRequired: boolean;
+  /** The setup asked for replaces an existing login (a `setup-link` run to recover a lost password). */
+  reset: boolean;
   loggedIn: boolean;
   username: string | null;
   totpEnabled: boolean;
@@ -773,6 +838,8 @@ export interface Settings {
   idleWorktreeDays: number;
   /** `[call_home] enabled`: send anonymous usage stats (the Account tab's checkbox). */
   callHomeEnabled: boolean;
+  /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
+  resolveConflicts: boolean;
   meko: MekoSettings;
 }
 
@@ -789,9 +856,13 @@ export interface MekoSettings {
   effectiveUrl: string;
   /** Meko Cloud's MCP server, used when nothing else names one. */
   defaultUrl: string;
+  /** The MCP server AgentK would use with `url` empty (from the environment, Claude Code's settings or Meko Cloud). */
+  fallbackUrl: string;
   /** Web app and API URLs as set; empty means worked out from the MCP URL. */
   webUrl: string;
   apiUrl: string;
+  /** The web app URL MEKO_WEB_URL or Claude Code's settings give, used when `webUrl` is empty; '' when unset. */
+  envWebUrl: string;
   /** What they work out to now; null when they can't be (your own Meko with no URL set). */
   effectiveWebUrl: string | null;
   effectiveApiUrl: string | null;
@@ -921,6 +992,67 @@ export interface DesignDoc {
   html: string | null;
   artifactUrl: string | null;
   updatedAt: number | null;
+  /** The design's questions for the user, open and resolved, in the order AgentK listed them. */
+  questions: DesignQuestion[];
+  /**
+   * Where the questions came from: `file` (the questions file AgentK writes beside the design),
+   * `markdown` (the list under an "Open questions" heading of a markdown design), or null (none).
+   */
+  questionsSource: 'file' | 'markdown' | null;
+}
+
+export interface DesignQuestionOption {
+  label: string;
+  detail: string | null;
+}
+
+/** A question AgentK asks the user about its design, with the options it sees, if any. */
+export interface DesignQuestion {
+  /** Stable across revisions of the design: lowercase letters, digits and dashes. */
+  id: string;
+  question: string;
+  context: string | null;
+  options: DesignQuestionOption[];
+  /** The option AgentK recommends (an index into `options`), or null. */
+  recommended: number | null;
+  status: 'open' | 'resolved';
+  /** What was decided, once resolved. */
+  decision: string | null;
+}
+
+/** The answer id for feedback on the design that isn't about one question. */
+export const DESIGN_FEEDBACK_ID = '_feedback';
+
+/**
+ * The user's answer to one of the design's questions (or, with `questionId` DESIGN_FEEDBACK_ID,
+ * other feedback on the design). Drafts are kept until the user sends them; a question has at
+ * most one draft. `question` and `choiceLabel` are what the user saw when they answered.
+ */
+export interface DesignAnswer {
+  id: string;
+  questionId: string;
+  question: string;
+  /** The option picked (an index into the question's options), or null. */
+  choice: number | null;
+  choiceLabel: string | null;
+  /** Left to AgentK: it goes with its recommendation. */
+  yourCall: boolean;
+  /** The answer in the user's words, or a note on the option picked. */
+  text: string;
+  state: CommentState;
+  createdAt: number;
+  updatedAt: number;
+  sentAt: number | null;
+}
+
+/**
+ * PUT /api/sessions/:id/design/answers/:qid. Fields left out keep their value. Picking an option
+ * clears Your call and the other way round; an answer left with nothing in it is removed.
+ */
+export interface DesignAnswerUpdate {
+  choice?: number | null;
+  yourCall?: boolean;
+  text?: string;
 }
 
 // ---- Requests ----
@@ -961,11 +1093,30 @@ export type SetDedicatedDatapackRequest = DatapackChoice & {
 };
 
 export interface CreateProjectRequest {
-  /** Exactly one of repoPath / cloneUrl. */
+  /** Exactly one of repoPath / cloneUrl / newRepo. */
   repoPath?: string;
   cloneUrl?: string;
+  /**
+   * A folder name for a new repo in the clone folder (`[repos] clone_into`): git init and an empty
+   * first commit. A repo there just as an earlier try left it is used again.
+   */
+  newRepo?: string;
   name: string;
   datapack: DatapackChoice;
+}
+
+/**
+ * What's wrong with <name> as a new repo's folder name, or null when nothing is: one plain folder
+ * name, not hidden (a ".git" in the repos folder would make it look like a repo), up to 100
+ * characters. Checked by the server and, as it's typed, by the Open project dialog.
+ */
+export function newRepoNameProblem(name: string): string | null {
+  const n = name.trim();
+  if (!n) return 'Name the new repo.';
+  if (n.length > 100) return 'Keep the repo name to 100 characters or fewer.';
+  if (!/^[A-Za-z0-9._-]+$/.test(n)) return 'Use only letters, digits, “.”, “_” and “-” in the repo name.';
+  if (/^[.-]/.test(n)) return 'Start the repo name with a letter, a digit or “_”.';
+  return null;
 }
 
 export interface UpdateProjectRequest {
@@ -981,7 +1132,7 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
-  /** The first prompt. Left out, Plan & Implement and Quick Code sessions use `name`; an Exploration starts with none. */
+  /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
   /** Defaults to the repo's default branch. */
   baseBranch?: string;
@@ -993,9 +1144,14 @@ export interface CreateSessionRequest {
    * uses it or another checkout has it.
    */
   branch?: string;
-  /** Defaults to `plan`. */
-  kind?: SessionKind;
-  /** Deprecated: use `kind: 'quick'`. True starts a Quick Code session when `kind` is unset. */
+  /**
+   * Defaults to `task`. The old session types still work: `explore`, `plan` and `quick` are a task
+   * starting at Explore, Design and Code (`start` wins when both are given).
+   */
+  kind?: SessionKind | StoredKind;
+  /** Where a task starts. Defaults to `design`. Ignored for a Review a PR. */
+  start?: StartStage;
+  /** Deprecated: use `start: 'code'`. True starts a task at Code when neither `start` nor `kind` says otherwise. */
   skipDesign?: boolean;
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
@@ -1007,16 +1163,15 @@ export interface CreateSessionRequest {
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
 export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
 
-/** Changes a session's type, its stage, or both (see `src/shared/stages.ts` for the rules). */
+/** Moves a task session to another stage (see `src/shared/stages.ts` for the rules). */
 export interface MoveSessionRequest {
-  kind: SessionKind;
   stage: MoveTarget;
   /**
    * Send the new stage's prompt. Left out, it follows promptByDefault. Ignored for PR & Review,
    * which picks up the branch's open PR, or sends the PR prompt when there's work to push.
    */
   prompt?: boolean;
-  /** The task, for a session that has none yet (an Exploration started without a first prompt). */
+  /** The task, for a session that has none yet (one started at Explore without a first prompt). */
   task?: string;
 }
 
@@ -1043,7 +1198,9 @@ export interface TotpEnrollResponse {
 // ---- WebSockets ----
 //
 // /ws/events: server → client JSON ServerEvent. A full `state` is sent on
-// connect and again (debounced) after every change.
+// connect and again (debounced) after every change. Client → server JSON
+// EventsClientMessage: a `ping` is answered with a `pong`, so a page can tell a
+// socket the server dropped (a phone back from the background) from a quiet one.
 //
 // Both sockets close with code 4401 when the login is missing or gone (logout, a password
 // change or reset); the client should show the login screen rather than reconnect. The
@@ -1058,7 +1215,11 @@ export type ServerEvent =
   | { type: 'state'; state: AppState }
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
   /** A project datapack was shared with you: sent once per datapack. */
-  | { type: 'invite'; datapackId: string; title: string; body: string };
+  | { type: 'invite'; datapackId: string; title: string; body: string }
+  /** The answer to a client's `ping`. */
+  | { type: 'pong' };
+
+export type EventsClientMessage = { type: 'ping' };
 
 export type TermClientMessage =
   | { type: 'input'; data: string }
@@ -1080,7 +1241,7 @@ export type TermServerMessage =
 // to localhost need no cookie.
 //
 // GET    /healthz                              → { ok: true, version }
-// GET    /api/auth/status                      → AuthStatus            (no auth)
+// GET    /api/auth/status                      → AuthStatus            (no auth; reset: a setup link replaces the login)
 // POST   /api/auth/setup      SetupRequest     → 204 + cookie | 400 | 403 (bad link) | 429   (no auth)
 // POST   /api/auth/login      LoginRequest     → 204 + cookie | 401 LoginError | 429
 // POST   /api/auth/logout                      → 204
@@ -1099,12 +1260,15 @@ export type TermServerMessage =
 //        with `login`, the email is remembered for that GitHub login)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
-//        The four above answer 409 in link mode (AppState.meko.sharing 'link').
+//        The four above answer 409 when AgentK can't share (AppState.meko.sharing false).
 // POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the Open project dialog's one read of Meko)
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
-// POST   /api/projects        CreateProjectRequest → Project   (opens a project)
+// POST   /api/projects        CreateProjectRequest → Project   (opens a project on a repo here, a clone, or a new repo;
+//        409 when a new repo's folder is already taken)
+// GET    /api/projects/:id                     → Project   (404 once it's closed: the UI asks for a project it just
+//        opened when a state push comes without it)
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project
 // DELETE /api/projects/:id                     → 204   (closes it: the repo, branches and datapacks stay)
 // GET    /api/projects/:id/branches            → string[]
@@ -1121,14 +1285,24 @@ export type TermServerMessage =
 //        a bare number looked up in `repoPath` (default: the project's repo); 400 for a PR that can't be found)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind, a bad branch name or a
-//        repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
-//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo)
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
+//        base branch neither the repo nor its origin has, or a repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
+//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo). Answers once
+//        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
+//        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.
+// DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
-// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a type and stage that don't go together or a
+// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be typed)
 // GET    /api/sessions/:id/design              → DesignDoc
+// GET    /api/sessions/:id/design/answers      → DesignAnswer[]
+// PUT    /api/sessions/:id/design/answers/:qid DesignAnswerUpdate → DesignAnswer[]   (the draft for a question, or
+//        DESIGN_FEEDBACK_ID; 400 for a bad field, an option out of range or a question that isn't in the design;
+//        409 for a question no longer open, or outside Design)
+// DELETE /api/sessions/:id/design/answers/:qid → 204   (drafts only; 404 when there's none)
+// POST   /api/sessions/:id/design/answers/send → SendCommentsResult   (409 with nothing to send, outside Design or
+//        Claude exited; 400 when the answers are too long for one prompt; 502 when typing failed: they stay queued)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
@@ -1143,7 +1317,8 @@ export type TermServerMessage =
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
-//                                                           '' goes back to the host name; callHomeEnabled is a boolean)
+//                                                           '' goes back to the host name; callHomeEnabled and
+//                                                           resolveConflicts are booleans)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus

@@ -149,6 +149,27 @@ describe('HTTP API: access control', () => {
       expect(await done).toBe(4401);
     });
 
+    it('answers a ping on the events socket, and ignores anything else', async () => {
+      const cookie = await setup();
+      await app.ready();
+      const got: string[] = [];
+      let onPong: () => void = () => undefined;
+      const pong = new Promise<void>((resolve) => (onPong = resolve));
+      const ws = await app.injectWS('/ws/events', { headers: { cookie } }, {
+        onInit: (w) => w.on('message', (m) => {
+          const type = (JSON.parse(String(m)) as { type: string }).type;
+          got.push(type);
+          if (type === 'pong') onPong();
+        }),
+      });
+      ws.send('not json');
+      ws.send(JSON.stringify({ type: 'other' }));
+      ws.send(JSON.stringify({ type: 'ping' }));
+      await pong;
+      expect(got).toEqual(['state', 'pong']);
+      ws.terminate();
+    });
+
   });
 });
 

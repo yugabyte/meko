@@ -150,11 +150,15 @@ function liveSetupToken(db: Db): { sha256: string; expiresAt: number } | null {
   return null;
 }
 
-export function consumeSetupToken(db: Db, token: string): boolean {
+/** True when `token` is the outstanding setup token, without using it up. */
+export function setupTokenValid(db: Db, token: unknown): boolean {
   if (typeof token !== 'string' || !token) return false;
   const t = liveSetupToken(db);
-  if (!t) return false;
-  const ok = timingSafeEqual(Buffer.from(t.sha256), Buffer.from(sha256(token)));
+  return !!t && timingSafeEqual(Buffer.from(t.sha256), Buffer.from(sha256(token)));
+}
+
+export function consumeSetupToken(db: Db, token: string): boolean {
+  const ok = setupTokenValid(db, token);
   if (ok) kvDelete(db, 'setup_token');
   return ok;
 }
@@ -320,7 +324,8 @@ export class LoginLimiter {
   /**
    * `max` failures per client network in the window, and `siteMax` across all clients, so many
    * addresses can't share out a guessing run. Past the site-wide limit everyone waits, including
-   * the owner; `agent-k-local setup-link` on the host still gets them in.
+   * the owner; `agent-k-local setup-link` on the host still gets them in (a valid setup link
+   * isn't held back by the limit).
    */
   constructor(private max = 5, private windowMs = 15 * 60 * 1000, private siteMax = 50) {}
 

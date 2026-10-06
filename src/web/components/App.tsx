@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppState, AuthStatus, DatapackInvite, ProjectWithSessions } from '../../shared/types';
-import { api, errorMessage } from '../api';
+import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
+import { api, ApiError, errorMessage } from '../api';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
@@ -8,10 +8,21 @@ import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
-import { lastSessionClosed, liveSessions, modKey, type LiveCount } from '../util';
+import {
+  lastOpenSession,
+  lastSessionClosed,
+  liveSessions,
+  modKey,
+  withCreated,
+  withOpened,
+  rememberOpenSession,
+  sessionToOpen,
+  type LiveCount,
+} from '../util';
 import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
+import { Busy } from './common';
 import { NewProjectDialog } from './NewProjectDialog';
 import { MoveSessionDialog, type MovePreset } from './MoveSessionDialog';
 import { NewSessionDialog } from './NewSessionDialog';
@@ -27,13 +38,16 @@ type Modal =
   | { kind: 'none' }
   /** `invite`: a share to open as the project (chosen as its datapack). */
   | { kind: 'new-project'; invite?: DatapackInvite }
-  /** `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review. */
-  | { kind: 'new-session'; projectId: string; fresh?: boolean }
+  /**
+   * `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review.
+   * `retry`: a failed start to try again, filling the dialog in.
+   */
+  | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings' }
   | { kind: 'palette' }
-  /** Change type or stage of a session, starting from `preset` (a stage clicked in the stage bar). */
+  /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
   | { kind: 'move'; sessionId: string; preset?: MovePreset };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
@@ -78,9 +92,8 @@ if (typeof navigator !== 'undefined') {
   });
 }
 
-function sortedProjects(state: AppState | null): ProjectWithSessions[] {
-  if (!state) return [];
-  return [...state.projects].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+function sortedProjects(projects: ProjectWithSessions[]): ProjectWithSessions[] {
+  return [...projects].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
 }
 
 // Only the AgentK page used last shows notifications, so clicking one lands in the window in use.
@@ -100,8 +113,13 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const [toast, setToast] = useState<string | null>(null);
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
-  // A project just created: its state push can arrive after the HTTP reply, so the route waits for it.
-  const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
+  // A project just opened, as Open project returned it: shown (withOpened) until a state push brings
+  // it, since the push can come after the reply, or late on a slow or reconnecting events socket.
+  const [opened, setOpened] = useState<Project | null>(null);
+  // A session just created, as New session returned it: shown (withCreated) until a state push
+  // brings it, since the reply comes first. `seen` is the last state looked at for it; two newer
+  // ones without it mean it's gone (a failed start, say).
+  const [created, setCreated] = useState<{ session: Session; seen: AppState | null; misses: number } | null>(null);
   const focusRef = useRef<{ projectId: string | null; sessionId: string | null }>({ projectId: null, sessionId: null });
 
   const onNotify = useCallback((n: NotifyEvent) => {
@@ -149,7 +167,33 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     return () => sw.removeEventListener('message', onMessage);
   }, [openInvite]);
 
-  const projects = useMemo(() => sortedProjects(state), [state]);
+  const projects = useMemo(
+    () => sortedProjects(withCreated(withOpened(state?.projects ?? [], opened), created?.session ?? null)),
+    [state, opened, created],
+  );
+  useEffect(() => {
+    if (!created || !state || state === created.seen) return;
+    const inState = state.projects.some((p) => p.sessions.some((s) => s.id === created.session.id));
+    setCreated(inState || created.misses >= 1 ? null : { ...created, seen: state, misses: created.misses + 1 });
+  }, [state, created]);
+  // Once a push has it, the state's copy takes over. A push without it may be an older snapshot or
+  // mean it was closed meanwhile: the server knows, and a 404 drops it.
+  const openedId = opened?.id ?? null;
+  const openedInState = !!openedId && !!state?.projects.some((p) => p.id === openedId);
+  useEffect(() => {
+    if (!openedId || !state) return;
+    if (openedInState) {
+      setOpened(null);
+      return;
+    }
+    let live = true;
+    api.project(openedId).catch((e: unknown) => {
+      if (live && e instanceof ApiError && e.status === 404) setOpened((o) => (o?.id === openedId ? null : o));
+    });
+    return () => {
+      live = false;
+    };
+  }, [state, openedId, openedInState]);
 
   // Ask for notification permission on the first click anywhere.
   useEffect(() => {
@@ -183,39 +227,41 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
 
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
+  useEffect(() => {
+    if (currentProject && currentSession) rememberOpenSession(currentProject.id, currentSession.id);
+  }, [currentProject, currentSession]);
+
   // When the project on screen loses its last open session, offer to close it. Only on the
   // project's view, with no other dialog open, and in a visible page (a background tab stays quiet).
+  // Not when that session failed to start: its banner offers Try again instead.
   const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
+  const liveIdsRef = useRef<string[]>([]);
   const currentId = currentProject?.id ?? null;
   const liveCount = live.length;
+  const liveIds = live.map((s) => s.id).join('\n');
+  const failedIds = (state?.failedStarts ?? []).map((f) => f.id).join('\n');
   const modalKind = modal.kind;
   useEffect(() => {
     const prev = liveRef.current;
+    const prevIds = liveIdsRef.current;
     const next = { projectId: currentId, live: liveCount };
     liveRef.current = next;
-    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !document.hidden) {
+    liveIdsRef.current = liveIds ? liveIds.split('\n') : [];
+    const failed = new Set(failedIds.split('\n'));
+    const failedStart = prevIds.some((id) => failed.has(id));
+    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !failedStart && !document.hidden) {
       setModal({ kind: 'close-project', projectId: currentId });
     }
-  }, [currentId, liveCount, route.view, modalKind]);
-
-  useEffect(() => {
-    if (pendingProjectId && projects.some((p) => p.id === pendingProjectId)) setPendingProjectId(null);
-  }, [pendingProjectId, projects]);
-  useEffect(() => {
-    if (!pendingProjectId) return;
-    const t = window.setTimeout(() => setPendingProjectId(null), 5000);
-    return () => window.clearTimeout(t);
-  }, [pendingProjectId]);
+  }, [currentId, liveCount, liveIds, failedIds, route.view, modalKind]);
 
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
   useEffect(() => {
     if (!state || route.view === 'usage') return;
     if (route.view === 'root' || !currentProject) {
-      if (route.view !== 'root' && route.projectId === pendingProjectId) return;
       const first = projects[0];
       if (first) {
-        const s = liveSessions(first).sort((a, b) => a.createdAt - b.createdAt)[0];
+        const s = sessionToOpen(liveSessions(first), lastOpenSession(first.id));
         navigate({ view: 'project', projectId: first.id, sessionId: s?.id ?? null }, { replace: true });
       } else if (route.view !== 'root') {
         navigate({ view: 'root' }, { replace: true });
@@ -223,15 +269,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       return;
     }
     if (route.view === 'project' && !currentSession && live.length > 0) {
-      navigate({ view: 'project', projectId: currentProject.id, sessionId: live[0].id }, { replace: true });
+      const s = sessionToOpen(live, lastOpenSession(currentProject.id));
+      if (s) navigate({ view: 'project', projectId: currentProject.id, sessionId: s.id }, { replace: true });
     }
-  }, [state, route, currentProject, currentSession, live, projects, pendingProjectId]);
+  }, [state, route, currentProject, currentSession, live, projects]);
 
   const goProject = useCallback((p: ProjectWithSessions) => {
-    // Open the session with the most recent activity.
-    const s = liveSessions(p).sort(
-      (a, b) => (b.lastEventAt ?? b.createdAt) - (a.lastEventAt ?? a.createdAt),
-    )[0];
+    // Reopen the session last open there, else the one with the most recent activity.
+    const s = sessionToOpen(liveSessions(p), lastOpenSession(p.id));
     // From the drawer, replace its history entry so Back doesn't reopen it.
     navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);
@@ -316,8 +361,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }
   };
 
-  // A New session dialog whose project was closed meanwhile closes. One opened for a project just
-  // opened waits for its state push (until pendingProjectId gives up on it).
+  // A New session dialog whose project was closed meanwhile closes. One for a project just opened
+  // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
   // Gone once the session is archived (or its project deleted) under the dialog.
   const moveSession =
@@ -325,10 +370,9 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   useEffect(() => {
     if (state && modalKind === 'move' && !moveSession) setModal({ kind: 'none' });
   }, [state, modalKind, moveSession]);
-  const newSessionWaiting = modal.kind === 'new-session' && modal.projectId === pendingProjectId;
   useEffect(() => {
-    if (state && modalKind === 'new-session' && !newSessionProject && !newSessionWaiting) setModal({ kind: 'none' });
-  }, [state, modalKind, newSessionProject, newSessionWaiting]);
+    if (state && modalKind === 'new-session' && !newSessionProject) setModal({ kind: 'none' });
+  }, [state, modalKind, newSessionProject]);
   // The close offer closes once its project is gone or has an open session again (say, from another tab).
   const closeProject = modal.kind === 'close-project' ? projects.find((p) => p.id === modal.projectId) : undefined;
   const closeProjectStale = !closeProject || liveSessions(closeProject).length > 0;
@@ -337,7 +381,9 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }, [state, modalKind, closeProjectStale]);
 
   if (!state) {
-    return <div className="boot">{conn === 'closed' ? 'Reconnecting to the server…' : 'Loading your projects…'}</div>;
+    return <div className="boot">
+        <Busy label={conn === 'closed' ? 'Reconnecting to the server' : 'Loading your projects'} />
+      </div>;
   }
 
   // A design doc opened in its own tab: just the doc, full page.
@@ -390,7 +436,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         open={drawer}
       />
       <div className="main">
-        <Banners state={state} conn={conn} stale={stale} onError={showToast} onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })} />
+        <Banners
+          state={state}
+          conn={conn}
+          stale={stale}
+          onError={showToast}
+          onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
+          onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
+        />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
         ) : currentProject && route.view === 'home' ? (
@@ -418,7 +471,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMenu={openDrawer}
             onError={showToast}
           />
-        ) : pendingProjectId ? null : (
+        ) : (
           <>
             {mobile && <TopBar onMenu={openDrawer} title="AgentK Local" />}
             <div className="empty-main">
@@ -438,15 +491,13 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {modal.kind === 'new-project' && (
         <NewProjectDialog
           mekoConfigured={state.meko.configured}
-          mekoWebUrl={state.meko.webUrl}
-          sharing={state.meko.sharing}
           projects={projects}
           initialInvite={modal.invite ?? null}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(p) => {
             // Straight on to the project's first session.
+            setOpened(p);
             setModal({ kind: 'new-session', projectId: p.id, fresh: true });
-            setPendingProjectId(p.id);
             navigate({ view: 'project', projectId: p.id, sessionId: null });
           }}
         />
@@ -455,8 +506,13 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         <NewSessionDialog
           project={newSessionProject}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
+          initial={modal.kind === 'new-session' ? modal.retry?.request : undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
+            // The failed start it retried is done with. One under the same id was cleared when the
+            // session was written, and dismissing it now could hide this start's own failure.
+            if (modal.kind === 'new-session' && modal.retry && modal.retry.id !== s.id) api.dismissFailedStart(modal.retry.id).catch(() => {});
+            setCreated({ session: s, seen: stateRef.current, misses: 0 });
             setModal({ kind: 'none' });
             navigate({ view: 'project', projectId: s.projectId, sessionId: s.id });
           }}

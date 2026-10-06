@@ -4,6 +4,7 @@ import { api, errorMessage, setUnauthorizedHandler } from '../api';
 import { disposeAllTerminals } from '../terminals';
 import { App } from './App';
 import { LoginScreen, SetupScreen } from './Auth';
+import { Busy } from './common';
 
 export function Root() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -40,8 +41,8 @@ export function Root() {
       </div>
     );
   }
-  if (!auth) return <div className="boot">Loading…</div>;
-  if (auth.setupRequired) return <SetupScreen onDone={refresh} />;
+  if (!auth) return <div className="boot"><Busy label="Loading" /></div>;
+  if (auth.setupRequired) return <SetupScreen reset={auth.reset} onDone={refresh} />;
   if (!auth.loggedIn) return <LoginScreen onDone={refresh} />;
   return (
     <App

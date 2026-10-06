@@ -39,6 +39,7 @@ npm run test:integration        # needs tmux and git; uses a stub `claude`
 ```
 
 CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`).
+Changes reach `main` only through PRs, squash-merged once CI and the PR title check pass.
 
 ## Commits
 
@@ -52,9 +53,9 @@ Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
 The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
 and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
-for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`.
-Nothing on GitHub enforces the rules; the commit skill does. See
-`.claude/skills/commit/SKILL.md` for the full rules, including: no agent attribution.
+for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`; the
+`PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules, including: no
+agent attribution.
 
 ## Dependencies
 
@@ -78,7 +79,7 @@ Versions are `0.YYYYMMDD.N`: the UTC date of the release, and `N` counting up fr
 release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, so newer always
 sorts higher.
 
-1. Push to `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
+1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
    `scripts/next-version.sh`, and writes notes with `scripts/release-notes.sh`. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,

@@ -31,7 +31,7 @@ export function CommandPalette({
   onClose: () => void;
   onNewProject: () => void;
   onNewSession: (projectId: string) => void;
-  /** Opens the Change type or stage dialog for the session on screen. */
+  /** Opens the Move to another stage dialog for the session on screen. */
   onMoveSession: () => void;
   onSettings: () => void;
 }) {
@@ -55,7 +55,7 @@ export function CommandPalette({
     if (currentSession && !moveBlockedIn(currentSession.stage)) {
       out.push({
         id: 'move-session',
-        label: `Change type or stage of ${currentSession.name}`,
+        label: `Move ${currentSession.name} to another stage`,
         hint: 'Action',
         keywords: 'change type stage move exploration explore plan quick code design pr review',
         run: onMoveSession,

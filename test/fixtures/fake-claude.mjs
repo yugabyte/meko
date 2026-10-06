@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const args = process.argv.slice(2);
 // Like `claude --version`; the version is the `version` file in the fake's dir, if there is one.
@@ -148,6 +148,19 @@ async function turn(text) {
   }
   await sleep(ms);
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
+  if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {
+    // A design with open questions, listed in the questions file beside it; RESOLVE_STORE (in the
+    // user's answer) revises it, resolving the first one.
+    const resolved = text.includes('RESOLVE_STORE');
+    writeFileSync(process.env.AK_DESIGN_FILE, `# Design\n\nDo the thing${resolved ? ' in the datapack' : ''}.\n`);
+    writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'questions.json'), JSON.stringify({
+      questions: [
+        { id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0,
+          status: resolved ? 'resolved' : 'open', decision: resolved ? 'Datapack.' : null },
+        { id: 'tabs', question: 'Tabs or one column?', status: 'open' },
+      ],
+    }));
+  }
   if (text.includes('DESIGN_ARTIFACT')) {
     // Like publishing with the Artifact tool: the page is a local file, the result has its link.
     const page = join(dir, `design-${sessionId}.html`);

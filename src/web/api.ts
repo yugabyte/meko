@@ -7,6 +7,8 @@ import type {
   CreateSessionRequest,
   CloneRepoRequest,
   DatapackPeople,
+  DesignAnswer,
+  DesignAnswerUpdate,
   DesignDoc,
   DiscardCheck,
   InviteCheck,
@@ -123,6 +125,7 @@ export const api = {
   openProject: (b: CreateProjectRequest) => post<Project>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
+  project: (id: string) => get<Project>(`/api/projects/${enc(id)}`),
   branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
   attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
   setDedicatedDatapack: (id: string, b: SetDedicatedDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/dedicated-datapack`, b),
@@ -137,6 +140,7 @@ export const api = {
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
+  dismissFailedStart: (id: string) => request<void>('DELETE', `/api/failed-starts/${enc(id)}`),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
@@ -150,6 +154,11 @@ export const api = {
   deleteComment: (id: string, cid: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/comments/${enc(cid)}`),
   sendComments: (id: string) => post<SendCommentsResult>(`/api/sessions/${enc(id)}/comments/send`),
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
+  designAnswers: (id: string) => get<DesignAnswer[]>(`/api/sessions/${enc(id)}/design/answers`),
+  putDesignAnswer: (id: string, qid: string, b: DesignAnswerUpdate) =>
+    request<DesignAnswer[]>('PUT', `/api/sessions/${enc(id)}/design/answers/${enc(qid)}`, b),
+  deleteDesignAnswer: (id: string, qid: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/design/answers/${enc(qid)}`),
+  sendDesignAnswers: (id: string) => post<SendCommentsResult>(`/api/sessions/${enc(id)}/design/answers/send`),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
 
   settings: () => get<Settings>('/api/settings'),

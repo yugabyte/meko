@@ -8,6 +8,7 @@ import { cx, formatCostOf, formatTokens, relativeTime, repoFolder, totalTokens, 
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { CostStat, DailyChart, DailyTable, Stat } from './UsagePanel';
+import { Busy } from './common';
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
@@ -82,7 +83,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
       <div className="home-scroll">
         {error && <p className="error-text">{error}</p>}
         {!usage || !t ? (
-          !error && <p className="muted">Loading…</p>
+          !error && <p className="muted"><Busy label="Loading" /></p>
         ) : (
           <>
             <section className="box">

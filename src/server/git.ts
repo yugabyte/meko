@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { normaliseRemote, remoteRepoName, shortRemote } from '../shared/datapacks.js';
+import { repoKey } from './paths.js';
 
 const exec = promisify(execFile);
 
@@ -188,6 +189,18 @@ export async function existingBranch(repo: string, branch: string): Promise<'loc
   if (err && /couldn't find remote ref/i.test(err)) await tryGit(repo, 'update-ref', '-d', `refs/remotes/origin/${branch}`);
   if (await revParse(repo, `refs/heads/${branch}`)) return 'local';
   return (await revParse(repo, `refs/remotes/origin/${branch}`)) ? 'origin' : null;
+}
+
+/**
+ * True when <base> is a branch of <repo>, locally or on origin. Only a name found in neither is
+ * fetched from origin (a branch pushed since the last fetch), so the usual case runs no fetch.
+ */
+export async function baseExists(repo: string, base: string): Promise<boolean> {
+  await checkBranchName(repo, base);
+  const here = async () => !!(await revParse(repo, `refs/heads/${base}`)) || !!(await revParse(repo, `refs/remotes/origin/${base}`));
+  if (await here()) return true;
+  await tryGit(repo, 'fetch', '--quiet', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`);
+  return here();
 }
 
 /**
@@ -407,6 +420,140 @@ export async function cloneRepo(url: string, dest: string): Promise<void> {
 
 export function repoNameFromUrl(url: string): string {
   return remoteRepoName(url) || 'repo';
+}
+
+/** git couldn't make a commit because it doesn't know the user's name or email (its C-locale message, which includes stderr). */
+function noIdentity(e: unknown): boolean {
+  return /tell me who you are|identity unknown|auto-detection is disabled|unable to auto-detect email/i.test(e instanceof Error ? e.message : String(e));
+}
+
+/** How long the first commit of a new repo may take before it's given up. */
+const FIRST_COMMIT_TIMEOUT_MS = 30_000;
+
+/**
+ * Makes a new repo at <dest>, a folder that must not exist yet (its EEXIST is passed on as it is):
+ * `git init`, HEAD on the user's `init.defaultBranch` (or main), and an empty first commit, so
+ * sessions have a base to branch from. On a failure the folder is removed again.
+ */
+export async function initRepo(dest: string): Promise<void> {
+  const parent = dirname(dest);
+  try {
+    mkdirSync(parent, { recursive: true });
+  } catch (e) {
+    // Not the new folder's own EEXIST: the repos folder itself is the problem.
+    throw new Error(`Couldn't make the repos folder ${parent} (the clone folder in Settings): ${(e as Error).message}`, { cause: e });
+  }
+  mkdirSync(dest);
+  try {
+    await initHere(dest);
+    await emptyFirstCommit(dest);
+  } catch (e) {
+    try {
+      rmSync(dest, { recursive: true, force: true });
+    } catch {
+      // Left behind: the error that matters is why the repo couldn't be made.
+    }
+    throw e;
+  }
+}
+
+/**
+ * Makes <dir>, an empty folder that isn't a repo, one as initRepo would. One that is a repo by now
+ * (another open made it meanwhile) is left as it is. On a failure the `.git` this call made is
+ * removed again, so the folder is left as it was.
+ */
+export async function initFolder(dir: string): Promise<void> {
+  await oneAtATime(dir, async () => {
+    if (isMainRepo(dir)) return;
+    try {
+      await initHere(dir);
+      await emptyFirstCommit(dir);
+    } catch (e) {
+      try {
+        rmSync(join(dir, '.git'), { recursive: true, force: true });
+      } catch {
+        // Left behind: the error that matters is why the repo couldn't be made.
+      }
+      throw e;
+    }
+  });
+}
+
+/** `git init` in <dir>, with HEAD on the user's `init.defaultBranch` (or main). */
+async function initHere(dir: string): Promise<void> {
+  await git(dir, 'init', '--quiet');
+  // Set by hand rather than with `git init -b`, which needs git 2.28.
+  const wanted = (await tryGit(dir, 'config', '--get', 'init.defaultBranch')) || 'main';
+  const branch = await checkBranchName(dir, wanted).then(() => wanted, () => 'main');
+  await git(dir, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`);
+}
+
+/** An empty commit on HEAD's branch of <dir>, as the user, saying how to fix a missing name and email. */
+async function emptyFirstCommit(dir: string): Promise<void> {
+  try {
+    // The server has no terminal: no signing (it may ask for a passphrase) and no hooks, which
+    // have nothing to check in an empty commit. The C locale keeps git's messages readable by noIdentity.
+    await exec('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '--allow-empty', '-m', 'Initial commit'], {
+      cwd: dir, timeout: FIRST_COMMIT_TIMEOUT_MS, env: { ...process.env, ...GIT_ENV, LC_ALL: 'C' },
+    });
+  } catch (e) {
+    if (!noIdentity(e)) throw e;
+    throw new Error('git needs your name and email to make the first commit. Run git config --global user.name "Your Name" and git config --global user.email "you@example.com", then try again.', { cause: e });
+  }
+}
+
+/** The last first-commit step queued on each repo (by its real path), so they run one at a time. */
+const repoLocks = new Map<string, Promise<unknown>>();
+
+/** Runs <fn> once every initFolder and ensureFirstCommit queued on <repo> before it is done. */
+async function oneAtATime<T>(repo: string, fn: () => Promise<T>): Promise<T> {
+  const key = repoKey(repo);
+  const run = (repoLocks.get(key) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  repoLocks.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (repoLocks.get(key) === run) repoLocks.delete(key);
+  }
+}
+
+/**
+ * Gives <repo>, a repo with no commits yet (`git init` and nothing more), an empty first commit on
+ * HEAD's branch, as initRepo does, so a session's worktree has a base to branch from. Returns
+ * whether it made one. A repo with files in it (untracked or staged) is refused, changing nothing:
+ * an empty commit would leave them out of every worktree, and committing them is the user's call.
+ * Two at once on one repo make one commit.
+ */
+export async function ensureFirstCommit(repo: string): Promise<boolean> {
+  return oneAtATime(repo, async () => {
+    if (await hasCommits(repo)) return false;
+    if (await tryGit(repo, 'status', '--porcelain')) {
+      throw new Error(`${repo} has no commits yet, so a session has nothing to branch from. Commit its files first (git add -A, then git commit -m "Initial commit"), then try again.`);
+    }
+    await emptyFirstCommit(repo);
+    return true;
+  });
+}
+
+/** <repo> has at least one commit on any ref. An error (not a repo) counts as having some: git reports that later. */
+async function hasCommits(repo: string): Promise<boolean> {
+  const out = await tryGit(repo, 'rev-list', '-n', '1', '--all');
+  return out !== '';
+}
+
+/**
+ * <dir> is a repo just as initRepo left it: no remotes, nothing uncommitted, untracked or ignored
+ * (by the user's global excludes, say), and one commit with no files. A retry can use it again.
+ */
+export async function isFreshRepo(dir: string): Promise<boolean> {
+  if (!isMainRepo(dir)) return false;
+  const [remotes, count, files, status] = await Promise.all([
+    tryGit(dir, 'remote'),
+    tryGit(dir, 'rev-list', '--count', '--all'),
+    tryGit(dir, 'ls-tree', '-r', '--name-only', 'HEAD'),
+    tryGit(dir, 'status', '--porcelain', '--ignored'),
+  ]);
+  return remotes === '' && count === '1' && files === '' && status === '';
 }
 
 // ---- Review a PR ----

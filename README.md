@@ -31,7 +31,8 @@ your phone.
 You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon. A
 [Meko](https://mekodata.ai) account and API key are optional: they give projects datapacks
 (shared memory) and let you share projects. Without one, press Enter at the key prompt (or pass
-`--no-meko`) and add a key later on the Meko tab in Settings. The repo is internal for now, so the
+`--no-meko`) and add a key later on the Meko tab in Settings, which links to Meko's sign-up and
+login pages to make one. The repo is internal for now, so the
 installer is fetched with `gh`:
 
 ```sh
@@ -44,6 +45,9 @@ Claude Code, asking first. It asks for **local** access (this computer only, no 
 default over SSH or on a machine with no display. Then it prints the address, or for remote
 access a one-time setup link that creates your login. Local access trusts everyone who can log
 in to the computer, so pick remote on a shared host.
+
+Forgot your password? Run `agent-k-local setup-link` on the host and open the link it prints to
+choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 
 If your home directory is shared with other hosts (over NFS, say), AgentK Local runs only on the
 host you installed it on: logging in to another host doesn't start a second server on the same
@@ -58,7 +62,10 @@ your phone can connect.
 ## Features
 
 - **Projects** in a left rail: each is an effort to build or improve a feature, product or service,
-  worked on in a git repo picked from your repos folder (`~/code` by default).
+  worked on in a git repo picked from your repos folder (`~/code` by default), cloned into it, or
+  started there as a new repo (git init and a first commit). A repo with no commits yet, or an
+  empty folder, gets the same empty first commit, so sessions have a base to branch from; a repo
+  with no commits but files in it is refused until you commit them.
   A repo can back several projects, each with its own datapack, settings and sessions.
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its
@@ -109,16 +116,22 @@ your phone can connect.
   types its prompts into the terminal again at once; running sessions keep the mod loaded until
   they're relaunched ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
-- **Four session types:** *Exploration* for investigating, POCs and experiments (no design, PR or
-  merge), *Plan & Implement* (the default) for the full lifecycle below, *Quick Code* for small
-  tasks that go straight to code, and *Review a PR* (above). A session other than a review can change its type and move between stages, forward or
-  back, at any point between turns: an exploration that should ship becomes Quick Code and opens a PR
-  with **Open PR…**, and a session in review can go back to Code or Design.
-- **Task lifecycle:** Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
+- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
+  Merge & Close, and a new session asks where to start: *Explore* for investigating, POCs and
+  experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
+  go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
+  at any point between turns: an exploration that should ship moves on to Code or opens a PR with
+  **Move on…**, and a session in review can go back to Code or Design.
+- **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
-  markdown. You approve the design, opening the PR, and Merge & Close, which merges the PR and
+  markdown. The design's open questions are listed beside it, each with AgentK's options and
+  recommendation: answer them there (or leave one to AgentK) and send them, and AgentK revises the
+  design. You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
-  people's by default, or every reviewer's, or only people's) and CI failures to Claude.
+  people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
+  you turn that off in Settings → General) and CI failures to Claude. Only reviews
+  from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
+  anyone else's are shown to you and ignored.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
@@ -126,7 +139,7 @@ your phone can connect.
   cost that Meko searches saved, and how many sessions had something from Meko in their first
   turn, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
-- **Usage stats:** once a day AgentK Local sends anonymous counts to YugabyteDB: how many
+- **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
   (details in [docs/design.md](docs/design.md#usage-stats)).

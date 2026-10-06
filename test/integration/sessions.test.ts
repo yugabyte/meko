@@ -12,6 +12,7 @@ import { sleep } from '../../src/server/tmux.js';
 import { transcriptPathFor } from '../../src/server/claude.js';
 import { socketId, startHookServer } from '../../src/server/hooks.js';
 import { MISSED_START_MS } from '../../src/server/sessions.js';
+import type { CreateSessionRequest } from '../../src/shared/types.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
@@ -383,7 +384,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
   it('designs outside plan mode, guards the repo, and moves to Code when the design is approved', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'DESIGN_MD it' });
-    expect(s).toMatchObject({ kind: 'plan', stage: 'design' });
+    expect(s).toMatchObject({ kind: 'plan', stage: 'design', skippedStages: ['explore'] });
     const designDir = join(env.core.paths.designs, s.id);
     const first = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args;
     expect(first).not.toContain('--permission-mode');
@@ -494,17 +495,17 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toThrow(/hasn't written a design/);
   });
 
-  it('runs an Exploration session with no design, PR or merge gates', async () => {
+  it('runs a task started at Explore with no design, PR or merge gates until it moves on', async () => {
     const p = await newProject();
-    const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', kind: 'explore' });
-    expect(s).toMatchObject({ kind: 'explore', stage: 'explore' });
+    const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', start: 'explore' });
+    expect(s).toMatchObject({ kind: 'plan', stage: 'explore', skippedStages: [] });
     expect(existsSync(s.worktreePath)).toBe(true);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const args = argvLog(env)[0].args;
     const system = args[args.indexOf('--append-system-prompt') + 1];
-    expect(system).toContain('This is an Exploration session');
-    expect(system).not.toContain('Merge & Close');
-    expect(args.at(-1)).toMatch(/Exploration session[\s\S]*Task: why is it slow/);
+    expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
+    expect(system).toContain("It's in Explore now");
+    expect(args.at(-1)).toMatch(/Explore stage of an AgentK Local task[\s\S]*Task: why is it slow/);
 
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409 });
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409 });
@@ -524,27 +525,36 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(env.core.sessions.get(s.id)).toMatchObject({ status: 'archived', stage: 'explore' });
   });
 
-  it('starts Quick Code in Code, keeps skipDesign working, and refuses an unknown session type', async () => {
+  it('starts a task at Code, stores it as plan, keeps the old types and skipDesign working, and refuses an unknown kind or start', async () => {
     const p = await newProject();
-    const quick = await env.core.sessions.create(p.id, { name: 'Quick one', prompt: 'hi', kind: 'quick' });
-    expect(quick).toMatchObject({ kind: 'quick', stage: 'code' });
+    const code = await env.core.sessions.create(p.id, { name: 'Quick one', prompt: 'hi', start: 'code' });
+    expect(code).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['explore', 'design'] });
+    // Stored and sent under an old type's name, so an older release (after a rollback) and a page
+    // from before start stages (until it reloads) can still index their stage lists with it.
+    expect(env.core.sessions.row(code.id).kind).toBe('plan');
     await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch');
     const args = argvLog(env)[0].args;
-    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('Stages: Code → PR & Review → Merge & Close;');
-    const legacy = await env.core.sessions.create(p.id, { name: 'Old client', prompt: 'hi', skipDesign: true });
-    expect(legacy).toMatchObject({ kind: 'quick', stage: 'code' });
+    const system = args[args.indexOf('--append-system-prompt') + 1];
+    expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
+    expect(system).not.toContain("It's in Explore now");
+    const stageOf = async (req: Partial<CreateSessionRequest>) => (await env.core.sessions.create(p.id, { prompt: 'hi', ...req } as CreateSessionRequest)).stage;
+    expect(await stageOf({ name: 'Old explore', kind: 'explore' })).toBe('explore');
+    expect(await stageOf({ name: 'Old plan', kind: 'plan' })).toBe('design');
+    expect(await stageOf({ name: 'Old quick', kind: 'quick', start: 'design' })).toBe('design');
+    expect(await stageOf({ name: 'Old client', skipDesign: true })).toBe('code');
     await expect(env.core.sessions.create(p.id, { name: 'Odd', kind: 'yolo' as never })).rejects.toMatchObject({ status: 400 });
+    await expect(env.core.sessions.create(p.id, { name: 'Odd', start: 'review' as never })).rejects.toMatchObject({ status: 400 });
   });
 
-  it('uses the name as the first prompt of a task session started without one, but not of an exploration', async () => {
+  it('uses the name as the first prompt of a task started without one, but not of one started at Explore', async () => {
     const p = await newProject();
-    const quick = await env.core.sessions.create(p.id, { name: 'Fix the typo', prompt: '  ', kind: 'quick' });
+    const quick = await env.core.sessions.create(p.id, { name: 'Fix the typo', prompt: '  ', start: 'code' });
     await waitFor(() => argvLog(env), (l) => l.length === 1, 10000, 'quick launch');
     expect(argvLog(env)[0].args.at(-1)).toMatch(/^Task: Fix the typo/);
     const plan = await env.core.sessions.create(p.id, { name: 'Add retries' });
     await waitFor(() => argvLog(env), (l) => l.length === 2, 10000, 'plan launch');
     expect(argvLog(env)[1].args.at(-1)).toMatch(/Task: Add retries/);
-    const explore = await env.core.sessions.create(p.id, { name: 'Why slow', kind: 'explore' });
+    const explore = await env.core.sessions.create(p.id, { name: 'Why slow', start: 'explore' });
     await waitFor(() => argvLog(env), (l) => l.length === 3, 10000, 'explore launch');
     expect(argvLog(env)[2].args).not.toContain('--'); // a prompt always follows "--"
     const rows = [quick, plan, explore].map((s) => env.core.sessions.row(s.id).initial_prompt);
@@ -566,6 +576,52 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(steps.slice(0, 3)).toEqual(['worktree', 'launch', 'loading']);
     expect(steps).toContain('prompt');
     expect(env.core.sessions.get(s.id).startup).toBeNull();
+  });
+
+  it('answers with the session still starting, before its worktree is made', async () => {
+    const p = await newProject();
+    const { session, done } = await env.core.sessions.begin(p.id, { name: 'Big repo', prompt: 'hi', kind: 'quick' });
+    expect(session).toMatchObject({ status: 'starting', startup: { step: 'worktree', hasPrompt: true } });
+    expect(existsSync(session.worktreePath)).toBe(false);
+    // Recovery leaves it alone meanwhile.
+    await env.core.sessions.reconcile();
+    expect(env.core.sessions.row(session.id).status).toBe('starting');
+    const made = await done;
+    expect(existsSync(made.worktreePath)).toBe(true);
+    expect(made.startup?.step).toBe('loading');
+  });
+
+  it("keeps a start whose worktree can't be made as a failed start, until it's dismissed or started again", async () => {
+    const p = await newProject();
+    env.core.projects.update(p.id, { settings: { notify: true } });
+    const notes: { title: string; body: string }[] = [];
+    env.core.on('notify', (n) => notes.push(n));
+    // A base branch the repo doesn't have is refused before the answer, so the dialog shows it.
+    await expect(env.core.sessions.begin(p.id, { name: 'Typo', start: 'code', baseBranch: 'mian' }))
+      .rejects.toMatchObject({ status: 400, message: "The base branch mian isn't in demo-repo or on its origin. Pick another base branch." });
+    // Git refuses the branch only when the worktree is made: ak/no-base/x leaves no room for ak/no-base.
+    const block = (branch: string) => execFileSync('git', ['branch', branch], { cwd: env.repo });
+    block('ak/no-base/x');
+    const req: CreateSessionRequest = { name: 'No base', prompt: 'the task', start: 'code' };
+    const { session, done } = await env.core.sessions.begin(p.id, req);
+    await expect(done).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^Couldn't create the worktree: /) });
+    expect(env.core.state().projects[0].sessions.map((s) => s.id)).not.toContain(session.id);
+    expect(get(env.core.db, 'SELECT path FROM worktrees WHERE session_id = ?', session.id)).toBeUndefined();
+    expect(env.core.state().failedStarts).toEqual([{
+      id: session.id, projectId: p.id, name: 'No base', error: expect.stringMatching(/^Couldn't create the worktree: /), at: expect.any(Number),
+      request: { name: 'No base', prompt: 'the task', kind: 'task', start: 'code', baseBranch: 'main' },
+    }]);
+    expect(notes).toEqual([expect.objectContaining({ projectId: p.id, sessionId: session.id, title: "No base: Couldn't start" })]);
+
+    // Started again under the same name, it's no longer a failed start; the other one is until dismissed.
+    block('ak/other/x');
+    await expect(env.core.sessions.create(p.id, { ...req, name: 'Other' })).rejects.toMatchObject({ status: 400 });
+    execFileSync('git', ['branch', '-D', 'ak/no-base/x'], { cwd: env.repo });
+    const again = await env.core.sessions.create(p.id, req);
+    expect(again.id).toBe(session.id);
+    expect(env.core.state().failedStarts.map((f) => f.name)).toEqual(['Other']);
+    env.core.sessions.dismissFailedStart('demo-repo--other');
+    expect(env.core.state().failedStarts).toEqual([]);
   });
 
   it("follows the transcript of a session whose hooks never arrive, and binds a removed hook socket again", async () => {

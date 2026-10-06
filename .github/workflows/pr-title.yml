@@ -1,0 +1,37 @@
+name: PR title
+
+# PRs are squash-merged with the PR title as the commit subject, which the release workflow
+# reads. Its own workflow, not a CI job: it reruns on every edit, and a CI run that skipped the
+# tests would leave the required test checks waiting.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  # Merging into main requires this check by name: renaming it means updating the branch rules.
+  title:
+    name: PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-title.sh
+          sparse-checkout-cone-mode: false
+      # The title reaches the shell through the environment, never pasted into the script.
+      # Dependabot's subjects run long, so its PRs skip the length limit.
+      - name: Check the title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then
+            sh scripts/check-title.sh --no-length "$TITLE"
+          else
+            sh scripts/check-title.sh "$TITLE"
+          fi

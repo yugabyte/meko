@@ -67,7 +67,7 @@ export type ApiHandler = (call: ApiCall) => { status?: number; body?: unknown } 
 
 /**
  * Meko's REST API, faked through `fetch`. Without a handler (or when it returns undefined) every
- * route answers 401, as Meko does today for API keys on its share routes (link mode).
+ * route answers 401, as Meko does for a key it doesn't accept.
  */
 export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
   const calls: ApiCall[] = [];
@@ -194,7 +194,9 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
         /* not running */
       }
       db.close();
-      rmSync(home, { recursive: true, force: true });
+      // core.stop() waited for the transcript captures that write into fakeDir; the retries cover
+      // any other late writer (removing a folder while something writes into it fails with ENOTEMPTY).
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }

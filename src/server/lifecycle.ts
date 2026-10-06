@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
-import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
+import { artifactUrlIn, isArtifactPublish, mekoDesignName, questionsFromMarkdown, readArtifactHtml, readDesignFile, readDesignQuestions } from './design.js';
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
@@ -12,10 +12,10 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, SESSION_KINDS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type SessionKind, type Stage } from '../shared/types.js';
-import { MOVE_TARGETS, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
+import { KIND_LABELS, STAGE_LABELS, type DesignQuestion, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
+import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
-import { WORKFLOW } from './sessions.js';
+import { workflowLine } from './sessions.js';
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
@@ -27,6 +27,8 @@ const CLOSING_RESUME_MS = 24 * 60 * 60 * 1000;
 const CI_SETTLE_MS = 10 * 60 * 1000;
 /** Heads in a row that get a CI-fix prompt before a failing CI is left to the user. */
 const MAX_CI_FIXES = 3;
+/** Heads in a row that get a prompt to resolve merge conflicts before the conflicts are left to the user. */
+const MAX_CONFLICT_FIXES = 3;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
 
@@ -34,7 +36,7 @@ const PR_CONVERSATION_TIMEOUT_MS = 10000;
 export const DESIGN_READY = 'Design ready for your approval';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
-const QUEUE_ORDER = ['review', 'review-people', 'ci'] as const;
+const QUEUE_ORDER = ['review', 'review-people', 'conflicts', 'ci'] as const;
 /** The one prompt queued in a Review a PR session: the summary after Update to latest. */
 const REVIEWING_ORDER = ['review-pr-update'] as const;
 type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
@@ -55,6 +57,11 @@ const REVIEW_VERBS: Record<string, string> = { APPROVED: 'approved', CHANGES_REQ
 type Queue = Partial<Record<QueuedPrompt, { state: 'queued' | 'sent'; vars?: Record<string, string> }>>;
 
 const REVIEW_REQUEST = /^\/agentk review\b/;
+
+/** The reviews' authors, each once, as `a, b`. */
+function loginList(reviews: github.PrReview[]): string {
+  return [...new Set(reviews.map((r) => r.author?.login))].join(', ');
+}
 
 /**
  * True when the local branch has commits the PR's head lacks: committed but never pushed, or
@@ -207,15 +214,49 @@ export class Lifecycle {
         this.designChanged.add(row.id);
       }
     }
+    this.collectQuestions(row);
     void this.sendDesign(row.id); // anything an earlier send couldn't deliver
     return this.designChanged.delete(row.id);
+  }
+
+  /**
+   * The design's questions for the user: the questions file Claude writes beside the design, or
+   * else the "Open questions" list of a markdown design. A file that's too large, unreadable or
+   * not questions is logged and leaves the ones stored alone. A change counts as a change to the
+   * design, and drafts are matched to the new options (see DesignAnswerService.realign).
+   */
+  private collectQuestions(row: SessionRow): void {
+    const d = get<{ markdown: string; questions: string; questions_source: string | null }>(
+      this.db, 'SELECT markdown, questions, questions_source FROM designs WHERE session_id = ?', row.id);
+    if (!d) return;
+    let questions: DesignQuestion[] | null;
+    try {
+      questions = readDesignQuestions(this.sessions.questionsFile(row));
+    } catch (e) {
+      this.warn(row.id, `Reading the design's questions (${this.sessions.questionsFile(row)})`, e);
+      return;
+    }
+    const source = questions ? 'file' : null;
+    questions ??= d.markdown ? questionsFromMarkdown(d.markdown) : [];
+    const from = source ?? (questions.length ? 'markdown' : null);
+    const json = JSON.stringify(questions);
+    if (json === d.questions && from === d.questions_source) return;
+    run(this.db, 'UPDATE designs SET questions = ?, questions_source = ?, open_questions = ?, updated_at = ? WHERE session_id = ?',
+      json, from, questions.filter((q) => q.status === 'open').length, Date.now(), row.id);
+    this.core.answers.realign(row.id, questions);
+    this.designChanged.add(row.id);
+    this.core.changed();
   }
 
   /** The design is waiting for the user: say so in the activity log, the header and a notification. */
   designReady(id: string): void {
     this.sessions.event(id, 'design', 'Design ready for approval');
     this.sessions.setStatus(id, 'needs_input', DESIGN_READY);
-    this.sessions.notifyUser(id, 'Design ready', 'Review and approve the design.');
+    // Answers queued meanwhile go out right after this, so AgentK isn't waiting on the user.
+    if (this.core.answers.queued(id)) return;
+    const open = get<{ n: number }>(this.db, 'SELECT open_questions AS n FROM designs WHERE session_id = ?', id)?.n ?? 0;
+    this.sessions.notifyUser(id, 'Design ready',
+      open ? `Review the design and answer ${open === 1 ? 'its open question' : `${open} open questions`}.` : 'Review and approve the design.');
   }
 
   async approveDesign(row: SessionRow): Promise<void> {
@@ -239,9 +280,17 @@ export class Lifecycle {
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
       throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     }
+    // Answers the user hasn't sent go with the approval.
+    const answers = this.core.answers.forApproval(row.id);
     this.designApproved(row.id, 'you');
     try {
-      await this.sessions.submit(row.id, this.sessions.prompt(this.sessions.row(row.id), 'approved'));
+      const cur = this.sessions.row(row.id);
+      const lead = answers && this.sessions.prompt(cur, 'approved-answers', { answers: answers.text });
+      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'approved')].filter(Boolean).join('\n\n'));
+      if (answers) {
+        answers.sent();
+        this.sessions.event(row.id, 'design', `Approved with ${answers.count === 1 ? '1 answer' : `${answers.count} answers`}`);
+      }
     } catch (e) {
       if (this.sessions.row(row.id).stage === 'code') this.sessions.setStage(row.id, 'design', 'auto');
       throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
@@ -267,27 +316,23 @@ export class Lifecycle {
   }
 
   /**
-   * Types the PR prompt (with a moved session's `moved` line first): the session goes to the PR
-   * stage, and back to where it was, as it was, if the prompt can't be typed. `check` runs again
-   * after waiting on GitHub and Meko, which gave Claude and the user time to move on.
+   * Types the PR prompt (with a moved session's `moved` line first, `lead`): the session goes to the
+   * PR stage, and back to where it was if the prompt can't be typed. `check` runs again after
+   * waiting on GitHub and Meko, which gave Claude and the user time to move on.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, move?: { kind: SessionKind; lead: string }): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, lead?: string): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     const footer = await this.prFooter(row);
     const cur = this.sessions.row(row.id);
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
-    if (move) this.applyKind(cur, move.kind);
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
     try {
-      await this.sessions.submit(row.id, [move?.lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
+      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      if (this.sessions.row(row.id).stage === 'pr') {
-        if (move) this.applyKind(this.sessions.row(row.id), cur.kind);
-        this.sessions.setStage(row.id, cur.stage, 'auto');
-      }
+      if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
       throw new HttpError(502, `Couldn't send the PR prompt to Claude: ${errMsg(e)}. Try again.`);
     }
   }
@@ -308,31 +353,31 @@ export class Lifecycle {
   // ---- moves ----
 
   /**
-   * Changes a session's type, its stage, or both, at the user's request. The rules for which
-   * moves exist are in src/shared/stages.ts, shared with the move dialog.
+   * Moves a task session to another stage at the user's request. The rules for which moves exist
+   * are in src/shared/stages.ts, shared with the move dialog. A `kind` sent by a page from before
+   * session kinds became start stages is ignored.
    */
   async move(row: SessionRow, req: MoveSessionRequest): Promise<void> {
-    const { kind, stage, prompt, task } = req ?? ({} as MoveSessionRequest);
-    if (!SESSION_KINDS.includes(kind)) throw new HttpError(400, `Pick a session type: ${SESSION_KINDS.join(', ')}.`);
+    const { stage, prompt, task } = req ?? ({} as MoveSessionRequest);
     if (!MOVE_TARGETS.includes(stage)) throw new HttpError(400, `Pick a stage to move to: ${MOVE_TARGETS.join(', ')}.`);
     if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
-    await this.serial(row.id, () => this.doMove(row.id, kind, stage, prompt, (task ?? '').trim()));
+    await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim()));
   }
 
-  private async doMove(id: string, kind: SessionKind, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
+  private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
     const cur = this.sessions.row(id);
     if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     const blocked = moveBlockedIn(cur.stage);
     if (blocked) throw new HttpError(409, blocked);
     if (this.merging.has(id) || this.closing.has(id)) throw new HttpError(409, 'A merge is in progress.');
-    const bad = moveError(cur, { kind, stage });
+    const bad = moveError(cur, stage);
     if (bad) throw new HttpError(400, bad);
     if (cur.stage === 'design' && cur.plan_mode) {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
     }
     this.checkBetweenTurns(cur);
-    if (stage === 'review' && movesStep(cur.stage, stage)) return this.moveToReview(cur, kind);
+    if (stage === 'review' && movesStep(cur.stage, stage)) return this.moveToReview(cur);
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
     if (send) {
@@ -342,7 +387,6 @@ export class Lifecycle {
     if (task && !cur.initial_prompt) this.sessions.update(id, { initial_prompt: task });
     // Designs are written as markdown or an Artifact now; plan mode is only for older sessions.
     if (stage === 'design') this.sessions.update(id, { plan_mode: 0 });
-    this.applyKind(cur, kind);
     if (movesStep(cur.stage, stage)) {
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
@@ -362,7 +406,7 @@ export class Lifecycle {
    * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
    * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does.
    */
-  private async moveToReview(row: SessionRow, kind: SessionKind): Promise<void> {
+  private async moveToReview(row: SessionRow): Promise<void> {
     const cwd = this.ghCwd(row);
     const pr = await github.findPr(cwd, row.branch, row.created_at, true).catch(() => null);
     let adopt = false;
@@ -384,24 +428,17 @@ export class Lifecycle {
       await this.sendPr(cur, (r) => {
         check(r);
         this.checkPromptable(r);
-      }, kind === cur.kind && cur.stage === 'code' ? undefined : { kind, lead: this.movedLine({ ...cur, kind }, 'review') });
+      }, cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'));
       return;
     }
-    this.applyKind(cur, kind);
     if (cur.stage === 'design') this.leaveDesign(row.id, false);
     await this.adoptPr(row.id, pr, 'you');
   }
 
-  /** Sets the session's type, with an event when it changes. */
-  private applyKind(row: SessionRow, kind: SessionKind): void {
-    if (row.kind === kind) return;
-    this.sessions.update(row.id, { kind });
-    this.sessions.event(row.id, 'kind', `Changed type to ${KIND_LABELS[kind]}`);
-  }
-
-  /** The `moved` line: what the session is now, since Claude's system prompt still says what it was. */
+  /** The `moved` line: where the session is now, since Claude's system prompt still says where it was. */
   private movedLine(row: SessionRow, stage: Stage = row.stage): string {
-    return this.sessions.prompt(row, 'moved', { kind: KIND_LABELS[row.kind], stage: STAGE_LABELS[stage], workflow: WORKFLOW[row.kind] });
+    const kind = kindOf(row.kind);
+    return this.sessions.prompt(row, 'moved', { kind: KIND_LABELS[kind], stage: STAGE_LABELS[stage], workflow: workflowLine(kind, stage) });
   }
 
   /**
@@ -416,7 +453,7 @@ export class Lifecycle {
   }
 
   /**
-   * Leaving PR & Review by hand, between turns: the PR stays open and queued review and CI prompts
+   * Leaving PR & Review by hand, between turns: the PR stays open and queued review, conflict and CI prompts
    * wait for the session to come back (deliverNext only sends in Review). Prompts marked sent
    * belong to a turn that's over, as onTurnEnd would have decided had the session stayed.
    */
@@ -503,8 +540,9 @@ export class Lifecycle {
         await this.doPollReviewedPr(id);
       }).catch((e) => this.warn(id, 'PR status failed', e));
     }
-    // Review comments go after anything above that already gave Claude its next turn.
+    // Review comments and design answers go after anything above that already gave Claude its next turn.
     await this.core.comments.deliver(id).catch((e) => this.warn(id, 'Sending review comments', e));
+    await this.core.answers.deliver(id).catch((e) => this.warn(id, 'Sending answers to the design', e));
   }
 
   /**
@@ -540,6 +578,13 @@ export class Lifecycle {
     this.setQueue(id, q);
   }
 
+  /** Queues `review-people` naming its reviewers, adding to those of a prompt still waiting to go out. */
+  private enqueuePeople(id: string, logins: string[]): void {
+    const waiting = this.queue(id)['review-people'];
+    const earlier = waiting?.state === 'queued' ? (waiting.vars?.reviewers ?? '').split(', ').filter(Boolean) : [];
+    this.enqueue(id, 'review-people', { reviewers: [...new Set([...earlier, ...logins])].join(', ') });
+  }
+
   /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */
   private ghCwd(row: SessionRow): string {
     if (existsSync(row.worktree_path) && this.sessions.ownsWorktree(row)) return row.worktree_path;
@@ -567,12 +612,14 @@ export class Lifecycle {
           await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
         } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
-        } else if (row.stage === 'reviewing-pr' && due) {
+        } else if (row.stage === 'reviewing-pr' && due && !this.sessions.isCreating(row.id)) {
+          // Not while its PR head is still being fetched: a push meanwhile isn't news, the fetch has it.
           await this.pollReviewedPr(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         }
         // Prompts and comments queued before a restart, or while Claude was busy, waiting on the user or exited.
         await this.serial(row.id, () => this.deliverNext(row.id)).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
         await this.core.comments.deliver(row.id).catch((e) => this.warn(row.id, 'Sending review comments', e));
+        await this.core.answers.deliver(row.id).catch((e) => this.warn(row.id, 'Sending answers to the design', e));
       }
     } finally {
       this.polling = false;
@@ -610,7 +657,7 @@ export class Lifecycle {
       if (before.review_state === 'none') this.sessions.update(id, { review_state: 'waiting' });
       this.sessions.event(id, 'pr-again', `Back on PR #${pr.number}`, { url: pr.url });
     } else {
-      this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0 });
+      this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0, conflict_head: null, conflict_fixes: 0 });
       const older = by === 'you' || Date.parse(pr.createdAt) < before.created_at - github.CLOCK_SKEW_MS;
       this.sessions.event(id, 'pr', older ? `Picked up PR #${pr.number}` : `Opened PR #${pr.number}`, { url: pr.url });
     }
@@ -656,8 +703,12 @@ export class Lifecycle {
     let reviewState = row.review_state;
     const seen = new Set(JSON.parse(row.seen_review_ids) as string[]);
     const isAgentk = (a: { login: string } | null) => github.isLogin(a, settings.reviewerLogin);
+    // On a public repo anyone can comment: only the user and people with a role on it can ask for AgentK.
+    const asked = st.comments.filter((c) => REVIEW_REQUEST.test(c.body.trim()));
+    const me = asked.some((c) => !github.isTrustedAuthor(c, settings.reviewerLogin)) ? await this.viewerLogin(this.ghCwd(before)) : null;
+    const requests = asked.filter((c) => github.isTrustedAuthor(c, settings.reviewerLogin) || (!!me && github.isLogin(c.author, me)));
     const agentkSeen = !!row.agentk_seen || st.reviews.some((r) => isAgentk(r.author))
-      || st.comments.some((c) => isAgentk(c.author) || REVIEW_REQUEST.test(c.body.trim()));
+      || st.comments.some((c) => isAgentk(c.author)) || requests.length > 0;
 
     if (mode !== 'people') {
       const botReviews = st.reviews.filter((r) => isAgentk(r.author));
@@ -681,7 +732,7 @@ export class Lifecycle {
         // AgentK talks through issue comments before the review: an ack, or a refusal. Only
         // comments after the last review and the last request count (a forced review follows a refusal).
         const latestReviewAt = Math.max(0, ...botReviews.map((r) => Date.parse(r.submittedAt)));
-        const requestedAt = Math.max(0, ...st.comments.filter((c) => REVIEW_REQUEST.test(c.body.trim())).map((c) => Date.parse(c.createdAt)));
+        const requestedAt = Math.max(0, ...requests.map((c) => Date.parse(c.createdAt)));
         const since = Math.max(latestReviewAt, requestedAt);
         const botComment = [...st.comments].reverse().find((c) => isAgentk(c.author) && Date.parse(c.createdAt) > since);
         if (botComment) {
@@ -693,19 +744,32 @@ export class Lifecycle {
 
     // People, and in All mode other bots too. AgentK's reviews are never counted here.
     const others = st.reviews.filter((r) => r.author && !isAgentk(r.author) && !seen.has(r.id));
-    const bots = others.length && mode !== 'all' ? await this.botLogins(before, st.number) : [];
-    if (others.length && bots) {
+    const bots = others.length ? await this.botLogins(before, st.number) : [];
+    const isBot = (r: github.PrReview) => !!bots?.some((b) => github.isLogin(r.author, b));
+    // Replies on review threads (Claude's too: it posts as the user) are empty COMMENTED reviews.
+    const worded = others.filter((r) => (mode === 'all' || !isBot(r)) && (r.state !== 'COMMENTED' || r.body.trim()));
+    // Anyone can review a public repo's PR. Only people with a role on it, bots (apps installed
+    // on it) and the user get to start a turn; the rest are shown to the user, not to Claude.
+    const outside = bots ? worded.filter((r) => !isBot(r) && !github.isTrustedAuthor(r, settings.reviewerLogin)) : [];
+    const user = outside.length ? await this.viewerLogin(this.ghCwd(before)) : null;
+    // Like the bot lookup, an unknown login leaves the reviews unseen for the next poll, so the
+    // user's own review is never dropped as a stranger's.
+    if (others.length && bots && (user || !outside.length)) {
       others.forEach((r) => seen.add(r.id));
-      const counted = others.filter((r) => !bots.some((b) => github.isLogin(r.author, b)));
-      // Replies on review threads (Claude's too: it posts as the user) are empty COMMENTED reviews.
-      const worded = counted.filter((r) => r.state !== 'COMMENTED' || r.body.trim());
-      if (worded.length) {
-        const names = [...new Set(worded.map((r) => r.author?.login))].join(', ');
+      const ignored = outside.filter((r) => !user || !github.isLogin(r.author, user));
+      const trusted = worded.filter((r) => !ignored.includes(r));
+      if (ignored.length) {
+        const names = loginList(ignored);
+        this.sessions.event(row.id, 'review', `Ignored review from ${names} (not a collaborator on the repo)`);
+        this.sessions.notifyUser(row.id, 'Review ignored', `From ${names}, not a collaborator on the repo. AgentK won't act on it; read it on GitHub.`);
+      }
+      if (trusted.length) {
+        const names = loginList(trusted);
         this.sessions.event(row.id, 'review', `Review from ${names}`);
-        if (worded.some((r) => r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED')) {
+        if (trusted.some((r) => r.state === 'CHANGES_REQUESTED' || r.state === 'COMMENTED')) {
           reviewState = 'addressing';
           this.sessions.notifyUser(row.id, 'Review arrived', `From ${names}.`);
-          this.enqueue(row.id, 'review-people');
+          this.enqueuePeople(row.id, trusted.map((r) => r.author!.login));
         }
       }
     }
@@ -722,6 +786,7 @@ export class Lifecycle {
       seen_review_ids: JSON.stringify([...seen]),
       agentk_seen: agentkSeen ? 1 : 0,
     });
+    this.watchConflicts(this.sessions.row(row.id), st, unpushed);
     this.watchCi(this.sessions.row(row.id), st, ci, unpushed);
     // A failed send stays queued; the next poll or turn end retries it.
     await this.deliverNext(row.id).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
@@ -775,8 +840,47 @@ export class Lifecycle {
     const checks = ci.failed.map((c) => `- ${c.name}: ${c.conclusion.toLowerCase()}${c.url ? ` (${c.url})` : ''}`).join('\n');
     this.enqueue(id, 'ci', { sha: head, checks });
     const next = this.queue(id);
+    const later = next.review || next['review-people'] ? 'AgentK will fix it after the review.'
+      : next.conflicts ? 'AgentK will look at it after resolving the merge conflicts.' : 'AgentK is fixing it.';
+    this.sessions.notifyUser(id, 'CI failed', `${names}. ${later}`);
+  }
+
+  /**
+   * Queues a prompt to resolve merge conflicts when GitHub says the PR's head conflicts with its
+   * base: once per head, never while the branch has unpushed commits, and for at most
+   * MAX_CONFLICT_FIXES heads in a row before it's left to the user. `[pr] resolve_conflicts` (Settings
+   * → General) turns it off: the conflicts stay a merge blocker, and deliverNext drops a queued prompt.
+   */
+  private watchConflicts(row: SessionRow, st: github.PrStatus, unpushed: boolean): void {
+    const id = row.id;
+    const head = st.headRefOid;
+    const on = this.core.config.pr.resolveConflicts;
+    const q = this.queue(id);
+    // Stale: turned off, the head moved on, or the PR merges cleanly now. UNKNOWN isn't an answer
+    // (GitHub works it out after a push or a base change), so it keeps a queued prompt.
+    if (q.conflicts?.state === 'queued' && (!on || st.mergeable === 'MERGEABLE' || q.conflicts.vars?.sha !== head)) {
+      delete q.conflicts;
+      this.setQueue(id, q);
+    }
+    if (st.mergeable === 'MERGEABLE') {
+      // A later conflict on this head (the base moved again) is new, and starts the count again.
+      if (row.conflict_fixes || row.conflict_head) this.sessions.update(id, { conflict_head: null, conflict_fixes: 0 });
+      return;
+    }
+    if (!on || st.mergeable !== 'CONFLICTING' || !head || row.conflict_head === head || row.stage !== 'review' || st.state !== 'OPEN' || unpushed) return;
+    const base = row.base_branch;
+    if (row.conflict_fixes >= MAX_CONFLICT_FIXES) {
+      this.sessions.update(id, { conflict_head: head });
+      this.sessions.event(id, 'conflicts', `Merge conflicts with ${base}. Still there after ${MAX_CONFLICT_FIXES} attempts; over to you`, { sha: head });
+      this.sessions.notifyUser(id, 'Merge conflicts remain', `PR #${st.number} still conflicts with ${base} after ${MAX_CONFLICT_FIXES} attempts. Take a look.`);
+      return;
+    }
+    this.sessions.update(id, { conflict_head: head, conflict_fixes: row.conflict_fixes + 1 });
+    this.sessions.event(id, 'conflicts', `Merge conflicts with ${base}`, { sha: head });
+    this.enqueue(id, 'conflicts', { sha: head });
+    const next = this.queue(id);
     const afterReview = !!(next.review || next['review-people']);
-    this.sessions.notifyUser(id, 'CI failed', `${names}. ${afterReview ? 'AgentK will fix it after the review.' : 'AgentK is fixing it.'}`);
+    this.sessions.notifyUser(id, 'Merge conflicts', `PR #${st.number} conflicts with ${base}. ${afterReview ? 'AgentK will resolve them after the review.' : 'AgentK is resolving them.'}`);
   }
 
   /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
@@ -788,12 +892,17 @@ export class Lifecycle {
   }
 
   /**
-   * Types the first queued prompt (reviews first, then CI) into Claude when it's between turns
+   * Types the first queued prompt (reviews first, then merge conflicts, then CI) into Claude when it's between turns
    * in the Review stage, or a Review a PR session's update summary in Reviewing PR. One at a time:
    * the next waits until the turn that got one has ended.
    */
   private async deliverNext(id: string): Promise<void> {
     const q = this.queue(id);
+    // Turned off since it was queued: never sent, even when the poll that would drop it failed.
+    if (q.conflicts?.state === 'queued' && !this.core.config.pr.resolveConflicts) {
+      delete q.conflicts;
+      this.setQueue(id, q);
+    }
     const row = this.sessions.row(id);
     const order = queueOrder(row.stage);
     const name = order.find((n) => q[n]?.state === 'queued');

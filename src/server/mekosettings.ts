@@ -1,5 +1,5 @@
 import type { MekoSettings, MekoSettingsUpdate } from '../shared/types.js';
-import { DEFAULT_MEKO_URL, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, envMekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
 import { checkMeko, strOrNull } from './meko.js';
@@ -41,8 +41,10 @@ export function mekoSettings(cfg: Config): MekoSettings {
     url: cfg.meko.url,
     effectiveUrl: eff.url,
     defaultUrl: DEFAULT_MEKO_URL,
+    fallbackUrl: resolveMekoWithSource({ ...cfg, meko: { ...cfg.meko, url: '' } }).url,
     webUrl: cfg.meko.webUrl,
     apiUrl: cfg.meko.apiUrl,
+    envWebUrl: envMekoWebUrl(),
     effectiveWebUrl: resolveMekoWebUrl(cfg),
     effectiveApiUrl: resolveMekoApiUrl(cfg),
     // Never the key itself; short keys get no hint at all.
@@ -81,13 +83,13 @@ export function applyMekoChange(c: Config, next: Config, changed: MekoKey[]): vo
  * Applies a Meko tab change to a copy of the config and checks it before anything is saved: a new
  * server and key must answer, and an API URL that comes from what was typed (the API or web app
  * URL) must answer like Meko's API. Returns the config to save, whether to reconnect, and whether
- * to check the sharing mode again; null when nothing changes.
+ * to sync invites again (a reconnect, or a new API URL); null when nothing changes.
  */
 export async function nextMekoConfig(
   core: Core,
   tools: MekoTools,
   m: MekoSettingsUpdate,
-): Promise<{ next: Config; changed: MekoKey[]; reconnect: boolean; recheck: boolean } | null> {
+): Promise<{ next: Config; changed: MekoKey[]; reconnect: boolean; resync: boolean } | null> {
   for (const k of TEXT_KEYS) {
     if (m[k] !== undefined && typeof m[k] !== 'string') throw new HttpError(400, `meko.${k} must be a string.`);
   }
@@ -129,14 +131,14 @@ export async function nextMekoConfig(
     if (!r.ok) throw new HttpError(400, `Meko at ${after.url} didn't accept that key: ${r.error}. Nothing was saved.`);
   }
   const apiAfter = resolveMekoApiUrl(next);
-  const recheck = reconnect || resolveMekoApiUrl(base) !== apiAfter;
+  const resync = reconnect || resolveMekoApiUrl(base) !== apiAfter;
   // Worked out for Meko Cloud, the API URL is trusted; one that came from a typed URL is checked.
   const typed = next.meko.apiUrl !== base.meko.apiUrl || next.meko.webUrl !== base.meko.webUrl;
   if (typed && apiAfter && apiAfter !== resolveMekoApiUrl(base)) {
     const r = await tools.checkApi(apiAfter);
     if (!r.ok) throw new HttpError(400, `${apiAfter} doesn't look like Meko's API: ${r.error}. Check the API or web app URL. Nothing was saved.`);
   }
-  return { next, changed, reconnect, recheck };
+  return { next, changed, reconnect, resync };
 }
 
 /**

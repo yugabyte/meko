@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  defaultStage, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps, stepOf,
+  defaultTarget, kindOf, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps, stepOf,
 } from '../../src/shared/stages.js';
-import { KIND_STAGES, SESSION_KINDS, STAGE_LABELS, type MoveTarget, type Stage } from '../../src/shared/types.js';
+import { KIND_STAGES, START_EXAMPLES, START_HINTS, START_STAGES, STAGE_LABELS, type MoveTarget, type Stage } from '../../src/shared/types.js';
 
 describe('stage moves', () => {
   it('shows the PR stage as part of PR & Review', () => {
@@ -12,10 +12,35 @@ describe('stage moves', () => {
     expect(STAGE_LABELS.review).toBe('PR & Review');
   });
 
-  it('moves to the stages each type has, never Merge & Close', () => {
-    expect(moveTargets('explore')).toEqual(['explore']);
-    expect(moveTargets('plan')).toEqual(['design', 'code', 'review']);
-    expect(moveTargets('quick')).toEqual(['code', 'review']);
+  it('runs every task on one pipeline, started at Explore, Design or Code', () => {
+    expect(KIND_STAGES.task).toEqual(['explore', 'design', 'code', 'review', 'merge']);
+    expect(START_STAGES).toEqual(['explore', 'design', 'code']);
+    for (const s of [...START_STAGES, 'review-pr'] as const) expect(START_HINTS[s]).toBeTruthy();
+  });
+
+  it('gives every start its own example name and first prompt', () => {
+    const starts = [...START_STAGES, 'review-pr'] as const;
+    for (const s of starts) {
+      expect(START_EXAMPLES[s].name).toBeTruthy();
+      expect(START_EXAMPLES[s].prompt).toMatch(/^e\.g\. /);
+    }
+    expect(new Set(starts.map((s) => START_EXAMPLES[s].name)).size).toBe(starts.length);
+    expect(new Set(starts.map((s) => START_EXAMPLES[s].prompt)).size).toBe(starts.length);
+    // Design's example is a feature with choices to make, not a quick fix (that's Code's).
+    expect(START_EXAMPLES.design.name).not.toMatch(/^fix\b/);
+  });
+
+  it('moves a task to any stage but Merge & Close', () => {
+    expect(moveTargets('task')).toEqual(['explore', 'design', 'code', 'review']);
+  });
+
+  it('reads the stored kind, old type names included, as task or review-pr', () => {
+    for (const k of ['explore', 'plan', 'quick', 'task'] as const) {
+      expect(kindOf(k)).toBe('task');
+      expect(moveTargets(k)).toEqual(['explore', 'design', 'code', 'review']);
+    }
+    expect(kindOf('review-pr')).toBe('review-pr');
+    expect(moveError({ kind: 'quick', stage: 'code' }, 'explore')).toBeNull();
   });
 
   it('refuses moving out of Merge & Close and Done only', () => {
@@ -23,26 +48,24 @@ describe('stage moves', () => {
     expect(all.filter((s) => moveBlockedIn(s))).toEqual(['merge', 'done']);
   });
 
-  it('accepts exactly the pairs a type has, except staying where it is', () => {
-    const from = { kind: 'quick' as const, stage: 'code' as Stage };
-    for (const kind of SESSION_KINDS) {
-      for (const stage of ['explore', 'design', 'code', 'review'] as MoveTarget[]) {
-        const valid = (KIND_STAGES[kind] as Stage[]).includes(stage) && !(kind === 'quick' && stage === 'code');
-        expect(moveError(from, { kind, stage }), `${kind}/${stage}`).toEqual(valid ? null : expect.any(String));
+  it('accepts every stage but the one the task is in', () => {
+    for (const from of ['explore', 'design', 'code', 'review'] as MoveTarget[]) {
+      for (const to of ['explore', 'design', 'code', 'review'] as MoveTarget[]) {
+        expect(moveError({ kind: 'task', stage: from }, to), `${from} → ${to}`).toEqual(from === to ? expect.any(String) : null);
       }
     }
-    expect(moveError({ kind: 'plan', stage: 'design' }, { kind: 'quick', stage: 'design' })).toBe('Quick Code sessions have no Design stage.');
-    // The PR stage is already PR & Review; changing the type there is fine.
-    expect(moveError({ kind: 'quick', stage: 'pr' }, { kind: 'quick', stage: 'review' })).toBe('Nothing to change: this Quick Code session is already in PR & Review.');
-    expect(moveError({ kind: 'quick', stage: 'pr' }, { kind: 'plan', stage: 'review' })).toBeNull();
+    expect(moveError({ kind: 'task', stage: 'design' }, 'design')).toBe('Nothing to change: this session is already in Design.');
+    // The PR stage is already PR & Review.
+    expect(moveError({ kind: 'task', stage: 'pr' }, 'review')).toBe('Nothing to change: this session is already in PR & Review.');
+    expect(moveError({ kind: 'task', stage: 'pr' }, 'code')).toBeNull();
   });
 
-  it('lands on the current step when the new type has it, else on its first', () => {
-    expect(defaultStage('plan', 'code')).toBe('code');
-    expect(defaultStage('plan', 'pr')).toBe('review');
-    expect(defaultStage('plan', 'explore')).toBe('design');
-    expect(defaultStage('quick', 'design')).toBe('code');
-    expect(defaultStage('explore', 'review')).toBe('explore');
+  it('opens the move dialog on the next step, or back on Code from PR & Review', () => {
+    expect(defaultTarget('explore')).toBe('design');
+    expect(defaultTarget('design')).toBe('code');
+    expect(defaultTarget('code')).toBe('review');
+    expect(defaultTarget('pr')).toBe('code');
+    expect(defaultTarget('review')).toBe('code');
   });
 
   it('offers and defaults the new stage prompt by move', () => {
@@ -51,6 +74,7 @@ describe('stage moves', () => {
     expect(offersPrompt('code', 'code')).toBe(false);
     expect(promptByDefault('code', 'design')).toBe(true);
     expect(promptByDefault('review', 'design')).toBe(true);
+    expect(promptByDefault('explore', 'design')).toBe(true);
     expect(promptByDefault('explore', 'code')).toBe(true);
     expect(promptByDefault('design', 'code')).toBe(true);
     expect(promptByDefault('review', 'code')).toBe(false);
@@ -64,27 +88,29 @@ describe('stage moves', () => {
     expect(moveEffect({ stage: 'design', prNumber: null }, 'code')).toBe('Skips design approval.');
     expect(moveEffect({ stage: 'review', prNumber: 12 }, 'code')).toBe(
       'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to PR & Review.');
-    expect(moveEffect({ stage: 'pr', prNumber: null }, 'review')).toBe('Only the type changes. The session stays in PR & Review.');
+    expect(moveEffect({ stage: 'code', prNumber: null }, 'explore')).toBe('AgentK runs no design, PR or merge while the session is in Explore.');
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'review')).toMatch(/^AgentK picks up the branch's open PR/);
   });
 
-  it('keeps a Review a PR session in its one stage, and makes no session one by a move', () => {
+  it('keeps a Review a PR session in its one stage', () => {
     expect(KIND_STAGES['review-pr']).toEqual(['reviewing-pr']);
     expect(STAGE_LABELS['reviewing-pr']).toBe('Reviewing PR');
     expect(stepOf('reviewing-pr')).toBe('reviewing-pr');
     expect(moveTargets('review-pr')).toEqual([]);
-    expect(moveBlockedIn('reviewing-pr')).toBe("A Review a PR session can't change type or stage.");
-    for (const from of ['explore', 'code', 'review'] as Stage[]) {
-      expect(moveError({ kind: 'quick', stage: from }, { kind: 'review-pr', stage: 'code' })).toMatch(/can't become a Review a PR session/);
-    }
+    expect(moveBlockedIn('reviewing-pr')).toBe("A Review a PR session can't be moved to another stage.");
+    expect(moveError({ kind: 'review-pr', stage: 'reviewing-pr' }, 'code')).toBe("A Review a PR session can't be moved to another stage.");
   });
 
   it('marks steps the session never went through as skipped', () => {
-    expect(skippedSteps('plan', 'code', ['code'])).toEqual(['design']);
-    expect(skippedSteps('plan', 'code', ['design', 'code'])).toEqual([]);
-    expect(skippedSteps('quick', 'review', ['explore', 'pr', 'review'])).toEqual(['code']);
-    expect(skippedSteps('quick', 'pr', ['code', 'pr'])).toEqual([]);
-    expect(skippedSteps('explore', 'explore', ['explore'])).toEqual([]);
-    expect(skippedSteps('plan', 'done', ['code', 'pr', 'review', 'merge', 'done'])).toEqual(['design']);
+    // Started at Code: Explore and Design were never entered.
+    expect(skippedSteps('task', 'review', ['code', 'pr', 'review'])).toEqual(['explore', 'design']);
+    // Started at Design.
+    expect(skippedSteps('task', 'code', ['design', 'code'])).toEqual(['explore']);
+    // Started at Explore, then Code.
+    expect(skippedSteps('task', 'code', ['explore', 'code'])).toEqual(['design']);
+    expect(skippedSteps('task', 'pr', ['explore', 'design', 'code', 'pr'])).toEqual([]);
+    // Moved back to Explore from Design: nothing before it.
+    expect(skippedSteps('task', 'explore', ['design', 'explore'])).toEqual([]);
+    expect(skippedSteps('task', 'done', ['code', 'pr', 'review', 'merge', 'done'])).toEqual(['explore', 'design']);
   });
 });

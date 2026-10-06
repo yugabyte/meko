@@ -19,6 +19,9 @@
   --ok: #23845a;
   --warn: #b86e00;
   --warn-soft: #fff1da;
+  /* Count badges (open questions): white on brown in both themes. */
+  --badge: #9a5b00;
+  --badge-ink: #ffffff;
   --bad: #b42318;
   --bad-soft: #fde7e4;
   /* Text on a --bad fill (danger buttons). */
@@ -53,6 +56,8 @@
     --ok: #5cc592;
     --warn: #e9a64a;
     --warn-soft: #3a2c14;
+    --badge: #8a5510;
+    --badge-ink: #ffffff;
     --bad: #f07366;
     --bad-soft: #3d1c19;
     --bad-ink: #1f0a07;
@@ -81,6 +86,8 @@
   --ok: #5cc592;
   --warn: #e9a64a;
   --warn-soft: #3a2c14;
+  --badge: #8a5510;
+  --badge-ink: #ffffff;
   --bad: #f07366;
   --bad-soft: #3d1c19;
   --bad-ink: #1f0a07;
@@ -337,47 +344,76 @@ textarea.input {
   color: var(--accent);
   font-weight: 600;
 }
-/* Session types in the New session dialog: boxes side by side, on phones too. */
-.kinds {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.kind {
+/* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
+   Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
+.starts {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  padding: 9px 10px;
+  align-items: center;
+}
+.start {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
   border: 1.5px solid var(--rule);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--surface);
-  color: var(--ink);
+  color: var(--muted);
   font: inherit;
-  text-align: left;
+  font-size: 13px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.kind:hover {
-  border-color: var(--muted);
+.start:has(.n) {
+  padding-left: 6px;
 }
-.kind:focus-visible {
+.start .n {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--rule);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.start:hover {
+  border-color: var(--muted);
+  color: var(--ink);
+}
+.start:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.kind.on {
+.start.on {
   border-color: var(--accent);
   background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
 }
-.kind b {
-  font-size: 13px;
-  line-height: 1.25;
+.start.on .n {
+  border-color: var(--accent);
+  color: var(--accent);
+  border-width: 2px;
 }
-.kind-stages {
-  font-size: 11px;
+.start-link {
+  flex: 1 1 10px;
+  min-width: 10px;
+  max-width: 40px;
+  border-top: 1.5px solid var(--rule);
+}
+.start-link.dotted {
+  border-top: 2px dotted var(--muted);
+}
+.start-or {
+  flex: none;
+  padding: 0 12px;
+  font-size: 12px;
   color: var(--muted);
-  overflow-wrap: anywhere;
 }
-/* The Change type or stage dialog: the stages as one segmented control, and what the move will do. */
+/* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
 .move-stages {
   align-self: flex-start;
   max-width: 100%;
@@ -909,7 +945,7 @@ textarea.input {
   color: var(--accent);
   border-width: 2px;
 }
-/* A stage the session can be moved to: it opens the Change type or stage dialog. */
+/* A stage the session can be moved to: it opens the Move to another stage dialog. */
 .stg-btn {
   border: 0;
   background: none;
@@ -931,7 +967,7 @@ textarea.input {
 .stg-btn:disabled {
   cursor: default;
 }
-/* A step the session never went through (a Quick Code session changed to Plan & Implement). */
+/* A step the session never went through (Explore and Design for a task started at Code). */
 .stg.skipped .n {
   border-style: dashed;
 }
@@ -1223,6 +1259,302 @@ textarea.input {
   flex: 1;
   overflow-y: auto;
   padding: 24px 32px 48px;
+}
+/* ---------- Design questions ---------- */
+.count-badge {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--badge);
+  color: var(--badge-ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.design-tabs button {
+  display: inline-flex;
+  align-items: center;
+}
+.design-frame[hidden],
+.design-body[hidden] {
+  display: none;
+}
+.design-split {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.design-split-doc {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.design-split-doc .design-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px 48px;
+}
+.design-qcol {
+  flex: none;
+  width: min(420px, 40%);
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+.design-qcol-hd {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  font-weight: 600;
+}
+.dq-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.dq-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dq-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+}
+.dq-foot-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dq-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dq-card {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dq-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dq-n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+.dq-q {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-chip {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.dq-chip.open {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.dq-chip.answered,
+.dq-chip.done {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.dq-chip.queued,
+.dq-chip.sent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dq-ctx,
+.dq-sent {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-sent {
+  color: var(--ink);
+}
+.dq-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dq-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.dq-opt:hover {
+  background: var(--sunk);
+}
+.dq-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.dq-opt input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  flex: none;
+}
+.dq-opt-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dq-label {
+  overflow-wrap: anywhere;
+}
+.dq-rec {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.dq-detail {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-text {
+  font-size: 13px;
+}
+.dq-clear {
+  align-self: flex-start;
+  font-size: 12px;
+}
+.dq-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dq-section h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.dq-section p {
+  margin: 0;
+}
+.dq-orphans,
+.dq-decided ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dq-orphans li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px dashed var(--rule);
+  border-radius: 6px;
+}
+.dq-decided summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.dq-decided li .dq-q {
+  font-weight: 500;
+}
+.dq-fb-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+.dq-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* At the panel's bottom edge, under a short design too. */
+  margin-top: auto;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  padding: 10px 14px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.dq-bar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .dq-opt {
+    min-height: 40px;
+    align-items: center;
+  }
+  .dq-opt input {
+    margin-top: 0;
+    width: 18px;
+    height: 18px;
+  }
+  .dq-bar,
+  .design-tabs button {
+    min-height: 40px;
+  }
+  .dq-clear,
+  .dq-orphans .link-btn {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .dq-decided summary {
+    padding: 9px 0;
+  }
 }
 a.icon-btn {
   display: inline-flex;
@@ -1605,6 +1937,33 @@ a.icon-btn {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Meko tab and key dialog: where to get an account and an API key */
+.meko-getkey {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--sunk);
+  font-size: 13px;
+}
+.meko-getkey p {
+  margin: 0;
+}
+.meko-getkey-links,
+.meko-getkey-url {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.meko-getkey-url code {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* palette */
 .palette {
@@ -1890,6 +2249,24 @@ a.icon-btn {
   align-items: center;
   gap: 12px;
   margin-bottom: 6px;
+}
+.auth-forgot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+}
+.auth-card > .link-btn {
+  align-self: flex-start;
+}
+.auth-cmd {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  background: var(--sunk);
+  padding: 6px 8px;
+  border-radius: 6px;
 }
 .brand-name {
   font-family: var(--display);
@@ -2604,22 +2981,24 @@ a.icon-btn {
 }
 
 /* ---------- Starting ---------- */
-.dots::after {
-  content: '…';
-  display: inline-block;
-  width: 1.2em;
-  text-align: left;
+/* Opacity, not an animated content, so the dots run in Safari too and the width never changes. */
+.dots {
+  white-space: nowrap;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .dots::after {
-    content: '';
-    animation: dots 1.2s steps(1, end) infinite;
+  .dots > span:nth-child(2) {
+    animation: dots-2 1.2s steps(1, end) infinite;
   }
-  @keyframes dots {
-    0% { content: ''; }
-    25% { content: '.'; }
-    50% { content: '..'; }
-    75% { content: '...'; }
+  .dots > span:nth-child(3) {
+    animation: dots-3 1.2s steps(1, end) infinite;
+  }
+  @keyframes dots-2 {
+    0% { opacity: 0; }
+    33.333% { opacity: 1; }
+  }
+  @keyframes dots-3 {
+    0% { opacity: 0; }
+    66.667% { opacity: 1; }
   }
 }
 .dot.starting {
@@ -3091,6 +3470,9 @@ a.icon-btn {
     padding: 6px 14px;
     font-size: 13px;
   }
+  .start {
+    min-height: 36px;
+  }
   .btn,
   .dp-row {
     min-height: 36px;
@@ -3364,6 +3746,18 @@ a.icon-btn {
   .design-page .design-body {
     padding: 14px 14px 40px;
   }
+  /* With the tabs in the header, its time goes so the header keeps to two rows. */
+  .design-hd.has-tabs .design-updated {
+    display: none;
+  }
+  /* On the full-page design the questions' footer and bar sit on the screen's bottom edge. */
+  .design-page .dq-foot,
+  .design-page .dq-bar {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .dq-scroll {
+    padding: 12px 12px 24px;
+  }
 
   /* Dialogs become sheets from the bottom; the palette stays at the top, above the keyboard.
      Overlays cover the visible viewport, like the app: iOS doesn't shrink the layout viewport for
@@ -3404,6 +3798,11 @@ a.icon-btn {
   .dialog-ft {
     flex-wrap: wrap;
     padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Open project lists three other repo sources, more than fit on one line. */
+  .alt-links {
+    flex-wrap: wrap;
+    row-gap: 4px;
   }
   /* A dialog without a footer (Settings) ends with its body, which clears the home indicator. */
   .dialog-body:last-child {
@@ -3495,13 +3894,42 @@ a.icon-btn {
 }
 
 /* ---- Review a PR ---- */
-/* Four session types: side by side on a desktop, two by two on a phone. */
-.kinds.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
+/* The start pills in one column on a phone: the lines run down from each number, and "or" is a
+   divider above Review a PR. */
 @media (max-width: 760px) {
-  .kinds.four {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .starts {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .start {
+    min-height: 40px;
+  }
+  .start-link {
+    flex: none;
+    width: 0;
+    height: 12px;
+    min-width: 0;
+    margin-left: 15px;
+    border-top: 0;
+    border-left: 1.5px solid var(--rule);
+  }
+  .start-link.dotted {
+    border-top: 0;
+    border-left: 2px dotted var(--muted);
+  }
+  .start-or {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+  }
+  .start-or::before,
+  .start-or::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
   }
 }
 /* The PR picker in the New session dialog. */

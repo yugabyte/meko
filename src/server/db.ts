@@ -350,6 +350,36 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN pr_remote TEXT;
   ALTER TABLE sessions ADD COLUMN review_notes TEXT;
   `,
+  // 22: a design's questions for the user (normalized JSON, where they came from, and how many are
+  // open), and the user's answers: drafts until sent, at most one draft per question. question_id
+  // is '_feedback' for other feedback on the design; question and choice_label are what the user saw.
+  `
+  ALTER TABLE designs ADD COLUMN questions TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE designs ADD COLUMN questions_source TEXT;
+  ALTER TABLE designs ADD COLUMN open_questions INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE design_answers (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    question_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    choice INTEGER,
+    choice_label TEXT,
+    your_call INTEGER NOT NULL DEFAULT 0,
+    text TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL CHECK (state IN ('draft', 'queued', 'sent')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sent_at INTEGER
+  );
+  CREATE INDEX design_answers_session ON design_answers(session_id, state);
+  CREATE UNIQUE INDEX design_answers_unsent ON design_answers(session_id, question_id) WHERE state != 'sent';
+  `,
+  // 23: the merge-conflict watcher, like the CI-fix one: the PR head that last got a prompt to
+  // resolve conflicts with the base, and how many heads in a row did.
+  `
+  ALTER TABLE sessions ADD COLUMN conflict_head TEXT;
+  ALTER TABLE sessions ADD COLUMN conflict_fixes INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDb(path: string): Db {
