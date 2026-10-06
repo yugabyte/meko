@@ -16,6 +16,7 @@ import type {
   MekoDatapack,
   MoveSessionRequest,
   NewComment,
+  PastedImage,
   Project,
   ProjectHome,
   UsageOverview,
@@ -56,14 +57,17 @@ export function setUnauthorizedHandler(fn: (() => void) | null) {
   onUnauthorized = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, opts: { quiet401?: boolean } = {}): Promise<T> {
+/** `raw` sends those bytes as the body, with their content type, instead of `body` as JSON. */
+async function request<T>(
+  method: string, path: string, body?: unknown, opts: { quiet401?: boolean; raw?: { data: Blob; type: string } } = {},
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
       method,
       credentials: 'same-origin',
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: opts.raw ? { 'Content-Type': opts.raw.type } : body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: opts.raw ? opts.raw.data : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new ApiError(0, 'Can’t reach the AgentK Local server. Check that it is running.');
@@ -147,6 +151,11 @@ export const api = {
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number) =>
     `/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}`,
+  /** Saves an image pasted into the session's terminal; the server checks its type by its bytes. */
+  pasteImage: (id: string, image: Blob) =>
+    request<PastedImage>('POST', `/api/sessions/${enc(id)}/images`, undefined, {
+      raw: { data: image, type: image.type.startsWith('image/') ? image.type : 'image/png' },
+    }),
   comments: (id: string) => get<ReviewComment[]>(`/api/sessions/${enc(id)}/comments`),
   addComment: (id: string, b: NewComment) => post<ReviewComment>(`/api/sessions/${enc(id)}/comments`, b),
   editComment: (id: string, cid: string, body: string) =>

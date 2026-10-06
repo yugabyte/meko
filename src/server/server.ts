@@ -8,10 +8,10 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignAnswer, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, MekoDatapack, MoveSessionRequest, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
+  EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
   ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs,
 } from '../shared/types.js';
-import { SHARE_GRANTS } from '../shared/types.js';
+import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
@@ -363,6 +363,12 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       .header('Content-Security-Policy', "default-src 'none'; sandbox")
       .header('Content-Disposition', 'inline')
       .send(img.data);
+  });
+  // An image pasted into the terminal: the body is the image itself. Its parser lives only in this
+  // scope, so no other route takes a body that isn't JSON (and an HTML form can't send image/*).
+  await app.register(async (scope) => {
+    scope.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: MAX_PASTE_BYTES }, (_req, body, done) => done(null, body));
+    scope.post<{ Params: { id: string } }>('/api/sessions/:id/images', async (req): Promise<PastedImage> => core.sessions.pasteImage(req.params.id, req.body));
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));

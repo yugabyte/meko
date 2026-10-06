@@ -5,12 +5,13 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
-import type { TermClientMessage, TermServerMessage } from '../shared/types';
-import { checkLogin, wsUrl, WS_UNAUTHORIZED } from './api';
-import { copyText, decodeOsc52 } from './clipboard';
+import { MAX_PASTE_BYTES, type TermClientMessage, type TermServerMessage } from '../shared/types';
+import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
+import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
+import { whenSettled } from './util';
 import {
-  clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
+  clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
 
@@ -67,6 +68,14 @@ const FLING_MIN = 0.3;
 const FLING_STOP = 0.05;
 /** Pause between a compose paste and the Enter that submits it, as the server does for prompts. */
 const SUBMIT_DELAY = 300;
+/** Pause between the paths of several pasted images, so Claude Code takes each paste on its own. */
+const IMAGE_PASTE_GAP = 200;
+/**
+ * How long saved images wait for the terminal to (re)connect before their paths are pasted. A phone's
+ * image picker hides the page, which can release the terminal (HIDDEN_RELEASE_MS) until it's shown again.
+ */
+const PASTE_CONNECT_WAIT_MS = 15_000;
+const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnects.';
 /**
  * A connection that stays up this long resets the reconnect backoff. An open alone proves nothing:
  * the server upgrades first, then may turn the socket away (a lost login, a failed attach).
@@ -124,8 +133,10 @@ class SessionTerminal {
   retrying = false;
   /** The server said why it can't attach (in `message`): no reconnecting until reconnect(). */
   failed = false;
-  /** A short-lived note after copying ("Copied", or why it failed). */
+  /** A short-lived note after copying ("Copied", or why it failed), or while pasting images. */
   notice: string | null = null;
+  /** `notice` is something still going on: the UI shows it with moving dots. */
+  noticeBusy = false;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
 
@@ -159,6 +170,10 @@ class SessionTerminal {
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: false });
     this.el.addEventListener('touchcancel', this.touchCancel, { capture: true, passive: true });
+    // Capture, so an image paste or drop is ours before xterm takes the paste as text.
+    this.el.addEventListener('paste', this.onPaste, { capture: true });
+    this.el.addEventListener('dragover', this.onDragOver);
+    this.el.addEventListener('drop', this.onDrop);
     // xterm measures its cells when it opens. If the web font arrives later (a cold cache), the
     // cells were measured with a fallback font and the rows no longer fit: re-measure and refit.
     document.fonts?.load(`13px ${FONT}`).then(
@@ -193,6 +208,17 @@ class SessionTerminal {
         if (!IS_MAC) this.term.clearSelection();
         return false;
       }
+      // Ctrl+V pastes from this browser's clipboard, images included. Claude Code's own Ctrl+V reads the
+      // clipboard of the host it runs on, which is this browser's only when both run on one computer;
+      // the page can't tell (a tunnel to a remote host is localhost too), so this serves both cases.
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) {
+        // Elsewhere Ctrl+V is the browser's paste: let it fire the paste event (onPaste).
+        if (!IS_MAC) return false;
+        // On a Mac ⌘V pastes and Ctrl+V doesn't, so read the clipboard for an image.
+        e.preventDefault();
+        void this.ctrlV();
+        return false;
+      }
       if (mod && (e.key === 'k' || e.key === 'K')) return false;
       if (mod && /^[1-9]$/.test(e.key)) return false;
       if (e.ctrlKey && e.key === 'Tab') return false;
@@ -211,16 +237,99 @@ class SessionTerminal {
     this.showNotice(ok ? copied : `Couldn’t copy: the browser blocked the clipboard.${how}`, ok ? 1500 : 6000);
   }
 
-  /** Shows a short note over the terminal for `ms`. */
-  showNotice(text: string, ms: number) {
+  /** Shows a short note over the terminal for `ms`; `busy` for something still going on. */
+  showNotice(text: string, ms: number, busy = false) {
     this.notice = text;
+    this.noticeBusy = busy;
     this.listeners.forEach((l) => l());
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => {
       this.notice = null;
+      this.noticeBusy = false;
       this.listeners.forEach((l) => l());
     }, ms);
   }
+
+  private hideNotice() {
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = null;
+    this.notice = null;
+    this.noticeBusy = false;
+    this.listeners.forEach((l) => l());
+  }
+
+  /**
+   * Pastes images for Claude. Claude Code can't see this browser's clipboard, so each image is saved
+   * on the host and its path is pasted, which Claude Code reads as the image.
+   */
+  async pasteImages(images: Blob[]): Promise<void> {
+    if (!images.length) return;
+    // Not connected right now is fine: the images upload over HTTP, and the paths wait for the socket.
+    const what = images.length === 1 ? 'the image' : 'the images';
+    if (images.some((i) => i.size > MAX_PASTE_BYTES)) {
+      this.showNotice(`Couldn’t paste ${what}: images over ${MAX_PASTE_BYTES / 1024 / 1024} MB can’t be pasted.`, 6000);
+      return;
+    }
+    this.showNotice(images.length === 1 ? 'Pasting image' : `Pasting ${images.length} images`, 120_000, true);
+    try {
+      const paths: string[] = [];
+      for (const image of images) paths.push((await api.pasteImage(this.sessionId, image)).path);
+      if (!(await this.whenOpen(PASTE_CONNECT_WAIT_MS))) {
+        this.showNotice(`Couldn’t paste ${what}: ${NOT_CONNECTED}`, 4000);
+        return;
+      }
+      for (const [i, path] of paths.entries()) {
+        if (i) await new Promise((r) => setTimeout(r, IMAGE_PASTE_GAP));
+        if (!this.send({ type: 'input', data: pastePath(path, this.term.modes.bracketedPasteMode) })) {
+          this.showNotice(`Couldn’t paste ${what}: ${NOT_CONNECTED}`, 4000);
+          return;
+        }
+      }
+      this.hideNotice();
+    } catch (e) {
+      this.showNotice(`Couldn’t paste ${what}: ${errorMessage(e)}`, 6000);
+    }
+  }
+
+  /** Resolves true once the terminal is connected, or false after `ms` (at once when it won't reconnect). */
+  private whenOpen(ms: number): Promise<boolean> {
+    const check = () => (this.conn === 'open' ? true : this.disposed || this.failed ? false : null);
+    return whenSettled(check, (fn) => this.subscribe(fn), ms);
+  }
+
+  private onPaste = (e: ClipboardEvent) => {
+    const images = pastedImages(e.clipboardData);
+    if (!images.length) return; // text: xterm pastes it
+    e.preventDefault();
+    e.stopPropagation();
+    void this.pasteImages(images);
+  };
+
+  /**
+   * Ctrl+V on a Mac: an image on the clipboard is pasted; otherwise Claude gets Ctrl+V, as before (on
+   * the same computer, Claude Code then reads the clipboard itself). Safari asks before each read.
+   */
+  private async ctrlV() {
+    const images = await readClipboardImages();
+    if (images?.length) return this.pasteImages(images);
+    this.send({ type: 'input', data: '\x16' });
+    if (images === null) this.showNotice('To paste an image, press ⌘V.', 4000);
+  }
+
+  private onDragOver = (e: DragEvent) => {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  /** Images dropped on the terminal are pasted; the browser would otherwise open the file. */
+  private onDrop = (e: DragEvent) => {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    const images = pastedImages(e.dataTransfer);
+    if (images.length) void this.pasteImages(images);
+    else this.showNotice('Only images can be dropped here: PNG, JPEG, GIF or WebP.', 4000);
+  };
 
   private setConn(c: TermConn, message: string | null = null, retrying = false) {
     this.conn = c;

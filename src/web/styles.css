@@ -3430,9 +3430,26 @@ a.icon-btn {
   place-items: center;
   cursor: pointer;
 }
-.compose-send:disabled {
+.compose-send:disabled,
+.compose-attach:disabled {
   opacity: 0.4;
   cursor: default;
+}
+.compose-attach {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.compose-attach:active:not(:disabled) {
+  background: var(--sunk);
 }
 
 @media (pointer: coarse) {

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
 import { START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -19,6 +19,7 @@ import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
 import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
+import { removePastes, savePastedImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import {
   EDIT_TOOLS, MIN_MOD_CLAUDE, claudeVersion, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, versionAtLeast, writeLauncher,
@@ -207,6 +208,13 @@ export class SessionManager {
     const r = sessionRow(this.db, id);
     if (!r) throw new HttpError(404, 'That session no longer exists.');
     return r;
+  }
+
+  /** Saves an image pasted into the session's terminal, for the browser to paste its path. */
+  pasteImage(id: string, data: unknown): PastedImage {
+    const row = this.row(id);
+    if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    return { path: savePastedImage(this.core.paths.pastes, row.id, data) };
   }
 
   byToken(token: string): SessionRow | undefined {
@@ -1386,6 +1394,7 @@ export class SessionManager {
       // A review's copy of the PR's head (fetched again by any later review of it).
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
+      removePastes(this.core.paths.pastes, row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
@@ -1481,6 +1490,7 @@ export class SessionManager {
         this.core.log.info(`kept the worktree of ${row.id} at ${row.worktree_path}: it has uncommitted changes`);
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
+      removePastes(this.core.paths.pastes, row.id);
     }
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
     if (p) {

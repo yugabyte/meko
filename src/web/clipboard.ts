@@ -45,3 +45,54 @@ export async function copyText(text: string): Promise<boolean> {
   active?.focus();
   return ok;
 }
+
+/** What `pastedImages` needs of a paste's or drop's DataTransfer. */
+export interface Transfer<F> {
+  files?: ArrayLike<F> | null;
+  getData?(format: string): string;
+}
+
+/**
+ * The images in a paste or drop. Text alongside them makes it a text paste (a spreadsheet's cells
+ * come with a picture of them), unless the text is only the files' names, as when copying files.
+ */
+export function pastedImages<F extends { type: string; name?: string }>(dt: Transfer<F> | null | undefined): F[] {
+  const images = Array.from(dt?.files ?? []).filter((f) => f.type.startsWith('image/'));
+  if (!images.length) return [];
+  let text = '';
+  try {
+    text = dt?.getData?.('text/plain') ?? '';
+  } catch {
+    /* no text to read */
+  }
+  const names = new Set(images.map((f) => f.name));
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return lines.every((l) => names.has(l)) ? images : [];
+}
+
+/**
+ * The images on the clipboard, read with the async Clipboard API (for a key press that fires no
+ * paste event). Empty when there's text too or no image; null when the browser can't or won't
+ * let the page read it.
+ */
+export async function readClipboardImages(): Promise<Blob[] | null> {
+  if (!navigator.clipboard?.read) return null;
+  let items: ClipboardItems;
+  try {
+    items = await navigator.clipboard.read();
+  } catch {
+    return null;
+  }
+  if (items.some((i) => i.types.includes('text/plain'))) return [];
+  const out: Blob[] = [];
+  for (const item of items) {
+    const type = item.types.find((t) => t.startsWith('image/'));
+    if (!type) continue;
+    try {
+      out.push(await item.getType(type));
+    } catch {
+      /* gone from the clipboard meanwhile */
+    }
+  }
+  return out;
+}

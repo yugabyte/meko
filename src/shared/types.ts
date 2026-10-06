@@ -914,6 +914,14 @@ export function previewImageType(path: string): string | null {
 /** Which version of a changed file: the base's (old) or the worktree's (new). */
 export type ChangeSide = 'old' | 'new';
 
+/** The largest image that can be pasted into a terminal. Claude Code scales big images down itself. */
+export const MAX_PASTE_BYTES = 20 * 1024 * 1024;
+
+/** An image pasted into a session's terminal, saved on the host: the browser pastes this path for Claude. */
+export interface PastedImage {
+  path: string;
+}
+
 /** One file that differs between a session's worktree and where its branch left the base. */
 export interface ChangedFile {
   path: string;
@@ -1306,6 +1314,9 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
+// POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
+//        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
+//        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)

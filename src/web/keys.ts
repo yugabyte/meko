@@ -89,6 +89,15 @@ export function pasteText(text: string, bracketed: boolean): string {
 }
 
 /**
+ * A file's path pasted for Claude Code, which reads a pasted path to an image as that image (it's how
+ * a terminal hands over a dropped file). Characters other than plain path ones are backslash-escaped,
+ * as a terminal does for a drop, so the path stays one word.
+ */
+export function pastePath(path: string, bracketed: boolean): string {
+  return pasteText(path.replace(/[^\w./~:@%+=,-]/g, (c) => `\\${c}`), bracketed);
+}
+
+/**
  * One mouse-wheel step at a cell (1-based), as an SGR mouse report (tmux turns SGR reporting on
  * with `mouse on`). Coordinates are clamped to the terminal.
  */

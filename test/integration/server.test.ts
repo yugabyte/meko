@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -320,6 +320,32 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(pic.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
     expect(pic.headers['x-content-type-options']).toBe('nosniff');
     expect(pic.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+
+    // Pasted images: behind login and the origin check, images only, saved for Claude to read by path.
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const paste = (payload: Buffer | string | object, headers: Record<string, string> = {}) =>
+      app.inject({ method: 'POST', url: `/api/sessions/${sid}/images`, headers: { cookie, 'content-type': 'image/png', ...headers }, payload });
+    expect((await paste(png, { cookie: '' })).statusCode).toBe(401);
+    expect((await paste(png, { origin: 'https://evil.example' })).statusCode).toBe(403);
+    expect((await paste('just text', { 'content-type': 'text/plain' })).statusCode).toBe(415);
+    expect((await paste({ path: '/etc/passwd' }, { 'content-type': 'application/json' })).statusCode).toBe(415);
+    const notImage = await paste(Buffer.from('<svg/>'), { 'content-type': 'image/svg+xml' });
+    expect(notImage.statusCode).toBe(415);
+    expect(notImage.json().error).toBe('Only PNG, JPEG, GIF and WebP images can be pasted.');
+    expect((await paste(png, { 'content-type': 'image/png' })).statusCode).toBe(200);
+    // The type comes from the bytes: a browser calling it something else doesn't matter.
+    const pasted = await paste(png, { 'content-type': 'image/webp' });
+    expect(pasted.statusCode).toBe(200);
+    const saved: string = pasted.json().path;
+    expect(saved.startsWith(join(env.core.paths.pastes, sid) + '/')).toBe(true);
+    expect(saved).toMatch(/\.png$/);
+    expect(readFileSync(saved)).toEqual(png);
+    expect((await app.inject({ method: 'POST', url: '/api/sessions/nope/images', headers: { cookie, 'content-type': 'image/png' }, payload: png })).statusCode).toBe(404);
+    // Archiving the session removes its images, and it takes no more. (The preview's file goes first: it's uncommitted.)
+    rmSync(join(s.json().worktreePath, 'pic.png'));
+    expect((await app.inject({ method: 'POST', url: `/api/sessions/${sid}/actions/archive`, headers: { cookie } })).statusCode).toBe(200);
+    expect(existsSync(join(env.core.paths.pastes, sid))).toBe(false);
+    expect((await paste(png)).statusCode).toBe(409);
   });
 });
 
