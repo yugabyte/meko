@@ -12,6 +12,7 @@ import (
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
+	"meko/api_server/internal/telemetry"
 )
 
 // SharingHandler holds Echo handlers for datapack sharing endpoints.
@@ -50,6 +51,29 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"INVALID_JSON", "malformed request body")
 	}
+
+	// Populate telemetry fields from the auth context. The share
+	// endpoint's middleware admits owner OR maintainer, so a request
+	// that reaches here is one or the other. ActingUserID is required
+	// for correct Rudderstack attribution: the previous version fired
+	// under the datapack owner's identity even when a maintainer sent
+	// the invite, so the event landed on the wrong Rudderstack /
+	// HubSpot user.
+	if account, aerr := auth.GetAccount(c); aerr == nil && account != nil {
+		req.ActingUserID = account.ID
+		req.SharedByEmail = account.Email
+		if account.ID == dp.UserID {
+			req.SharedByRole = "owner"
+		} else {
+			req.SharedByRole = "maintainer"
+		}
+	}
+	// POST /datapacks/:id/share is on the PAT-accepting dpDirect group
+	// too, so a hardcoded UI tag would mis-slice every PAT/MCP share.
+	// Derive from the auth method (JWT → UI, PAT → mcp/api depending
+	// on the client hint).
+	authMethod, _ := c.Get(auth.ContextKeyAuthMethod).(string)
+	req.Source = telemetry.SourceFromAuthMethod(authMethod, c.Request().Header.Get(clientHintHeader))
 
 	// Invite rows use the datapack row owner as OwnerUserID so resend/revoke
 	// checks match; maintainers act on behalf of the same datapack.
@@ -146,6 +170,25 @@ func (h *SharingHandler) BulkInvite(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
 			fmt.Sprintf("too many emails: %d (max %d per request)", len(req.Emails), maxBulkInviteEmails))
 	}
+
+	// Populate telemetry fields from the auth context — same as the
+	// single-invite handler above, propagated into each per-row
+	// InviteRequest the service's loop builds. Without this, every
+	// bulk-share landed as source=api (so the service's UI-skip gate
+	// didn't fire and browser shares double-counted), and the event
+	// was credited to the datapack owner instead of the acting
+	// maintainer. See sharing_service.BulkInviteRequest.
+	if account, aerr := auth.GetAccount(c); aerr == nil && account != nil {
+		req.ActingUserID = account.ID
+		req.SharedByEmail = account.Email
+		if account.ID == dp.UserID {
+			req.SharedByRole = "owner"
+		} else {
+			req.SharedByRole = "maintainer"
+		}
+	}
+	authMethod, _ := c.Get(auth.ContextKeyAuthMethod).(string)
+	req.Source = telemetry.SourceFromAuthMethod(authMethod, c.Request().Header.Get(clientHintHeader))
 
 	// Same as Invite: invite rows use the datapack row owner as OwnerUserID so
 	// resend/revoke checks match; maintainers act on behalf of the same datapack.

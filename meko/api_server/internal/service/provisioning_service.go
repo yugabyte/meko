@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"meko/api_server/internal/models"
+	"meko/api_server/internal/telemetry"
 )
 
 // DefaultDatapackName is the name assigned to the default datapack
@@ -74,6 +75,11 @@ func (s *ProvisioningService) ProvisionNewAccount(ctx context.Context, userID st
 	dpResp, err := s.dpCreator.Create(CreateRequest{
 		Name:   DefaultDatapackName,
 		UserID: userID,
+		// SourceProvisioner marks this call as the automatic default-
+		// datapack create Meko does at signup; the Rudderstack emit in
+		// DatapackService.Create skips it so the funnel does not get a
+		// phantom datapack_created for every new account.
+		Source: telemetry.SourceProvisioner,
 	})
 	if err != nil {
 		slog.Error("Failed to create default datapack",

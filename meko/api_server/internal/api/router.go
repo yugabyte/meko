@@ -17,6 +17,7 @@ import (
 	adminrepo "meko/api_server/internal/repository/admin"
 	"meko/api_server/internal/service"
 	adminsvc "meko/api_server/internal/service/admin"
+	"meko/api_server/internal/telemetry"
 	"meko/api_server/internal/yba"
 )
 
@@ -76,6 +77,9 @@ type serviceRegistry struct {
 	// envSvc is nil unless control-plane mode is enabled (--control-plane-mode);
 	// the YCP fleet + agent routes are registered only when it is non-nil.
 	envSvc *service.EnvironmentService
+	// telemetry is the Rudderstack emitter; NewNoop when config is
+	// missing so handlers/services never need to nil-check.
+	telemetry telemetry.Client
 	// metricsSvc reads an environment's amp series from the control plane's
 	// metrics store. Built alongside envSvc, and non-nil with an empty URL when
 	// none is configured — the route then 503s rather than disappearing.
@@ -178,7 +182,34 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("ses invite emails disabled (set SES_FROM_ADDRESS to enable)")
 	}
 
+	// Rudderstack telemetry emitter. Same shape as the SES block: missing
+	// config → Noop (services still call Track, just to a no-op sink), a
+	// misconfigured client also falls back to Noop with an error log
+	// rather than crashing the server. Wired below into every service
+	// that fires a server-observable event.
+	var teleClient telemetry.Client
+	if cfg.RudderstackWriteKey != "" && cfg.RudderstackDataPlaneURL != "" {
+		tc, teleErr := telemetry.NewRudderstack(telemetry.RudderstackConfig{
+			WriteKey:     cfg.RudderstackWriteKey,
+			DataPlaneURL: cfg.RudderstackDataPlaneURL,
+		})
+		if teleErr != nil {
+			slog.Error("rudderstack telemetry init failed; falling back to noop",
+				"data_plane_url", cfg.RudderstackDataPlaneURL, "error", teleErr)
+			teleClient = telemetry.NewNoop()
+		} else {
+			teleClient = tc
+			slog.Info("rudderstack telemetry initialized",
+				"data_plane_url", cfg.RudderstackDataPlaneURL)
+		}
+	} else {
+		teleClient = telemetry.NewNoop()
+		slog.Warn("rudderstack telemetry disabled (set RUDDERSTACK_WRITE_KEY + RUDDERSTACK_DATA_PLANE_URL to enable)")
+	}
+	sharingSvc.SetTelemetry(teleClient)
+
 	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc, freeTierRepo, convSearchOptOutRepo)
+	dpSvc.SetTelemetry(teleClient)
 
 	mcpPATRepo := repository.NewMCPPATRepo(cfg.SystemDB)
 	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.SystemDB)
@@ -360,6 +391,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		marketplaceWelcomeURL: cfg.AWSMarketplaceWelcomeURL,
 		deploymentRepo:        deploymentRepo,
 		deploymentSvc:         deploymentSvc,
+		telemetry:             teleClient,
 	}
 }
 

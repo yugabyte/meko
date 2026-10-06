@@ -9,6 +9,21 @@ import (
 	"meko/api_server/internal/service"
 )
 
+// clientHintHeader lets callers self-identify for Rudderstack's `source`
+// prop when the auth method alone is ambiguous. The hint takes precedence
+// over the auth method inside telemetry.SourceFromAuthMethod — important
+// because meko-mcp-server's MCP tools swap their fastmcp OAuth-proxy
+// token for the user's upstream Cognito access token before calling
+// api_server, so a Cognito JWT alone can't distinguish a browser from
+// an MCP tool call. Without the hint, Cognito → UI, PAT → API.
+//
+// meko-mcp-server is the only caller intended to send this today, with
+// value "mcp"; the companion PR there sets the header on every outgoing
+// api_server call. Until that lands, every PAT-driven MCP operation
+// shows up as source=api in the funnel — the plumbing is here, the
+// signal only starts flowing once the client sends it.
+const clientHintHeader = "X-Meko-Client"
+
 // APIResponse is the standard envelope for all API responses. Error is omitted on
 // success rather than serialized as null, so its presence in a response is a
 // reliable failure signal.

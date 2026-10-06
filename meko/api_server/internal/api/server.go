@@ -135,6 +135,15 @@ type ServerConfig struct {
 	// When SESFromAddress is empty, email sending is disabled.
 	SESRegion      string
 	SESFromAddress string
+
+	// Rudderstack configuration for backend telemetry. Both must be set to
+	// enable event emission — either missing and the router hands services
+	// a Noop client (services never see nil, so nothing branches on
+	// telemetry-disabled). Mirror the shape of the meko_ui rudderstack
+	// config so the same write key + data plane serve both sides of the
+	// funnel.
+	RudderstackWriteKey     string
+	RudderstackDataPlaneURL string
 	// AppURL is the base URL of the Meko web app included in invite emails.
 	// Derived from DeployEnv: prod → https://cloud.mekodata.ai, dev → https://app.mekodev.com.
 	AppURL string
@@ -342,6 +351,24 @@ func Run(cfg ServerConfig) error {
 	deployPollerDone := make(chan struct{})
 	go runDeploymentStatusPoller(deployPollerCtx, reg, deploymentStatusPollInterval, deployPollerDone)
 
+	// Flush the Rudderstack batch queue on every Run exit path — normal
+	// shutdown AND the errCh / Shutdown-error early returns. Deferred so
+	// no return statement can miss it. Noop when telemetry is Noop.
+	// Caveat: the detached waitBuildAndPopulateDetails goroutines can
+	// keep firing events for up to 5 minutes after their request; they
+	// currently emit nothing to Rudderstack from api_server, so no tail
+	// loss on that path today. If BE later emits from those goroutines,
+	// they will need their own drain against a bounded shutdown ctx.
+	defer func() {
+		if reg.telemetry != nil {
+			if err := reg.telemetry.Flush(context.Background()); err != nil {
+				slog.Warn("telemetry flush at shutdown failed", "error", err)
+			}
+		}
+	}()
+
+	// errCh is buffered to 2 because both the main server and the
+	// metrics-only sidecar can push errors into it. See startMetricsServer.
 	errCh := make(chan error, 2)
 	metricsSrv := startMetricsServer(cfg, errCh)
 	go func() {

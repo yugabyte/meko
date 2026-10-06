@@ -11,6 +11,7 @@ import (
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/service"
+	"meko/api_server/internal/telemetry"
 )
 
 // DatapackHandler holds Echo handlers for datapack endpoints.
@@ -75,6 +76,15 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 	}
 	req.UserID = account.ID
 	req.UserType = account.AccountType
+	req.Email = account.Email
+	// POST /datapacks is on the PAT-accepting dpDirect group AND on the
+	// Cognito-authed group, so this handler serves the UI, the CLI, and
+	// meko-mcp-server's proxy calls. Derive `source` from the auth
+	// method (JWT → ui, PAT → mcp/api depending on the X-Meko-Client
+	// hint); the hardcoded UI tag would otherwise mis-slice every non-
+	// browser create in the funnel.
+	authMethod, _ := c.Get(auth.ContextKeyAuthMethod).(string)
+	req.Source = telemetry.SourceFromAuthMethod(authMethod, c.Request().Header.Get(clientHintHeader))
 
 	// Validated BEFORE the datapack exists: a bad folder_id must fail the
 	// request outright rather than leave an unplaceable datapack behind.

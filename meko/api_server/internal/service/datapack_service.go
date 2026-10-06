@@ -16,6 +16,7 @@ import (
 
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
+	"meko/api_server/internal/telemetry"
 )
 
 const defaultDatapackName = "meko_default_datapack"
@@ -92,11 +93,26 @@ type DatapackService struct {
 	// ampSvc, when set (AMP feature enabled), tears down the datapack's AMP
 	// clusters + pool mapping on delete. Nil leaves deletion AMP-blind.
 	ampSvc *AMPService
+	// telemetry emits datapack_created to Rudderstack after a successful
+	// Create — fires regardless of entry path (UI, MCP tool, direct API),
+	// so MCP-driven creates no longer bypass the funnel. Never nil once
+	// the router has run; NewDatapackService seeds a Noop so bare-bones
+	// callers (early bootstrap, tests) can skip it.
+	telemetry telemetry.Client
 }
 
 // SetAMPService wires the optional AMP cleanup run on datapack deletion. Called
 // from router setup only when --show-pg-amp is on; nil otherwise.
 func (s *DatapackService) SetAMPService(amp *AMPService) { s.ampSvc = amp }
+
+// SetTelemetry late-binds the Rudderstack emitter. router.go passes the
+// real client when RUDDERSTACK_WRITE_KEY is set; anything else keeps
+// the Noop seeded in NewDatapackService.
+func (s *DatapackService) SetTelemetry(t telemetry.Client) {
+	if t != nil {
+		s.telemetry = t
+	}
+}
 
 // NewDatapackService creates a new DatapackService.
 func NewDatapackService(
@@ -114,6 +130,7 @@ func NewDatapackService(
 		langfuseSvc:          langfuseSvc,
 		freeTierRepo:         freeTierRepo,
 		convSearchOptOutRepo: convSearchOptOutRepo,
+		telemetry:            telemetry.NewNoop(),
 	}
 }
 
@@ -157,6 +174,15 @@ type CreateRequest struct {
 	// ProjectService.ValidateNewDatapackFolder. Ignored when the feature is
 	// off, so the field is additive for existing clients.
 	FolderID string `json:"folder_id,omitempty"`
+	// Email is the acting user's email, populated by the handler from the
+	// auth context and passed through to the datapack_created Rudderstack
+	// event. Not persisted; drops off after the telemetry Track call.
+	Email string `json:"-"`
+	// Source tags the origin of the create for Rudderstack's `source`
+	// property so Growth can slice the funnel by entry path. Handler sets
+	// it (ui / mcp / api / admin — see telemetry.Source* constants). Empty
+	// falls back to telemetry.SourceAPI.
+	Source string `json:"-"`
 }
 
 // MCPServerInfo holds the MCP server connection details returned after
@@ -295,6 +321,45 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 			)
 		}
 		return nil, fmt.Errorf("failed to create datapack: %w", err)
+	}
+
+	// Rudderstack datapack_created. This closes the MCP / PAT / direct-
+	// API funnel gap: those callers never had a UI to fire trackEvent,
+	// so the event only lands from here. UI creates are deliberately
+	// skipped — meko_ui's DatapackConfigureWizardPage still fires the
+	// same event client-side, so a BE emit would double-count every
+	// browser create. The two paths are disjoint on the `source`
+	// property (UI event has no source; BE event carries source ∈
+	// {mcp, api, admin}), so Growth can sum them without dedup logic.
+	//
+	// Provisioner (default-datapack-at-signup) is also skipped — the UI
+	// never sent that event, and firing here would misreport
+	// is_first_datapack for every new account.
+	//
+	// CountByOwner runs after the insert (not in the same tx). Two
+	// concurrent creates might both read the pre-race count; the field
+	// is a soft analytics prop, not a correctness gate. Failure is
+	// non-fatal: the create already succeeded, telemetry just skips.
+	source := req.Source
+	if source == "" {
+		source = telemetry.SourceAPI
+	}
+	if source != telemetry.SourceProvisioner && source != telemetry.SourceUI {
+		total, countErr := s.repo.CountByOwner(req.UserID)
+		if countErr != nil {
+			slog.Warn("telemetry: datapack count for datapack_created failed",
+				"user_id", req.UserID, "error", countErr)
+		}
+		// is_first mirrors the UI's semantic — 2 not 1 because the
+		// provisioner seeded row 1 at signup and this call landed row 2.
+		s.telemetry.Track(ctx, req.UserID, telemetry.EventDatapackCreated, map[string]any{
+			"email":           req.Email,
+			"datapack_id":     res.DatapackID,
+			"datapack_name":   req.Name,
+			"total_datapacks": total,
+			"is_first":        total == 2,
+			"source":          source,
+		})
 	}
 
 	return &CreateResponse{

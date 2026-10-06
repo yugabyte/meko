@@ -335,6 +335,26 @@ func (r *SharingRepo) GetOutgoingMembers(datapackID, ownerUserID string) ([]mode
 	return result, rows.Err()
 }
 
+// CountSharesByDatapack returns the number of active shares on a datapack —
+// accepted members (excluding the owner) plus pending invites. Used by the
+// telemetry emitter to compute total_shares / is_first_share on the
+// datapack_shared event without paying for the JOIN-heavy Get* queries per
+// invite (bulk shares would otherwise fire 2 queries per row).
+func (r *SharingRepo) CountSharesByDatapack(datapackID string) (int, error) {
+	var n int
+	err := r.db.QueryRow(
+		`SELECT COUNT(DISTINCT recipient_email)
+		 FROM meko_system.datapack_invites
+		 WHERE datapack_id = $1
+		   AND status IN ('accepted', 'pending')`,
+		datapackID,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count datapack shares: %w", err)
+	}
+	return n, nil
+}
+
 // GetOutgoingPendingInvites returns pending invites for a datapack.
 func (r *SharingRepo) GetOutgoingPendingInvites(datapackID string) ([]models.OutgoingSharePendingInvite, error) {
 	rows, err := r.db.Query(

@@ -285,6 +285,17 @@ func run() error {
 		envOrDefault("SES_REGION", ""),
 		"AWS region for SES (e.g. us-east-2). Defaults to cognito-region when empty.")
 
+	// Rudderstack telemetry (backend emitter for datapack_created,
+	// document_uploaded, datapack_shared). Both required — either missing
+	// falls back to a Noop client so services never see nil. See
+	// internal/telemetry.
+	rudderWriteKey := flag.String("rudderstack-write-key",
+		envOrDefault("RUDDERSTACK_WRITE_KEY", ""),
+		"Rudderstack write key. Empty disables server-side telemetry.")
+	rudderDataPlaneURL := flag.String("rudderstack-data-plane-url",
+		envOrDefault("RUDDERSTACK_DATA_PLANE_URL", ""),
+		"Rudderstack data plane URL (e.g. https://xxx.dataplane.rudderstack.com).")
+
 	// Stripe billing configuration. All five values must be set for
 	// the /billing/* routes to register; with any blank, the routes
 	// stay off and the UI's Upgrade / Manage payment buttons remain
@@ -612,6 +623,8 @@ func run() error {
 		PATRateLimitBurst:                  *patRateLimitBurst,
 		SESRegion:                          resolvedSESRegion,
 		SESFromAddress:                     *sesFromAddress,
+		RudderstackWriteKey:                *rudderWriteKey,
+		RudderstackDataPlaneURL:            *rudderDataPlaneURL,
 		AppURL:                             appURL,
 		StripeSecretKey:                    *stripeSecretKey,
 		StripeWebhookSecret:                *stripeWebhookSecret,

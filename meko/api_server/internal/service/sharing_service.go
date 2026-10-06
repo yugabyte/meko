@@ -11,6 +11,7 @@ import (
 
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
+	"meko/api_server/internal/telemetry"
 )
 
 // ErrCannotInviteOwner is returned by InviteToDatapack when the recipient
@@ -102,6 +103,7 @@ type SharingService struct {
 	cognito   CognitoInviter
 	langfuseS *LangfuseService
 	emailer   EmailSender
+	telemetry telemetry.Client
 	// agentKAdminEmail: invites addressed to this one account are
 	// auto-accepted (see InviteToDatapack) instead of left pending --
 	// it's a designated service account (the shared AgentK deployment's
@@ -114,7 +116,7 @@ type SharingService struct {
 // may be nil (e.g. in dev/test mode), in which case invite emails for
 // non-existing users are skipped.
 func NewSharingService(repo *repository.SharingRepo, cognito CognitoInviter) *SharingService {
-	return &SharingService{repo: repo, cognito: cognito}
+	return &SharingService{repo: repo, cognito: cognito, telemetry: telemetry.NewNoop()}
 }
 
 // SetCognito late-binds the CognitoInviter (used when the Cognito
@@ -140,10 +142,28 @@ func (s *SharingService) SetEmailer(e EmailSender) {
 	s.emailer = e
 }
 
+// SetTelemetry late-binds the Rudderstack emitter used for datapack_shared.
+// The constructor seeds a Noop, so leaving this unset silently drops events.
+func (s *SharingService) SetTelemetry(t telemetry.Client) {
+	if t != nil {
+		s.telemetry = t
+	}
+}
+
 // InviteRequest is the body for POST /datapacks/:datapack_id/share.
 type InviteRequest struct {
 	RecipientEmail string `json:"recipient_email"`
 	GrantRole      string `json:"grant"`
+	// Populated by the handler from the auth context; never comes off the
+	// JSON body. Feeds the datapack_shared Rudderstack event and does not
+	// affect invite creation. ActingUserID is the caller's own user_id
+	// (owner or maintainer) — the datapack_shared event MUST be attributed
+	// to them, not to the datapack's owner (whose id we already carry
+	// separately as ownerUserID for repo bookkeeping).
+	ActingUserID  string `json:"-"`
+	SharedByEmail string `json:"-"`
+	SharedByRole  string `json:"-"`
+	Source        string `json:"-"`
 }
 
 // InviteResponse is returned when a new invite is created.
@@ -271,6 +291,47 @@ func (s *SharingService) InviteToDatapack(
 			"invite_id", inv.InviteID, "email", email)
 	}
 
+	// Rudderstack datapack_shared. Closes the MCP / PAT / direct-API
+	// funnel gap — those callers can't fire trackEvent from a browser,
+	// so BE is the only place they land. UI shares are deliberately
+	// skipped: meko_ui's InviteByEmailSection still fires this event
+	// client-side, so a BE emit would double-count every browser share.
+	// Disjoint on `source` (UI has none, BE carries mcp/api/admin), so
+	// Growth can sum both paths without dedup logic.
+	//
+	// Attribution is the ACTING user (owner or maintainer who sent the
+	// invite), not the datapack owner — attributing to the owner would
+	// credit a maintainer's action to a different HubSpot identity and
+	// break funnel joins with UI-side identify(). ActingUserID falls
+	// back to ownerUserID only when the handler did not set it (bare-
+	// bones callers, tests).
+	source := req.Source
+	if source == "" {
+		source = telemetry.SourceAPI
+	}
+	if source != telemetry.SourceUI {
+		actor := req.ActingUserID
+		if actor == "" {
+			actor = ownerUserID
+		}
+		total, countErr := s.repo.CountSharesByDatapack(datapackID)
+		if countErr != nil {
+			slog.Warn("telemetry: share count for datapack_shared failed",
+				"datapack_id", datapackID, "error", countErr)
+		}
+		s.telemetry.Track(ctx, actor, telemetry.EventDatapackShared, map[string]any{
+			"datapack_id":      datapackID,
+			"shared_by_email":  req.SharedByEmail,
+			"invited_email":    email,
+			"shared_by_role":   req.SharedByRole,
+			"invited_role":     req.GrantRole,
+			"is_first_share":   total == 1,
+			"total_shares":     total,
+			"shared_timestamp": inv.CreatedAt,
+			"source":           source,
+		})
+	}
+
 	return &InviteResponse{
 		Status:         inv.Status,
 		InviteID:       inv.InviteID,
@@ -305,6 +366,20 @@ const (
 type BulkInviteRequest struct {
 	Emails    []string `json:"emails"`
 	GrantRole string   `json:"grant"`
+	// Telemetry fields populated by the handler from the auth context,
+	// never from the JSON body. Propagated verbatim into each per-row
+	// InviteRequest the loop below builds, so datapack_shared events
+	// (fired from InviteToDatapack) are attributed to the acting
+	// maintainer and tagged with the correct `source` — a UI bulk-
+	// share must land as source=ui so the service's skip gate fires and
+	// the browser-side event isn't double-counted; a PAT/MCP bulk-share
+	// must flow through at source=mcp/api so the funnel captures it.
+	// Before this field set, every bulk-share landed as source=api and
+	// credit went to the datapack owner.
+	ActingUserID  string `json:"-"`
+	SharedByEmail string `json:"-"`
+	SharedByRole  string `json:"-"`
+	Source        string `json:"-"`
 }
 
 // BulkInviteResult is the outcome for a single email in a bulk invite.
@@ -402,7 +477,19 @@ func (s *SharingService) BulkInviteToDatapack(
 
 		inv, err := s.InviteToDatapack(
 			ctx, datapackID, ownerUserID, datapackName, datapackDesc, ownerName, ownerEmail,
-			InviteRequest{RecipientEmail: email, GrantRole: req.GrantRole},
+			InviteRequest{
+				RecipientEmail: email,
+				GrantRole:      req.GrantRole,
+				// Carry the auth-context fields through so each per-row
+				// datapack_shared event picks up actor attribution and
+				// the right `source` tag; without this the batch would
+				// double-count browser shares (both UI and BE firing)
+				// and credit maintainer actions to the datapack owner.
+				ActingUserID:  req.ActingUserID,
+				SharedByEmail: req.SharedByEmail,
+				SharedByRole:  req.SharedByRole,
+				Source:        req.Source,
+			},
 		)
 		switch {
 		case err == nil:
