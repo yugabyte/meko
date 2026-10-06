@@ -279,18 +279,48 @@ export function approveLabel(openQuestions: number): string {
   return openQuestions ? 'Answer & approve' : 'Approve design';
 }
 
+/** The status detail while Claude asks the user something (`askDetail()` in sessions.ts). */
+const ASKING = 'AgentK asks: ';
+
+/** Claude is waiting on a question or permission prompt in the terminal, not on the design. */
+function otherPrompt(session: Session): boolean {
+  if (session.status !== 'needs_input' || !session.statusDetail || session.statusDetail === DESIGN_READY) return false;
+  // Claude's own question, whatever it says.
+  if (session.statusDetail.startsWith(ASKING)) return true;
+  // (Plan mode's approval dialog can carry Claude's own wording, so any mention of a plan is allowed.)
+  return !/plan/i.test(session.statusDetail);
+}
+
+/**
+ * A turn is running and AgentK's mod is too: an approval now waits for the turn to end, and
+ * answers sent now are taken when it does.
+ */
+export function heldForTurnEnd(session: Session): boolean {
+  return session.modLive && session.midTurn;
+}
+
 /** Why Approve design can't be pressed right now, or null when it can. Mirrors the server's checks. */
 export function designApprovalBlocker(session: Session): string | null {
-  // A question or permission prompt from Claude isn't the design; the server refuses to approve over it.
-  // (Plan mode's approval dialog can carry Claude's own wording, so any mention of a plan is allowed.)
-  const otherPrompt =
-    session.status === 'needs_input' &&
-    !!session.statusDetail &&
-    session.statusDetail !== DESIGN_READY &&
-    !/plan/i.test(session.statusDetail);
   if (!session.hasDesign) return 'AgentK hasn’t proposed a design yet.';
-  if (session.status === 'working' || session.status === 'starting') return 'Wait for AgentK to finish its turn.';
+  if (session.approvalQueued) return 'You approved the design: it goes to AgentK when this turn ends.';
   if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
-  if (otherPrompt) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
+  if (session.promptsHeld > 0) return 'AgentK has answers from you to take first. Approve once it has revised the design.';
+  // With the mod, an approval made mid-turn waits for the turn to end.
+  if (heldForTurnEnd(session)) return null;
+  if (session.status === 'working') return 'Wait for AgentK to finish its turn.';
+  // A question or permission prompt from Claude isn't the design; the server refuses to approve over it.
+  if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  return null;
+}
+
+/** Why answers can't be sent for AgentK to revise the design right now, or null when they can. */
+export function designReviseBlocker(session: Session): string | null {
+  if (session.approvalQueued) return 'You approved the design. Cancel the approval to send answers instead.';
+  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
+  if (heldForTurnEnd(session)) return null;
+  if (session.status === 'working') return 'Wait for AgentK to finish its turn.';
+  if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
 }

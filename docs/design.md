@@ -98,7 +98,7 @@ replaced (see [One server per home](#one-server-per-home)).
 ### AgentK's mod in Claude
 
 Claude Code runs *mods*: plugins of TypeScript function hooks that run inside the Claude process
-(early access). AgentK Local ships one, `agentk` (`src/mod/agentk`, about a hundred lines), that
+(early access). AgentK Local ships one, `agentk` (`src/mod/agentk`, a couple of hundred lines), that
 gives the server a way into each session besides the terminal. The server copies it to
 `run/mod/agentk` at startup, writing only files that changed, each through a temp file renamed into
 place; when a source file is missing or a write fails, it removes the run copy, so sessions start
@@ -140,9 +140,13 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | Route | What it does |
 |---|---|
 | `/mod/hello` | Sent once per load, from `session.start`. |
-| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
+| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The poll carries the ids of the prompts the mod submitted that Claude still holds (`{ held: [...] }`). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
 | `/mod/ack` | `accepted` for each prompt as it arrives. The server answers 204 when it still wants the prompt, and only then does the mod hand it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words; 410 (it gave up on the prompt) or no answer, and the mod drops it. `dropped` with a reason, and whether it filled the prompt box, when another plugin's `prompt.submit` hook refused it. |
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
+| `/mod/held` | `{ held: [...] }`, as on a poll, as soon as it changes: a held prompt's `$.prompt.submit` resolved (its turn started) or another plugin refused it. |
+| `/mod/ask` | From a `tool.call` hook on Claude's `AskUserQuestion`: `{ id, questions }` (the call's `tool_use_id` and its questions). The server holds it up to 20 seconds and answers the user's answers by question index (`{ answers: { 0: "Blue" } }`), or 204, and the mod asks again; 410 when it dropped the ask, 400 (`{ error }`) for questions it can't show. Either way the mod then leaves the question to the terminal's dialog. |
+| `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK Local or the terminal, or ended. |
+| `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions, checked and saved (`{ text }` for Claude), or what's wrong (400, `{ error }`). |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
@@ -171,7 +175,84 @@ Enter). A prompt is never sent both ways:
   press Enter in the terminal to send it; otherwise it says to ask AgentK for it in the terminal.
 
 The links are in memory only. After a server restart the mod's next poll brings its link back
-within seconds, and the prompts AgentK queues are in the database anyway.
+within seconds, and the prompts AgentK queues are in the database anyway. Whether a session's link
+is live is in `Session.modLive`: the server pushes a change when the mod is first heard from, on a
+reset, and when a sweep every 2 seconds finds a link gone stale. The UI offers what needs the mod
+(below) only while it's live, and the server checks again on every request.
+
+**Claude's questions.** The mod's `tool.call` hook on `AskUserQuestion` lets Claude's own dialog
+open in the terminal as always (`next(e)`), and sends the questions to the server too
+(`/mod/ask`, asked again after each hold). Whichever is answered first wins: the terminal's answer
+is returned as it is; AgentK Local's comes back as the tool's result,
+`{ questions, answers: { "<question>": "<answer>" } }`, which closes the terminal's dialog (checked
+on Claude Code 2.1.286, the oldest that loads the mod, and on 2.1.287 and 2.1.291; so is the
+`design_questions` tool below). The hook's `.catch` falls back to `next(e)`, and any failure
+leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
+call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
+mod says it has its answer (`/mod/ask/done`), when the mod stops asking for 10 seconds (the call
+was interrupted, or Claude died), at the turn's end (`Stop`), and on a reset; and since the mod
+sends the questions with every ask, a server restart brings the ask back with the next one. Only
+choice questions (1 to 4, each with options) are offered: a question of another kind (Claude
+Code's `text` and `number` questions) is left to the terminal. Text is capped for the browser (the
+question 1,000 characters, a label 200, a description 1,000, a preview 8,000); labels are kept
+whole, since the answer names them.
+
+The session goes to **Needs you** with *AgentK asks: <first question>*, and you're notified once;
+the classic `PermissionRequest` hook for `AskUserQuestion`, which Claude raises as well, uses the
+same words (without the mod too). The questions show:
+
+- in the design's **Questions** view, under **AgentK is asking**, at the top (its tab counts them);
+- in any stage, in a bar above the terminal, *AgentK asks: …* with **Answer**, and on a phone also
+  as the ⋯ sheet's first row (with a dot on ⋯). **Answer** opens the questions in a dialog (a sheet
+  from the bottom on a phone). Nothing opens by itself: you may be answering in the terminal.
+
+Each question is a card: its header, the options (radio rows, or checkboxes for a multi-select
+question, each with its description and its preview as preformatted text), and **Other** with a
+text box, which is the dialog's "Other". `POST /api/sessions/:id/ask/:askId` checks the answers
+against the questions (labels must be the question's, one unless it's multi-select, the text
+within 10,000 characters) and hands them to the mod: the labels comma-joined, then the text, as the
+dialog gives them. A 409 means AgentK has moved on: the terminal answered first, or the turn ended.
+
+**Answers and approvals mid-turn.** Mid-turn means a turn is running (`Session.midTurn`): from its
+`UserPromptSubmit` to its `Stop` (or Claude's end), while AgentK works or Claude waits on a
+permission prompt or a question during it. A Needs you with no turn behind it (a parked recovery,
+a prompt another plugin refused) isn't, and nor is a design waiting for approval; after a server
+restart only a session showing as working counts. While the mod is live, the design's **Send for
+revision** works mid-turn: the answers go through the mod at once and Claude holds them until the
+turn ends, so the server keeps nothing. A prompt sent mid-turn leaves the session's status alone (a
+permission prompt still shows as Needs you). Which prompts Claude still holds comes from the mod
+(`held` on each poll, and `/mod/held`), so one another plugin refused, or one still held after a
+server restart, counts right; a mod too old to report it (until it reloads) has one taken off at
+each `UserPromptSubmit`. They're in `Session.promptsHeld`. While Claude holds any, the *Design
+ready* notification at a turn end is skipped, since AgentK revises the design again right away, and
+an approval is refused, mid-turn or not: the held answers run first, and the approval would move
+the session to Code while AgentK revises the design.
+
+**Approve design** works mid-turn too, but waits on the server instead: a turn in Design may still
+change the design (often it's the revision you asked for), and moving to Code at once would lift
+the Design edit guard while that turn runs. The approval, with your answers, is kept in memory
+(`Session.approvalQueued`; the gate and the questions' footer say so, with **Cancel approval**). At
+the turn's end it's sent, as an approval between turns is, if the turn left the design and its
+questions alone; if it changed them it's dropped, and you're notified to review the design and
+approve again (the answers are still in the browser). It's dropped, with a line in the activity
+log, when Claude exits (with its `SessionEnd`, or found dead by `reconcile()`) or is relaunched, or
+the session is archived; a server restart forgets it. While it waits, the answers it took can't be
+edited, and answers can't be sent; the browser marks its drafts (`approved` in
+`ak-design-answers:<session>`) and forgets them once the session has left Design, or makes them
+drafts again when the approval was dropped. Without the mod, approving and sending answers are
+refused mid-turn, as before.
+
+**The design's questions tool.** The mod registers a `design_questions` tool at `session.start`
+(`mcp__agentk__design_questions`; Claude Code may defer it, so the prompt says to load it with
+ToolSearch). Its input is the questions file's list. The server checks it strictly
+(`checkToolQuestions()` in `design.ts`: each question an object with an id and a question, ids not
+repeated, options with labels, a recommendation that points at an option, a status of open or
+resolved, at most 30, and no more than the file can hold) and answers what's wrong, so Claude fixes
+it in the same turn. Good questions are saved to `questions.json` at once (through a temp file
+renamed into place, so a restart and the next turn end read the same ones) and shown straight away:
+when they differ from the ones kept, the design's time moves on and the change counts as a change to
+the design (the same list again changes nothing). The tool is refused
+outside Design. Without it (no mod, or an older session) Claude writes the file as before.
 
 **Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context N%` from the
 latest measurement, from 85% in the warning colour and led by ⚠ (so it reads without colour too). It is cleared when Claude is relaunched or
@@ -436,10 +517,12 @@ before it), so the page can't read the login cookie or call the API. **Open on c
 the published Artifact. A markdown design is rendered as sanitized HTML with no forms or styles,
 and its links open in a new tab.
 
-**Open questions.** Besides the design, AgentK writes its open questions for you to
+**Open questions.** Besides the design, AgentK gives you its open questions in
 `~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "question", "context",
-"options": [{"label", "detail"}], "recommended", "status": "open" | "resolved", "decision"}]}`).
-The line asking for it is added to the Design prompt in code (`designQuestionsLine()`), so a repo's
+"options": [{"label", "detail"}], "recommended", "status": "open" | "resolved", "decision"}]}`):
+through the [mod's `design_questions` tool](#agentks-mod-in-claude) when Claude has it, which saves
+the file and shows them at once, or else by writing the file, read at the turn's end.
+The line asking for them is added to the Design prompt in code (`designQuestionsLine()`), so a repo's
 own `design` prompt gets it too. The server keeps each session's questions in memory, never in
 the database (`DesignQuestionStore` in `answers.ts`): they're read the first time they're asked
 for, for every session in Design at startup (so the first turn end after a restart can tell
@@ -477,12 +560,14 @@ the ⋯ sheet take you to the questions, and the approval goes from their footer
 answers**. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
 recommendation (its own judgment when it has none). **Send for revision** sends them as the `design-answers` prompt instead, and AgentK
-revises the design and marks each answered question resolved. It only works while Claude is at its
-prompt (between turns, or with the design waiting for approval, never over a permission or
-question prompt); otherwise the button says why, and nothing is queued. The server checks the
+revises the design and marks each answered question resolved. Without AgentK's mod it only works
+while Claude is at its prompt (between turns, or with the design waiting for approval, never over a
+permission or question prompt); otherwise the button says why, and nothing is queued. With the mod
+both work mid-turn: see [Answers and approvals mid-turn](#agentks-mod-in-claude). The server checks the
 answers against the current questions: one to a question no longer open, or whose option's label
 changed, is refused (409) so the user looks again; answers too long for one prompt (50,000
-characters) are refused too. After either goes out, the browser forgets the drafts. Answers reach
+characters) are refused too. After either goes out, the browser forgets the drafts (an approval queued for the turn's end keeps
+them, in case it's dropped). Answers reach
 Meko in the revised design and the session's conversation.
 
 ### Side panels
@@ -921,7 +1006,7 @@ stateDiagram-v2
 | Stage | Claude | AgentK Local | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |

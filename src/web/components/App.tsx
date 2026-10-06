@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
-import { approveDesign } from '../design-answers';
+import { approveDesign, settleApprovals } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
@@ -213,6 +213,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     const ids = new Set<string>();
     for (const p of state.projects) for (const s of liveSessions(p)) ids.add(s.id);
     pruneTerminals(ids);
+    settleApprovals(state.projects.flatMap((p) => p.sessions));
   }, [state]);
 
   const currentProject =

@@ -50,7 +50,7 @@ Read the relevant code, then write a design: the goal, the approach, the files y
 
 {{answers}}
 
-Revise the design to match: update the same Artifact (republish the same file) or the same markdown file, and record each decision in it. In {{questionsFile}}, mark each answered question "resolved" with its "decision", keep the ids stable, and add any new questions the answers raise. Where a question has no answer, go with your recommendation and say so. Don't change anything in the repo. Then stop and say the design is ready.`,
+Revise the design to match: update the same Artifact (republish the same file) or the same markdown file, and record each decision in it. In the design's questions ({{questionsFile}}, or the design_questions tool when you have it), mark each answered question "resolved" with its "decision", keep the ids stable, and add any new questions the answers raise. Where a question has no answer, go with your recommendation and say so. Don't change anything in the repo. Then stop and say the design is ready.`,
 
   'approved-answers': `The user answered these open questions on the design as they approved it. Where an answer differs from the design, follow the answer.
 
@@ -141,12 +141,17 @@ When the user asks, help with exactly that: explain code, trace a path, check a 
 {{comments}}`,
 };
 
+/** The tool AgentK's mod gives Claude for the design's questions (`mcp__<plugin>__<name>`; src/mod/agentk). */
+export const DESIGN_QUESTIONS_TOOL = 'mcp__agentk__design_questions';
+
 /**
- * The Design prompt's line on the questions file, added in code (like mekoRecallLine) so a repo's
- * own design prompt gets it too: AgentK Local lists the questions beside the design for the user to answer.
+ * The Design prompt's line on the design's questions, added in code (like mekoRecallLine) so a
+ * repo's own design prompt gets it too: AgentK Local lists the questions beside the design for the
+ * user to answer. They go through the mod's tool when Claude has it (checked, and shown at once),
+ * else in the questions file.
  */
 export function designQuestionsLine(questionsFile: string): string {
-  return `Also write the design's open questions for the user to ${questionsFile}, as JSON: {"questions": [{"id": "short-stable-id", "question": "…", "context": "why it matters (optional)", "options": [{"label": "…", "detail": "…"}], "recommended": 0, "status": "open", "decision": null}]}. AgentK Local lists them beside the design, and the user answers them there. Give options when there are real alternatives, with "recommended" as the index of the one you recommend. When you revise the design, keep each question's id, and mark a settled question "resolved" with its "decision". Write {"questions": []} when there are none. The file is outside the repo, so writing it is allowed.`;
+  return `Also give the user the design's open questions, as {"questions": [{"id": "short-stable-id", "question": "…", "context": "why it matters (optional)", "options": [{"label": "…", "detail": "…"}], "recommended": 0, "status": "open", "decision": null}]}: pass that list to the ${DESIGN_QUESTIONS_TOOL} tool if you have it (load it with ToolSearch, query "select:${DESIGN_QUESTIONS_TOOL}", if it's deferred; it checks them, shows them to the user at once and saves them to ${questionsFile}), or else write that JSON to ${questionsFile}. AgentK Local lists them beside the design, and the user answers them there. Give options when there are real alternatives, with "recommended" as the index of the one you recommend. When you revise the design, keep each question's id, and mark a settled question "resolved" with its "decision". Give an empty list when there are none. The file is outside the repo, so writing it is allowed.`;
 }
 
 /**

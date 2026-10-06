@@ -166,3 +166,156 @@ test('does nothing outside an AgentK session', async ($, on) => {
   await clock.advance(5000)
   expect(calls).toEqual([])
 })
+
+const QUESTIONS = [{ question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue', description: 'Cool' }], multiSelect: false }]
+
+/** The AgentK server for asks and the questions tool: `reply` answers each request (pending: held). */
+function routes(on: On, reply: (path: string, body: Record<string, unknown>) => { value: HttpResponse } | Promise<{ value: HttpResponse }>) {
+  const calls: { path: string; body: Record<string, unknown> }[] = []
+  on('http.fetch', (_$, e) => {
+    const path = new URL(e.url).pathname
+    const body = e.init?.body ? JSON.parse(e.init.body) : {}
+    calls.push({ path, body })
+    return reply(path, body)
+  })
+  return calls
+}
+
+/**
+ * Claude's own AskUserQuestion dialog in the terminal, beneath the mod: `opened` once it shows,
+ * then answered by `answer`, or closed.
+ */
+function dialog(on: On) {
+  let open = () => undefined as void
+  const d = { closed: false, opened: new Promise<void>((r) => (open = r)), answer: (_r: unknown) => undefined as void }
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, _e, next) => new Promise((resolve) => {
+    d.answer = (r) => resolve(r as never)
+    open()
+    next.signal.addEventListener('abort', () => {
+      d.closed = true
+      resolve({ deny: 'closed' })
+    })
+  }))
+  return d
+}
+
+const held = () => new Promise<{ value: HttpResponse }>(() => undefined)
+
+test("answers Claude's question with the user's answer from AgentK Local, closing the terminal's dialog", async ($, on) => {
+  mock.env(on, ENV)
+  const calls = routes(on, (path) => (path === '/mod/ask' ? answer(200, { answers: { 0: 'Blue' } }) : answer(204)))
+  const d = dialog(on)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu1', questions: QUESTIONS })
+  expect(r.result).toEqual({ questions: QUESTIONS, answers: { 'Which color?': 'Blue' } })
+  expect(d.closed).toBe(true)
+  expect(calls[0]).toEqual({ path: '/mod/ask', body: { id: 'tu1', questions: QUESTIONS } })
+  expect(calls.some((c) => c.path === '/mod/ask/done' && c.body.id === 'tu1')).toBe(true)
+})
+
+test("asks again after each hold, and takes the terminal's answer when it comes first", async ($, on) => {
+  mock.env(on, ENV)
+  let asks = 0
+  let third = () => undefined as void
+  const thirdAsk = new Promise<void>((r) => (third = r))
+  const calls = routes(on, (path) => {
+    if (path !== '/mod/ask') return answer(204)
+    if (asks++ < 2) return answer(204)
+    third()
+    return held()
+  })
+  const d = dialog(on)
+  const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu2', questions: QUESTIONS })
+  await d.opened
+  await thirdAsk
+  const terminal = { result: { questions: QUESTIONS, answers: { 'Which color?': 'Red' } } }
+  d.answer(terminal)
+  const r = await call
+  expect(r.result).toEqual(terminal.result)
+  expect(calls.filter((c) => c.path === '/mod/ask').length).toBe(3)
+  expect(calls.some((c) => c.path === '/mod/ask/done' && c.body.id === 'tu2')).toBe(true)
+})
+
+test("leaves the question to the terminal when AgentK Local can't take it", async ($, on) => {
+  mock.env(on, ENV)
+  const calls = routes(on, (path) => (path === '/mod/ask' ? answer(400, { error: "question 1 isn't a choice" }) : answer(204)))
+  const d = dialog(on)
+  const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu3', questions: QUESTIONS })
+  await d.opened
+  d.answer({ result: { questions: QUESTIONS, answers: { 'Which color?': 'Red' } } })
+  expect((await call).result).toEqual({ questions: QUESTIONS, answers: { 'Which color?': 'Red' } })
+  expect(calls.filter((c) => c.path === '/mod/ask').length).toBe(1)
+})
+
+test('asks again a while after the server was away', async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  let asks = 0
+  on('http.fetch', (_$, e) => {
+    const path = new URL(e.url).pathname
+    if (path !== '/mod/ask') return answer(204)
+    if (asks++ === 0) throw new Error('connect ENOENT')
+    return answer(200, { answers: { 0: 'Red' } })
+  })
+  dialog(on)
+  const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu4', questions: QUESTIONS })
+  await clock.advance(10)
+  expect(asks).toBe(1)
+  await clock.advance(3000)
+  expect((await call).result).toEqual({ questions: QUESTIONS, answers: { 'Which color?': 'Red' } })
+})
+
+test("leaves Claude's questions to the terminal outside an AgentK session", async ($, on) => {
+  mock.env(on, {})
+  const calls = routes(on, () => answer(204))
+  const d = dialog(on)
+  const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu5', questions: QUESTIONS })
+  await d.opened
+  d.answer({ result: { questions: QUESTIONS, answers: { 'Which color?': 'Red' } } })
+  expect((await call).result).toEqual({ questions: QUESTIONS, answers: { 'Which color?': 'Red' } })
+  expect(calls).toEqual([])
+})
+
+const DESIGN_QUESTIONS = [{ id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0, status: 'open' }]
+
+test('gives Claude the design_questions tool, and passes its questions to AgentK Local', async ($, on) => {
+  mock.env(on, ENV)
+  mock.clock(on)
+  const registered: string[] = []
+  on('tool.register', (_$, e) => {
+    registered.push(e.name)
+    return { value: { tool: `mcp__agentk__${e.name}` } }
+  })
+  const calls = routes(on, (path) => (path === '/mod/questions' ? answer(200, { text: 'Saved 1 question (1 open).' }) : answer(204)))
+  engine(on)
+  await $.session.start(START)
+  expect(registered).toEqual(['design_questions'])
+  const r = await $.tool.call({ tool: 'mcp__agentk__design_questions', questions: DESIGN_QUESTIONS })
+  expect(r.result).toBe('Saved 1 question (1 open).')
+  expect(calls.find((c) => c.path === '/mod/questions')?.body).toEqual({ questions: DESIGN_QUESTIONS })
+})
+
+test("answers a bad design_questions call with what's wrong, for Claude to fix", async ($, on) => {
+  mock.env(on, ENV)
+  routes(on, (path) => (path === '/mod/questions' ? answer(400, { error: 'Question 1 needs an "id".' }) : answer(204)))
+  const r = await $.tool.call({ tool: 'mcp__agentk__design_questions', questions: [{ question: 'Where?' }] })
+  expect(r.deny ?? r.text).toBe('Question 1 needs an "id".')
+})
+
+test('tells AgentK which prompts Claude still holds, until each starts its turn', async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  const calls = server(on, [[{ id: 'p1', text: 'Revise the design.' }]])
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  // Claude holds the prompt (a turn is running) until `start`.
+  let start = () => undefined as void
+  on('prompt.submit', (_$, e) => new Promise((resolve) => (start = () => resolve({ text: e.text }))))
+  await $.session.start(START)
+  await clock.advance(5)
+  const polls = () => calls.filter((c) => c.path === '/mod/poll').map((c) => c.body)
+  expect(polls()[0]).toEqual({ held: [] })
+  expect(polls().at(-1)).toEqual({ held: ['p1'] })
+  start()
+  await clock.advance(5)
+  expect(calls.filter((c) => c.path === '/mod/held').map((c) => c.body)).toEqual([{ held: [] }])
+  expect(polls().at(-1)).toEqual({ held: [] })
+})

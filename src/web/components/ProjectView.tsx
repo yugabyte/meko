@@ -15,7 +15,8 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, repoFolder, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, repoFolder, totalTokens, usageTitle } from '../util';
+import { AskSheet } from './AskSheet';
 import { Busy, Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
@@ -76,11 +77,14 @@ export function ProjectView({
   // Bumped to show the design's questions (Approve pressed with questions open).
   const [questionsAt, setQuestionsAt] = useState(0);
   const [sharing, setSharing] = useState(false);
+  // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
+  const [asking, setAsking] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPanel(null);
     setSheet(false);
     setSharing(false);
+    setAsking(false);
     setQuestionsAt(0);
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
@@ -126,11 +130,11 @@ export function ProjectView({
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
   const openQuestions = session?.stage === 'design' ? session.designQuestions.open : 0;
   const rv = session?.reviewingPr ?? null;
-  // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you.
-  const gateReady = !!session && !session.busy && (
+  // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you (or Claude asks something).
+  const gateReady = !!session && (!!session.asking || (!session.busy && (
     (session.stage === 'design' && session.hasDesign)
     || (session.stage === 'review' && session.canMerge)
-    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)));
+    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.sharing;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
@@ -292,7 +296,7 @@ export function ProjectView({
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={`term-${session.id}`} session={session} />
+          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>
@@ -376,12 +380,14 @@ export function ProjectView({
             </>
           }
           onDesign={() => setPanel('design')}
+          onAsk={() => setAsking(true)}
           onHome={goHome}
           onMove={() => onMove()}
           onAct={act}
           onClose={() => setSheet(false)}
         />
       )}
+      {session && asking && <AskSheet session={session} onClose={() => setAsking(false)} />}
       {session && sharing && dedicated && (
         <ShareDialog
           projectId={project.id}
@@ -461,13 +467,29 @@ function StageBar({
       );
       break;
     case 'design': {
+      if (session.approvalQueued) {
+        gate = (
+          <span className="gate-group">
+            <span className="gate-pill" title="The approval goes to AgentK when its turn ends, unless the turn changes the design">
+              ✓ Approved: goes when the turn ends
+            </span>
+            <button className="btn small" disabled={blocked} onClick={() => onAct('cancel-approval')}>
+              Cancel approval
+            </button>
+          </span>
+        );
+        break;
+      }
       // With open questions the gate only shows them, so it isn't held up.
       reason = session.designQuestions.open ? null : designApprovalBlocker(session);
+      const waits = heldForTurnEnd(session);
       gate = (
         <button
           className="gate"
           disabled={blocked || !!reason}
-          title={reason ?? (session.designQuestions.open ? 'Answer the open questions, then approve' : 'Approve the design and move to Code')}
+          title={reason ?? (session.designQuestions.open
+            ? 'Answer the open questions, then approve'
+            : waits ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same' : 'Approve the design and move to Code')}
           onClick={() => onAct('approve-design')}
         >
           {approveLabel(session.designQuestions.open)}

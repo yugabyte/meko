@@ -217,6 +217,7 @@ export function SessionSheet({
   acting,
   info,
   onDesign,
+  onAsk,
   onHome,
   onMove,
   onAct,
@@ -233,6 +234,8 @@ export function SessionSheet({
   /** Branch, tokens, Meko and review lines from the desktop footer. */
   info: ReactNode;
   onDesign: () => void;
+  /** Opens the questions Claude is asking (Session.asking). */
+  onAsk: () => void;
   onHome: () => void;
   /** Opens the Move to another stage dialog. */
   onMove: () => void;
@@ -247,6 +250,11 @@ export function SessionSheet({
     <Sheet label={`${session.name} actions`} onClose={onClose}>
       <div className="sheet-stage">{stage}</div>
       <div className="sheet-items">
+        {session.asking && (
+          <SheetItem className="primary ask" hint="›" onClick={then(onAsk)}>
+            Answer AgentK: {session.asking.questions[0]?.question}
+          </SheetItem>
+        )}
         {session.status === 'exited' && (
           <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('resume'))}>
             Resume Claude

@@ -3410,6 +3410,62 @@ a.icon-btn {
   opacity: 0.4;
   cursor: default;
 }
+/* Questions Claude asks with AskUserQuestion (AskSheet.tsx): a bar above the terminal that opens
+   them, and the form, in a dialog (a sheet on a phone) or the design's Questions view. */
+.ask-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--warn-soft);
+}
+.ask-bar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.ask-bar-text b {
+  color: var(--warn);
+}
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ask-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.ask-preview {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 16em;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--sunk);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre;
+}
+.sheet-item.ask .sheet-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .ask-bar .btn {
+    min-height: 36px;
+  }
+}
+
 /* Images held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal on a
    desktop, above the compose box on touch screens. */
 .held-images {

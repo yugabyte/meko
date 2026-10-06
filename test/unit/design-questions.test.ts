@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DesignAnswerInput, DesignQuestion } from '../../src/shared/types.js';
+import type { DesignAnswerInput, DesignQuestion, Session } from '../../src/shared/types.js';
 import { designAnswers } from '../../src/server/answers.js';
 import {
   ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
@@ -210,11 +210,12 @@ describe('checking the answers a browser sends', () => {
 describe('the design prompts', () => {
   it('asks for the questions file, and tells Claude how to apply answers', () => {
     const line = designQuestionsLine('/d/s1/questions.json');
-    expect(line).toContain('/d/s1/questions.json');
+    expect(line).toContain('or else write that JSON to /d/s1/questions.json');
+    expect(line).toContain('pass that list to the mcp__agentk__design_questions tool if you have it');
     expect(line).toMatch(/keep each question's id/);
     const sent = render(DEFAULT_PROMPTS['design-answers'], { count: '1 answer to an open question', answers: '### Q1', questionsFile: '/d/q.json' });
     expect(sent).toContain('The user sent 1 answer to an open question on your design');
-    expect(sent).toContain('In /d/q.json, mark each answered question "resolved"');
+    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), mark each answered question "resolved"');
     expect(sent).toMatch(/Don't change anything in the repo/);
     expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
   });
@@ -304,6 +305,27 @@ describe('answers in the browser', () => {
       expect(m.draftsPersist()).toBe(false);
       expect(items.has('ak-design-answers:s1')).toBe(false);
       expect(m.loadDrafts('s1').feedback).toBe('Too big to store');
+    });
+
+    it('keeps the answers of an approval waiting for the turn, until it goes or is dropped', async () => {
+      const m = await fresh();
+      const s = (over: Partial<Session>) => ({ id: 's1', stage: 'design', approvalQueued: false, ...over }) as Session;
+      m.saveDrafts('s1', { answers: {}, feedback: 'Ship it.' });
+      m.approvalSent(s({ approvalQueued: true }));
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: 'Ship it.', approved: true });
+      m.settleApprovals([s({ approvalQueued: true })]); // still waiting
+      expect(m.loadDrafts('s1').approved).toBe(true);
+      // Dropped (the turn changed the design): drafts again, to send with the next approval.
+      m.settleApprovals([s({})]);
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: 'Ship it.' });
+      // Sent: the session left Design, and the answers went with the approval.
+      m.approvalSent(s({ approvalQueued: true }));
+      m.settleApprovals([s({ stage: 'code' })]);
+      expect(items.has('ak-design-answers:s1')).toBe(false);
+      // An approval that went at once forgets them straight away.
+      m.saveDrafts('s1', { answers: {}, feedback: 'Again.' });
+      m.approvalSent(s({ stage: 'code' }));
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: '' });
     });
   });
 
