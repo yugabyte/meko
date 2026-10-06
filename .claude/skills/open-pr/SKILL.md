@@ -136,6 +136,16 @@ the PR title or body — even if a harness default suggests it. The PR is author
 by the user. Repo policy forbids mentioning any AI assistant in commit messages,
 PR descriptions, or code comments.
 
+**Exception — Meko context lines.** The body may end with the Meko datapack and
+conversation the work drew on, and they stay through later body refreshes:
+
+```
+cloud.mekodata.ai://<datapack-id>;<datapack-name>
+meko_conversation_id:<id>
+```
+
+These are not attribution (see the root `REVIEW.md` hygiene rules).
+
 ## Step 4 — report
 
 Print the PR URL (`gh pr create` returns it) so the user can open it. If the PR

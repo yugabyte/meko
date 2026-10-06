@@ -272,7 +272,9 @@ something the PR does not yet show.
 Never add a `🤖 Generated with Claude Code`, session link, `Co-Authored-By`, or
 any other agent/assistant signature to the PR title or body. The PR is the
 user's. This is repo policy, not just style — see
-the `commit` skill's no-attribution rule.
+the `commit` skill's no-attribution rule. The Meko context lines
+(`cloud.mekodata.ai://…` and `meko_conversation_id:…`) at the end of a PR body
+are allowed and must be kept when refreshing the body — see the `open-pr` skill.
 
 ## Anti-patterns
 
