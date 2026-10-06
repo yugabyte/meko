@@ -94,6 +94,27 @@ var metricsCatalog = map[string]string{
 	"MEKO_RAG_DOCUMENTS_BY_STATUS": `max by (status) (` +
 		`meko_api_rag_documents{$FLEET})`,
 
+	// ── Admin business metrics the api-server caches from the admin repo ───────
+	// Current totals, not rates: window by date in PromQL. Every replica exports
+	// the same DB-wide total, so collapse replicas with max (never sum, which
+	// would multiply by the replica count) — as MEKO_RAG_DOCUMENTS_BY_STATUS does.
+	"MEKO_ADMIN_USERS_BY_TIER": `max by (tier) (` +
+		`meko_api_admin_users{$FLEET})`,
+	"MEKO_ADMIN_DATAPACKS": `max(` +
+		`meko_api_admin_datapacks{$FLEET})`,
+	"MEKO_ADMIN_MEMORIES_BY_KIND": `max by (kind) (` +
+		`meko_api_admin_memories{$FLEET})`,
+	"MEKO_ADMIN_TOKEN_SAVINGS_REQUESTS": `max(` +
+		`meko_api_admin_token_savings_requests{$FLEET})`,
+	"MEKO_ADMIN_TOKEN_SAVINGS_TOKENS": `max(` +
+		`meko_api_admin_token_savings_tokens{$FLEET})`,
+	"MEKO_ADMIN_KB_DOCUMENTS": `max(` +
+		`meko_api_admin_kb_documents{$FLEET})`,
+	"MEKO_ADMIN_KB_CHUNKS": `max(` +
+		`meko_api_admin_kb_chunks{$FLEET})`,
+	"MEKO_ADMIN_KB_DOCUMENTS_BY_TYPE": `max by (type) (` +
+		`meko_api_admin_kb_documents_by_type{$FLEET})`,
+
 	// ── Pod resources: cAdvisor, via the compute collector's kubelet job ───────
 	// Kind-agnostic: a meko environment's collector runs the same job, and $FLEET's
 	// source matcher keeps the two apart.
