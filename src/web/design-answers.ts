@@ -2,7 +2,7 @@
 // server: this browser keeps them, per session, until they go to AgentK with an approval or a
 // request to revise the design.
 import { useCallback, useEffect, useState } from 'react';
-import type { DesignAnswerInput, DesignAnswersRequest, DesignQuestion } from '../shared/types';
+import type { DesignAnswerInput, DesignAnswersRequest, DesignQuestion, Session } from '../shared/types';
 import { api } from './api';
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -21,6 +21,11 @@ export interface Draft {
 export interface Drafts {
   answers: Record<string, Draft>;
   feedback: string;
+  /**
+   * An approval with these answers waits for AgentK's turn to end (`Session.approvalQueued`): they
+   * go once it's sent, and are kept if it's dropped.
+   */
+  approved?: boolean;
 }
 
 const EMPTY: Drafts = { answers: {}, feedback: '' };
@@ -47,7 +52,7 @@ export function parseDrafts(text: string | null): Drafts {
     if (v.answers && typeof v.answers === 'object') {
       for (const [id, d] of Object.entries(v.answers as Record<string, unknown>)) if (isDraft(d)) answers[id] = d;
     }
-    return { answers, feedback: typeof v.feedback === 'string' ? v.feedback : '' };
+    return { answers, feedback: typeof v.feedback === 'string' ? v.feedback : '', ...(v.approved === true ? { approved: true } : {}) };
   } catch {
     return EMPTY;
   }
@@ -176,11 +181,29 @@ export function draftsBlocker(questions: DesignQuestion[], drafts: Drafts): stri
 }
 
 /**
- * Approves a design with no open questions, taking along any other feedback the user wrote. An
- * approval queued for the end of AgentK's turn keeps the drafts, in case the turn changes the
- * design and the approval is dropped.
+ * After an approval went to the server: the drafts are forgotten, or, when the approval waits for
+ * AgentK's turn to end, marked to be forgotten once it's sent (`settleApprovals`).
  */
+export function approvalSent(s: Session): void {
+  if (s.approvalQueued) saveDrafts(s.id, { ...loadDrafts(s.id), approved: true });
+  else clearDrafts(s.id);
+}
+
+/**
+ * For every session on a state push: drafts whose approval waited for the turn's end are forgotten
+ * once it was sent (the session left Design), and kept as drafts again when it was dropped.
+ */
+export function settleApprovals(sessions: Session[]): void {
+  for (const s of sessions) {
+    if (s.approvalQueued) continue;
+    const d = loadDrafts(s.id);
+    if (!d.approved) continue;
+    if (s.stage === 'design') saveDrafts(s.id, { answers: d.answers, feedback: d.feedback });
+    else clearDrafts(s.id);
+  }
+}
+
+/** Approves a design with no open questions, taking along any other feedback the user wrote. */
 export async function approveDesign(sessionId: string): Promise<void> {
-  const s = await api.approveDesign(sessionId, toRequest([], loadDrafts(sessionId)));
-  if (!s.approvalQueued) clearDrafts(sessionId);
+  approvalSent(await api.approveDesign(sessionId, toRequest([], loadDrafts(sessionId))));
 }

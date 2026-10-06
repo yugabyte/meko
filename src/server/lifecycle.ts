@@ -274,13 +274,15 @@ export class Lifecycle {
     if (row.stage !== 'design' || row.plan_mode) return fail("The session isn't in the Design stage, so there's no design to ask about.");
     const checked = checkToolQuestions(input);
     if ('error' in checked) return fail(checked.error);
+    let changed: boolean;
     try {
-      this.core.questions.set(row, checked.questions);
+      changed = this.core.questions.set(row, checked.questions);
     } catch (e) {
       return fail(`AgentK Local couldn't save the questions (${errMsg(e)}). Write them to ${this.sessions.questionsFile(row)} instead.`);
     }
-    // Before there's a design they're only saved, to show with it when it comes.
-    if (get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
+    // The same questions again change nothing. Before there's a design they're only saved, to
+    // show with it when it comes.
+    if (changed && get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
       run(this.db, 'UPDATE designs SET updated_at = ? WHERE session_id = ?', Date.now(), row.id);
       this.designChanged.add(row.id);
       this.core.changed();
@@ -318,20 +320,24 @@ export class Lifecycle {
     }
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
     if (row.status === 'starting') throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
-    // Mid-turn, or Claude waiting on a question or permission prompt (which would take a typed
-    // approval as its answer): with the mod, the approval waits for the turn to end.
-    const busy = row.status === 'working' || (row.status === 'needs_input' && row.status_detail !== DESIGN_READY);
-    if (busy) {
+    // Answers sent during a turn wait in Claude, and run before anything sent now: the approval
+    // would move to Code while AgentK revises the design.
+    if (this.sessions.promptsHeld(row.id) > 0) {
+      throw new HttpError(409, 'AgentK has answers from you to take first. Approve once it has revised the design.');
+    }
+    // Mid-turn, a turn may still change the design: with the mod, the approval waits for its end.
+    if (this.sessions.midTurn(row.id)) {
       if (!this.sessions.modLive(row.id)) {
         throw new HttpError(409, row.status === 'working' ? 'AgentK is still working. Wait for the turn to finish.' : 'AgentK is waiting on you in the terminal. Answer it first.');
-      }
-      if (this.sessions.promptsHeld(row.id) > 0) {
-        throw new HttpError(409, 'AgentK has answers from you to take when this turn ends. Approve once it has revised the design.');
       }
       this.queuedApprovals.set(row.id, answers);
       this.sessions.event(row.id, 'design', 'Approval queued: it goes when AgentK finishes its turn, if the design stays the same');
       this.core.changed();
       return;
+    }
+    // Any other question (a permission prompt, a parked recovery) would take a typed approval as its answer.
+    if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
+      throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     }
     this.queuedApprovals.delete(row.id);
     await this.sendApproval(row.id, answers);
@@ -410,8 +416,8 @@ export class Lifecycle {
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     if (row.stage !== 'design' || row.plan_mode) throw new HttpError(409, 'Answers to the design can only be sent while the session is in Design.');
     if (this.queuedApprovals.has(row.id)) throw new HttpError(409, 'You approved the design: the approval goes when this turn ends. Cancel it to send answers instead.');
-    if (this.sessions.modLive(row.id) && row.status !== 'starting') {
-      if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+    // With the mod, answers sent mid-turn wait in Claude for the turn to end.
+    if (this.sessions.modLive(row.id) && this.sessions.midTurn(row.id)) {
       if (this.sessions.runtime(row.id).busy) throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     } else {
       this.checkPromptable(row);

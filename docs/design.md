@@ -140,9 +140,10 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | Route | What it does |
 |---|---|
 | `/mod/hello` | Sent once per load, from `session.start`. |
-| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
+| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The poll carries the ids of the prompts the mod submitted that Claude still holds (`{ held: [...] }`). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
 | `/mod/ack` | `accepted` for each prompt as it arrives. The server answers 204 when it still wants the prompt, and only then does the mod hand it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words; 410 (it gave up on the prompt) or no answer, and the mod drops it. `dropped` with a reason, and whether it filled the prompt box, when another plugin's `prompt.submit` hook refused it. |
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
+| `/mod/held` | `{ held: [...] }`, as on a poll, as soon as it changes: a held prompt's `$.prompt.submit` resolved (its turn started) or another plugin refused it. |
 | `/mod/ask` | From a `tool.call` hook on Claude's `AskUserQuestion`: `{ id, questions }` (the call's `tool_use_id` and its questions). The server holds it up to 20 seconds and answers the user's answers by question index (`{ answers: { 0: "Blue" } }`), or 204, and the mod asks again; 410 when it dropped the ask, 400 (`{ error }`) for questions it can't show. Either way the mod then leaves the question to the terminal's dialog. |
 | `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK Local or the terminal, or ended. |
 | `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions, checked and saved (`{ text }` for Claude), or what's wrong (400, `{ error }`). |
@@ -184,7 +185,8 @@ open in the terminal as always (`next(e)`), and sends the questions to the serve
 (`/mod/ask`, asked again after each hold). Whichever is answered first wins: the terminal's answer
 is returned as it is; AgentK Local's comes back as the tool's result,
 `{ questions, answers: { "<question>": "<answer>" } }`, which closes the terminal's dialog (checked
-on Claude Code 2.1.287 and 2.1.291). The hook's `.catch` falls back to `next(e)`, and any failure
+on Claude Code 2.1.286, the oldest that loads the mod, and on 2.1.287 and 2.1.291; so is the
+`design_questions` tool below). The hook's `.catch` falls back to `next(e)`, and any failure
 leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
 call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
 mod says it has its answer (`/mod/ask/done`), when the mod stops asking for 10 seconds (the call
@@ -211,12 +213,20 @@ against the questions (labels must be the question's, one unless it's multi-sele
 within 10,000 characters) and hands them to the mod: the labels comma-joined, then the text, as the
 dialog gives them. A 409 means AgentK has moved on: the terminal answered first, or the turn ended.
 
-**Answers and approvals mid-turn.** While the mod is live, the design's **Send for revision** works
-while AgentK is working or Claude waits on a prompt: the answers go through the mod at once and
-Claude holds them until the turn ends, so the server keeps nothing. A prompt sent mid-turn leaves
-the session's status alone (a permission prompt still shows as Needs you); its `UserPromptSubmit`
-says when it starts. The server counts these held prompts, and skips the *Design ready*
-notification at a turn end while one waits, since AgentK revises the design again right away.
+**Answers and approvals mid-turn.** Mid-turn means a turn is running (`Session.midTurn`): from its
+`UserPromptSubmit` to its `Stop` (or Claude's end), while AgentK works or Claude waits on a
+permission prompt or a question during it. A Needs you with no turn behind it (a parked recovery,
+a prompt another plugin refused) isn't, and nor is a design waiting for approval; after a server
+restart only a session showing as working counts. While the mod is live, the design's **Send for
+revision** works mid-turn: the answers go through the mod at once and Claude holds them until the
+turn ends, so the server keeps nothing. A prompt sent mid-turn leaves the session's status alone (a
+permission prompt still shows as Needs you). Which prompts Claude still holds comes from the mod
+(`held` on each poll, and `/mod/held`), so one another plugin refused, or one still held after a
+server restart, counts right; a mod too old to report it (until it reloads) has one taken off at
+each `UserPromptSubmit`. They're in `Session.promptsHeld`. While Claude holds any, the *Design
+ready* notification at a turn end is skipped, since AgentK revises the design again right away, and
+an approval is refused, mid-turn or not: the held answers run first, and the approval would move
+the session to Code while AgentK revises the design.
 
 **Approve design** works mid-turn too, but waits on the server instead: a turn in Design may still
 change the design (often it's the revision you asked for), and moving to Code at once would lift
@@ -225,9 +235,12 @@ the Design edit guard while that turn runs. The approval, with your answers, is 
 the turn's end it's sent, as an approval between turns is, if the turn left the design and its
 questions alone; if it changed them it's dropped, and you're notified to review the design and
 approve again (the answers are still in the browser). It's dropped, with a line in the activity
-log, when Claude exits or is relaunched, or the session is archived; a server restart forgets it.
-While answers sent mid-turn wait in Claude an approval is refused, and while an approval is queued
-answers are; without the mod both are refused mid-turn, as before.
+log, when Claude exits (with its `SessionEnd`, or found dead by `reconcile()`) or is relaunched, or
+the session is archived; a server restart forgets it. While it waits, the answers it took can't be
+edited, and answers can't be sent; the browser marks its drafts (`approved` in
+`ak-design-answers:<session>`) and forgets them once the session has left Design, or makes them
+drafts again when the approval was dropped. Without the mod, approving and sending answers are
+refused mid-turn, as before.
 
 **The design's questions tool.** The mod registers a `design_questions` tool at `session.start`
 (`mcp__agentk__design_questions`; Claude Code may defer it, so the prompt says to load it with
@@ -237,7 +250,8 @@ repeated, options with labels, a recommendation that points at an option, a stat
 resolved, at most 30, and no more than the file can hold) and answers what's wrong, so Claude fixes
 it in the same turn. Good questions are saved to `questions.json` at once (through a temp file
 renamed into place, so a restart and the next turn end read the same ones) and shown straight away:
-the design's time moves on and the change counts as a change to the design. The tool is refused
+when they differ from the ones kept, the design's time moves on and the change counts as a change to
+the design (the same list again changes nothing). The tool is refused
 outside Design. Without it (no mod, or an older session) Claude writes the file as before.
 
 **Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context N%` from the

@@ -34,7 +34,7 @@ interface Pending {
   /** Answered to a poll; waiting for the mod's ack. */
   handed: boolean;
   timer: NodeJS.Timeout;
-  resolve(): void;
+  resolve(id: string): void;
   reject(e: Error): void;
 }
 
@@ -64,6 +64,11 @@ interface Link {
   reported: boolean;
   /** The questions Claude is asking through the mod, if any: one AskUserQuestion runs at a time. */
   ask: Ask | null;
+  /**
+   * Prompts the mod submitted that Claude holds until its turn ends, by id, oldest first: added when
+   * a prompt is sent mid-turn, and replaced by what the mod reports (`/mod/poll`, `/mod/held`).
+   */
+  held: Set<string>;
   /** The poll held open now, if any. */
   waiter: { answer(a: PollAnswer): void } | null;
   queue: Pending[];
@@ -109,7 +114,7 @@ export class ModLinks {
 
   private link(session: string): Link {
     let l = this.links.get(session);
-    if (!l) this.links.set(session, (l = { seenAt: 0, reported: false, ask: null, waiter: null, queue: [], taken: new Map() }));
+    if (!l) this.links.set(session, (l = { seenAt: 0, reported: false, ask: null, held: new Set(), waiter: null, queue: [], taken: new Map() }));
     return l;
   }
 
@@ -184,11 +189,11 @@ export class ModLinks {
   }
 
   /**
-   * Sends a prompt through the mod. Resolves once the server has told the mod to submit it (Claude
-   * runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
+   * Sends a prompt through the mod. Resolves with its id once the server has told the mod to submit
+   * it (Claude runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
    * is reset, and then the mod is told not to submit it.
    */
-  send(session: string, text: string): Promise<void> {
+  send(session: string, text: string): Promise<string> {
     const l = this.link(session);
     return new Promise((resolve, reject) => {
       const p: Pending = {
@@ -231,7 +236,7 @@ export class ModLinks {
     const now = this.now();
     for (const [id, t] of l.taken) if (now - t.at > TAKEN_KEEP_MS) l.taken.delete(id);
     l.taken.set(p.id, { text: p.text, at: now });
-    p.resolve();
+    p.resolve(p.id);
     return true;
   }
 
@@ -259,6 +264,35 @@ export class ModLinks {
       p.reject(new Error(why));
     }
     if (l.reported || l.ask) this.onChange(session);
+  }
+
+  // ---- prompts Claude holds until its turn ends ----
+
+  /** A prompt sent mid-turn: Claude holds it until the turn ends. */
+  hold(session: string, prompt: string): void {
+    this.link(session).held.add(prompt);
+  }
+
+  /**
+   * What the mod says it still holds (a list of prompt ids): it drops a prompt once its turn
+   * starts, or another plugin refused it. Ignored when it isn't a list of ids.
+   */
+  reportHeld(session: string, ids: unknown): void {
+    if (!Array.isArray(ids) || ids.some((i) => typeof i !== 'string')) return;
+    const l = this.links.get(session);
+    if (l) l.held = new Set(ids as string[]);
+  }
+
+  /** A prompt started its turn: the oldest held one, for a mod that doesn't report what it holds. */
+  started(session: string): void {
+    const l = this.links.get(session);
+    const first = l?.held.values().next();
+    if (l && first && !first.done) l.held.delete(first.value);
+  }
+
+  /** How many prompts sent mid-turn Claude still holds. */
+  heldCount(session: string): number {
+    return this.links.get(session)?.held.size ?? 0;
   }
 
   // ---- Claude's questions (AskUserQuestion) ----

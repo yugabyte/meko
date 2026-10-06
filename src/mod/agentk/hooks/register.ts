@@ -4,7 +4,9 @@
 // (AK_HOOK_SOCK) with the session's hook token (AK_HOOK_TOKEN), like the hook scripts do:
 //
 //   /mod/hello    once per load: the server sends this session's prompts through the mod from now on
-//   /mod/poll     held by the server up to 20 s; answers the prompts AgentK has for the session
+//   /mod/poll     held by the server up to 20 s; answers the prompts AgentK has for the session,
+//                 and tells it which of the prompts the mod submitted Claude still holds
+//   /mod/held     the same, as soon as that changes (a prompt started its turn, or was refused)
 //   /mod/ack      each prompt taken (accepted; submitted only when the server answers 204), or
 //                 refused by another plugin (dropped)
 //   /mod/measure  the context window's fill and the plan limits, after each turn
@@ -44,6 +46,8 @@ interface Prompt {
 // and starts over.
 let link: Promise<Link | null> | null = null
 let polling = false
+/** The prompts submitted that Claude still holds (it runs each when it's next idle), by id. */
+const held = new Set<string>()
 
 /** The server's socket and this session's token, or null outside an AgentK session. */
 function linkOf($: EngineInterface): Promise<Link | null> {
@@ -76,10 +80,16 @@ async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
     if (typeof p?.id !== 'string' || typeof p.text !== 'string') continue
     const ack = await post($, l, '/mod/ack', { id: p.id, state: 'accepted' }).catch(() => null)
     if (ack?.status !== 204) continue
-    // Not awaited: it resolves only when the prompt's turn starts, and polling goes on meanwhile.
-    void $.prompt.submit({ text: p.text, asUser: true }).then(
-      (r) => (r.drop !== undefined ? refused($, l, p, r.drop) : undefined),
-    ).catch(() => undefined)
+    held.add(p.id)
+    // Not awaited: it resolves only when the prompt's turn starts (or another plugin refused it),
+    // and polling goes on meanwhile.
+    void $.prompt.submit({ text: p.text, asUser: true })
+      .then((r) => (r.drop !== undefined ? refused($, l, p, r.drop) : undefined))
+      .catch(() => undefined)
+      .finally(() => {
+        held.delete(p.id)
+        void post($, l, '/mod/held', { held: [...held] }).catch(() => undefined)
+      })
   }
 }
 
@@ -167,7 +177,7 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
 async function poll($: EngineInterface, l: Link): Promise<void> {
   let wait = 1
   try {
-    const r = await post($, l, '/mod/poll', {})
+    const r = await post($, l, '/mod/poll', { held: [...held] })
     if (r.status === 200) await take($, l, (JSON.parse(r.text) as { prompts?: Prompt[] }).prompts ?? [])
     else if (r.status !== 204) wait = RETRY_MS
   } catch {

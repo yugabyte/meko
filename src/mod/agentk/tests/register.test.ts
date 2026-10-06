@@ -300,3 +300,22 @@ test("answers a bad design_questions call with what's wrong, for Claude to fix",
   const r = await $.tool.call({ tool: 'mcp__agentk__design_questions', questions: [{ question: 'Where?' }] })
   expect(r.deny ?? r.text).toBe('Question 1 needs an "id".')
 })
+
+test('tells AgentK which prompts Claude still holds, until each starts its turn', async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  const calls = server(on, [[{ id: 'p1', text: 'Revise the design.' }]])
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  // Claude holds the prompt (a turn is running) until `start`.
+  let start = () => undefined as void
+  on('prompt.submit', (_$, e) => new Promise((resolve) => (start = () => resolve({ text: e.text }))))
+  await $.session.start(START)
+  await clock.advance(5)
+  const polls = () => calls.filter((c) => c.path === '/mod/poll').map((c) => c.body)
+  expect(polls()[0]).toEqual({ held: [] })
+  expect(polls().at(-1)).toEqual({ held: ['p1'] })
+  start()
+  await clock.advance(5)
+  expect(calls.filter((c) => c.path === '/mod/held').map((c) => c.body)).toEqual([{ held: [] }])
+  expect(polls().at(-1)).toEqual({ held: [] })
+})

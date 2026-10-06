@@ -39,9 +39,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       hook socket closes, on a rebind as well as a stop. A question Claude asks (`AskUserQuestion`)
       is answered once: the terminal's dialog always opens too, the first answer wins, and any
       failure leaves it to the terminal; the server keeps an ask only while the mod keeps asking.
-      Answers and approvals sent mid-turn need a live mod: answers wait in Claude (the status is
-      left alone), and an approval waits on the server for the turn's end and is dropped if the
-      turn changed the design or its questions; the stage never moves to Code mid-turn. Changes to the mod pass `claude plugin validate` and
+      Answers and approvals sent mid-turn (a turn actually running, not any Needs you) need a live
+      mod: answers wait in Claude (the status is left alone, and the mod reports which it still
+      holds), and an approval waits on the server for the turn's end and is dropped if the turn
+      changed the design or its questions; the stage never moves to Code mid-turn or while Claude
+      holds answers. Status details can quote Claude's own words (`AgentK asks: …`), so code that
+      recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mod pass `claude plugin validate` and
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).

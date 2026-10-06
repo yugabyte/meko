@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { all } from '../../src/server/db.js';
@@ -123,4 +123,66 @@ describe("Claude's questions and the design through AgentK's mod (real tmux + gi
     await env.core.lifecycle.reviseDesign(row(id), { answers: [], feedback: 'Shorter.' });
     await expect(env.core.sessions.action(id, 'approve-design')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/revised the design/) });
   });
+
+  it('forgets answers another plugin refused, and queues no approval without a turn running', async () => {
+    const id = await start({}, { prompt: 'DESIGN_MD it' });
+    await waitFor(() => get(id), (x) => x.hasDesign && x.status === 'needs_input', 10000, 'the design');
+    const drop = (on: boolean) => (on ? writeFileSync(join(env.fakeDir, 'mod-drop'), '') : rmSync(join(env.fakeDir, 'mod-drop')));
+
+    // Between turns, a refused prompt leaves Needs you with no turn behind it: no approval is queued.
+    drop(true);
+    await env.core.sessions.submit(id, 'hello');
+    await waitFor(() => get(id).statusDetail ?? '', (d) => d.startsWith('A plugin in Claude refused'), 10000, 'the refusal');
+    expect(get(id)).toMatchObject({ midTurn: false, promptsHeld: 0 });
+    await expect(env.core.sessions.action(id, 'approve-design')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/waiting on you in the terminal/) });
+    drop(false);
+
+    // Answers sent mid-turn are held; once refused they no longer hold up the approval.
+    slow(1500);
+    await env.core.sessions.submit(id, 'think about it');
+    await waitFor(() => transcript(id), (t) => t.includes('think about it'), 10000, 'the turn to start');
+    drop(true);
+    await env.core.lifecycle.reviseDesign(row(id), { answers: [], feedback: 'Refused.' });
+    await waitFor(() => get(id).promptsHeld, (n) => n === 0, 10000, 'the refused answers to be let go');
+    drop(false);
+    slow(200);
+    // (The refusal shows as Needs you while the turn still runs.)
+    await waitFor(() => get(id), (x) => x.status === 'idle' && !x.midTurn, 10000, 'the turn to end');
+    await env.core.sessions.action(id, 'approve-design');
+    expect(get(id).stage).toBe('code');
+  }, 60_000);
+
+  it('holds the approval back while answers wait in Claude, and the same questions again change nothing', async () => {
+    const id = await start({}, { prompt: 'DESIGN_MD it' });
+    await waitFor(() => get(id), (x) => x.hasDesign && x.status === 'needs_input', 10000, 'the design');
+    slow(1500);
+    await env.core.sessions.submit(id, 'DESIGN_TOOL first');
+    await waitFor(() => get(id).designQuestions.open, (n) => n === 1, 10000, "the tool's questions");
+    await waitFor(() => get(id).status, (st) => st !== 'working', 10000, 'the turn to end');
+    const at = get(id).designUpdatedAt;
+    // The same questions again: not a change, so an approval queued during the turn goes.
+    await env.core.sessions.submit(id, 'DESIGN_TOOL again');
+    await waitFor(() => get(id).status, (st) => st === 'working', 10000, 'a turn');
+    await env.core.sessions.action(id, 'approve-design');
+    expect(get(id).approvalQueued).toBe(true);
+    await waitFor(() => get(id).stage, (st) => st === 'code', 10000, 'the approval');
+    expect(get(id).designUpdatedAt).toBe(at);
+  }, 60_000);
+
+  it('drops a queued approval when Claude dies without a word', async () => {
+    const id = await start({}, { prompt: 'DESIGN_MD it' });
+    await waitFor(() => get(id), (x) => x.hasDesign && x.status === 'needs_input', 10000, 'the design');
+    slow(5000);
+    await env.core.sessions.submit(id, 'think about it');
+    await waitFor(() => get(id).status, (st) => st === 'working', 10000, 'a turn');
+    await env.core.sessions.action(id, 'approve-design');
+    expect(get(id).approvalQueued).toBe(true);
+    await env.core.tmux.submit(row(id).tmux_name, 'crash');
+    const s = await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return get(id);
+    }, (x) => x.status === 'exited', 10000, 'the exit');
+    expect(s).toMatchObject({ approvalQueued: false, stage: 'design', promptsHeld: 0 });
+    expect(events(id, 'design')).toContain('Queued approval dropped: Claude exited');
+  }, 30_000);
 });

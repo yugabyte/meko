@@ -120,13 +120,17 @@ function modPost(path, body) {
 }
 
 // Turns from the mod run one at a time, as the engine holds a plugin's prompt until it's idle.
+// Like the mod, it tells AgentK which prompts are still held: on each poll, and as each starts its
+// turn or is refused (/mod/held).
 let modTurns = Promise.resolve();
+const held = new Set();
+const reportHeld = () => modPost('/mod/held', { held: [...held] }).catch(() => undefined);
 
 async function modLoop() {
   await modPost('/mod/hello', { protocol: 1 }).catch(() => undefined);
   for (;;) {
     try {
-      const r = await modPost('/mod/poll', {});
+      const r = await modPost('/mod/poll', { held: [...held] });
       if (r.status === 200) {
         for (const p of JSON.parse(r.text).prompts) {
           appendFileSync(join(dir, 'mod-prompts.jsonl'), JSON.stringify(p) + '\n');
@@ -135,11 +139,18 @@ async function modLoop() {
           const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
           appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
           if (ack.status !== 204) continue;
+          held.add(p.id);
           if (existsSync(join(dir, 'mod-drop'))) {
             await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin', filled: true });
+            held.delete(p.id);
+            await reportHeld();
             continue;
           }
-          modTurns = modTurns.then(() => turn(p.text));
+          modTurns = modTurns.then(async () => {
+            held.delete(p.id);
+            await reportHeld();
+            await turn(p.text);
+          });
         }
       } else if (r.status !== 204) await sleep(500);
     } catch {
@@ -358,6 +369,8 @@ process.stdin.on('data', async (chunk) => {
       hook('SessionEnd', { reason: 'exit' });
       process.exit(0);
     }
+    // Like Claude crashing: gone without a SessionEnd hook.
+    if (line === 'crash') process.exit(1);
     if (line === '/clear') {
       // Like Claude Code: /clear starts a new conversation with a new session id and transcript.
       hook('SessionEnd', { reason: 'clear' });

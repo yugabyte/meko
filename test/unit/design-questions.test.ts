@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DesignAnswerInput, DesignQuestion } from '../../src/shared/types.js';
+import type { DesignAnswerInput, DesignQuestion, Session } from '../../src/shared/types.js';
 import { designAnswers } from '../../src/server/answers.js';
 import {
   ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
@@ -305,6 +305,27 @@ describe('answers in the browser', () => {
       expect(m.draftsPersist()).toBe(false);
       expect(items.has('ak-design-answers:s1')).toBe(false);
       expect(m.loadDrafts('s1').feedback).toBe('Too big to store');
+    });
+
+    it('keeps the answers of an approval waiting for the turn, until it goes or is dropped', async () => {
+      const m = await fresh();
+      const s = (over: Partial<Session>) => ({ id: 's1', stage: 'design', approvalQueued: false, ...over }) as Session;
+      m.saveDrafts('s1', { answers: {}, feedback: 'Ship it.' });
+      m.approvalSent(s({ approvalQueued: true }));
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: 'Ship it.', approved: true });
+      m.settleApprovals([s({ approvalQueued: true })]); // still waiting
+      expect(m.loadDrafts('s1').approved).toBe(true);
+      // Dropped (the turn changed the design): drafts again, to send with the next approval.
+      m.settleApprovals([s({})]);
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: 'Ship it.' });
+      // Sent: the session left Design, and the answers went with the approval.
+      m.approvalSent(s({ approvalQueued: true }));
+      m.settleApprovals([s({ stage: 'code' })]);
+      expect(items.has('ak-design-answers:s1')).toBe(false);
+      // An approval that went at once forgets them straight away.
+      m.saveDrafts('s1', { answers: {}, feedback: 'Again.' });
+      m.approvalSent(s({ stage: 'code' }));
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: '' });
     });
   });
 

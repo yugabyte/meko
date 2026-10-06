@@ -55,7 +55,7 @@ describe('the link to AgentK\'s mod', () => {
     const answer = await links.poll('s1');
     expect(answer?.prompts.map((p) => p.text)).toEqual(['Open the PR.']);
     expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
-    await expect(send).resolves.toBeUndefined();
+    await expect(send).resolves.toBe(answer!.prompts[0].id);
   });
 
   it('fails a send the mod never acks, tells a late ack not to run it, and never hands it out again', async () => {
@@ -240,5 +240,26 @@ describe('the link to AgentK\'s mod', () => {
       expect(changes).toEqual(['s2']);
       expect(links.live('s2')).toBe(false);
     });
+  });
+
+  it('counts the prompts Claude holds: added mid-turn, then as the mod reports them', async () => {
+    links.hello('s1');
+    const held = links.poll('s1');
+    const send = links.send('s1', 'Revise it.');
+    const answer = await held;
+    links.accept('s1', answer!.prompts[0].id);
+    const id = await send;
+    links.hold('s1', id);
+    links.hold('s1', 'p2');
+    expect(links.heldCount('s1')).toBe(2);
+    links.reportHeld('s1', [id]); // p2 started, or was refused
+    expect(links.heldCount('s1')).toBe(1);
+    links.reportHeld('s1', 'nonsense');
+    expect(links.heldCount('s1')).toBe(1);
+    links.started('s1'); // a mod that doesn't report: the oldest started its turn
+    expect(links.heldCount('s1')).toBe(0);
+    links.hold('s1', 'p3');
+    links.reset('s1');
+    expect(links.heldCount('s1')).toBe(0);
   });
 });

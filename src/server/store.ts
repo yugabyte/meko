@@ -199,6 +199,8 @@ export interface SessionRuntime {
   mergeBlockers: string[];
   contextPercent: number | null;
   modLive: boolean;
+  midTurn: boolean;
+  promptsHeld: number;
   asking: AskRequest | null;
   approvalQueued: boolean;
 }
@@ -239,6 +241,8 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     usage: rt.usage,
     contextPercent: rt.contextPercent,
     modLive: rt.modLive,
+    midTurn: rt.midTurn,
+    promptsHeld: rt.promptsHeld,
     asking: rt.asking,
     approvalQueued: rt.approvalQueued,
     startup: r.status === 'starting' ? rt.startup : null,

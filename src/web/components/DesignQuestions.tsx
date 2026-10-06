@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { DesignDoc, DesignQuestion, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { clearDrafts, draftFor, draftsBlocker, draftsPersist, toRequest, useDesignDrafts, type Draft } from '../design-answers';
+import { approvalSent, clearDrafts, draftFor, draftsBlocker, draftsPersist, toRequest, useDesignDrafts, type Draft } from '../design-answers';
 import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../util';
 import { AskForm } from './AskSheet';
 import { Busy } from './common';
@@ -105,6 +105,8 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
 
   const editable = session.stage === 'design' && session.desired === 'running';
+  // While an approval waits for the turn's end, the answers it took stay as they were.
+  const canEdit = editable && !session.approvalQueued;
   const open = doc.questions.filter((q) => q.status === 'open');
   const resolved = doc.questions.filter((q) => q.status === 'resolved');
   const number = new Map(doc.questions.map((q, i) => [q.id, i + 1]));
@@ -133,9 +135,8 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
         clearDrafts(session.id);
         setNote(held ? 'Sent. AgentK takes them when this turn ends, then revises the design.' : 'Sent to AgentK. The design is updated when its turn ends.');
       } else {
-        // An approval queued for the turn's end keeps the answers, in case the turn changes the design.
-        const s = await api.approveDesign(session.id, request);
-        if (!s.approvalQueued) clearDrafts(session.id);
+        // An approval queued for the turn's end keeps the answers until it's sent, in case it's dropped.
+        approvalSent(await api.approveDesign(session.id, request));
       }
       setError(null);
     } catch (e) {
@@ -163,7 +164,7 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
                 q={q}
                 n={number.get(q.id) ?? 0}
                 d={draftFor(q, drafts.answers[q.id])}
-                editable={editable}
+                editable={canEdit}
                 onChange={(d) => update((x) => ({ ...x, answers: { ...x.answers, [q.id]: d } }))}
               />
             ))}
@@ -206,6 +207,7 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
               className="input dq-text"
               rows={3}
               value={drafts.feedback}
+              disabled={!canEdit}
               placeholder="Anything else AgentK should change"
               data-reload-safe={draftsPersist() ? '' : undefined}
               onChange={(e) => {

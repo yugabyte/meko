@@ -279,18 +279,24 @@ export function approveLabel(openQuestions: number): string {
   return openQuestions ? 'Answer & approve' : 'Approve design';
 }
 
+/** The status detail while Claude asks the user something (`askDetail()` in sessions.ts). */
+const ASKING = 'AgentK asks: ';
+
 /** Claude is waiting on a question or permission prompt in the terminal, not on the design. */
 function otherPrompt(session: Session): boolean {
+  if (session.status !== 'needs_input' || !session.statusDetail || session.statusDetail === DESIGN_READY) return false;
+  // Claude's own question, whatever it says.
+  if (session.statusDetail.startsWith(ASKING)) return true;
   // (Plan mode's approval dialog can carry Claude's own wording, so any mention of a plan is allowed.)
-  return session.status === 'needs_input' && !!session.statusDetail && session.statusDetail !== DESIGN_READY && !/plan/i.test(session.statusDetail);
+  return !/plan/i.test(session.statusDetail);
 }
 
 /**
- * AgentK is mid-turn (or Claude waits on a prompt) and its mod is running: an approval now waits
- * for the turn to end, and answers sent now are taken when it does.
+ * A turn is running and AgentK's mod is too: an approval now waits for the turn to end, and
+ * answers sent now are taken when it does.
  */
 export function heldForTurnEnd(session: Session): boolean {
-  return session.modLive && (session.status === 'working' || otherPrompt(session));
+  return session.modLive && session.midTurn;
 }
 
 /** Why Approve design can't be pressed right now, or null when it can. Mirrors the server's checks. */
@@ -299,6 +305,7 @@ export function designApprovalBlocker(session: Session): string | null {
   if (session.approvalQueued) return 'You approved the design: it goes to AgentK when this turn ends.';
   if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
   if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
+  if (session.promptsHeld > 0) return 'AgentK has answers from you to take first. Approve once it has revised the design.';
   // With the mod, an approval made mid-turn waits for the turn to end.
   if (heldForTurnEnd(session)) return null;
   if (session.status === 'working') return 'Wait for AgentK to finish its turn.';

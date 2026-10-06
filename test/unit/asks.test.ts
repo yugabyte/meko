@@ -106,10 +106,10 @@ describe('questions from the design_questions tool', () => {
 
 describe('approving and revising while AgentK is busy, in the browser', () => {
   const session = (over: Partial<Session>) => ({
-    hasDesign: true, status: 'idle', statusDetail: null, modLive: false, approvalQueued: false, ...over,
+    hasDesign: true, status: 'idle', statusDetail: null, modLive: false, midTurn: false, promptsHeld: 0, approvalQueued: false, ...over,
   }) as Session;
-  const working = session({ status: 'working' });
-  const permission = session({ status: 'needs_input', statusDetail: 'Permission needed for Bash' });
+  const working = session({ status: 'working', midTurn: true });
+  const permission = session({ status: 'needs_input', statusDetail: 'Permission needed for Bash', midTurn: true });
 
   it('waits for the turn to end without the mod', () => {
     expect(heldForTurnEnd(working)).toBe(false);
@@ -130,8 +130,29 @@ describe('approving and revising while AgentK is busy, in the browser', () => {
     expect(designApprovalBlocker(session({ status: 'exited', modLive: true }))).toMatch(/Resume/);
   });
 
+  it("doesn't queue an approval for a Needs you with no turn behind it", () => {
+    const parked = session({ status: 'needs_input', statusDetail: 'Recovered twice in the last hour; waiting for you before continuing', modLive: true });
+    expect(heldForTurnEnd(parked)).toBe(false);
+    expect(designApprovalBlocker(parked)).toMatch(/waiting on you in the terminal/);
+    expect(designReviseBlocker(parked)).toMatch(/waiting on you in the terminal/);
+  });
+
+  it("treats Claude's question as one, even when it mentions a plan", () => {
+    const ask = session({ status: 'needs_input', statusDetail: 'AgentK asks: Which plan should I follow?', midTurn: true });
+    expect(designApprovalBlocker(ask)).toMatch(/waiting on you in the terminal/);
+    expect(designReviseBlocker(ask)).toMatch(/waiting on you in the terminal/);
+    // Plan mode's own approval dialog still lets the approval through.
+    expect(designApprovalBlocker(session({ status: 'needs_input', statusDetail: 'Claude has a plan for you to approve' }))).toBeNull();
+  });
+
+  it('waits for answers Claude holds before approving', () => {
+    const held = session({ status: 'needs_input', statusDetail: 'Design ready for your approval', modLive: true, promptsHeld: 1 });
+    expect(designApprovalBlocker(held)).toMatch(/answers from you to take first/);
+    expect(designApprovalBlocker({ ...working, modLive: true, promptsHeld: 1 })).toMatch(/answers from you to take first/);
+  });
+
   it('holds both while an approval is queued', () => {
-    const queued = session({ status: 'working', modLive: true, approvalQueued: true });
+    const queued = session({ status: 'working', midTurn: true, modLive: true, approvalQueued: true });
     expect(designApprovalBlocker(queued)).toMatch(/when this turn ends/);
     expect(designReviseBlocker(queued)).toMatch(/Cancel the approval/);
   });

@@ -76,16 +76,26 @@ export class DesignQuestionStore {
   /**
    * Questions from the mod's design_questions tool: written to the questions file (so a restart
    * and the next turn end read the same ones) and kept, so the user sees them at once. Before
-   * there's a design they're only written, to show with it. Throws when the file can't be written.
+   * there's a design they're only written, to show with it. True when they differ from the ones
+   * kept. Throws when the file can't be written.
    */
-  set(row: SessionRow, questions: DesignQuestion[]): void {
+  set(row: SessionRow, questions: DesignQuestion[]): boolean {
+    const hasDesign = !!get(this.core.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id);
+    // What was kept, read before the file is replaced.
+    if (hasDesign) this.get(row);
+    const prev = this.cache.get(row.id);
     const file = this.core.sessions.questionsFile(row);
     mkdirSync(dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
     writeFileSync(tmp, questionsFileText(questions));
     renameSync(tmp, file);
-    if (get(this.core.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) this.cache.set(row.id, entry(questions, 'file'));
-    else this.cache.delete(row.id);
+    if (!hasDesign) {
+      this.cache.delete(row.id);
+      return true;
+    }
+    const next = entry(questions, 'file');
+    this.cache.set(row.id, next);
+    return !prev || prev.json !== next.json || prev.source !== next.source;
   }
 
   /** Loads the questions of every running session in Design. */

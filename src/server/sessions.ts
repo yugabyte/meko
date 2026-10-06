@@ -35,6 +35,9 @@ import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
+/** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
+const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
+
 /** The status detail while Claude asks the user something: its first question, shortened. */
 export function askDetail(question: string): string {
   const q = question.replace(/\s+/g, ' ').trim();
@@ -159,10 +162,10 @@ export class SessionManager {
   /** How full each session's context window is (percent), from the mod's measurements. */
   private contextFill = new Map<string, number>();
   /**
-   * Prompts sent through the mod mid-turn, which Claude holds until the turn ends (answers to a
-   * design sent while AgentK works): counted down as each one starts its turn.
+   * Sessions with a turn running: from its UserPromptSubmit to its Stop (or Claude's end). Kept in
+   * memory: after a restart a turn counts as running only while the session shows as working.
    */
-  private heldPrompts = new Map<string, number>();
+  private turns = new Set<string>();
 
   setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
     const prev = this.startup.get(id);
@@ -200,9 +203,22 @@ export class SessionManager {
       mergeBlockers: m?.blockers ?? [],
       contextPercent: this.contextFill.get(id) ?? null,
       modLive: this.modLive(id),
+      midTurn: this.midTurn(id),
+      promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
       approvalQueued: this.core.lifecycle.approvalQueued(id),
     };
+  }
+
+  /**
+   * A turn is running: AgentK is working, or Claude waits on the user (a permission prompt, a
+   * question) during a turn. Not a Needs you with no turn behind it (a parked recovery, a prompt
+   * another plugin refused), nor a design waiting for approval.
+   */
+  midTurn(id: string): boolean {
+    const r = sessionRow(this.db, id);
+    if (!r) return false;
+    return r.status === 'working' || (r.status === 'needs_input' && r.status_detail !== DESIGN_READY && this.turns.has(id));
   }
 
   /** AgentK's mod is on and running in the session's Claude: prompts go through it, and it can hold one mid-turn. */
@@ -210,9 +226,9 @@ export class SessionManager {
     return this.core.config.claude.mod && this.mod.live(id);
   }
 
-  /** How many prompts sent mid-turn Claude still holds for after this turn. */
+  /** How many prompts sent mid-turn Claude still holds for after this turn (as the mod reports them). */
   promptsHeld(id: string): number {
-    return this.heldPrompts.get(id) ?? 0;
+    return this.modLive(id) ? this.mod.heldCount(id) : 0;
   }
 
   listForProject(projectId: string): Session[] {
@@ -834,10 +850,11 @@ export class SessionManager {
         // Mid-turn (answers to a design sent while AgentK works), Claude holds the prompt until the
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
         // permission prompt still shows as Needs you.
-        const midTurn = r.status === 'working' || (r.status === 'needs_input' && r.status_detail !== DESIGN_READY);
-        await this.mod.send(id, text);
+        const midTurn = this.midTurn(id);
+        const prompt = await this.mod.send(id, text);
         if (midTurn) {
-          this.heldPrompts.set(id, this.promptsHeld(id) + 1);
+          this.mod.hold(id, prompt);
+          this.core.changed();
           return;
         }
       } else {
@@ -910,6 +927,7 @@ export class SessionManager {
         // The socket is closing (a rebind or a stop), or the mod was turned off in the config: the
         // mod waits a few seconds and polls again. Sessions keep the mod until they're relaunched.
         if (!this.mod.accepting || !this.core.config.claude.mod) return { status: 503 };
+        if (body.held !== undefined) this.heldReported(row.id, body.held);
         const answer = await this.mod.poll(row.id, signal);
         return answer ? { status: 200, body: answer } : { status: 204 };
       }
@@ -937,6 +955,9 @@ export class SessionManager {
         if (reply === 'gone') return { status: 410 };
         return reply ? { status: 200, body: reply } : { status: 204 };
       }
+      case '/mod/held':
+        this.heldReported(row.id, body.held);
+        return { status: 204 };
       case '/mod/ask/done':
         if (typeof body.id === 'string') this.mod.endAsk(row.id, body.id);
         return { status: 204 };
@@ -944,6 +965,13 @@ export class SessionManager {
         return this.core.lifecycle.questionsFromTool(row, body.questions);
     }
     return { status: 404 };
+  }
+
+  /** What the mod says Claude still holds: a change shows (and unblocks Approve) at once. */
+  private heldReported(id: string, held: unknown): void {
+    const before = this.mod.heldCount(id);
+    this.mod.reportHeld(id, held);
+    if (this.mod.heldCount(id) !== before) this.core.changed();
   }
 
   /** Claude asks the user something (AskUserQuestion): Needs you, naming the first question. */
@@ -980,7 +1008,7 @@ export class SessionManager {
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
-    this.heldPrompts.delete(id);
+    this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
   }
 
@@ -1039,7 +1067,7 @@ export class SessionManager {
           run(this.db, 'UPDATE sessions SET claude_session_id = ? WHERE id = ?', p.session_id, id);
           this.event(id, 'conversation', 'Claude moved to a new conversation; Resume continues that one');
         }
-        const trustPrompt = row.status === 'needs_input' && /trust this folder/.test(row.status_detail ?? '');
+        const trustPrompt = row.status === 'needs_input' && row.status_detail === TRUST_DETAIL;
         const st = this.startup.get(id);
         if ((row.status === 'starting' || trustPrompt) && st?.hasPrompt && !st.resumed) {
           // Claude is up; it submits the first prompt next (UserPromptSubmit ends startup).
@@ -1052,11 +1080,9 @@ export class SessionManager {
         break;
       }
       case 'UserPromptSubmit':
-        if (this.heldPrompts.has(id)) {
-          const n = this.promptsHeld(id) - 1;
-          if (n > 0) this.heldPrompts.set(id, n);
-          else this.heldPrompts.delete(id);
-        }
+        this.turns.add(id);
+        // A mod too old to report what it holds (until it reloads): this may be a held prompt starting.
+        this.mod.started(id);
         this.clearStartup(id);
         this.planPending.delete(id);
         this.update(id, { interrupted: 0 });
@@ -1109,6 +1135,7 @@ export class SessionManager {
         void this.captureTranscript(id);
         if (this.planPending.has(id)) break;
         this.update(id, { interrupted: 0 });
+        this.turns.delete(id);
         // A tool call doesn't outlive its turn.
         this.mod.endAsk(id);
         // A Design turn that wrote or republished the design (or changed its questions) leaves it
@@ -1213,7 +1240,7 @@ export class SessionManager {
     for (const row of sessionRows(this.db)) {
       if (!this.recoverable(row)) continue;
       const pane = panes.get(row.tmux_name);
-      const trustShown = row.status === 'needs_input' && /trust this folder/.test(row.status_detail ?? '');
+      const trustShown = row.status === 'needs_input' && row.status_detail === TRUST_DETAIL;
       if (!pane) {
         await this.tryRecover(row);
       } else if (!pane.dead && this.hookless.has(row.id) && (row.status === 'working' || row.status === 'idle')) {
@@ -1225,7 +1252,7 @@ export class SessionManager {
         if (TRUST_PROMPT_RE.test(screen)) {
           const repo = sessionRepo(this.db, row);
           if (repo) await this.trustRepo(repo); // so the next session skips it
-          this.setStatus(row.id, 'needs_input', 'Claude is asking whether you trust this folder. Answer in the terminal.');
+          this.setStatus(row.id, 'needs_input', TRUST_DETAIL);
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         }
       } else if (pane.dead && row.status !== 'exited') {
@@ -1235,6 +1262,8 @@ export class SessionManager {
         if (row.status === 'working') this.update(row.id, { interrupted: 1 });
         this.planPending.delete(row.id);
         this.busy.delete(row.id);
+        // No SessionEnd came (Claude crashed, or its pane was killed).
+        this.forgetClaude(row.id, 'Claude exited before taking the prompt', 'Claude exited');
         this.setStatus(row.id, 'exited', pane.exitStatus ? `Claude exited with status ${pane.exitStatus}` : 'Claude exited');
         this.event(row.id, 'exited', 'Claude exited');
         this.notifyUser(row.id, 'Exited', 'Claude exited. Resume it from the session header.');
