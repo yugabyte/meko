@@ -113,7 +113,12 @@ your phone can connect.
   question), and which are idle, with browser notifications.
 - **AgentK's mod in Claude:** with Claude Code 2.1.286 or later, each session loads a small Claude
   Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
-  never land in a permission dialog or a running turn. After each turn the footer shows how full
+  never land in a permission dialog or a running turn. When Claude asks you something
+  (`AskUserQuestion`), the question shows in AgentK Local too, on a phone as well: answer it there or
+  in the terminal, whichever comes first. During Design you can send answers or approve while AgentK
+  is still working: the answers wait in Claude for the turn to end, and the approval goes when the
+  turn ends if it left the design alone. AgentK gives you its design questions through a tool, so
+  they show as soon as it has them. After each turn the footer shows how full
   Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml` and restart
   the server (the file is read at startup): AgentK then types its prompts into the terminal, running
   sessions included, though those keep the mod loaded until they're relaunched

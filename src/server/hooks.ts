@@ -40,9 +40,9 @@ export type GuardDecision = Record<string, unknown> | null;
 export type HookContext = Record<string, unknown> | null;
 
 /** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
-export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure'];
+export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/ask', '/mod/ask/done', '/mod/questions'];
 
-/** How the server answers the mod: the status, and a JSON body for a 200. */
+/** How the server answers the mod: the status, and a JSON body (always sent with a 200). */
 export interface ModReply {
   status: number;
   body?: unknown;
@@ -109,7 +109,7 @@ export function startHookServer(
         // server open when it closes. A poll comes every few seconds at most, so this costs nothing.
         void reply.then((r) => {
           if (res.writableEnded || res.destroyed) return;
-          if (r.status === 200) res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' }).end(JSON.stringify(r.body ?? null));
+          if (r.status === 200 || r.body !== undefined) res.writeHead(r.status, { 'Content-Type': 'application/json', Connection: 'close' }).end(JSON.stringify(r.body ?? null));
           else res.writeHead(r.status, { Connection: 'close' }).end();
         });
         return;

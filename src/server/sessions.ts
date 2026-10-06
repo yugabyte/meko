@@ -25,6 +25,8 @@ import {
   EDIT_TOOLS, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
 } from './claude.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
+import { DESIGN_READY } from './lifecycle.js';
+import { askAnswers, parseAsk } from './asks.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
@@ -32,6 +34,12 @@ import {
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
+
+/** The status detail while Claude asks the user something: its first question, shortened. */
+export function askDetail(question: string): string {
+  const q = question.replace(/\s+/g, ' ').trim();
+  return `AgentK asks: ${q.length > 120 ? `${q.slice(0, 119)}…` : q}`;
+}
 
 /**
  * What the appended system prompt (and a moved session's prompt) says about the session's workflow:
@@ -147,9 +155,14 @@ export class SessionManager {
   /** Each new session's Meko search on its task, until its SessionStart hook takes what it found. */
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
   /** Each session's link to AgentK's mod in its Claude (modlink.ts): prompts go through it while it's live. */
-  readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped));
+  readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped), Date.now, () => this.core.changed());
   /** How full each session's context window is (percent), from the mod's measurements. */
   private contextFill = new Map<string, number>();
+  /**
+   * Prompts sent through the mod mid-turn, which Claude holds until the turn ends (answers to a
+   * design sent while AgentK works): counted down as each one starts its turn.
+   */
+  private heldPrompts = new Map<string, number>();
 
   setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
     const prev = this.startup.get(id);
@@ -186,7 +199,20 @@ export class SessionManager {
       canMerge: m?.canMerge ?? false,
       mergeBlockers: m?.blockers ?? [],
       contextPercent: this.contextFill.get(id) ?? null,
+      modLive: this.modLive(id),
+      asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
+      approvalQueued: this.core.lifecycle.approvalQueued(id),
     };
+  }
+
+  /** AgentK's mod is on and running in the session's Claude: prompts go through it, and it can hold one mid-turn. */
+  modLive(id: string): boolean {
+    return this.core.config.claude.mod && this.mod.live(id);
+  }
+
+  /** How many prompts sent mid-turn Claude still holds for after this turn. */
+  promptsHeld(id: string): number {
+    return this.heldPrompts.get(id) ?? 0;
   }
 
   listForProject(projectId: string): Session[] {
@@ -763,7 +789,7 @@ export class SessionManager {
     if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
     this.awaitingStart.add(row.id);
     // A new Claude process: the last one's mod and measurements are gone with it.
-    this.mod.reset(row.id);
+    this.forgetClaude(row.id);
     this.contextFill.delete(row.id);
     try {
       if (pane) await this.core.tmux.respawn(row.tmux_name, row.worktree_path, command);
@@ -802,8 +828,19 @@ export class SessionManager {
       const r = this.row(id);
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
-      if (this.core.config.claude.mod && this.mod.live(id)) await this.mod.send(id, text);
-      else await this.core.tmux.submit(r.tmux_name, text);
+      if (this.modLive(id)) {
+        // Mid-turn (answers to a design sent while AgentK works), Claude holds the prompt until the
+        // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
+        // permission prompt still shows as Needs you.
+        const midTurn = r.status === 'working' || (r.status === 'needs_input' && r.status_detail !== DESIGN_READY);
+        await this.mod.send(id, text);
+        if (midTurn) {
+          this.heldPrompts.set(id, this.promptsHeld(id) + 1);
+          return;
+        }
+      } else {
+        await this.core.tmux.submit(r.tmux_name, text);
+      }
       this.setStatus(id, 'working');
     });
     const tail = next.catch(() => undefined);
@@ -855,7 +892,10 @@ export class SessionManager {
 
   /**
    * AgentK's mod in the session's Claude (src/mod/agentk), on the hook socket's `/mod/*` routes:
-   * hello when it loads, polls for prompts, acks them, and reports measurements after each turn.
+   * hello when it loads, polls for prompts, acks them, and reports measurements after each turn;
+   * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
+   * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
+   * design_questions tool (`/mod/questions`).
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -881,8 +921,65 @@ export class SessionManager {
       case '/mod/measure':
         this.measured(row.id, body);
         return { status: 204 };
+      case '/mod/ask': {
+        // 410: leave it to the terminal's dialog.
+        if (!this.core.config.claude.mod || typeof body.id !== 'string' || !body.id || body.id.length > 200) return { status: 410 };
+        let questions;
+        try {
+          questions = parseAsk(body.questions);
+        } catch (e) {
+          return { status: 400, body: { error: errMsg(e) } };
+        }
+        if (this.mod.openAsk(row.id, body.id, questions)) this.asked(row.id, questions[0].question);
+        const reply = await this.mod.waitAsk(row.id, body.id, signal);
+        if (reply === 'gone') return { status: 410 };
+        return reply ? { status: 200, body: reply } : { status: 204 };
+      }
+      case '/mod/ask/done':
+        if (typeof body.id === 'string') this.mod.endAsk(row.id, body.id);
+        return { status: 204 };
+      case '/mod/questions':
+        return this.core.lifecycle.questionsFromTool(row, body.questions);
     }
     return { status: 404 };
+  }
+
+  /** Claude asks the user something (AskUserQuestion): Needs you, naming the first question. */
+  private asked(id: string, question: string): void {
+    const row = sessionRow(this.db, id);
+    if (!row || row.desired !== 'running') return;
+    const detail = askDetail(question);
+    if (row.status !== 'needs_input') this.notifyUser(id, 'Needs you', detail);
+    this.setStatus(id, 'needs_input', detail);
+  }
+
+  /**
+   * The user's answers to the questions Claude is asking (`Session.asking`), from the browser: they
+   * go to the mod, which gives them to Claude as the tool's result and closes the terminal's dialog.
+   */
+  answerAsk(id: string, askId: string, body: unknown): void {
+    const row = this.row(id);
+    if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    const gone = () => new HttpError(409, 'AgentK has moved on from that question: it was answered in the terminal, or its turn ended.');
+    const asking = this.core.config.claude.mod ? this.mod.asking(id) : null;
+    if (!asking || asking.id !== askId) throw gone();
+    const answers = askAnswers(body, asking.questions);
+    if (!this.mod.answerAsk(id, askId, answers)) throw gone();
+    const n = Object.keys(answers).length;
+    this.event(id, 'ask', `Answered ${n === 1 ? "AgentK's question" : `${n} of AgentK's questions`} in AgentK Local`);
+    // Claude takes the answer and carries on with its turn.
+    if (row.status === 'needs_input') this.setStatus(id, 'working');
+  }
+
+  /**
+   * Claude's process ended or is being replaced: its mod link (prompts on their way fail with `why`,
+   * by default that Claude restarted), the prompts it held and an approval queued for its turn's
+   * end (`ended` says why in the activity log) go with it.
+   */
+  private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
+    this.mod.reset(id, why);
+    this.heldPrompts.delete(id);
+    this.core.lifecycle.dropApproval(id, ended);
   }
 
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
@@ -953,6 +1050,11 @@ export class SessionManager {
         break;
       }
       case 'UserPromptSubmit':
+        if (this.heldPrompts.has(id)) {
+          const n = this.promptsHeld(id) - 1;
+          if (n > 0) this.heldPrompts.set(id, n);
+          else this.heldPrompts.delete(id);
+        }
         this.clearStartup(id);
         this.planPending.delete(id);
         this.update(id, { interrupted: 0 });
@@ -983,7 +1085,10 @@ export class SessionManager {
       case 'PermissionRequest': {
         // The plan dialog is also a permission request; keep the clearer wording.
         if (p.tool_name === 'ExitPlanMode') break;
-        const detail = p.tool_name ? `Permission needed for ${p.tool_name}` : 'Permission needed';
+        const asks = p.tool_name === 'AskUserQuestion' && Array.isArray(p.tool_input?.questions) ? (p.tool_input.questions as { question?: unknown }[]) : null;
+        const detail = asks && typeof asks[0]?.question === 'string'
+          ? askDetail(asks[0].question)
+          : p.tool_name ? `Permission needed for ${p.tool_name}` : 'Permission needed';
         if (row.status !== 'needs_input') this.notifyUser(id, 'Needs you', detail);
         this.setStatus(id, 'needs_input', detail);
         break;
@@ -1002,9 +1107,16 @@ export class SessionManager {
         void this.captureTranscript(id);
         if (this.planPending.has(id)) break;
         this.update(id, { interrupted: 0 });
-        // A Design turn that wrote or republished the design leaves it waiting for approval.
-        if (row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)))) {
-          this.core.lifecycle.designReady(id);
+        // A tool call doesn't outlive its turn.
+        this.mod.endAsk(id);
+        // A Design turn that wrote or republished the design (or changed its questions) leaves it
+        // waiting for approval, unless the user approved it during the turn and it didn't change.
+        const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));
+        const queued = await this.core.lifecycle.takeQueuedApproval(id, changed);
+        if (queued === 'sent' || queued === 'failed') {
+          /* the approval went (the session is in Code), or the design waits for it again */
+        } else if (changed) {
+          this.core.lifecycle.designReady(id, queued === 'dropped');
         } else {
           this.setStatus(id, 'idle');
         }
@@ -1017,7 +1129,7 @@ export class SessionManager {
         this.ingestUsage(id);
         // /clear ends one conversation and starts the next (SessionStart follows); Claude keeps running.
         if (p.reason === 'clear') break;
-        this.mod.reset(id, 'Claude exited before taking the prompt');
+        this.forgetClaude(id, 'Claude exited before taking the prompt', 'Claude exited');
         this.clearStartup(id);
         if (this.stopping.has(id)) break;
         if (row.status === 'working') this.update(id, { interrupted: 1 });
@@ -1237,6 +1349,7 @@ export class SessionManager {
     const lc = this.core.lifecycle;
     switch (action) {
       case 'approve-design': await lc.approveDesign(row, body); break;
+      case 'cancel-approval': lc.cancelApproval(row); break;
       case 'open-pr': await lc.openPr(row); break;
       case 'merge': await lc.merge(row); break;
       case 'request-review': await lc.requestReview(row, false); break;
@@ -1391,7 +1504,7 @@ export class SessionManager {
       this.recoverRetryAt.delete(row.id);
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
-      this.mod.reset(row.id, 'The session was archived');
+      this.forgetClaude(row.id, 'The session was archived');
       this.contextFill.delete(row.id);
       if (opts.force) {
         this.event(row.id, 'discarded', {
@@ -1471,7 +1584,7 @@ export class SessionManager {
         this.stopping.delete(row.id);
         this.awaitingStart.delete(row.id);
         this.recoverRetryAt.delete(row.id);
-        this.mod.reset(row.id, 'The project was deleted');
+        this.forgetClaude(row.id, 'The project was deleted');
         this.contextFill.delete(row.id);
       }
       // A worktree that went idle or to another session (maybe another project's) isn't this one's to remove.

@@ -148,6 +148,49 @@ async function modLoop() {
   }
 }
 
+// Like Claude's AskUserQuestion with the mod loaded: the mod forwards the question to AgentK and
+// asks again after each hold, while the terminal's dialog is open (the PermissionRequest hook fires
+// for it). An `ask-terminal` file answers in the terminal after its milliseconds instead. The
+// outcome goes to mod-asks.jsonl.
+const ASK = [{ question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue', description: 'Cool' }], multiSelect: false }];
+async function askUser() {
+  const id = `toolu_${randomUUID()}`;
+  const call = { settled: false };
+  const agentk = (async () => {
+    while (!call.settled) {
+      const r = await modPost('/mod/ask', { id, questions: ASK }).catch(() => null);
+      if (r?.status === 200) return { by: 'agentk', answers: JSON.parse(r.text).answers };
+      if (r?.status !== 204) await new Promise(() => undefined); // left to the terminal
+    }
+    return new Promise(() => undefined);
+  })();
+  hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: { questions: ASK } });
+  let terminalMs = null;
+  try {
+    terminalMs = Number(readFileSync(join(dir, 'ask-terminal'), 'utf8'));
+  } catch {
+    /* only AgentK answers */
+  }
+  const terminal = terminalMs === null ? new Promise(() => undefined) : sleep(terminalMs).then(() => ({ by: 'terminal', answers: { 0: 'Red' } }));
+  const won = await Promise.race([agentk, terminal]);
+  call.settled = true;
+  await modPost('/mod/ask/done', { id }).catch(() => undefined);
+  appendFileSync(join(dir, 'mod-asks.jsonl'), JSON.stringify(won) + '\n');
+  hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_response: won });
+}
+
+// Like Claude calling the mod's design_questions tool: a call missing an id first (told what's
+// wrong), then a good one. Each answer goes to mod-tool.jsonl.
+async function designQuestionsTool() {
+  for (const questions of [
+    [{ question: 'Where do designs live?' }],
+    [{ id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0 }],
+  ]) {
+    const r = await modPost('/mod/questions', { questions }).catch((e) => ({ status: 0, text: String(e) }));
+    appendFileSync(join(dir, 'mod-tool.jsonl'), JSON.stringify({ status: r.status, body: r.text ? JSON.parse(r.text) : null }) + '\n');
+  }
+}
+
 /** Like the mod's session.measure: the context fill (the `context-pct` file, else 37%) and plan limits. */
 function modMeasure() {
   if (!modOn) return;
@@ -166,6 +209,8 @@ function modMeasure() {
 async function turn(text) {
   writeFileSync(transcript, JSON.stringify({ type: 'user', text }) + '\n', { flag: 'a' });
   hook('UserPromptSubmit', { prompt: text });
+  // Early in the turn, so the questions show while it goes on.
+  if (text.includes('DESIGN_TOOL') && modOn) await designQuestionsTool();
   let ms = 200;
   try {
     ms = Number(readFileSync(join(dir, 'turn-ms'), 'utf8'));
@@ -224,6 +269,7 @@ async function turn(text) {
     return; // waits for approval (Enter)
   }
   if (text.includes('MEKO_SEARCH')) mekoSearch();
+  if (text.includes('ASK_USER') && modOn) await askUser();
   respond();
   hook('Stop', {});
   modMeasure();

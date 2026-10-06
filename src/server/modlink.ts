@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { AskQuestion, AskRequest } from '../shared/types.js';
 
 /** How long the server holds a mod's poll open while it has nothing to send. */
 export const POLL_HOLD_MS = 20_000;
@@ -11,6 +12,9 @@ export const LINK_STALE_MS = 10_000;
 export const ACCEPT_MS = 5_000;
 /** How long the text of a prompt the mod took is kept, to name it if another plugin refuses it. */
 const TAKEN_KEEP_MS = 10 * 60 * 1000;
+
+/** How often links are checked for going stale, and asks for being abandoned. */
+const SWEEP_MS = 2_000;
 
 /** What a poll answers: the prompts to submit, or null for none. */
 export type PollAnswer = { prompts: { id: string; text: string }[] } | null;
@@ -34,9 +38,32 @@ interface Pending {
   reject(e: Error): void;
 }
 
+/**
+ * What the mod's held `/mod/ask` gets: the user's answers by question index, null when the hold
+ * ended first (the mod asks again), or `gone` when the ask was dropped (the mod leaves it to the
+ * terminal).
+ */
+export type AskReply = { answers: Record<number, string> } | null | 'gone';
+
+/** Questions Claude asks with AskUserQuestion, forwarded by the mod while the tool call waits. */
+interface Ask {
+  /** The tool call's id, as the mod sends it. */
+  id: string;
+  questions: AskQuestion[];
+  /** When the mod last asked; it asks again after each hold while the call waits. */
+  seenAt: number;
+  waiter: { answer(a: AskReply): void } | null;
+  /** The user's answers, kept until the mod has them (it may have to ask again to get them). */
+  answers: Record<number, string> | null;
+}
+
 interface Link {
   /** When the mod last said hello or polled; 0 before it ever has. */
   seenAt: number;
+  /** Whether the link was live when that was last reported (onChange). */
+  reported: boolean;
+  /** The questions Claude is asking through the mod, if any: one AskUserQuestion runs at a time. */
+  ask: Ask | null;
   /** The poll held open now, if any. */
   waiter: { answer(a: PollAnswer): void } | null;
   queue: Pending[];
@@ -54,21 +81,55 @@ interface Link {
  * acked within ACCEPT_MS (or reset) is given up on: the send fails, as a failed paste does, the
  * caller keeps the prompt, and a late ack is answered 410 so the mod never submits it. So a prompt
  * is never run twice, and never both handed to the mod and typed into the terminal.
+ *
+ * The mod also forwards Claude's AskUserQuestion calls (`openAsk`, then `waitAsk` held like a poll
+ * and asked again after each hold) while Claude's own dialog is open in the terminal: whichever
+ * answers first wins. An ask lives only while the mod keeps asking: it's dropped when the mod says
+ * it has its answer, when it stops asking for LINK_STALE_MS, at the turn's end, and on a reset; and
+ * since the mod sends the questions each time, a server restart brings it back with the next ask.
  */
 export class ModLinks {
   private links = new Map<string, Link>();
   /** False while the hook socket is closing (a rebind or a stop): polls aren't held then. */
   accepting = true;
+  private sweeper: NodeJS.Timeout;
 
+  /**
+   * `onChange` is told when a session's link goes live or stale, and when the questions it's
+   * asking change (`asking`).
+   */
   constructor(
     private onDropped: (session: string, dropped: DroppedPrompt) => void = () => undefined,
     private now: () => number = Date.now,
-  ) {}
+    private onChange: (session: string) => void = () => undefined,
+  ) {
+    this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
+    this.sweeper.unref?.();
+  }
 
   private link(session: string): Link {
     let l = this.links.get(session);
-    if (!l) this.links.set(session, (l = { seenAt: 0, waiter: null, queue: [], taken: new Map() }));
+    if (!l) this.links.set(session, (l = { seenAt: 0, reported: false, ask: null, waiter: null, queue: [], taken: new Map() }));
     return l;
+  }
+
+  /** The mod was heard from: reports the link live if it wasn't. */
+  private seen(session: string, l: Link): void {
+    l.seenAt = this.now();
+    if (l.reported) return;
+    l.reported = true;
+    this.onChange(session);
+  }
+
+  /** Reports links that went stale, and drops asks the mod stopped asking (the call ended without a word). */
+  private sweep(): void {
+    for (const [session, l] of this.links) {
+      if (l.ask && !l.ask.waiter && this.now() - l.ask.seenAt >= LINK_STALE_MS) this.endAsk(session, l.ask.id);
+      if (l.reported && !this.live(session)) {
+        l.reported = false;
+        this.onChange(session);
+      }
+    }
   }
 
   /** True while the session's mod is polling: prompts for it go through the mod. */
@@ -81,7 +142,7 @@ export class ModLinks {
   hello(session: string): boolean {
     const l = this.link(session);
     const first = l.seenAt === 0;
-    l.seenAt = this.now();
+    this.seen(session, l);
     return first;
   }
 
@@ -92,7 +153,7 @@ export class ModLinks {
    */
   poll(session: string, signal?: AbortSignal): Promise<PollAnswer> {
     const l = this.link(session);
-    l.seenAt = this.now();
+    this.seen(session, l);
     l.waiter?.answer(null);
     const ready = this.hand(l);
     if (ready || !this.accepting) return Promise.resolve(ready);
@@ -192,10 +253,94 @@ export class ModLinks {
     if (!l) return;
     this.links.delete(session);
     l.waiter?.answer(null);
+    l.ask?.waiter?.answer('gone');
     for (const p of l.queue) {
       clearTimeout(p.timer);
       p.reject(new Error(why));
     }
+    if (l.reported || l.ask) this.onChange(session);
+  }
+
+  // ---- Claude's questions (AskUserQuestion) ----
+
+  /** The questions Claude is asking through the mod, until they're answered (here or in the terminal) or dropped. */
+  asking(session: string): AskRequest | null {
+    const a = this.links.get(session)?.ask;
+    return a && !a.answers ? { id: a.id, questions: a.questions } : null;
+  }
+
+  /**
+   * The mod forwards an AskUserQuestion call (and again after each hold, with the same id). True
+   * when it's new: one asked before it is dropped, since Claude asks one at a time.
+   */
+  openAsk(session: string, id: string, questions: AskQuestion[]): boolean {
+    const l = this.link(session);
+    this.seen(session, l);
+    if (l.ask?.id === id) {
+      l.ask.seenAt = this.now();
+      return false;
+    }
+    l.ask?.waiter?.answer('gone');
+    l.ask = { id, questions, seenAt: this.now(), waiter: null, answers: null };
+    this.onChange(session);
+    return true;
+  }
+
+  /**
+   * Holds the mod's ask until the user answers it (at once when they already have), POLL_HOLD_MS
+   * passes (null: the mod asks again), or the ask is dropped (`gone`). `signal` aborts when the
+   * mod's connection closes.
+   */
+  waitAsk(session: string, id: string, signal?: AbortSignal): Promise<AskReply> {
+    const l = this.links.get(session);
+    const a = l?.ask;
+    if (!l || !a || a.id !== id) return Promise.resolve('gone');
+    a.seenAt = this.now();
+    if (a.answers) return Promise.resolve({ answers: a.answers });
+    a.waiter?.answer(null);
+    if (!this.accepting) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const done = (r: AskReply) => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', gone);
+        if (a.waiter === waiter) a.waiter = null;
+        a.seenAt = this.now();
+        resolve(r);
+      };
+      const gone = () => done(null);
+      const waiter = { answer: done };
+      const timer = setTimeout(() => done(null), POLL_HOLD_MS);
+      timer.unref?.();
+      a.waiter = waiter;
+      if (signal?.aborted) gone();
+      else signal?.addEventListener('abort', gone, { once: true });
+    });
+  }
+
+  /**
+   * The user answered the questions Claude is asking. False when they're gone or already answered:
+   * the terminal's dialog answered first, or Claude moved on.
+   */
+  answerAsk(session: string, id: string, answers: Record<number, string>): boolean {
+    const a = this.links.get(session)?.ask;
+    if (!a || a.id !== id || a.answers) return false;
+    a.answers = answers;
+    a.waiter?.answer({ answers });
+    this.onChange(session);
+    return true;
+  }
+
+  /**
+   * Drops the ask `id` (any, without one): the mod has its answer (from the user or the terminal),
+   * the turn ended, or the mod stopped asking. A held ask is told it's gone.
+   */
+  endAsk(session: string, id?: string): void {
+    const l = this.links.get(session);
+    const a = l?.ask;
+    if (!l || !a || (id !== undefined && a.id !== id)) return;
+    l.ask = null;
+    a.waiter?.answer('gone');
+    if (!a.answers) this.onChange(session);
   }
 
   /**
@@ -204,7 +349,10 @@ export class ModLinks {
    */
   pause(): void {
     this.accepting = false;
-    for (const l of this.links.values()) l.waiter?.answer(null);
+    for (const l of this.links.values()) {
+      l.waiter?.answer(null);
+      l.ask?.waiter?.answer(null);
+    }
   }
 
   resume(): void {
@@ -213,6 +361,7 @@ export class ModLinks {
 
   /** The server is stopping: pauses polls for good, and fails every prompt on its way. */
   closeAll(): void {
+    clearInterval(this.sweeper);
     this.pause();
     for (const s of [...this.links.keys()]) this.reset(s, 'AgentK Local is stopping');
   }

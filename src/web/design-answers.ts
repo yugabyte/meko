@@ -175,8 +175,12 @@ export function draftsBlocker(questions: DesignQuestion[], drafts: Drafts): stri
   return i < 0 ? null : `Write your answer to Q${i + 1}, or pick one of AgentK’s options.`;
 }
 
-/** Approves a design with no open questions, taking along any other feedback the user wrote. */
+/**
+ * Approves a design with no open questions, taking along any other feedback the user wrote. An
+ * approval queued for the end of AgentK's turn keeps the drafts, in case the turn changes the
+ * design and the approval is dropped.
+ */
 export async function approveDesign(sessionId: string): Promise<void> {
-  await api.approveDesign(sessionId, toRequest([], loadDrafts(sessionId)));
-  clearDrafts(sessionId);
+  const s = await api.approveDesign(sessionId, toRequest([], loadDrafts(sessionId)));
+  if (!s.approvalQueued) clearDrafts(sessionId);
 }

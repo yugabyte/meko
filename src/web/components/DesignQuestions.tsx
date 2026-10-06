@@ -2,7 +2,8 @@ import { useRef, useState } from 'react';
 import type { DesignDoc, DesignQuestion, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { clearDrafts, draftFor, draftsBlocker, draftsPersist, toRequest, useDesignDrafts, type Draft } from '../design-answers';
-import { cx, designApprovalBlocker } from '../util';
+import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../util';
+import { AskForm } from './AskSheet';
 import { Busy } from './common';
 
 function StateChip({ q, d }: { q: DesignQuestion; d: Draft }) {
@@ -94,35 +95,49 @@ function QuestionCard({
 /**
  * The design's questions for the user: open ones to answer (an option, with an optional note, or
  * a custom answer), what's decided, and other feedback. The answers stay in this browser until
- * they go to AgentK: with the approval, or to revise the design.
+ * they go to AgentK: with the approval, or to revise the design. Questions Claude is asking right
+ * now (AskUserQuestion, through AgentK's mod) come first, answered on their own.
  */
 export function DesignQuestions({ session, doc }: { session: Session; doc: DesignDoc }) {
   const [drafts, update] = useDesignDrafts(session.id);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [sending, setSending] = useState<'revise' | 'approve' | null>(null);
+  const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
 
   const editable = session.stage === 'design' && session.desired === 'running';
   const open = doc.questions.filter((q) => q.status === 'open');
   const resolved = doc.questions.filter((q) => q.status === 'resolved');
   const number = new Map(doc.questions.map((q, i) => [q.id, i + 1]));
   const request = toRequest(doc.questions, drafts);
-  const blocker = !editable
-    ? 'Answers go to AgentK only while the session is in Design.'
-    : (draftsBlocker(doc.questions, drafts) ?? designApprovalBlocker(session));
-  const reviseBlocker = blocker ?? (!request.answers.length && !request.feedback.trim() ? 'Answer a question or write feedback first.' : null);
+  const notDesign = !editable ? 'Answers go to AgentK only while the session is in Design.' : null;
+  const blocker = notDesign ?? draftsBlocker(doc.questions, drafts) ?? designApprovalBlocker(session);
+  const reviseBlocker = notDesign ?? draftsBlocker(doc.questions, drafts) ?? designReviseBlocker(session)
+    ?? (!request.answers.length && !request.feedback.trim() ? 'Answer a question or write feedback first.' : null);
+  // AgentK is mid-turn with its mod running: answers go now and wait in Claude, an approval waits here.
+  const held = heldForTurnEnd(session);
+  const queued = session.approvalQueued
+    ? 'Approved: it goes to AgentK when this turn ends. If the turn changes the design, you’re asked again.'
+    : null;
+  const waiting = held && !reviseBlocker ? 'AgentK is working: your answers go now, and it takes them when this turn ends.' : null;
   // Shown in the footer too, as tooltips aren't seen on a phone.
   const busy = session.busy ? 'AgentK is moving the session on. Wait a moment.' : null;
 
-  const go = async (what: 'revise' | 'approve') => {
+  const go = async (what: 'revise' | 'approve' | 'cancel') => {
     setSending(what);
     setNote(null);
     try {
-      if (what === 'revise') await api.reviseDesign(session.id, request);
-      else await api.approveDesign(session.id, request);
-      clearDrafts(session.id);
+      if (what === 'cancel') {
+        await api.sessionAction(session.id, 'cancel-approval');
+      } else if (what === 'revise') {
+        await api.reviseDesign(session.id, request);
+        clearDrafts(session.id);
+        setNote(held ? 'Sent. AgentK takes them when this turn ends, then revises the design.' : 'Sent to AgentK. The design is updated when its turn ends.');
+      } else {
+        // An approval queued for the turn's end keeps the answers, in case the turn changes the design.
+        const s = await api.approveDesign(session.id, request);
+        if (!s.approvalQueued) clearDrafts(session.id);
+      }
       setError(null);
-      if (what === 'revise') setNote('Sent to AgentK. The design is updated when its turn ends.');
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -133,6 +148,12 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
   return (
     <>
       <div className="dq-scroll">
+        {session.asking && (
+          <section className="dq-section" aria-label="AgentK is asking">
+            <h4>AgentK is asking</h4>
+            <AskForm key={session.asking.id} session={session} ask={session.asking} />
+          </section>
+        )}
         {!editable && <p className="muted small">The session is past Design, so these can no longer be answered here.</p>}
         {open.length ? (
           <ol className="dq-list">
@@ -198,7 +219,7 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
       {editable && (
         <div className="dq-foot">
           <span className="dq-foot-note">
-            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? reviseBlocker ?? '')}
+            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? queued ?? waiting ?? reviseBlocker ?? '')}
           </span>
           <button
             className="btn small"
@@ -208,14 +229,22 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
           >
             {sending === 'revise' ? <Busy label="Sending" /> : 'Send for revision'}
           </button>
-          <button
-            className="btn small primary"
-            disabled={!!blocker || !!sending || !!busy}
-            title={busy ?? blocker ?? 'Approve the design with your answers, and move to Code'}
-            onClick={() => void go('approve')}
-          >
-            {sending === 'approve' ? <Busy label="Approving" /> : open.length ? 'Approve with answers' : 'Approve design'}
-          </button>
+          {session.approvalQueued ? (
+            <button className="btn small" disabled={!!sending} onClick={() => void go('cancel')}>
+              {sending === 'cancel' ? <Busy label="Cancelling" /> : 'Cancel approval'}
+            </button>
+          ) : (
+            <button
+              className="btn small primary"
+              disabled={!!blocker || !!sending || !!busy}
+              title={busy ?? blocker ?? (held
+                ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same'
+                : 'Approve the design with your answers, and move to Code')}
+              onClick={() => void go('approve')}
+            >
+              {sending === 'approve' ? <Busy label="Approving" /> : open.length ? 'Approve with answers' : 'Approve design'}
+            </button>
+          )}
         </div>
       )}
     </>

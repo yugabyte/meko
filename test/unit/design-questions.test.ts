@@ -210,11 +210,12 @@ describe('checking the answers a browser sends', () => {
 describe('the design prompts', () => {
   it('asks for the questions file, and tells Claude how to apply answers', () => {
     const line = designQuestionsLine('/d/s1/questions.json');
-    expect(line).toContain('/d/s1/questions.json');
+    expect(line).toContain('or else write that JSON to /d/s1/questions.json');
+    expect(line).toContain('pass that list to the mcp__agentk__design_questions tool if you have it');
     expect(line).toMatch(/keep each question's id/);
     const sent = render(DEFAULT_PROMPTS['design-answers'], { count: '1 answer to an open question', answers: '### Q1', questionsFile: '/d/q.json' });
     expect(sent).toContain('The user sent 1 answer to an open question on your design');
-    expect(sent).toContain('In /d/q.json, mark each answered question "resolved"');
+    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), mark each answered question "resolved"');
     expect(sent).toMatch(/Don't change anything in the repo/);
     expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
   });

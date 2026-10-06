@@ -496,6 +496,16 @@ export interface Session {
   comments: { drafts: number; queued: number };
   /** How many of the design's questions are open, for the user to answer. */
   designQuestions: { open: number };
+  /**
+   * AgentK's mod is running in the session's Claude (`[claude] mod` on, and the mod polling): answers
+   * to the design can be sent and the design approved while AgentK works, and Claude's questions
+   * (`asking`) answered here.
+   */
+  modLive: boolean;
+  /** The question Claude is asking with its AskUserQuestion tool, waiting for an answer; null when none (or without the mod). */
+  asking: AskRequest | null;
+  /** The user approved the design while AgentK was busy: the approval goes when this turn ends, if the turn leaves the design alone. */
+  approvalQueued: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
@@ -1072,6 +1082,47 @@ export interface DesignAnswersRequest {
   feedback: string;
 }
 
+export interface AskOption {
+  label: string;
+  description: string | null;
+  /** What the option looks like (a mockup, a snippet), shown as preformatted text. */
+  preview: string | null;
+}
+
+/** One question of Claude's AskUserQuestion tool. */
+export interface AskQuestion {
+  question: string;
+  /** A short label for it (a chip). */
+  header: string;
+  options: AskOption[];
+  /** Several options can be picked. */
+  multiSelect: boolean;
+}
+
+/**
+ * Questions Claude is asking with its AskUserQuestion tool (1 to 4), through AgentK's mod. They're
+ * kept in memory only while Claude's tool call waits: answered here or in the terminal, whichever
+ * comes first.
+ */
+export interface AskRequest {
+  id: string;
+  questions: AskQuestion[];
+}
+
+/** The answer to one of an AskRequest's questions: the options picked (by label), and/or text of the user's own. */
+export interface AskAnswerInput {
+  /** The question's index in `AskRequest.questions`. */
+  question: number;
+  /** The labels picked: at most one unless the question is multiSelect. */
+  labels: string[];
+  /** A custom answer (the dialog's "Other"); with labels, added after them. */
+  text: string;
+}
+
+export interface AskAnswerRequest {
+  answers: AskAnswerInput[];
+}
+
 // ---- Requests ----
 
 export interface SetupRequest {
@@ -1194,6 +1245,8 @@ export interface MoveSessionRequest {
 
 export type SessionAction =
   | 'approve-design'
+  /** Withdraws an approval waiting for AgentK's turn to end (`Session.approvalQueued`). */
+  | 'cancel-approval'
   | 'open-pr'
   | 'merge'
   | 'request-review'
@@ -1310,14 +1363,19 @@ export type TermServerMessage =
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
-//        when AgentK's questions changed since, or in plan mode)
+//        when AgentK's questions changed since, or in plan mode. While AgentK works or Claude waits on something,
+//        with the mod live, the approval is queued for the turn's end (Session.approvalQueued) and dropped if the
+//        turn changes the design; without the mod that's a 409. cancel-approval withdraws it: 409 when none is queued)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design;
-//        409 outside Design, while AgentK works or Claude waits on something else, or when AgentK's questions changed
-//        since; 400 for a bad answer or answers too long for one prompt; 502 when sending failed)
+//        409 outside Design, while AgentK works or Claude waits on something else (with the mod live they're sent
+//        anyway, and Claude takes them when the turn ends), while an approval is queued, or when AgentK's questions
+//        changed since; 400 for a bad answer or answers too long for one prompt; 502 when sending failed)
+// POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
+//        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)

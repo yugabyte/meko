@@ -1,7 +1,9 @@
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { DesignAnswerInput, DesignQuestion } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get } from './db.js';
-import { ANSWER_MAX, ANSWERS_PROMPT_MAX, answersCount, formatAnswers, questionsFromMarkdown, readDesignQuestions } from './design.js';
+import { ANSWER_MAX, ANSWERS_PROMPT_MAX, answersCount, formatAnswers, questionsFileText, questionsFromMarkdown, readDesignQuestions } from './design.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
 import type { SessionRow } from './store.js';
@@ -30,7 +32,8 @@ function entry(questions: DesignQuestion[], source: DesignQuestionSet['source'])
  * database. They're read from the questions file Claude writes beside the design (or else the
  * "Open questions" list of a markdown design) the first time they're asked for, again at the end
  * of each Design turn (`refresh`), and for every session in Design at startup (`preload`), so the
- * first turn end after a restart can tell whether they changed.
+ * first turn end after a restart can tell whether they changed. Claude's design_questions tool
+ * (through AgentK's mod) replaces them mid-turn (`set`), writing the file too.
  */
 export class DesignQuestionStore {
   private cache = new Map<string, Entry>();
@@ -68,6 +71,21 @@ export class DesignQuestionStore {
     this.cache.set(row.id, next);
     // With nothing kept to compare with, no one has seen the questions change.
     return !!prev && (prev.json !== next.json || prev.source !== next.source);
+  }
+
+  /**
+   * Questions from the mod's design_questions tool: written to the questions file (so a restart
+   * and the next turn end read the same ones) and kept, so the user sees them at once. Before
+   * there's a design they're only written, to show with it. Throws when the file can't be written.
+   */
+  set(row: SessionRow, questions: DesignQuestion[]): void {
+    const file = this.core.sessions.questionsFile(row);
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, questionsFileText(questions));
+    renameSync(tmp, file);
+    if (get(this.core.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) this.cache.set(row.id, entry(questions, 'file'));
+    else this.cache.delete(row.id);
   }
 
   /** Loads the questions of every running session in Design. */

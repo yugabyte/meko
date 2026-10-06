@@ -3,7 +3,7 @@ import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
-  CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -189,6 +189,9 @@ export interface SessionRuntime {
   canMerge: boolean;
   mergeBlockers: string[];
   contextPercent: number | null;
+  modLive: boolean;
+  asking: AskRequest | null;
+  approvalQueued: boolean;
 }
 
 export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
@@ -226,6 +229,9 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     reviewingPr: reviewingPr(r),
     usage: rt.usage,
     contextPercent: rt.contextPercent,
+    modLive: rt.modLive,
+    asking: rt.asking,
+    approvalQueued: rt.approvalQueued,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     createdAt: r.created_at,

@@ -1,5 +1,6 @@
 import type {
   AppState,
+  AskAnswerRequest,
   AttachDatapackRequest,
   AuthStatus,
   ChangeSide,
@@ -165,6 +166,7 @@ export const api = {
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
   approveDesign: (id: string, b?: DesignAnswersRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/approve-design`, b),
   reviseDesign: (id: string, b: DesignAnswersRequest) => post<void>(`/api/sessions/${enc(id)}/design/answers`, b),
+  answerAsk: (id: string, askId: string, b: AskAnswerRequest) => post<void>(`/api/sessions/${enc(id)}/ask/${enc(askId)}`, b),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
 
   settings: () => get<Settings>('/api/settings'),
