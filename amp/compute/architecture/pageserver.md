@@ -868,7 +868,12 @@ an eviction between fold and install). `install_image_if_extends`
 therefore installs only under one hold of the key's shard mutex, only
 when the key is present and `image.lsn ≥ min(cached lsns)`; otherwise
 it skips — the image is already durable in YB, so reads fall through to
-the YB blend, correct but un-accelerated. Safe historical installs
+the YB blend, correct but un-accelerated. Its trim walks the key's
+cached rows from the lowest LSN up and removes flushed rows only until
+it reaches an unflushed one, which can come from a reconnect replaying a
+WAL record whose row is already in YB. Removing rows above that row
+would leave it as a cache-only anchor with rows missing above it
+(#1687). Safe historical installs
 (suffix above fully cached) are permitted, preserving the speedup for
 static/branch readers. The `direct_getpage` integration scenario
 reproduces the lost-update deterministically under tiny cache/chain

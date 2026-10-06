@@ -20,8 +20,7 @@
 //!
 //! Map membership and per-key contents are kept consistent without a
 //! global lock by a single rule: a node is only ever **removed** while
-//! its own `KeyState` mutex is held (`evict_to_capacity` /
-//! `trim_key_up_to`), and every mutator re-checks `Entry::is_removed`
+//! its own `KeyState` mutex is held (`evict_to_capacity`), and every mutator re-checks `Entry::is_removed`
 //! after taking that mutex. A writer that raced an eviction onto a
 //! now-detached node simply retries onto a fresh one, so no accepted
 //! row is ever stranded on a removed node. The skiplist's ordered
@@ -66,9 +65,9 @@
 //!   sufficient — no `evicted_below` check.
 //!
 //! ## Trim
-//! [`UnifiedPages::trim_key_up_to`] removes durable rows for `key`
-//! with `lsn ≤ max_lsn`. Called by the materialiser after a
-//! successful image INSERT to drop the deltas the image superseded.
+//! [`UnifiedPages::install_image_if_extends`] drops the rows a
+//! materialised image supersedes, under the same hold of the key's mutex
+//! that inserts the image.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -159,7 +158,7 @@ pub struct UnifiedPages {
     by_key: SkipMap<Key, Mutex<KeyState>>,
     /// LRU sidecar: just the key set, in promotion order. Back =
     /// most recently inserted / promoted, front = coldest. Only
-    /// `push*` / `evict_to_capacity` / `trim_key_up_to` touch this;
+    /// `push*` / `evict_to_capacity` / `install_image_if_extends` touch this;
     /// reads do not. Holds are O(1).
     lru: Mutex<LinkedHashMap<Key, ()>>,
     /// Insertion-ordered list of (key, lsn) pairs for unflushed
@@ -389,50 +388,6 @@ impl UnifiedPages {
         }
     }
 
-    /// Remove all durable entries for `key` with `lsn <= max_lsn`.
-    /// Used by the materialiser to drop deltas the new image
-    /// supersedes. Newer deltas and unflushed entries are untouched.
-    pub fn trim_key_up_to(&self, key: &Key, max_lsn: Lsn) {
-        let mut total_freed = 0usize;
-        let key_empty = {
-            let Some(node) = self.by_key.get(key) else {
-                return;
-            };
-            let mut ks_guard = node.value().lock();
-            if node.is_removed() {
-                // Raced with an eviction that already dropped this node.
-                return;
-            }
-            let ks = &mut *ks_guard;
-            let to_remove: Vec<Lsn> = ks
-                .chain
-                .range(..=max_lsn)
-                .filter(|(_, e)| e.is_durable())
-                .map(|(l, _)| *l)
-                .collect();
-            for lsn in to_remove {
-                if let Some(page_entry) = ks.chain.remove(&lsn) {
-                    let size = row_size(&page_entry.row);
-                    ks.bytes -= size;
-                    total_freed += size;
-                }
-            }
-            let empty = ks.chain.is_empty();
-            // Remove the node under its own mutex (the map's removal rule)
-            // so a racing `push` retries onto a fresh node.
-            if empty {
-                node.remove();
-            }
-            empty
-        };
-        if total_freed > 0 {
-            self.total_bytes.fetch_sub(total_freed, Ordering::Relaxed);
-        }
-        if key_empty {
-            self.lru.lock().remove(key);
-        }
-    }
-
     /// Atomic guarded materialiser-image install: trim the durable prefix
     /// `≤ image.lsn`, then insert `image` as a durable anchor — but ONLY
     /// if that keeps the key's cache a complete suffix. Returns `true` if
@@ -449,11 +404,10 @@ impl UnifiedPages {
     /// `lookup_chain_if_complete`). A materialiser image installed below
     /// the head would break that: the rows between the image and the head
     /// can live only in YB (evicted, or never cached), so a later read
-    /// would anchor on the image and miss them — a silent lost-update. The
-    /// old `trim_key_up_to` + `push_durable_arc` pairing did exactly that,
-    /// and was *also* a TOCTOU (two separate lock holds — an eviction could
-    /// drop the key between them, turning the push into a lone stale
-    /// anchor). This method closes both: check + trim + insert run under
+    /// would anchor on the image and miss them — a silent lost-update. A
+    /// trim followed by a separate insert would also race: an eviction
+    /// could drop the key between the two lock holds, turning the insert
+    /// into a lone stale anchor. This method closes both: check + trim + insert run under
     /// one continuous hold of the key's shard mutex, and we install only
     /// when
     ///   * the key is **present** (an absent / just-evicted key has no
@@ -464,9 +418,10 @@ impl UnifiedPages {
     ///     only in YB).
     ///
     /// Those two conditions are *sufficient* because the materialiser
-    /// bounds `image.lsn ≤ flush_horizon_lsn`: every cached row
-    /// `≤ image.lsn` is therefore durable (so the prefix trim is total)
-    /// and every unflushed row is strictly above it; and a present key's
+    /// bounds `image.lsn ≤ flush_horizon_lsn`: an unflushed row
+    /// `≤ image.lsn` can only come from a reconnect replaying a WAL record
+    /// whose row is already in YB, and the trim stops at the first such row, so it never leaves a
+    /// gap above one (#1687); and a present key's
     /// **top** row is never selectively removed (trim only drops a prefix,
     /// eviction drops the whole key), so a present key's chain is exactly
     /// the complete suffix `[min_cached, head]`. Trimming to `image.lsn`
@@ -509,14 +464,15 @@ impl UnifiedPages {
                 _ => return false,
             }
 
-            // Trim the durable prefix `≤ image.lsn` the image subsumes.
-            // Unflushed rows `≤ image.lsn` only occur via the benign #57
-            // reconnect re-push; leave them — an exact-LSN collision is
+            // Trim the durable prefix `≤ image.lsn` the image subsumes,
+            // stopping at the first unflushed row (a reconnect replay):
+            // trimming past it would leave the replayed row as a cache-only
+            // anchor with a gap above it (#1687). An exact-LSN collision is
             // handled by the insert's Occupied arm below.
             let to_remove: Vec<Lsn> = ks
                 .chain
                 .range(..=lsn)
-                .filter(|(_, e)| e.is_durable())
+                .take_while(|(_, e)| e.is_durable())
                 .map(|(l, _)| *l)
                 .collect();
             for l in to_remove {
@@ -530,10 +486,10 @@ impl UnifiedPages {
             // Insert the image as a durable anchor.
             match ks.chain.entry(lsn) {
                 Entry::Occupied(mut o) => {
-                    // A same-LSN slot survived the trim ⇒ it was unflushed
-                    // (a #57 re-push of an already-durable record; an exact
-                    // image-LSN collision with a durable row would have been
-                    // trimmed). Overwrite and reverse its unflushed pin.
+                    // A same-LSN slot survived the trim. It is unflushed (a
+                    // reconnect replay), or flushed and kept because the trim
+                    // stopped at an unflushed row below it. Overwrite it;
+                    // `try_promote` decides whether the unflushed counts change.
                     let prev = row_size(&o.get().row);
                     // Claim the promotion via mark_flushed's CAS (not a bare
                     // is_durable() read) so exactly one of {this image install,
@@ -565,8 +521,8 @@ impl UnifiedPages {
         }
 
         // Bump the (present) key to the back of the LRU — most recently
-        // used. Lock order matches `trim_key_up_to`: node mutex (released
-        // above) → LRU, never nested.
+        // used. Lock order: node mutex (released above) → LRU, never
+        // nested.
         {
             let mut lru = self.lru.lock();
             if lru.contains_key(&key) {
@@ -1005,6 +961,77 @@ mod tests {
         Key::from_slice(&a)
     }
 
+    /// LSNs of the chain a cache-only read at `lsn` would serve.
+    fn served(u: &UnifiedPages, lsn: u64) -> Option<Vec<u64>> {
+        u.lookup_chain_if_complete(&tkey(b"k"), Lsn(lsn))
+            .map(|c| c.iter().map(|r| r.lsn.0).collect())
+    }
+
+    fn flush_all(u: &UnifiedPages) {
+        let snap = u.snapshot_unflushed(None);
+        u.mark_flushed(&snap);
+    }
+
+    /// #1687. Reconnect replay after a fold: a replayed row the fold had
+    /// trimmed is inserted unflushed below flushed rows. The next fold must
+    /// keep the rows above it, and drop them once it is flushed.
+    #[test]
+    fn replayed_rows_below_a_fold_never_serve_a_stale_chain() {
+        let u = UnifiedPages::new(1 << 20);
+        u.push(mk(b"k", 100, true, b"img100"));
+        u.push(mk(b"k", 110, false, b"d110"));
+        u.push(mk(b"k", 120, false, b"d120"));
+        flush_all(&u);
+        assert!(u.install_image_if_extends(Arc::new(mk(b"k", 110, true, b"img110"))));
+        u.push(mk(b"k", 130, false, b"d130"));
+        flush_all(&u);
+        // Reconnect rewinds below 100 and replays 100 to 130.
+        u.push(mk(b"k", 100, true, b"img100"));
+        u.push(mk(b"k", 110, false, b"d110"));
+        u.push(mk(b"k", 120, false, b"d120"));
+        u.push(mk(b"k", 130, false, b"d130"));
+        assert_eq!(u.unflushed_count(), 1);
+
+        // The fold at 130 lands on d130's flushed slot.
+        let (total, unflushed) = (u.total_bytes(), u.unflushed_bytes());
+        let img130 = mk(b"k", 130, true, b"img130");
+        let grown = row_size(&img130) - row_size(&mk(b"k", 130, false, b"d130"));
+        assert!(u.install_image_if_extends(Arc::new(img130)));
+        assert_eq!(u.total_bytes(), total + grown);
+        assert_eq!(u.unflushed_bytes(), unflushed);
+        assert_eq!(u.unflushed_count(), 1);
+        assert_eq!(served(&u, 125), Some(vec![120, 110]));
+
+        // Once img100 is flushed, the next fold drops everything below it.
+        flush_all(&u);
+        assert_eq!(u.unflushed_count(), 0);
+        u.push(mk(b"k", 140, false, b"d140"));
+        flush_all(&u);
+        let img140 = mk(b"k", 140, true, b"img140");
+        let img140_size = row_size(&img140);
+        assert!(u.install_image_if_extends(Arc::new(img140)));
+        let lsns: Vec<u64> = u.lookup_chain(&tkey(b"k"), Lsn(1000)).iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![140]);
+        assert_eq!(u.total_bytes(), img140_size);
+    }
+
+    /// The same after an eviction: the key comes back holding only
+    /// d110 and d120, then the replay inserts img100 unflushed.
+    #[test]
+    fn replayed_anchor_below_evicted_rows_never_serves_a_stale_chain() {
+        let u = UnifiedPages::new(1);
+        u.push(mk(b"k", 100, true, b"img100"));
+        flush_all(&u);
+        u.evict_to_capacity();
+        assert!(u.lookup_chain(&tkey(b"k"), Lsn(1000)).is_empty());
+        u.push(mk(b"k", 110, false, b"d110"));
+        u.push(mk(b"k", 120, false, b"d120"));
+        flush_all(&u);
+        u.push(mk(b"k", 100, true, b"img100"));
+        assert!(u.install_image_if_extends(Arc::new(mk(b"k", 130, true, b"img130"))));
+        assert_eq!(served(&u, 125), Some(vec![120, 110, 100]));
+    }
+
     fn mk(key: &[u8], lsn: u64, is_image: bool, payload: &[u8]) -> PageRow {
         PageRow {
             key: tkey(key),
@@ -1150,46 +1177,6 @@ mod tests {
         u.evict_to_capacity();
         assert!(u.lookup_chain(&tkey(b"k1"), Lsn(100)).is_empty());
         assert!(!u.lookup_chain(&tkey(b"k2"), Lsn(100)).is_empty());
-    }
-
-    #[test]
-    fn trim_drops_only_durable_le_max_lsn() {
-        let u = UnifiedPages::new(4096);
-        u.push(mk(b"k", 10, false, b"d10"));
-        u.push(mk(b"k", 20, false, b"d20"));
-        u.push(mk(b"k", 30, false, b"d30"));
-        flush_first_n(&u, 2);
-        u.trim_key_up_to(&tkey(b"k"), Lsn(25));
-        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
-        assert_eq!(chain.len(), 1);
-        assert_eq!(chain[0].lsn, Lsn(30));
-    }
-
-    #[test]
-    fn trim_leaves_unflushed_in_range() {
-        let u = UnifiedPages::new(4096);
-        u.push(mk(b"k", 10, false, b"d10"));
-        flush_first_n(&u, 1);
-        u.push(mk(b"k", 20, false, b"d20"));
-        u.trim_key_up_to(&tkey(b"k"), Lsn(50));
-        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
-        assert_eq!(chain.len(), 1);
-        assert_eq!(chain[0].lsn, Lsn(20));
-    }
-
-    #[test]
-    fn materializer_install_sequence_works_end_to_end() {
-        let u = UnifiedPages::new(4096);
-        for i in 1..=5 {
-            u.push(mk(b"k", i * 10, false, &[i as u8; 4]));
-        }
-        flush_first_n(&u, 5);
-        u.trim_key_up_to(&tkey(b"k"), Lsn(50));
-        u.push_durable(mk(b"k", 50, true, b"full-page-image"));
-        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
-        assert_eq!(chain.len(), 1, "only the new image remains");
-        assert!(chain[0].is_image);
-        assert_eq!(chain[0].lsn, Lsn(50));
     }
 
     #[test]
@@ -1558,9 +1545,9 @@ mod tests {
         );
     }
 
-    /// Materialiser install at LSN N MUST drop every durable row with
-    /// LSN ≤ N for that key so we can't fall into the "old image plus
-    /// new delta" trap. Exercised through `install_image_if_extends`, the
+    /// Materialiser install at LSN N MUST drop the durable rows with
+    /// LSN ≤ N for that key, up to the first unflushed one, so we can't
+    /// fall into the "old image plus new delta" trap. Exercised through `install_image_if_extends`, the
     /// atomic guarded install the materialiser actually uses.
     #[test]
     fn install_drops_all_older_durable_rows() {

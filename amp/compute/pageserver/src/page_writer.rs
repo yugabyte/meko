@@ -1488,8 +1488,8 @@ impl PageWriter {
             // No `will_init` anchor in the merged cache+YB chain ≤
             // target_lsn (#57 part 2). `parse_chain` would set
             // `base_img=None` and walredo would fold these deltas onto a
-            // ZERO page; the materialiser would then `install` +
-            // `trim_key_up_to` that wrong/zero image, making the
+            // ZERO page; the materialiser would then install that
+            // wrong/zero image, making the
             // corruption durable — surfacing later as a heap hole /
             // orphan catalog row / "unexpected zero page". A complete
             // durable chain must always reach a will_init anchor; its
@@ -1562,8 +1562,8 @@ impl PageWriter {
 
     /// Install a freshly-materialised image into the cache. Call AFTER
     /// `PageStore::put_pages([image])` succeeds. Drops the deltas the
-    /// image supersedes for that key (durable, lsn ≤ image.lsn) and
-    /// indexes the new image as a durable cache entry; subsequent
+    /// image supersedes for that key (durable, lsn ≤ image.lsn, stopping
+    /// at the first unflushed row) and indexes the new image as a durable cache entry; subsequent
     /// `read_chain` / `read_chain_durable` find the image first and
     /// don't walk the chain back.
     ///
