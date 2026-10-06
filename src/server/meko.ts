@@ -354,3 +354,22 @@ export async function checkMeko(url: string, apiKey: string): Promise<{ ok: true
     await c.close();
   }
 }
+
+/** What trying a token on a Meko server found: the datapacks its account sees, or why not. */
+export type TokenTry = { ok: true; datapacks: string[] } | { ok: false; rejected: boolean; error: string };
+
+/**
+ * Tries a token on a Meko server by listing the datapacks its account sees. `rejected` when Meko
+ * refused the token (HTTP 401 or 403), as against Meko being down or slow.
+ */
+export async function tryMekoToken(url: string, apiKey: string): Promise<TokenTry> {
+  const c = new MekoClient(() => ({ url, apiKey }));
+  try {
+    return { ok: true, datapacks: (await c.listDatapacks()).map((d) => d.id) };
+  } catch (e) {
+    const rejected = e instanceof StreamableHTTPError && (e.code === 401 || e.code === 403);
+    return { ok: false, rejected, error: (e instanceof Error ? e.message : String(e)).slice(0, 200) };
+  } finally {
+    await c.close();
+  }
+}

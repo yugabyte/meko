@@ -163,7 +163,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
-      false) means no Meko calls at all.
+      false) means no Meko calls at all. The one check that calls Meko by itself, trying Claude
+      Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
+      session launch, after Claude Code's setup), in the background, only for a token that isn't
+      AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
+- [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
+      the user asked: the installer's question (or `--install-deps`) or **Set up Claude Code with
+      this Meko**. A Claude Code token is only ever sent to AgentK's server, and only when Claude
+      Code is set up for that server; messages name hosts, never full URLs or tokens.
 - [ ] The Meko search at session start (`recall.ts`) never holds up a session: `create()` doesn't
       wait for it, the SessionStart context hook answers within its limit and prints nothing when
       there's no result or no server, and there's no search with Meko off or no datapacks. What it

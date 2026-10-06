@@ -60,6 +60,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/mekoapi.ts` | Meko REST client for sharing (share, members, invites, accept or decline). Whether sharing is on (`MekoStatus.sharing`) is worked out from the config in `core.ts`. |
 | `src/server/invites.ts` | Project datapacks shared with us: synced from Meko into `datapack_invites`, the first-sync baseline, accept, decline, later. |
 | `src/server/mekosettings.ts` | The Meko tab in Settings: what it shows (never the key), checking a change against Meko before it's saved, and running Meko's setup for Claude Code. |
+| `src/server/mekoclaude.ts` | Whether Claude Code's sessions reach AgentK's Meko (`MekoStatus.claude`, shown as a banner and on the Meko tab): the same server in Claude Code's settings and on its `meko` MCP server, and each of its tokens that isn't AgentK's tried on AgentK's server (accepted, and seeing the project datapacks AgentK's own token sees), with results reused for 10 minutes. Refreshed at startup, on a config change, on Settings open, at session launch, and after Claude Code's setup. It never changes Claude Code's setup. |
 | `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents), which also finds pushes to the base branch and Meko calls, and per session/project/model/day totals and costs plus the all-projects overview (`GET /api/usage`). |
 | `src/server/callhome.ts`, `filetypes.ts` | Anonymous usage stats: the report (`buildReport`, counts only, Meko use included; its contract is `CallHomeReport` and `docs/call-home-report.schema.json`), sending it to the collector (hourly in an install's first day, then daily; `[call_home]`, or the `CALL_HOME_URL` a release carries), and file types (paths reduced to extensions right away). |
@@ -69,7 +70,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/db.ts`, `store.ts` | SQLite (`node:sqlite`), migrations, row ↔ API type mapping (`sessions.kind`, and `Session.kind`, keep the old type names for tasks; `kindOf()` in `stages.ts` reads them as `task`). |
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback (tarball per platform and CPU); host install. |
-| `src/server/mekosetup.ts` | Meko set up for Claude Code (plugin, MCP server, key): what's missing, and running Meko's own setup package from npm (integrity-checked) with the bundled Node. |
+| `src/server/mekosetup.ts` | Meko set up for Claude Code (plugin, MCP server, key): reading it from Claude Code's settings and `~/.claude.json` (the user-scope `meko` server), what keeps it off AgentK's Meko, and running Meko's own setup package from npm (integrity-checked) with the bundled Node. |
 | `scripts/install.sh` | The installer: installs missing tools (tmux, git, curl, gh, Claude Code) after asking, downloads and verifies the release, then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
 | `src/server/service.ts` | The two background services (server, tmux) behind one `ServiceManager`: systemd user units on Linux (run only on the install host, `ConditionHost=`), LaunchAgents on macOS. Install, start, state, remove, boot check. |
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
@@ -123,7 +124,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
    the project's dedicated datapack pinned for it when it starts; AgentK's writes for a session use
    the id it runs with (`launchedAgentId()`). Never remove a `pin-claude_code_<project id>.json`:
    it may be the user's own pin for plain Claude Code in that repo. (Claude Code's own
-   Meko setup is the user's and isn't changed.) Nothing that needs Meko may stop the install, a project or a session when Meko is off or
+   Meko setup is the user's and is changed only when they ask: the installer's question or
+   **Set up Claude Code with this Meko**.) Nothing that needs Meko may stop the install, a project or a session when Meko is off or
    down: it's skipped or offered later.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
    keys in code, docs, tests or commit messages.

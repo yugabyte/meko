@@ -763,6 +763,8 @@ export class SessionManager {
     const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
     this.pinDatapack(row);
+    // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
+    if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
     const mod = await this.modDir();

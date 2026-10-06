@@ -569,6 +569,22 @@ export interface MekoStatus {
    * and its API URL is known.
    */
   sharing: boolean;
+  /**
+   * Whether Claude Code's sessions reach the Meko AgentK uses: the same server in Claude Code's
+   * settings and on its `meko` MCP server, tokens there that work (accepted, and seeing AgentK's
+   * project datapacks), and the plugin. Fixed only when the user asks (POST
+   * /api/settings/meko/claude-setup). Empty lists while Meko is off.
+   */
+  claude: MekoClaudeStatus;
+}
+
+export interface MekoClaudeStatus {
+  /** What's wrong, one sentence each; the banner shows while this isn't empty. */
+  gaps: string[];
+  /** Token checks that couldn't run (Meko unreachable or slow), one sentence each. Never raises the banner. */
+  unchecked: string[];
+  /** A token check is running. */
+  checking: boolean;
 }
 
 export interface AppState {
@@ -900,10 +916,6 @@ export interface MekoSettings {
   /** The key's last four characters, or null when there's no key. */
   keyHint: string | null;
   keySource: MekoKeySource | null;
-  /** The MCP URL Claude Code's settings give its sessions (MEKO_MCP_URL), or null when unset. */
-  claudeUrl: string | null;
-  /** Claude Code's settings have the same key AgentK uses. */
-  claudeKeyMatches: boolean;
 }
 
 /**
@@ -1395,7 +1407,8 @@ export type TermServerMessage =
 //                                                           at most 64 characters with no control characters, and
 //                                                           '' goes back to the host name; callHomeEnabled and
 //                                                           resolveConflicts are booleans)
-// POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko)
+// POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
+//                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
 //        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs)
 // GET    /api/update                           → UpdateStatus

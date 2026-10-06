@@ -1,9 +1,10 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mekoPluginInstalls } from './capture.js';
+import { DEFAULT_MEKO_URL } from '../shared/mekourls.js';
 
 /**
  * Meko's own setup for Claude Code (the `@yugabytedb/meko-mcp` npm package): it registers the
@@ -15,42 +16,182 @@ import { mekoPluginInstalls } from './capture.js';
 export const MEKO_SETUP_PACKAGE = '@yugabytedb/meko-mcp';
 const REGISTRY = 'https://registry.npmjs.org';
 
-/**
- * What's missing for Meko to work in Claude Code sessions; empty when it's all there. The key
- * must be in Claude Code's settings.json and be the one just verified: sessions don't inherit
- * the installer's environment (they start under the tmux service), and a stale key there would
- * keep the hooks on it.
- */
-export function mekoClaudeGaps(opts: {
-  claudeDir: string;
-  /** True when Claude Code has an MCP server named `meko` (`claude mcp get meko`). */
-  mcpRegistered: () => boolean;
-  /** The key AgentK Local just verified with Meko. */
-  apiKey: string;
-}): string[] {
-  const gaps: string[] = [];
-  let settings: { enabledPlugins?: Record<string, unknown>; env?: Record<string, unknown> } = {};
+/** Claude Code's user-scope `meko` MCP server (in ~/.claude.json): what its tools call. */
+export interface ClaudeMekoServer {
+  /** Null for a server without one (a local command): its URL and token can't be checked. */
+  url: string | null;
+  /** The Bearer token it sends, with `${VAR}` references expanded; null when there's none, or it can't be worked out. */
+  token: string | null;
+  /**
+   * The variable the token comes from when AgentK can't expand it: one that's neither in Claude
+   * Code's settings `env` nor in AgentK's own environment (a session may get it from its login
+   * shell). Such a token is neither tried nor counted as missing.
+   */
+  unresolved?: string;
+}
+
+/** Where Claude Code keeps its Meko: the plugin, the settings its hooks read, and the MCP server. */
+export interface ClaudeMeko {
+  plugin: 'ok' | 'missing' | 'disabled';
+  /** settings.json `env`: MEKO_MCP_URL (null when unset, which means Meko Cloud) and MEKO_API_KEY. */
+  settings: { url: string | null; token: string | null };
+  /** The user-scope `meko` MCP server, or null when ~/.claude.json has none. */
+  server: ClaudeMekoServer | null;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function readJson(file: string): unknown {
   try {
-    settings = JSON.parse(readFileSync(join(opts.claudeDir, 'settings.json'), 'utf8')) ?? {};
+    return JSON.parse(readFileSync(file, 'utf8'));
   } catch {
-    /* no settings yet */
+    return null;
   }
-  const installed = (mekoPluginInstalls(opts.claudeDir)?.length ?? 0) > 0;
-  const enabled = Object.entries(settings.enabledPlugins ?? {}).some(([k, v]) => k.startsWith('meko-agent-skills@') && v === true);
-  if (!installed) gaps.push('the meko-agent-skills plugin');
-  else if (!enabled) gaps.push('the meko-agent-skills plugin (installed, not enabled)');
-  // The hooks in every session read the key from settings.json's env.
-  const key = typeof settings.env === 'object' && settings.env ? settings.env.MEKO_API_KEY : undefined;
-  if (!(typeof key === 'string' && key)) gaps.push("MEKO_API_KEY in Claude Code's settings");
-  else if (key !== opts.apiKey) gaps.push("the current key in Claude Code's settings (it has a different MEKO_API_KEY)");
-  if (!opts.mcpRegistered()) gaps.push('the Meko MCP server in Claude Code');
+}
+
+/**
+ * `${VAR}` and `${VAR:-default}` expanded as Claude Code does for MCP headers in a session, where
+ * settings.json's `env` is applied over the environment. `unresolved` names a variable that's set
+ * in neither, with no default: the session may still have it, from its login shell.
+ */
+function expandEnv(v: string, env: Record<string, unknown>): { value: string; unresolved?: string } {
+  let unresolved: string | undefined;
+  const value = v.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_, name: string, def?: string) => {
+    const set = typeof env[name] === 'string' ? (env[name] as string) : process.env[name];
+    if (set) return set;
+    if (def === undefined) unresolved ??= name;
+    return def ?? '';
+  });
+  return { value, unresolved };
+}
+
+function nonBlank(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+/** Reads Claude Code's Meko setup from its settings directory and its global config file. */
+export function readClaudeMeko(claudeDir: string, configPath: string): ClaudeMeko {
+  const settings = readJson(join(claudeDir, 'settings.json'));
+  const env = isRecord(settings) && isRecord(settings.env) ? settings.env : {};
+  const installed = (mekoPluginInstalls(claudeDir)?.length ?? 0) > 0;
+  const plugins = isRecord(settings) && isRecord(settings.enabledPlugins) ? settings.enabledPlugins : {};
+  const enabled = Object.entries(plugins).some(([k, v]) => k.startsWith('meko-agent-skills@') && v === true);
+  const cfg = readJson(configPath);
+  const entry = isRecord(cfg) && isRecord(cfg.mcpServers) ? cfg.mcpServers.meko : undefined;
+  let server: ClaudeMekoServer | null = null;
+  if (isRecord(entry)) {
+    const headers = isRecord(entry.headers) ? entry.headers : {};
+    const auth = Object.entries(headers).find(([k]) => k.toLowerCase() === 'authorization')?.[1];
+    const expanded = typeof auth === 'string' ? expandEnv(auth, env) : null;
+    const bearer = expanded && !expanded.unresolved ? /^\s*Bearer\s+(\S+)\s*$/i.exec(expanded.value) : null;
+    server = { url: nonBlank(entry.url), token: bearer?.[1] ?? null, ...(expanded?.unresolved ? { unresolved: expanded.unresolved } : {}) };
+  }
+  return {
+    plugin: !installed ? 'missing' : enabled ? 'ok' : 'disabled',
+    settings: { url: nonBlank(env.MEKO_MCP_URL), token: nonBlank(env.MEKO_API_KEY) },
+    server,
+  };
+}
+
+/** The same Meko MCP server: compared without a trailing slash, and with the host's case ignored. */
+export function sameMekoUrl(a: string, b: string): boolean {
+  const norm = (u: string) => {
+    try {
+      const x = new URL(u.trim());
+      return `${x.protocol}//${x.host}${x.pathname.replace(/\/+$/, '')}${x.search}`;
+    } catch {
+      return u.trim().replace(/\/+$/, '');
+    }
+  };
+  return norm(a) === norm(b);
+}
+
+/** A URL's host, for messages: never the whole URL, which can carry credentials. */
+export function mekoUrlHost(url: string): string {
+  try {
+    return new URL(url).host || 'another server';
+  } catch {
+    return 'another server';
+  }
+}
+
+/** The URL Claude Code's hooks use: MEKO_MCP_URL from its settings, else Meko Cloud. */
+function settingsUrl(c: ClaudeMeko): string {
+  return c.settings.url ?? DEFAULT_MEKO_URL;
+}
+
+/**
+ * What keeps Claude Code's sessions off AgentK's Meko, one sentence each; empty when nothing does.
+ * It reads files only. The tokens are checked apart (claudeMekoTokens): they may differ from
+ * AgentK's, as long as they work. `mcpRegistered` is asked only when ~/.claude.json has no
+ * user-scope `meko` server (it may be registered some other way); null means it couldn't be asked,
+ * which isn't a gap.
+ */
+export function mekoClaudeGaps(c: ClaudeMeko, url: string, mcpRegistered: () => boolean | null): string[] {
+  const gaps: string[] = [];
+  const ours = mekoUrlHost(url);
+  if (c.plugin === 'missing') gaps.push("The meko-agent-skills plugin isn't installed in Claude Code.");
+  else if (c.plugin === 'disabled') gaps.push("The meko-agent-skills plugin is installed in Claude Code but not enabled.");
+  // The hooks in every session read the key from settings.json's env: sessions don't inherit
+  // the installer's environment (they start under the tmux service).
+  if (!c.settings.token) gaps.push("Claude Code's settings have no MEKO_API_KEY.");
+  if (!sameMekoUrl(settingsUrl(c), url)) gaps.push(`Claude Code's settings point at ${mekoUrlHost(settingsUrl(c))}, not ${ours}.`);
+  if (c.server) {
+    if (c.server.url && !sameMekoUrl(c.server.url, url)) gaps.push(`Claude Code's meko MCP server points at ${mekoUrlHost(c.server.url)}, not ${ours}.`);
+    else if (c.server.url && !c.server.token && !c.server.unresolved) gaps.push("Claude Code's meko MCP server sends no token.");
+  } else if (mcpRegistered() === false) {
+    gaps.push('Claude Code has no meko MCP server.');
+  }
   return gaps;
 }
 
-/** `claude mcp get meko` succeeds: Claude Code knows the Meko MCP server. */
-export function claudeHasMekoMcp(): boolean {
-  const r = spawnSync('claude', ['mcp', 'get', 'meko'], { stdio: 'ignore', timeout: 60_000 });
+/** Where Claude Code holds a Meko token. */
+export type ClaudeTokenPlace = 'settings' | 'server';
+
+/** The tokens Claude Code uses on AgentK's server (not those on another server: that's a gap of its own). */
+export function claudeMekoTokens(c: ClaudeMeko, url: string): { place: ClaudeTokenPlace; token: string }[] {
+  const out: { place: ClaudeTokenPlace; token: string }[] = [];
+  if (c.settings.token && sameMekoUrl(settingsUrl(c), url)) out.push({ place: 'settings', token: c.settings.token });
+  if (c.server?.url && c.server.token && sameMekoUrl(c.server.url, url)) out.push({ place: 'server', token: c.server.token });
+  return out;
+}
+
+/**
+ * `<claude> mcp get meko` succeeds: Claude Code knows the Meko MCP server. Blocks: only for the
+ * installer, where anything but success counts as not set up (it asks before setting it up).
+ */
+export function claudeHasMekoMcp(command: string): boolean {
+  const r = spawnSync(command, ['mcp', 'get', 'meko'], { stdio: 'ignore', timeout: 60_000 });
   return r.status === 0;
+}
+
+/**
+ * claudeHasMekoMcp without blocking, for the server: true when it's there, false when Claude Code
+ * says it isn't (exit 1), and null when Claude Code couldn't be asked (not found, timed out, another
+ * failure), which mustn't read as a missing server.
+ */
+export function claudeHasMekoMcpAsync(command: string): Promise<boolean | null> {
+  return new Promise((resolve) => {
+    execFile(command, ['mcp', 'get', 'meko'], { timeout: 60_000 }, (err) => {
+      if (!err) return resolve(true);
+      // An exit status is a number here; a command that couldn't start has a string code (ENOENT).
+      const { code, killed } = err as { code?: unknown; killed?: boolean };
+      resolve(code === 1 && !killed ? false : null);
+    });
+  });
+}
+
+/**
+ * The installer's own check on the key it was given in its environment (MEKO_API_KEY, not typed):
+ * it isn't stored in config.toml, so once AgentK runs as a service (with no MEKO_* environment) it
+ * takes the key from Claude Code's settings. A different key there would become AgentK's.
+ */
+export function envKeyGap(c: ClaudeMeko, apiKey: string, keyFromEnv: boolean): string[] {
+  return keyFromEnv && c.settings.token && c.settings.token !== apiKey
+    ? ["Claude Code's settings hold a different MEKO_API_KEY, which AgentK would use instead of this one once it runs as a service."]
+    : [];
 }
 
 export interface MekoSetupPackage {
@@ -142,7 +283,8 @@ export class MekoSetupError extends Error {}
 export async function ensureMekoInClaude(
   o: { url: string; apiKey: string; canAsk: boolean; installDeps: boolean; noInstallDeps: boolean },
   d: {
-    gaps: () => string[];
+    /** What's wrong with Meko in Claude Code, one sentence each (mekoClaudeGaps, plus tokens that don't work). */
+    gaps: () => Promise<string[]>;
     latest: () => Promise<MekoSetupPackage>;
     run: (pkg: MekoSetupPackage) => Promise<number>;
     ask: (question: string, def: string) => Promise<string>;
@@ -150,10 +292,11 @@ export async function ensureMekoInClaude(
     warn: (label: string, text: string) => void;
   },
 ): Promise<'ready' | 'set-up'> {
-  const gaps = d.gaps();
+  const gaps = await d.gaps();
   if (!gaps.length) return 'ready';
   const manual = manualMekoSetup(o.url);
-  d.warn('Meko in Claude', 'missing');
+  // A short word, not the list: the install output stays tidy, and the setup fixes them all.
+  d.warn('Meko in Claude', 'not set up for this Meko');
   if (o.noInstallDeps) throw new MekoSetupError(`Meko isn't set up for Claude Code. Run: ${manual}`);
   const pkg = await d.latest().catch((e: unknown) => {
     throw new MekoSetupError(`Couldn't look up Meko's setup on npm (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
@@ -168,9 +311,9 @@ export async function ensureMekoInClaude(
   const code = await d.run(pkg).catch((e: unknown) => {
     throw new MekoSetupError(`Meko's setup couldn't run (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
   });
-  const left = d.gaps();
+  const left = await d.gaps();
   if (code !== 0 || left.length) {
-    throw new MekoSetupError(`Meko's setup didn't finish${left.length ? ` (still missing: ${left.join(', ')})` : ''}. See its output above, or run it yourself: ${manual}`);
+    throw new MekoSetupError(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} See its output above, or run it yourself: ${manual}`);
   }
   return 'set-up';
 }

@@ -31,7 +31,7 @@ import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
 import { ProjectView } from './ProjectView';
 import { Rail } from './Rail';
-import { SettingsDialog } from './SettingsDialog';
+import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
 
@@ -46,7 +46,7 @@ type Modal =
   | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
-  | { kind: 'settings' }
+  | { kind: 'settings'; tab?: SettingsTab }
   | { kind: 'palette' }
   /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
   | { kind: 'move'; sessionId: string; preset?: MovePreset };
@@ -444,6 +444,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onError={showToast}
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
+          onMekoSettings={() => setModal({ kind: 'settings', tab: 'meko' })}
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
@@ -539,7 +540,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         />
       )}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} onClose={() => setModal({ kind: 'none' })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
       )}
       {modal.kind === 'palette' && (
         <CommandPalette
