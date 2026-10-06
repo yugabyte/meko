@@ -22,7 +22,7 @@ import { HttpError } from './projects.js';
 import { removePastes, savePastedImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import {
-  EDIT_TOOLS, MIN_MOD_CLAUDE, claudeVersion, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, versionAtLeast, writeLauncher,
+  EDIT_TOOLS, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
 } from './claude.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
 import {
@@ -77,8 +77,6 @@ const MAX_FAILED_STARTS = 20;
 const SETTLE_MS = 60000;
 /** How long recovery waits before trying again after a failed restart (each try may fetch from the remote). */
 const RECOVERY_BACKOFF_MS = 5 * 60 * 1000;
-/** How long the Claude Code version read for the mod's version check is used before it's read again. */
-const CLAUDE_VERSION_TTL_MS = 10 * 60 * 1000;
 /**
  * Session variables the launcher clears when it doesn't set them, so a value inherited from
  * tmux's environment or the user's profile can't leak in. MEKO_CHECKPOINT_INTERVAL is only
@@ -152,8 +150,6 @@ export class SessionManager {
   readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped));
   /** How full each session's context window is (percent), from the mod's measurements. */
   private contextFill = new Map<string, number>();
-  /** The Claude Code version, read for the mod's version check. */
-  private claudeVer: { command: string; at: number; version: Promise<string | null> } | null = null;
 
   setStartup(id: string, step: StartupStep, opts: { resumed?: boolean; hasPrompt?: boolean } = {}): void {
     const prev = this.startup.get(id);
@@ -658,16 +654,11 @@ export class SessionManager {
    * the config, its files missing, or the Claude Code too old (or its version unreadable).
    */
   async modDir(): Promise<string | null> {
-    const { command, mod } = this.core.config.claude;
     const dir = modDirPath(this.core.paths);
-    if (!mod || !existsSync(join(dir, 'hooks', 'register.ts'))) return null;
-    const now = Date.now();
-    if (!this.claudeVer || this.claudeVer.command !== command || now - this.claudeVer.at > CLAUDE_VERSION_TTL_MS) {
-      this.claudeVer = { command, at: now, version: claudeVersion(command) };
-    }
-    const v = await this.claudeVer.version;
-    return v && versionAtLeast(v, MIN_MOD_CLAUDE) ? dir : null;
+    if (!this.core.config.claude.mod || !existsSync(join(dir, 'hooks', 'register.ts'))) return null;
+    return (await this.core.claudeCode.supportsMod()) ? dir : null;
   }
+
 
   private systemPrompt(row: SessionRow): string {
     const p = projectRow(this.db, row.project_id);

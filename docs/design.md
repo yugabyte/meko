@@ -114,6 +114,23 @@ hooks module whatever the variable says, and AgentK types prompts as before. It 
 - `claude --version` (read at startup, then at most every 10 minutes) is 2.1.286 or later. Older
   versions frame a plugin's prompt as the plugin's message, not the person's.
 
+**Claude Code's version.** AgentK installs Claude Code with Anthropic's installer (`install.sh`) and
+never updates it; Claude Code updates itself, unless that's turned off or it hasn't run for a while.
+`ClaudeCode` (`claudecode.ts`) keeps the version read above and puts it in `AppState.claudeCode`,
+with whether it runs the mod. A running session keeps the version it started with until Claude
+restarts in it, so what matters is the version the next launch gets. While `[claude] mod` is on and
+that version is older than 2.1.286, a banner says so, and that AgentK types its prompts instead:
+
+- **Update Claude Code** runs `claude update`, Claude Code's own updater (`POST /api/claude/update`,
+  one at a time, stopped after 5 minutes), then reads the version again;
+- the outcome shows as its own banner: updated (running sessions keep their version until Claude
+  restarts in them), nothing newer found (its release channel or the organization's settings may
+  hold it back), or failed, with the last lines it printed and what to run on the host instead;
+- each can be dismissed (the too-old banner once per version, in the browser's storage).
+
+When Claude Code's rollout switch keeps mods off despite a new enough version, nothing shows: an
+update can't fix it, and the switch flips back on by itself.
+
 The mod reaches the server on the hook socket, with the session's `AK_HOOK_SOCK` and
 `AK_HOOK_TOKEN`, like the hook scripts. Its routes answer with `Connection: close`, so a mod that
 keeps polling on one connection can't hold the socket open. Before the socket closes (a stop, or a

@@ -20,6 +20,32 @@ if (args[0] === '--version') {
   process.stdout.write(`${v} (Claude Code)\n`);
   process.exit(0);
 }
+// Like `claude update`: an `update-to` file in the fake's dir is the version it updates to (written
+// to `version`); an `update-fail` file makes it fail with that file's text.
+if (args[0] === 'update') {
+  const fake = process.env.FAKE_CLAUDE_DIR ?? '';
+  const read = (f) => {
+    try {
+      return readFileSync(join(fake, f), 'utf8').trim();
+    } catch {
+      return null;
+    }
+  };
+  const fail = read('update-fail');
+  if (fail !== null) {
+    process.stderr.write(`${fail}\n`);
+    process.exit(1);
+  }
+  const from = read('version') ?? '2.1.287';
+  const to = read('update-to');
+  if (to && to !== from) {
+    writeFileSync(join(fake, 'version'), to);
+    process.stdout.write(`Current version: ${from}\nSuccessfully updated from ${from} to version ${to}\n`);
+  } else {
+    process.stdout.write(`Claude Code is up to date (${from})\n`);
+  }
+  process.exit(0);
+}
 const opt = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : null;

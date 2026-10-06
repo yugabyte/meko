@@ -118,6 +118,7 @@ your phone can connect.
   types its prompts into the terminal again at once; running sessions keep the mod loaded until
   they're relaunched ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
+  When the host's Claude Code is too old for the mod, a banner says so and can update it.
 - **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
   Merge & Close, and a new session asks where to start: *Explore* for investigating, POCs and
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that

@@ -142,6 +142,31 @@ describe("AgentK's mod in Claude (real tmux + git, fake claude)", () => {
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, "the new Claude's mod to poll");
   });
 
+  it('shows a too-old Claude Code, updates it, and loads the mod from the next launch', async () => {
+    env = await makeEnv({ start: false });
+    fakeFiles(env, { version: '2.1.280', 'update-to': '2.1.291' });
+    await env.core.start();
+    await waitFor(() => env.core.state().claudeCode.version, (v) => v === '2.1.280', 5000, 'the version');
+    expect(env.core.state().claudeCode).toMatchObject({ supportsMod: false, minModVersion: '2.1.286', modEnabled: true, updating: false });
+    await session('Before');
+    expect(launches(env)[0].args).not.toContain('--plugin-dir');
+
+    const after = await env.core.claudeCode.update();
+    expect(after).toMatchObject({ version: '2.1.291', supportsMod: true });
+    expect(after.lastUpdate).toMatchObject({ ok: true, from: '2.1.280', to: '2.1.291', message: expect.stringContaining('Successfully updated') });
+    await session('After');
+    expect(launches(env)[1].args).toEqual(expect.arrayContaining(['--plugin-dir', modDirPath(env.core.paths)]));
+  });
+
+  it('reports a failed Claude Code update', async () => {
+    env = await makeEnv({ start: false });
+    fakeFiles(env, { version: '2.1.280', 'update-fail': 'Error: permission denied' });
+    await env.core.start();
+    const after = await env.core.claudeCode.update();
+    expect(after).toMatchObject({ version: '2.1.280', supportsMod: false });
+    expect(after.lastUpdate).toMatchObject({ ok: false, message: 'Error: permission denied' });
+  });
+
   it('leaves the mod out for a Claude Code older than 2.1.286, or when the config turns it off', async () => {
     env = await makeEnv({ start: false });
     fakeFiles(env, { version: '2.1.285' });

@@ -300,6 +300,22 @@ export function claudeVersion(command: string): Promise<string | null> {
   });
 }
 
+/** How long `claude update` may run before it's stopped. */
+const CLAUDE_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Runs `<command> update`, Claude Code's own updater, and resolves whether it exited 0 and what it
+ * printed (stdout, then stderr). Never rejects: a command that can't start is `ok: false`.
+ */
+export function runClaudeUpdate(command: string): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    execFile(command, ['update'], { timeout: CLAUDE_UPDATE_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: { ...process.env, NO_COLOR: '1' } }, (err, stdout, stderr) => {
+      const output = [String(stdout ?? ''), String(stderr ?? '')].join('\n').trim();
+      resolve({ ok: !err, output: output || (err ? err.message : '') });
+    });
+  });
+}
+
 /** Whether dotted version `v` is `min` or later (numeric parts; `2.1.10` is after `2.1.9`). */
 export function versionAtLeast(v: string, min: string): boolean {
   const a = v.split('.').map(Number);
