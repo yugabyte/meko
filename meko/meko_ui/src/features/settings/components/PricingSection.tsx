@@ -7,9 +7,12 @@
 // user_type from /auth/me. Every row value matches the caps enforced
 // by lib/freeTier.ts on the FE and api_server/internal/service/free_tier.go on the BE.
 
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ArrowUpRight, Check, CreditCard, Cloud, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useArrivalFlash } from "@/hooks/useArrivalFlash";
+import { HIGHLIGHT_TIER_PARAM } from "@/lib/freeTierBanner";
 import {
   Dialog,
   DialogContent,
@@ -70,6 +73,69 @@ export function PricingSection() {
 
   const gridCols = showStandard ? "md:grid-cols-3" : "md:grid-cols-2";
 
+  // Deep-link highlight (MEKO-809). TierLimitBanner lands the user here
+  // with ?highlightTier=standard; useArrivalFlash scrolls the Standard
+  // card into view and pulses it for ~1.6s so the next action is
+  // unmissable. The pro variant of the banner opens SALES_CONTACT_URL
+  // directly (no Settings hop), so ?highlightTier=pro only reaches
+  // this page from a hand-typed URL — supported for completeness but
+  // not generated anywhere today.
+  //
+  // Dropping ?highlightTier=standard when the Standard tile is hidden
+  // (STANDARD_TIER_ENABLED off): otherwise the mobile <Tabs defaultValue>
+  // below would set an unknown tab value with no trigger/content and
+  // render nothing, and the hook would run active:true against a
+  // never-mounted node. Free targets are also dropped — Free is never
+  // a useful highlight destination.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const highlightRaw = searchParams.get(HIGHLIGHT_TIER_PARAM);
+  const highlightTier: Exclude<TierColumn, "free"> | null =
+    highlightRaw === "pro"
+      ? "pro"
+      : highlightRaw === "standard" && showStandard
+        ? "standard"
+        : null;
+  const clearHighlight = useCallback(() => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete(HIGHLIGHT_TIER_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
+  // Two independent arrival-flash hooks (desktop + mobile). The old
+  // single-ref version attached the SAME ref object to both the
+  // desktop-grid TierCard and the mobile TabsContent TierCard; React
+  // commits refs in child order, so ref.current ended up pointing at
+  // the mobile node. On >=md viewports that node is `md:hidden`
+  // (display:none), so scrollIntoView was a no-op and the Upgrade
+  // deep-link never scrolled on desktop. One flash key per layout
+  // means each ref targets its OWN visible node for that viewport —
+  // the hidden layout's scroll fires against a display:none element
+  // and silently no-ops, which is fine.
+  const clearedRef = useRef(false);
+  const onFlashDone = useCallback(() => {
+    if (clearedRef.current) return;
+    clearedRef.current = true;
+    clearHighlight();
+  }, [clearHighlight]);
+  const { ref: highlightRefDesktop, flashing: flashingDesktop } = useArrivalFlash<HTMLElement>({
+    flashKey: highlightTier ? `desktop:${highlightTier}` : undefined,
+    active: highlightTier !== null,
+    onDone: onFlashDone,
+    block: "center",
+    debugLabel: "PricingTierCard[desktop]",
+  });
+  const { ref: highlightRefMobile, flashing: flashingMobile } = useArrivalFlash<HTMLElement>({
+    flashKey: highlightTier ? `mobile:${highlightTier}` : undefined,
+    active: highlightTier !== null,
+    onDone: onFlashDone,
+    block: "center",
+    debugLabel: "PricingTierCard[mobile]",
+  });
+
   return (
     <section className="rounded-xl border border-border bg-card p-5">
       <header className="mb-4">
@@ -91,12 +157,33 @@ export function PricingSection() {
         {/* Desktop (≥ md): tiles side-by-side. */}
         <div className={cn("hidden md:grid md:gap-4", gridCols)}>
           <TierCard column="free" activeTier={activeTier} />
-          {showStandard && <TierCard column="standard" activeTier={activeTier} />}
-          <TierCard column="pro" activeTier={activeTier} />
+          {showStandard && (
+            <TierCard
+              column="standard"
+              activeTier={activeTier}
+              highlightRef={highlightTier === "standard" ? highlightRefDesktop : undefined}
+              flashing={highlightTier === "standard" && flashingDesktop}
+            />
+          )}
+          <TierCard
+            column="pro"
+            activeTier={activeTier}
+            highlightRef={highlightTier === "pro" ? highlightRefDesktop : undefined}
+            flashing={highlightTier === "pro" && flashingDesktop}
+          />
         </div>
 
-        {/* Mobile (< md): tabs so one card renders at full viewport width. */}
-        <Tabs defaultValue={activeTier === "pro" ? "pro" : activeTier === "standard" ? "standard" : "free"} className="md:hidden">
+        {/* Mobile (< md): tabs so one card renders at full viewport width.
+            A highlight target also drives the initial tab so the pulsed
+            card is the one on screen — otherwise the flash fires behind
+            an inactive tab the user never looks at. */}
+        <Tabs
+          defaultValue={
+            highlightTier ??
+            (activeTier === "pro" ? "pro" : activeTier === "standard" ? "standard" : "free")
+          }
+          className="md:hidden"
+        >
           <TabsList className={cn("grid w-full", showStandard ? "grid-cols-3" : "grid-cols-2")}>
             <TabsTrigger value="free">Free</TabsTrigger>
             {showStandard && <TabsTrigger value="standard">Standard</TabsTrigger>}
@@ -107,11 +194,21 @@ export function PricingSection() {
           </TabsContent>
           {showStandard && (
             <TabsContent value="standard" className="mt-3">
-              <TierCard column="standard" activeTier={activeTier} />
+              <TierCard
+                column="standard"
+                activeTier={activeTier}
+                highlightRef={highlightTier === "standard" ? highlightRefMobile : undefined}
+                flashing={highlightTier === "standard" && flashingMobile}
+              />
             </TabsContent>
           )}
           <TabsContent value="pro" className="mt-3">
-            <TierCard column="pro" activeTier={activeTier} />
+            <TierCard
+              column="pro"
+              activeTier={activeTier}
+              highlightRef={highlightTier === "pro" ? highlightRefMobile : undefined}
+              flashing={highlightTier === "pro" && flashingMobile}
+            />
           </TabsContent>
         </Tabs>
       </TooltipProvider>
@@ -119,17 +216,38 @@ export function PricingSection() {
   );
 }
 
-function TierCard({ column, activeTier }: { column: TierColumn; activeTier: TierName }) {
+function TierCard({
+  column,
+  activeTier,
+  highlightRef,
+  flashing,
+}: {
+  column: TierColumn;
+  activeTier: TierName;
+  /** Attached by PricingSection to one card per layout (desktop grid
+   *  and mobile tabs are both mounted; refs are per-layout). On the
+   *  hidden layout the scroll is a no-op against a display:none node,
+   *  so only the visible card actually scrolls into view and flashes.
+   *  Target comes from ?highlightTier=… on the banner's deep-link. */
+  highlightRef?: React.Ref<HTMLElement>;
+  flashing?: boolean;
+}) {
   const isCurrent = activeTier === column;
   const meta = tierMeta(column);
 
   return (
     <article
+      ref={highlightRef}
       className={cn(
-        "flex flex-col rounded-lg border p-4",
+        "flex flex-col rounded-lg border p-4 transition-shadow",
         column === "standard"
           ? "border-brand/40 bg-brand/[0.05]"
           : "border-border bg-background/40",
+        // Deep-link flash: brand-colour ring + a subtle pulse while
+        // useArrivalFlash holds `flashing` true (1.6s). Falls back to
+        // nothing after the one-shot timer clears, so the card settles
+        // into its normal styling.
+        flashing && "ring-4 ring-brand/70 shadow-lg animate-pulse",
       )}
     >
       <header className="mb-3 flex min-h-7 flex-col">

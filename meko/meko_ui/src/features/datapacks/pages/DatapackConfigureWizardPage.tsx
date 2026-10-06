@@ -9,6 +9,8 @@ import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { setCachedDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { queryClient } from "@/lib/queryClient";
 import { ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
+import { tierBannerKindForError } from "@/lib/freeTierBanner";
+import type { TierBannerKind } from "@/lib/freeTier";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/configure-wizard/DatapackConfigureWizardStepper";
@@ -99,6 +101,11 @@ export default function DatapackConfigureWizardPage({
   const [configureInitialDescription, setConfigureInitialDescription] = useState("");
   const [configureLoading, setConfigureLoading] = useState(!isCreateFlow);
   const [configureError, setConfigureError] = useState<string | null>(null);
+  // Tier-limit error from the api_server 402 (MEKO-809). Set alongside
+  // configureError=null so the step renders TierLimitBanner (upgrade
+  // button + contact-us) instead of the dead-end red error block that
+  // Scott hit on #meko-feedback.
+  const [tierLimitBannerKind, setTierLimitBannerKind] = useState<TierBannerKind | null>(null);
   const [configureSubmitting, setConfigureSubmitting] = useState(false);
 
   const [knowledgeItems, setKnowledgeItems] = useState<ListedSource[]>([]);
@@ -414,6 +421,11 @@ export default function DatapackConfigureWizardPage({
 
   const handleConfigureStepNext = useCallback(async () => {
     const trimmed = configureDraftName.trim();
+    // Clear the tier-limit banner up front: ConfigureWizardConfigureStep
+    // renders the banner in preference to `error`, so a prior 402 would
+    // otherwise hide any subsequent validation message and the user's
+    // click would look like a no-op.
+    setTierLimitBannerKind(null);
     const nameError = validateDatapackName(trimmed);
     if (nameError) {
       setConfigureError(nameError);
@@ -509,7 +521,24 @@ export default function DatapackConfigureWizardPage({
       }
       setStepId(WIZARD_STEP_ID.install);
     } catch (err) {
-      setConfigureError(getApiErrorMessage(err, "Failed to save datapack."));
+      // Tier-limit 402 (MEKO-809): swap the plain red error block for
+      // the shared TierLimitBanner so the user has a working upgrade
+      // path instead of a dead end. Also invalidate the account-usage
+      // cache (staleTime 60s) — the banner's metric line reads from
+      // that cache, and without a refresh here it would still show the
+      // pre-cap numbers that let the user get as far as submitting
+      // (e.g. "9 / 10 datapacks used" sitting under "You've reached
+      // the limit"). Any other error still shows the plain message
+      // the step rendered before.
+      const bannerKind = tierBannerKindForError(err);
+      if (bannerKind) {
+        setTierLimitBannerKind(bannerKind);
+        setConfigureError(null);
+        void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
+      } else {
+        setTierLimitBannerKind(null);
+        setConfigureError(getApiErrorMessage(err, "Failed to save datapack."));
+      }
     } finally {
       setConfigureSubmitting(false);
     }
@@ -637,6 +666,7 @@ export default function DatapackConfigureWizardPage({
               loading={configureLoading}
               submitting={configureSubmitting}
               error={configureError}
+              tierLimitBannerKind={tierLimitBannerKind}
               showFolderPicker={isCreateFlow && projectsEnabled}
               folderId={createFolderId}
               onFolderChange={setCreateFolderId}
