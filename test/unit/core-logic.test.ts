@@ -236,12 +236,11 @@ describe('config and db', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 6}`);
+    db.exec(`PRAGMA user_version = ${version - 7}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -254,6 +253,34 @@ describe('config and db', () => {
     db.close();
   });
 
+  it('drops stored design questions and answers at schema 24, keeping the design', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+      VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'design', 0)`);
+    run(db, `INSERT INTO designs(session_id, markdown, updated_at) VALUES ('s1', '# Design', 1)`);
+    // Back to schema 23, with questions and a draft answer stored, then upgrade.
+    db.exec(`
+      ALTER TABLE designs ADD COLUMN questions TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE designs ADD COLUMN questions_source TEXT;
+      ALTER TABLE designs ADD COLUMN open_questions INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE design_answers (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, question_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '');
+      CREATE INDEX design_answers_session ON design_answers(session_id);
+      UPDATE designs SET questions = '[{"id":"q"}]', questions_source = 'file', open_questions = 1;
+      INSERT INTO design_answers(id, session_id, question_id, text) VALUES ('a1', 's1', 'q', 'Draft');
+      PRAGMA user_version = ${version - 1};
+    `);
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(all(db, `SELECT name FROM sqlite_master WHERE name LIKE 'design_answers%'`)).toEqual([]);
+    expect(all<{ name: string }>(db, 'PRAGMA table_info(designs)').some((c) => /question/.test(c.name))).toBe(false);
+    expect(all(db, 'SELECT session_id, markdown FROM designs')).toEqual([{ session_id: 's1', markdown: '# Design' }]);
+    db.close();
+  });
+
   it('keeps sessions from before schema 20 on their project-wide agent id, and carries closes over', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
@@ -262,10 +289,9 @@ describe('config and db', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 4}`);
+    db.exec(`PRAGMA user_version = ${version - 5}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -291,7 +317,6 @@ describe('config and db', () => {
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -329,7 +354,6 @@ describe('config and db', () => {
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -372,7 +396,6 @@ describe('config and db', () => {
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -398,7 +421,6 @@ describe('config and db', () => {
     let db = openDb(file);
     const version = schemaVersion(db);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -429,7 +451,6 @@ describe('config and db', () => {
     add('live', 'running');
     add('old', 'archived');
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -462,7 +483,6 @@ describe('config and db', () => {
     add('s1', 'api');
     add('s2', 'web');
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -490,7 +510,6 @@ describe('config and db', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -522,7 +541,6 @@ describe('config and db', () => {
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
     dropV23(db);
-    dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
@@ -558,15 +576,12 @@ describe('config and db', () => {
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
+// Migration 24 dropped what 22 added (a design's questions and the answers to them), so a test
+// that rewinds past 22 has nothing of either to undo; it still counts both in the version.
+
 /** Undoes migration 23 (the merge-conflict watcher), for tests that rewind the schema. */
 function dropV23(db: ReturnType<typeof openDb>) {
   for (const c of ['conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
-}
-
-/** Undoes migration 22 (a design's questions and the answers to them), for tests that rewind the schema. */
-function dropV22(db: ReturnType<typeof openDb>) {
-  db.exec('DROP TABLE design_answers');
-  for (const c of ['questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
 }
 
 /** Undoes migration 21 (Review a PR sessions), for tests that rewind the schema. */

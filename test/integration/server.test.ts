@@ -292,19 +292,22 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const nothing = await app.inject({ method: 'POST', url: `${url}/send`, headers: { cookie } });
     expect(nothing.statusCode).toBe(409);
 
-    // Answers to the design: behind login, and only in Design (this session started at Code).
+    // Answers to the design: behind login, and only in Design (this session started at Code). They
+    // aren't stored, so there's nothing to list, change or delete.
     const design = await app.inject({ url: `/api/sessions/${s.json().id}/design`, headers: { cookie } });
     expect(design.json()).toMatchObject({ markdown: null, questions: [], questionsSource: null });
     const answers = `/api/sessions/${s.json().id}/design/answers`;
-    expect((await app.inject({ url: answers })).statusCode).toBe(401);
-    expect((await app.inject({ method: 'PUT', url: `${answers}/_feedback`, payload: { text: 'Hi' } })).statusCode).toBe(401);
-    expect((await app.inject({ method: 'POST', url: `${answers}/send` })).statusCode).toBe(401);
-    expect((await app.inject({ url: answers, headers: { cookie } })).json()).toEqual([]);
-    const early = await app.inject({ method: 'PUT', url: `${answers}/_feedback`, headers: { cookie }, payload: { text: 'Hi' } });
+    const feedback = { answers: [], feedback: 'Hi' };
+    expect((await app.inject({ method: 'POST', url: answers, payload: feedback })).statusCode).toBe(401);
+    const early = await app.inject({ method: 'POST', url: answers, headers: { cookie }, payload: feedback });
     expect(early.statusCode).toBe(409);
     expect(early.json().error).toMatch(/only be sent while the session is in Design/);
-    expect((await app.inject({ method: 'POST', url: `${answers}/send`, headers: { cookie } })).statusCode).toBe(409);
-    expect((await app.inject({ method: 'DELETE', url: `${answers}/_feedback`, headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ url: answers, headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url: `${answers}/_feedback`, headers: { cookie }, payload: { text: 'Hi' } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: `${answers}/send`, headers: { cookie } })).statusCode).toBe(404);
+    const approve = await app.inject({ method: 'POST', url: `/api/sessions/${s.json().id}/actions/approve-design`, headers: { cookie }, payload: feedback });
+    expect(approve.statusCode).toBe(409);
+    expect(approve.json().error).toMatch(/past the Design stage/);
 
     // Image previews: behind login, images only, served so the browser never runs them.
     const sid = s.json().id;

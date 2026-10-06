@@ -1332,14 +1332,15 @@ textarea.input {
 }
 .dq-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   padding: 8px 12px;
   border-top: 1px solid var(--rule);
   background: var(--surface);
 }
 .dq-foot-note {
-  flex: 1;
+  flex: 1 1 14em;
   min-width: 0;
   font-size: 12px;
   color: var(--muted);
@@ -1398,21 +1399,16 @@ textarea.input {
   border-color: var(--ok);
   color: var(--ok);
 }
-.dq-chip.queued,
-.dq-chip.sent {
+.dq-chip.custom {
   border-color: var(--accent);
   color: var(--accent);
 }
-.dq-ctx,
-.dq-sent {
+.dq-ctx {
   margin: 0;
   font-size: 13px;
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-.dq-sent {
-  color: var(--ink);
 }
 .dq-opts {
   display: flex;
@@ -1465,10 +1461,6 @@ textarea.input {
 .dq-text {
   font-size: 13px;
 }
-.dq-clear {
-  align-self: flex-start;
-  font-size: 12px;
-}
 .dq-section {
   display: flex;
   flex-direction: column;
@@ -1481,7 +1473,6 @@ textarea.input {
 .dq-section p {
   margin: 0;
 }
-.dq-orphans,
 .dq-decided ul {
   list-style: none;
   margin: 0;
@@ -1489,15 +1480,6 @@ textarea.input {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-.dq-orphans li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  align-items: baseline;
-  padding: 8px 10px;
-  border: 1px dashed var(--rule);
-  border-radius: 6px;
 }
 .dq-decided summary {
   cursor: pointer;
@@ -1545,12 +1527,6 @@ textarea.input {
   .dq-bar,
   .design-tabs button {
     min-height: 40px;
-  }
-  .dq-clear,
-  .dq-orphans .link-btn {
-    min-height: 36px;
-    display: inline-flex;
-    align-items: center;
   }
   .dq-decided summary {
     padding: 9px 0;

@@ -11,6 +11,7 @@ import {
 } from '../../shared/types';
 import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
+import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
@@ -69,12 +70,15 @@ export function ProjectView({
   const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
   const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
   const [sheet, setSheet] = useState(false);
+  // Bumped to show the design's questions (Approve pressed with questions open).
+  const [questionsAt, setQuestionsAt] = useState(0);
   const [sharing, setSharing] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPanel(null);
     setSheet(false);
     setSharing(false);
+    setQuestionsAt(0);
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
   // During Design, show the design as soon as it's written, and again whenever it's revised.
@@ -88,10 +92,18 @@ export function ProjectView({
   const actingRef = useRef(false);
   const act = async (action: SessionAction) => {
     if (!session || actingRef.current) return;
+    // With open questions, approving starts with answering them; the approval goes from there.
+    if (action === 'approve-design' && session.designQuestions.open > 0) {
+      setPanel('design');
+      setSheet(false);
+      setQuestionsAt((n) => n + 1);
+      return;
+    }
     actingRef.current = true;
     setActing(true);
     try {
-      await api.sessionAction(session.id, action);
+      if (action === 'approve-design') await approveDesign(session.id);
+      else await api.sessionAction(session.id, action);
       if (action === 'archive' || action === 'discard') disposeTerminal(session.id);
     } catch (e) {
       onError(errorMessage(e));
@@ -276,7 +288,13 @@ export function ProjectView({
           </div>
         )}
         {session && panel === 'design' && (
-          <DesignPanel key={`design-${session.id}`} session={session} onClose={() => setPanel(null)} onApprove={() => act('approve-design')} />
+          <DesignPanel
+            key={`design-${session.id}`}
+            session={session}
+            showQuestions={questionsAt}
+            onClose={() => setPanel(null)}
+            onApprove={() => act('approve-design')}
+          />
         )}
         {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
       </div>
@@ -423,15 +441,16 @@ function StageBar({
       );
       break;
     case 'design': {
-      reason = designApprovalBlocker(session);
+      // With open questions the gate only shows them, so it isn't held up.
+      reason = session.designQuestions.open ? null : designApprovalBlocker(session);
       gate = (
         <button
           className="gate"
           disabled={blocked || !!reason}
-          title={reason ?? 'Approve the design and move to Code'}
+          title={reason ?? (session.designQuestions.open ? 'Answer the open questions, then approve' : 'Approve the design and move to Code')}
           onClick={() => onAct('approve-design')}
         >
-          {approveLabel(session.designQuestions.unsent)}
+          {approveLabel(session.designQuestions.open)}
         </button>
       );
       break;
