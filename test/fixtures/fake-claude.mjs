@@ -310,6 +310,9 @@ process.on('SIGHUP', () => {
   process.exit(129);
 });
 
+// Like Claude's TUI, the terminal is read raw, not line by line: a line-mode terminal caps a line
+// (1,024 bytes on macOS, 4,096 on Linux) and a longer typed prompt never arrives whole.
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
 // Like Claude Code in an untrusted folder: no hooks until the trust dialog is answered.
 if (existsSync(join(dir, 'trust-prompt'))) {
