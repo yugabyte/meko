@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesignAnswerInput, DesignQuestion } from '../../src/shared/types.js';
 import { designAnswers } from '../../src/server/answers.js';
 import {
@@ -188,6 +188,7 @@ describe('checking the answers a browser sends', () => {
     for (const body of [
       'text', [], { answers: 'x' }, { feedback: 3 }, { answers: [7] }, { answers: [{ choice: 0 }] },
       { answers: [{ questionId: 'store', choice: 1.5, label: 'Repo', text: '' }] },
+      { answers: [{ questionId: 'store', choice: 0 }] },
       { answers: [{ questionId: 'store', choice: 0, label: 'Datapack', text: 4 }] },
       { answers: [{ questionId: 'tabs', choice: null, label: null, text: '  ' }] },
       { answers: [{ questionId: 'tabs', text: 'a' }, { questionId: 'tabs', text: 'b' }] },
@@ -263,6 +264,47 @@ describe('answers in the browser', () => {
     expect(parseDrafts('{oops')).toEqual({ answers: {}, feedback: '' });
     expect(parseDrafts(JSON.stringify({ answers: { a: draft({ choice: 0, label: 'A' }), b: { choice: 'x' } }, feedback: 'f' })))
       .toEqual({ answers: { a: draft({ choice: 0, label: 'A' }) }, feedback: 'f' });
+  });
+
+  describe('kept in localStorage', () => {
+    let items: Map<string, string>;
+    let full: boolean;
+    beforeEach(() => {
+      items = new Map();
+      full = false;
+      vi.stubGlobal('localStorage', {
+        getItem: (k: string) => items.get(k) ?? null,
+        setItem: (k: string, v: string) => {
+          if (full && !k.endsWith(':probe')) throw new Error('QuotaExceededError');
+          items.set(k, v);
+        },
+        removeItem: (k: string) => void items.delete(k),
+      });
+      vi.resetModules();
+    });
+    afterEach(() => vi.unstubAllGlobals());
+    const fresh = () => import('../../src/web/design-answers.js');
+
+    it('reads what another tab wrote, never a stale copy', async () => {
+      const m = await fresh();
+      expect(m.draftsPersist()).toBe(true);
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: '' });
+      items.set('ak-design-answers:s1', JSON.stringify({ answers: {}, feedback: 'From the other tab' }));
+      expect(m.loadDrafts('s1').feedback).toBe('From the other tab');
+      // The other tab sent them: they're gone here too.
+      items.delete('ak-design-answers:s1');
+      expect(m.loadDrafts('s1').feedback).toBe('');
+    });
+
+    it('stops counting as reload-safe once a save fails, keeping the draft for the page', async () => {
+      const m = await fresh();
+      expect(m.draftsPersist()).toBe(true);
+      full = true;
+      m.saveDrafts('s1', { answers: {}, feedback: 'Too big to store' });
+      expect(m.draftsPersist()).toBe(false);
+      expect(items.has('ak-design-answers:s1')).toBe(false);
+      expect(m.loadDrafts('s1').feedback).toBe('Too big to store');
+    });
   });
 
   it('labels Approve', () => {

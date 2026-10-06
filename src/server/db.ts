@@ -380,15 +380,6 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN conflict_head TEXT;
   ALTER TABLE sessions ADD COLUMN conflict_fixes INTEGER NOT NULL DEFAULT 0;
   `,
-  // 24: a design's questions and the answers to them are no longer stored: the questions are read
-  // from the questions file (or the markdown design) into memory, and the browser sends the answers
-  // with an approval or a request to revise.
-  `
-  DROP TABLE design_answers;
-  ALTER TABLE designs DROP COLUMN questions;
-  ALTER TABLE designs DROP COLUMN questions_source;
-  ALTER TABLE designs DROP COLUMN open_questions;
-  `,
 ];
 
 export function openDb(path: string): Db {

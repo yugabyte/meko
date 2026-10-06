@@ -81,6 +81,10 @@ export function ProjectView({
     setQuestionsAt(0);
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
+  // Showing the questions is for the panel open now: one opened later starts on the design.
+  useEffect(() => {
+    if (panel !== 'design') setQuestionsAt(0);
+  }, [panel]);
   // During Design, show the design as soon as it's written, and again whenever it's revised.
   const designAt = session?.stage === 'design' ? session.designUpdatedAt : null;
   useEffect(() => {

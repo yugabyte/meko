@@ -44,8 +44,13 @@ export class DesignQuestionStore {
       try {
         e = this.read(row);
       } catch (err) {
-        // A broken questions file: the markdown design's list, if it has one, until Claude fixes it.
+        // A broken questions file with nothing read before it (after a restart): the markdown
+        // design's list, if it has one, until Claude fixes it. Said in the activity log, since the
+        // questions it had are gone and Approve no longer asks for them.
         this.core.log.warn(`reading the design's questions failed for ${row.id}`, errMsg(err));
+        if (row.stage === 'design') {
+          this.core.sessions.event(row.id, 'design', `AgentK's questions file can't be read (${errMsg(err)}), so its open questions aren't shown. Ask AgentK to fix ${this.core.sessions.questionsFile(row)}.`);
+        }
         e = this.read(row, true);
       }
       this.cache.set(row.id, e);
@@ -131,6 +136,7 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): { tex
       continue;
     }
     if (!Number.isInteger(choice) || (choice as number) < 0) throw new HttpError(400, `Pick one of ${qn}'s options.`);
+    if (typeof a.label !== 'string') throw new HttpError(400, `The answer to ${qn} needs the label of the option picked.`);
     // The label must still be the option's: a revision may have moved, changed or dropped it.
     const option = q.options[choice as number];
     if (!option || option.label !== a.label) throw new HttpError(409, STALE);

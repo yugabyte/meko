@@ -111,6 +111,8 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
     ? 'Answers go to AgentK only while the session is in Design.'
     : (draftsBlocker(doc.questions, drafts) ?? designApprovalBlocker(session));
   const reviseBlocker = blocker ?? (!request.answers.length && !request.feedback.trim() ? 'Answer a question or write feedback first.' : null);
+  // Shown in the footer too, as tooltips aren't seen on a phone.
+  const busy = session.busy ? 'AgentK is moving the session on. Wait a moment.' : null;
 
   const go = async (what: 'revise' | 'approve') => {
     setSending(what);
@@ -196,20 +198,20 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
       {editable && (
         <div className="dq-foot">
           <span className="dq-foot-note">
-            {error ? <span className="error-text">{error}</span> : (note ?? blocker ?? '')}
+            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? reviseBlocker ?? '')}
           </span>
           <button
             className="btn small"
-            disabled={!!reviseBlocker || !!sending || session.busy}
-            title={reviseBlocker ?? 'AgentK revises the design to match your answers'}
+            disabled={!!reviseBlocker || !!sending || !!busy}
+            title={busy ?? reviseBlocker ?? 'AgentK revises the design to match your answers'}
             onClick={() => void go('revise')}
           >
             {sending === 'revise' ? <Busy label="Sending" /> : 'Send for revision'}
           </button>
           <button
             className="btn small primary"
-            disabled={!!blocker || !!sending || session.busy}
-            title={blocker ?? 'Approve the design with your answers, and move to Code'}
+            disabled={!!blocker || !!sending || !!busy}
+            title={busy ?? blocker ?? 'Approve the design with your answers, and move to Code'}
             onClick={() => void go('approve')}
           >
             {sending === 'approve' ? <Busy label="Approving" /> : open.length ? 'Approve with answers' : 'Approve design'}

@@ -26,7 +26,8 @@ export interface Drafts {
 const EMPTY: Drafts = { answers: {}, feedback: '' };
 const key = (sessionId: string) => `ak-design-answers:${sessionId}`;
 
-// What's in localStorage, mirrored here so drafts still work on a page that can't use storage.
+// Drafts for a page that can't use localStorage (or stopped being able to: a full quota). Where it
+// works, localStorage is read every time, so another tab's changes are never missed.
 const memory = new Map<string, Drafts>();
 const listeners = new Set<(sessionId: string) => void>();
 
@@ -53,7 +54,10 @@ export function parseDrafts(text: string | null): Drafts {
 }
 
 let persists: boolean | null = null;
-/** Whether drafts outlast the page (localStorage works here), so their fields don't hold up a reload. */
+/**
+ * Whether drafts outlast the page (localStorage works here, and no save has failed), so their
+ * fields don't hold up a reload.
+ */
 export function draftsPersist(): boolean {
   if (persists === null) {
     try {
@@ -76,21 +80,18 @@ function readStorage(sessionId: string): Drafts {
 }
 
 export function loadDrafts(sessionId: string): Drafts {
-  let d = memory.get(sessionId);
-  if (!d) {
-    d = readStorage(sessionId);
-    memory.set(sessionId, d);
-  }
-  return d;
+  if (draftsPersist()) return readStorage(sessionId);
+  return memory.get(sessionId) ?? readStorage(sessionId);
 }
 
-function saveDrafts(sessionId: string, d: Drafts): void {
+export function saveDrafts(sessionId: string, d: Drafts): void {
   memory.set(sessionId, d);
   try {
     if (!Object.keys(d.answers).length && !d.feedback) localStorage.removeItem(key(sessionId));
     else localStorage.setItem(key(sessionId), JSON.stringify(d));
   } catch {
-    // Kept in memory, for this page only.
+    // Kept in memory, for this page only: the fields stop counting as reload-safe.
+    persists = false;
   }
   for (const fn of listeners) fn(sessionId);
 }
@@ -110,9 +111,7 @@ export function useDesignDrafts(sessionId: string): [Drafts, (fn: (d: Drafts) =>
     };
     // Another tab (the full-page design, or the side panel) changed them.
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== null && e.key !== key(sessionId)) return;
-      memory.set(sessionId, readStorage(sessionId));
-      setDrafts(loadDrafts(sessionId));
+      if (e.key === null || e.key === key(sessionId)) setDrafts(loadDrafts(sessionId));
     };
     listeners.add(onChange);
     window.addEventListener('storage', onStorage);

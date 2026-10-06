@@ -122,5 +122,12 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     expect(get(s.id).designUpdatedAt).toBeGreaterThanOrEqual(before);
     // Nothing changed since: not a change.
     expect(await env.core.lifecycle.collectDesign(row(s.id))).toBe(false);
+
+    // A broken file with nothing kept (a restart) shows no questions, and the activity log says why.
+    writeFileSync(file, '{oops');
+    env.core.questions.forget(s.id);
+    env.core.questions.preload();
+    expect(get(s.id).designQuestions.open).toBe(0);
+    expect(events(s.id).some((e) => /questions file can't be read .* Ask AgentK to fix .*questions\.json/.test(e))).toBe(true);
   });
 });

@@ -1036,7 +1036,7 @@ export interface DesignAnswerInput {
 
 /**
  * Answers to the design's open questions and other feedback on it. An open question left out is
- * sent as unanswered, so AgentK goes with its recommendation.
+ * sent as unanswered: AgentK goes with its recommendation, or its own judgment when it has none.
  */
 export interface DesignAnswersRequest {
   answers: DesignAnswerInput[];

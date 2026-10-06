@@ -357,7 +357,11 @@ whether they changed), and again at each Design turn end. A read is capped (256 
 6 options each, text cut short) and normalized (ids lowercased to letters, digits and dashes;
 entries without an id or question, and repeated ids, dropped; a recommendation must point at an
 option). A file that's too large, can't be read or isn't questions is logged and leaves the ones
-kept alone.
+kept alone. That holds within one server run: after a restart there's nothing kept, so a broken file
+shows the markdown design's list or no questions, and the session's activity log says the file
+needs fixing. The `designs` questions columns and the `design_answers` table from before are left
+in place, unused, so the release before this one still works after a rollback; a later migration
+drops them.
 Without the file, a markdown design's top-level list items under an "Open questions" heading are
 its questions (only those with a "?" under a heading that also names risks), with ids from their
 text. A change to the questions counts as a change to the design: the design's time moves on so
@@ -382,7 +386,7 @@ With open questions, **Approve design** reads **Answer & approve**: the gate, th
 the ⋯ sheet take you to the questions, and the approval goes from their footer, **Approve with
 answers**. The answers go in the approval request (`DesignAnswersRequest`), typed ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
-recommendation. **Send for revision** types them as the `design-answers` prompt instead, and AgentK
+recommendation (its own judgment when it has none). **Send for revision** types them as the `design-answers` prompt instead, and AgentK
 revises the design and marks each answered question resolved. It only works while Claude is at its
 prompt (between turns, or with the design waiting for approval, never over a permission or
 question prompt); otherwise the button says why, and nothing is queued. The server checks the
@@ -666,7 +670,11 @@ CREATE TABLE designs (         -- one per session: markdown, or an Artifact's pa
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT,
   md_version INTEGER, md_sent INTEGER,        -- versions sent to Meko (names the next one), and
   html_version INTEGER, html_sent INTEGER,    -- whether the current one was sent
-  updated_at INTEGER);                        -- (its questions are read from questions.json, and kept in memory)
+  questions TEXT, questions_source TEXT,      -- unused: a design's questions are read from questions.json and
+  open_questions INTEGER, updated_at INTEGER);  -- kept in memory; dropped once the release before that has aged out
+CREATE TABLE design_answers (  -- unused: answers aren't stored, the browser sends them; dropped with the columns above
+  id TEXT PRIMARY KEY, session_id TEXT, question_id TEXT, question TEXT, choice INTEGER, choice_label TEXT,
+  your_call INTEGER, text TEXT, state TEXT, created_at INTEGER, updated_at INTEGER, sent_at INTEGER);
 CREATE TABLE review_comments ( -- comments on a session's diff: draft → queued → sent to Claude
   id TEXT PRIMARY KEY, session_id TEXT, path TEXT, side TEXT, line INTEGER, end_line INTEGER,
   excerpt TEXT, body TEXT, state TEXT, created_at INTEGER, updated_at INTEGER, sent_at INTEGER);
