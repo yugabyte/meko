@@ -427,17 +427,21 @@ browser instead, and then `Ctrl+C` (`⌘C`) copies rather than interrupting Clau
 needs HTTPS or localhost.
 
 To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
-Windows) or drop image files on it. Claude Code can't see the browser's clipboard (its own `Ctrl+V`
-reads the clipboard of the host it runs on), so the page uploads each image
+Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it
+runs on, which is the browser's only when both are on one computer, so the page uploads each image
 (`POST /api/sessions/:id/images`, the image as the body) and pastes the path the server saved it at;
 Claude Code reads a pasted path to an image as that image and shows `[Image #1]`. The server takes
 PNG, JPEG, GIF and WebP, checked by their bytes, up to 20 MB each, and saves them owner-only under
 `~/.agent-k-local/pastes/<session>/`; they're removed when the session is archived or its project
 closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
-them) pastes the text, unless the text is only the copied files' names. On a Mac, `Ctrl+V` reads the
-clipboard through the async Clipboard API (the browser may ask first): an image is pasted the same
-way, and otherwise Claude gets `Ctrl+V` as before. On a phone, the image button beside the compose
-box picks images to paste.
+them) pastes the text, unless the text is only the copied files' names. The page can't tell whether
+Claude Code shares its computer (a tunnel to a remote host is localhost too), so `Ctrl+V` works the
+same either way. On Linux and Windows it's the browser's paste, so it pastes text as well, where it
+used to send `Ctrl+V` to Claude. On a Mac, `Ctrl+V` reads the clipboard through the async Clipboard
+API (Chrome asks once, Safari before each read): an image is pasted the same way, and otherwise
+Claude gets `Ctrl+V` as before. The images are saved first, and their paths wait up to 15 seconds
+for the terminal to reconnect (a phone's image picker hides the page, which can release it). On a
+phone, the image button beside the compose box picks images to paste.
 
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
 names no session) reopens the session last open there in this browser, kept in `localStorage`.

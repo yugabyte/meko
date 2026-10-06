@@ -9,6 +9,7 @@ import { MAX_PASTE_BYTES, type TermClientMessage, type TermServerMessage } from 
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
+import { whenSettled } from './util';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
   type BarKey, type TouchSample,
@@ -69,6 +70,11 @@ const FLING_STOP = 0.05;
 const SUBMIT_DELAY = 300;
 /** Pause between the paths of several pasted images, so Claude Code takes each paste on its own. */
 const IMAGE_PASTE_GAP = 200;
+/**
+ * How long saved images wait for the terminal to (re)connect before their paths are pasted. A phone's
+ * image picker hides the page, which can release the terminal (HIDDEN_RELEASE_MS) until it's shown again.
+ */
+const PASTE_CONNECT_WAIT_MS = 15_000;
 const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnects.';
 /**
  * A connection that stays up this long resets the reconnect backoff. An open alone proves nothing:
@@ -202,8 +208,9 @@ class SessionTerminal {
         if (!IS_MAC) this.term.clearSelection();
         return false;
       }
-      // Ctrl+V pastes from this browser's clipboard, images included. (Claude Code's own Ctrl+V reads
-      // the clipboard of the host it runs on, which isn't this one.)
+      // Ctrl+V pastes from this browser's clipboard, images included. Claude Code's own Ctrl+V reads the
+      // clipboard of the host it runs on, which is this browser's only when both run on one computer;
+      // the page can't tell (a tunnel to a remote host is localhost too), so this serves both cases.
       if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) {
         // Elsewhere Ctrl+V is the browser's paste: let it fire the paste event (onPaste).
         if (!IS_MAC) return false;
@@ -257,10 +264,7 @@ class SessionTerminal {
    */
   async pasteImages(images: Blob[]): Promise<void> {
     if (!images.length) return;
-    if (this.conn !== 'open') {
-      this.showNotice(NOT_CONNECTED, 3000);
-      return;
-    }
+    // Not connected right now is fine: the images upload over HTTP, and the paths wait for the socket.
     const what = images.length === 1 ? 'the image' : 'the images';
     if (images.some((i) => i.size > MAX_PASTE_BYTES)) {
       this.showNotice(`Couldn’t paste ${what}: images over ${MAX_PASTE_BYTES / 1024 / 1024} MB can’t be pasted.`, 6000);
@@ -270,6 +274,10 @@ class SessionTerminal {
     try {
       const paths: string[] = [];
       for (const image of images) paths.push((await api.pasteImage(this.sessionId, image)).path);
+      if (!(await this.whenOpen(PASTE_CONNECT_WAIT_MS))) {
+        this.showNotice(`Couldn’t paste ${what}: ${NOT_CONNECTED}`, 4000);
+        return;
+      }
       for (const [i, path] of paths.entries()) {
         if (i) await new Promise((r) => setTimeout(r, IMAGE_PASTE_GAP));
         if (!this.send({ type: 'input', data: pastePath(path, this.term.modes.bracketedPasteMode) })) {
@@ -283,6 +291,12 @@ class SessionTerminal {
     }
   }
 
+  /** Resolves true once the terminal is connected, or false after `ms` (at once when it won't reconnect). */
+  private whenOpen(ms: number): Promise<boolean> {
+    const check = () => (this.conn === 'open' ? true : this.disposed || this.failed ? false : null);
+    return whenSettled(check, (fn) => this.subscribe(fn), ms);
+  }
+
   private onPaste = (e: ClipboardEvent) => {
     const images = pastedImages(e.clipboardData);
     if (!images.length) return; // text: xterm pastes it
@@ -291,7 +305,10 @@ class SessionTerminal {
     void this.pasteImages(images);
   };
 
-  /** Ctrl+V on a Mac: an image on the clipboard is pasted; otherwise Claude gets Ctrl+V, as before. */
+  /**
+   * Ctrl+V on a Mac: an image on the clipboard is pasted; otherwise Claude gets Ctrl+V, as before (on
+   * the same computer, Claude Code then reads the clipboard itself). Safari asks before each read.
+   */
   private async ctrlV() {
     const images = await readClipboardImages();
     if (images?.length) return this.pasteImages(images);
