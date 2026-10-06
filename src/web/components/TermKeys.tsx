@@ -55,6 +55,7 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
   /** The row of more keys (Ctrl, Esc, Shift+Tab…) is open. */
   const [more, setMore] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
 
   useEffect(() => saveDraft(sessionId, text), [sessionId, text]);
 
@@ -163,6 +164,36 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           if (send()) box.current?.blur();
         }}
       >
+        {/* A phone has no paste or drop of images into the terminal: pick one instead. */}
+        <button
+          type="button"
+          className="compose-attach"
+          aria-label="Paste an image for Claude"
+          title="Paste an image for Claude"
+          disabled={disabled}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={() => picker.current?.click()}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <circle cx="9" cy="10" r="1.6" />
+            <path d="M21 16l-5-5-9 9" />
+          </svg>
+        </button>
+        <input
+          ref={picker}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            // Cleared, so picking the same image again still fires a change.
+            e.target.value = '';
+            void term.pasteImages(files);
+          }}
+        />
         <textarea
           ref={box}
           id={`compose-${sessionId}`}

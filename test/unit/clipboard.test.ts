@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOsc52 } from '../../src/web/clipboard.js';
+import { decodeOsc52, pastedImages } from '../../src/web/clipboard.js';
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64');
 
@@ -14,5 +14,34 @@ describe('OSC 52 from tmux', () => {
     expect(decodeOsc52('c;')).toBeNull();
     expect(decodeOsc52('no separator')).toBeNull();
     expect(decodeOsc52('c;***not base64***')).toBeNull();
+  });
+});
+
+describe('images pasted or dropped on the terminal', () => {
+  const file = (name: string, type: string) => ({ name, type });
+  const transfer = (files: { name: string; type: string }[], text = '') => ({ files, getData: (f: string) => (f === 'text/plain' ? text : '') });
+
+  it('takes the image files, and leaves other files out', () => {
+    const shot = file('image.png', 'image/png');
+    expect(pastedImages(transfer([shot]))).toEqual([shot]);
+    expect(pastedImages(transfer([shot, file('notes.txt', 'text/plain')]))).toEqual([shot]);
+    expect(pastedImages(transfer([file('notes.txt', 'text/plain')]))).toEqual([]);
+    expect(pastedImages(null)).toEqual([]);
+    expect(pastedImages({ files: null })).toEqual([]);
+  });
+
+  it('pastes text when the image only comes with it (a spreadsheet copy)', () => {
+    expect(pastedImages(transfer([file('image.png', 'image/png')], 'Q3\t1200\nQ4\t1500'))).toEqual([]);
+  });
+
+  it('still takes copied image files that bring their names as text', () => {
+    const a = file('a.png', 'image/png');
+    const b = file('b.jpg', 'image/jpeg');
+    expect(pastedImages(transfer([a, b], 'a.png\r\nb.jpg\n'))).toEqual([a, b]);
+  });
+
+  it('reads no text when the browser refuses it', () => {
+    const shot = file('image.png', 'image/png');
+    expect(pastedImages({ files: [shot], getData: () => { throw new Error('denied'); } })).toEqual([shot]);
   });
 });

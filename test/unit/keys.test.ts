@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pasteText, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
@@ -99,6 +99,16 @@ describe('compose box', () => {
   it('types newlines as Enter without bracketed paste', () => {
     expect(pasteText('one line', false)).toBe('one line');
     expect(pasteText('a\nb\r\nc', false)).toBe('a\rb\rc');
+  });
+});
+
+describe('pasted images', () => {
+  it('pastes the saved image path as one word, which Claude Code reads as the image', () => {
+    expect(pastePath('/home/me/.agent-k-local/pastes/s1/20261005-120000-ab12cd34.png', true)).toBe(
+      '\x1b[200~/home/me/.agent-k-local/pastes/s1/20261005-120000-ab12cd34.png\x1b[201~',
+    );
+    expect(pastePath('/Users/Jo Doe/a.png', false)).toBe('/Users/Jo\\ Doe/a.png');
+    expect(pastePath("/x/it's (1).png", false)).toBe("/x/it\\'s\\ \\(1\\).png");
   });
 });
 

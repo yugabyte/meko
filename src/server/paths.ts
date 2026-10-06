@@ -18,6 +18,8 @@ export interface Paths {
   worktrees: string;
   /** Per-session design files written during the Design stage: designs/<session>/design.md. */
   designs: string;
+  /** Images pasted into a session's terminal from the browser: pastes/<session>/<time>-<random>.<ext>. */
+  pastes: string;
   /** Per-session launcher scripts and the Claude hooks settings file. */
   run: string;
   hookSock: string;
@@ -41,6 +43,7 @@ export function getPaths(home: string = akHome()): Paths {
     app: join(home, 'app'),
     worktrees: join(home, 'worktrees'),
     designs: join(home, 'designs'),
+    pastes: join(home, 'pastes'),
     run: join(home, 'run'),
     hookSock: hookSockPath(home),
     lock: join(home, 'server.lock'),

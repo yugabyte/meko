@@ -60,7 +60,7 @@ export function TerminalPane({ session }: { session: Session }) {
         )}
         {term.notice && (
           <div className="term-toast" role="status">
-            {term.notice}
+            {term.noticeBusy ? <Busy label={term.notice} /> : term.notice}
           </div>
         )}
         {status === 'exited' && (
