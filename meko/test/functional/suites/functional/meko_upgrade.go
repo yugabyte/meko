@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -52,7 +51,7 @@ func previousRelease(t *core.T) error {
 	shared := stacktest.ClusterEnv(t)
 	cfg := t.Options
 	target := cfg.GetString("env.mekostack.image_version", "")
-	chart, err := filepath.Abs(cfg.GetString("env.mekostack.chart", ""))
+	chart, err := mekostack.ResolveChart(cfg.GetString("env.mekostack.chart", ""))
 	if err != nil {
 		return err
 	}

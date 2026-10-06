@@ -206,3 +206,24 @@ func TestUploadKBFileSendsOneMultipartFileAndReadsTheDocumentStatus(t *testing.T
 		t.Errorf("status request = %+v", second)
 	}
 }
+
+func TestWithHeaderSendsItOnEveryRequestAndLeavesTheOriginalAlone(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Meko-Admin-Secret"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	defer srv.Close()
+	base := New(srv.URL)
+	admin := base.WithHeader("X-Meko-Admin-Secret", "s3cret")
+	if _, err := admin.Raw(context.Background(), http.MethodGet, "/admin/users", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.Raw(context.Background(), http.MethodGet, "/admin/users", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "s3cret" || got[1] != "" {
+		t.Errorf("headers seen %q, want the secret only on the copy", got)
+	}
+}

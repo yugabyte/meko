@@ -191,7 +191,7 @@ func TestBuiltInAnswersForTheStackPrompts(t *testing.T) {
 		t.Errorf("extraction answered %q (%v)", reply(out), err)
 	}
 
-	extract := "# ROLE\n\nYou are a Memory Extractor.\n"
+	extract := "# ROLE\n\nYou are a Memory Extractor.\n\n# INPUTS\n\n## New Messages\n\nDo NOT extract:\n- Generic assistant acknowledgments\n\n## Summary\n\nA narrative summary.\n"
 	turn := "## Summary\n\n## Existing Memories\n[]\n\n## New Messages\nuser: I drink green tea. My dog is Rex.\n\n\n## Observation Date\n2026-10-02"
 	_, out = chat(t, base, map[string]any{"messages": []any{
 		map[string]string{"role": "system", "content": extract},
@@ -635,5 +635,25 @@ func TestManifestRunsTheBinaryAndCarriesTheJanitorLabels(t *testing.T) {
 	}
 	if got := OpenAIBaseURL("llmmock", "ns1"); got != "http://llmmock.ns1.svc.cluster.local:8080/v1" {
 		t.Errorf("OpenAIBaseURL = %s", got)
+	}
+}
+
+func TestStatsCountEveryCallPastTheRing(t *testing.T) {
+	c, base := startMock(t)
+	embed(t, base, "one", nil)
+	embed(t, base, "two", nil)
+	chat(t, base, map[string]any{"model": "gpt-4o-mini", "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+	st, err := c.Stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Routes[RouteEmbeddings] != 2 || st.Routes[RouteChatCompletions] != 1 || st.Seq != 3 {
+		t.Errorf("stats %+v, want 2 embeddings and 1 chat over seq 3", st)
+	}
+	if err := c.Reset(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := c.Stats(context.Background()); len(st.Routes) != 0 {
+		t.Errorf("stats after reset %+v", st)
 	}
 }

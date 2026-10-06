@@ -67,6 +67,9 @@ type Config struct {
 	DatabaseImage string
 
 	APIReplicas int
+	// APIConfig is extra api-server env, KEY=VALUE, for runtime feature flags the
+	// presets leave off.
+	APIConfig []string
 	// Auth is who the api-server believes, and CognitoMock how the mock pool is
 	// built when Auth is cognito_mock.
 	Auth        AuthMode
@@ -120,6 +123,7 @@ func FromConfig(get Getter) (Config, error) {
 		ImageTags:     map[string]string{},
 		DatabaseImage: get.GetString("env.mekostack.images.database", ""),
 		APIReplicas:   get.GetInt("env.mekostack.api_replicas", 0),
+		APIConfig:     get.GetStringSlice("env.mekostack.api_config", nil),
 		Auth:          AuthMode(get.GetString("env.mekostack.auth", string(AuthNone))),
 		CognitoMock: cognitomock.Spec{
 			Region:   get.GetString("env.mekostack.cognito_mock.region", ""),
@@ -189,6 +193,11 @@ func (cfg Config) Validate() error {
 	}
 	if err := CheckQuayOnly(refs); err != nil {
 		errs = append(errs, err)
+	}
+	for _, kv := range cfg.APIConfig {
+		if k, _, ok := strings.Cut(kv, "="); !ok || k == "" {
+			errs = append(errs, fmt.Errorf("env.mekostack.api_config entry %q is not KEY=VALUE", kv))
+		}
 	}
 	if cfg.APIReplicas < 1 {
 		errs = append(errs, fmt.Errorf("env.mekostack.api_replicas = %d, want at least 1", cfg.APIReplicas))

@@ -6,7 +6,31 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekoload"
+	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekostack"
+	"github.com/yugabyte/meko/meko/test/functional/framework/core"
 )
+
+func TestAStackUnderLoadLiftsThePATLimit(t *testing.T) {
+	cfg, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack, err := mekostack.FromConfig(cfg.Derive(StackConfig(cfg)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(stack.APIConfig, " ")
+	if !strings.Contains(got, "PAT_RATE_LIMIT_PER_MIN=0") || !strings.Contains(got, "MEKO_ENABLE_PROJECTS=true") {
+		t.Errorf("a loaded stack's api_config is %q, want the run's flags plus the lifted PAT limit", got)
+	}
+	plain, err := mekostack.FromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(plain.APIConfig, " "), "PAT_RATE_LIMIT") {
+		t.Errorf("the shared stack lifts the PAT limit too: %v", plain.APIConfig)
+	}
+}
 
 func TestPlanKeepsUnderThePATCap(t *testing.T) {
 	if err := (Plan{Pods: 2, Credentials: 3, PATBudget: 2}).Check(); err != nil {

@@ -153,8 +153,9 @@ func builtinAnswer(messages []message, wantsJSON bool) (name, text string) {
 		}
 	}
 
-	if _, after, ok := strings.Cut(prompt, "## New Messages\n"); ok {
-		body, _, _ := strings.Cut(after, "\n\n## ")
+	// The last heading: mem0 2.x documents its inputs under the same heading in the system prompt.
+	if i := strings.LastIndex(prompt, "## New Messages\n"); i >= 0 {
+		body, _, _ := strings.Cut(prompt[i+len("## New Messages\n"):], "\n\n## ")
 		return "mem0_extract", spacedJSON(obj{"memory": memories(body)})
 	}
 

@@ -35,6 +35,7 @@ var serviceSelectors = []string{
 }
 
 var (
+	pyFrame       = regexp.MustCompile(`(File "[^"]+", line \d+, in \S+|\S+\.py:\d+ in \S+)`)
 	crashPatterns = regexp.MustCompile(`panic: |fatal error: |Traceback \(most recent call last\)|\[signal SIG(SEGV|BUS|ABRT)|goroutine \d+ \[running\]:`)
 	errorPattern  = regexp.MustCompile(`level=ERROR|"level":"error"|\] ERROR |\bERROR:`)
 	requestsLine  = regexp.MustCompile(`^meko_api_http_requests_total\{(.*)\} ([0-9.eE+-]+)$`)
@@ -272,11 +273,15 @@ func logFindings(selector, logs string) []Finding {
 	var crashes []string
 	errors := 0
 	var firstError string
-	for _, line := range strings.Split(logs, "\n") {
+	lines := strings.Split(logs, "\n")
+	for i, line := range lines {
 		switch {
 		case crashPatterns.MatchString(line):
+			if rejectedArguments(lines, i) || chainedTraceback(lines, i) {
+				continue
+			}
 			if len(crashes) < 5 {
-				crashes = append(crashes, truncateLine(line))
+				crashes = append(crashes, truncateLine(line)+pythonRaise(lines, i))
 			}
 		case errorPattern.MatchString(line):
 			errors++
@@ -292,6 +297,91 @@ func logFindings(selector, logs string) []Finding {
 		out = append(out, Finding{Kind: FindingErrorLogs, Workload: selector, Detail: fmt.Sprintf("%d ERROR line(s), first: %s", errors, firstError)})
 	}
 	return out
+}
+
+// pythonRaise returns the raising frame and the exception of the traceback at lines[i], plain or
+// rich-boxed. DEBUG-level pods rotate a traceback out of the attached log tail within a minute.
+func pythonRaise(lines []string, i int) string {
+	if !strings.Contains(lines[i], "Traceback (most recent call last)") {
+		return ""
+	}
+	prefix := podPrefix(lines[i])
+	rich := strings.Contains(lines[i], "╭")
+	var frame, appFrame, exc string
+	closed := false
+	for _, l := range lines[i+1 : min(len(lines), i+400)] {
+		body, ok := strings.CutPrefix(l, prefix)
+		if !ok || podPrefix(l) != prefix {
+			continue
+		}
+		trimmed := strings.Trim(strings.TrimSpace(body), "│ ")
+		switch {
+		case pyFrame.MatchString(trimmed):
+			frame = pyFrame.FindString(trimmed)
+			if !strings.Contains(frame, "site-packages") && !strings.Contains(frame, "/lib/python") {
+				appFrame = frame
+			}
+		case rich && !closed:
+			closed = strings.Contains(body, "╰")
+		case strings.HasPrefix(trimmed, "During handling") || strings.HasPrefix(trimmed, "The above exception"):
+			exc = ""
+		case trimmed == "" || !rich && (body[0] == ' ' || body[0] == '\t') || strings.HasPrefix(trimmed, "Traceback"):
+		default:
+			if exc != "" {
+				return raiseSummary(appFrame, frame, exc)
+			}
+			exc = trimmed
+		}
+	}
+	if exc != "" {
+		return raiseSummary(appFrame, frame, exc)
+	}
+	return ""
+}
+
+// chainedTraceback reports a traceback that continues the one above it, which
+// pythonRaise already summarised.
+func chainedTraceback(lines []string, i int) bool {
+	prefix := podPrefix(lines[i])
+	for j := i - 1; j >= max(0, i-5); j-- {
+		body := strings.TrimSpace(strings.TrimPrefix(lines[j], prefix))
+		if body == "" {
+			continue
+		}
+		return strings.HasPrefix(body, "The above exception") || strings.HasPrefix(body, "During handling")
+	}
+	return false
+}
+
+// raiseSummary names the deepest frame in the service's own code, so a chained
+// library timeout still says which call of ours timed out.
+func raiseSummary(appFrame, frame, exc string) string {
+	if appFrame == "" {
+		appFrame = frame
+	}
+	return " -> " + truncateLine(appFrame) + " -> " + truncateLine(exc)
+}
+
+// rejectedArguments reports a traceback FastMCP logs for tool arguments it refused: the caller got a
+// validation error, which is the server working, and on a shared stack it would fail every test.
+func rejectedArguments(lines []string, i int) bool {
+	prefix := podPrefix(lines[i])
+	for j := i - 1; j >= max(0, i-3); j-- {
+		if podPrefix(lines[j]) == prefix && strings.Contains(lines[j], "Error validating tool") {
+			return true
+		}
+	}
+	return false
+}
+
+func podPrefix(line string) string {
+	if !strings.HasPrefix(line, "[pod/") {
+		return ""
+	}
+	if end := strings.Index(line, "] "); end > 0 {
+		return line[:end+2]
+	}
+	return ""
 }
 
 func truncateLine(s string) string {

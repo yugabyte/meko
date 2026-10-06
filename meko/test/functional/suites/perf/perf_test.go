@@ -9,7 +9,8 @@ import (
 	_ "github.com/yugabyte/meko/meko/test/functional/suites/perf"
 )
 
-var tests = []string{"perf/api_latency", "perf/mcp_latency"}
+var tests = []string{"perf/api_latency", "perf/mcp_latency", "perf/recall_latency", "perf/write_path_latency",
+	"perf/kb_ingest_throughput", "perf/ui_read_latency", "perf/chat_latency"}
 
 func TestPerfTestsAreDedicatedAndTagged(t *testing.T) {
 	for _, name := range tests {
@@ -37,6 +38,9 @@ func TestDefaultsCarryEveryKey(t *testing.T) {
 	for _, k := range []string{
 		"perf.client_pods", "perf.credentials", "perf.forwarded_for", "perf.warmup", "perf.step_duration", "perf.min_samples", "perf.max_error_rate",
 		"perf.api_latency.concurrency", "perf.api_latency.max_active_pats", "perf.mcp_latency.concurrency", "perf.mcp_latency.credentials",
+		"perf.server_metrics.enabled", "perf.server_metrics.sample_interval", "perf.server_metrics.min_count",
+		"perf.recall_latency.volumes", "perf.recall_latency.users", "perf.write_path_latency.llm_chat_latency", "perf.write_path_latency.freshness_timeout",
+		"perf.kb_ingest_throughput.step_duration", "perf.ui_read_latency.memories", "perf.chat_latency.concurrency",
 	} {
 		if !cfg.Has(k) {
 			t.Errorf("default.yaml has no %s", k)

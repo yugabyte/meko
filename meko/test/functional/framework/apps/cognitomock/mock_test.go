@@ -422,3 +422,36 @@ func TestUnknownOperationAndUserErrors(t *testing.T) {
 		t.Fatal("minted a token for a user that does not exist")
 	}
 }
+
+func TestAChangedEmailSignsInOnceVerified(t *testing.T) {
+	r := startMock(t, Spec{}, t.TempDir(), nil)
+	cid := r.spec.ClientID
+	old, changed := "before@mekoqa.test", "after@mekoqa.test"
+	if _, e := r.call(t, "SignUp", map[string]any{"ClientId": cid, "Username": old, "Password": "Passw0rd!x"}); e != "" {
+		t.Fatal(e)
+	}
+	if _, e := r.call(t, "ConfirmSignUp", map[string]any{"ClientId": cid, "Username": old, "ConfirmationCode": ConfirmationCode}); e != "" {
+		t.Fatal(e)
+	}
+	login := func(name string) string {
+		_, e := r.call(t, "InitiateAuth", map[string]any{"AuthFlow": "USER_PASSWORD_AUTH", "ClientId": cid,
+			"AuthParameters": map[string]string{"USERNAME": name, "PASSWORD": "Passw0rd!x"}})
+		return e
+	}
+	res, _ := r.call(t, "InitiateAuth", map[string]any{"AuthFlow": "USER_PASSWORD_AUTH", "ClientId": cid,
+		"AuthParameters": map[string]string{"USERNAME": old, "PASSWORD": "Passw0rd!x"}})
+	tok := res["AuthenticationResult"].(map[string]any)["AccessToken"]
+	if _, e := r.call(t, "UpdateUserAttributes", map[string]any{"AccessToken": tok,
+		"UserAttributes": []map[string]string{{"Name": "email", "Value": changed}, {"Name": "email_verified", "Value": "false"}}}); e != "" {
+		t.Fatal(e)
+	}
+	if e := login(changed); e == "" {
+		t.Error("an unverified new email signed in")
+	}
+	if _, e := r.call(t, "VerifyUserAttribute", map[string]any{"AccessToken": tok, "AttributeName": "email", "Code": ConfirmationCode}); e != "" {
+		t.Fatal(e)
+	}
+	if e := login(changed); e != "" {
+		t.Errorf("the verified new email does not sign in: %q", e)
+	}
+}

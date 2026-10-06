@@ -81,7 +81,8 @@ architecture doc.
 - Use `Shared` plus `SingleStack` by default. The test shares the run's stack with up to four
   others, so it must use only its own resources.
 - Use `DedicatedStack` when the test needs a stack nobody else touches: load, a pod kill, a
-  database of its own (`EnvSpec.Database`, `BackingConfig`). It takes a whole stack, about
+  database of its own (`EnvSpec.Database`), or stack settings of its own (`BackingConfig`, which
+  overrides `db.*` and `env.mekostack.*` keys for that stack only). It takes a whole stack, about
   20 minutes to build, so reach for it only when the test needs it.
 - Set `FaultsSharedInfra: true` when a shared-stack test freezes, kills or reconfigures a
   stack component. The scheduler then runs it alone and checks the stack serves again after.

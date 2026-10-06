@@ -77,12 +77,15 @@ type state struct {
 	faults   []*fault
 	calls    []*call
 	seq      int
+	// routes counts every call by route since the last reset. The call ring
+	// forgets, these do not, so a load test can count a whole run.
+	routes map[string]int
 }
 
 func (st *state) reset() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.fixtures, st.scripts, st.faults, st.calls, st.seq = nil, nil, nil, nil, 0
+	st.fixtures, st.scripts, st.faults, st.calls, st.seq, st.routes = nil, nil, nil, nil, 0, nil
 }
 
 func (st *state) record(c call) *call {
@@ -90,6 +93,10 @@ func (st *state) record(c call) *call {
 	defer st.mu.Unlock()
 	st.seq++
 	c.Seq = st.seq
+	if st.routes == nil {
+		st.routes = map[string]int{}
+	}
+	st.routes[c.Route]++
 	c.Time = float64(time.Now().UnixNano()) / 1e9
 	st.calls = append(st.calls, &c)
 	if len(st.calls) > maxCalls {

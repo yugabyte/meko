@@ -77,7 +77,7 @@ var schedulingSignals = []struct {
 	{"helm install timed out waiting for readiness", []string{"not ready", "context deadline exceeded"}},
 	{"readiness wait timed out", []string{"timed out waiting for the condition"}},
 	{"readiness wait timed out", []string{"never became ready"}},
-	// A product bug, retried because a fresh stack usually gets past it: the
+	// A product bug (#1709), retried because a fresh stack usually gets past it: the
 	// RETRY line names it, so it stays visible rather than absorbed.
 	{"api-server migrations wedged (golang-migrate postgres driver on YB)", []string{"api-server migrations wedged on a dirty version"}},
 	{"readiness wait timed out", []string{"not ready before"}},

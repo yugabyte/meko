@@ -256,6 +256,27 @@ func (p *Provider) stackConfig(ns string, b *mekostack.Backing) mekostack.Config
 	return c
 }
 
+// dedicatedStackConfig is stackConfig with the test's BackingConfig laid over the run config, so
+// a test can set the stack's own knobs as well as its database.
+func (p *Provider) dedicatedStackConfig(spec core.EnvSpec, ns string) (mekostack.Config, error) {
+	if spec.BackingConfig == nil || p.cfg.core == nil {
+		return p.stackConfig(ns, nil), nil
+	}
+	o := spec.BackingConfig(p.cfg.core)
+	if len(o) == 0 {
+		return p.stackConfig(ns, nil), nil
+	}
+	withRun := map[string]string{"report.portal.run_id": p.cfg.RunID}
+	maps.Copy(withRun, o)
+	c, err := FromConfig(p.cfg.core.Derive(withRun), p.cfg.resolve)
+	if err != nil {
+		return mekostack.Config{}, err
+	}
+	sc := c.Stack
+	sc.Context, sc.Namespace = p.cfg.Context, ns
+	return sc, nil
+}
+
 func (p *Provider) track(ns string, live bool) {
 	p.mu.Lock()
 	if live {
@@ -355,11 +376,16 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	case core.DedicatedStack:
 		n := p.counter.Add(1)
 		ns := DedicatedNamespace(p.cfg.RunID, n)
-		bk, sb, err := p.prepareBacking(ctx, spec, false, fmt.Sprintf("%s-%d", p.cfg.RunID, n), ns, p.cfg.Stack.DatabaseImage)
+		sc, err := p.dedicatedStackConfig(spec, ns)
 		if err != nil {
 			return nil, err
 		}
-		app := p.newStack(p.stackConfig(ns, sb))
+		bk, sb, err := p.prepareBacking(ctx, spec, false, fmt.Sprintf("%s-%d", p.cfg.RunID, n), ns, sc.DatabaseImage)
+		if err != nil {
+			return nil, err
+		}
+		sc.Backing = sb
+		app := p.newStack(sc)
 		p.log("k8s: building a dedicated stack in %s", ns)
 		p.track(ns, true)
 		if err := app.Deploy(ctx); err != nil {

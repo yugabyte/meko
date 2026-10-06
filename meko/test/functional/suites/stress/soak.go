@@ -16,7 +16,7 @@ import (
 
 // dedicated is the environment every stress test asks for: a whole stack that
 // no other test shares, and a slot of the cluster's capacity for it.
-var dedicated = core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, ClusterSlots: 1}
+var dedicated = core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, ClusterSlots: 1, BackingConfig: loadtest.StackConfig}
 
 var paramPrefixes = []string{"stress", "apps.mekoload", "env.k8s", "env.mekostack", "timeouts"}
 
@@ -80,6 +80,25 @@ func runSoak(t *core.T, s soakSpec) error {
 		_ = load.Stop(ctx)
 		_ = load.Collect(ctx, loadtest.Sink(t))
 	}()
+
+	// Faults are timed from the end of the seed, which takes minutes: a kill
+	// during it fails the seed and leaves nothing running to recover.
+	if err := t.Step("seeded", func(h *core.StepHandle) error {
+		setup := cfgDuration(t, "stress.setup_timeout", 15*time.Minute)
+		return t.WaitFor("the load to finish seeding", setup, 5*time.Second, func() (bool, error) {
+			agg, err := load.Stats(t, false)
+			if err != nil {
+				return false, nil
+			}
+			if failed := agg.Failed(); len(failed) > 0 {
+				return false, fmt.Errorf("the load failed before it ran: %s", strings.Join(failed, "; "))
+			}
+			return agg.States["setting_up"] == 0, nil
+		})
+	}); err != nil {
+		return err
+	}
+	started = time.Now()
 
 	var judgeDuring func(mekoload.Aggregate) []string
 	var duringErr error

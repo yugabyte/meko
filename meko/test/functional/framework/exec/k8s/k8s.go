@@ -405,10 +405,24 @@ func (k *Kubectl) DeleteNamespace(ctx context.Context, name string) error {
 // WaitFor blocks until a condition holds on a target (`kubectl wait`).
 // target is "kind/name" (e.g. "statefulset/yugabyted"); condition is a
 // --for value (e.g. "condition=Ready" or "jsonpath={.status.readyReplicas}=1").
+// A NotFound is retried until the timeout: right after an apply, a GKE control plane that is
+// resizing under a scale-out can serve a read that does not see the object yet.
 func (k *Kubectl) WaitFor(ctx context.Context, target, condition string, timeout time.Duration) error {
-	_, err := k.exec(ctx, nil, "wait", target, "--for="+condition, "--timeout="+durationArg(timeout))
-	return err
+	deadline := time.Now().Add(timeout)
+	for {
+		_, err := k.exec(ctx, nil, "wait", target, "--for="+condition, "--timeout="+durationArg(time.Until(deadline)))
+		if !IsNotFound(err) || time.Until(deadline) < notFoundRetry {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(notFoundRetry):
+		}
+	}
 }
+
+const notFoundRetry = 3 * time.Second
 
 // RolloutStatus blocks until a workload's rollout completes (`kubectl rollout
 // status <kind>/<name>`). It gates on the NEW ReplicaSet becoming ready, which a
@@ -492,7 +506,9 @@ func (k *Kubectl) LogsAllPrevious(ctx context.Context, target string, tail int) 
 }
 
 func (k *Kubectl) logsAll(ctx context.Context, target string, tail int, previous bool) (string, error) {
-	extra := []string{"logs", target, "--all-containers", "--prefix"}
+	// --ignore-errors: a container still waiting to start would otherwise drop the log of the init
+	// container that keeps it waiting, the one log that says why.
+	extra := []string{"logs", target, "--all-containers", "--prefix", "--ignore-errors"}
 	if previous {
 		extra = append(extra, "--previous")
 	}

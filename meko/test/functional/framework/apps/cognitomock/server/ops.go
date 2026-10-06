@@ -388,7 +388,7 @@ func (p *Pool) initiateAuth(r obj) (obj, error) {
 	if err := p.checkHash(s(r, "ClientId"), s(params, "SECRET_HASH"), username); err != nil {
 		return nil, err
 	}
-	u := p.users[key(username)]
+	u, _ := p.find(username)
 	if u == nil || !equal(u.Password, s(params, "PASSWORD")) {
 		return nil, fail("NotAuthorizedException", "Incorrect username or password.")
 	}

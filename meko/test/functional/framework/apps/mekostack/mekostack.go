@@ -208,6 +208,9 @@ func (a *App) deploy(ctx context.Context) error {
 	if err := a.ensurePullSecret(ctx); err != nil {
 		return err
 	}
+	if err := a.ensureNoScaleDown(ctx); err != nil {
+		return err
+	}
 	if err := a.setupBacking(ctx, dp); err != nil {
 		return err
 	}
@@ -367,6 +370,9 @@ func (a *App) Attach(ctx context.Context) error {
 		return err
 	}
 	a.detectAuth(ctx)
+	if err := a.ensureNoScaleDown(ctx); err != nil {
+		a.log("mekostack: %v", err)
+	}
 	return a.waitReady(ctx)
 }
 
@@ -475,6 +481,27 @@ func (a *App) namespaceLabels(ctx context.Context, name string) (labels map[stri
 		return nil, false, fmt.Errorf("decode namespace %s: %w", name, err)
 	}
 	return ns.Metadata.Labels, true, nil
+}
+
+// noScaleDownPDB keeps the cluster autoscaler from draining a node that runs a
+// pod of the stack. Scale-down evicts through the eviction API, which a budget
+// of zero refuses, while a test's own pod kills and a rolling upgrade delete
+// pods directly and are unaffected. Without it, amp-dev scaled nodes down
+// under running tests and every MCP and gateway call in flight failed.
+const noScaleDownPDB = `apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mekoqa-no-scale-down
+spec:
+  maxUnavailable: 0
+  selector: {}
+`
+
+func (a *App) ensureNoScaleDown(ctx context.Context) error {
+	if err := a.kube.Apply(ctx, noScaleDownPDB); err != nil {
+		return fmt.Errorf("apply the scale-down guard: %w", err)
+	}
+	return nil
 }
 
 func (a *App) ensurePullSecret(ctx context.Context) error {
@@ -852,6 +879,11 @@ func (a *App) connect(ctx context.Context) error {
 func ClusterURLs(namespace string) (api, mcp string) {
 	return fmt.Sprintf("http://%s.%s.svc:%d", apiService, namespace, apiServicePort),
 		fmt.Sprintf("http://%s.%s.svc:%d%s", mcpService, namespace, mcpServicePort, mcpPath)
+}
+
+// ClusterGatewayURL is the inference gateway's in-cluster address.
+func ClusterGatewayURL(namespace string) string {
+	return fmt.Sprintf("http://inference-gateway-service.%s.svc:8088", namespace)
 }
 
 // API is the REST client for the stack's default account: the one account of a

@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/yugabyte/meko/meko/test/functional/framework/apps/cognitomock"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/llmmock"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekoapi"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/minio"
@@ -1216,6 +1217,39 @@ func TestHealthOKReadsTheEnvelope(t *testing.T) {
 	} {
 		if got := healthOK(body); got != want {
 			t.Errorf("healthOK(%s) = %v, want %v", body, got, want)
+		}
+	}
+}
+
+func TestCognitoOverlayKeepsTheLLMEnvAndFlags(t *testing.T) {
+	base := map[string]any{"apiServer": map[string]any{
+		"extraEnv": []any{map[string]any{"name": "OPENAI_BASE_URL", "value": "http://llmmock/v1"}, map[string]any{"name": "MEKO_ENABLE_PROJECTS", "value": "true"}},
+		"replicas": 3,
+	}}
+	v := overlay(base, apiServerCognito(cognitomock.Spec{Region: "us-east-1"}.WithDefaults(), cognitoMockHost{ClusterIP: "10.0.0.2"}, true))
+	api := v["apiServer"].(map[string]any)
+	got := map[string]bool{}
+	for _, e := range api["extraEnv"].([]any) {
+		got[e.(map[string]any)["name"].(string)] = true
+	}
+	for _, k := range []string{"OPENAI_BASE_URL", "MEKO_ENABLE_PROJECTS", "SSL_CERT_FILE"} {
+		if !got[k] {
+			t.Errorf("api-server extraEnv lost %s after the Cognito overlay: %v", k, api["extraEnv"])
+		}
+	}
+	if api["replicas"] != 3 || api["cognito"] == nil {
+		t.Errorf("overlay dropped a key: %v", api)
+	}
+}
+
+func TestLangfuseUploadsGoToTheStackMinIO(t *testing.T) {
+	m := MinIO{AccessKey: "ak", SecretKey: "sk", APIEndpoint: "http://minio.ns.svc.cluster.local:9000"}
+	cfg := Config{S3Bucket: "mekoqa", S3Region: "us-east-1"}
+	lf := langfuseS3(cfg, m)
+	for _, kind := range []string{"EVENT_UPLOAD", "MEDIA_UPLOAD", "BATCH_EXPORT"} {
+		p := "LANGFUSE_S3_" + kind + "_"
+		if lf[p+"BUCKET"] != "mekoqa" || lf[p+"ENDPOINT"] != m.APIEndpoint || lf[p+"FORCE_PATH_STYLE"] != "true" {
+			t.Errorf("%s config %v", kind, lf)
 		}
 	}
 }

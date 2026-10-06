@@ -105,6 +105,10 @@ func cognitoPodAdditions(spec cognitomock.Spec, host cognitoMockHost) podAdditio
 	}
 }
 
+// overlay lays over on base. Maps merge, and the pod additions several
+// overlays contribute to (env, volumes, mounts, host aliases) are appended:
+// replacing them dropped the LLM mock's OPENAI_BASE_URL from the api-server
+// whenever the Cognito mock added its CA path.
 func overlay(base, over map[string]any) map[string]any {
 	out := make(map[string]any, len(base))
 	for k, v := range base {
@@ -117,10 +121,18 @@ func overlay(base, over map[string]any) map[string]any {
 			out[k] = overlay(bm, om)
 			continue
 		}
+		bl, blok := out[k].([]any)
+		ol, olok := v.([]any)
+		if blok && olok && appendedLists[k] {
+			out[k] = append(append([]any{}, bl...), ol...)
+			continue
+		}
 		out[k] = v
 	}
 	return out
 }
+
+var appendedLists = map[string]bool{"extraEnv": true, "extraVolumes": true, "extraVolumeMounts": true, "hostAliases": true}
 
 func (a *App) cognitoSpec() cognitomock.Spec {
 	spec := a.cfg.CognitoMock

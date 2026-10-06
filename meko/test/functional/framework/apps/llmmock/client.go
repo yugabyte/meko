@@ -186,6 +186,18 @@ func (c *Client) Calls(ctx context.Context, f Filter) ([]Call, error) {
 	return out.Calls, nil
 }
 
+// Stats is how many calls the mock has answered since its last reset, by route.
+type Stats struct {
+	Seq    int            `json:"seq"`
+	Routes map[string]int `json:"routes"`
+}
+
+func (c *Client) Stats(ctx context.Context) (Stats, error) {
+	var out Stats
+	err := c.do(ctx, http.MethodGet, "/_mock/stats", nil, &out)
+	return out, err
+}
+
 // Reset drops every fixture, script, fault and recorded call. On a stack that
 // tests share it also wipes what the other tests set, so a test removes its own
 // rules instead.

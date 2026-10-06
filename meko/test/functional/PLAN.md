@@ -429,15 +429,15 @@ source of truth once they exist.
 | `functional/agent_lifecycle` | agent CRUD, attach to and detach from a datapack |
 | `functional/pat_auth` | mint a PAT, MCP accepts it, a revoked PAT is rejected, an expired one too |
 | `functional/mcp_tools_contract` | `tools/list` matches the tool names and input schemas the image ships |
-| `functional/mcp_memory_roundtrip` | `memory_add`, `memory_search` finds it, `memory_update`, `memory_get_by_id`, `memory_delete_by_id`, `memory_delete_all` |
-| `functional/mcp_conversation_roundtrip` | create, add message, get, list, update, delete, and `conversation_list` agrees with `conversation_get` after every step (#1553) |
+| `functional/memory_lifecycle` (built) | `memory_add`, `memory_search` ranks the match first, `memory_get_by_id`, `memory_get_all`, the REST memories page, filter and count, `memory_update` re-embeds, a viewer reads but cannot delete, a stranger learns nothing, deletion over MCP and REST and `memory_delete_all` |
+| `functional/conversation_lifecycle` (built) | create, add message, get, list over MCP and REST, the observe detail and trace, rename shows everywhere (#1553), conversation search, the opt-out flag, malformed ids refused cleanly, a stranger refused, delete |
 | `functional/search_consistency` | a promoted memory and a KB chunk on one topic: `context_search` returns what `memory_search` and `knowledgebase_search` return on their own (mcp-server #355). Embedding fixtures put the chunk past the KB distance floor and the memory inside it |
 | `functional/llm_provider_faults` | `llmmock` answers 429, 500, timeouts and malformed JSON on embeddings and chat. `memory_add`, KB ingest and `/chat` each return an error the caller can read, nothing is half-written, and the stack works again when the faults stop |
 | `functional/kb_ingest_text` | presigned upload to MinIO, `upload-complete`, document status reaches indexed, `knowledgebase_search` returns its chunk |
 | `functional/kb_ingest_pdf` | the same through the CPU pdf worker |
-| `functional/kb_delete_document` | a deleted document's chunks stop coming back |
-| `functional/context_search` | one query reaches memories, knowledge base and conversations |
-| `functional/artifacts` | `artifact_put`, `artifact_get`, REST download URL |
+| `functional/kb_document_lifecycle` (built) | the presigned and the direct upload both index, the documents list, counts, summary, activity log and status agree, search finds both, the download URL returns the bytes, a viewer searches but cannot delete, a stranger sees nothing, deletion over REST and MCP, a pending upload until discarded |
+| `functional/context_and_chat_grounding` (built) | `context_search` returns a memory, a document and a conversation turn from their own sources, `force_source` narrows, nothing crosses datapacks, the search shows in token savings, `/chat` puts the memory in the model's prompt and keeps a resumed conversation |
+| `functional/artifacts_roundtrip` (built) | a database-stored and an S3-stored artifact round-trip over MCP and REST, the download URL, idempotent put, viewer and stranger, the size limit |
 | `functional/datapack_sharing` | share, invite, accept, revoke |
 | `functional/inference_chat` | `/chat` with a scripted completion that calls an MCP tool, and the tool result lands in the reply. `/memory/add` and `/index-conversation` called directly (#1353) |
 | `functional/langfuse_trace` | a tool call produces a trace in the datapack's langfuse project |
@@ -446,6 +446,12 @@ source of truth once they exist.
 | `functional/cli_smoke` | `meko datapack create/list/describe/delete` against the stack |
 | `functional/meko_upgrade` | a stack on release N-1 with data and 3 api-server replicas, `helm upgrade` to the candidate while clients run, data intact and every tool answers (#1516) |
 | `functional/meko_mixed_versions` | old and new api-server pods against one database after the new migration ran, old pods keep serving (the AGENTS.md upgrade-safety rule, tested) |
+| `functional/memory_promote_flow` (built) | learnings promoted over REST and MCP reach the promoted list and the knowledge-base counts, keep-as-memory, delete a promoted memory, bad input refused cleanly, a stranger cannot promote |
+| `functional/projects_and_placement` (built) | projects from a theme, folders, filing, moving and unfiling datapacks, rename, a viewer sees the owner's project, a stranger cannot, deleting a project deletes the datapacks filed in it |
+| `functional/datapack_delete_cascade` (built) | a datapack with memories, a conversation, a document, an artifact, a member, a pending invite and a placement: after delete no view and no table row names it, and its name is free |
+| `functional/account_self_service` (built) | forgot password, change password, profile, onboarding, email change with its code, usage, nothing without a login |
+| `functional/free_tier_limits` (built) | datapack creations count towards the free cap, the create past it is refused, an oversized file is refused, a paid tier lifts the cap |
+| `functional/hook_capture` (built) | the published meko-skills Claude Code hooks capture a session into one conversation, a turn becomes a memory, the next session preloads it, an outage queues and delivers once |
 | `functional/reconcile_agent` | the `ycp/test/local/meko-reconcile.sh` flow: declared datapacks converge, a withdrawn one is collected, a hand-made one survives |
 
 ### `stress`: a dedicated stack per test
@@ -455,8 +461,10 @@ source of truth once they exist.
 | `stress/datapack_churn_soak` (built) | create and delete datapacks concurrently for an hour, then check nothing leaked: databases, langfuse projects, S3 prefixes, `dist_rag` sources |
 | `stress/mcp_conversations_soak` (built) | N MCP clients on memory and search at a fixed rate, error budget and p99 held for the whole soak |
 | `stress/kb_ingest_soak` | a large document set ingesting while queries run, the queue drains, no chunk lost or duplicated |
-| `stress/rag_worker_nemesis` | rag workers killed mid-ingest, every document ends indexed exactly once |
-| `stress/churn_with_api_pod_kills` (built) | api-server pods deleted every interval under REST load, recovery within a bound. `stress/component_nemesis` is the wider version: | api-server, mcp-server, langfuse and Valkey pods killed at random under load. Every request gets an answer, nothing acknowledged is lost |
+| `stress/kb_ingest_with_worker_kills` (built) | the text rag worker deleted mid-ingest under continuous uploads: every document ends indexed within the task lease, none FAILED, each searchable |
+| `stress/churn_with_api_pod_kills` (built) | api-server pods deleted every interval under REST load, recovery within a bound |
+| `stress/recall_under_mcp_pod_kills` (built) | recall and captured sessions on seeded datapacks while the MCP server is deleted every interval: recovery within a bound, a quiet error rate between kills, every seeded fact still found |
+| `stress/dependency_faults_under_load` (built) | every workload at once while Langfuse is frozen, Valkey, api-server, MCP, gateway and database pods are deleted and the LLM is slow then failing, in turn: recovery after each fault, a quiet error rate between them, invariants, survivors and cleanup |
 | `stress/db_nemesis` | on a `yba` RF3 backing: tserver kill and network partition under load |
 | `stress/db_maintenance` | rolling restart, gflag change and YugabyteDB upgrade of the backing under load |
 | `stress/rolling_upgrade_under_load` | `helm upgrade` N-1 to N while clients run |
@@ -475,12 +483,12 @@ missing.
 |---|---|
 | `perf/api_latency`, `perf/mcp_latency` (built) | closed-loop concurrency ladder, p50, p95, p99 and throughput per op as datapoints |
 | `perf/mcp_tool_latency` | p50, p95, p99 per tool at a fixed rate, and throughput at saturation |
-| `perf/memory_search_scaling` | `memory_search` latency against memory count per datapack |
-| `perf/kb_search_scaling` | `knowledgebase_search` latency against corpus size |
-| `perf/kb_ingest_throughput` | documents per minute, chunks per second, time from upload to searchable |
+| `perf/recall_latency` (built) | `memory_search`, `context_search`, `knowledgebase_search`, `datapack_describe` and the memories pages against the seeded volume of a datapack |
+| `perf/write_path_latency` (built) | `conversation_add_message` and the time until an extracted fact is searchable, with the LLM mock as slow as a model |
+| `perf/kb_ingest_throughput` (built) | upload latency, time from upload to indexed, documents per second, by concurrent uploaders |
 | `perf/ops_latency` | datapack create and delete, PAT mint, time to first successful tool call |
-| `perf/chat_overhead` | `/chat` end to end with a scripted reply, so the number is meko's own overhead |
-| `perf/read_api_at_scale` | the read routes the UI and admin console call (account usage, datapack metrics, KB summary), timed on a stack seeded with production-sized langfuse and conversation data (#1236, #1540, #1548) |
+| `perf/chat_latency` (built) | `/chat` end to end and every processing step the gateway times, with the LLM mock as slow as a model |
+| `perf/ui_read_latency` (built) | the read routes the web app calls, on datapacks seeded with memories, conversations and documents (#1236, #1540, #1548) |
 | `perf/idle_footprint` | CPU and memory of an idle stack |
 
 ### `quality`: real model, optional, not scheduled

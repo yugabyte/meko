@@ -98,6 +98,17 @@ func (r *Rig) UniverseCounter(ctx context.Context) error {
 	return nil
 }
 
+// StackConfig is the BackingConfig of a stack under load: env.mekostack.load_api_config added to
+// the api-server's api_config.
+func StackConfig(cfg *core.Config) map[string]string {
+	extra := cfg.GetStringSlice("env.mekostack.load_api_config", nil)
+	if len(extra) == 0 {
+		return nil
+	}
+	all := append(cfg.GetStringSlice("env.mekostack.api_config", nil), extra...)
+	return map[string]string{"env.mekostack.api_config": "list:" + strings.Join(all, ",")}
+}
+
 // Logf is the rig's masked logger.
 func (r *Rig) Logf(format string, a ...any) { r.logf(format, a...) }
 
@@ -132,7 +143,8 @@ func Start(t *core.T, p Plan) (*Rig, error) {
 
 		api, mcp := mekostack.ClusterURLs(r.Stack.Namespace())
 		return r.Fleet.CreateTargets(t, func(i int) mekoload.TargetSpec {
-			return mekoload.TargetSpec{Name: fmt.Sprintf("stack-%d", i), APIURL: api, MCPURL: mcp, Credentials: r.credentialsFor(i), Timeout: "60s"}
+			return mekoload.TargetSpec{Name: fmt.Sprintf("stack-%d", i), APIURL: api, MCPURL: mcp, GatewayURL: mekostack.ClusterGatewayURL(r.Stack.Namespace()),
+				Credentials: r.credentialsFor(i), Timeout: "60s"}
 		})
 	})
 	if err != nil {

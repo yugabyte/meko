@@ -18,8 +18,8 @@ func TestEveryFunctionalTestIsInTheRegressionSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 19 || len(tagged) != len(all) {
-		t.Fatalf("%d functional tests, %d tagged regression, want 19 and 19", len(all), len(tagged))
+	if len(all) != 30 || len(tagged) != len(all) {
+		t.Fatalf("%d functional tests, %d tagged regression, want 30 and 30", len(all), len(tagged))
 	}
 }
 
@@ -36,8 +36,8 @@ func TestStackTestsSkipOnAProviderWithoutAStack(t *testing.T) {
 			tests = append(tests, tc)
 		}
 	}
-	if len(tests) != 14 {
-		t.Fatalf("selected %d stack tests, want 14", len(tests))
+	if len(tests) != 25 {
+		t.Fatalf("selected %d stack tests, want 25", len(tests))
 	}
 	for _, tc := range tests {
 		if tc.Env.Shape != core.SingleStack {

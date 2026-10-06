@@ -176,6 +176,15 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request, name string) {
 			"calls":    len(st.calls),
 		}, nil)
 		return
+	case name == "stats":
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		routes := map[string]int{}
+		for k, v := range st.routes {
+			routes[k] = v
+		}
+		writeJSON(w, 200, obj{"seq": st.seq, "routes": routes}, nil)
+		return
 	case name == "reset" && r.Method == http.MethodPost:
 		st.reset()
 		ok()

@@ -157,6 +157,13 @@ env:
       database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2"
     # api-server replicas. Three, so a migration runs while other replicas serve.
     api_replicas: 3
+    # Extra api-server env, KEY=VALUE, for runtime feature flags the chart presets
+    # leave off. Projects and conversation search ship in the UI, so the stack
+    # runs them.
+    api_config: ["MEKO_ENABLE_PROJECTS=true", "MEKO_ENABLE_CONVERSATION_SEARCH=true"]
+    # Added to api_config on the dedicated stacks perf and stress load. Their clients share a
+    # few PATs across many virtual agents, and the api-server allows one PAT 60 calls a minute.
+    load_api_config: ["PAT_RATE_LIMIT_PER_MIN=0"]
     # Deploy the rag workers (text, conversations, pdf) on CPU nodes, no GPU and no
     # node selector.
     rag_workers: true
@@ -923,6 +930,8 @@ stress:
   http_5xx_allowed: 0
   # How long after the duration the pods get to stop, before the run is a failure.
   drain_timeout: 10m
+  # How long the load may take to seed before it runs. Faults wait for the seed.
+  setup_timeout: 15m
   datapack_churn_soak:
     duration: 15m
     concurrency: 8
@@ -963,6 +972,60 @@ stress:
     recovery_error_rate: 0.2
     # Over the whole run, with the kills in it.
     max_error_rate: 0.10
+  # Recall and captured sessions on seeded datapacks while the MCP server dies.
+  recall_under_mcp_pod_kills:
+    duration: 20m
+    concurrency: 12
+    think_time: 50ms
+    seed_memories: 300
+    seed_docs: 5
+    freshness_timeout: 3m
+    recall_weight: 6
+    write_weight: 2
+    conversation_weight: 2
+    first_kill_after: 2m
+    kill_interval: 3m
+    recover_within: 2m
+    recovery_error_rate: 0.2
+    # Between kills, once the load has recovered.
+    quiet_error_rate: 0.02
+    max_error_rate: 0.10
+    # The kills cost 5xx answers; recovery and the quiet error rate judge them.
+    http_5xx_allowed: 100000
+  # Ingest that must survive the text worker dying mid-document.
+  kb_ingest_with_worker_kills:
+    duration: 30m
+    concurrency: 6
+    think_time: 200ms
+    seed_docs: 3
+    doc_bytes: 8192
+    # Longer than the rag task lease (TASK_LEASE_DURATION, 600s), so a document
+    # whose worker died is retried within it.
+    ingest_timeout: 15m
+    ingest_weight: 3
+    search_weight: 1
+    first_kill_after: 3m
+    kill_interval: 5m
+    recover_within: 2m
+    max_error_rate: 0.02
+    http_5xx_allowed: 0
+  # Everything at once while the dependencies fail in turn.
+  dependency_faults_under_load:
+    duration: 30m
+    concurrency: 12
+    think_time: 100ms
+    seed_memories: 100
+    freshness_timeout: 3m
+    first_fault_after: 2m
+    fault_interval: 3m
+    # How long a freeze or an LLM fault lasts. A deleted pod heals on its own.
+    hold: 60s
+    llm_slow: 8s
+    recover_within: 2m
+    recovery_error_rate: 0.2
+    quiet_error_rate: 0.02
+    max_error_rate: 0.15
+    http_5xx_allowed: 100000
 
 # --- Perf tests (suites/perf) ---
 # A closed loop at each concurrency of the ladder, on a dedicated stack, one
@@ -980,18 +1043,75 @@ perf:
   max_error_rate: 0.01
   drain_timeout: 10m
   api_latency:
+    step_duration: ""
     concurrency: [1, 8, 32]
     think_time: 0s
     max_active_pats: 2
     datapack_weight: 4
     pat_weight: 2
   mcp_latency:
+    # Empty takes perf.step_duration, the same for every test below.
+    step_duration: ""
     concurrency: [1, 8, 32]
     think_time: 0s
     credentials: 4
     messages: 2
     datapacks: 1
     reuse_session: false
+  # CPU and memory of every component, the request and latency histograms the
+  # api-server, MCP server and gateway export, the database's RPCs and the LLM
+  # calls, measured over each level once every client pod is past its setup.
+  server_metrics:
+    enabled: true
+    sample_interval: 15s
+    # A server series with fewer events in a level records no datapoint.
+    min_count: 20
+  # Recall over a growing datapack: one level per seeded volume.
+  recall_latency:
+    step_duration: ""
+    volumes: [100, 1000, 5000]
+    users: 8
+    credentials: 1
+    docs: 20
+    doc_bytes: 4096
+    seed_concurrency: 16
+    ingest_timeout: 10m
+    llm_embed_latency: 20ms
+  # Captured sessions: conversation_add_message and the time until the fact it
+  # carries is searchable.
+  write_path_latency:
+    step_duration: ""
+    concurrency: [1, 8, 32]
+    credentials: 4
+    messages: 3
+    freshness_timeout: 2m
+    freshness_every: 1
+    # How slowly the LLM mock answers, the way a model would.
+    llm_chat_latency: 800ms
+    llm_embed_latency: 20ms
+  kb_ingest_throughput:
+    step_duration: 3m
+    concurrency: [1, 4, 16]
+    credentials: 2
+    doc_bytes: 16384
+    ingest_timeout: 10m
+    llm_embed_latency: 20ms
+  ui_read_latency:
+    step_duration: ""
+    concurrency: [1, 8, 32]
+    credentials: 1
+    datapacks: 2
+    memories: 200
+    conversations: 10
+    docs: 3
+  chat_latency:
+    step_duration: ""
+    concurrency: [1, 4, 16]
+    credentials: 2
+    memories: 50
+    messages: 2
+    llm_chat_latency: 800ms
+    llm_embed_latency: 20ms
 
 # --- Service guard (core/guard.go) ---
 # Around every test body on a self-built stack: a container restart, a panic or
@@ -1000,6 +1120,23 @@ perf:
 # result and never fail it.
 guard:
   enabled: true
+
+# --- functional system tests ---
+functional:
+  # How long a write may take to show in a read on another path: a conversation
+  # in Langfuse, a memory count, a page of the web app. A read still stale after
+  # this is a finding.
+  visible_within: 60s
+  # The api-server's free-tier caps (MEKO_FREE_TIER_DATAPACKS and
+  # MEKO_FREE_TIER_KB_FILE_BYTES), which functional/free_tier_limits meets.
+  free_tier:
+    datapacks: 10
+    kb_file_bytes: 5242880
+  # functional/hook_capture: the meko-skills ref whose Claude Code hooks run, and
+  # the public Node image they run in.
+  hook_capture:
+    ref: "main"
+    image: "mirror.gcr.io/library/node:20-alpine"
 
 # --- functional/upgrade_previous_release ---
 upgrade:

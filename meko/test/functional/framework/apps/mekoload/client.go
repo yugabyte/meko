@@ -111,6 +111,7 @@ type TargetSpec struct {
 	Name        string       `json:"name,omitempty"`
 	APIURL      string       `json:"api_url,omitempty"`
 	MCPURL      string       `json:"mcp_url,omitempty"`
+	GatewayURL  string       `json:"gateway_url,omitempty"`
 	Credentials []Credential `json:"credentials,omitempty"`
 	Timeout     string       `json:"timeout,omitempty"`
 }

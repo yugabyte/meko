@@ -87,6 +87,7 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 	if cfg.S3PublicEndpoint != "" {
 		apiConfig["S3_PUBLIC_ENDPOINT"] = cfg.S3PublicEndpoint
 	}
+
 	secrets := map[string]any{
 		"dbPassword":                   s.DBPassword,
 		"mcpInternalSecret":            s.MCPInternal,
@@ -100,6 +101,8 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 		"langfuseInitUserEmail":        s.LangfuseInitEmail,
 		"langfuseInitUserPassword":     s.LangfuseInitPassword,
 		"langfuseInitProjectSecretKey": s.LangfuseProjectKey,
+		"langfuseS3AccessKey":          m.AccessKey,
+		"langfuseS3SecretKey":          m.SecretKey,
 	}
 	if cfg.RagWorkers {
 		secrets["ragAwsAccessKeyId"] = m.AccessKey
@@ -130,6 +133,7 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 		"langfuse": map[string]any{
 			"web":    map[string]any{"image": tag("langfuse_web")},
 			"worker": map[string]any{"image": tag("langfuse_worker")},
+			"config": langfuseS3(cfg, m),
 		},
 	}
 	if cfg.RagWorkers {
@@ -168,6 +172,16 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 		v["apiServer"].(map[string]any)["extraEnv"] = cfg.apiLLMEnv()
 		v["mekoMcpServer"].(map[string]any)["extraEnv"] = cfg.mcpLLMEnv()
 	}
+	// The chart passes only the config keys it names, so a feature flag goes in as env.
+	if len(cfg.APIConfig) > 0 {
+		api := v["apiServer"].(map[string]any)
+		env, _ := api["extraEnv"].([]any)
+		for _, kv := range cfg.APIConfig {
+			k, val, _ := strings.Cut(kv, "=")
+			env = append(env, map[string]any{"name": k, "value": val})
+		}
+		api["extraEnv"] = env
+	}
 	return v, nil
 }
 
@@ -178,10 +192,26 @@ func MarshalValues(v map[string]any) ([]byte, error) {
 	return yaml.Marshal(v)
 }
 
+// langfuseS3 points Langfuse's event, media and export uploads at the stack's
+// MinIO. Without a store Langfuse rejects every OTLP trace, so no conversation
+// is ever recorded.
+func langfuseS3(cfg Config, m MinIO) map[string]any {
+	out := map[string]any{}
+	for _, kind := range []string{"EVENT_UPLOAD", "MEDIA_UPLOAD", "BATCH_EXPORT"} {
+		p := "LANGFUSE_S3_" + kind + "_"
+		out[p+"BUCKET"] = cfg.S3Bucket
+		out[p+"REGION"] = cfg.S3Region
+		out[p+"ENDPOINT"] = m.APIEndpoint
+		out[p+"FORCE_PATH_STYLE"] = "true"
+	}
+	return out
+}
+
 var secretValueKeys = map[string]struct{}{
 	"dbPassword": {}, "mcpInternalSecret": {}, "openaiApiKey": {}, "s3AccessKey": {}, "s3SecretKey": {},
 	"langfuseNextauthSecret": {}, "langfuseSalt": {}, "langfuseEncryptionKey": {}, "langfuseAdminApiKey": {},
 	"langfuseInitUserPassword": {}, "langfuseInitProjectSecretKey": {}, "ragAwsAccessKeyId": {}, "ragAwsSecretAccessKey": {},
+	"langfuseS3AccessKey": {}, "langfuseS3SecretKey": {},
 }
 
 func MaskedValues(v map[string]any) map[string]any {

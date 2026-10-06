@@ -33,6 +33,7 @@ type Client struct {
 	token   string
 	hc      *http.Client
 	onError func(*Error)
+	headers http.Header
 }
 
 type Option func(*Client)
@@ -58,6 +59,18 @@ func (c *Client) WithToken(token string) *Client {
 }
 
 // WithTimeout returns a copy whose requests may take up to d.
+// WithHeader returns a copy that sends key: value on every request, for the
+// operator routes that authenticate with a header instead of a token.
+func (c *Client) WithHeader(key, value string) *Client {
+	cp := *c
+	cp.headers = c.headers.Clone()
+	if cp.headers == nil {
+		cp.headers = http.Header{}
+	}
+	cp.headers.Set(key, value)
+	return &cp
+}
+
 func (c *Client) WithTimeout(d time.Duration) *Client {
 	cp := *c
 	hc := *c.hc
@@ -185,6 +198,9 @@ func (c *Client) send(ctx context.Context, method, path, contentType string, pay
 		}
 		if c.token != "" {
 			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		for k, v := range c.headers {
+			req.Header[k] = v
 		}
 		resp, err := c.hc.Do(req)
 		retry := err == nil && resp.StatusCode == http.StatusTooManyRequests ||

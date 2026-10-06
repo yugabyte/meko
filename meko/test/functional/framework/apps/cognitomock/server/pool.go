@@ -169,12 +169,19 @@ func (p *Pool) ordered() []*user {
 
 func key(username string) string { return strings.ToLower(strings.TrimSpace(username)) }
 
+// find takes a username or, as a pool that signs in by email does, the
+// user's current verified email, which differs from the username once the
+// user has changed it.
 func (p *Pool) find(username string) (*user, error) {
-	u := p.users[key(username)]
-	if u == nil {
-		return nil, fail("UserNotFoundException", "User does not exist.")
+	if u := p.users[key(username)]; u != nil {
+		return u, nil
 	}
-	return u, nil
+	for _, u := range p.users {
+		if key(u.Attrs["email"]) == key(username) && u.Attrs["email_verified"] == "true" {
+			return u, nil
+		}
+	}
+	return nil, fail("UserNotFoundException", "User does not exist.")
 }
 
 func (p *Pool) newUser(username, password string, attrs map[string]string, status string) (*user, error) {
