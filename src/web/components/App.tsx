@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
+import { approveDesign } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
@@ -395,7 +396,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         <DesignPanel
           page
           session={s}
-          onApprove={() => api.sessionAction(s.id, 'approve-design').catch((e) => showToast(errorMessage(e)))}
+          onApprove={() => approveDesign(s.id).catch((e) => showToast(errorMessage(e)))}
         />
         {toast && (
           <div className="toast" role="status" onClick={() => setToast(null)}>

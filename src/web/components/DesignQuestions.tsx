@@ -1,256 +1,134 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  DESIGN_FEEDBACK_ID,
-  type DesignAnswer,
-  type DesignAnswerUpdate,
-  type DesignDoc,
-  type DesignQuestion,
-  type Session,
-} from '../../shared/types';
+import { useRef, useState } from 'react';
+import type { DesignDoc, DesignQuestion, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { answerSummary, answersByQuestion, plural, sendLabel } from '../design-answers';
-import { cx } from '../util';
+import { clearDrafts, draftFor, draftsBlocker, draftsPersist, toRequest, useDesignDrafts, type Draft } from '../design-answers';
+import { cx, designApprovalBlocker } from '../util';
 import { Busy } from './common';
 
-/**
- * A textarea whose text is saved as you type (after a pause, on blur, and when it goes away).
- * Text from the server replaces it only while it isn't being edited. It's reload-safe only while
- * its text is what the server has, so the reload after an update waits for unsaved text (one
- * still being typed, or a save that failed).
- */
-function AutosaveText({
-  id,
-  value,
-  disabled,
-  placeholder,
-  label,
-  rows = 2,
-  onSave,
-}: {
-  id: string;
-  value: string;
-  disabled: boolean;
-  placeholder: string;
-  label: string;
-  rows?: number;
-  onSave: (text: string) => void;
-}) {
-  const [text, setText] = useState(value);
-  const editing = useRef(false);
-  const pending = useRef<string | null>(null);
-  const timer = useRef<number | undefined>(undefined);
-  const save = useRef(onSave);
-  useEffect(() => {
-    save.current = onSave;
-  });
-
-  useEffect(() => {
-    if (!editing.current && pending.current === null) setText(value);
-  }, [value]);
-
-  const flush = useCallback(() => {
-    window.clearTimeout(timer.current);
-    if (pending.current !== null) {
-      const t = pending.current;
-      pending.current = null;
-      save.current(t);
-    }
-  }, []);
-  // Saves what's left when the card goes away (a tab switch, a revised design).
-  useEffect(() => flush, [flush]);
-
-  return (
-    <textarea
-      id={id}
-      className="input dq-text"
-      rows={rows}
-      value={text}
-      disabled={disabled}
-      placeholder={placeholder}
-      aria-label={label}
-      data-reload-safe={text === value ? '' : undefined}
-      onFocus={() => {
-        editing.current = true;
-      }}
-      onBlur={() => {
-        editing.current = false;
-        flush();
-      }}
-      onChange={(e) => {
-        const t = e.target.value;
-        setText(t);
-        pending.current = t;
-        window.clearTimeout(timer.current);
-        timer.current = window.setTimeout(flush, 800);
-      }}
-    />
-  );
-}
-
-function StateChip({ q, unsent, sent }: { q: DesignQuestion; unsent?: DesignAnswer; sent?: DesignAnswer }) {
+function StateChip({ q, d }: { q: DesignQuestion; d: Draft }) {
   if (q.status === 'resolved') return <span className="dq-chip done">✓ Resolved</span>;
-  if (unsent?.state === 'queued') return <span className="dq-chip queued">◔ Waiting to send</span>;
-  if (unsent) return <span className="dq-chip answered">✓ Answered</span>;
-  if (sent) return <span className="dq-chip sent">↗ Sent</span>;
+  if (d.custom && d.text.trim() && q.options.length) return <span className="dq-chip custom">✎ Custom</span>;
+  if (d.choice !== null || (d.custom && d.text.trim())) return <span className="dq-chip answered">✓ Answered</span>;
   return <span className="dq-chip open">● Open</span>;
 }
 
 function QuestionCard({
   q,
   n,
-  unsent,
-  sent,
+  d,
   editable,
-  onSave,
-  onClear,
+  onChange,
 }: {
   q: DesignQuestion;
   n: number;
-  unsent?: DesignAnswer;
-  sent?: DesignAnswer;
+  d: Draft;
   editable: boolean;
-  onSave: (b: DesignAnswerUpdate) => void;
-  onClear: () => void;
+  onChange: (d: Draft) => void;
 }) {
-  const locked = !editable || unsent?.state === 'queued';
   const name = `dq-${q.id}`;
+  const text = useRef<HTMLTextAreaElement>(null);
+  const answer = d.custom && q.options.length > 0;
   return (
     <li className="dq-card">
       <div className="dq-top">
         <span className="dq-n">Q{n}</span>
         <span className="dq-q">{q.question}</span>
-        <StateChip q={q} unsent={unsent} sent={sent} />
+        <StateChip q={q} d={d} />
       </div>
       {q.context && <p className="dq-ctx">{q.context}</p>}
-      {sent && !unsent && <p className="dq-sent">You sent: {answerSummary(sent)}</p>}
-      {unsent && unsent.choice === null && unsent.choiceLabel !== null && (
-        <p className="dq-sent">
-          You picked “{unsent.choiceLabel}”, which is no longer one of AgentK’s options. Pick again, or send it as it is.
-        </p>
-      )}
-      <div className="dq-opts" role="radiogroup" aria-label={`Answer to Q${n}`}>
-        {q.options.map((o, i) => (
-          <label key={i} className={cx('dq-opt', unsent?.choice === i && 'on')}>
-            <input type="radio" name={name} checked={unsent?.choice === i} disabled={locked} onChange={() => onSave({ choice: i })} />
-            <span className="dq-opt-text">
-              <span className="dq-label">
-                {o.label}
-                {q.recommended === i && <span className="dq-rec">Recommended</span>}
+      {q.options.length > 0 && (
+        <div className="dq-opts" role="radiogroup" aria-label={`Answer to Q${n}`}>
+          {q.options.map((o, i) => (
+            <label key={i} className={cx('dq-opt', !d.custom && d.choice === i && 'on')}>
+              <input
+                type="radio"
+                name={name}
+                checked={!d.custom && d.choice === i}
+                disabled={!editable}
+                onChange={() => onChange({ ...d, choice: i, label: o.label, custom: false })}
+              />
+              <span className="dq-opt-text">
+                <span className="dq-label">
+                  {o.label}
+                  {q.recommended === i && <span className="dq-rec">Recommended</span>}
+                </span>
+                {o.detail && <span className="dq-detail">{o.detail}</span>}
               </span>
-              {o.detail && <span className="dq-detail">{o.detail}</span>}
+            </label>
+          ))}
+          <label className={cx('dq-opt', d.custom && 'on')}>
+            <input
+              type="radio"
+              name={name}
+              checked={d.custom}
+              disabled={!editable}
+              onChange={() => {
+                onChange({ ...d, choice: null, label: null, custom: true });
+                // Picking Custom answer is to write one.
+                text.current?.focus();
+              }}
+            />
+            <span className="dq-opt-text">
+              <span className="dq-label">Custom answer</span>
+              <span className="dq-detail">Tell AgentK what you want instead.</span>
             </span>
           </label>
-        ))}
-        <label className={cx('dq-opt', unsent?.yourCall && 'on')}>
-          <input type="radio" name={name} checked={!!unsent?.yourCall} disabled={locked} onChange={() => onSave({ yourCall: true })} />
-          <span className="dq-opt-text">
-            <span className="dq-label">Your call</span>
-            <span className="dq-detail">
-              {q.recommended !== null ? 'AgentK goes with its recommendation.' : 'AgentK decides, and says what it picked.'}
-            </span>
-          </span>
-        </label>
-      </div>
-      <AutosaveText
-        id={`dq-text-${q.id}`}
-        value={unsent?.text ?? ''}
-        disabled={locked}
-        placeholder={q.options.length ? 'Add a note (optional)' : 'Your answer'}
-        label={`Note on Q${n}`}
-        onSave={(text) => onSave({ text })}
-      />
-      {unsent?.state === 'draft' && editable && (
-        <button className="link-btn dq-clear" onClick={onClear}>
-          Clear answer
-        </button>
+        </div>
       )}
+      <textarea
+        ref={text}
+        id={`dq-text-${q.id}`}
+        className="input dq-text"
+        rows={2}
+        value={d.text}
+        disabled={!editable}
+        placeholder={answer ? 'Your answer' : q.options.length ? 'Add a note (optional)' : 'Your answer (or leave it to AgentK)'}
+        aria-label={answer || !q.options.length ? `Your answer to Q${n}` : `Note on Q${n}`}
+        data-reload-safe={draftsPersist() ? '' : undefined}
+        onChange={(e) => onChange({ ...d, text: e.target.value })}
+      />
     </li>
   );
 }
 
 /**
- * The design's questions for the user, with their answers: open ones to answer (an option, Your
- * call, or text), what's decided, answers to questions no longer open, other feedback, and Send.
+ * The design's questions for the user: open ones to answer (an option, with an optional note, or
+ * a custom answer), what's decided, and other feedback. The answers stay in this browser until
+ * they go to AgentK: with the approval, or to revise the design.
  */
 export function DesignQuestions({ session, doc }: { session: Session; doc: DesignDoc }) {
-  const [answers, setAnswers] = useState<DesignAnswer[] | null>(null);
+  const [drafts, update] = useDesignDrafts(session.id);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  // Responses can come back out of order; only the newest request's answers are kept.
-  const seq = useRef(0);
+  const [sending, setSending] = useState<'revise' | 'approve' | null>(null);
 
   const editable = session.stage === 'design' && session.desired === 'running';
-
-  const load = useCallback(() => {
-    const n = ++seq.current;
-    api
-      .designAnswers(session.id)
-      .then((a) => n === seq.current && setAnswers(a))
-      .catch((e) => n === seq.current && setError(errorMessage(e)));
-  }, [session.id]);
-  // Again when the design is revised, or any answer changes (here, in another tab, a send, an approval).
-  useEffect(load, [load, session.designUpdatedAt, session.designQuestions.changedAt, session.stage]);
-
-  const save = async (qid: string, b: DesignAnswerUpdate) => {
-    const n = ++seq.current;
-    try {
-      const list = await api.putDesignAnswer(session.id, qid, b);
-      if (n === seq.current) setAnswers(list);
-      setError(null);
-    } catch (e) {
-      setError(errorMessage(e));
-      load();
-    }
-  };
-  const clear = async (qid: string) => {
-    try {
-      await api.deleteDesignAnswer(session.id, qid);
-      setError(null);
-    } catch (e) {
-      setError(errorMessage(e));
-    }
-    load();
-  };
-  const send = async () => {
-    setSending(true);
-    setNote(null);
-    try {
-      const r = await api.sendDesignAnswers(session.id);
-      setNote(r.sent ? 'Sent to AgentK. The design is updated when its turn ends.' : 'Queued: they go to AgentK when its turn ends.');
-      setError(null);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setSending(false);
-      load();
-    }
-  };
-
-  if (!answers) {
-    return (
-      <div className="dq-scroll">
-        {error ? <p className="error-text">{error}</p> : <p className="muted"><Busy label="Loading" /></p>}
-      </div>
-    );
-  }
-
-  const { unsent, sent } = answersByQuestion(answers);
   const open = doc.questions.filter((q) => q.status === 'open');
   const resolved = doc.questions.filter((q) => q.status === 'resolved');
   const number = new Map(doc.questions.map((q, i) => [q.id, i + 1]));
-  const openIds = new Set(open.map((q) => q.id));
-  const orphans = [...unsent.values()].filter((a) => a.questionId !== DESIGN_FEEDBACK_ID && !openIds.has(a.questionId));
-  const drafts = [...unsent.values()].filter((a) => a.state === 'draft');
-  const queued = [...unsent.values()].filter((a) => a.state === 'queued').length;
-  const feedback = unsent.get(DESIGN_FEEDBACK_ID);
+  const request = toRequest(doc.questions, drafts);
   const blocker = !editable
     ? 'Answers go to AgentK only while the session is in Design.'
-    : session.status === 'exited'
-      ? 'Claude has exited. Resume the session first.'
-      : !drafts.length
-        ? 'Answer a question or write feedback first.'
-        : null;
+    : (draftsBlocker(doc.questions, drafts) ?? designApprovalBlocker(session));
+  const reviseBlocker = blocker ?? (!request.answers.length && !request.feedback.trim() ? 'Answer a question or write feedback first.' : null);
+  // Shown in the footer too, as tooltips aren't seen on a phone.
+  const busy = session.busy ? 'AgentK is moving the session on. Wait a moment.' : null;
+
+  const go = async (what: 'revise' | 'approve') => {
+    setSending(what);
+    setNote(null);
+    try {
+      if (what === 'revise') await api.reviseDesign(session.id, request);
+      else await api.approveDesign(session.id, request);
+      clearDrafts(session.id);
+      setError(null);
+      if (what === 'revise') setNote('Sent to AgentK. The design is updated when its turn ends.');
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSending(null);
+    }
+  };
 
   return (
     <>
@@ -263,11 +141,9 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
                 key={q.id}
                 q={q}
                 n={number.get(q.id) ?? 0}
-                unsent={unsent.get(q.id)}
-                sent={sent.get(q.id)}
+                d={draftFor(q, drafts.answers[q.id])}
                 editable={editable}
-                onSave={(b) => void save(q.id, b)}
-                onClear={() => void clear(q.id)}
+                onChange={(d) => update((x) => ({ ...x, answers: { ...x.answers, [q.id]: d } }))}
               />
             ))}
           </ol>
@@ -285,26 +161,6 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
           <p className="muted small">These are the items under the design’s “Open questions” heading.</p>
         )}
 
-        {orphans.length > 0 && (
-          <section className="dq-section">
-            <h4>Answers to questions no longer open</h4>
-            <p className="muted small">AgentK changed or resolved these questions after you answered. They still go with the others when you send.</p>
-            <ul className="dq-orphans">
-              {orphans.map((a) => (
-                <li key={a.id}>
-                  <span className="dq-q">{a.question}</span>
-                  <span className="dq-sent">{answerSummary(a)}</span>
-                  {a.state === 'draft' && editable && (
-                    <button className="link-btn" onClick={() => void clear(a.questionId)}>
-                      Delete
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
         {resolved.length > 0 && (
           <details className="dq-section dq-decided">
             <summary>Decided ({resolved.length})</summary>
@@ -319,41 +175,49 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
           </details>
         )}
 
-        {(editable || feedback) && (
+        {editable && (
           <section className="dq-section">
             <label className="dq-fb-label" htmlFor="dq-text-feedback">
               Other feedback on the design
             </label>
-            <AutosaveText
+            <textarea
               id="dq-text-feedback"
-              value={feedback?.text ?? ''}
-              disabled={!editable || feedback?.state === 'queued'}
-              placeholder="Anything else AgentK should change"
-              label="Other feedback on the design"
+              className="input dq-text"
               rows={3}
-              onSave={(text) => void save(DESIGN_FEEDBACK_ID, { text })}
+              value={drafts.feedback}
+              placeholder="Anything else AgentK should change"
+              data-reload-safe={draftsPersist() ? '' : undefined}
+              onChange={(e) => {
+                const feedback = e.target.value;
+                update((x) => ({ ...x, feedback }));
+              }}
             />
           </section>
         )}
       </div>
-      <div className="dq-foot">
-        <span className="dq-foot-note">
-          {error ? (
-            <span className="error-text">{error}</span>
-          ) : note ? (
-            note
-          ) : queued ? (
-            `${plural(queued, 'answer')} waiting for AgentK’s turn to end.`
-          ) : drafts.length && session.status === 'working' ? (
-            'AgentK is working. Send now, and your answers go when its turn ends.'
-          ) : (
-            blocker && drafts.length ? blocker : ''
-          )}
-        </span>
-        <button className="btn small primary" disabled={!!blocker || sending} title={blocker ?? undefined} onClick={() => void send()}>
-          {sending ? <Busy label="Sending" /> : sendLabel(drafts)}
-        </button>
-      </div>
+      {editable && (
+        <div className="dq-foot">
+          <span className="dq-foot-note">
+            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? reviseBlocker ?? '')}
+          </span>
+          <button
+            className="btn small"
+            disabled={!!reviseBlocker || !!sending || !!busy}
+            title={busy ?? reviseBlocker ?? 'AgentK revises the design to match your answers'}
+            onClick={() => void go('revise')}
+          >
+            {sending === 'revise' ? <Busy label="Sending" /> : 'Send for revision'}
+          </button>
+          <button
+            className="btn small primary"
+            disabled={!!blocker || !!sending || !!busy}
+            title={busy ?? blocker ?? 'Approve the design with your answers, and move to Code'}
+            onClick={() => void go('approve')}
+          >
+            {sending === 'approve' ? <Busy label="Approving" /> : open.length ? 'Approve with answers' : 'Approve design'}
+          </button>
+        </div>
+      )}
     </>
   );
 }

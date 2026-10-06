@@ -1,4 +1,3 @@
-import { designQuestionCounts } from './answers.js';
 import { commentCounts } from './comments.js';
 import { all, get, run, type Db } from './db.js';
 import type {
@@ -192,7 +191,7 @@ export interface SessionRuntime {
   contextPercent: number | null;
 }
 
-export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
+export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
   const design = get<{ updated_at: number }>(db, 'SELECT updated_at FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
@@ -223,7 +222,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime): Session {
     designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
     comments: commentCounts(db, r.id),
-    designQuestions: designQuestionCounts(db, r.id),
+    designQuestions: { open: openQuestions },
     reviewingPr: reviewingPr(r),
     usage: rt.usage,
     contextPercent: rt.contextPercent,

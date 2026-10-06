@@ -6,7 +6,7 @@ import { hostname, userInfo } from 'node:os';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import { TranscriptCapture } from './capture.js';
-import { DesignAnswerService } from './answers.js';
+import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
 import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
@@ -80,7 +80,7 @@ export class Core extends EventEmitter {
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
   readonly comments: CommentService;
-  readonly answers: DesignAnswerService;
+  readonly questions: DesignQuestionStore;
   readonly prReview: PrReviewService;
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
@@ -126,7 +126,7 @@ export class Core extends EventEmitter {
     this.sessions = new SessionManager(this);
     this.lifecycle = new Lifecycle(this);
     this.comments = new CommentService(this);
-    this.answers = new DesignAnswerService(this);
+    this.questions = new DesignQuestionStore(this);
     this.prReview = new PrReviewService(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
@@ -236,6 +236,8 @@ export class Core extends EventEmitter {
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
     const noWebUrl = mekoWebUrlWarning(this.cfg);
     if (noWebUrl) this.log.warn(noWebUrl);
+    // Before any turn can end, so the first one after a restart can tell whether its design's questions changed.
+    this.questions.preload();
     await this.bindHooks();
     this.hooksOn = true;
     // A tmux service that is down must not keep the web server from starting: the UI stays

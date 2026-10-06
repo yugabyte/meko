@@ -494,11 +494,8 @@ export interface Session {
   diffStat: { added: number; removed: number } | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
-  /**
-   * The design's open questions, the user's answers to them not yet sent to Claude (drafts or
-   * queued), and when any answer last changed (null before there's one).
-   */
-  designQuestions: { open: number; unsent: number; changedAt: number | null };
+  /** How many of the design's questions are open, for the user to answer. */
+  designQuestions: { open: number };
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
@@ -1028,39 +1025,27 @@ export interface DesignQuestion {
   decision: string | null;
 }
 
-/** The answer id for feedback on the design that isn't about one question. */
-export const DESIGN_FEEDBACK_ID = '_feedback';
-
 /**
- * The user's answer to one of the design's questions (or, with `questionId` DESIGN_FEEDBACK_ID,
- * other feedback on the design). Drafts are kept until the user sends them; a question has at
- * most one draft. `question` and `choiceLabel` are what the user saw when they answered.
+ * The user's answer to one of the design's open questions. Answers aren't stored on the server:
+ * the browser keeps them until they go to AgentK with an approval or a request to revise.
  */
-export interface DesignAnswer {
-  id: string;
+export interface DesignAnswerInput {
   questionId: string;
-  question: string;
-  /** The option picked (an index into the question's options), or null. */
+  /** The option picked (an index into the question's options), or null for a custom answer. */
   choice: number | null;
-  choiceLabel: string | null;
-  /** Left to AgentK: it goes with its recommendation. */
-  yourCall: boolean;
-  /** The answer in the user's words, or a note on the option picked. */
+  /** The picked option's label, to catch a revision that changed the options; null with `choice`. */
+  label: string | null;
+  /** With an option, an optional note on it; for a custom answer, the answer itself (required). */
   text: string;
-  state: CommentState;
-  createdAt: number;
-  updatedAt: number;
-  sentAt: number | null;
 }
 
 /**
- * PUT /api/sessions/:id/design/answers/:qid. Fields left out keep their value. Picking an option
- * clears Your call and the other way round; an answer left with nothing in it is removed.
+ * Answers to the design's open questions and other feedback on it. An open question left out is
+ * sent as unanswered: AgentK goes with its recommendation, or its own judgment when it has none.
  */
-export interface DesignAnswerUpdate {
-  choice?: number | null;
-  yourCall?: boolean;
-  text?: string;
+export interface DesignAnswersRequest {
+  answers: DesignAnswerInput[];
+  feedback: string;
 }
 
 // ---- Requests ----
@@ -1299,18 +1284,16 @@ export type TermServerMessage =
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
 //        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
-// POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction)
+// POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
+//        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
+//        when AgentK's questions changed since, or in plan mode)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be typed)
 // GET    /api/sessions/:id/design              → DesignDoc
-// GET    /api/sessions/:id/design/answers      → DesignAnswer[]
-// PUT    /api/sessions/:id/design/answers/:qid DesignAnswerUpdate → DesignAnswer[]   (the draft for a question, or
-//        DESIGN_FEEDBACK_ID; 400 for a bad field, an option out of range or a question that isn't in the design;
-//        409 for a question no longer open, or outside Design)
-// DELETE /api/sessions/:id/design/answers/:qid → 204   (drafts only; 404 when there's none)
-// POST   /api/sessions/:id/design/answers/send → SendCommentsResult   (409 with nothing to send, outside Design or
-//        Claude exited; 400 when the answers are too long for one prompt; 502 when typing failed: they stay queued)
+// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (types them in for AgentK to revise the design;
+//        409 outside Design, while AgentK works or Claude waits on something else, or when AgentK's questions changed
+//        since; 400 for a bad answer or answers too long for one prompt; 502 when typing failed)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)

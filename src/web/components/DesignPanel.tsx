@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { DesignDoc, Session } from '../../shared/types';
@@ -47,22 +47,27 @@ function useDataTheme(): string | null {
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
  * questions to answer. Shown as a resizable side panel next to the terminal (the questions on
  * their own tab), or the whole page in its own tab (`page`, the questions beside the design on a
- * wide screen).
+ * wide screen). With open questions, Approve shows them, and the approval goes from there with
+ * the answers; `onApprove` approves a design with none.
  */
 export function DesignPanel({
   session,
   onClose,
   onApprove,
+  showQuestions = 0,
   page = false,
 }: {
   session: Session;
   onClose?: () => void;
   onApprove: () => void;
+  /** Changes when the questions should be shown (Approve pressed elsewhere with open questions). */
+  showQuestions?: number;
   page?: boolean;
 }) {
   const [doc, setDoc] = useState<DesignDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<'design' | 'questions'>('design');
+  const [tab, setTab] = useState<'design' | 'questions'>(showQuestions ? 'questions' : 'design');
+  const qcol = useRef<HTMLElement>(null);
   const mobile = useIsMobile();
 
   const theme = useDataTheme();
@@ -95,7 +100,15 @@ export function DesignPanel({
   const tabs = hasQuestions && !split;
   const showDoc = !tabs || tab === 'design';
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
-  const unsent = session.stage === 'design' ? session.designQuestions.unsent : 0;
+  const toQuestions = () => {
+    setTab('questions');
+    qcol.current?.scrollIntoView({ block: 'nearest' });
+  };
+  useEffect(() => {
+    if (!showQuestions) return;
+    setTab('questions');
+    qcol.current?.scrollIntoView({ block: 'nearest' });
+  }, [showQuestions]);
 
   const docView = (
     <>
@@ -153,11 +166,12 @@ export function DesignPanel({
         {session.stage === 'design' && session.hasDesign && (
           <button
             className="btn small primary"
-            disabled={session.busy || !!designApprovalBlocker(session)}
-            title={designApprovalBlocker(session) ?? undefined}
-            onClick={onApprove}
+            // With open questions it only shows them; the approval waits for the answers.
+            disabled={open === 0 && (session.busy || !!designApprovalBlocker(session))}
+            title={open > 0 ? 'Answer the open questions, then approve' : (designApprovalBlocker(session) ?? undefined)}
+            onClick={open > 0 ? toQuestions : onApprove}
           >
-            {approveLabel(unsent)}
+            {approveLabel(open)}
           </button>
         )}
         {doc?.artifactUrl && (
@@ -189,7 +203,7 @@ export function DesignPanel({
       {split ? (
         <div className="design-split">
           <div className="design-split-doc">{docView}</div>
-          <aside className="design-qcol" aria-label="Open questions">
+          <aside ref={qcol} className="design-qcol" aria-label="Open questions">
             <div className="design-qcol-hd">
               Questions{open > 0 && <span className="count-badge">{open}</span>}
             </div>

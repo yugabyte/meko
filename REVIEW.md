@@ -100,7 +100,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       out of Merge & Close or while AgentK is mid-turn.
 - [ ] Prompts (stage, review, review-comment and design-answer prompts) are only typed into a session when Claude is
       idle (or showing a design waiting for approval), never into a permission or question prompt; otherwise they're queued (the review prompt
-      in `state.db`, so it survives a restart). Prompts to one session go one at a time.
+      in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead.
+      Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
