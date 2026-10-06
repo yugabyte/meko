@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG, type Config } from '../src/server/config.js';
 import { Core } from '../src/server/core.js';
 import { openDb } from '../src/server/db.js';
 import { silentLogger } from '../src/server/log.js';
-import { pinSlug, sessionAgentId, type MekoClient } from '../src/server/meko.js';
+import { pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import { getPaths } from '../src/server/paths.js';
@@ -99,7 +99,13 @@ export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
 /** The Meko tab's checks and Claude Code setup, recorded instead of run. */
 export function stubMekoTools() {
   const calls: { name: string; args: unknown[] }[] = [];
-  const state: { checkError: string | null; apiError: string | null; setupError: string | null } = { checkError: null, apiError: null, setupError: null };
+  const state: {
+    checkError: string | null; apiError: string | null; setupError: string | null;
+    /** What trying each of Claude Code's tokens finds; a token not listed is rejected. */
+    tokens: Record<string, TokenTry>;
+    /** Whether `claude mcp get meko` finds a server (null: it couldn't be asked). */
+    claudeHasMcp: boolean | null;
+  } = { checkError: null, apiError: null, setupError: null, tokens: {}, claudeHasMcp: false };
   const tools: MekoTools = {
     async check(url, apiKey) {
       calls.push({ name: 'check', args: [url, apiKey] });
@@ -113,6 +119,14 @@ export function stubMekoTools() {
       calls.push({ name: 'setUpClaude', args: [url, apiKey] });
       log('setting up');
       if (state.setupError) throw new Error(state.setupError);
+    },
+    async tryToken(url, token) {
+      calls.push({ name: 'tryToken', args: [url, token] });
+      return state.tokens[token] ?? { ok: false, rejected: true, error: 'invalid_token' };
+    },
+    async claudeHasMcp(command) {
+      calls.push({ name: 'claudeHasMcp', args: [command] });
+      return state.claudeHasMcp;
     },
   };
   return { tools, calls, state };

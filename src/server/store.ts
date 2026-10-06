@@ -128,6 +128,15 @@ export function projectDatapacks(db: Db, projectId: string): DatapackRef[] {
   ).map((r) => ({ id: r.datapack_id, name: r.name, role: r.role }));
 }
 
+/** The datapacks of every open project, dedicated and shared, each once. */
+export function openProjectDatapacks(db: Db): { id: string; name: string }[] {
+  return all<{ datapack_id: string; name: string }>(
+    db,
+    `SELECT d.datapack_id, MIN(d.name) AS name FROM project_datapacks d JOIN projects p ON p.id = d.project_id
+     WHERE p.deleted_at IS NULL GROUP BY d.datapack_id ORDER BY name`,
+  ).map((r) => ({ id: r.datapack_id, name: r.name }));
+}
+
 export function toProject(db: Db, r: ProjectRow): Project {
   return {
     id: r.id,

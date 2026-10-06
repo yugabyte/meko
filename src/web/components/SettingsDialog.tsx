@@ -5,7 +5,8 @@ import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
-type Tab = 'general' | 'meko' | 'account' | 'updates';
+export type SettingsTab = 'general' | 'meko' | 'account' | 'updates';
+type Tab = SettingsTab;
 
 const TAB_LABEL: Record<Tab, string> = { general: 'General', meko: 'Meko', account: 'Account', updates: 'Updates' };
 
@@ -13,14 +14,17 @@ export function SettingsDialog({
   auth,
   update,
   meko,
+  initialTab = 'general',
   onClose,
 }: {
   auth: AuthStatus;
   update: UpdateStatus;
   meko: MekoStatus;
+  /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
+  initialTab?: SettingsTab;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>('general');
+  const [tab, setTab] = useState<Tab>(initialTab);
   return (
     <Dialog
       title="Settings"
@@ -318,7 +322,10 @@ function MekoTab({ status }: { status: MekoStatus }) {
     }
   };
 
-  const claudeMatches = m.claudeKeyMatches && (m.claudeUrl ?? m.defaultUrl) === m.effectiveUrl;
+  // Worked out by the server (MekoStatus.claude): the same server in both of Claude Code's places, tokens that work there.
+  const claude = status.claude;
+  const claudeProblems = [...claude.gaps, ...claude.unchecked];
+  const claudeTag = claude.gaps.length ? 'differs' : claude.checking ? 'checking' : claude.unchecked.length ? 'not checked' : 'matches';
 
   /** Turns Meko off (the key is kept) or back on (checked with Meko first). */
   const setEnabled = async (enabled: boolean) => {
@@ -438,21 +445,25 @@ function MekoTab({ status }: { status: MekoStatus }) {
           <span className={cx('tag', !status.sharing && 'shared')}>{status.sharing ? 'on' : 'off'}</span>
           {status.configured && !status.sharing && <span className="hint">Needs Meko’s API URL: set the web app or API URL above.</span>}
         </div>
-        <div className="meko-status-row">
-          <span>Claude Code</span>
-          <span className={cx('tag', !claudeMatches && 'shared')}>{claudeMatches ? 'matches' : 'differs'}</span>
-          <span className="hint">
-            {claudeMatches
-              ? `Sessions use ${m.effectiveUrl} with the same key.`
-              : `Sessions use ${m.claudeUrl ?? 'the Meko server Claude Code has registered'}${m.claudeKeyMatches ? ' with the same key' : ' with a different key (or none)'}. New sessions pick up a change; running ones keep theirs.`}
-          </span>
-          {!claudeMatches && (
-            <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
-              {busy === 'claude' ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
-            </button>
-          )}
-          {claudeDone && <span className="ok-text">Claude Code now uses this Meko.</span>}
-        </div>
+        {status.configured && (
+          <div className="meko-status-row">
+            <span>Claude Code</span>
+            <span className={cx('tag', claudeTag !== 'matches' && 'shared')}>{claudeTag}</span>
+            <span className="hint">
+              {claudeProblems.length
+                ? `${claudeProblems.join(' ')} New sessions pick up a fix; running ones keep what they started with.`
+                : claude.checking
+                  ? 'Checking Claude Code’s tokens on this Meko.'
+                  : `Sessions use ${m.effectiveUrl}, with tokens that work there.`}
+            </span>
+            {claudeProblems.length > 0 && (
+              <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
+                {busy === 'claude' ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
+              </button>
+            )}
+            {claudeDone && !claudeProblems.length && <span className="ok-text">Claude Code now uses this Meko.</span>}
+          </div>
+        )}
       </div>
 
       {confirmHost && (

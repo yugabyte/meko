@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
@@ -242,6 +243,78 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     };
     expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://meko.example.com' } })).statusCode).toBe(200);
     expect(env.core.config.meko).toMatchObject({ webUrl: 'https://meko.example.com', apiKey: '' });
+  });
+
+  it("shows when Claude Code's Meko differs, and changes Claude Code only when asked", async () => {
+    const dir = process.env.CLAUDE_CONFIG_DIR!;
+    /** Claude Code's Meko as Meko's setup writes it, on this server with this token. */
+    const writeClaude = (url: string, token: string) => {
+      mkdirSync(join(dir, 'plugins', 'p'), { recursive: true });
+      writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'meko-agent-skills@m': [{ installPath: join(dir, 'plugins', 'p') }] } }));
+      writeFileSync(join(dir, 'settings.json'), JSON.stringify({ enabledPlugins: { 'meko-agent-skills@m': true }, env: { MEKO_MCP_URL: url, MEKO_API_KEY: token } }));
+      const cfgFile = join(dir, '.claude.json');
+      const cfg = existsSync(cfgFile) ? JSON.parse(readFileSync(cfgFile, 'utf8')) : {};
+      writeFileSync(cfgFile, JSON.stringify({ ...cfg, mcpServers: { meko: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }));
+    };
+    await project();
+    env.core.updateConfig((c) => {
+      c.meko.apiKey = 'mko_tkn_abcdefghij1234';
+    });
+    // Claude Code is on another Meko.
+    writeClaude('https://other.example.org/mcp', 'claude-token');
+    await env.core.claudeMeko.refresh();
+    expect(env.core.state().meko.claude).toEqual({
+      gaps: [
+        "Claude Code's settings point at other.example.org, not mcp.mekodata.ai.",
+        "Claude Code's meko MCP server points at other.example.org, not mcp.mekodata.ai.",
+      ],
+      unchecked: [],
+      checking: false,
+    });
+
+    // A token Meko turns down.
+    writeClaude('https://mcp.mekodata.ai/mcp', 'claude-token');
+    await env.core.claudeMeko.refresh();
+    expect(env.core.state().meko.claude.gaps).toEqual([
+      "The token in Claude Code's settings isn't accepted by mcp.mekodata.ai.",
+      "The token on Claude Code's meko MCP server isn't accepted by mcp.mekodata.ai.",
+    ]);
+
+    // On this Meko, another account's token can't see the project's datapack, which AgentK's can.
+    env.meko.listDatapacks = async () => [
+      { id: 'dp-1', name: 'adlc/proj/demo-repo/p', grant: 'owner', createdAt: null, ownerName: null, ownerEmail: null, description: null, ownerUserId: 'u-self' },
+    ];
+    env.mekoTools.state.tokens['claude-token'] = { ok: true, datapacks: ['dp-other'] };
+    writeClaude('https://mcp.mekodata.ai/mcp', 'claude-token');
+    await env.core.claudeMeko.refresh(true);
+    expect(env.core.state().meko.claude.gaps).toEqual([
+      "The token in Claude Code's settings can't see the datapack adlc/proj/demo-repo/p on mcp.mekodata.ai.",
+      "The token on Claude Code's meko MCP server can't see the datapack adlc/proj/demo-repo/p on mcp.mekodata.ai.",
+    ]);
+    // A different token that sees it is fine.
+    env.mekoTools.state.tokens['claude-token'] = { ok: true, datapacks: ['dp-1'] };
+    await env.core.claudeMeko.refresh(true);
+    expect(env.core.state().meko.claude.gaps).toEqual([]);
+
+    // Moving AgentK to another Meko shows the difference; nothing changes Claude Code.
+    expect((await call('PUT', '/api/settings', { meko: { url: 'https://meko.example.com/mcp' } })).statusCode).toBe(200);
+    await env.core.claudeMeko.refresh();
+    expect(env.core.state().meko.claude.gaps).toEqual([
+      "Claude Code's settings point at mcp.mekodata.ai, not meko.example.com.",
+      "Claude Code's meko MCP server points at mcp.mekodata.ai, not meko.example.com.",
+    ]);
+    expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([]);
+
+    // Asked to, the setup runs once, and the check after it finds nothing left.
+    env.mekoTools.tools.setUpClaude = async (url, apiKey) => {
+      env.mekoTools.calls.push({ name: 'setUpClaude', args: [url, apiKey] });
+      writeClaude(url, apiKey);
+    };
+    expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
+    expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([{ name: 'setUpClaude', args: ['https://meko.example.com/mcp', 'mko_tkn_abcdefghij1234'] }]);
+    // The check after it runs in the background; the state stream carries what it finds.
+    await waitFor(() => env.core.state().meko.claude, (c) => !c.gaps.length && !c.checking, 5000, "the check after Claude Code's setup");
+    expect((await call('GET', '/api/settings')).json().meko).not.toHaveProperty('claudeUrl');
   });
 
   it("runs Meko's setup for Claude Code and reports when it doesn't finish", async () => {

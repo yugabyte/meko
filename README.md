@@ -85,6 +85,9 @@ your phone can connect.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
+  When Claude Code is set up for another Meko server, or holds a token that can't see the
+  projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko;
+  AgentK never changes Claude Code's setup unless you ask.
   Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
   (in every repo its sessions work in) with their emails, to share with in one click.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,

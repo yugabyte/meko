@@ -1181,7 +1181,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > `[meko] enabled` isn't false (`MekoStatus.configured`). Off, AgentK doesn't talk to Meko: projects
 > get no datapack, and sessions get no datapack, pin or Meko lines in
 > their prompt (even a project that has a datapack). Claude Code's own Meko setup, in its settings,
-> is the user's and isn't changed.
+> is the user's and is changed only when they ask (see *Claude Code on AgentK's Meko* below).
 >
 > - **At install:** the installer reuses `MEKO_API_KEY` from `~/.claude/settings.json` if one is
 >   there, and otherwise asks for one, with **Enter to skip** (pointing to the Meko web app to
@@ -1189,9 +1189,13 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   with a warning, non-interactively too. A key it's given must work: without anyone to ask it
 >   stops, and interactively it asks whether to go on without Meko (and turns it off, so a bad key
 >   from the environment isn't used). With a key, it checks that Meko is set up for Claude Code:
->   the `meko-agent-skills` plugin installed and enabled, the verified `MEKO_API_KEY` in Claude
->   Code's settings (sessions don't inherit the installer's environment, and a different key there
->   would keep the hooks on it), and the `meko` MCP server registered. If anything is missing it
+>   the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY` in Claude Code's
+>   settings (sessions don't inherit the installer's environment), and the `meko` MCP server
+>   registered, both on this Meko server, with tokens it accepts (they may differ from AgentK's
+>   key; the installer deliberately stops at accepted, and the server checks datapacks once it
+>   runs). A key it took from its own environment (`MEKO_API_KEY`, not typed) isn't stored in
+>   `config.toml`, so a different key in Claude Code's settings counts too: the service, with no
+>   `MEKO_*` environment, would switch to it. If anything is missing or wrong it
 >   offers, after showing what will change, to run Meko's own setup (`@yugabytedb/meko-mcp
 >   --client claude-code`), fetched from npm, checked against the registry's integrity hash and run
 >   with the bundled Node, with the key passed in the environment. Declining it (or, without
@@ -1238,10 +1242,30 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   writes only the fields it changed, so a change that landed while its checks ran (Claude Code's
 >   setup clearing the key) isn't undone.
 >   Switching to another Meko host asks you to confirm, because existing projects' datapacks stay
->   on the old one. The tab also says whether Claude Code's settings (which sessions use) name the
->   same server and key, and when they don't, **Set up Claude Code with this Meko** runs Meko's
+>   on the old one. The tab also says whether Claude Code's sessions reach this Meko (the same
+>   list as the banner, below), and when they don't, **Set up Claude Code with this Meko** runs Meko's
 >   setup package as the installer does (without blocking the server; its output goes to the log).
 >   New sessions pick that up; running ones keep what they started with.
+> - **Claude Code on AgentK's Meko:** Claude Code keeps its own copy of the Meko server and token
+>   in two places: its settings' `env` (`MEKO_MCP_URL`, unset meaning Meko Cloud, and
+>   `MEKO_API_KEY`), which the Meko hooks read, and the user-scope `meko` MCP server in
+>   `~/.claude.json` (its URL and `Authorization: Bearer` header, `${VAR}` expanded with the
+>   settings' `env` over AgentK's environment, as a session sees it), which the tools call. A
+>   variable set in neither (a session may get it from its login shell) leaves that token
+>   unchecked, not missing. Local- and project-scope registrations aren't checked. `MekoStatus.claude`
+>   (`mekoclaude.ts`) lists what keeps sessions off AgentK's Meko: the plugin, a missing key or
+>   token, either place on another server (named by host only), and each token that isn't AgentK's
+>   own failing on AgentK's server: turned down (HTTP 401 or 403), or unable to see a project
+>   datapack that AgentK's own token sees (another account's token). Tokens are only tried on
+>   AgentK's server, and only where Claude Code is set up for it. A token that couldn't be checked
+>   (Meko slow or down) is listed apart and never raises the banner. The file checks are cheap;
+>   token results (and AgentK's own datapack list, and `<[claude] command> mcp get meko` when
+>   `~/.claude.json` has no user-scope server: exit 1 means none, and a command that couldn't be
+>   asked is unchecked) are reused for 10 minutes. It's refreshed at startup, on a config
+>   change, when Settings opens, at each session launch, and after Claude Code's setup (which
+>   starts over). While the list isn't empty, a banner says what's wrong, with **Set up Claude Code
+>   with this Meko** and **Details** (the Meko tab). AgentK never fixes it on its own: not at
+>   startup, and not after a Meko tab change, which only checks again.
 
 ### Sharing a project
 
