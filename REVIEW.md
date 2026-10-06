@@ -62,6 +62,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
       per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
+- [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
+      saved owner-only under the session's `pastes/` folder with a name the server picks; the
+      browser only gets the path back. The route's `image/*` parser stays in its own scope, so no
+      other route takes a non-JSON body.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no

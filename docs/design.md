@@ -426,6 +426,19 @@ OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) 
 browser instead, and then `Ctrl+C` (`⌘C`) copies rather than interrupting Claude. Clipboard access
 needs HTTPS or localhost.
 
+To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
+Windows) or drop image files on it. Claude Code can't see the browser's clipboard (its own `Ctrl+V`
+reads the clipboard of the host it runs on), so the page uploads each image
+(`POST /api/sessions/:id/images`, the image as the body) and pastes the path the server saved it at;
+Claude Code reads a pasted path to an image as that image and shows `[Image #1]`. The server takes
+PNG, JPEG, GIF and WebP, checked by their bytes, up to 20 MB each, and saves them owner-only under
+`~/.agent-k-local/pastes/<session>/`; they're removed when the session is archived or its project
+closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
+them) pastes the text, unless the text is only the copied files' names. On a Mac, `Ctrl+V` reads the
+clipboard through the async Clipboard API (the browser may ask first): an image is pasted the same
+way, and otherwise Claude gets `Ctrl+V` as before. On a phone, the image button beside the compose
+box picks images to paste.
+
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
 names no session) reopens the session last open there in this browser, kept in `localStorage`.
 When that session is closed, or none was open there yet, it opens the one with the most recent
@@ -464,7 +477,8 @@ touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mo
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,
 Home, End, Page Up and Page Down; the row stays open until ▾ is tapped again, and ▾ stays lit while
 Ctrl is armed with the row closed; with Ctrl lit, the next letter typed in the compose box or in typing mode goes to
-Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape) and a compose box (it grows with its text to about a fifth
+Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape), an image button that picks
+images to paste for Claude (see Keyboard), and a compose box (it grows with its text to about a fifth
 of the visible screen, then scrolls) whose text goes in as one bracketed
 paste (with any Escape characters removed), then Enter; if the terminal isn't connected, the text
 stays in the box. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
@@ -552,6 +566,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
+  pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
 
 # config.toml (excerpt)
 [server]
