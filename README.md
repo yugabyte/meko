@@ -131,8 +131,8 @@ your phone can connect.
   **Move on…**, and a session in review can go back to Code or Design.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
-  markdown. The design's open questions are listed beside it, each with AgentK's options and
-  recommendation picked to start: pick another, or write a custom answer, then send them for
+  markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each
+  with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
   takes you to them first. You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and

@@ -1596,6 +1596,84 @@ a.icon-btn {
   text-align: left;
 }
 
+/* Mermaid diagrams in markdown designs (MarkdownView.tsx): drawn as images, fit to the column;
+   a tap opens one full size. */
+.mermaid-slot {
+  margin: 0 0 0.8em;
+}
+/* Mermaid measures its labels in a container it adds to <body> ("d" + the render id, from
+   mermaid.ts). The app's .label must not reach them there, or boxes get sized for small capitals. */
+div[id^='dak-mermaid-'] .label {
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
+}
+.mermaid-fig {
+  margin: 0;
+}
+.mermaid-open {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.mermaid-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mermaid-open img,
+.diagram-view img {
+  display: block;
+  height: auto;
+}
+.mermaid-open img {
+  max-width: 100%;
+}
+.mermaid-src summary {
+  width: fit-content;
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mermaid-src pre {
+  margin-top: 4px;
+}
+.mermaid-error-msg {
+  white-space: pre-wrap;
+}
+.prose .mermaid-error-msg {
+  background: var(--bad-soft);
+  color: var(--ink);
+  font-size: 12px;
+}
+.dialog.diagram-dialog {
+  width: min(1200px, 100%);
+}
+/* The image at its natural size: wider or taller ones scroll here (pinch zoom works too). */
+.diagram-dialog .dialog-body {
+  padding: 0;
+}
+.diagram-view {
+  overflow: auto;
+  padding: 14px 18px;
+}
+.diagram-view img {
+  max-width: none;
+}
+@media (pointer: coarse) {
+  .mermaid-src summary {
+    display: flex;
+    align-items: center;
+    width: auto;
+    min-height: 36px;
+  }
+}
+
 /* ---------- Dialogs ---------- */
 .overlay {
   position: fixed;

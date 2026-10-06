@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_DESIGN_HTML, artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from '../../src/server/design.js';
-import { DESIGN_FRAME_CSP, designFrameDoc } from '../../src/web/design-frame.js';
+import { DESIGN_FRAME_CSP, MERMAID_VERSION, designFrameDoc, mermaidLoader } from '../../src/web/design-frame.js';
 
 describe('design capture', () => {
   let dir: string;
@@ -83,5 +83,38 @@ describe('design frame', () => {
     expect(designFrameDoc('<html><head></head></html>', 'dark')).toBe(`<!doctype html><html data-theme="dark">${meta}<html><head></head></html>`);
     expect(designFrameDoc('<p>fragment</p>', 'light')).toMatch(/^<!doctype html><html data-theme="light"><meta /);
     expect(designFrameDoc('<html><head></head></html>', null)).not.toContain('data-theme');
+  });
+
+  it('draws Mermaid blocks a page leaves to the claude.ai viewer', () => {
+    const page = '<html><body><pre class="mermaid">flowchart LR\n  a --> b</pre></body></html>';
+    const doc = designFrameDoc(page, 'dark');
+    expect(doc.startsWith(`<!doctype html><html data-theme="dark">${meta}${page}`)).toBe(true);
+    expect(doc.endsWith(`${mermaidLoader(page)}`)).toBe(true);
+    const loader = mermaidLoader(page);
+    expect(loader).toContain(`https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VERSION}/dist/mermaid.esm.min.mjs`);
+    expect(loader).toContain("securityLevel: 'strict'");
+    // jsdelivr is one of the policy's script sources, so the loader needs nothing more.
+    expect(DESIGN_FRAME_CSP).toContain('https://cdn.jsdelivr.net');
+    for (const block of ["<div class='diagram mermaid'>graph TD</div>", '<pre class=mermaid>graph TD</pre>', '<PRE CLASS="Mermaid">x</PRE>']) {
+      expect(mermaidLoader(block)).not.toBe('');
+    }
+  });
+
+  it('adds no Mermaid when the page has no blocks or loads Mermaid itself', () => {
+    for (const page of [
+      '<p>no diagrams</p>',
+      '<pre><code class="language-js">mermaid</code></pre>',
+      '<pre class="mermaid">graph TD</pre><script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>',
+      '<pre class="mermaid">graph TD</pre><script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid/+esm"; mermaid.run();</script>',
+      '<pre class="mermaid">graph TD</pre><script>mermaid.initialize({ startOnLoad: true })</script>',
+    ]) {
+      expect(mermaidLoader(page)).toBe('');
+      expect(designFrameDoc(page, null)).not.toContain('mermaid.esm.min.mjs');
+    }
+  });
+
+  it('loads the same Mermaid version that is bundled for markdown designs', () => {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), 'node_modules/mermaid/package.json'), 'utf8')) as { version: string };
+    expect(MERMAID_VERSION).toBe(pkg.version);
   });
 });

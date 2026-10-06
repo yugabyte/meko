@@ -78,7 +78,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
-      first in the frame's document. Markdown designs are sanitized with no forms or styles. A
+      first in the frame's document. Markdown designs are sanitized with no forms or styles. Their
+      Mermaid diagrams draw in strict mode and show as `<img>` SVGs, never inline SVG or a page
+      of their own (a `blob:`/`data:` SVG opened as a page could run script). A
       design's questions (from Claude's `questions.json`) render as plain text, never HTML, and are
       size-capped and normalized on the server.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open

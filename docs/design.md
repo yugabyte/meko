@@ -434,7 +434,14 @@ same-origin access, and a content policy that blocks network requests and limits
 and fonts to what Artifacts use, placed first in the frame's document so nothing of the page runs
 before it), so the page can't read the login cookie or call the API. **Open on claude.ai** links to
 the published Artifact. A markdown design is rendered as sanitized HTML with no forms or styles,
-and its links open in a new tab.
+and its links open in a new tab. Its ` ```mermaid ` blocks are drawn as diagrams (the Design prompt
+tells Claude they are): Mermaid is loaded only when a design has one, draws in strict mode (labels
+escaped, no click callbacks) with SVG text in a system font, and the result is shown as an `<img>`
+of the SVG, never inline, so nothing in it can run or restyle the app. A diagram fits the column,
+a tap opens it full size, its source is a tap away, and one that doesn't parse shows Mermaid's
+error above its source. An Artifact page with `class="mermaid"` blocks that leaves drawing them to
+the claude.ai viewer gets the same Mermaid version from jsdelivr, which the frame's policy already
+allows, so its diagrams show here too.
 
 **Open questions.** Besides the design, AgentK writes its open questions for you to
 `~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "question", "context",
