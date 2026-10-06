@@ -4,7 +4,9 @@ import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**'] },
+  // The mod's .claude-plugin/types are Claude Code's own declarations, laid beside it when it's loaded
+  // from src/mod/agentk (gitignored too).
+  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'src/mod/agentk/.claude-plugin/types/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
