@@ -1,8 +1,13 @@
 // Drawing a markdown design's Mermaid diagrams.
 //
-// Mermaid is imported only when a design has a diagram, so it stays out of the main bundle. Its
-// SVG is shown as an <img> (see `svgDataUrl`), never inline: an image can't run scripts, load
-// anything or restyle the app, so a bug in Mermaid can't reach AgentK Local's page.
+// Mermaid is imported only when a design has a diagram, so it stays out of the main bundle.
+//
+// What keeps a diagram from reaching AgentK Local's page is Mermaid's strict mode: labels are
+// sanitized (or drawn as SVG text) and click callbacks are off. Mermaid draws in the app's own
+// document, in a container it adds to <body>, before handing back the SVG, so while it draws, a
+// label that got past its sanitizing would be live in the app's origin, and images a diagram
+// names are fetched. The result is then shown as an <img> (see `svgDataUrl`), never inline SVG,
+// so the diagram on screen can't run scripts, load anything or restyle the app.
 
 import type { MermaidConfig } from 'mermaid';
 
@@ -17,20 +22,28 @@ const MAX_CACHED = 50;
 /** Most characters of Mermaid's error message shown. */
 const ERROR_CHARS = 600;
 
-export type Diagram = { svg: string; width: number | null; height: number | null } | { error: string };
+/** A drawn diagram, or why it couldn't be drawn (`retry`: Mermaid itself didn't load, so it isn't cached). */
+export type Diagram = { svg: string; width: number | null; height: number | null } | { error: string; retry?: boolean };
 
-export function mermaidConfig(dark: boolean): MermaidConfig {
+/** How diagrams look, in markdown designs and in Artifact frames alike (`design-frame.ts`). */
+export function mermaidLook(dark: boolean): MermaidConfig {
   return {
-    startOnLoad: false,
-    // Labels are escaped and click callbacks are off.
-    securityLevel: 'strict',
-    // SVG text instead of <foreignObject> HTML, which images draw differently across browsers.
+    // SVG text instead of <foreignObject> HTML, which isn't valid XML in an image.
     htmlLabels: false,
     // SVG labels wrap to fit the default 200 px by splitting words ("renderMarkdo wn()").
     flowchart: { wrappingWidth: 300 },
     theme: dark ? 'dark' : 'default',
     fontFamily: DIAGRAM_FONT,
     themeVariables: { fontFamily: DIAGRAM_FONT },
+  };
+}
+
+export function mermaidConfig(dark: boolean): MermaidConfig {
+  return {
+    ...mermaidLook(dark),
+    startOnLoad: false,
+    // Labels are sanitized and click callbacks are off.
+    securityLevel: 'strict',
     suppressErrorRendering: true,
   };
 }
@@ -100,15 +113,14 @@ export function drawDiagram(source: string, dark: boolean): Promise<Diagram> {
     cache.set(key, hit);
     return hit;
   }
-  let retry = false;
   const drawn = queue.then(async (): Promise<Diagram> => {
     let mermaid;
     try {
       mermaid = (await import('mermaid')).default;
     } catch (e) {
-      // A failed download (offline, a new version deployed) is tried again next time.
-      retry = true;
-      return { error: `Couldn't load the diagram library: ${messageOf(e)}` };
+      // A failed download (offline, a new version deployed) isn't cached here, so a later draw
+      // tries again; the browser may keep the failed import itself until the page reloads.
+      return { error: `Couldn’t load the diagram library (${messageOf(e)}). Check your connection and reload the page.`, retry: true };
     }
     try {
       mermaid.initialize(mermaidConfig(dark));
@@ -122,7 +134,7 @@ export function drawDiagram(source: string, dark: boolean): Promise<Diagram> {
   queue = drawn;
   cache.set(key, drawn);
   while (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value!);
-  void drawn.then(() => retry && cache.get(key) === drawn && cache.delete(key));
+  void drawn.then((d) => 'retry' in d && d.retry && cache.get(key) === drawn && cache.delete(key));
   return drawn;
 }
 

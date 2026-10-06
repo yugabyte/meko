@@ -5,6 +5,8 @@
 // can load to what Artifacts themselves may use (inline code, the two script CDNs, Google
 // Fonts, data: and blob: media), with no network requests of its own.
 
+import { mermaidLook } from './mermaid';
+
 export const DESIGN_FRAME_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
@@ -16,14 +18,21 @@ export const DESIGN_FRAME_CSP = [
 
 /**
  * The Mermaid version the frame loads from jsdelivr. It matches the one bundled for markdown
- * designs (a test checks), so a diagram looks the same in both.
+ * designs (a test checks), and the frame uses the same look (`mermaidLook`), so a diagram looks
+ * the same in both.
  */
 export const MERMAID_VERSION = '12.1.0';
 
-/** A <pre> or <div> with the mermaid class, which the claude.ai viewer draws as a diagram. */
-const MERMAID_BLOCK = /<(?:pre|div)\b[^>]*\bclass\s*=\s*["']?[^"'>]*\bmermaid\b/i;
-/** The page loads or runs Mermaid itself. */
-const OWN_MERMAID = /<script\b[^>]*\bsrc\s*=[^>]*mermaid|\bfrom\s*["'][^"']*mermaid|\bmermaid\s*\.\s*(?:initialize|run|init|render)\s*\(/i;
+/**
+ * A <pre> or <div> with the mermaid class (a whole class token, as `.mermaid` matches it: not
+ * `language-mermaid` or `mermaid-container`), which the claude.ai viewer draws as a diagram.
+ */
+const MERMAID_BLOCK =
+  /<(?:pre|div|PRE|DIV)\b[^>]*\s(?:class|CLASS)\s*=\s*(?:"(?:[^"]*\s)?mermaid(?:\s[^"]*)?"|'(?:[^']*\s)?mermaid(?:\s[^']*)?'|mermaid(?=[\s/>]))/;
+/** A <script> element, its tag and its code. */
+const SCRIPT = /<script\b[^>]*>[\s\S]*?(?:<\/script\s*>|$)/gi;
+/** A script that loads or runs Mermaid (looked for only in scripts: a diagram may name it too). */
+const OWN_MERMAID = /^<script\b[^>]*\bsrc\s*=[^>]*mermaid|\bfrom\s*["'][^"']*mermaid|\bimport\s*\(\s*["'][^"']*mermaid|\bmermaid\s*\.\s*(?:initialize|run|init|render)\s*\(/i;
 
 /**
  * The script that draws a page's Mermaid blocks, for a page that has them but leaves drawing them
@@ -31,12 +40,13 @@ const OWN_MERMAID = /<script\b[^>]*\bsrc\s*=[^>]*mermaid|\bfrom\s*["'][^"']*merm
  * in strict mode, themed like the frame.
  */
 export function mermaidLoader(html: string): string {
-  if (!MERMAID_BLOCK.test(html) || OWN_MERMAID.test(html)) return '';
+  if (!MERMAID_BLOCK.test(html) || (html.match(SCRIPT) ?? []).some((script) => OWN_MERMAID.test(script))) return '';
   return `<script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VERSION}/dist/mermaid.esm.min.mjs';
 const theme = document.documentElement.getAttribute('data-theme');
 const dark = theme ? theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
+const look = dark ? ${JSON.stringify(mermaidLook(true))} : ${JSON.stringify(mermaidLook(false))};
+mermaid.initialize({ ...look, startOnLoad: false, securityLevel: 'strict' });
 await mermaid.run({ querySelector: '.mermaid' });
 </script>`;
 }

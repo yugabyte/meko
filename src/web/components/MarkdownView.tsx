@@ -9,11 +9,14 @@ import { Busy, Dialog } from './common';
 // Markdown designs render in the app's own page, so they get no forms or styles (an invisible
 // form button could post to the API with the user's cookie, and a <style> could restyle the
 // app), and their links open in a new tab instead of replacing the workbench.
+// Its own DOMPurify instance: Mermaid adds hooks of its own to the shared one (keeping an <a>'s
+// target, which would undo the new-tab rule below), and those must never reach this.
+const purify = DOMPurify(window);
 const PURIFY = {
   FORBID_TAGS: ['form', 'button', 'select', 'textarea', 'style', 'link', 'meta', 'base'],
   FORBID_ATTR: ['style', 'action', 'formaction'],
 };
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+purify.addHook('afterSanitizeAttributes', (node) => {
   // Task-list checkboxes (`- [x] done`) are the one kind of input kept: any input becomes a
   // read-only tick, and with no forms or buttons it can't send anything.
   if (node.tagName === 'INPUT') {
@@ -31,7 +34,7 @@ export function MarkdownView({ markdown }: { markdown: string }) {
   const dark = useDarkTheme();
   const { html, diagrams } = useMemo(() => {
     const r = renderMarkdown(markdown);
-    return { html: DOMPurify.sanitize(r.html, PURIFY), diagrams: r.diagrams };
+    return { html: purify.sanitize(r.html, PURIFY), diagrams: r.diagrams };
   }, [markdown]);
   // Keyed by the HTML: new HTML replaces the slots, so the diagrams mount again into the new ones.
   return <Prose key={html} html={html} diagrams={diagrams} dark={dark} />;
@@ -83,7 +86,11 @@ function MermaidDiagram({ source, dark }: { source: string; dark: boolean }) {
   if ('error' in diagram) {
     return (
       <div className="mermaid-error">
-        <p className="error-text">Couldn’t draw this diagram. Its source is below.</p>
+        <p className="error-text">
+          {'retry' in diagram && diagram.retry
+            ? 'Couldn’t draw this diagram. Its source is below.'
+            : 'Couldn’t draw this diagram. Ask AgentK to fix it; its source is below.'}
+        </p>
         <pre className="mermaid-error-msg">{diagram.error}</pre>
         {code}
       </div>

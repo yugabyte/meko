@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_DESIGN_HTML, artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from '../../src/server/design.js';
 import { DESIGN_FRAME_CSP, MERMAID_VERSION, designFrameDoc, mermaidLoader } from '../../src/web/design-frame.js';
+import { mermaidLook } from '../../src/web/mermaid.js';
 
 describe('design capture', () => {
   let dir: string;
@@ -93,9 +94,19 @@ describe('design frame', () => {
     const loader = mermaidLoader(page);
     expect(loader).toContain(`https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VERSION}/dist/mermaid.esm.min.mjs`);
     expect(loader).toContain("securityLevel: 'strict'");
+    // The same look as markdown designs: SVG labels, the wider wrap, the system font.
+    expect(loader).toContain(JSON.stringify(mermaidLook(true)));
+    expect(loader).toContain(JSON.stringify(mermaidLook(false)));
     // jsdelivr is one of the policy's script sources, so the loader needs nothing more.
     expect(DESIGN_FRAME_CSP).toContain('https://cdn.jsdelivr.net');
-    for (const block of ["<div class='diagram mermaid'>graph TD</div>", '<pre class=mermaid>graph TD</pre>', '<PRE CLASS="Mermaid">x</PRE>']) {
+    // A diagram that names Mermaid's API isn't the page running Mermaid.
+    expect(mermaidLoader('<pre class="mermaid">flowchart LR\n  a["mermaid.render()"] --> b</pre>')).not.toBe('');
+    for (const block of [
+      "<div class='diagram mermaid'>graph TD</div>",
+      '<pre class=mermaid>graph TD</pre>',
+      '<pre id="a" class="mermaid wide">graph TD</pre>',
+      '<PRE CLASS="mermaid">x</PRE>',
+    ]) {
       expect(mermaidLoader(block)).not.toBe('');
     }
   });
@@ -104,9 +115,15 @@ describe('design frame', () => {
     for (const page of [
       '<p>no diagrams</p>',
       '<pre><code class="language-js">mermaid</code></pre>',
+      // Only `mermaid` as a whole class token counts, as `.mermaid` selects it.
+      '<pre class="language-mermaid">graph TD</pre>',
+      '<div class="mermaid-container"><p>x</p></div>',
+      '<div data-class="mermaid">x</div>',
+      '<pre class="Mermaid">graph TD</pre>',
       '<pre class="mermaid">graph TD</pre><script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>',
       '<pre class="mermaid">graph TD</pre><script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid/+esm"; mermaid.run();</script>',
       '<pre class="mermaid">graph TD</pre><script>mermaid.initialize({ startOnLoad: true })</script>',
+      '<script type="module">const { default: m } = await import("https://cdn.jsdelivr.net/npm/mermaid@11/+esm");</script><div class="mermaid">x</div>',
     ]) {
       expect(mermaidLoader(page)).toBe('');
       expect(designFrameDoc(page, null)).not.toContain('mermaid.esm.min.mjs');

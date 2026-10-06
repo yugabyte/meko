@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DIAGRAM_FONT, diagramAlt, diagramSize, mermaidConfig, svgDataUrl } from '../../src/web/mermaid.js';
+import { DIAGRAM_FONT, diagramAlt, diagramSize, mermaidConfig, mermaidLook, svgDataUrl } from '../../src/web/mermaid.js';
 
 describe('mermaid diagrams', () => {
   it('draws in strict mode with SVG labels in a system font, themed', () => {
@@ -7,6 +7,9 @@ describe('mermaid diagrams', () => {
     expect(light).toMatchObject({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, theme: 'default', fontFamily: DIAGRAM_FONT });
     expect(light.flowchart?.wrappingWidth).toBe(300);
     expect(mermaidConfig(true).theme).toBe('dark');
+    // Markdown designs and Artifact frames share the look.
+    expect(mermaidConfig(true)).toMatchObject(mermaidLook(true));
+    expect(mermaidLook(false)).not.toHaveProperty('securityLevel');
     // No web font: an SVG drawn as an image can't load one.
     expect(DIAGRAM_FONT).not.toMatch(/Plex|Bricolage|JetBrains/);
   });

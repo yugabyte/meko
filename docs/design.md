@@ -516,13 +516,18 @@ and fonts to what Artifacts use, placed first in the frame's document so nothing
 before it), so the page can't read the login cookie or call the API. **Open on claude.ai** links to
 the published Artifact. A markdown design is rendered as sanitized HTML with no forms or styles,
 and its links open in a new tab. Its ` ```mermaid ` blocks are drawn as diagrams (the Design prompt
-tells Claude they are): Mermaid is loaded only when a design has one, draws in strict mode (labels
-escaped, no click callbacks) with SVG text in a system font, and the result is shown as an `<img>`
-of the SVG, never inline, so nothing in it can run or restyle the app. A diagram fits the column,
-a tap opens it full size, its source is a tap away, and one that doesn't parse shows Mermaid's
-error above its source. An Artifact page with `class="mermaid"` blocks that leaves drawing them to
-the claude.ai viewer gets the same Mermaid version from jsdelivr, which the frame's policy already
-allows, so its diagrams show here too.
+tells Claude they are): Mermaid is loaded only when a design has one and draws with SVG text in a
+system font. What keeps a diagram out of the app is Mermaid's strict mode: labels are sanitized (or
+drawn as SVG text) and click callbacks are off. Mermaid draws in the app's own page, in a container
+it adds and removes, so while it draws, a label that got past its sanitizing would be live in the
+app, and images a diagram names are fetched. The finished diagram is shown as an `<img>` of its SVG,
+never inline, so what's on screen can't run, load anything or restyle the app. Markdown is
+sanitized with its own DOMPurify instance, out of reach of the hooks Mermaid adds to the shared one.
+A diagram fits the column, a tap opens it full size, its source is a tap away, and one that doesn't
+parse shows Mermaid's error above its source, asking you to have AgentK fix it. An Artifact page with
+`class="mermaid"` blocks that leaves drawing them to the claude.ai viewer gets the same Mermaid
+version and look from jsdelivr, which the frame's policy already allows, so its diagrams show here
+too.
 
 **Open questions.** Besides the design, AgentK gives you its open questions in
 `~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "question", "context",
