@@ -405,6 +405,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     idleWorktreesPerRepo: core.worktrees.cap(),
     idleWorktreeDays: core.worktrees.idleDays(),
     callHomeEnabled: core.config.callHome.enabled,
+    resolveConflicts: core.config.pr.resolveConflicts,
     meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => settings());
@@ -427,6 +428,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       throw new HttpError(400, 'Server name must be 64 characters or fewer, with no line breaks.');
     }
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
+    if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -440,6 +442,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
+      if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.

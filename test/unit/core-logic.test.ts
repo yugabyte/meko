@@ -99,6 +99,14 @@ describe('config and db', () => {
     expect(loadConfig(paths).meko.captureTranscripts).toBe(false);
   });
 
+  it('has AgentK resolve merge conflicts unless config.toml turns it off', () => {
+    expect(DEFAULT_CONFIG.pr.resolveConflicts).toBe(true);
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    mkdirSync(paths.home, { recursive: true });
+    writeFileSync(paths.config, '[pr]\nresolve_conflicts = false\n');
+    expect(loadConfig(paths).pr.resolveConflicts).toBe(false);
+  });
+
   it('writes only settings that differ from the defaults', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
@@ -227,12 +235,13 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 5}`);
+    db.exec(`PRAGMA user_version = ${version - 6}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -252,10 +261,11 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 3}`);
+    db.exec(`PRAGMA user_version = ${version - 4}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -280,6 +290,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -317,6 +328,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -359,6 +371,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -384,6 +397,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -414,6 +428,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -446,6 +461,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -473,6 +489,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -504,6 +521,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV23(db);
     dropV22(db);
     dropV21(db);
     dropV20(db);
@@ -539,6 +557,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 23 (the merge-conflict watcher), for tests that rewind the schema. */
+function dropV23(db: ReturnType<typeof openDb>) {
+  for (const c of ['conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+}
 
 /** Undoes migration 22 (a design's questions and the answers to them), for tests that rewind the schema. */
 function dropV22(db: ReturnType<typeof openDb>) {
@@ -619,9 +642,10 @@ describe('stages', () => {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'design', 'design-plan', 'explore', 'review', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'review', 'review-people', 'review-pr']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
+    expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
   });
 
   it('names the ToolSearch query that loads the Meko tools under any server name', () => {

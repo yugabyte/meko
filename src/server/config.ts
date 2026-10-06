@@ -35,6 +35,11 @@ export interface Config {
    * nothing is sent.
    */
   callHome: { enabled: boolean; url: string };
+  /**
+   * resolveConflicts: when a PR in PR & Review conflicts with its base, AgentK asks Claude to resolve the conflicts
+   * (false leaves them to the user). Set in Settings → General; an edit to config.toml takes effect after a restart.
+   */
+  pr: { resolveConflicts: boolean };
 }
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
@@ -50,6 +55,7 @@ export const DEFAULT_CONFIG: Config = {
   claude: { command: 'claude' },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '' },
+  pr: { resolveConflicts: true },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

@@ -236,6 +236,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'CI prompt done');
     expect(await blockersFor({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] })).toEqual(['CI is still running.']);
     expect(await blockersFor({ reviewDecision: 'CHANGES_REQUESTED' })).toEqual(['Changes were requested.']);
+    // Claude also gets the prompt to resolve them.
+    expect(await blockersFor({ mergeable: 'CONFLICTING' })).toEqual(['AgentK is still working.', 'The branch has merge conflicts.']);
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'conflicts prompt done');
     expect(await blockersFor({ mergeable: 'CONFLICTING' })).toEqual(['The branch has merge conflicts.']);
     expect(await blockersFor({ mergeStateStatus: 'BEHIND' })).toEqual(['The branch is behind its base.']);
     expect(await blockersFor({ mergeStateStatus: 'DRAFT' })).toEqual(['The PR is a draft.']);
@@ -701,6 +704,93 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     env.core.sessions.setStatus(s.id, 'recovered');
     await pollAll();
     await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR #7 (https://github.com/acme/demo/pull/7) at commit abc1234'), 10000, 'CI prompt');
+  });
+
+  it('asks Claude to resolve merge conflicts with the base, once per head', async () => {
+    const s = await inReview('Conflicts');
+    const sha = tip(env.core.sessions.row(s.id).worktree_path);
+    gh.status = { ...gh.status!, mergeable: 'UNKNOWN' };
+    await poll(s.id);
+    expect(queued(s.id)).toEqual({}); // GitHub hasn't worked it out yet
+    gh.status = { ...gh.status!, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' };
+    await poll(s.id);
+    expect(lastEvent(s.id, 'conflicts')).toBe('Merge conflicts with main');
+    await waitFor(() => transcript(s.id), (t) => t.includes(`PR #7 (https://github.com/acme/demo/pull/7) has merge conflicts with main at commit ${sha}`), 10000, 'conflicts prompt');
+    expect(env.core.sessions.get(s.id).mergeBlockers).toContain('The branch has merge conflicts.');
+    await idle(s.id, 'conflicts turn');
+    await poll(s.id); // the same head isn't sent again
+    expect(count(transcript(s.id), /has merge conflicts with/g)).toBe(1);
+    // Resolved: a later conflict on the same head (the base moved again) is new.
+    gh.status = { ...gh.status!, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' };
+    await poll(s.id);
+    expect(env.core.sessions.row(s.id)).toMatchObject({ conflict_head: null, conflict_fixes: 0 });
+    gh.status = { ...gh.status!, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' };
+    await poll(s.id);
+    await waitFor(() => transcript(s.id), (t) => count(t, /has merge conflicts with/g) === 2, 10000, 'second conflicts prompt');
+  });
+
+  it('hands merge conflicts to the user after three heads in a row', async () => {
+    const s = await inReview('Conflicts keep coming');
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    gh.status = { ...gh.status!, mergeable: 'CONFLICTING' };
+    for (let i = 1; i <= 4; i++) {
+      if (i > 1) commitIn(wt); // Claude pushed a merge; it still conflicts
+      await poll(s.id);
+      await idle(s.id, `head ${i}`);
+    }
+    expect(count(transcript(s.id), /has merge conflicts with/g)).toBe(3);
+    expect(lastEvent(s.id, 'conflicts')).toBe('Merge conflicts with main. Still there after 3 attempts; over to you');
+  });
+
+  it('leaves merge conflicts to the user when Settings turns it off, and drops a queued prompt', async () => {
+    const s = await inReview('Conflicts off');
+    slowTurns();
+    await env.core.sessions.submit(s.id, 'something else');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
+    gh.status = { ...gh.status!, mergeable: 'CONFLICTING' };
+    await poll(s.id);
+    expect(queued(s.id).conflicts).toMatchObject({ state: 'queued' });
+    env.core.updateConfig((c) => void (c.pr.resolveConflicts = false));
+    await poll(s.id);
+    expect(queued(s.id)).toEqual({});
+    await idle(s.id, 'turn end');
+    commitIn(env.core.sessions.row(s.id).worktree_path);
+    await poll(s.id);
+    expect(queued(s.id)).toEqual({});
+    expect(transcript(s.id)).not.toContain('has merge conflicts with');
+    expect(env.core.sessions.get(s.id).mergeBlockers).toContain('The branch has merge conflicts.');
+  });
+
+  it('never sends a queued conflicts prompt once turned off, even when GitHub is unreachable', async () => {
+    const s = await inReview('Conflicts off, GitHub down');
+    env.core.sessions.update(s.id, { pending_prompts: JSON.stringify({ conflicts: { state: 'queued', vars: { sha: 'abc1234' } } }) });
+    env.core.updateConfig((c) => void (c.pr.resolveConflicts = false));
+    gh.status = null; // prStatus throws
+    await pollAll();
+    expect(queued(s.id)).toEqual({});
+    expect(transcript(s.id)).not.toContain('has merge conflicts with');
+  });
+
+  it('holds a conflicts prompt while the branch has unpushed commits, and sends it before a CI fix', async () => {
+    const s = await inReview('Conflicts and CI');
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    const pushed = tip(wt);
+    commitIn(wt);
+    gh.status = { ...gh.status!, headRefOid: pushed, mergeable: 'CONFLICTING' };
+    await poll(s.id);
+    expect(queued(s.id)).toEqual({});
+    expect(lastEvent(s.id, 'conflicts')).toBeUndefined();
+    // Pushed, and CI failed too: the conflicts go first.
+    slowTurns();
+    await env.core.sessions.submit(s.id, 'something else');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    gh.status = { ...gh.status!, headRefOid: '', statusCheckRollup: [failing()] };
+    await poll(s.id);
+    expect(queued(s.id)).toMatchObject({ conflicts: { state: 'queued' }, ci: { state: 'queued' } });
+    expect(notify).toHaveBeenCalledWith(s.id, 'CI failed', 'test (macos-15). AgentK will look at it after resolving the merge conflicts.');
+    await waitFor(() => transcript(s.id), (t) => t.includes('has merge conflicts with'), 10000, 'conflicts prompt');
+    expect(transcript(s.id)).not.toContain('CI failed on PR');
   });
 
   it('refuses Open PR while Claude is working', async () => {

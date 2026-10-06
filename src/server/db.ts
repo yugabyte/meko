@@ -374,6 +374,12 @@ const MIGRATIONS: string[] = [
   CREATE INDEX design_answers_session ON design_answers(session_id, state);
   CREATE UNIQUE INDEX design_answers_unsent ON design_answers(session_id, question_id) WHERE state != 'sent';
   `,
+  // 23: the merge-conflict watcher, like the CI-fix one: the PR head that last got a prompt to
+  // resolve conflicts with the base, and how many heads in a row did.
+  `
+  ALTER TABLE sessions ADD COLUMN conflict_head TEXT;
+  ALTER TABLE sessions ADD COLUMN conflict_fixes INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDb(path: string): Db {

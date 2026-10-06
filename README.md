@@ -121,7 +121,8 @@ your phone can connect.
   recommendation: answer them there (or leave one to AgentK) and send them, and AgentK revises the
   design. You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
-  people's by default, or every reviewer's, or only people's) and CI failures to Claude. Only reviews
+  people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
+  you turn that off in Settings → General) and CI failures to Claude. Only reviews
   from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
   anyone else's are shown to you and ignored.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
