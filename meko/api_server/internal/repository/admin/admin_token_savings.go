@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -24,7 +25,14 @@ type TokenSavingsUserRow struct {
 // leak risk (unlike the shared Langfuse DB). Returns (0, 0) when no
 // contextual-search requests have been recorded yet.
 func (r *AdminRepo) TotalTokenSavings() (requests, tokensSaved int64, err error) {
-	if err = r.systemDB.QueryRow(
+	return r.TotalTokenSavingsContext(context.Background())
+}
+
+// TotalTokenSavingsContext is TotalTokenSavings under the caller's context, so a
+// metrics scrape can bound the query with a deadline the pool has no
+// statement_timeout to enforce on its own.
+func (r *AdminRepo) TotalTokenSavingsContext(ctx context.Context) (requests, tokensSaved int64, err error) {
+	if err = r.systemDB.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(request_count), 0), COALESCE(SUM(tokens_saved_total), 0)
 		 FROM meko_system.token_savings_summary`,
 	).Scan(&requests, &tokensSaved); err != nil {

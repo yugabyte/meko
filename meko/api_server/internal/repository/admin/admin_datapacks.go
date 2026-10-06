@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -8,16 +9,21 @@ import (
 // CountDatapacksAll returns the total number of datapacks across all users.
 // start/endExclusive optionally window by created_at.
 func (r *AdminRepo) CountDatapacksAll(start, endExclusive *time.Time) (int64, error) {
+	return r.CountDatapacksAllContext(context.Background(), start, endExclusive)
+}
+
+// CountDatapacksAllContext is CountDatapacksAll under the caller's context, so a
+// metrics scrape can bound the query with a deadline the pool has no
+// statement_timeout to enforce on its own.
+func (r *AdminRepo) CountDatapacksAllContext(ctx context.Context, start, endExclusive *time.Time) (int64, error) {
 	pred, args := rangePredicate("created_at", start, endExclusive, 1)
 	where := ""
 	if pred != "" {
 		where = " WHERE TRUE" + pred
 	}
+	q := `SELECT COUNT(*) FROM meko_system.datapacks` + where
 	var n int64
-	if err := r.systemDB.QueryRow(
-		`SELECT COUNT(*) FROM meko_system.datapacks`+where,
-		args...,
-	).Scan(&n); err != nil {
+	if err := r.systemDB.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count all datapacks: %w", err)
 	}
 	return n, nil

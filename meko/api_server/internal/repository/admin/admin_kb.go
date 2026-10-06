@@ -85,19 +85,20 @@ func kbSpine(sourceFilter, rangePred string) string {
 
 // runCounts executes a 2-column (documents, chunks) KB query under a short
 // read-only statement_timeout.
-func (r *AdminRepo) runCounts(query string, args ...any) (AdminKBCounts, error) {
+func (r *AdminRepo) runCounts(ctx context.Context, query string, args ...any) (AdminKBCounts, error) {
 	var c AdminKBCounts
-	err := r.withKBTimeout(func(tx *sql.Tx) error {
-		return tx.QueryRow(query, args...).Scan(&c.Documents, &c.Chunks)
+	err := r.withKBTimeout(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, query, args...).Scan(&c.Documents, &c.Chunks)
 	})
 	return c, err
 }
 
 // withKBTimeout runs fn inside a read-only tx that has SET LOCAL statement_timeout,
-// so a slow KB query fails fast rather than hanging. fn must consume its rows
-// before returning (the tx ends here).
-func (r *AdminRepo) withKBTimeout(fn func(*sql.Tx) error) error {
-	tx, err := r.dataDB.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+// so a slow KB query fails fast rather than hanging. The tx is bound to ctx, so a
+// caller with a tighter deadline (a metrics scrape) can cancel it earlier. fn must
+// consume its rows before returning (the tx ends here).
+func (r *AdminRepo) withKBTimeout(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := r.dataDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("kb query: begin: %w", err)
 	}
@@ -118,7 +119,7 @@ func (r *AdminRepo) CountCompletedDocsAndChunksAll(
 	start, endExclusive *time.Time,
 ) (AdminKBCounts, error) {
 	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 1)
-	c, err := r.runCounts(completedDocsChunksSQL("", pred), rangeArgs...)
+	c, err := r.runCounts(context.Background(), completedDocsChunksSQL("", pred), rangeArgs...)
 	if err != nil {
 		return c, fmt.Errorf("kb admin counts (all): %w", err)
 	}
@@ -138,7 +139,9 @@ func (r *AdminRepo) CountCompletedDocsAndChunksBySourceIDs(
 	// source_ids occupy $1; range params (if any) start at $2.
 	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 2)
 	args := append([]any{pq.Array(sourceIDs)}, rangeArgs...)
-	c, err := r.runCounts(completedDocsChunksSQL(" AND d0.source_id = ANY($1::uuid[])", pred), args...)
+	c, err := r.runCounts(
+		context.Background(),
+		completedDocsChunksSQL(" AND d0.source_id = ANY($1::uuid[])", pred), args...)
 	if err != nil {
 		return c, fmt.Errorf("kb admin counts (by source ids): %w", err)
 	}
@@ -204,10 +207,10 @@ func scanKBBreakdown(rows *sql.Rows) (AdminKBBreakdown, error) {
 
 // runBreakdown executes a 3-column breakdown query under the KB statement_timeout
 // and scans it. Rows are read before the tx ends.
-func (r *AdminRepo) runBreakdown(query string, args ...any) (AdminKBBreakdown, error) {
+func (r *AdminRepo) runBreakdown(ctx context.Context, query string, args ...any) (AdminKBBreakdown, error) {
 	var out AdminKBBreakdown
-	err := r.withKBTimeout(func(tx *sql.Tx) error {
-		rows, qErr := tx.Query(query, args...)
+	err := r.withKBTimeout(ctx, func(tx *sql.Tx) error {
+		rows, qErr := tx.QueryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
 		}
@@ -225,8 +228,16 @@ func (r *AdminRepo) runBreakdown(query string, args ...any) (AdminKBBreakdown, e
 func (r *AdminRepo) CountIndexedDocsBreakdownAll(
 	start, endExclusive *time.Time,
 ) (AdminKBBreakdown, error) {
+	return r.CountIndexedDocsBreakdownAllContext(context.Background(), start, endExclusive)
+}
+
+// CountIndexedDocsBreakdownAllContext is CountIndexedDocsBreakdownAll bound to the
+// caller's context, so a metrics scrape can cancel the scan at its deadline.
+func (r *AdminRepo) CountIndexedDocsBreakdownAllContext(
+	ctx context.Context, start, endExclusive *time.Time,
+) (AdminKBBreakdown, error) {
 	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 1)
-	out, err := r.runBreakdown(indexedDocsBreakdownSQL("", pred), rangeArgs...)
+	out, err := r.runBreakdown(ctx, indexedDocsBreakdownSQL("", pred), rangeArgs...)
 	if err != nil {
 		return AdminKBBreakdown{}, fmt.Errorf("kb breakdown (all): %w", err)
 	}
@@ -245,7 +256,9 @@ func (r *AdminRepo) CountIndexedDocsBreakdownBySourceIDs(
 	// source_ids occupy $1; range params (if any) start at $2.
 	pred, rangeArgs := rangePredicate("pd.created_at", start, endExclusive, 2)
 	args := append([]any{pq.Array(sourceIDs)}, rangeArgs...)
-	out, err := r.runBreakdown(indexedDocsBreakdownSQL(" AND d0.source_id = ANY($1::uuid[])", pred), args...)
+	out, err := r.runBreakdown(
+		context.Background(),
+		indexedDocsBreakdownSQL(" AND d0.source_id = ANY($1::uuid[])", pred), args...)
 	if err != nil {
 		return AdminKBBreakdown{}, fmt.Errorf("kb breakdown (by source ids): %w", err)
 	}
@@ -292,7 +305,7 @@ func documentsByStatusSQL() string {
 func (r *AdminRepo) CountDocumentsByStatus() (map[string]int64, error) {
 	counts := map[string]int64{}
 	query := documentsByStatusSQL()
-	err := r.withKBTimeout(func(tx *sql.Tx) error {
+	err := r.withKBTimeout(context.Background(), func(tx *sql.Tx) error {
 		rows, err := tx.Query(query)
 		if err != nil {
 			return fmt.Errorf("count documents by status: %w", err)

@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -527,7 +528,41 @@ func run() error {
 	if *metricsPort > 0 {
 		serverMetrics = metrics.New(dataConn, systemConn)
 		if !*controlPlaneMode {
-			serverMetrics.WithRAGBacklog(adminrepo.NewAdminRepo(systemConn, dataConn, nil).CountDocumentsByStatus)
+			// Data-plane only: these read dist_rag / meko_system counters a control
+			// plane doesn't have. One repo over the two pools backs both collectors.
+			adminRepo := adminrepo.NewAdminRepo(systemConn, dataConn, nil)
+			serverMetrics.WithRAGBacklog(adminRepo.CountDocumentsByStatus)
+			serverMetrics.WithAdminBusiness(metrics.AdminBusinessSources{
+				UsersByTier: func(ctx context.Context) (free, standard, pro int64, err error) {
+					_, free, standard, pro, err = adminRepo.CountUsersByTier(ctx, nil, nil)
+					return free, standard, pro, err
+				},
+				Datapacks: func(ctx context.Context) (int64, error) {
+					return adminRepo.CountDatapacksAllContext(ctx, nil, nil)
+				},
+				TokenSavings: func(ctx context.Context) (requests, tokensSaved int64, err error) {
+					return adminRepo.TotalTokenSavingsContext(ctx)
+				},
+				Memories: func(ctx context.Context) (private, promoted int64, err error) {
+					private, err = adminRepo.CountPrivateMemoriesAll(ctx, nil, nil)
+					if err != nil {
+						return 0, 0, err
+					}
+					promoted, err = adminRepo.CountAllPromoted(ctx, nil, nil)
+					return private, promoted, err
+				},
+				KnowledgeBase: func(ctx context.Context) (documents, chunks int64, byType map[string]int64, err error) {
+					bd, err := adminRepo.CountIndexedDocsBreakdownAllContext(ctx, nil, nil)
+					if err != nil {
+						return 0, 0, nil, err
+					}
+					byType = make(map[string]int64, len(bd.ByType))
+					for _, t := range bd.ByType {
+						byType[t.DocumentType] = t.Count
+					}
+					return bd.Documents, bd.Chunks, byType, nil
+				},
+			})
 		}
 	}
 
@@ -587,7 +622,7 @@ func run() error {
 		ShowPGAMP:                          *showPGAMP,
 		EnableConversationSearch:           *enableConversationSearch,
 		BYOCMode:                           *enableBYOC,
-		EnableProjects:                  *enableProjects,
+		EnableProjects:                     *enableProjects,
 		ControlPlaneMode:                   *controlPlaneMode,
 		BasePath:                           *basePath,
 		AWSMarketplaceProductCode:          *awsMarketplaceProductCode,

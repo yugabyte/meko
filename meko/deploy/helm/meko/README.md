@@ -204,8 +204,11 @@ OpenTelemetry Operator with the contrib distro — modelled on amp's
   - `/metrics` from the api-server, MCP server, inference gateway and reconcile-agent,
     each on `<component>.metricsPort` (9464), a port named `metrics` kept off the one
     their Service and Ingress expose. The api-server's include `meko_api_rag_documents`,
-    the knowledge-base backlog by status, read from `dist_rag` — the rag workers export
-    nothing themselves.
+    the knowledge-base backlog by status read from `dist_rag` (the rag workers export
+    nothing themselves), and `meko_api_admin_*`, the admin business counters — users by
+    tier, datapacks, memories, token savings, and knowledge-base documents/chunks by file
+    type — read from `meko_system`/`datapacks`/`dist_rag`. These leave the cluster through
+    the BYOC door like every other series.
   - the provisioner's controller-runtime `/metrics`, over HTTPS with the collector's
     token, through a ClusterRoleBinding to the provisioner's metrics-reader role;
   - Langfuse's DogStatsD metrics, on a `statsd` receiver at UDP 8125 that the web and
