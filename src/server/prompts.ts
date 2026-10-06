@@ -50,7 +50,7 @@ Read the relevant code, then write a design: the goal, the approach, the files y
 
 {{answers}}
 
-Revise the design to match: update the same Artifact (republish the same file) or the same markdown file, and record each decision in it. In {{questionsFile}}, mark each answered question "resolved" with its "decision", keep the ids stable, and add any new questions the answers raise. Where the user left a question to you, go with your recommendation and say so. Don't change anything in the repo. Then stop and say the design is ready.`,
+Revise the design to match: update the same Artifact (republish the same file) or the same markdown file, and record each decision in it. In {{questionsFile}}, mark each answered question "resolved" with its "decision", keep the ids stable, and add any new questions the answers raise. Where a question has no answer, go with your recommendation and say so. Don't change anything in the repo. Then stop and say the design is ready.`,
 
   'approved-answers': `The user answered these open questions on the design as they approved it. Where an answer differs from the design, follow the answer.
 

@@ -350,42 +350,50 @@ and its links open in a new tab.
 `~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "question", "context",
 "options": [{"label", "detail"}], "recommended", "status": "open" | "resolved", "decision"}]}`).
 The line asking for it is added to the Design prompt in code (`designQuestionsLine()`), so a repo's
-own `design` prompt gets it too. At each Design turn end the server reads it, capped (256 KB, 30
-questions, 6 options each, text cut short) and normalized (ids lowercased to letters, digits and
-dashes; entries without an id or question, and repeated ids, dropped; a recommendation must point
-at an option). A file that's too large, can't be read or isn't questions is logged and leaves the
-stored ones alone.
+own `design` prompt gets it too. The server keeps each session's questions in memory, never in
+the database (`DesignQuestionStore` in `answers.ts`): they're read the first time they're asked
+for, for every session in Design at startup (so the first turn end after a restart can tell
+whether they changed), and again at each Design turn end. A read is capped (256 KB, 30 questions,
+6 options each, text cut short) and normalized (ids lowercased to letters, digits and dashes;
+entries without an id or question, and repeated ids, dropped; a recommendation must point at an
+option). A file that's too large, can't be read or isn't questions is logged and leaves the ones
+kept alone. That holds within one server run: after a restart there's nothing kept, so a broken file
+shows the markdown design's list or no questions, and the session's activity log says the file
+needs fixing. The `designs` questions columns and the `design_answers` table from before are left
+in place, unused, so the release before this one still works after a rollback; a later migration
+drops them.
 Without the file, a markdown design's top-level list items under an "Open questions" heading are
 its questions (only those with a "?" under a heading that also names risks), with ids from their
-text. A change to the questions counts as a change to the design: the panel refreshes and the
-session is *Design ready* again. A draft keeps its option by label: when a revision moves the
-option, the pick follows it; when it's gone, the draft keeps the label (still sent to Claude) with
-nothing picked, and its card says to pick again.
+text. A change to the questions counts as a change to the design: the design's time moves on so
+the panel refreshes, and the session is *Design ready* again.
 
 The panel then has two tabs, **Design** and **Questions** (with the open count, also shown on the
 Design doc button and the ⋯ sheet's row); on the Design tab a bar says how many questions are open
 and jumps to them. The full page on a wide screen shows the questions in a column beside the design
 instead. Each open question is a card: the question, its context, the options as radio rows with
-AgentK's recommendation marked, **Your call** (AgentK goes with its recommendation), and a note
-(the answer itself when there are no options). Choices are saved at once and text as you type, as
-server-side drafts (`design_answers`, one per question), so they follow you to another device.
-A note's textarea counts as reload-safe only while its text is what the server has, so the reload
-after an update waits for text not yet saved.
-Resolved questions collapse under **Decided** with their decision; an answer to a question AgentK
-since changed or resolved is kept under *Answers to questions no longer open*, still sent with the
-others. **Other feedback** takes anything else about the design. Question text renders as plain
-text, never HTML.
+AgentK's recommendation marked and picked to start with, **Custom answer**, and one text box: a
+note on the option picked (optional), or the answer itself with Custom answer (or when there are no
+options). Resolved questions collapse under **Decided** with their decision. **Other feedback**
+takes anything else about the design. Question text renders as plain text, never HTML.
 
-**Send answers** queues the drafts and types them into Claude as the `design-answers` prompt when
-it's at its prompt: between turns, or with the design waiting for approval (never over a
-permission or question prompt); otherwise they wait for its turn to end, like review comments.
-AgentK then revises the same design and marks each answered question resolved. **Approve design**
-reads **Approve with N answers** while answers are unsent: they go ahead of the Code prompt
-(`approved-answers`) and count as sent. Answers too long for one prompt (50,000 characters) are
-refused, on send and on approval. A queued answer can't change; however the session leaves Design
-other than by approval (a move by hand, the PR prompt), queued answers turn back into drafts,
-which can only be sent from Design again. Sent answers reach Meko
-in the revised design and the session's conversation.
+Answers aren't stored on the server. The browser keeps them per session in localStorage
+(`ak-design-answers:<session>`, `src/web/design-answers.ts`), in step across tabs, so a reload or
+the full page keeps them; their text boxes are reload-safe. An option is kept by label too: when
+a revision moves it, the pick follows it; when it's gone, the question starts over at the
+recommendation, keeping the text.
+
+With open questions, **Approve design** reads **Answer & approve**: the gate, the panel header and
+the ⋯ sheet take you to the questions, and the approval goes from their footer, **Approve with
+answers**. The answers go in the approval request (`DesignAnswersRequest`), typed ahead of the Code
+prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
+recommendation (its own judgment when it has none). **Send for revision** types them as the `design-answers` prompt instead, and AgentK
+revises the design and marks each answered question resolved. It only works while Claude is at its
+prompt (between turns, or with the design waiting for approval, never over a permission or
+question prompt); otherwise the button says why, and nothing is queued. The server checks the
+answers against the current questions: one to a question no longer open, or whose option's label
+changed, is refused (409) so the user looks again; answers too long for one prompt (50,000
+characters) are refused too. After either goes out, the browser forgets the drafts. Answers reach
+Meko in the revised design and the session's conversation.
 
 ### Side panels
 
@@ -662,12 +670,10 @@ CREATE TABLE designs (         -- one per session: markdown, or an Artifact's pa
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT,
   md_version INTEGER, md_sent INTEGER,        -- versions sent to Meko (names the next one), and
   html_version INTEGER, html_sent INTEGER,    -- whether the current one was sent
-  questions TEXT, questions_source TEXT,      -- its questions for the user (normalized JSON; 'file' or 'markdown')
-  open_questions INTEGER, updated_at INTEGER);
-CREATE TABLE design_answers (  -- the user's answers to a design's questions: draft → queued → sent to Claude
-  id TEXT PRIMARY KEY, session_id TEXT,
-  question_id TEXT,               -- '_feedback' for other feedback; at most one unsent answer per question
-  question TEXT, choice INTEGER, choice_label TEXT,  -- the question and option as the user saw them
+  questions TEXT, questions_source TEXT,      -- unused: a design's questions are read from questions.json and
+  open_questions INTEGER, updated_at INTEGER);  -- kept in memory; dropped once the release before that has aged out
+CREATE TABLE design_answers (  -- unused: answers aren't stored, the browser sends them; dropped with the columns above
+  id TEXT PRIMARY KEY, session_id TEXT, question_id TEXT, question TEXT, choice INTEGER, choice_label TEXT,
   your_call INTEGER, text TEXT, state TEXT, created_at INTEGER, updated_at INTEGER, sent_at INTEGER);
 CREATE TABLE review_comments ( -- comments on a session's diff: draft → queued → sent to Claude
   id TEXT PRIMARY KEY, session_id TEXT, path TEXT, side TEXT, line INTEGER, end_line INTEGER,
@@ -805,7 +811,7 @@ stateDiagram-v2
 | Stage | Claude | AgentK Local | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them and send the answers to Claude. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"), after any answers you haven't sent. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |

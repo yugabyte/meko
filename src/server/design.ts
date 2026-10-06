@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
-import { DESIGN_FEEDBACK_ID, type DesignAnswer, type DesignQuestion, type DesignQuestionOption } from '../shared/types.js';
+import type { DesignAnswerInput, DesignQuestion, DesignQuestionOption } from '../shared/types.js';
 
 /** A published Artifact's HTML larger than this isn't kept (the claude.ai link still is). */
 export const MAX_DESIGN_HTML = 5 * 1024 * 1024;
@@ -213,32 +213,36 @@ export const ANSWER_MAX = 10_000;
 export const ANSWERS_PROMPT_MAX = 50_000;
 
 /** "2 answers to open questions and other feedback", for the prompt's first line. */
-export function answersCount(answers: DesignAnswer[]): string {
-  const n = answers.filter((a) => a.questionId !== DESIGN_FEEDBACK_ID).length;
+export function answersCount(answers: DesignAnswerInput[], feedback: string): string {
+  const n = answers.length;
   const parts = [];
   if (n) parts.push(n === 1 ? '1 answer to an open question' : `${n} answers to open questions`);
-  if (answers.some((a) => a.questionId === DESIGN_FEEDBACK_ID)) parts.push(n ? 'other feedback' : 'feedback');
+  if (feedback.trim()) parts.push(n ? 'other feedback' : 'feedback');
   return parts.join(' and ');
 }
 
 /**
- * The answers as markdown for Claude: in the order of the design's questions (numbered as the
- * user saw them), then answers to questions no longer in the design, then other feedback.
+ * The answers as markdown for Claude: every open question in the design's order (numbered as the
+ * user saw them), answered or not, then other feedback. A question without an answer is left to
+ * AgentK's recommendation.
  */
-export function formatAnswers(answers: DesignAnswer[], questions: DesignQuestion[]): string {
-  const order = new Map(questions.map((q, i) => [q.id, i]));
-  const rank = (a: DesignAnswer) => (a.questionId === DESIGN_FEEDBACK_ID ? 2 : order.has(a.questionId) ? 0 : 1);
-  const sorted = [...answers].sort((a, b) => rank(a) - rank(b)
-    || (order.get(a.questionId) ?? 0) - (order.get(b.questionId) ?? 0) || a.createdAt - b.createdAt);
-  return sorted.map((a) => {
-    const text = a.text.trim();
-    if (a.questionId === DESIGN_FEEDBACK_ID) return `### Other feedback\n${text}`;
-    const i = order.get(a.questionId);
-    const head = i === undefined ? `### Earlier question (id: ${a.questionId}): ${a.question}` : `### Q${i + 1} (id: ${a.questionId}): ${a.question}`;
-    const lines = [head];
-    if (a.choiceLabel !== null) lines.push(`Answer: ${a.choiceLabel}`);
-    else if (a.yourCall) lines.push('Answer: your call. Go with your recommendation.');
-    if (text) lines.push(a.choiceLabel !== null || a.yourCall ? `Note: ${text}` : `Answer: ${text}`);
-    return lines.join('\n');
-  }).join('\n\n');
+export function formatAnswers(answers: DesignAnswerInput[], feedback: string, questions: DesignQuestion[]): string {
+  const byId = new Map(answers.map((a) => [a.questionId, a]));
+  const out = questions.flatMap((q, i) => {
+    if (q.status !== 'open') return [];
+    const a = byId.get(q.id);
+    const lines = [`### Q${i + 1} (id: ${q.id}): ${q.question}`];
+    const text = a?.text.trim() ?? '';
+    if (!a) {
+      lines.push(q.recommended !== null ? 'No answer: go with your recommendation.' : 'No answer: use your judgment, and say what you picked.');
+    } else if (a.label !== null) {
+      lines.push(`Answer: ${a.label}`);
+      if (text) lines.push(`Note: ${text}`);
+    } else {
+      lines.push(`Answer (custom): ${text}`);
+    }
+    return [lines.join('\n')];
+  });
+  if (feedback.trim()) out.push(`### Other feedback\n${feedback.trim()}`);
+  return out.join('\n\n');
 }

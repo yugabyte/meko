@@ -185,11 +185,12 @@ export class SessionManager {
     this.loadUsage();
     return sessionRows(this.db, projectId)
       .filter((r) => r.desired === 'running')
-      .map((r) => toSession(this.db, r, this.runtime(r.id)));
+      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open));
   }
 
   get(id: string): Session {
-    return toSession(this.db, this.row(id), this.runtime(id));
+    const row = this.row(id);
+    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open);
   }
 
   row(id: string): SessionRow {
@@ -242,16 +243,12 @@ export class SessionManager {
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
     const now = Date.now();
-    const from = sessionRow(this.db, id)?.stage;
     tx(this.db, () => {
       run(this.db, 'UPDATE session_stages SET left_at = ? WHERE session_id = ? AND left_at IS NULL', now, id);
       run(this.db, 'INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, ?)', id, stage, now, by);
       run(this.db, 'UPDATE sessions SET stage = ? WHERE id = ?', stage, id);
     });
     if (opts.event !== false) this.event(id, 'stage', stage === 'done' ? 'Done' : `Moved to ${STAGE_LABELS[stage]}`);
-    // However it leaves Design (approval, a move, a PR prompt), answers waiting for Claude's turn
-    // become drafts again: they only go out from Design, when the user sends them.
-    if (from === 'design' && stage !== 'design') this.core.answers.unqueue(id);
     this.core.changed();
   }
 
@@ -1141,12 +1138,13 @@ export class SessionManager {
 
   // ---- actions ----
 
-  async action(id: string, action: SessionAction): Promise<Session> {
+  /** `body` is the request's: approve-design takes the user's answers to the design (DesignAnswersRequest). */
+  async action(id: string, action: SessionAction, body?: unknown): Promise<Session> {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     const lc = this.core.lifecycle;
     switch (action) {
-      case 'approve-design': await lc.approveDesign(row); break;
+      case 'approve-design': await lc.approveDesign(row, body); break;
       case 'open-pr': await lc.openPr(row); break;
       case 'merge': await lc.merge(row); break;
       case 'request-review': await lc.requestReview(row, false); break;
@@ -1294,6 +1292,7 @@ export class SessionManager {
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
+      this.core.questions.forget(row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
@@ -1386,6 +1385,7 @@ export class SessionManager {
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
+      this.core.questions.forget(row.id);
     }
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
     if (p) {

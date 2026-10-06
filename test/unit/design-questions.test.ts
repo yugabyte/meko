@@ -1,22 +1,21 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DESIGN_FEEDBACK_ID, type DesignAnswer, type DesignQuestion } from '../../src/shared/types.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DesignAnswerInput, DesignQuestion } from '../../src/shared/types.js';
+import { designAnswers } from '../../src/server/answers.js';
 import {
-  MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
+  ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
 } from '../../src/server/design.js';
 import { DEFAULT_PROMPTS, designQuestionsLine, render } from '../../src/server/prompts.js';
-import { answerSummary, answersByQuestion, sendLabel } from '../../src/web/design-answers.js';
+import { defaultDraft, draftFor, draftsBlocker, parseDrafts, toRequest, type Draft } from '../../src/web/design-answers.js';
 import { approveLabel } from '../../src/web/util.js';
 
 const question = (over: Partial<DesignQuestion>): DesignQuestion => ({
   id: 'q', question: 'Which?', context: null, options: [], recommended: null, status: 'open', decision: null, ...over,
 });
-const answer = (over: Partial<DesignAnswer>): DesignAnswer => ({
-  id: 'a', questionId: 'q', question: 'Which?', choice: null, choiceLabel: null, yourCall: false, text: '', state: 'draft',
-  createdAt: 0, updatedAt: 0, sentAt: null, ...over,
-});
+const answer = (over: Partial<DesignAnswerInput>): DesignAnswerInput => ({ questionId: 'q', choice: null, label: null, text: '', ...over });
+const opts = (...labels: string[]) => labels.map((label) => ({ label, detail: null }));
 
 describe('reading the questions file', () => {
   it('normalizes questions, options and recommendations', () => {
@@ -124,30 +123,87 @@ describe('questions from a markdown design', () => {
 
 describe('formatting answers for Claude', () => {
   const questions = [
-    question({ id: 'store', question: 'Where?', options: [{ label: 'Datapack', detail: null }, { label: 'Repo', detail: null }] }),
+    question({ id: 'store', question: 'Where?', options: opts('Datapack', 'Repo'), recommended: 0 }),
+    question({ id: 'done', question: 'Decided?', status: 'resolved', decision: 'Yes.' }),
     question({ id: 'tabs', question: 'Tabs?' }),
+    question({ id: 'layout', question: 'Layout?', options: opts('Tabs', 'Columns'), recommended: 1 }),
+    question({ id: 'name', question: 'Name?', options: opts('A', 'B') }),
   ];
 
-  it('orders them as the design does, then gone questions, then other feedback', () => {
+  it('lists every open question in order, answered or not, then other feedback', () => {
     const out = formatAnswers([
-      answer({ questionId: DESIGN_FEEDBACK_ID, question: 'Other feedback', text: 'Shorter, please.' }),
-      answer({ questionId: 'tabs', question: 'Tabs?', yourCall: true }),
-      answer({ questionId: 'gone', question: 'Old one?', text: 'Yes.' }),
-      answer({ questionId: 'store', question: 'Where?', choice: 1, choiceLabel: 'Repo', text: 'Under docs/designs.' }),
-    ], questions);
+      answer({ questionId: 'tabs', text: 'One column.' }),
+      answer({ questionId: 'store', choice: 1, label: 'Repo', text: ' Under docs/designs. ' }),
+      answer({ questionId: 'layout', choice: 0, label: 'Tabs' }),
+    ], ' Shorter, please. ', questions);
     expect(out).toBe([
       '### Q1 (id: store): Where?\nAnswer: Repo\nNote: Under docs/designs.',
-      '### Q2 (id: tabs): Tabs?\nAnswer: your call. Go with your recommendation.',
-      '### Earlier question (id: gone): Old one?\nAnswer: Yes.',
+      '### Q3 (id: tabs): Tabs?\nAnswer (custom): One column.',
+      '### Q4 (id: layout): Layout?\nAnswer: Tabs',
+      '### Q5 (id: name): Name?\nNo answer: use your judgment, and say what you picked.',
       '### Other feedback\nShorter, please.',
     ].join('\n\n'));
+    expect(formatAnswers([], '', [questions[0]])).toBe('### Q1 (id: store): Where?\nNo answer: go with your recommendation.');
   });
 
   it('counts answers and feedback for the first line', () => {
-    expect(answersCount([answer({})])).toBe('1 answer to an open question');
-    expect(answersCount([answer({}), answer({ questionId: 'b' })])).toBe('2 answers to open questions');
-    expect(answersCount([answer({}), answer({ questionId: DESIGN_FEEDBACK_ID })])).toBe('1 answer to an open question and other feedback');
-    expect(answersCount([answer({ questionId: DESIGN_FEEDBACK_ID })])).toBe('feedback');
+    expect(answersCount([answer({})], '')).toBe('1 answer to an open question');
+    expect(answersCount([answer({}), answer({ questionId: 'b' })], ' ')).toBe('2 answers to open questions');
+    expect(answersCount([answer({})], 'More.')).toBe('1 answer to an open question and other feedback');
+    expect(answersCount([], 'More.')).toBe('feedback');
+  });
+});
+
+describe('checking the answers a browser sends', () => {
+  const questions = [
+    question({ id: 'store', question: 'Where?', options: opts('Datapack', 'Repo'), recommended: 0 }),
+    question({ id: 'done', question: 'Decided?', status: 'resolved', decision: 'Yes.' }),
+    question({ id: 'tabs', question: 'Tabs?' }),
+  ];
+  const check = (body: unknown) => () => designAnswers(body, questions);
+
+  it('formats valid answers, and is null with nothing in them', () => {
+    expect(designAnswers(undefined, questions)).toBeNull();
+    expect(designAnswers({}, questions)).toBeNull();
+    expect(designAnswers({ answers: [], feedback: '  ' }, questions)).toBeNull();
+    const r = designAnswers({ answers: [{ questionId: 'store', choice: 1, label: 'Repo', text: 'why' }], feedback: 'More.' }, questions)!;
+    expect(r.count).toBe('1 answer to an open question and other feedback');
+    expect(r.text).toContain('### Q1 (id: store): Where?\nAnswer: Repo\nNote: why');
+    expect(r.text).toContain('### Q3 (id: tabs): Tabs?\nNo answer: use your judgment');
+    expect(designAnswers({ answers: [{ questionId: 'tabs', choice: null, label: null, text: 'Mine' }] }, questions)!.text).toContain('Answer (custom): Mine');
+  });
+
+  it('refuses answers to questions AgentK has changed since', () => {
+    for (const a of [
+      { questionId: 'gone', choice: 0, label: 'Datapack', text: '' },
+      { questionId: 'done', choice: null, label: null, text: 'Late' },
+      { questionId: 'store', choice: 0, label: 'Repo', text: '' },
+      { questionId: 'store', choice: 5, label: 'Repo', text: '' },
+    ]) {
+      expect(check({ answers: [a] })).toThrow(expect.objectContaining({ status: 409, message: expect.stringMatching(/changed its questions/) }));
+    }
+  });
+
+  it('refuses malformed answers', () => {
+    for (const body of [
+      'text', [], { answers: 'x' }, { feedback: 3 }, { answers: [7] }, { answers: [{ choice: 0 }] },
+      { answers: [{ questionId: 'store', choice: 1.5, label: 'Repo', text: '' }] },
+      { answers: [{ questionId: 'store', choice: 0 }] },
+      { answers: [{ questionId: 'store', choice: 0, label: 'Datapack', text: 4 }] },
+      { answers: [{ questionId: 'tabs', choice: null, label: null, text: '  ' }] },
+      { answers: [{ questionId: 'tabs', text: 'a' }, { questionId: 'tabs', text: 'b' }] },
+      { answers: [{ questionId: 'tabs', text: 'x'.repeat(ANSWER_MAX + 1) }] },
+      { feedback: 'x'.repeat(ANSWER_MAX + 1) },
+    ]) {
+      expect(check(body)).toThrow(expect.objectContaining({ status: 400 }));
+    }
+    expect(check({ answers: [{ questionId: 'tabs', text: '  ' }] })).toThrow(/Write your answer to Q3/);
+  });
+
+  it('refuses answers too long for one prompt', () => {
+    const many = Array.from({ length: 6 }, (_, i) => question({ id: `q${i}` }));
+    const body = { answers: many.map((q) => ({ questionId: q.id, text: 'x'.repeat(ANSWER_MAX) })) };
+    expect(() => designAnswers(body, many)).toThrow(expect.objectContaining({ status: 400, message: expect.stringMatching(/Shorten some/) }));
   });
 });
 
@@ -164,27 +220,95 @@ describe('the design prompts', () => {
   });
 });
 
-describe('answers in the UI', () => {
-  it('keeps the unsent answer and the last one sent per question', () => {
-    const { unsent, sent } = answersByQuestion([
-      answer({ id: '1', state: 'sent', sentAt: 5, text: 'old' }),
-      answer({ id: '2', state: 'sent', sentAt: 9, text: 'newer' }),
-      answer({ id: '3', state: 'draft', text: 'draft' }),
-      answer({ id: '4', questionId: 'b', state: 'queued' }),
-    ]);
-    expect(sent.get('q')?.id).toBe('2');
-    expect(unsent.get('q')?.id).toBe('3');
-    expect(unsent.get('b')?.id).toBe('4');
+describe('answers in the browser', () => {
+  const store = question({ id: 'store', options: opts('Datapack', 'Repo'), recommended: 1 });
+  const pick = question({ id: 'pick', options: opts('A', 'B') });
+  const free = question({ id: 'free' });
+  const draft = (over: Partial<Draft>): Draft => ({ choice: null, label: null, custom: false, text: '', ...over });
+
+  it('starts on the recommendation, nothing, or a written answer for a question without options', () => {
+    expect(defaultDraft(store)).toEqual({ choice: 1, label: 'Repo', custom: false, text: '' });
+    expect(defaultDraft(pick)).toEqual({ choice: null, label: null, custom: false, text: '' });
+    expect(defaultDraft(free)).toEqual({ choice: null, label: null, custom: true, text: '' });
   });
 
-  it('sums up an answer, labels Send, and labels Approve', () => {
-    expect(answerSummary(answer({ choiceLabel: 'Repo', text: ' why ' }))).toBe('Repo · why');
-    expect(answerSummary(answer({ yourCall: true }))).toBe('Your call');
-    expect(answerSummary(answer({ text: 'Mine' }))).toBe('Mine');
-    expect(sendLabel([answer({}), answer({ questionId: DESIGN_FEEDBACK_ID })])).toBe('Send 1 answer');
-    expect(sendLabel([answer({ questionId: DESIGN_FEEDBACK_ID })])).toBe('Send feedback');
+  it('finds a picked option again by its label after a revision', () => {
+    const moved = { ...store, options: opts('Repo', 'Datapack') };
+    expect(draftFor(moved, draft({ choice: 1, label: 'Datapack', text: 'n' }))).toEqual(draft({ choice: 1, label: 'Datapack', text: 'n' }));
+    expect(draftFor(moved, draft({ choice: 0, label: 'Datapack' }))).toMatchObject({ choice: 1, label: 'Datapack' });
+    // Gone: back to the default, keeping the note.
+    expect(draftFor({ ...store, options: opts('Other', 'Repo') }, draft({ choice: 0, label: 'Datapack', text: 'n' })))
+      .toEqual({ choice: 1, label: 'Repo', custom: false, text: 'n' });
+    expect(draftFor(store, draft({ custom: true, choice: 0, label: 'Datapack', text: 'mine' }))).toEqual(draft({ custom: true, text: 'mine' }));
+  });
+
+  it('builds the request, leaving out questions with no answer', () => {
+    const resolved = question({ id: 'old', status: 'resolved', options: opts('X'), recommended: 0 });
+    const r = toRequest([store, pick, free, resolved], { answers: { pick: draft({ custom: true, text: 'Neither' }), free: draft({ custom: true, text: ' ' }) }, feedback: 'More.' });
+    expect(r).toEqual({
+      answers: [
+        { questionId: 'store', choice: 1, label: 'Repo', text: '' },
+        { questionId: 'pick', choice: null, label: null, text: 'Neither' },
+      ],
+      feedback: 'More.',
+    });
+  });
+
+  it('holds the answers back while a picked custom answer is empty', () => {
+    expect(draftsBlocker([store, pick, free], { answers: {}, feedback: '' })).toBeNull();
+    expect(draftsBlocker([store, pick], { answers: { pick: draft({ custom: true }) }, feedback: '' })).toBe('Write your answer to Q2, or pick one of AgentK’s options.');
+  });
+
+  it('reads stored drafts, dropping what isn’t one', () => {
+    expect(parseDrafts(null)).toEqual({ answers: {}, feedback: '' });
+    expect(parseDrafts('{oops')).toEqual({ answers: {}, feedback: '' });
+    expect(parseDrafts(JSON.stringify({ answers: { a: draft({ choice: 0, label: 'A' }), b: { choice: 'x' } }, feedback: 'f' })))
+      .toEqual({ answers: { a: draft({ choice: 0, label: 'A' }) }, feedback: 'f' });
+  });
+
+  describe('kept in localStorage', () => {
+    let items: Map<string, string>;
+    let full: boolean;
+    beforeEach(() => {
+      items = new Map();
+      full = false;
+      vi.stubGlobal('localStorage', {
+        getItem: (k: string) => items.get(k) ?? null,
+        setItem: (k: string, v: string) => {
+          if (full && !k.endsWith(':probe')) throw new Error('QuotaExceededError');
+          items.set(k, v);
+        },
+        removeItem: (k: string) => void items.delete(k),
+      });
+      vi.resetModules();
+    });
+    afterEach(() => vi.unstubAllGlobals());
+    const fresh = () => import('../../src/web/design-answers.js');
+
+    it('reads what another tab wrote, never a stale copy', async () => {
+      const m = await fresh();
+      expect(m.draftsPersist()).toBe(true);
+      expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: '' });
+      items.set('ak-design-answers:s1', JSON.stringify({ answers: {}, feedback: 'From the other tab' }));
+      expect(m.loadDrafts('s1').feedback).toBe('From the other tab');
+      // The other tab sent them: they're gone here too.
+      items.delete('ak-design-answers:s1');
+      expect(m.loadDrafts('s1').feedback).toBe('');
+    });
+
+    it('stops counting as reload-safe once a save fails, keeping the draft for the page', async () => {
+      const m = await fresh();
+      expect(m.draftsPersist()).toBe(true);
+      full = true;
+      m.saveDrafts('s1', { answers: {}, feedback: 'Too big to store' });
+      expect(m.draftsPersist()).toBe(false);
+      expect(items.has('ak-design-answers:s1')).toBe(false);
+      expect(m.loadDrafts('s1').feedback).toBe('Too big to store');
+    });
+  });
+
+  it('labels Approve', () => {
     expect(approveLabel(0)).toBe('Approve design');
-    expect(approveLabel(1)).toBe('Approve with 1 answer');
-    expect(approveLabel(3)).toBe('Approve with 3 answers');
+    expect(approveLabel(2)).toBe('Answer & approve');
   });
 });
