@@ -321,8 +321,8 @@ export interface CallHomeInstall {
   claudeCode: string;
   access: 'local' | 'remote';
   service: 'systemd' | 'launchd' | 'none';
-  /** 'none' when Meko is off (or the sharing mode isn't known yet). */
-  meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: SharingMode | 'none' };
+  /** Sharing is 'api' when AgentK shares through Meko's API, 'none' when it can't (Meko off, or no API URL). */
+  meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: 'api' | 'none' };
   /** The UTC day this install first built a report. */
   firstDay: string;
 }
@@ -553,13 +553,11 @@ export interface MekoStatus {
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
-   * How datapacks are shared: `api` through Meko's share API with our key, `link` in Meko's web
-   * app (this Meko doesn't take API keys for sharing yet), null before it has been checked.
+   * AgentK shares datapacks and answers invites through Meko's share API with our key: Meko is on
+   * and its API URL is known.
    */
-  sharing: SharingMode | null;
+  sharing: boolean;
 }
-
-export type SharingMode = 'api' | 'link';
 
 export interface AppState {
   projects: ProjectWithSessions[];
@@ -1255,7 +1253,7 @@ export type TermServerMessage =
 //        with `login`, the email is remembered for that GitHub login)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
-//        The four above answer 409 in link mode (AppState.meko.sharing 'link').
+//        The four above answer 409 when AgentK can't share (AppState.meko.sharing false).
 // POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the Open project dialog's one read of Meko)
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204

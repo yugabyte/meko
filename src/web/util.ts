@@ -167,12 +167,6 @@ export function mekoDatapackUrl(webUrl: string | null, datapackId: string): stri
   return webUrl ? `${webUrl}/datapacks/${encodeURIComponent(datapackId)}` : null;
 }
 
-/** The datapack's Share page in the Meko web app (how sharing works in link mode). */
-export function mekoDatapackShareUrl(webUrl: string | null, datapackId: string): string | null {
-  const u = mekoDatapackUrl(webUrl, datapackId);
-  return u ? `${u}/share` : null;
-}
-
 /** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */
 export function httpHost(url: string): string | null {
   try {

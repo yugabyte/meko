@@ -485,10 +485,10 @@ Recent activity shows the project's last 50 events, newest first, and scrolls in
 never pushes the rest of the page down.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
-datapack. In API mode it opens the Share dialog; in link mode it is **Share in Meko ↗**, which
-opens the datapack's Share page in the Meko web app. With Meko off it asks for a Meko API key
-first (**Add a Meko API key**), and for a project without a dedicated datapack it offers **Add a
-dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
+datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with
+no web app or API URL set) it's off, with a note to set the web app URL on the Meko tab. With Meko
+off it asks for a Meko API key first (**Add a Meko API key**), and for a project without a
+dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
 maintainer. See [Sharing a project](#sharing-a-project).
 
 A project without a dedicated datapack says so in its Datapacks box, with **Add a dedicated
@@ -1089,10 +1089,10 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   home shows the same links.
 >   A new URL or key is checked with a Meko ping before anything is saved; then the MCP connection
 >   is dropped (one still being opened with the old ones is dropped once it's up) so the next call
->   reconnects, and Meko and the sharing mode are checked again. An API URL that comes from a typed
+>   reconnects, and the invites waiting in Meko are synced again. An API URL that comes from a typed
 >   API or web app URL is checked too, without the key (it must answer with Meko's JSON envelope,
 >   `{ data }` or `{ error: { code, message } }`),
->   so a mistyped host never gets the key; a changed API URL also re-checks the sharing mode. A save
+>   so a mistyped host never gets the key; a changed API URL also syncs invites again. A save
 >   writes only the fields it changed, so a change that landed while its checks ran (Claude Code's
 >   setup clearing the key) isn't undone.
 >   Switching to another Meko host asks you to confirm, because existing projects' datapacks stay
@@ -1113,24 +1113,25 @@ per user in Meko, so a member sees their own memories plus the datapack's shared
 Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET …/outgoing-shares`,
 `POST …/invite/:id/resend`, `DELETE …/invite/:id`, `GET /datapacks/incoming-shares`,
 `POST /datapacks/invite-action`) are REST, not MCP. `src/server/mekoapi.ts` calls them with the
-same API key, at `[meko] api_url` (by default the web app URL plus `/api/v1`). Today Meko accepts
-only a web login on those routes, not an API key, so AgentK works in two modes. It calls
-`GET /datapacks/incoming-shares` at startup, every hour, and after a change to the Meko URL, key or
-API URL: an answer means **API mode**; a refusal (401, 403, 404 or 405), or no API URL at all,
-means **link mode**. `AppState.meko.sharing` carries the result. Meko's own refusals of a share
-call (a bad email, an invite already pending, no permission) come back with their status and
-message; a 401 there also switches to link mode; anything else is a 502.
+same API key (a Meko personal access token), at `[meko] api_url` (by default the web app URL plus
+`/api/v1`). `AppState.meko.sharing` is true when Meko is on and that API URL is known; it's worked
+out from the config, not by asking Meko. Without an API URL the share routes answer 409, saying to
+set the web app URL. Meko's own refusals of a share call (a bad email, an invite already pending,
+no permission) come back with their status and message; a refused key (401) is a 502 that says to
+check the key on the Meko tab; anything else is a 502. The invite sync keeps asking every five
+minutes, but logs a failure to list the invites waiting (a refused key, say) once, until the error
+or API URL changes or a sync works.
 
-| | API mode | Link mode (today) |
-|---|---|---|
-| Share | The Share dialog: the reviewers of the project's open PRs (below), email, role, the people with access and pending invites (Resend, Revoke). Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). | **Share in Meko ↗** opens `<web app>/datapacks/<id>/share`. From a session's **Share with reviewers**, a dialog lists the reviewers with **Copy email**, then links there. |
-| An invite for you | A banner (and a notification) from `incoming-shares`: **Open as project** (creating the project accepts it), **Decline**, **Later**. A viewer invite gets **Accept** instead of Open as project. | Meko emails you and shows it in its notification bell; you accept it there. |
-| A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). | Same. |
+| | |
+|---|---|
+| Share | The Share dialog: the reviewers of the project's open PRs (below), email, role, the people with access and pending invites (Resend, Revoke). Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). |
+| An invite for you | A banner (and a notification) from `incoming-shares`: **Open as project** (creating the project accepts it), **Decline**, **Later**. A viewer invite gets **Accept** instead of Open as project. |
+| A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). |
 
 **Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
-reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko is
-on. It opens the Share dialog with a **Reviewers on the project's open PRs** section above the
-email form: for each open PR of the project's running sessions (in PR & Review or Merge & Close),
+reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and AgentK
+can share (`AppState.meko.sharing`). It opens the Share dialog with a **Reviewers on the
+project's open PRs** section above the email form: for each open PR of the project's running sessions (in PR & Review or Merge & Close),
 each in its own session's repo, the people asked to review and the people who have reviewed,
 without bots, the PR's author or you, and the teams asked (whose members are invited by email);
 the session's own PR comes first, and a person on several PRs is listed once
@@ -1391,7 +1392,8 @@ reports.
   Claude Code versions (`tmux -V`, `claude --version`; `''` when they can't be read; our version or
   Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
   cut to its leading numbers, else `0.0.0`), local or remote access, the service manager, whether Meko is on (and where its key comes from, and the
-  sharing mode; `none` when Meko is off or the mode isn't known), and the UTC day of the first
+  sharing: `api` when AgentK can share through Meko's API, `none` when Meko is off or its API URL
+  isn't known), and the UTC day of the first
   report.
 - *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
   attached, distinct repos), sessions (by kind, open ones by stage; a task counts as `explore`,

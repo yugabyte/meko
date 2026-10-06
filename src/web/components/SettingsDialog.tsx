@@ -381,7 +381,7 @@ function MekoTab({ status }: { status: MekoStatus }) {
         />
       </Field>
       <div className="fields">
-        <Field label="Web app URL" hint="For links to datapacks, and sharing in link mode.">
+        <Field label="Web app URL" hint="For links to datapacks, and sharing: the API URL defaults to it plus /api/v1.">
           <input
             id="set-meko-web"
             className="input mono"
@@ -419,12 +419,8 @@ function MekoTab({ status }: { status: MekoStatus }) {
         </div>
         <div className="meko-status-row">
           <span>Sharing</span>
-          <span className={cx('tag', status.sharing !== 'api' && 'shared')}>
-            {!status.configured ? 'off' : status.sharing === 'api' ? 'in AgentK' : status.sharing === 'link' ? 'link mode' : 'not checked yet'}
-          </span>
-          {status.sharing === 'link' && (
-            <span className="hint">This Meko doesn’t accept API keys for sharing yet, so sharing happens in Meko’s web app.</span>
-          )}
+          <span className={cx('tag', !status.sharing && 'shared')}>{status.sharing ? 'on' : 'off'}</span>
+          {status.configured && !status.sharing && <span className="hint">Needs Meko’s API URL: set the web app or API URL above.</span>}
         </div>
         <div className="meko-status-row">
           <span>Claude Code</span>

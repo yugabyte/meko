@@ -14,7 +14,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, mekoDatapackShareUrl, repoFolder, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, repoFolder, totalTokens, usageTitle } from '../util';
 import { Busy, Check, ConfirmButton, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
@@ -112,9 +112,8 @@ export function ProjectView({
     (session.stage === 'design' && session.hasDesign)
     || (session.stage === 'review' && session.canMerge)
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)));
-  // Sharing the project with a PR's reviewers is sharing its dedicated datapack (Meko on, and a share mode known).
-  const shareUrl = dedicated && meko.sharing === 'link' ? mekoDatapackShareUrl(mekoWebUrl, dedicated.id) : null;
-  const canShare = !!dedicated && meko.configured && (meko.sharing === 'api' || !!shareUrl);
+  // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
+  const canShare = !!dedicated && meko.sharing;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -351,7 +350,6 @@ export function ProjectView({
           projectName={project.name}
           datapack={dedicated}
           focusSessionId={session.id}
-          shareUrl={shareUrl}
           onClose={() => setSharing(false)}
         />
       )}

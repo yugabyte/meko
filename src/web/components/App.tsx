@@ -491,8 +491,6 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {modal.kind === 'new-project' && (
         <NewProjectDialog
           mekoConfigured={state.meko.configured}
-          mekoWebUrl={state.meko.webUrl}
-          sharing={state.meko.sharing}
           projects={projects}
           initialInvite={modal.invite ?? null}
           onClose={() => setModal({ kind: 'none' })}

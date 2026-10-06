@@ -406,7 +406,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     meko: {
       enabled: meko,
       keySource: (meko && resolveMekoWithSource(o.config).keySource) || 'none',
-      sharing: (meko && o.meko.sharing) || 'none',
+      sharing: meko && o.meko.sharing ? 'api' : 'none',
     },
     firstDay: o.firstDay,
   };

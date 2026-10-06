@@ -250,13 +250,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return rows.map(toDatapack);
   });
 
-  // ---- sharing (Meko's share API; link mode shares in Meko's web app instead) ----
+  // ---- sharing (Meko's share API) ----
   /** Runs a share API call for a datapack one of our projects uses; Meko's errors become HTTP errors (see apiFailure). */
   const sharing = async <T>(datapackId: string, fn: () => Promise<T>): Promise<T> => {
     const inUse = get(db, `SELECT 1 AS x FROM project_datapacks d JOIN projects p ON p.id = d.project_id
                            WHERE d.datapack_id = ? AND p.deleted_at IS NULL`, datapackId);
     if (!inUse) throw new HttpError(404, "That datapack isn't in any of your projects.");
-    if (core.mekoStatus.sharing !== 'api') throw new HttpError(409, "This Meko doesn't let AgentK share datapacks yet. Share it in Meko.");
+    core.invites.requireSharing('share datapacks');
     try {
       return await fn();
     } catch (e) {
@@ -287,7 +287,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- datapacks shared with us ----
   app.post('/api/invites/check', async (): Promise<InviteCheck> => {
     if (!core.mekoStatus.configured) return { datapacks: [], invites: [], closed: [] };
-    if (core.mekoStatus.sharing === null) await core.invites.checkMode();
     let rows: MekoDatapackRow[];
     try {
       // One datapack_list serves both the dialog's list and the sync; the stamp catches a change here in between.
@@ -452,7 +451,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       audit(db, 'meko_settings_changed', { url: mekoSettings(core.config).effectiveUrl });
       core.log.info(`Meko settings changed (${mekoSettings(core.config).effectiveUrl})`);
       if (meko.reconnect) await core.mekoChanged();
-      else if (meko.recheck) core.sharingChanged();
+      else if (meko.resync) void core.syncInvites();
     }
     return settings();
   });

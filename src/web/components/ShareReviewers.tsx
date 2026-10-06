@@ -2,16 +2,14 @@ import { useEffect, useState } from 'react';
 import type { DatapackPeople, PrReviewer, PrReviewers, ShareGrant } from '../../shared/types';
 import { SHARE_GRANTS } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { copyText } from '../clipboard';
 import { Busy } from './common';
 
 const GRANT_NAMES: Record<ShareGrant, string> = { contributor: 'Contributor', maintainer: 'Maintainer', viewer: 'Viewer' };
 
 /**
  * The Share dialog's Reviewers section: who reviews each open PR of the project's running sessions
- * (each in its own repo), the PR the dialog was opened from first, with a Share per person. In link
- * mode (`onShare` absent) it lists their emails to copy instead. Hidden while the project has no
- * open PRs.
+ * (each in its own repo), the PR the dialog was opened from first, with a Share per person. Hidden
+ * while the project has no open PRs.
  */
 export function ShareReviewers({
   projectId,
@@ -22,10 +20,10 @@ export function ShareReviewers({
 }: {
   projectId: string;
   focusSessionId: string | null;
-  /** Who already has access or a pending invite, to mark them; null while loading (or in link mode). */
+  /** Who already has access or a pending invite, to mark them; null while loading. */
   people: DatapackPeople | null;
   /** Invites one reviewer; resolves true when it went through. */
-  onShare?: (login: string, email: string, grant: ShareGrant) => Promise<boolean>;
+  onShare: (login: string, email: string, grant: ShareGrant) => Promise<boolean>;
   busy: boolean;
 }) {
   const [prs, setPrs] = useState<PrReviewers[] | null>(null);
@@ -85,7 +83,7 @@ export function ShareReviewers({
                 <span className="share-who">
                   <b>@{t}</b> <span className="tag">team</span>
                 </span>
-                <span className="hint">{onShare ? 'Invite its members by email below.' : 'Invite its members in Meko.'}</span>
+                <span className="hint">Invite its members by email below.</span>
               </div>
             ))}
             {!pr.error && !pr.reviewers.length && !pr.teams.length && <p className="hint">No reviewers asked for yet.</p>}
@@ -107,13 +105,12 @@ function ReviewerRow({
 }: {
   reviewer: PrReviewer;
   hasAccess: boolean;
-  onShare?: (login: string, email: string, grant: ShareGrant) => Promise<boolean>;
+  onShare: (login: string, email: string, grant: ShareGrant) => Promise<boolean>;
   busy: boolean;
 }) {
   const [email, setEmail] = useState(reviewer.email ?? '');
   const [grant, setGrant] = useState<ShareGrant>('contributor');
   const [done, setDone] = useState(false);
-  const [copied, setCopied] = useState(false);
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const id = `share-rv-${reviewer.login}`;
 
@@ -137,40 +134,27 @@ function ReviewerRow({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
-          {onShare ? (
-            <>
-              <select
-                id={`${id}-grant`}
-                className="input small"
-                aria-label={`Access for @${reviewer.login}`}
-                value={grant}
-                onChange={(e) => setGrant(e.target.value as ShareGrant)}
-              >
-                {SHARE_GRANTS.map((g) => (
-                  <option key={g} value={g}>
-                    {GRANT_NAMES[g]}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="btn small primary"
-                disabled={!valid || busy}
-                onClick={() => void onShare(reviewer.login, email.trim(), grant).then((ok) => ok && setDone(true))}
-              >
-                Share
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="btn small"
-              disabled={!valid}
-              onClick={() => void copyText(email.trim()).then((ok) => setCopied(ok))}
-            >
-              {copied ? 'Copied' : 'Copy email'}
-            </button>
-          )}
+          <select
+            id={`${id}-grant`}
+            className="input small"
+            aria-label={`Access for @${reviewer.login}`}
+            value={grant}
+            onChange={(e) => setGrant(e.target.value as ShareGrant)}
+          >
+            {SHARE_GRANTS.map((g) => (
+              <option key={g} value={g}>
+                {GRANT_NAMES[g]}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn small primary"
+            disabled={!valid || busy}
+            onClick={() => void onShare(reviewer.login, email.trim(), grant).then((ok) => ok && setDone(true))}
+          >
+            Share
+          </button>
         </span>
       )}
     </div>

@@ -31,7 +31,7 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "keySource": { "enum": ["config", "env", "claude", "none"] },
-            "sharing": { "enum": ["api", "link", "none"] }
+            "sharing": { "enum": ["api", "none"] }
           }
         },
         "firstDay": { "$ref": "#/$defs/day" }

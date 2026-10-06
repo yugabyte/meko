@@ -9,12 +9,11 @@ import {
   type ProjectWithSessions,
   type ReviewerMode,
   type SearchResult,
-  type SharingMode,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
-import { cx, mekoDatapackShareUrl, shortTime } from '../util';
+import { cx, shortTime } from '../util';
 import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
 import { AddDatapackDialog } from './AddDatapackDialog';
 import { MekoKeyDialog } from './MekoKeyDialog';
@@ -46,8 +45,8 @@ export function ProjectHomeView({
   mekoWebUrl: string | null;
   /** Meko is on (a key is set). */
   mekoConfigured: boolean;
-  /** How datapacks are shared: in AgentK (api) or in Meko's web app (link). */
-  sharing: SharingMode | null;
+  /** AgentK can share datapacks through Meko's API (Meko on, its API URL known). */
+  sharing: boolean;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
@@ -73,8 +72,8 @@ export function ProjectHomeView({
   const cantShare = !!dedicated?.grant && dedicated.grant !== 'owner' && dedicated.grant !== 'maintainer';
   /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
   const [sharers, setSharers] = useState<string[] | null>(null);
-  // Sharing the project is sharing its dedicated datapack: in link mode that happens on Meko's Share page.
-  const shareUrl = dedicated && mekoConfigured && sharing !== 'api' && !cantShare ? mekoDatapackShareUrl(mekoWebUrl, dedicated.id) : null;
+  // Sharing the project is sharing its dedicated datapack, which needs Meko's API URL.
+  const noApi = !!dedicated && mekoConfigured && !sharing && !cantShare;
   const share = () => {
     if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add your Meko API key to turn it on.' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
@@ -82,8 +81,8 @@ export function ProjectHomeView({
       const owner = dedicated.ownerName ?? dedicated.ownerEmail;
       const person = (name: string | null, email: string | null) => (name && email ? `${name} (${email})` : (name ?? email ?? ''));
       setSharers(owner ? [`its owner, ${person(dedicated.ownerName, dedicated.ownerEmail)}`] : []);
-      // Meko lists the maintainers when it lets AgentK use its share API.
-      if (sharing === 'api') {
+      // Meko lists the maintainers.
+      if (sharing) {
         api
           .datapackPeople(dedicated.id)
           .then((p) => {
@@ -129,20 +128,10 @@ export function ProjectHomeView({
         <span className="mono muted small home-repo">
           {project.repoPath} · {project.defaultBranch}
         </span>
-        {shareUrl ? (
-          <a className="btn small home-share" href={shareUrl} target="_blank" rel="noreferrer">
-            Share in Meko ↗
-          </a>
-        ) : (
-          <button
-            className="btn small home-share"
-            // Only when Meko's Share page can't be linked (no web app URL); the note below says why.
-            disabled={!!dedicated && mekoConfigured && sharing !== 'api' && !cantShare}
-            onClick={share}
-          >
-            Share
-          </button>
-        )}
+        {/* Off only without Meko's API URL; the note below says why. */}
+        <button className="btn small home-share" disabled={noApi} onClick={share}>
+          Share
+        </button>
       </header>
       {sharers && dedicated && (
         <div className="banner info home-share-banner" role="status">
@@ -156,13 +145,7 @@ export function ProjectHomeView({
           </button>
         </div>
       )}
-      {dedicated && mekoConfigured && sharing !== 'api' && !cantShare && (
-        <p className="hint home-share-note">
-          {mekoWebUrl
-            ? 'Sharing opens the project datapack’s Share page in Meko, which emails the person you invite.'
-            : 'To share this project, set Meko’s web app URL on the Meko tab in Settings.'}
-        </p>
-      )}
+      {noApi && <p className="hint home-share-note">To share this project, set Meko’s web app URL on the Meko tab in Settings.</p>}
       <div className="home-scroll">
         {mekoConfigured && project.datapacks.length > 0 && <SearchBox projectId={project.id} />}
         {loadError && <p className="error-text">{loadError}</p>}

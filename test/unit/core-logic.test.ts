@@ -22,7 +22,7 @@ import {
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { repoFolder } from '../../src/server/worktrees.js';
-import { mekoDatapackShareUrl, mekoDatapackUrl } from '../../src/web/util.js';
+import { mekoDatapackUrl } from '../../src/web/util.js';
 import { KIND_STAGES, STAGE_LABELS } from '../../src/shared/types.js';
 
 describe('auth', () => {
@@ -204,8 +204,6 @@ describe('config and db', () => {
       'https://cloud.mekodata.ai/datapacks/eb5ba952-643a-4610-a662-a54a39c82a90',
     );
     expect(mekoDatapackUrl(null, 'eb5ba952')).toBeNull();
-    expect(mekoDatapackShareUrl('https://cloud.mekodata.ai', 'eb5ba952')).toBe('https://cloud.mekodata.ai/datapacks/eb5ba952/share');
-    expect(mekoDatapackShareUrl(null, 'eb5ba952')).toBeNull();
   });
 
   it('migrates a fresh database', () => {

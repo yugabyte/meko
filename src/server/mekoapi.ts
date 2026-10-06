@@ -1,4 +1,4 @@
-import type { DatapackMember, DatapackPeople, DatapackPendingInvite, ShareGrant, SharingMode } from '../shared/types.js';
+import type { DatapackMember, DatapackPeople, DatapackPendingInvite, ShareGrant } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
 import { strOrNull } from './meko.js';
 
@@ -22,9 +22,6 @@ type Json = Record<string, unknown>;
 type Fetch = typeof fetch;
 
 const TIMEOUT_MS = 30000;
-
-/** Statuses that mean this Meko won't let our API key use its share routes (link mode). */
-const NO_SHARING_FOR_KEYS = new Set([401, 403, 404, 405]);
 
 export function asGrant(v: unknown): ShareGrant | null {
   const g = typeof v === 'string' ? v.trim().toLowerCase() : '';
@@ -103,20 +100,6 @@ export class MekoApi {
       throw new MekoApiError(res.status, str(e.code) || `HTTP_${res.status}`, message);
     }
     return ('data' in env ? env.data : parsed) as T;
-  }
-
-  /**
-   * Whether this Meko takes our key on its share routes: `api` if it does, `link` if it refuses
-   * it (sharing then happens in Meko's web app). Throws when Meko can't be reached at all.
-   */
-  async sharingMode(): Promise<SharingMode> {
-    try {
-      await this.request('GET', '/datapacks/incoming-shares');
-      return 'api';
-    } catch (e) {
-      if (e instanceof MekoApiError && (NO_SHARING_FOR_KEYS.has(e.status) || e.code === 'NO_API_URL')) return 'link';
-      throw e;
-    }
   }
 
   async incomingShares(): Promise<IncomingShare[]> {

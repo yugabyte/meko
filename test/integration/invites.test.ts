@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent } from '../../src/shared/types.js';
 import type { MekoDatapackRow } from '../../src/server/meko.js';
 import { makeEnv, type ApiCall, type TestEnv } from '../helpers.js';
@@ -39,7 +39,7 @@ describe('datapacks shared with us', () => {
     await env.cleanup();
   });
 
-  /** Turns on API mode: Meko takes our key on its share routes. */
+  /** Meko answers its share routes: it lists the invites waiting and acts on them. */
   async function apiMode() {
     env.mekoApi.handle((c: ApiCall) => {
       if (c.path === '/datapacks/incoming-shares') return { body: { data: waiting } };
@@ -50,15 +50,11 @@ describe('datapacks shared with us', () => {
       }
       return undefined;
     });
-    await env.core.invites.checkMode();
-    expect(env.core.mekoStatus.sharing).toBe('api');
   }
 
   const pending = () => env.core.invites.pending().map((i) => [i.datapackId, i.state, i.inviteId]);
 
   it('records shares that already exist on the first sync without telling, then tells once about new ones', async () => {
-    await env.core.invites.checkMode();
-    expect(env.core.mekoStatus.sharing).toBe('link');
     rows = [OWN, shared('dp-old', 'adlc/proj/demo-repo/old')];
     await env.core.invites.sync();
     expect(pending()).toEqual([]);
@@ -260,7 +256,7 @@ describe('datapacks shared with us', () => {
     expect(env.mekoApi.calls.find((c) => c.path === '/datapacks/invite-action')?.body).toMatchObject({ recipient_user_id: 'u-new' });
   });
 
-  it('declines in Meko, and refuses to answer invites in link mode', async () => {
+  it("declines in Meko, and refuses to answer invites without Meko's API URL", async () => {
     await env.core.invites.sync();
     await apiMode();
     waiting = [incoming('inv-1', 'dp-a', 'adlc/proj/demo-repo/a')];
@@ -271,9 +267,31 @@ describe('datapacks shared with us', () => {
 
     waiting = [incoming('inv-2', 'dp-b', 'adlc/proj/demo-repo/b', 'viewer')];
     await env.core.invites.sync();
-    env.core.mekoStatus = { ...env.core.mekoStatus, sharing: 'link' };
-    await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409 });
+    env.core.updateConfig((c) => {
+      c.meko.url = 'https://meko.example.com/mcp';
+    });
+    expect(env.core.mekoStatus.sharing).toBe(false);
+    await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/API URL isn't known/) });
     expect(() => env.core.invites.later('nope')).toThrow(/no longer waiting/);
+  });
+
+  it('logs a key the share routes refuse once, not on every sync, and again after it worked', async () => {
+    const warn = vi.spyOn(env.core.log, 'warn');
+    try {
+      const refusals = () => warn.mock.calls.filter((c) => String(c[0]).startsWith("couldn't list the datapack invites"));
+      await env.core.invites.sync();
+      await env.core.invites.sync();
+      expect(env.mekoApi.calls.filter((c) => c.path === '/datapacks/incoming-shares')).toHaveLength(2);
+      expect(refusals()).toHaveLength(1);
+      expect(String(refusals()[0][1])).toMatch(/invalid or expired token/);
+      await apiMode();
+      await env.core.invites.sync();
+      env.mekoApi.handle(null);
+      await env.core.invites.sync();
+      expect(refusals()).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('accepts a viewer invite without making a project of it', async () => {
