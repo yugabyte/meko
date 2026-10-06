@@ -577,6 +577,9 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
 # url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
+
+[pr]
+# resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base; on by default
 ```
 
 | Action | What the server does |
@@ -619,9 +622,11 @@ CREATE TABLE sessions (
   pr_remote TEXT,                  -- Review a PR: the clone's remote the PR is fetched from (origin, or upstream for a fork)
   review_notes TEXT,               -- Review a PR: the user's notes for AgentK
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'ci' | 'review-pr-update' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
+  conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
+                                   --   heads in a row did (both cleared once the PR merges cleanly)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
@@ -674,7 +679,7 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
 
 `config.toml` holds host settings: the listen address and port, the server's name, TLS paths, repo folders, the update
 channel, the Meko URL and key (only when typed at install), transcript capture, the tmux socket, the
-`claude` command, the database path and how many idle worktrees each repo keeps. The Settings dialog
+`claude` command, the database path, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
 keep an unused one, update channel, server name) there too. Per-project settings, sessions and everything else live in `state.db`. Only values that
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
@@ -783,7 +788,7 @@ stateDiagram-v2
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them and send the answers to Claude. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design**, and the server sends the Code prompt ("The design is approved…"), after any answers you haven't sent. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt, reviews before CI. A queued CI prompt is dropped if the head moves or CI stops failing. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
+| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. `[pr] resolve_conflicts = false` in `config.toml` turns this off, leaving conflicts as a merge blocker for you. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
 | 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
@@ -818,13 +823,14 @@ stateDiagram-v2
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `design-answers`, `approved-answers`, `review`, `review-people`, `ci`, `continue`, `comments`, `moved`,
+  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`,
   `review-pr`, `review-pr-update`, `review-pr-comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),
-  and CI failures through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
+  merge conflicts with the base through `conflicts` (`{{sha}}`, the conflicting head), and CI failures
+  through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
   enforce a branch-name prefix with rulesets.
 
@@ -935,8 +941,8 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   revised. Leaving Design by hand clears *Design ready* and saves the design to Meko as an approval
   would; straight to Code, it skips the approval ("Design approval skipped"). Leaving PR & Review
   stops polling (only Review and Merge & Close follow the PR, and the footer stops showing its review
-  and CI state); the PR stays open and linked. Queued review and CI prompts wait in `state.db`, and
-  reviews that arrive meanwhile are picked up, when the session comes back; a CI prompt for a head
+  and CI state); the PR stays open and linked. Queued review, conflict and CI prompts wait in `state.db`, and
+  reviews that arrive meanwhile are picked up, when the session comes back; a conflict or CI prompt for a head
   that moved on is dropped then, as usual.
 - **PR & Review** picks up the branch's open PR (any open PR from this repo) when there's nothing to
   push: the branch tip is in the PR and the worktree is clean. The session goes straight to Review,
@@ -975,7 +981,7 @@ knows to pass the right `datapack_id` when it searches them, and says when to se
 reading code for a new task, a review or a CI fix. Claude Code hides MCP tools until ToolSearch
 loads them, so it names the query that does (`+meko context_search`, which matches the Meko server
 under its own name or a plugin's). The first prompt of each task (`explore`, `design`,
-`design-plan`, `code`, `review-pr`) and the review and CI prompts end with one line asking for that search.
+`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search.
 A Review a PR session's prompts (`review-pr`, `review-pr-comments`) and system prompt also ask for a
 search before every answer about why the code is the way it is (`mekoQuestionLine()`,
 `mekoQuestionSystemLine()`). These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so

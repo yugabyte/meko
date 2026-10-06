@@ -80,6 +80,10 @@ export interface SessionRow {
   ci_fix_head: string | null;
   /** CI-fix prompts for consecutive failing heads since CI was last green. */
   ci_fixes: number;
+  /** The PR head that last got a prompt to resolve merge conflicts (or was handed to the user after the cap). */
+  conflict_head: string | null;
+  /** Conflict prompts for consecutive conflicting heads since the PR last merged cleanly. */
+  conflict_fixes: number;
   agentk_seen: number;
   /** The dedicated datapack the session was last launched with (see sessionDatapack). */
   meko_datapack_id: string | null;

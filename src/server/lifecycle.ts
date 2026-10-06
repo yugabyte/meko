@@ -27,6 +27,8 @@ const CLOSING_RESUME_MS = 24 * 60 * 60 * 1000;
 const CI_SETTLE_MS = 10 * 60 * 1000;
 /** Heads in a row that get a CI-fix prompt before a failing CI is left to the user. */
 const MAX_CI_FIXES = 3;
+/** Heads in a row that get a prompt to resolve merge conflicts before the conflicts are left to the user. */
+const MAX_CONFLICT_FIXES = 3;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
 
@@ -34,7 +36,7 @@ const PR_CONVERSATION_TIMEOUT_MS = 10000;
 export const DESIGN_READY = 'Design ready for your approval';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
-const QUEUE_ORDER = ['review', 'review-people', 'ci'] as const;
+const QUEUE_ORDER = ['review', 'review-people', 'conflicts', 'ci'] as const;
 /** The one prompt queued in a Review a PR session: the summary after Update to latest. */
 const REVIEWING_ORDER = ['review-pr-update'] as const;
 type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
@@ -451,7 +453,7 @@ export class Lifecycle {
   }
 
   /**
-   * Leaving PR & Review by hand, between turns: the PR stays open and queued review and CI prompts
+   * Leaving PR & Review by hand, between turns: the PR stays open and queued review, conflict and CI prompts
    * wait for the session to come back (deliverNext only sends in Review). Prompts marked sent
    * belong to a turn that's over, as onTurnEnd would have decided had the session stayed.
    */
@@ -655,7 +657,7 @@ export class Lifecycle {
       if (before.review_state === 'none') this.sessions.update(id, { review_state: 'waiting' });
       this.sessions.event(id, 'pr-again', `Back on PR #${pr.number}`, { url: pr.url });
     } else {
-      this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0 });
+      this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0, conflict_head: null, conflict_fixes: 0 });
       const older = by === 'you' || Date.parse(pr.createdAt) < before.created_at - github.CLOCK_SKEW_MS;
       this.sessions.event(id, 'pr', older ? `Picked up PR #${pr.number}` : `Opened PR #${pr.number}`, { url: pr.url });
     }
@@ -784,6 +786,7 @@ export class Lifecycle {
       seen_review_ids: JSON.stringify([...seen]),
       agentk_seen: agentkSeen ? 1 : 0,
     });
+    this.watchConflicts(this.sessions.row(row.id), st, unpushed);
     this.watchCi(this.sessions.row(row.id), st, ci, unpushed);
     // A failed send stays queued; the next poll or turn end retries it.
     await this.deliverNext(row.id).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
@@ -841,6 +844,44 @@ export class Lifecycle {
     this.sessions.notifyUser(id, 'CI failed', `${names}. ${afterReview ? 'AgentK will fix it after the review.' : 'AgentK is fixing it.'}`);
   }
 
+  /**
+   * Queues a prompt to resolve merge conflicts when GitHub says the PR's head conflicts with its
+   * base: once per head, never while the branch has unpushed commits, and for at most
+   * MAX_CONFLICT_FIXES heads in a row before it's left to the user. `[pr] resolve_conflicts = false`
+   * in config.toml turns it off (the conflicts stay a merge blocker).
+   */
+  private watchConflicts(row: SessionRow, st: github.PrStatus, unpushed: boolean): void {
+    const id = row.id;
+    const head = st.headRefOid;
+    const on = this.core.config.pr.resolveConflicts;
+    const q = this.queue(id);
+    // Stale: turned off, the head moved on, or the PR merges cleanly now. UNKNOWN isn't an answer
+    // (GitHub works it out after a push or a base change), so it keeps a queued prompt.
+    if (q.conflicts?.state === 'queued' && (!on || st.mergeable === 'MERGEABLE' || q.conflicts.vars?.sha !== head)) {
+      delete q.conflicts;
+      this.setQueue(id, q);
+    }
+    if (st.mergeable === 'MERGEABLE') {
+      // A later conflict on this head (the base moved again) is new, and starts the count again.
+      if (row.conflict_fixes || row.conflict_head) this.sessions.update(id, { conflict_head: null, conflict_fixes: 0 });
+      return;
+    }
+    if (!on || st.mergeable !== 'CONFLICTING' || !head || row.conflict_head === head || row.stage !== 'review' || st.state !== 'OPEN' || unpushed) return;
+    const base = row.base_branch;
+    if (row.conflict_fixes >= MAX_CONFLICT_FIXES) {
+      this.sessions.update(id, { conflict_head: head });
+      this.sessions.event(id, 'conflicts', `Merge conflicts with ${base}. Still there after ${MAX_CONFLICT_FIXES} attempts; over to you`, { sha: head });
+      this.sessions.notifyUser(id, 'Merge conflicts remain', `PR #${st.number} still conflicts with ${base} after ${MAX_CONFLICT_FIXES} attempts. Take a look.`);
+      return;
+    }
+    this.sessions.update(id, { conflict_head: head, conflict_fixes: row.conflict_fixes + 1 });
+    this.sessions.event(id, 'conflicts', `Merge conflicts with ${base}`, { sha: head });
+    this.enqueue(id, 'conflicts', { sha: head });
+    const next = this.queue(id);
+    const afterReview = !!(next.review || next['review-people']);
+    this.sessions.notifyUser(id, 'Merge conflicts', `PR #${st.number} conflicts with ${base}. ${afterReview ? 'AgentK will resolve them after the review.' : 'AgentK is resolving them.'}`);
+  }
+
   /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
   private mergeStalled(id: string, st: github.PrStatus): boolean {
     if (st.state === 'CLOSED') return true;
@@ -850,7 +891,7 @@ export class Lifecycle {
   }
 
   /**
-   * Types the first queued prompt (reviews first, then CI) into Claude when it's between turns
+   * Types the first queued prompt (reviews first, then merge conflicts, then CI) into Claude when it's between turns
    * in the Review stage, or a Review a PR session's update summary in Reviewing PR. One at a time:
    * the next waits until the turn that got one has ended.
    */
