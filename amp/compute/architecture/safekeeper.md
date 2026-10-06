@@ -235,8 +235,9 @@ auto-reconnecting `ysql_client::YsqlClient` wrapper with its own
 `libyb_thin_client` C++ shim) to `amp_storage.wals` — fail-fast
 health-checked at startup, and the only transport for the WAL chunk
 writes and reads. The hot-path WAL write batch runs as ONE
-Perform per batch (a single-tablet atomic write batch — a crash mid-flush
-cannot leave a hole), and the WAL sender's fetch issues all
+Perform per batch (a single-tablet atomic write batch while the bucket's
+tablet is unsplit — after a split a flush cut short can leave a hole, which
+the next load trims; see Recovery), and the WAL sender's fetch issues all
 2×`WALS_BUCKETS` (arm, bucket) read ops as ops of ONE Perform served at a
 single read time — one snapshot by construction. An op that comes back with a
 continuation is re-issued, pinned to that same read time, until it has the
@@ -632,31 +633,59 @@ loses nothing but logs.
    `branch_state` row (`YbControlFileStorage::restore_opt`, which returns
    `None` when the branch has no row yet).
 2. **End-of-WAL rehydration** (`YbWalStorage::new`):
-   - `load_max_offset` reads the raw end of the byte stream with one
-     **max-end probe per bucket** (metadata only, never `data`):
-     `SELECT segno, chunk_offset + chunk_size ... ORDER BY segno DESC,
-     chunk_offset DESC LIMIT 1` per bucket; the global max across buckets is
-     the end of WAL. Within a segno the top-offset row necessarily has the
-     highest end because rows never overlap. No hole detection is needed:
-     every consumer batch carries one bucket and lands atomically (one
-     single-tablet Perform), and batches are
-     written sequentially — so the durable row set is always a contiguous
-     prefix of the WAL stream. If either property is ever relaxed (batches
-     spanning tablets, or concurrent in-flight batches), hole detection must
-     come back.
+   - `load_tail` reads the raw end of the byte stream and the rows just below
+     it with one **tail probe per bucket** (metadata only, never `data`):
+     `SELECT segno, chunk_offset, chunk_size ... ORDER BY segno DESC,
+     chunk_offset DESC LIMIT TAIL_SCAN_ROWS` per bucket, from the segment
+     before the retention floor's up (the oldest GC keeps; below it a short
+     bucket would scan every deleted key, as in #874), cut to the global top
+     `TAIL_SCAN_ROWS` (unfetched rows of other buckets would otherwise sit
+     inside the run and read as gaps). The highest end is the raw end. Within a
+     segno the top-offset row necessarily has the highest end because rows
+     never overlap.
+   - **Hole scan** (`contiguous_wal_end`). A batch carries one bucket, but once
+     that bucket's tablet splits its rows can land on different tablets, and a
+     flush cut short — a fence refusal and the exit after it, or a crash — can
+     store a later row without an earlier one. The writer is serial and retries
+     a batch until it lands, so only the batch in flight can be partial and
+     its rows are the highest in `wals`; a batch is at most
+     `FLUSH_ROWS_THRESHOLD` rows, so the top `TAIL_SCAN_ROWS =
+     FLUSH_ROWS_THRESHOLD + 1` rows always hold the hole and the row below it.
+     The walk stops at the first gap and cuts the raw end there. A gap that
+     closes exactly on the next segment boundary may instead be unstored
+     `XLOG_SWITCH` padding — a batch that lost its lower run across a segment
+     leaves the same shape — so it is decoded first (`switch_ends_at`): a
+     switch ending there makes `find_end_of_wal` return the boundary, and the
+     walk continues. A decode that can't reach an answer (no anchor within
+     `MAX_ANCHOR_SCAN_BYTES`, or the walk running into another gap), or one
+     past `MAX_PADDING_PROBES`, also continues: walking past a real hole fails
+     loudly later, while cutting at real padding deletes acked WAL. A failed
+     read is not that ambiguity (#756): it fails the load, which the walproposer
+     handshake retries, as the end-of-WAL scan does. Nothing past a hole was acked,
+     so cutting loses nothing; the compute re-streams from there. The cut is
+     taken only when the rows above the hole can be that one batch — one
+     bucket, fewer than `FLUSH_ROWS_THRESHOLD` rows (`not_one_partial_batch`).
+     More than that means later batches landed above the hole, which a build
+     without this scan did and acked, so the load fails instead of deleting
+     them (runbook §P). Concurrent in-flight batches would put more rows above
+     a hole, and both bounds have to grow with them.
    - The raw probe can land **mid-record** (an ungraceful compute shutdown
      leaves a torn trailing page) or **short of the true end** (after an
      `XLOG_SWITCH`, whose zero padding is never stored as rows). A decoder
      replay refines it: `find_anchor` walks back to the nearest fresh-record
-     page — floored at the `retention_floor` `restore_opt` returns (the
-     pageserver's `consistent_lsn`, which GC never trims below, or
-     `timeline_start_lsn` before it has one), so the walk cannot descend into
+     page — starting on the page below when the end cuts a page header
+     (`anchor_target`; a row ends wherever the walproposer cut its send), and
+     floored at the `retention_floor` `restore_opt` returns (the pageserver's
+     `consistent_lsn`, which GC never trims below, or `timeline_start_lsn`
+     before it has one), so the walk cannot descend into
      segments `remove_up_to` has dropped (#788) or below a mid-page branch start
      (#181) — then `find_end_of_wal` scans forward to the last complete record
      boundary. Exhausting `MAX_ANCHOR_SCAN_BYTES` seeds at the floor rather than
      failing.
    - The two phases get expensive under opposite conditions, so the scan logs
      each separately (`find_anchor_queries` / `_ms`, `find_end_of_wal_queries` / `_ms`).
+     The hole scan's decodes run on their own source and log their own count and
+     time (`probe_queries`, `hole_scan_ms`), so they don't inflate these.
      The walk is one query per 8 KiB page and stops at the first fresh-record
      page, so it is short on small records and long on large ones. The replay
      reads chunks, and a chunk is one coalesced consumer batch — ~1.4 KiB on OLTP
@@ -669,8 +698,8 @@ loses nothing but logs.
      `enable_sort off` among them left an index scan that only *claimed*
      `chunk_offset` order — which mis-seeded the batch and truncated durable WAL
      (#938, yugabyte-db#32733).
-   - **Torn tail** (`end < raw`): truncate back to the boundary; the compute
-     re-streams from there. The torn rows are physically deleted
+   - **Torn tail or hole** (`end < raw`): truncate back to the boundary; the
+     compute re-streams from there. The rows past it are physically deleted
      (`truncate_wals_above`) so they are not re-counted next restart;
      best-effort and bounded by `YB_TORN_TAIL_CLEANUP_MAX`, since the reader
      is bounded by `accepted_byte_end` anyway. Bounded because it runs inside
@@ -700,7 +729,8 @@ loses nothing but logs.
 4. The durability watermark and `durable_lsn` start at the rehydrated
    `accepted_byte_end`, so an immediate flush with nothing in flight returns at
    once. Committed-but-unacked rows from a crashed run are absorbed as
-   durable by the max-end probe rather than discarded.
+   durable wherever they extend the contiguous run; rows stranded above a hole
+   are discarded.
 5. On the first walproposer reconnect, the greeting advertises the
    rehydrated `flush_lsn` and `ProposerElected` truncates/resumes there.
 
@@ -827,8 +857,11 @@ Deleting the whole directory and restarting rebuilds everything from YB.
   50-row batches against local YB).
 - **WAL sends** — cache hits are memory reads; misses amortize one YB round
   trip over up to 64 chunks / 4 MiB of prefetch.
-- **Restart** — ten single-row index probes + a bounded record-boundary
-  replay over the trailing chunks; independent of total WAL size.
+- **Restart** — `WALS_BUCKETS` tail probes of at most `TAIL_SCAN_ROWS`
+  metadata rows each (floored at the oldest segment GC keeps), up to
+  `MAX_PADDING_PROBES` hole-scan decodes when the tail has a padding-shaped
+  gap, and a bounded record-boundary replay over the trailing chunks;
+  independent of total WAL size.
 - **YB connection failures** — absorbed by `YsqlClient` (lazy reconnect,
   one in-flight retry); a sustained outage surfaces as
   `DurableState::Failed` and dropped walproposer connections, while the

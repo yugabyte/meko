@@ -23,7 +23,10 @@
 //! consumer BATCH by [`consumer_main`], rotating through the buckets one
 //! batch at a time. One bucket per batch means every batch targets ONE
 //! tablet, applied as a single atomic write batch, while write load rotates
-//! across all tablets.
+//! across all tablets. That holds until the bucket's tablet splits: then the
+//! rows of one batch can land on different tablets, and a flush cut short
+//! leaves a hole that the next load has to find
+//! ([`YbWalStorage::contiguous_wal_end`]).
 //! Readers can't derive a chunk's bucket, so index-tight reads add a
 //! `bucket_id IN (0..WALS_BUCKETS-1)` key list (batched per-bucket index
 //! probes).
@@ -165,6 +168,119 @@ fn bucket_in_list() -> String {
     format!("bucket_id IN ({})", ids.join(","))
 }
 
+/// How many of the highest rows [`YbWalStorage::load_tail`] reads, which is
+/// what bounds where [`YbWalStorage::contiguous_wal_end`] can see a hole.
+///
+/// The consumer writes one batch at a time and retries it until it lands, so
+/// only the batch in flight when the process died can be partly applied, and
+/// its rows are the highest in `wals`. A batch is at most
+/// [`FLUSH_ROWS_THRESHOLD`] chunks, so at most that many rows. Every row above
+/// a hole therefore belongs to that batch, and the top `FLUSH_ROWS_THRESHOLD +
+/// 1` rows always hold the hole and the row below it, whatever the chunk sizes.
+/// Overlapping batches would break this: the bound has to grow with the number
+/// in flight.
+const TAIL_SCAN_ROWS: usize = FLUSH_ROWS_THRESHOLD + 1;
+
+/// How many padding-shaped gaps [`YbWalStorage::contiguous_wal_end`] will
+/// spend a decode on. One `XLOG_SWITCH` in the tail is the realistic case; the
+/// budget only stops a pathological table from turning startup into a decode
+/// loop. Gaps past it are treated as padding — see that function on why
+/// ambiguity resolves toward continuing.
+const MAX_PADDING_PROBES: usize = 8;
+
+/// The `k` highest of `rows` — `wals` rows led by their start LSN — sorted
+/// ascending.
+///
+/// The per-bucket probes each return their own bucket's top rows, and their
+/// union holds the global top `k`: a row in the global top `k` has fewer than
+/// `k` rows above it in its own bucket. It can also hold rows from much further
+/// down a bucket that has been quiet at the top, and between those sit rows of
+/// other buckets that were never fetched, which would read as gaps. Cutting to
+/// the global top `k` leaves a run with no unfetched row inside it.
+fn global_tail<T: Ord>(mut rows: Vec<T>, k: usize) -> Vec<T> {
+    rows.sort_unstable();
+    let below = rows.len().saturating_sub(k);
+    rows.drain(..below);
+    rows
+}
+
+/// Why the rows above a hole at `cut` can't be what a cut-short flush leaves,
+/// or `None` when they can be. `tail` is [`WalTail::rows`].
+///
+/// A cut-short flush leaves the upper runs of the one batch in flight: one
+/// bucket, and fewer than [`FLUSH_ROWS_THRESHOLD`] rows since at least one is
+/// missing. More than that is later batches landing above the hole, and those
+/// may have been acked: a build without the hole scan rehydrated past a hole and
+/// kept acking commits stored above it. Deleting them would lose committed WAL.
+fn not_one_partial_batch(tail: &[(u64, u64, i16)], cut: u64) -> Option<String> {
+    let above: Vec<&(u64, u64, i16)> = tail.iter().filter(|r| r.0 > cut).collect();
+    let mut buckets: Vec<i16> = above.iter().map(|r| r.2).collect();
+    buckets.sort_unstable();
+    buckets.dedup();
+    if buckets.len() > 1 {
+        return Some(format!("{} rows across buckets {buckets:?}", above.len()));
+    }
+    if above.len() >= FLUSH_ROWS_THRESHOLD {
+        return Some(format!(
+            "{} rows, more than one batch can leave",
+            above.len()
+        ));
+    }
+    None
+}
+
+/// Every gap in `spans` (sorted ascending) as `(gap_start, gap_end)` pairs.
+///
+/// Walks the whole list rather than stopping at the first gap, because the
+/// caller has to classify each one (padding vs hole) before it knows which
+/// gap actually ends the WAL.
+///
+/// A row that starts at or below the running end closes no gap and is folded
+/// in with `max`: rows never overlap, but a row left behind by a failed
+/// torn-tail cleanup can, and it must not read as a gap.
+fn tail_gaps(spans: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    let Some(&(first_start, _)) = spans.first() else {
+        return Vec::new();
+    };
+    let mut gaps = Vec::new();
+    let mut end = first_start;
+    for &(start, span_end) in spans {
+        if start > end {
+            gaps.push((end, start));
+        }
+        end = end.max(span_end);
+    }
+    gaps
+}
+
+/// Could `[gap_start, gap_end)` be `XLOG_SWITCH` padding? Padding runs from
+/// the switch record's end to the end of that segment and no further, so the
+/// gap has to close exactly on the next segment boundary above `gap_start`. A
+/// gap of any other shape is a hole, no decode needed.
+fn gap_is_padding_shaped(gap_start: u64, gap_end: u64, wal_seg_size: u64) -> bool {
+    gap_end == (gap_start / wal_seg_size + 1) * wal_seg_size
+}
+
+/// Walk `spans` up to the first gap that isn't in `padding`, and return where
+/// the reachable run ends.
+///
+/// The walk anchors at the lowest span: everything below the tail is contiguous
+/// by construction (see [`TAIL_SCAN_ROWS`]). `raw_max` is the answer for an
+/// empty tail, which only an empty branch has.
+fn contiguous_end(spans: &[(u64, u64)], raw_max: u64, padding: &[(u64, u64)]) -> u64 {
+    let Some(&(first_start, _)) = spans.first() else {
+        return raw_max;
+    };
+    let mut end = first_start;
+    for &(start, span_end) in spans {
+        if start > end && !padding.contains(&(end, start)) {
+            break;
+        }
+        end = end.max(span_end);
+    }
+    end
+}
+
 /// Rows one [`YbWalSource::contiguous_chunks_from`] fetch may return. The segno
 /// scoping bounds the bytes; this bounds row count, which it does not — rows are one
 /// coalesced consumer batch each, so tiny commits can put ~110k in a 16 MiB segment.
@@ -186,7 +302,7 @@ const CHUNK_FETCH_ROW_CAP: usize = 16384;
 /// `application_name` for attribution in YB's `pg_stat_activity`.
 pub struct YbWalConn {
     /// System / background lane (no upsert GUC). Used for startup
-    /// rehydration ([`YbWalStorage::load_max_offset`]), the GC DELETE
+    /// rehydration ([`YbWalStorage::load_tail`]), the GC DELETE
     /// ([`YbWalStorage::remove_up_to`]), and the idempotent
     /// control-file ops (`restore_opt` SELECT, `write_initial_state` and `persist`
     /// UPDATEs — the control file's row is provisioned by the controller, so
@@ -248,7 +364,7 @@ impl YbWalConn {
         // attributable in YB's pg_stat_activity; the hot path runs on the
         // thin-client lane opened below. The system lane runs without
         // `yb_enable_upsert_mode`: it carries the startup SELECT
-        // (`load_max_offset`), the GC DELETE (`remove_up_to`), and the
+        // (`load_tail`), the GC DELETE (`remove_up_to`), and the
         // control-file ops (`restore_opt` SELECT, `write_initial_state` and
         // `persist` UPDATEs) — all UPDATEs against a row the controller
         // provisioned at branch create, so a blind retry can't hit
@@ -516,8 +632,8 @@ pub struct YbWalStorage {
     /// true YB durability — the in-memory record boundary can
     /// otherwise be moved ahead of YB by `truncate_wal(end_pos)` when
     /// `end_pos > submitted_max_lsn`, opening a permanent gap. Initialised
-    /// from `load_max_offset` at construction (YB's current max chunk end).
-    /// `truncate_wal` lowers it to the cut.
+    /// to the rehydrated end of WAL at construction. `truncate_wal` lowers it
+    /// to the cut.
     durable_lsn: Arc<AtomicU64>,
     /// Kept so the consumer task isn't dropped immediately on
     /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
@@ -538,29 +654,88 @@ impl YbWalStorage {
         let cache = yb_wal.cache.clone();
         let wal_seg_size = state.server.wal_seg_size as usize;
 
-        // Rehydrate the end of WAL from YB rather than scanning local FS. Take
-        // the highest `chunk_offset + chunk_size` across all segnos for this
-        // branch as the end-of-WAL position. Startup work →
-        // system lane so it doesn't share the streaming-read connection.
-        let max_offset = Self::load_max_offset(
+        // Rehydrate the end of WAL from YB rather than scanning local FS: the
+        // highest stored chunk end, plus the rows just below it for the hole
+        // scan. Startup work → system lane so it doesn't share the
+        // streaming-read connection.
+        let tail = Self::load_tail(
             &system_client,
             &table_name,
             branch_id,
             wal_seg_size,
             state.timeline_start_lsn,
+            retention_floor,
         )
         .await?;
+        let raw_max = tail.end;
+        let pg_version =
+            PgMajorVersion::try_from(state.server.pg_version).unwrap_or(PgMajorVersion::PG18);
+        // A flush cut short after its batch's rows split across tablets can
+        // leave rows above a hole. None of them were acked, and nothing can
+        // replay across the gap, so the end of WAL is the hole's lower edge
+        // and the `truncate_wals_above` below deletes the rows past it — but
+        // only when they are that one batch (see `not_one_partial_batch`).
+        let max_offset = if raw_max > state.timeline_start_lsn {
+            // Its own source, so the end-of-WAL scan's query counts below stay
+            // that scan's cost.
+            let hole_src = YbWalSource {
+                client: &system_client,
+                table: &table_name,
+                branch_id,
+                seg: wal_seg_size as u64,
+                find_anchor_queries: AtomicU64::new(0),
+                find_end_of_wal_queries: AtomicU64::new(0),
+                read_failures: AtomicU64::new(0),
+            };
+            let t = std::time::Instant::now();
+            let contiguous = Self::contiguous_wal_end(
+                &hole_src,
+                &tail.spans(),
+                raw_max,
+                pg_version,
+                retention_floor,
+            )
+            .await?;
+            let probe_queries = hole_src.find_anchor_queries.load(Ordering::Relaxed)
+                + hole_src.find_end_of_wal_queries.load(Ordering::Relaxed);
+            if probe_queries > 0 {
+                tracing::info!(
+                    branch_id = %branch_id,
+                    %probe_queries,
+                    hole_scan_ms = %t.elapsed().as_millis(),
+                    "YbWalStorage::new — tail hole scan decoded padding-shaped gaps",
+                );
+            }
+            if contiguous < raw_max {
+                if let Some(why) = not_one_partial_batch(&tail.rows, contiguous.0) {
+                    return Err(anyhow::anyhow!(
+                        "YbWalStorage::new — hole in the persisted WAL tail at {contiguous} below \
+                         {raw_max} for branch {branch_id}, but the rows above it ({why}) are not \
+                         the one batch a cut-short flush leaves; they may hold acked WAL, so the \
+                         load refuses to delete them"
+                    ));
+                }
+                tracing::warn!(
+                    branch_id = %branch_id,
+                    contiguous_end = %contiguous,
+                    raw_max_end = %raw_max,
+                    "YbWalStorage::new — hole in the persisted WAL tail; \
+                     end-of-WAL is the contiguous end and the rows past it are dropped",
+                );
+            }
+            contiguous
+        } else {
+            raw_max
+        };
 
-        // `load_max_offset` returns the max BYTE offset persisted, which
-        // lands mid-record when an ungraceful compute shutdown left a torn
-        // trailing page (#61). Treating that as the durable end-of-WAL
+        // `max_offset` is a BYTE offset, which lands mid-record when an
+        // ungraceful compute shutdown left a torn trailing page (#61), or when
+        // a hole cut through a record. Treating that as the durable end-of-WAL
         // makes the interpreted reader decode into the torn page and panic.
         // Replay the decoder to the last complete record boundary <=
         // max_offset — where Postgres crash recovery also stops — and use
         // THAT as the end of WAL, discarding the torn tail (the compute
         // re-streams from here and overwrites it).
-        let pg_version =
-            PgMajorVersion::try_from(state.server.pg_version).unwrap_or(PgMajorVersion::PG18);
         let end_of_wal = {
             let src = YbWalSource {
                 client: &system_client,
@@ -569,6 +744,7 @@ impl YbWalStorage {
                 seg: wal_seg_size as u64,
                 find_anchor_queries: AtomicU64::new(0),
                 find_end_of_wal_queries: AtomicU64::new(0),
+                read_failures: AtomicU64::new(0),
             };
             // Timed apart: the backward walk and the forward replay get expensive
             // under opposite conditions, so a combined figure names neither.
@@ -592,12 +768,9 @@ impl YbWalStorage {
                 // `end_of_wal` in the segment padding (#181). `find_anchor`
                 // returns a floor at or above its target, and `find_end_of_wal`
                 // hands it back, so the `end > max_offset` arm below honors it.
-                //
-                // `find_anchor`'s target is inclusive and `max_offset` is one past
-                // the last persisted byte (#678).
-                let last_byte = Lsn(max_offset.0 - 1);
+                let target = anchor_target(max_offset, wal_seg_size as u64);
                 let t = std::time::Instant::now();
-                let anchor = find_anchor(&src, last_byte, retention_floor).await;
+                let anchor = find_anchor(&src, target, retention_floor).await;
                 find_anchor_ms = t.elapsed().as_millis();
                 let t = std::time::Instant::now();
                 let scanned = match anchor {
@@ -665,14 +838,19 @@ impl YbWalStorage {
                 }
             }
         };
-        // Physically discard the torn tail so the table ends exactly at the
-        // valid boundary — otherwise the dropped rows linger past
-        // `durable_lsn` (violating `truncate_wal`'s "no rows past end_pos"
-        // invariant) and would be re-counted by `load_max_offset` on the
-        // next restart. Best-effort: the reader is already bounded by
-        // `end_of_wal`, so a failed cleanup is harmless and retried next
-        // restart.
-        if end_of_wal < max_offset {
+        // Physically discard everything above the valid boundary — a torn
+        // tail, and rows orphaned above a hole — so the table ends exactly
+        // there. Otherwise the dropped rows linger past `durable_lsn`
+        // (violating `truncate_wal`'s "no rows past end_pos" invariant) and
+        // would be re-counted by `load_tail` on the next restart.
+        //
+        // Against the RAW max: after a hole `end_of_wal` usually lands exactly
+        // on the contiguous end, so comparing with that would leave the
+        // orphans in place on every restart.
+        //
+        // Best-effort: the reader is already bounded by `end_of_wal`, so a
+        // failed cleanup is harmless and retried next restart.
+        if end_of_wal < raw_max {
             let cleanup = truncate_wals_above(
                 &system_client,
                 &table_name,
@@ -690,7 +868,7 @@ impl YbWalStorage {
                 tracing::warn!(
                     branch_id = %branch_id,
                     %end_of_wal,
-                    %max_offset,
+                    %raw_max,
                     "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {why}",
                 );
             }
@@ -747,39 +925,83 @@ impl YbWalStorage {
             _consumer_handle: consumer_handle,
         };
 
-        // No post-crash row scrub: `load_max_offset` already takes the
-        // max chunk-end across the table, so any committed-but-unacked
-        // rows from a crashed run are absorbed as durable rather than
-        // discarded. yb-amp has no truncation-past-durable case that
-        // would justify a DELETE here.
+        // The post-crash scrub is the hole scan plus `truncate_wals_above`
+        // above. Committed-but-unacked rows from a crashed run are absorbed as
+        // durable wherever they extend the contiguous run; the ones stranded
+        // above a hole are discarded there, because nothing can replay across
+        // the gap below them.
         Ok(me)
     }
 
-    /// Find the end of the persisted WAL with one max-end probe per
-    /// bucket: each bucket's top row (highest `segno`, then highest
-    /// `chunk_offset`) yields its end offset, and the global max across
-    /// buckets is the end of WAL. Falls back to `commit_lsn` when the
-    /// table is empty (fresh timeline). Startup-only, so a loop of
-    /// WALS_BUCKETS single-row index probes is fine.
+    /// The end of the persisted WAL, and the [`TAIL_SCAN_ROWS`] highest rows
+    /// below it for [`Self::contiguous_wal_end`]. Falls back to `commit_lsn`
+    /// when the table is empty (fresh timeline). Startup-only: one index probe
+    /// of at most `TAIL_SCAN_ROWS` metadata rows per bucket.
     ///
-    /// Why `ORDER BY segno DESC, chunk_offset DESC LIMIT 1` gives the
-    /// bucket's max end: in general max(chunk_offset + chunk_size) for
-    /// the top segno is NOT the last row's end — an earlier row could be
-    /// longer and reach further. But rows never overlap (the writer
-    /// never produces overlapping chunks and `truncate_wal` /
-    /// `truncate_wals_above` keep it that way), so within a segno the
-    /// row with the highest `chunk_offset` necessarily also has the
-    /// highest `chunk_offset + chunk_size`.
+    /// Each probe stops at the segment before `floor`'s, the oldest one GC keeps
+    /// (`remove_up_to` deletes below `consistent_lsn`'s segment minus one). A
+    /// bucket with fewer than `TAIL_SCAN_ROWS` rows above that would otherwise
+    /// scan on through every deleted key below it, the cost that took
+    /// [`Self::load_min_segno`] off this path (#874). Nothing the hole scan needs
+    /// is lower: the pageserver can't read past a hole, so a hole and the row
+    /// ending at it are at or above `floor`. `Lsn(0)` means no bound.
     ///
-    /// Why a simple max is safe (no hole detection): every consumer
-    /// batch is stamped with ONE bucket, so a batch targets one tablet
-    /// and lands atomically as one write batch — and the consumer writes
-    /// batches sequentially, one at a time. Batch-atomic + sequential batches ⇒
-    /// the durable row set is always a contiguous prefix of the WAL
-    /// stream; no bucket's max end can sit above a hole. If either
-    /// property changes (a batch spanning tablets again, or concurrent
-    /// in-flight batches), hole detection must return — git history has
-    /// the hole-aware `contiguous_end` tail scan this replaced.
+    /// `ORDER BY segno DESC, chunk_offset DESC` yields each bucket's highest
+    /// rows because rows never overlap (the writer never produces overlapping
+    /// chunks and `truncate_wal` / `truncate_wals_above` keep it that way): within
+    /// a segno the row with the highest `chunk_offset` also has the highest
+    /// `chunk_offset + chunk_size`.
+    ///
+    /// The highest end is the end of WAL only when the stored rows are a
+    /// contiguous prefix of the stream. A partly applied batch breaks that, so
+    /// the caller pairs this with [`Self::contiguous_wal_end`].
+    async fn load_tail(
+        client: &YsqlClient,
+        table: &str,
+        branch_id: BranchId,
+        wal_seg_size: usize,
+        commit_lsn: Lsn,
+        floor: Lsn,
+    ) -> Result<WalTail> {
+        let seg = wal_seg_size as u64;
+        let floor_segno = (floor.0 / seg).saturating_sub(1);
+        let mut rows: Vec<(u64, u64, i16)> = Vec::new();
+        for bucket in 0..WALS_BUCKETS {
+            let sql = bake_branch_id(
+                &format!(
+                    "SELECT segno, chunk_offset, chunk_size FROM {} \
+                     WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND bucket_id = {bucket} \
+                       AND segno >= {floor_segno} \
+                     ORDER BY segno DESC, chunk_offset DESC \
+                     LIMIT {TAIL_SCAN_ROWS}",
+                    quote_relation(table)
+                ),
+                branch_id,
+            );
+            let probed = client
+                .query(&sql, &[])
+                .await
+                .context("YbWalStorage: probe the WAL tail in YB (per-bucket)")?;
+            for row in probed {
+                let segno: i64 = row.get("segno");
+                // `chunk_offset` is INTEGER: tokio-postgres reads it only as `i32`.
+                let chunk_offset: i32 = row.get("chunk_offset");
+                let chunk_size: i32 = row.get("chunk_size");
+                let start = segno as u64 * seg + chunk_offset as u64;
+                rows.push((start, start + chunk_size as u64, bucket));
+            }
+        }
+        let rows = global_tail(rows, TAIL_SCAN_ROWS);
+        let end = rows
+            .iter()
+            .map(|&(_, end, _)| end)
+            .max()
+            .map_or(commit_lsn, Lsn);
+        Ok(WalTail { end, rows })
+    }
+
+    /// [`Self::load_tail`]'s end alone.
+    #[cfg(test)]
     async fn load_max_offset(
         client: &YsqlClient,
         table: &str,
@@ -787,30 +1009,125 @@ impl YbWalStorage {
         wal_seg_size: usize,
         commit_lsn: Lsn,
     ) -> Result<Lsn> {
-        let mut max_end: Option<u64> = None;
-        for bucket in 0..WALS_BUCKETS {
-            let sql = bake_branch_id(
-                &format!(
-                    "SELECT segno, chunk_offset::bigint + chunk_size AS end_off FROM {} \
-                     WHERE branch_id = $1 AND version = {DEFAULT_VERSION} AND bucket_id = {bucket} \
-                     ORDER BY segno DESC, chunk_offset DESC \
-                     LIMIT 1",
-                    quote_relation(table)
-                ),
-                branch_id,
-            );
-            let row = client
-                .query_opt(&sql, &[])
-                .await
-                .context("YbWalStorage: probe the max chunk end in YB (per-bucket)")?;
-            if let Some(row) = row {
-                let segno: i64 = row.get("segno");
-                let end_off: i64 = row.get("end_off");
-                let end = (segno as u64) * (wal_seg_size as u64) + end_off as u64;
-                max_end = Some(max_end.map_or(end, |m| m.max(end)));
+        Ok(
+            Self::load_tail(client, table, branch_id, wal_seg_size, commit_lsn, Lsn(0))
+                .await?
+                .end,
+        )
+    }
+
+    /// Highest LSN reachable from below `raw_max` without crossing a hole,
+    /// walking `spans` ([`Self::load_tail`]'s rows) in LSN order.
+    ///
+    /// **Not every gap is a hole.** `pg_switch_wal()` can leave a permanent
+    /// legitimate gap: the switch record's end LSN rounds up to the next
+    /// segment boundary, and the compute need not stream the trailing zero
+    /// padding, leaving `wals` with no rows for `[switch_end, segment_end)`
+    /// (the read path synthesizes those zeros — see [`YbSegmentReader`]).
+    /// Reading that as a hole would rehydrate the end of WAL *below* acked WAL
+    /// and hand `truncate_wals_above` everything above the switch to delete. So
+    /// a gap shaped like padding is confirmed by decoding: the record ending
+    /// there has to be an `XLOG_SWITCH`, which `find_end_of_wal` reports by
+    /// returning the rounded-up boundary. A batch that crossed a segment and
+    /// lost its lower run leaves the same shape, and the decode is what tells
+    /// it apart.
+    ///
+    /// Ambiguity resolves toward *continuing* the walk, because the two
+    /// misreadings are not symmetric. Continuing past a real hole leaves
+    /// unreplayable WAL in place, which fails loudly on the next read; stopping
+    /// at padding deletes WAL that was already acked to a committed
+    /// transaction. So a decode that can't reach an answer — no anchor within
+    /// `MAX_ANCHOR_SCAN_BYTES`, or the walk running into another gap — or one past
+    /// [`MAX_PADDING_PROBES`], is treated as padding.
+    ///
+    /// A failed *read* is not that ambiguity. It says nothing about where the WAL
+    /// ends (#756), and walking through on one would report flush across a real
+    /// hole, so it fails the load and the walproposer handshake retries it, as the
+    /// end-of-WAL scan does.
+    async fn contiguous_wal_end(
+        src: &YbWalSource<'_>,
+        spans: &[(u64, u64)],
+        raw_max: Lsn,
+        pg_version: PgMajorVersion,
+        anchor_floor: Lsn,
+    ) -> Result<Lsn> {
+        let (branch_id, seg) = (src.branch_id, src.seg);
+        let mut padding: Vec<(u64, u64)> = Vec::new();
+        let mut probes = 0usize;
+        for (gap_start, gap_end) in tail_gaps(spans) {
+            if !gap_is_padding_shaped(gap_start, gap_end, seg) {
+                continue;
+            }
+            if probes >= MAX_PADDING_PROBES {
+                tracing::warn!(
+                    %branch_id,
+                    gap_start = %Lsn(gap_start),
+                    "YbWalStorage: past the {MAX_PADDING_PROBES}-probe budget; \
+                     treating this padding-shaped gap as XLOG_SWITCH padding unverified",
+                );
+                padding.push((gap_start, gap_end));
+                continue;
+            }
+            // `find_anchor` hands its floor straight back once the walk reaches
+            // it, so a floor past the gap's lower edge anchors inside or above the
+            // gap: the replay can't see the switch and returns something other
+            // than `gap_end`, which would read as "not a switch" and cut at real
+            // padding. At or past `gap_end` the pageserver has read through the
+            // gap, which only padding allows; strictly inside, the floor is no
+            // record boundary at all. A floor exactly at the lower edge is
+            // answerable: the replay returns it, and real padding can't put a
+            // boundary there (a switch's is the rounded-up end), so it is a hole.
+            if anchor_floor > Lsn(gap_start) {
+                tracing::warn!(
+                    %branch_id,
+                    gap_start = %Lsn(gap_start),
+                    %anchor_floor,
+                    "YbWalStorage: padding-shaped gap starts below the anchor floor, \
+                     so it cannot be confirmed; treating it as padding",
+                );
+                padding.push((gap_start, gap_end));
+                continue;
+            }
+            probes += 1;
+            let failures_before = src.read_failures.load(Ordering::Relaxed);
+            match switch_ends_at(src, pg_version, Lsn(gap_start), anchor_floor).await {
+                Ok(end) if end.0 == gap_end => {
+                    tracing::info!(
+                        %branch_id,
+                        switch_end = %Lsn(gap_start),
+                        segment_end = %Lsn(gap_end),
+                        "YbWalStorage: gap in the WAL tail is XLOG_SWITCH padding, not a hole",
+                    );
+                    padding.push((gap_start, gap_end));
+                }
+                Ok(end) => {
+                    tracing::warn!(
+                        %branch_id,
+                        gap_start = %Lsn(gap_start),
+                        gap_end = %Lsn(gap_end),
+                        decoded_end = %end,
+                        "YbWalStorage: padding-shaped gap is NOT an XLOG_SWITCH — treating as a hole",
+                    );
+                }
+                Err(e) if src.read_failures.load(Ordering::Relaxed) > failures_before => {
+                    return Err(e.context(format!(
+                        "hole scan: a read failed while decoding across the padding-shaped gap \
+                         at {}",
+                        Lsn(gap_start)
+                    )));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        %branch_id,
+                        gap_start = %Lsn(gap_start),
+                        "YbWalStorage: could not decode across a padding-shaped gap, \
+                         treating it as padding (never delete acked WAL on a guess): {e:#}",
+                    );
+                    padding.push((gap_start, gap_end));
+                }
             }
         }
-        Ok(max_end.map(Lsn).unwrap_or(commit_lsn))
+        Ok(Lsn(contiguous_end(spans, raw_max.0, &padding)))
     }
 
     /// The lowest `segno` the branch still has a row for, or 0 when it has
@@ -1156,7 +1473,7 @@ impl Storage for YbWalStorage {
         // durable` and there's nothing past it (no-op), but after a torn
         // tail (find_end_of_wal capped flush_lsn below the raw max on
         // restart) or a multi-SK divergence, rows can sit past `end_pos`;
-        // leaving them would let `load_max_offset` re-count them on the
+        // leaving them would let `load_tail` re-count them on the
         // next restart and could resurface a partial chunk to a reader.
         truncate_wals_above(
             &self.ysql_system_client,
@@ -1318,6 +1635,22 @@ fn quote_one(ident: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// What [`YbWalStorage::load_tail`] read: the highest stored chunk end, and the
+/// rows just below it as `(start, end, bucket_id)`, ascending.
+struct WalTail {
+    end: Lsn,
+    rows: Vec<(u64, u64, i16)>,
+}
+
+impl WalTail {
+    fn spans(&self) -> Vec<(u64, u64)> {
+        self.rows
+            .iter()
+            .map(|&(start, end, _)| (start, end))
+            .collect()
+    }
+}
+
 /// `WalSource` over the `wals` table, for the end-of-WAL record-boundary
 /// scan run once at [`YbWalStorage::new`]. Plain binds on the system lane
 /// — not a hot path.
@@ -1334,9 +1667,20 @@ struct YbWalSource<'a> {
     /// separates a long scan from a slow cluster.
     find_anchor_queries: AtomicU64,
     find_end_of_wal_queries: AtomicU64,
+    /// Reads that failed (a query error, or a row that would not decode), as
+    /// opposed to finding nothing. Lets [`YbWalStorage::contiguous_wal_end`] tell
+    /// a failed read from a decode that genuinely couldn't answer.
+    read_failures: AtomicU64,
 }
 
 impl YbWalSource<'_> {
+    fn note_failure<T>(&self, res: Result<T>) -> Result<T> {
+        if res.is_err() {
+            self.read_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        res
+    }
+
     /// One scan row, decoded, its offset resolved against `segno`. Borrows the
     /// row buffer: a batch can be thousands of rows.
     fn decode_row(&self, row: &yb_tokio_postgres::Row, segno: i64) -> Result<(Lsn, Vec<u8>)> {
@@ -1347,6 +1691,52 @@ impl YbWalSource<'_> {
             .with_context(|| format!("chunk segno={segno} offset={chunk_offset}"))?;
         Ok((Lsn(segno as u64 * self.seg + chunk_offset), data))
     }
+}
+
+/// The inclusive `find_anchor` target for WAL that ends at `end` (exclusive).
+///
+/// Normally `end - 1`: passing `end` itself probes a page that holds no bytes
+/// (#678). But `find_anchor` reads the header of the target's page first, and
+/// an `end` inside a page header leaves that header incomplete, so the walk has
+/// to start on the page below. Stored WAL can end there: a row ends wherever
+/// the walproposer cut its send, not on a record boundary, so a torn tail or the
+/// lower edge of a hole can stop a few bytes into a page.
+fn anchor_target(end: Lsn, wal_seg_size: u64) -> Lsn {
+    use postgres_ffi::XLOG_BLCKSZ;
+    use postgres_ffi::wal_record_boundary::page_header_size;
+    let page = end.0 - end.0 % XLOG_BLCKSZ as u64;
+    if page > 0 && end.0 - page < page_header_size(Lsn(page), wal_seg_size) as u64 {
+        Lsn(page - 1)
+    } else {
+        Lsn(end.0 - 1)
+    }
+}
+
+/// Where the WAL ends according to a decoder replay that stops at `at`, used by
+/// [`YbWalStorage::contiguous_wal_end`] to tell `XLOG_SWITCH` padding from a
+/// hole.
+///
+/// The two are indistinguishable from the row extents alone — both are a stretch
+/// of `wals` with no rows — so this asks the bytes. Anchor on a fresh-record page
+/// at or below `at` and replay forward: an `XLOG_SWITCH` ending at `at` makes
+/// `find_end_of_wal` return the *rounded-up segment boundary*, because that is
+/// where the switch record's end LSN sits. Any other record ends at or below
+/// `at`.
+///
+/// `at` is exclusive (one past the run's last byte); see [`anchor_target`].
+async fn switch_ends_at(
+    src: &YbWalSource<'_>,
+    pg_version: PgMajorVersion,
+    at: Lsn,
+    anchor_floor: Lsn,
+) -> Result<Lsn> {
+    use postgres_ffi::wal_record_boundary::{find_anchor, find_end_of_wal};
+    let anchor = find_anchor(src, anchor_target(at, src.seg), anchor_floor)
+        .await
+        .context("anchor scan below a padding-shaped gap")?;
+    find_end_of_wal(src, anchor, pg_version)
+        .await
+        .context("record replay across a padding-shaped gap")
 }
 
 impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
@@ -1371,17 +1761,18 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch_id, &segno, &off];
         // Only a missing row ends the WAL. A failed query is a failed read and
         // must stay an `Err` — see `WalSource::chunk_at` (#756).
-        let Some(row) = self
-            .client
-            .query_opt(&sql, &params)
-            .await
-            .context("end-of-WAL scan: reading wals")?
+        let Some(row) = self.note_failure(
+            self.client
+                .query_opt(&sql, &params)
+                .await
+                .context("end-of-WAL scan: reading wals"),
+        )?
         else {
             return Ok(None);
         };
         // Decode before any length arithmetic — the coverage check and the
         // returned buffer are both in logical WAL bytes.
-        let (chunk_start, data) = self.decode_row(&row, segno)?;
+        let (chunk_start, data) = self.note_failure(self.decode_row(&row, segno))?;
         if lsn.0 >= chunk_start.0 + data.len() as u64 {
             // The nearest chunk stops short of `lsn`: the WAL ends here.
             return Ok(None);
@@ -1445,11 +1836,12 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         let params: [&(dyn ToSql + Sync); 4] =
             [&self.branch_id, &segno, &off, &(CHUNK_FETCH_ROW_CAP as i64)];
         // A failed query stays an `Err`; only an empty result ends the WAL (#756).
-        let rows = self
-            .client
-            .query(&sql, &params)
-            .await
-            .context("end-of-WAL scan: reading wals")?;
+        let rows = self.note_failure(
+            self.client
+                .query(&sql, &params)
+                .await
+                .context("end-of-WAL scan: reading wals"),
+        )?;
         // Cut the run at the first byte it does not hold, so the batch is
         // contiguous in fact and not just in the contract. `lsn` seeds it because
         // the leading chunk starts at or below `lsn` and may stop short of it.
@@ -1464,7 +1856,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
                 // — and if the scan does reach this row, the next fetch leads with
                 // it and the error surfaces then (#756).
                 Err(_) if i > 0 => break,
-                Err(e) => return Err(e),
+                Err(e) => return self.note_failure(Err(e)),
             };
             if start > want || want.0 - start.0 >= data.len() as u64 {
                 break;
@@ -1826,8 +2218,8 @@ async fn consumer_main(
         // stamping site, after assembly and before any write attempt, so a
         // retry (which replays this same Vec) inherits the same bucket and
         // produces identical rows. One bucket per batch means the batch
-        // targets one tablet and lands as a single atomic write batch, so a
-        // crash mid-flush cannot leave a hole.
+        // targets one tablet and lands as a single atomic write batch, until
+        // that tablet splits (see `YbWalStorage::contiguous_wal_end`).
         let bucket = next_batch_bucket;
         next_batch_bucket = (next_batch_bucket + 1) % WALS_BUCKETS;
         for pc in &mut batch {
@@ -1869,9 +2261,10 @@ async fn consumer_main(
         // exists to beat.
         //
         // What is deliberately NOT bounded is the data: the batch is not
-        // durable, so abandoning it after N attempts would leave a hole the
-        // rehydration path's max-end scan accepts silently. The bound is on how
-        // long callers block, never on whether the chunks eventually land.
+        // durable, so abandoning it after N attempts would leave a hole under
+        // the batches written after it — further down than the load-time hole
+        // scan looks (`TAIL_SCAN_ROWS`). The bound is on how long callers
+        // block, never on whether the chunks eventually land.
         let mut attempt: u32 = 0;
         let mut signalled = false;
         let mut failing_since: Option<std::time::Instant> = None;
@@ -1886,8 +2279,7 @@ async fn consumer_main(
                     attempt += 1;
                     crate::metrics::WAL_CONSUMER_BATCH_RETRIES.inc();
                     // The batch is NOT durable, so it cannot be dropped or
-                    // skipped — that would leave a hole the rehydration path's
-                    // max-end scan would silently accept. The only options are
+                    // skipped — see the hole note above. The only options are
                     // retry or stop, and stopping is what #770 was.
                     let msg = format!("{e:#}");
                     // Chatty for the first few, then every
@@ -2034,7 +2426,8 @@ async fn flush_batch(
     // and the write is refused by the tablet, and `write_fenced` then resubmits
     // under a renewed token or exits. The batch is one bucket, but a bucket's
     // key span is not pinned to one tablet once tablets split, so a refusal
-    // can be partial — see compute-fencing.md § Known gaps.
+    // can be partial; after an exit the next load trims the hole
+    // (`YbWalStorage::contiguous_wal_end`).
     utils::write_fence::global()
         .write_fenced("WAL flush to amp_storage.wals", server_fenced, |deadline| {
             flush_batch_thin(
@@ -2093,11 +2486,10 @@ fn encode_run(chunks: &[PendingChunk], codec: payload_codec::Codec) -> bytes::By
 /// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
 /// first chunk and valued as the concatenation of the run's chunks
 /// ([`encode_run`]). The whole batch carries ONE bucket, so while that
-/// bucket's key span is one tablet the ops apply as one write batch and a
-/// crash mid-flush cannot leave a hole — the invariant `load_max_offset`'s
-/// max-end rehydration relies on. Once a tablet splits inside the bucket, two
-/// runs of a batch can land on different tablets, and a crash or a fence
-/// refusal mid-flush can leave one: https://github.com/yugabyte/meko/issues/1570.
+/// bucket's key span is one tablet the ops apply as one write batch. Once a
+/// tablet splits inside the bucket, two runs of a batch can land on different
+/// tablets, and a crash or a fence refusal mid-flush can leave a hole, which
+/// the next load finds and trims ([`YbWalStorage::contiguous_wal_end`]).
 ///
 /// `encoded` carries the [`payload_codec`]-wrapped run buffers produced by
 /// [`flush_batch`], 1:1 with `runs`. `deadline` is the lease the rows are
@@ -2155,6 +2547,25 @@ async fn flush_batch_thin(
             )
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Test-only failpoint (build with `--features testing`): land every run but
+    // the lowest, then exit the way a lapsed fence does — the partial batch a
+    // refusal leaves once the bucket's tablet has split. Single-run batches pass
+    // through, so it trips only on a batch that crosses a segment boundary or
+    // isn't contiguous.
+    #[cfg(feature = "testing")]
+    if n >= 2 && fail::eval("sk-wal-flush-drop-leading-run", |_| ()).is_some() {
+        yb_thinclient
+            .client
+            .upsert(&rows[1..], deadline)
+            .await
+            .context("failpoint sk-wal-flush-drop-leading-run: upsert the upper runs")?;
+        tracing::error!(
+            runs = n,
+            "failpoint sk-wal-flush-drop-leading-run: landed all but the lowest run; exiting"
+        );
+        std::process::exit(utils::write_fence::FENCE_LAPSED_EXIT_CODE);
+    }
 
     let batch_bytes: usize = batch.iter().map(|p| p.chunk_size as usize).sum();
     let started = std::time::Instant::now();
@@ -2927,6 +3338,148 @@ mod tests {
         assert_eq!(coalesce_runs(&chunks), vec![0..1, 1..3]);
     }
 
+    #[test]
+    fn anchor_target_skips_a_page_whose_header_is_cut() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        let blk = XLOG_BLCKSZ as u64;
+        let page = SEG_SIZE + 6 * blk;
+        assert_eq!(anchor_target(Lsn(page + 100), SEG_SIZE), Lsn(page + 99));
+        // Page-aligned: the last byte is on the page below (#678).
+        assert_eq!(anchor_target(Lsn(page), SEG_SIZE), Lsn(page - 1));
+        // Inside the short header.
+        assert_eq!(anchor_target(Lsn(page + 17), SEG_SIZE), Lsn(page - 1));
+        // Inside a segment's long header, which is longer than a short one.
+        assert_eq!(
+            anchor_target(Lsn(SEG_SIZE + 30), SEG_SIZE),
+            Lsn(SEG_SIZE - 1)
+        );
+    }
+
+    /// The tail scan's bound only holds if it reaches past a whole batch.
+    #[test]
+    fn the_tail_scan_reaches_below_a_whole_batch() {
+        const { assert!(TAIL_SCAN_ROWS > FLUSH_ROWS_THRESHOLD) };
+    }
+
+    #[test]
+    fn global_tail_keeps_only_the_highest_rows() {
+        // Bucket A holds the top of the stream; bucket B went quiet long ago and
+        // its top rows sit far below. Their union has a gap where neither
+        // bucket's top rows reach — rows that exist but were never fetched.
+        let a: Vec<(u64, u64)> = (10..13).map(|i| (i * 100, i * 100 + 100)).collect();
+        let b: Vec<(u64, u64)> = (0..3).map(|i| (i * 100, i * 100 + 100)).collect();
+        let union: Vec<(u64, u64)> = b.iter().chain(&a).copied().collect();
+        assert_eq!(
+            contiguous_end(&global_tail(union.clone(), usize::MAX), 1300, &[]),
+            300,
+            "untrimmed, the unfetched rows read as a hole"
+        );
+        let tail = global_tail(union, 3);
+        assert_eq!(tail, a);
+        assert_eq!(contiguous_end(&tail, 1300, &[]), 1300);
+
+        assert!(global_tail(Vec::<(u64, u64)>::new(), 3).is_empty());
+        assert_eq!(global_tail(vec![(5, 9), (0, 5)], 3), vec![(0, 5), (5, 9)]);
+    }
+
+    /// Only the upper runs of the one batch in flight may be trimmed; anything
+    /// more landed later and may have been acked.
+    #[test]
+    fn only_one_partial_batch_above_a_hole_may_be_trimmed() {
+        let below = [(0u64, 100u64, 0i16), (100, 200, 1)];
+        let one_run = [below.as_slice(), &[(300, 400, 2)]].concat();
+        assert_eq!(not_one_partial_batch(&one_run, 200), None);
+
+        let two_buckets = [below.as_slice(), &[(300, 400, 2), (400, 500, 3)]].concat();
+        let why = not_one_partial_batch(&two_buckets, 200).expect("two buckets");
+        assert!(why.contains("buckets [2, 3]"), "{why}");
+
+        let full_batch: Vec<(u64, u64, i16)> = (0..FLUSH_ROWS_THRESHOLD as u64)
+            .map(|i| (300 + i * 10, 310 + i * 10, 4))
+            .collect();
+        let too_many = [below.as_slice(), &full_batch].concat();
+        assert!(not_one_partial_batch(&too_many, 200).is_some());
+        assert_eq!(
+            not_one_partial_batch(&too_many[..too_many.len() - 1], 200),
+            None
+        );
+    }
+
+    #[test]
+    fn contiguous_end_stops_at_the_first_hole() {
+        // Empty tail: only an empty branch, where the raw max is the fallback.
+        assert_eq!(contiguous_end(&[], 4242, &[]), 4242);
+
+        let clean = [(0u64, 100u64), (100, 250), (250, 900)];
+        assert_eq!(contiguous_end(&clean, 900, &[]), 900);
+
+        let holed = [(0u64, 100u64), (100, 250), (400, 700), (700, 900)];
+        assert_eq!(contiguous_end(&holed, 900, &[]), 250);
+
+        let two_holes = [(0u64, 100u64), (200, 300), (300, 900)];
+        assert_eq!(contiguous_end(&two_holes, 900, &[]), 100);
+
+        // The walk anchors at the lowest row, not at zero.
+        let anchored = [(SEG_SIZE, SEG_SIZE + 100), (SEG_SIZE + 100, SEG_SIZE + 300)];
+        assert_eq!(
+            contiguous_end(&anchored, SEG_SIZE + 300, &[]),
+            SEG_SIZE + 300
+        );
+
+        let overlap = [(0u64, 100u64), (0, 100), (100, 250)];
+        assert_eq!(contiguous_end(&overlap, 250, &[]), 250);
+
+        // Confirmed XLOG_SWITCH padding is walked through: the rows above it
+        // are acked WAL.
+        let padded = [(0u64, 250u64), (SEG_SIZE, SEG_SIZE + 300)];
+        assert_eq!(
+            contiguous_end(&padded, SEG_SIZE + 300, &[(250, SEG_SIZE)]),
+            SEG_SIZE + 300
+        );
+        assert_eq!(contiguous_end(&padded, SEG_SIZE + 300, &[]), 250);
+        let padded_then_holed = [
+            (0u64, 250u64),
+            (SEG_SIZE, SEG_SIZE + 300),
+            (SEG_SIZE + 900, SEG_SIZE + 1000),
+        ];
+        assert_eq!(
+            contiguous_end(&padded_then_holed, SEG_SIZE + 1000, &[(250, SEG_SIZE)]),
+            SEG_SIZE + 300
+        );
+    }
+
+    #[test]
+    fn tail_gaps_reports_every_gap_not_just_the_first() {
+        assert!(tail_gaps(&[]).is_empty());
+        assert!(tail_gaps(&[(0, 100), (100, 250)]).is_empty());
+        assert_eq!(
+            tail_gaps(&[(0, 100), (200, 300), (400, 500)]),
+            vec![(100, 200), (300, 400)],
+            "classification needs all of them — the first gap may be padding",
+        );
+    }
+
+    #[test]
+    fn only_segment_closing_gaps_look_like_padding() {
+        assert!(gap_is_padding_shaped(
+            SEG_SIZE + 250,
+            2 * SEG_SIZE,
+            SEG_SIZE
+        ));
+        // Closes on a boundary, but two segments up.
+        assert!(!gap_is_padding_shaped(
+            SEG_SIZE + 250,
+            3 * SEG_SIZE,
+            SEG_SIZE
+        ));
+        assert!(!gap_is_padding_shaped(
+            SEG_SIZE + 250,
+            2 * SEG_SIZE - 8,
+            SEG_SIZE
+        ));
+        assert!(!gap_is_padding_shaped(SEG_SIZE, 3 * SEG_SIZE, SEG_SIZE));
+    }
+
     fn pgcfg() -> tokio_postgres::Config {
         let mut cfg = tokio_postgres::Config::new();
         cfg.host(&std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".into()));
@@ -3102,15 +3655,29 @@ mod tests {
         chunk_offset: i64,
         data: &[u8],
     ) {
+        insert_chunk_in(client, table, branch_id, 0, segno, chunk_offset, data).await;
+    }
+
+    /// [`insert_chunk`] into a chosen bucket.
+    async fn insert_chunk_in(
+        client: &YsqlClient,
+        table: &str,
+        branch_id: BranchId,
+        bucket: i16,
+        segno: i64,
+        chunk_offset: i64,
+        data: &[u8],
+    ) {
         client
             .execute(
                 &format!(
                     "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES (0, $1, {DEFAULT_VERSION}, $2, $3, $4, $5, 0)",
+                     VALUES ($1, $2, {DEFAULT_VERSION}, $3, $4, $5, $6, 0)",
                     quote_relation(table)
                 ),
                 &[
+                    &bucket,
                     &branch_id,
                     &segno,
                     &(chunk_offset as i32),
@@ -3120,6 +3687,29 @@ mod tests {
             )
             .await
             .expect("insert WAL chunk");
+    }
+
+    /// Store `[from, to)` of `wal` — which starts at `wal_start` — as one row
+    /// in `bucket`.
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_span(
+        client: &YsqlClient,
+        table: &str,
+        branch_id: BranchId,
+        bucket: i16,
+        wal: &[u8],
+        wal_start: Lsn,
+        from: Lsn,
+        to: Lsn,
+    ) {
+        assert_eq!(
+            from.0 / SEG_SIZE,
+            (to.0 - 1) / SEG_SIZE,
+            "a row never spans segments"
+        );
+        let data = &wal[(from.0 - wal_start.0) as usize..(to.0 - wal_start.0) as usize];
+        let (segno, offset) = ((from.0 / SEG_SIZE) as i64, (from.0 % SEG_SIZE) as i64);
+        insert_chunk_in(client, table, branch_id, bucket, segno, offset, data).await;
     }
 
     async fn drop_wals_table(client: &YsqlClient, table: &str) {
@@ -3303,6 +3893,7 @@ mod tests {
             seg: SEG_SIZE,
             find_anchor_queries: AtomicU64::new(0),
             find_end_of_wal_queries: AtomicU64::new(0),
+            read_failures: AtomicU64::new(0),
         };
 
         // Mid-chunk start: the covering chunk is the one that holds it, not the
@@ -3353,6 +3944,7 @@ mod tests {
             seg: SEG_SIZE,
             find_anchor_queries: AtomicU64::new(0),
             find_end_of_wal_queries: AtomicU64::new(0),
+            read_failures: AtomicU64::new(0),
         };
         let run = gap_src
             .contiguous_chunks_from(Lsn(SEG_SIZE))
@@ -3432,6 +4024,499 @@ mod tests {
             "rehydrated accepted_byte_end {got} must be a real record boundary"
         );
 
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// Real WAL of `msg_len`-byte logical messages from `start` until the
+    /// generator passes `until`: the bytes, every record start, and the end of
+    /// the last record.
+    fn gen_wal_until(start: Lsn, until: Lsn, msg_len: usize) -> (Vec<u8>, Vec<Lsn>, Lsn) {
+        use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), start);
+        let (mut buf, mut starts) = (Vec::new(), Vec::new());
+        while g.lsn < until {
+            let (lsn, bytes) = g.append_logical_message(c"t", &vec![7u8; msg_len]);
+            starts.push(lsn);
+            buf.extend_from_slice(&bytes);
+        }
+        starts.push(g.lsn);
+        (buf, starts, g.lsn)
+    }
+
+    fn state_starting_at(branch_id: BranchId, start: Lsn) -> TimelinePersistentState {
+        let mut state = TimelinePersistentState::empty();
+        state.branch_id = branch_id;
+        state.timeline_start_lsn = start;
+        state
+    }
+
+    async fn connect_test_yb() -> Arc<YsqlClient> {
+        Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        )
+    }
+
+    /// Loads `branch_id` from `table` with `floor` as the retention floor and
+    /// checks it rehydrated to the last record boundary at or below `hole`, with
+    /// every row past it deleted.
+    #[allow(clippy::too_many_arguments)]
+    async fn assert_rehydrates_below_hole(
+        client: &Arc<YsqlClient>,
+        table: &str,
+        branch_id: BranchId,
+        start: Lsn,
+        floor: Lsn,
+        starts: &[Lsn],
+        hole: Lsn,
+    ) {
+        let storage = YbWalStorage::new(
+            branch_id,
+            &state_starting_at(branch_id, start),
+            floor,
+            wal_conn(client, table).await,
+        )
+        .await
+        .expect("YbWalStorage::new");
+        let got = storage.accepted_byte_end();
+        assert!(
+            got <= hole,
+            "rehydrated end of WAL {got} must not pass the hole at {hole}: the pageserver \
+             would stall on it"
+        );
+        assert!(
+            starts.contains(&got),
+            "rehydrated end of WAL {got} must be a real record boundary"
+        );
+        assert_eq!(Lsn(storage.durable_lsn.load(Ordering::Acquire)), got);
+        drop(storage);
+
+        let left =
+            YbWalStorage::load_max_offset(client, table, branch_id, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_max_offset");
+        assert_eq!(
+            left, got,
+            "the rows past the hole must be deleted, or the next load counts them again"
+        );
+    }
+
+    /// The shape a partly refused flush leaves: the batch in flight crossed a
+    /// segment boundary, so it was two rows, and only the upper one landed. The
+    /// gap closes exactly on the boundary, so it looks like `XLOG_SWITCH`
+    /// padding, and only the decode tells it apart.
+    #[tokio::test]
+    async fn rehydration_cuts_a_batch_that_lost_its_lower_run_across_a_segment() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        let blk = XLOG_BLCKSZ as u64;
+        let table = scratch_table("wals_test_partial_batch_seg");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+
+        let start = Lsn(2 * SEG_SIZE - 16 * blk);
+        let boundary = Lsn(2 * SEG_SIZE);
+        let (wal, starts, end) = gen_wal_until(start, Lsn(boundary.0 + 8 * blk), 300);
+        let earlier = Lsn(start.0 + 5 * blk + 13);
+        let hole = Lsn(boundary.0 - 3 * blk + 40);
+
+        let branch_id = BranchId::generate();
+        // Two complete earlier batches, then the top batch's upper run alone.
+        insert_span(&client, &table, branch_id, 0, &wal, start, start, earlier).await;
+        insert_span(&client, &table, branch_id, 1, &wal, start, earlier, hole).await;
+        insert_span(&client, &table, branch_id, 2, &wal, start, boundary, end).await;
+
+        assert_rehydrates_below_hole(&client, &table, branch_id, start, start, &starts, hole).await;
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// The same shape on an idle branch: the pageserver has caught up to the
+    /// last batch that landed whole, so its `consistent_lsn` — the anchor floor
+    /// — is the hole's lower edge. The decode can still answer there.
+    #[tokio::test]
+    async fn rehydration_cuts_a_hole_whose_lower_edge_is_the_floor() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        let blk = XLOG_BLCKSZ as u64;
+        let table = scratch_table("wals_test_hole_at_floor");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+
+        let start = Lsn(2 * SEG_SIZE - 16 * blk);
+        let boundary = Lsn(2 * SEG_SIZE);
+        let (wal, starts, end) = gen_wal_until(start, Lsn(boundary.0 + 8 * blk), 300);
+        // The earlier batches end on a record boundary, as an acked one does.
+        let hole = *starts
+            .iter()
+            .rev()
+            .find(|&&lsn| lsn < Lsn(boundary.0 - 2 * blk))
+            .expect("a record boundary below the segment end");
+
+        let branch_id = BranchId::generate();
+        insert_span(&client, &table, branch_id, 0, &wal, start, start, hole).await;
+        insert_span(&client, &table, branch_id, 1, &wal, start, boundary, end).await;
+
+        assert_rehydrates_below_hole(&client, &table, branch_id, start, hole, &starts, hole).await;
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// A hole that doesn't close on a segment boundary is cut without a decode.
+    #[tokio::test]
+    async fn rehydration_cuts_a_hole_inside_a_segment() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        let blk = XLOG_BLCKSZ as u64;
+        let table = scratch_table("wals_test_hole_in_segment");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+
+        let start = Lsn(SEG_SIZE);
+        let (wal, starts, end) = gen_wal_until(start, Lsn(start.0 + 12 * blk), 100);
+        let earlier = Lsn(start.0 + 3 * blk + 5);
+        let hole = Lsn(start.0 + 6 * blk + 17);
+        let resume = Lsn(start.0 + 8 * blk + 3);
+
+        let branch_id = BranchId::generate();
+        insert_span(&client, &table, branch_id, 0, &wal, start, start, earlier).await;
+        insert_span(&client, &table, branch_id, 1, &wal, start, earlier, hole).await;
+        insert_span(&client, &table, branch_id, 2, &wal, start, resume, end).await;
+
+        assert_rehydrates_below_hole(&client, &table, branch_id, start, start, &starts, hole).await;
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// A hole with more than one batch above it is not what a cut-short flush
+    /// leaves: a build without the hole scan loaded past the hole and acked the
+    /// commits stored above it. The load must refuse rather than delete them.
+    #[tokio::test]
+    async fn rehydration_refuses_to_trim_more_than_one_batch_above_a_hole() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        let blk = XLOG_BLCKSZ as u64;
+        let table = scratch_table("wals_test_hole_acked_above");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+
+        let start = Lsn(SEG_SIZE);
+        let (wal, _, end) = gen_wal_until(start, Lsn(start.0 + 12 * blk), 100);
+        let hole = Lsn(start.0 + 4 * blk + 17);
+        let resume = Lsn(start.0 + 6 * blk + 3);
+        let later = Lsn(start.0 + 9 * blk + 11);
+
+        let branch_id = BranchId::generate();
+        insert_span(&client, &table, branch_id, 0, &wal, start, start, hole).await;
+        insert_span(&client, &table, branch_id, 1, &wal, start, resume, later).await;
+        insert_span(&client, &table, branch_id, 2, &wal, start, later, end).await;
+
+        let err = YbWalStorage::new(
+            branch_id,
+            &state_starting_at(branch_id, start),
+            start,
+            wal_conn(&client, &table).await,
+        )
+        .await
+        .err()
+        .expect("the load must refuse");
+        assert!(
+            format!("{err:#}").contains("they may hold acked WAL"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(
+            YbWalStorage::load_max_offset(&client, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_max_offset"),
+            end,
+            "nothing may be deleted"
+        );
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// `pg_switch_wal()` with the padding never stored leaves a gap of the same
+    /// shape as a lost lower run. The rows above it are acked WAL: the decode
+    /// has to confirm the switch and the load must keep everything.
+    #[tokio::test]
+    async fn rehydration_walks_through_unstored_switch_padding() {
+        use bytes::Bytes;
+        use postgres_ffi::XLOG_BLCKSZ;
+        use postgres_ffi::pg_constants::{RM_XLOG_ID, XLOG_SWITCH};
+        use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, Record, WalGenerator};
+        let blk = XLOG_BLCKSZ as u64;
+        let table = scratch_table("wals_test_switch_padding");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+
+        let start = Lsn(2 * SEG_SIZE - 8 * blk);
+        let boundary = Lsn(2 * SEG_SIZE);
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), start);
+        let mut seg1 = Vec::new();
+        for _ in 0..200 {
+            let (_, bytes) = g.append_logical_message(c"t", &[7u8; 100]);
+            seg1.extend_from_slice(&bytes);
+        }
+        let mut switch = WalGenerator::new(
+            std::iter::once(Record {
+                rmid: RM_XLOG_ID,
+                info: XLOG_SWITCH,
+                data: Bytes::new(),
+            }),
+            g.lsn,
+        );
+        switch.prev_lsn = g.prev_lsn;
+        let (_, bytes) = switch.next().expect("the switch record");
+        seg1.extend_from_slice(&bytes);
+        let switch_end = Lsn(start.0 + seg1.len() as u64);
+        let mid1 = Lsn(start.0 + 2 * blk + 9);
+        assert!(mid1 < switch_end && switch_end < boundary);
+
+        let (seg2, _, end) = gen_wal_until(boundary, Lsn(boundary.0 + 3 * blk), 100);
+        let mid2 = Lsn(boundary.0 + blk + 21);
+
+        let branch_id = BranchId::generate();
+        insert_span(&client, &table, branch_id, 0, &seg1, start, start, mid1).await;
+        insert_span(
+            &client, &table, branch_id, 1, &seg1, start, mid1, switch_end,
+        )
+        .await;
+        insert_span(
+            &client, &table, branch_id, 2, &seg2, boundary, boundary, mid2,
+        )
+        .await;
+        insert_span(&client, &table, branch_id, 3, &seg2, boundary, mid2, end).await;
+
+        let storage = YbWalStorage::new(
+            branch_id,
+            &state_starting_at(branch_id, start),
+            start,
+            wal_conn(&client, &table).await,
+        )
+        .await
+        .expect("YbWalStorage::new");
+        assert_eq!(
+            storage.accepted_byte_end(),
+            end,
+            "switch padding is not a hole; cutting there deletes the acked WAL above it"
+        );
+        drop(storage);
+        assert_eq!(
+            YbWalStorage::load_max_offset(&client, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_max_offset"),
+            end,
+            "nothing may be deleted"
+        );
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// [`YbWalStorage::contiguous_wal_end`] over `table`'s tail, with no anchor
+    /// floor: `(raw max, contiguous end, tail rows read)`.
+    async fn contiguous_end_via_yb(
+        client: &YsqlClient,
+        table: &str,
+        branch_id: BranchId,
+    ) -> (Lsn, Lsn, usize) {
+        let tail =
+            YbWalStorage::load_tail(client, table, branch_id, SEG_SIZE as usize, Lsn(0), Lsn(0))
+                .await
+                .expect("load_tail");
+        let src = YbWalSource {
+            client,
+            table,
+            branch_id,
+            seg: SEG_SIZE,
+            find_anchor_queries: AtomicU64::new(0),
+            find_end_of_wal_queries: AtomicU64::new(0),
+            read_failures: AtomicU64::new(0),
+        };
+        let end = YbWalStorage::contiguous_wal_end(
+            &src,
+            &tail.spans(),
+            tail.end,
+            PgMajorVersion::PG18,
+            Lsn(0),
+        )
+        .await
+        .expect("contiguous_wal_end");
+        (tail.end, end, tail.rows.len())
+    }
+
+    /// A padding-shaped gap the decode can't confirm either way — synthetic
+    /// bytes here — is walked through: continuing past a real hole fails loudly
+    /// on the next read, while stopping at real padding destroys acked WAL.
+    #[tokio::test]
+    async fn an_undecodable_padding_shaped_gap_is_never_read_as_a_hole() {
+        let table = scratch_table("wals_test_padding_gap");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+        let branch_id = BranchId::generate();
+
+        let blob = [0x33u8; 8192];
+        insert_chunk_in(&client, &table, branch_id, 0, 1, 0, &blob).await;
+        insert_chunk_in(&client, &table, branch_id, 1, 2, 0, &blob).await;
+
+        let (raw_max, end, _) = contiguous_end_via_yb(&client, &table, branch_id).await;
+        assert_eq!(raw_max, Lsn(2 * SEG_SIZE + 8192));
+        assert_eq!(end, raw_max);
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// A failed read while confirming a padding-shaped gap is not ambiguity: it
+    /// says nothing about the gap (#756). Walking through on it would report
+    /// flush across a real hole, so the scan fails and the load is retried.
+    #[tokio::test]
+    async fn a_failed_read_while_confirming_padding_fails_the_scan() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        let blk = XLOG_BLCKSZ as u64;
+        let table = scratch_table("wals_test_probe_read_fail");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+
+        let start = Lsn(2 * SEG_SIZE - 16 * blk);
+        let boundary = Lsn(2 * SEG_SIZE);
+        let (wal, _, end) = gen_wal_until(start, Lsn(boundary.0 + 8 * blk), 300);
+        let earlier = Lsn(start.0 + 5 * blk + 13);
+        let hole = Lsn(boundary.0 - 3 * blk + 40);
+
+        let branch_id = BranchId::generate();
+        insert_span(&client, &table, branch_id, 0, &wal, start, start, earlier).await;
+        // The row the confirming decode reads first, under a codec tag this
+        // build doesn't know: durable, but every read of it fails.
+        let mut undecodable = vec![0x7fu8];
+        undecodable
+            .extend_from_slice(&wal[(earlier.0 - start.0) as usize..(hole.0 - start.0) as usize]);
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     VALUES (1, $1, {DEFAULT_VERSION}, $2, $3, $4, $5, 0)",
+                    quote_relation(&table)
+                ),
+                &[
+                    &branch_id,
+                    &((earlier.0 / SEG_SIZE) as i64),
+                    &((earlier.0 % SEG_SIZE) as i32),
+                    &((hole.0 - earlier.0) as i32),
+                    &undecodable,
+                ],
+            )
+            .await
+            .expect("insert undecodable WAL chunk");
+        insert_span(&client, &table, branch_id, 2, &wal, start, boundary, end).await;
+
+        let tail = YbWalStorage::load_tail(
+            &client,
+            &table,
+            branch_id,
+            SEG_SIZE as usize,
+            Lsn(0),
+            Lsn(0),
+        )
+        .await
+        .expect("load_tail");
+        let src = YbWalSource {
+            client: &client,
+            table: &table,
+            branch_id,
+            seg: SEG_SIZE,
+            find_anchor_queries: AtomicU64::new(0),
+            find_end_of_wal_queries: AtomicU64::new(0),
+            read_failures: AtomicU64::new(0),
+        };
+        let err = YbWalStorage::contiguous_wal_end(
+            &src,
+            &tail.spans(),
+            tail.end,
+            PgMajorVersion::PG18,
+            start,
+        )
+        .await
+        .expect_err("a failed read must not be walked through as padding");
+        assert!(
+            format!("{err:#}").contains("hole scan: a read failed"),
+            "unexpected error: {err:#}"
+        );
+
+        YbWalStorage::new(
+            branch_id,
+            &state_starting_at(branch_id, start),
+            start,
+            wal_conn(&client, &table).await,
+        )
+        .await
+        .err()
+        .expect("the load must fail rather than guess");
+        assert_eq!(
+            YbWalStorage::load_max_offset(&client, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_max_offset"),
+            end,
+            "nothing may be deleted"
+        );
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// The tail probe stops at the segment before the floor's, the oldest GC
+    /// keeps, so a bucket with few rows above it doesn't scan on through the
+    /// deleted span below.
+    #[tokio::test]
+    async fn the_tail_probe_stops_at_the_oldest_segment_gc_keeps() {
+        let table = scratch_table("wals_test_tail_floor");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+        let branch_id = BranchId::generate();
+
+        let blob = [0x55u8; 64];
+        insert_chunk_in(&client, &table, branch_id, 0, 1, 0, &blob).await;
+        insert_chunk_in(&client, &table, branch_id, 0, 5, 0, &blob).await;
+        insert_chunk_in(&client, &table, branch_id, 1, 6, 0, &blob).await;
+
+        let floor = Lsn(6 * SEG_SIZE + 32);
+        let tail =
+            YbWalStorage::load_tail(&client, &table, branch_id, SEG_SIZE as usize, Lsn(0), floor)
+                .await
+                .expect("load_tail");
+        assert_eq!(
+            tail.spans(),
+            vec![
+                (5 * SEG_SIZE, 5 * SEG_SIZE + 64),
+                (6 * SEG_SIZE, 6 * SEG_SIZE + 64)
+            ],
+            "segno 1 is below the oldest kept segment (5) and must not be read"
+        );
+        assert_eq!(tail.end, Lsn(6 * SEG_SIZE + 64));
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// The per-bucket probes against a real table, with one bucket gone quiet
+    /// far below the top: the tail must be cut to the global top rows, or the
+    /// rows between that bucket's and the others' read as a hole.
+    #[tokio::test]
+    async fn the_tail_probe_is_cut_to_the_global_top_rows() {
+        let table = scratch_table("wals_test_tail_probe");
+        let client = connect_test_yb().await;
+        make_wals_table(&client, &table).await;
+        let branch_id = BranchId::generate();
+
+        const ROWS: i64 = 600;
+        const QUIET_ROWS: i64 = 20;
+        const SZ: i64 = 64;
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {} (bucket_id, branch_id, version, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     SELECT CASE WHEN g < {QUIET_ROWS} THEN 5 ELSE g % 5 END, $1, \
+                            {DEFAULT_VERSION}, 1, g * {SZ}, {SZ}, $2, 0 \
+                     FROM generate_series(0, {}) g",
+                    quote_relation(&table),
+                    ROWS - 1
+                ),
+                &[&branch_id, &enc(&[0x44u8; SZ as usize])],
+            )
+            .await
+            .expect("insert rows");
+
+        let (raw_max, end, rows) = contiguous_end_via_yb(&client, &table, branch_id).await;
+        assert_eq!(raw_max, Lsn(SEG_SIZE + (ROWS * SZ) as u64));
+        assert_eq!(rows, TAIL_SCAN_ROWS);
+        assert_eq!(end, raw_max, "a clean tail has no hole");
         drop_wals_table(&client, &table).await;
     }
 
@@ -3629,6 +4714,7 @@ mod tests {
                 seg: SEG_SIZE,
                 find_anchor_queries: AtomicU64::new(0),
                 find_end_of_wal_queries: AtomicU64::new(0),
+                read_failures: AtomicU64::new(0),
             },
             Lsn(durable_end.0 - 1),
             start,
@@ -5151,8 +6237,7 @@ mod tests {
 
     /// Per-batch bucket stamping + rotation: every row written by one
     /// consumer batch must carry ONE `bucket_id` (the whole batch targets
-    /// one tablet — the atomicity `load_max_offset`'s simple max-end
-    /// rehydration relies on), and the bucket must rotate across batches
+    /// one tablet while that tablet is unsplit), and the bucket must rotate across batches
     /// (the load spread across tablets).
     ///
     /// Three flush cycles, one batch each (same current-thread-runtime
@@ -5261,8 +6346,8 @@ mod tests {
     /// probe must skip), while other buckets hold their own bucket-local
     /// maxima that end lower — including one in the same top segno.
     ///
-    /// Calls `load_max_offset` directly (the same restore seam
-    /// `YbWalStorage::new` uses) rather than constructing the full
+    /// Calls `load_max_offset` directly (the end of the `load_tail` restore
+    /// seam `YbWalStorage::new` uses) rather than constructing the full
     /// storage: construction additionally runs the record-boundary
     /// end-of-WAL scan over the row bytes, which on this synthetic
     /// payload could nondeterministically trim the tail and obscure what

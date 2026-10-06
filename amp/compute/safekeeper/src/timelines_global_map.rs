@@ -24,7 +24,9 @@ use crate::{SafeKeeperConf, control_file};
 /// own budget (`endpoint_supervisor`'s `coordinate.rs`).
 ///
 /// It bounds one request, not the load. Every leg of the load is bounded in its
-/// own right (`load_max_offset` is a fixed count of single-row probes, the anchor
+/// own right (`load_tail` is a fixed count of probes of at most `TAIL_SCAN_ROWS`
+/// rows each, floored at the oldest segment GC keeps so they cross no deleted
+/// keys, the hole scan decodes at most `MAX_PADDING_PROBES` gaps, each anchor
 /// walk is capped at `MAX_ANCHOR_SCAN_BYTES`, the torn-tail cleanup at
 /// `YB_TORN_TAIL_CLEANUP_MAX`), so this is not standing in for an unbounded step —
 /// it decides how long one caller holds a connection before being told to ask

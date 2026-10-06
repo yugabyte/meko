@@ -242,10 +242,11 @@ deadline can land on some and not others. That is safe for the same reason a
 crash mid-write is: a page batch was never atomic across tablets, and nothing
 past it is acknowledged until `advance_consistent_lsn` runs, which a refused
 write never reaches. A WAL batch is one bucket, but a bucket's key span can
-cross tablets once they split, so it too can be refused in part; a
-resubmission fills the gap, and what an exit leaves behind is Known gap 2.
-Every write here is an idempotent upsert, which is what makes the
-resubmission safe as well.
+cross tablets once they split, so it too can be refused in part. A
+resubmission fills the gap; after an exit, the next load finds the hole below
+the stored rows and trims back to it (`YbWalStorage::contiguous_wal_end`,
+[`safekeeper.md`](safekeeper.md) §"Recovery and restart"). Every write here
+is an idempotent upsert, which is what makes the resubmission safe as well.
 
 ### Losing the token
 
@@ -500,17 +501,3 @@ it is consistent with the answer rather than with a later clock read.
      variants; note a dropped session is reopened lazily and synchronously
      before dispatch (`DoHeartbeat` in `yb_thin_client.cc`, under the session
      mutex), so one logical call can burn 2x the timeout.
-
-2. **A partly refused WAL batch can leave a hole the next load misses.** A WAL
-   batch is one `wals` bucket, but once a tablet splits inside that bucket's key
-   span, two runs of one batch are judged by different leaders, and a later run
-   can land while an earlier one is refused. A resubmission under a renewed
-   token re-sends the whole batch and fills the gap. An exit leaves it: the
-   next load rehydrates the end of WAL from the highest stored chunk, and
-   `find_anchor` walks back only to the nearest fresh-record page, so a hole
-   below that anchor is not seen. The safekeeper would then report WAL flushed
-   across the hole, and the pageserver stalls on `YB WAL hole`. None of the
-   refused batch was acknowledged, so no committed WAL is lost; the fix is for
-   rehydration to prove contiguity from the durable floor, or for a batch to be
-   kept within one tablet. Tracked in
-   [#1570](https://github.com/yugabyte/meko/issues/1570).

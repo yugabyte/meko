@@ -198,12 +198,17 @@ timeline starts at a nonzero LSN.
 
 ### Restart rehydration (`YbWalStorage::new`)
 
-1. `load_max_offset` scans `amp_storage.wals` for
-   `max(segno_base + chunk_offset + chunk_size)` across all buckets;
-   falls back to `timeline_start_lsn` when the table has no rows. Because
-   `write_wal` is gap-free and `truncate_wal` deletes above the cut, the
-   durable row set is a contiguous prefix — the max end is the end of WAL.
-2. That raw byte offset can point inside a torn record or a torn trailing
+1. `load_tail` reads the highest rows of `amp_storage.wals` across all
+   buckets; their max end is the raw end, falling back to `timeline_start_lsn`
+   when the table has no rows.
+2. The raw end can sit above a hole: once a bucket's tablet splits, a flush
+   cut short can store a later row of its batch without an earlier one.
+   `contiguous_wal_end` walks those rows and cuts at the first gap that is a
+   hole: one that doesn't close on a segment boundary, or one whose decode
+   shows no `XLOG_SWITCH` ending there. A gap it can't classify is walked
+   through, never cut at. Nothing past a hole was acked, unless more than one
+   batch sits above it — then the load fails rather than delete them.
+3. That byte offset can point inside a torn record or a torn trailing
    page (#61), so it is refined to a record boundary by replaying the
    decoder: `find_anchor` walks back (floored at the pageserver's
    `consistent_lsn`, which GC never trims below), then
@@ -220,7 +225,7 @@ timeline starts at a nonzero LSN.
    advertising the raw max offset can publish a mid-record `flush_lsn` no
    reader can reach (#678). The walproposer handshake retries the load, so a
    transient read failure costs a reconnect.
-3. Rows past the refined `accepted_byte_end` are deleted (best-effort; a failed
+4. Rows past the refined `accepted_byte_end` are deleted (best-effort; a failed
    cleanup is absorbed on the next restart), and `durable_lsn` +
    `DurableState::Healthy` are seeded at `accepted_byte_end` so an immediate
    `flush_wal()` returns at once.
@@ -419,7 +424,7 @@ pageserver column means WAL gets re-streamed into idempotent UPSERTs.
 |-------|-------------------------------|----------------------|----------------|
 | `timeline_start_lsn` | Yes | — | — |
 | `consistent_lsn` | — (read from the pageserver's `consistent_lsn` at startup) | — | `TimelineMemState` (live) |
-| `flush_lsn` / `commit_lsn` | — | implied by max chunk end (rehydrated by `load_max_offset` + boundary walk) | record boundary + `durable_lsn` |
+| `flush_lsn` / `commit_lsn` | — | implied by the contiguous chunk end (rehydrated by `load_tail` + hole scan + boundary walk) | record boundary + `durable_lsn` |
 | `accepted_byte_end` / record boundary | — | same rehydration | `YbWalStorage` |
 | WAL bytes | — | Yes (coalesced chunk rows) | `WalCache` (hot cache) |
 | Walsender positions / feedback | — | — | `WalSenders` slots |
@@ -440,7 +445,7 @@ pageserver column means WAL gets re-streamed into idempotent UPSERTs.
 - `compute/libs/postgres_ffi/src/wal_record_boundary.rs` —
   `WalStreamTracker` (write path), `find_end_of_wal` (restart scan).
 - `compute/safekeeper/src/yb_wal_storage.rs` — producer/consumer batching,
-  `DurableState`, `YbFlush`, `durable_lsn` cap, `load_max_offset`,
+  `DurableState`, `YbFlush`, `durable_lsn` cap, `load_tail`, `contiguous_wal_end`,
   `truncate_wal`, `remove_up_to`, `YbSegmentReader`.
 - `compute/safekeeper/src/receive_wal.rs` — WalAcceptor loop:
   `NoFlushAppendRequest` conversion, `FlushWAL` ticker, durable-watch ack
