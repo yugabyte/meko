@@ -138,7 +138,7 @@ describe("AgentK's mod in Claude (real tmux + git, fake claude)", () => {
     await env.core.tmux.kill(env.core.sessions.row(s.id).tmux_name);
     await env.core.sessions.reconcile();
     await waitFor(() => launches(env).length, (n) => n === 2, 10000, 'the relaunch');
-    expect(reset).toHaveBeenCalledWith(s.id);
+    expect(reset.mock.calls.map(([id]) => id)).toContain(s.id);
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, "the new Claude's mod to poll");
   });
 

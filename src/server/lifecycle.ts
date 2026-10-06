@@ -4,13 +4,13 @@ import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { designAnswers } from './answers.js';
-import { artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
+import { artifactUrlIn, checkToolQuestions, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId } from './meko.js';
-import type { HookPayload } from './hooks.js';
+import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
 import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
@@ -93,6 +93,11 @@ export class Lifecycle {
   private warned = new Map<string, number>();
   /** Sessions whose design changed during the current turn. */
   private designChanged = new Set<string>();
+  /**
+   * Approvals given while AgentK was busy (with the mod live), waiting for the turn to end: the
+   * user's answers to the design's questions, or null. In memory only, like the answers.
+   */
+  private queuedApprovals = new Map<string, { text: string; count: string } | null>();
   /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
   private closing = new Set<string>();
   /** Sessions with a Merge request in flight. */
@@ -239,14 +244,57 @@ export class Lifecycle {
     this.core.changed();
   }
 
-  /** The design is waiting for the user: say so in the activity log, the header and a notification. */
-  designReady(id: string): void {
+  /**
+   * The design is waiting for the user: say so in the activity log, the header and a notification.
+   * `approvalDropped`: the user approved it during the turn, but the turn changed it. No
+   * notification while Claude holds answers the user sent during the turn: it revises the design
+   * again right away.
+   */
+  designReady(id: string, approvalDropped = false): void {
     this.sessions.event(id, 'design', 'Design ready for approval');
     this.sessions.setStatus(id, 'needs_input', DESIGN_READY);
     const row = sessionRow(this.db, id);
     const open = row ? this.core.questions.get(row).open : 0;
+    if (approvalDropped) {
+      this.sessions.notifyUser(id, 'Design changed', "AgentK changed the design during its turn, so your approval wasn't sent. Review it and approve again.");
+      return;
+    }
+    if (this.sessions.promptsHeld(id) > 0) return;
     this.sessions.notifyUser(id, 'Design ready',
       open ? `Review the design and answer ${open === 1 ? 'its open question' : `${open} open questions`}.` : 'Review and approve the design.');
+  }
+
+  /**
+   * The design's questions from the mod's design_questions tool: checked, shown at once, and saved
+   * to the questions file (so a restart, and Claude's later edits to the file, start from them).
+   * A bad call is answered with what's wrong, for Claude to fix in the same turn.
+   */
+  questionsFromTool(row: SessionRow, input: unknown): ModReply {
+    const fail = (error: string): ModReply => ({ status: 400, body: { error } });
+    if (row.stage !== 'design' || row.plan_mode) return fail("The session isn't in the Design stage, so there's no design to ask about.");
+    const checked = checkToolQuestions(input);
+    if ('error' in checked) return fail(checked.error);
+    let changed: boolean;
+    try {
+      changed = this.core.questions.set(row, checked.questions);
+    } catch (e) {
+      return fail(`AgentK Local couldn't save the questions (${errMsg(e)}). Write them to ${this.sessions.questionsFile(row)} instead.`);
+    }
+    // The same questions again change nothing. Before there's a design they're only saved, to
+    // show with it when it comes.
+    if (changed && get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
+      run(this.db, 'UPDATE designs SET updated_at = ? WHERE session_id = ?', Date.now(), row.id);
+      this.designChanged.add(row.id);
+      this.core.changed();
+    }
+    const open = checked.questions.filter((q) => q.status === 'open').length;
+    const n = checked.questions.length;
+    return {
+      status: 200,
+      body: {
+        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open) to ${this.sessions.questionsFile(row)}. The user sees them beside the design in AgentK Local.`,
+      },
+    };
   }
 
   /**
@@ -270,33 +318,110 @@ export class Lifecycle {
     if (!get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
       throw new HttpError(409, "AgentK hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
     }
-    if (row.status === 'working' || row.status === 'starting') throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
-    // Any other question (a permission prompt) would take the approval as its answer.
+    if (row.status === 'starting') throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
+    // Answers sent during a turn wait in Claude, and run before anything sent now: the approval
+    // would move to Code while AgentK revises the design.
+    if (this.sessions.promptsHeld(row.id) > 0) {
+      throw new HttpError(409, 'AgentK has answers from you to take first. Approve once it has revised the design.');
+    }
+    // Mid-turn, a turn may still change the design: with the mod, the approval waits for its end.
+    if (this.sessions.midTurn(row.id)) {
+      if (!this.sessions.modLive(row.id)) {
+        throw new HttpError(409, row.status === 'working' ? 'AgentK is still working. Wait for the turn to finish.' : 'AgentK is waiting on you in the terminal. Answer it first.');
+      }
+      this.queuedApprovals.set(row.id, answers);
+      this.sessions.event(row.id, 'design', 'Approval queued: it goes when AgentK finishes its turn, if the design stays the same');
+      this.core.changed();
+      return;
+    }
+    // Any other question (a permission prompt, a parked recovery) would take a typed approval as its answer.
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
       throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     }
-    this.designApproved(row.id, 'you');
+    this.queuedApprovals.delete(row.id);
+    await this.sendApproval(row.id, answers);
+  }
+
+  /** Moves the session to Code and sends Claude the approval, with the user's answers ahead of it. */
+  private async sendApproval(id: string, answers: { text: string; count: string } | null): Promise<void> {
+    this.designApproved(id, 'you');
     try {
-      const cur = this.sessions.row(row.id);
+      const cur = this.sessions.row(id);
       const lead = answers && this.sessions.prompt(cur, 'approved-answers', { answers: answers.text });
-      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'approved')].filter(Boolean).join('\n\n'));
-      if (answers) this.sessions.event(row.id, 'design', `Approved with ${answers.count}`);
+      await this.sessions.submit(id, [lead, this.sessions.prompt(cur, 'approved')].filter(Boolean).join('\n\n'));
+      if (answers) this.sessions.event(id, 'design', `Approved with ${answers.count}`);
     } catch (e) {
-      if (this.sessions.row(row.id).stage === 'code') this.sessions.setStage(row.id, 'design', 'auto');
+      if (this.sessions.row(id).stage === 'code') this.sessions.setStage(id, 'design', 'auto');
       throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
     }
   }
 
+  /** True while an approval waits for the session's turn to end. */
+  approvalQueued(id: string): boolean {
+    return this.queuedApprovals.has(id);
+  }
+
+  /** Withdraws an approval waiting for the turn to end. */
+  cancelApproval(row: SessionRow): void {
+    if (!this.queuedApprovals.delete(row.id)) throw new HttpError(409, 'There is no approval waiting for AgentK.');
+    this.sessions.event(row.id, 'design', 'Queued approval withdrawn');
+    this.core.changed();
+  }
+
+  /** Drops an approval waiting for the turn to end, saying why (Claude exited, the session was archived). */
+  dropApproval(id: string, why: string): void {
+    if (!this.queuedApprovals.delete(id)) return;
+    this.sessions.event(id, 'design', `Queued approval dropped: ${why}`);
+    this.core.changed();
+  }
+
   /**
-   * Types the user's answers to the design's questions (`body`, a DesignAnswersRequest) into
-   * Claude for it to revise the design. Nothing is kept: they go now, while Claude is at its
-   * prompt (a design waiting for approval included), or not at all.
+   * At the end of a turn: sends an approval queued during it (`sent`), unless the turn changed the
+   * design or its questions (`dropped`: the user sees the new design first) or the session left
+   * Design meanwhile. `failed`: it couldn't be sent, and the design waits for approval again (the
+   * user is told). Null when none was queued.
+   */
+  async takeQueuedApproval(id: string, changed: boolean): Promise<'sent' | 'dropped' | 'failed' | null> {
+    if (!this.queuedApprovals.has(id)) return null;
+    const answers = this.queuedApprovals.get(id) ?? null;
+    this.queuedApprovals.delete(id);
+    this.core.changed();
+    const row = sessionRow(this.db, id);
+    if (!row || row.desired !== 'running' || row.stage !== 'design') return null;
+    if (changed) {
+      this.sessions.event(id, 'design', "Queued approval dropped: AgentK changed the design during its turn");
+      return 'dropped';
+    }
+    // Claude is at its prompt now.
+    this.sessions.setStatus(id, 'idle');
+    try {
+      await this.sendApproval(id, answers);
+    } catch (e) {
+      this.warn(id, 'Sending the queued approval', e);
+      this.sessions.setStatus(id, 'needs_input', DESIGN_READY);
+      this.sessions.notifyUser(id, 'Approval not sent', `Your approval couldn't be sent to Claude (${errMsg(e)}). Approve the design again.`);
+      return 'failed';
+    }
+    return 'sent';
+  }
+
+  /**
+   * Sends the user's answers to the design's questions (`body`, a DesignAnswersRequest) to Claude
+   * for it to revise the design. Nothing is kept on the server: they go now, while Claude is at its
+   * prompt (a design waiting for approval included), or, with the mod live, mid-turn too, held by
+   * Claude until the turn ends.
    */
   async reviseDesign(row: SessionRow, body: unknown): Promise<void> {
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     if (row.stage !== 'design' || row.plan_mode) throw new HttpError(409, 'Answers to the design can only be sent while the session is in Design.');
-    this.checkPromptable(row);
+    if (this.queuedApprovals.has(row.id)) throw new HttpError(409, 'You approved the design: the approval goes when this turn ends. Cancel it to send answers instead.');
+    // With the mod, answers sent mid-turn wait in Claude for the turn to end.
+    if (this.sessions.modLive(row.id) && this.sessions.midTurn(row.id)) {
+      if (this.sessions.runtime(row.id).busy) throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
+    } else {
+      this.checkPromptable(row);
+    }
     const answers = designAnswers(body, this.core.questions.get(row).questions);
     if (!answers) throw new HttpError(400, 'Answer a question or write feedback first.');
     try {

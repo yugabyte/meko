@@ -120,13 +120,17 @@ function modPost(path, body) {
 }
 
 // Turns from the mod run one at a time, as the engine holds a plugin's prompt until it's idle.
+// Like the mod, it tells AgentK which prompts are still held: on each poll, and as each starts its
+// turn or is refused (/mod/held).
 let modTurns = Promise.resolve();
+const held = new Set();
+const reportHeld = () => modPost('/mod/held', { held: [...held] }).catch(() => undefined);
 
 async function modLoop() {
   await modPost('/mod/hello', { protocol: 1 }).catch(() => undefined);
   for (;;) {
     try {
-      const r = await modPost('/mod/poll', {});
+      const r = await modPost('/mod/poll', { held: [...held] });
       if (r.status === 200) {
         for (const p of JSON.parse(r.text).prompts) {
           appendFileSync(join(dir, 'mod-prompts.jsonl'), JSON.stringify(p) + '\n');
@@ -135,16 +139,66 @@ async function modLoop() {
           const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
           appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
           if (ack.status !== 204) continue;
+          held.add(p.id);
           if (existsSync(join(dir, 'mod-drop'))) {
             await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin', filled: true });
+            held.delete(p.id);
+            await reportHeld();
             continue;
           }
-          modTurns = modTurns.then(() => turn(p.text));
+          modTurns = modTurns.then(async () => {
+            held.delete(p.id);
+            await reportHeld();
+            await turn(p.text);
+          });
         }
       } else if (r.status !== 204) await sleep(500);
     } catch {
       await sleep(500);
     }
+  }
+}
+
+// Like Claude's AskUserQuestion with the mod loaded: the mod forwards the question to AgentK and
+// asks again after each hold, while the terminal's dialog is open (the PermissionRequest hook fires
+// for it). An `ask-terminal` file answers in the terminal after its milliseconds instead. The
+// outcome goes to mod-asks.jsonl.
+const ASK = [{ question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue', description: 'Cool' }], multiSelect: false }];
+async function askUser() {
+  const id = `toolu_${randomUUID()}`;
+  const call = { settled: false };
+  const agentk = (async () => {
+    while (!call.settled) {
+      const r = await modPost('/mod/ask', { id, questions: ASK }).catch(() => null);
+      if (r?.status === 200) return { by: 'agentk', answers: JSON.parse(r.text).answers };
+      if (r?.status !== 204) await new Promise(() => undefined); // left to the terminal
+    }
+    return new Promise(() => undefined);
+  })();
+  hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: { questions: ASK } });
+  let terminalMs = null;
+  try {
+    terminalMs = Number(readFileSync(join(dir, 'ask-terminal'), 'utf8'));
+  } catch {
+    /* only AgentK answers */
+  }
+  const terminal = terminalMs === null ? new Promise(() => undefined) : sleep(terminalMs).then(() => ({ by: 'terminal', answers: { 0: 'Red' } }));
+  const won = await Promise.race([agentk, terminal]);
+  call.settled = true;
+  await modPost('/mod/ask/done', { id }).catch(() => undefined);
+  appendFileSync(join(dir, 'mod-asks.jsonl'), JSON.stringify(won) + '\n');
+  hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_response: won });
+}
+
+// Like Claude calling the mod's design_questions tool: a call missing an id first (told what's
+// wrong), then a good one. Each answer goes to mod-tool.jsonl.
+async function designQuestionsTool() {
+  for (const questions of [
+    [{ question: 'Where do designs live?' }],
+    [{ id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0 }],
+  ]) {
+    const r = await modPost('/mod/questions', { questions }).catch((e) => ({ status: 0, text: String(e) }));
+    appendFileSync(join(dir, 'mod-tool.jsonl'), JSON.stringify({ status: r.status, body: r.text ? JSON.parse(r.text) : null }) + '\n');
   }
 }
 
@@ -166,6 +220,8 @@ function modMeasure() {
 async function turn(text) {
   writeFileSync(transcript, JSON.stringify({ type: 'user', text }) + '\n', { flag: 'a' });
   hook('UserPromptSubmit', { prompt: text });
+  // Early in the turn, so the questions show while it goes on.
+  if (text.includes('DESIGN_TOOL') && modOn) await designQuestionsTool();
   let ms = 200;
   try {
     ms = Number(readFileSync(join(dir, 'turn-ms'), 'utf8'));
@@ -224,6 +280,7 @@ async function turn(text) {
     return; // waits for approval (Enter)
   }
   if (text.includes('MEKO_SEARCH')) mekoSearch();
+  if (text.includes('ASK_USER') && modOn) await askUser();
   respond();
   hook('Stop', {});
   modMeasure();
@@ -264,6 +321,9 @@ process.on('SIGHUP', () => {
   process.exit(129);
 });
 
+// Like Claude's TUI, the terminal is read raw, not line by line: a line-mode terminal caps a line
+// (1,024 bytes on macOS, 4,096 on Linux) and a longer typed prompt never arrives whole.
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
 // Like Claude Code in an untrusted folder: no hooks until the trust dialog is answered.
 if (existsSync(join(dir, 'trust-prompt'))) {
@@ -309,6 +369,8 @@ process.stdin.on('data', async (chunk) => {
       hook('SessionEnd', { reason: 'exit' });
       process.exit(0);
     }
+    // Like Claude crashing: gone without a SessionEnd hook.
+    if (line === 'crash') process.exit(1);
     if (line === '/clear') {
       // Like Claude Code: /clear starts a new conversation with a new session id and transcript.
       hook('SessionEnd', { reason: 'clear' });

@@ -55,7 +55,7 @@ describe('the link to AgentK\'s mod', () => {
     const answer = await links.poll('s1');
     expect(answer?.prompts.map((p) => p.text)).toEqual(['Open the PR.']);
     expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
-    await expect(send).resolves.toBeUndefined();
+    await expect(send).resolves.toBe(answer!.prompts[0].id);
   });
 
   it('fails a send the mod never acks, tells a late ack not to run it, and never hands it out again', async () => {
@@ -155,5 +155,111 @@ describe('the link to AgentK\'s mod', () => {
     expect(await caught).toBe('AgentK Local is stopping');
     expect(links.accepting).toBe(false);
     expect(links.accept('b', handed)).toBe(false); // its ack arrives late: not run
+  });
+
+  describe("Claude's questions (AskUserQuestion)", () => {
+    const Q = [{ question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: null, preview: null }], multiSelect: false }];
+    let changes: string[];
+    beforeEach(() => {
+      changes = [];
+      links = new ModLinks(undefined, () => now, (s) => changes.push(s));
+    });
+
+    it('offers them until the user answers, handing the answer to a held ask', async () => {
+      expect(links.openAsk('s1', 'tu1', Q)).toBe(true);
+      expect(links.openAsk('s1', 'tu1', Q)).toBe(false); // asked again after a hold: the same one
+      expect(links.asking('s1')).toEqual({ id: 'tu1', questions: Q });
+      const held = links.waitAsk('s1', 'tu1');
+      expect(links.answerAsk('s1', 'tu1', { 0: 'Red' })).toBe(true);
+      expect(await held).toEqual({ answers: { 0: 'Red' } });
+      expect(links.asking('s1')).toBeNull();
+      expect(links.answerAsk('s1', 'tu1', { 0: 'Red' })).toBe(false); // answered already
+      // The mod didn't get it (its connection dropped): asking again gets it.
+      expect(await links.waitAsk('s1', 'tu1')).toEqual({ answers: { 0: 'Red' } });
+      links.endAsk('s1', 'tu1');
+      expect(await links.waitAsk('s1', 'tu1')).toBe('gone');
+    });
+
+    it('ends a hold with nothing after POLL_HOLD_MS, for the mod to ask again', async () => {
+      links.openAsk('s1', 'tu1', Q);
+      const held = links.waitAsk('s1', 'tu1');
+      vi.advanceTimersByTime(POLL_HOLD_MS);
+      expect(await held).toBeNull();
+      expect(links.asking('s1')).not.toBeNull();
+    });
+
+    it('drops them when the terminal answers, a new ask comes, or the mod stops asking', async () => {
+      links.openAsk('s1', 'tu1', Q);
+      const held = links.waitAsk('s1', 'tu1');
+      links.endAsk('s1', 'other'); // not this one
+      expect(links.asking('s1')?.id).toBe('tu1');
+      links.endAsk('s1', 'tu1');
+      expect(await held).toBe('gone');
+      expect(links.answerAsk('s1', 'tu1', { 0: 'Red' })).toBe(false);
+
+      links.openAsk('s1', 'tu2', Q);
+      const old = links.waitAsk('s1', 'tu2');
+      links.openAsk('s1', 'tu3', Q);
+      expect(await old).toBe('gone');
+      expect(links.asking('s1')?.id).toBe('tu3');
+
+      // Not asked again (the call was interrupted, Claude died): swept once it's stale.
+      now += LINK_STALE_MS;
+      vi.advanceTimersByTime(2000);
+      expect(links.asking('s1')).toBeNull();
+    });
+
+    it('answers a held ask with nothing while the socket closes, and with gone on a reset', async () => {
+      links.openAsk('s1', 'tu1', Q);
+      const held = links.waitAsk('s1', 'tu1');
+      links.pause();
+      expect(await held).toBeNull();
+      expect(await links.waitAsk('s1', 'tu1')).toBeNull(); // not held while paused
+      links.resume();
+      const again = links.waitAsk('s1', 'tu1');
+      links.reset('s1');
+      expect(await again).toBe('gone');
+      expect(links.asking('s1')).toBeNull();
+    });
+
+    it('reports changes: questions coming and going, and the link going live and stale', () => {
+      links.hello('s1');
+      expect(changes).toEqual(['s1']);
+      links.poll('s1');
+      links.openAsk('s1', 'tu1', Q);
+      links.answerAsk('s1', 'tu1', { 0: 'Red' });
+      expect(changes).toEqual(['s1', 's1', 's1']);
+      links.endAsk('s1'); // already answered: nothing new to show
+      expect(changes).toHaveLength(3);
+      links.reset('s1');
+      expect(changes).toHaveLength(4);
+      links.hello('s2');
+      changes.length = 0;
+      now += LINK_STALE_MS;
+      vi.advanceTimersByTime(2000);
+      expect(changes).toEqual(['s2']);
+      expect(links.live('s2')).toBe(false);
+    });
+  });
+
+  it('counts the prompts Claude holds: added mid-turn, then as the mod reports them', async () => {
+    links.hello('s1');
+    const held = links.poll('s1');
+    const send = links.send('s1', 'Revise it.');
+    const answer = await held;
+    links.accept('s1', answer!.prompts[0].id);
+    const id = await send;
+    links.hold('s1', id);
+    links.hold('s1', 'p2');
+    expect(links.heldCount('s1')).toBe(2);
+    links.reportHeld('s1', [id]); // p2 started, or was refused
+    expect(links.heldCount('s1')).toBe(1);
+    links.reportHeld('s1', 'nonsense');
+    expect(links.heldCount('s1')).toBe(1);
+    links.started('s1'); // a mod that doesn't report: the oldest started its turn
+    expect(links.heldCount('s1')).toBe(0);
+    links.hold('s1', 'p3');
+    links.reset('s1');
+    expect(links.heldCount('s1')).toBe(0);
   });
 });

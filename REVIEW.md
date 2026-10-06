@@ -36,7 +36,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       prompt runs once at most: the mod submits it only on the server's 204 to its ack, a send it
       doesn't ack in time fails as a failed paste does (and a late ack gets 410), and a prompt
       handed to the mod is never also typed into the terminal. Held polls are answered before the
-      hook socket closes, on a rebind as well as a stop. Changes to the mod pass `claude plugin validate` and
+      hook socket closes, on a rebind as well as a stop. A question Claude asks (`AskUserQuestion`)
+      is answered once: the terminal's dialog always opens too, the first answer wins, and any
+      failure leaves it to the terminal; the server keeps an ask only while the mod keeps asking.
+      Answers and approvals sent mid-turn (a turn actually running, not any Needs you) need a live
+      mod: answers wait in Claude (the status is left alone, and the mod reports which it still
+      holds), and an approval waits on the server for the turn's end and is dropped if the turn
+      changed the design or its questions; the stage never moves to Code mid-turn or while Claude
+      holds answers. Status details can quote Claude's own words (`AgentK asks: …`), so code that
+      recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mod pass `claude plugin validate` and
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
 - [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).
@@ -81,8 +89,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       first in the frame's document. Markdown designs are sanitized with no forms or styles. Their
       Mermaid diagrams draw in strict mode and show as `<img>` SVGs, never inline SVG or a page
       of their own (a `blob:`/`data:` SVG opened as a page could run script). A
-      design's questions (from Claude's `questions.json`) render as plain text, never HTML, and are
-      size-capped and normalized on the server.
+      design's questions (from Claude's `questions.json` or its `design_questions` tool) and the
+      questions Claude asks (`AskUserQuestion`, previews included) render as plain text, never
+      HTML, and are size-capped and normalized on the server.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
       (no answer means allow) so a slow or restarting server never blocks Claude.
 
@@ -102,7 +111,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       out of Merge & Close or while AgentK is mid-turn.
 - [ ] Prompts (stage, review, review-comment and design-answer prompts) are only typed into a session when Claude is
       idle (or showing a design waiting for approval), never into a permission or question prompt; otherwise they're queued (the review prompt
-      in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead.
+      in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead
+      (with a live mod they go through it, and Claude holds them until the turn ends).
       Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the

@@ -2,12 +2,14 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '../../shared/types';
 import { useTouch } from '../hooks/useMedia';
 import { getTerminal } from '../terminals';
+import { AskBar } from './AskSheet';
 import { Busy } from './common';
 import { HeldImages } from './HeldImages';
 import { StartupPanel } from './StartupPanel';
 import { TermKeys } from './TermKeys';
 
-export function TerminalPane({ session }: { session: Session }) {
+/** `onAsk` opens the questions Claude is asking (Session.asking), offered in a bar above the terminal. */
+export function TerminalPane({ session, onAsk }: { session: Session; onAsk?: () => void }) {
   const { id: sessionId, status } = session;
   const hostRef = useRef<HTMLDivElement>(null);
   const [, rerender] = useReducer((x: number) => x + 1, 0);
@@ -45,6 +47,7 @@ export function TerminalPane({ session }: { session: Session }) {
 
   return (
     <div className="term-col">
+      {session.asking && onAsk && <AskBar ask={session.asking} onOpen={onAsk} />}
       {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key). */}
       <div className="term-wrap" onClick={() => (!touch || term.typing) && term.focus()}>
         <div className="term-host" ref={hostRef} />

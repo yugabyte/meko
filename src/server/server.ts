@@ -32,7 +32,7 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 /** A browser with this much unsent data skips state snapshots until it catches up. */
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 const ACTIONS: SessionAction[] = [
-  'approve-design', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
+  'approve-design', 'cancel-approval', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 
@@ -390,6 +390,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/design/answers', async (req, reply) => {
     await core.lifecycle.reviseDesign(core.sessions.row(req.params.id), req.body);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string; askId: string }; Body: unknown }>('/api/sessions/:id/ask/:askId', async (req, reply) => {
+    core.sessions.answerAsk(req.params.id, req.params.askId, req.body);
     return reply.code(204).send();
   });
 

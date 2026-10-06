@@ -64,6 +64,8 @@ export function DesignPanel({
   const tabs = hasQuestions && !split;
   const showDoc = !tabs || tab === 'design';
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
+  // The Questions tab's count takes in what Claude is asking right now, shown at its top.
+  const waiting = open + (session.asking ? 1 : 0);
   const toQuestions = () => {
     setTab('questions');
     qcol.current?.scrollIntoView({ block: 'nearest' });
@@ -122,7 +124,7 @@ export function DesignPanel({
             </button>
             <button role="tab" aria-selected={tab === 'questions'} className={cx(tab === 'questions' && 'on')} onClick={() => setTab('questions')}>
               Questions
-              {open > 0 && <span className="count-badge" aria-label={`${open} open`}>{open}</span>}
+              {waiting > 0 && <span className="count-badge" aria-label={`${waiting} open`}>{waiting}</span>}
             </button>
           </div>
         )}
@@ -169,7 +171,7 @@ export function DesignPanel({
           <div className="design-split-doc">{docView}</div>
           <aside ref={qcol} className="design-qcol" aria-label="Open questions">
             <div className="design-qcol-hd">
-              Questions{open > 0 && <span className="count-badge">{open}</span>}
+              Questions{waiting > 0 && <span className="count-badge">{waiting}</span>}
             </div>
             <DesignQuestions session={session} doc={doc!} />
           </aside>

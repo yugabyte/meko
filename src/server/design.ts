@@ -127,6 +127,55 @@ export function parseDesignQuestions(text: string): DesignQuestion[] {
   return out;
 }
 
+/** The questions file's JSON for a set of questions, as the design_questions tool saves it. */
+export function questionsFileText(questions: DesignQuestion[]): string {
+  return `${JSON.stringify({ questions }, null, 2)}\n`;
+}
+
+/**
+ * The questions Claude gives the mod's design_questions tool (its `questions` input), checked
+ * strictly, since Claude can fix them in the same turn: a list of objects, each with an id and a
+ * question, ids not repeated, options a list of labels or {label, detail}, a recommendation that
+ * points at an option, and a status of open or resolved. Returns them normalized as a questions
+ * file would be, or what's wrong.
+ */
+export function checkToolQuestions(input: unknown): { questions: DesignQuestion[] } | { error: string } {
+  if (!Array.isArray(input)) return { error: 'questions must be a list: {"questions": [{"id": …, "question": …}, …]}, or [] when there are none.' };
+  if (input.length > MAX_QUESTIONS) return { error: `Give at most ${MAX_QUESTIONS} questions.` };
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  input.forEach((v, i) => {
+    const at = `Question ${i + 1}`;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+      problems.push(`${at} must be an object.`);
+      return;
+    }
+    const q = v as Record<string, unknown>;
+    const id = questionId(q.id);
+    if (!id) problems.push(`${at} needs an "id" (letters, digits and dashes).`);
+    else if (seen.has(id)) problems.push(`${at} repeats the id "${id}".`);
+    else seen.add(id);
+    if (!str(q.question, QUESTION_CHARS)) problems.push(`${at} needs its "question" text.`);
+    const options = q.options ?? [];
+    if (!Array.isArray(options)) problems.push(`${at}: "options" must be a list.`);
+    else {
+      if (options.length > MAX_OPTIONS) problems.push(`${at} has ${options.length} options; give at most ${MAX_OPTIONS}.`);
+      if (options.some((o) => !option(o))) problems.push(`${at}: each option needs a "label".`);
+    }
+    const rec = q.recommended ?? null;
+    if (rec !== null && !(Number.isInteger(rec) && (rec as number) >= 0 && Array.isArray(options) && (rec as number) < options.length)) {
+      problems.push(`${at}: "recommended" must be the index of one of its options (from 0), or null.`);
+    }
+    if (q.status !== undefined && q.status !== 'open' && q.status !== 'resolved') problems.push(`${at}: "status" must be "open" or "resolved".`);
+  });
+  if (problems.length) return { error: problems.slice(0, 10).join(' ') };
+  const questions = parseDesignQuestions(JSON.stringify({ questions: input }));
+  if (Buffer.byteLength(questionsFileText(questions)) > MAX_QUESTIONS_FILE) {
+    return { error: `The questions come to more than ${MAX_QUESTIONS_FILE / 1024} KB. Shorten their context and details.` };
+  }
+  return { questions };
+}
+
 /**
  * The questions file AgentK writes beside the design: null when there's none (or it's empty);
  * throws when it's too large, can't be read, or isn't questions, so a bad file is never taken
