@@ -116,7 +116,7 @@ describe("AgentK's mod in Claude (real tmux + git, fake claude)", () => {
     await waitFor(() => modPrompts(env).map((p) => p.text), (t) => t.includes('after the rebind'), 10000, 'the prompt');
   });
 
-  it('types prompts again as soon as the mod is turned off, though running sessions keep it loaded', async () => {
+  it('types prompts again once the config turns the mod off, though running sessions keep it loaded', async () => {
     env = await makeEnv();
     fakeFiles(env, { mod: '', debug: '' });
     const s = await session();

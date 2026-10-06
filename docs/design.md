@@ -147,8 +147,9 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
 - live means the mod is polling, or polled in the last 10 seconds (`modlink.ts`), and `[claude] mod`
-  is on: turning it off types prompts again at once, though running sessions keep the mod (and
-  `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`) until they're relaunched;
+  is on. `config.toml` is read when the server starts, so turning it off takes effect at the next
+  server restart; from then on prompts are typed, for running sessions too, though those keep the
+  mod (and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`) until they're relaunched;
 - the send resolves when the server answers the `accepted` ack with 204;
 - the engine holds the prompt until Claude is idle, so it never lands in a permission dialog, a
   menu or a running turn, and a long one arrives whole rather than as `[Pasted text]`;
@@ -173,7 +174,7 @@ The links are in memory only. After a server restart the mod's next poll brings 
 within seconds, and the prompts AgentK queues are in the database anyway.
 
 **Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context N%` from the
-latest measurement, in the warning colour from 85%. It is cleared when Claude is relaunched or
+latest measurement, from 85% in the warning colour and led by ⚠ (so it reads without colour too). It is cleared when Claude is relaunched or
 `/clear`ed, until the next turn measures it again. The plan limits in the measurement are merged
 like the status line's (see [Plan limits](#token-usage)).
 

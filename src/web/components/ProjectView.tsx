@@ -147,12 +147,14 @@ export function ProjectView({
     </span>
   );
   // Measured by AgentK's mod after each turn; null without it.
+  // Nearly full shows by a ⚠ as well as the warning colour.
+  const contextFull = session?.contextPercent != null && session.contextPercent >= CONTEXT_WARN_PERCENT;
   const contextText = session && session.contextPercent !== null && (
     <span
-      className={session.contextPercent >= CONTEXT_WARN_PERCENT ? 'warn-text' : undefined}
-      title="How full Claude's context window is, measured after each turn. Claude compacts the conversation when it fills up."
+      className={contextFull ? 'warn-text' : undefined}
+      title={`How full Claude's context window is, measured after each turn.${contextFull ? ' Nearly full:' : ''} Claude compacts the conversation when it fills up.`}
     >
-      context {session.contextPercent}%
+      {contextFull && '⚠ '}context {session.contextPercent}%
     </span>
   );
   const mekoText = (
