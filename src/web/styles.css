@@ -1196,6 +1196,7 @@ textarea.input {
 }
 /* The context ring: fills as Claude's context window does (see ContextRing). */
 .ctx {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1214,6 +1215,30 @@ textarea.input {
 }
 .ctx-ring.bad .arc {
   stroke: var(--bad);
+}
+/* The exact percent, in a pill centred over the ring while the mouse is on it. It floats, so the
+   footer doesn't shift; touch screens can't hover and have it in the ⋯ sheet instead. It rises into
+   the terminal, so it sits above xterm's layers (up to 11) and below menus and dialogs. */
+.ctx-pct {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  right: 7px;
+  transform: translateX(50%);
+  padding: 2px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .ctx:hover .ctx-pct {
+    display: block;
+  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .ctx-ring .arc {
