@@ -3552,6 +3552,11 @@ mod tests {
     /// has been enough on CI, and an exhausted budget panics rather than
     /// hiding one.
     ///
+    /// A CREATE that returned OK is checked against pg_class, and retried when
+    /// the table is missing. Temporary workaround until yugabyte-db#34751 is
+    /// fixed (#1750): YSQL's in-server retry of a conflicting CREATE can skip
+    /// as `already exists` on a table that was never committed.
+    ///
     /// Both statements have to survive a re-send. On a dropped connection
     /// `execute` repeats a statement without learning whether it committed
     /// (`compute/architecture/yugabyte.md`, the client retry contract). The
@@ -3599,9 +3604,16 @@ mod tests {
                     break;
                 }
             }
+            let created = failure.is_none();
+            if created {
+                failure = ysql_client::lookup_table_oids(client, "public", &[table])
+                    .await
+                    .err()
+                    .map(|e| ("find scratch wals table", e));
+            }
             let Some((label, e)) = failure else { return };
             assert!(
-                attempt < ATTEMPTS && is_scratch_table_catalog_race(&e.to_string()),
+                attempt < ATTEMPTS && (created || is_scratch_table_catalog_race(&e.to_string())),
                 "{label} {table} (attempt {attempt} of {ATTEMPTS}): {e:#}"
             );
             // Plain backoff: `execute` classifies both Fatal (42xxx, and an

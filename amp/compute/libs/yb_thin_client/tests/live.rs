@@ -93,7 +93,9 @@ async fn ysql() -> YsqlClient {
 /// retry clears both only because it re-runs the DROP ahead of the CREATE.
 /// `create_sql` is re-run per attempt and must create `table`; the DROP is
 /// derived from the name, not from the SQL. This tolerates the two classes
-/// rather than preventing them, and an exhausted budget panics.
+/// rather than preventing them, and an exhausted budget panics. A missing
+/// table after an OK CREATE is retried too, a temporary workaround until
+/// yugabyte-db#34751 is fixed; see the safekeeper helper (#1750).
 ///
 /// Keep `IF NOT EXISTS` on the CREATE even under the unconditional DROP: on a
 /// dropped connection `execute` repeats a statement without learning whether
@@ -121,11 +123,20 @@ async fn recreate_table(ysql: &YsqlClient, table: &str, create_sql: &str) {
                 break;
             }
         }
+        let created = failure.is_none();
+        if created {
+            failure = ysql_client::lookup_table_oids(ysql, "public", &[table])
+                .await
+                .err()
+                .map(|e| ("find fixture table", e));
+        }
         let Some((label, e)) = failure else { return };
         let msg = e.to_string();
         assert!(
             attempt < ATTEMPTS
-                && (msg.contains("already exists") || msg.contains("deleted while still in use")),
+                && (created
+                    || msg.contains("already exists")
+                    || msg.contains("deleted while still in use")),
             "{label} {table} (attempt {attempt} of {ATTEMPTS}): {e:#}"
         );
         // Plain backoff: `execute` classifies both Fatal, so it never backs
