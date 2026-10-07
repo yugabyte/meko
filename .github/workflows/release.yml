@@ -35,6 +35,7 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       release: ${{ steps.p.outputs.release }}
       rebuild: ${{ steps.p.outputs.rebuild }}
@@ -264,6 +265,7 @@ jobs:
     # failure stops the release, so SHA256SUMS never loses an existing darwin tarball.
     if: always() && needs.build.result == 'success' && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # create the tag and release, upload assets, prune old releases
       id-token: write # attest build provenance
