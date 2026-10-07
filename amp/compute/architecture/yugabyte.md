@@ -119,8 +119,8 @@ intentional, not silently ignored.
 - `tsclient_read_sessions` / `tsclient_write_sessions` — server-*session*
   counts for the direct-RPC pool. (The `tsclient_` prefix is historical: it
   predates `yb_thin_client` replacing `yb_tsclient`; the keys are kept so
-  existing configs parse.) They set request *concurrency* (each
-  server session is a serial Perform queue). Used verbatim when set (no
+  existing configs parse.) A session can have several Performs in flight,
+  so they size the pool rather than cap concurrency. Used verbatim when set (no
   scale-factor multiplication). When unset, each daemon applies its own
   default: the **pageserver** `scale_count(2, scale_factor)` for both
   (getpage + put_pages fan-out); the **safekeeper** a fixed **1 read / 1

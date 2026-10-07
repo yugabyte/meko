@@ -3798,10 +3798,8 @@ mod tests {
     /// the production path looks up `amp_storage.wals` instead
     /// (`lookup_wals_oids`).
     /// A `TsClient` per caller, NOT one shared across the suite. `cargo test`
-    /// runs these concurrently and the shim's defaults are 4 read / 1 write
-    /// session — a single write session is a serial Perform queue, so one
-    /// shared client makes the whole suite contend on it. Sharing one was
-    /// tried and produced intermittent `segment_reader_*` failures.
+    /// runs these concurrently, and sharing one was tried and produced
+    /// intermittent `segment_reader_*` failures.
     fn thin_client() -> Arc<yb_thin_client::TsClient> {
         let tserver =
             std::env::var("YB_TEST_TSERVER_RPC").unwrap_or_else(|_| "127.0.0.1:9100".into());

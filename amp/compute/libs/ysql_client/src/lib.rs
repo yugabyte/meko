@@ -190,10 +190,9 @@ pub struct YbConnConfig {
     /// Read-*session* count for the direct-RPC hot-path pool. (The
     /// `tsclient_` prefix is historical — it predates `yb_thin_client`
     /// replacing `yb_tsclient`; the key is kept so existing configs parse.)
-    /// Sets read
-    /// concurrency (each session is a serial Perform queue); the sessions are
-    /// packed onto shared connections (see [`Self::tsclient_sessions_per_conn`]),
-    /// so this sets concurrency, not the connection count. Used verbatim (no
+    /// A session can have several Performs in flight, so this does not cap
+    /// read concurrency. The sessions are packed onto shared connections (see
+    /// [`Self::tsclient_sessions_per_conn`]). Used verbatim (no
     /// scale-factor multiplication). When unset, each daemon applies its own
     /// default: the pageserver `scale_count(2, scale_factor)`, the safekeeper
     /// WAL lane a fixed 1.

@@ -66,9 +66,8 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 ///
 /// At 2: each materialiser `put_pages` carries ≤500 rows (one
 /// `ROWS_PER_INSERT` chunk) and rides one write session of the store's
-/// thin-client pool, which `tsclient_write_sessions` sizes — base 2 ×
-/// `scale_factor`, matching this cap so 2 in-flight batches get 2 sessions
-/// rather than queueing behind one. Measured at ~38 K rows/s (~13 ms per
+/// thin-client pool, which `tsclient_write_sessions` sizes (base 2 ×
+/// `scale_factor`). Measured at ~38 K rows/s (~13 ms per
 /// 490-row batch) when this was the YSQL pool's 2 connections. Peak
 /// in-flight RAM is ~8 MB (2 × 500 × 8 KB image). Raise `scale_factor` to
 /// deepen the pipeline (it widens the session pool with it) on hosts that

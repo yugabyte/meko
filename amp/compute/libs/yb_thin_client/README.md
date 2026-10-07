@@ -76,13 +76,13 @@ read is just a one-op batch; writes are the same shape.
 ## Session / connection pool
 
 `TsClientConfig` carries `read_sessions` / `write_sessions` /
-`sessions_per_conn`. A single ThinClientService session serialises its Performs
-server-side, so concurrency comes from many sessions; the shim packs
-`sessions_per_conn` sessions onto each connection and opens
+`sessions_per_conn`. A ThinClientService session can have several Performs in
+flight; the shim packs `sessions_per_conn` sessions onto each connection and opens
 `ceil((read+write)/per_conn)` connections. It is the *connections* that spread
 load across tserver nodes (behind a ClusterIP VIP, each connection may land on
-a different node). A field of 0 selects the shim default (read 4, write 1,
-per-conn 4).
+a different node). A connection whose tserver stops answering moves to the next
+configured address and reopens its sessions there. A field of 0 selects the shim
+default (read 4, write 1, per-conn 4).
 
 ## The C ABI (`shim/yb_thin_client.h`)
 
