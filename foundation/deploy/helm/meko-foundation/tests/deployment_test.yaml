@@ -1,0 +1,91 @@
+suite: deployment
+templates:
+  - deployment.yaml
+release:
+  name: fdn
+  namespace: amp
+tests:
+  # The invariant the whole deployment exists to hold. Two of these against one
+  # Foundation would run two `helm upgrade`s at the same release, which is how a
+  # release ends up pending-upgrade — and RollingUpdate starts the new pod
+  # before the old one is gone, which is exactly that overlap.
+  - it: runs exactly one, and replaces rather than overlaps
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: reconciles the named object in the release namespace
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [reconcile, --name, foundation, --namespace, amp]
+
+  - it: passes the loop timings only when they are set
+    set:
+      reconcile:
+        poll: 10s
+        resync: 6h
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            [reconcile, --name, foundation, --namespace, amp, --poll, 10s, --resync, 6h]
+
+  # A SIGKILL partway through `helm upgrade --install` is what leaves the
+  # release in pending-install, so the kubelet has to wait long enough for a
+  # writing step to finish.
+  - it: gives the pod a grace period sized for a helm install
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 600
+
+  # The image is distroless-static with a read-only root, and both kubectl and
+  # helm want somewhere to write — the image points them at /tmp. Without the
+  # volume every converge fails on the first helm call.
+  - it: gives the read-only root a writable /tmp
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}
+
+  # 65532 is distroless's nonroot, and it is the UID the image's writable paths
+  # were chosen for.
+  - it: runs as the image's nonroot user
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+
+  # The default tag has to be one build-image.sh actually pushes, which is
+  # `latest` or a `custom-<sha>`. It was the chart's own version, so a README
+  # install of the chart as published went straight to ImagePullBackOff.
+  - it: defaults to a tag that is published
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/meko-foundation:latest
+  - it: and uses an explicit tag when given one
+    set:
+      image.tag: custom-abc123def456
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/meko-foundation:custom-abc123def456

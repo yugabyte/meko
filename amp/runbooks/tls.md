@@ -41,7 +41,7 @@ must be `ClusterIssuer` because YBA deploys into its own namespace, and the node
 certificates carry the endpoint Service's name through
 `kubernetesOverrides.tls.extraSANs` — without it the Service is in no SAN and every
 `verify-full` client fails the hostname check. See
-[`foundation/examples/amp.yaml`](../../foundation/examples/amp.yaml).
+[`foundation/examples/foundation-cli.yaml`](../../foundation/examples/foundation-cli.yaml).
 
 ## Permissive versus strict
 

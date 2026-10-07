@@ -2,7 +2,11 @@ package foundation
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -28,15 +32,45 @@ type Deployer struct {
 	ybaTimeout      time.Duration
 	universeTimeout time.Duration
 	noPrune         bool
-	pollInterval    time.Duration
-	// failureWindow is how long the terminal failure signal must hold before
-	// the wait acts on it. Zero uses ybuniverse.FailureSettleWindow; only tests
-	// set it.
-	failureWindow time.Duration
+	noWaits         bool
+	// interrupt, when non-nil, abandons the steps that do not write as soon as
+	// it closes. See WithInterrupt.
+	interrupt    <-chan struct{}
+	pollInterval time.Duration
 	// dsnOpts are the consumer's own libpq parameters, supplied by connstr
 	// flags. Empty is the common case and means "whatever the universe
 	// implies".
 	dsnOpts DSNOptions
+	// httpGet is the seam for the one probe that is not a kubectl call, for the
+	// same reason Runner exists: it has to be recordable without a cluster.
+	httpGet HTTPGetter
+	// inCluster routes that probe at the yugaware Service instead of exec'ing
+	// curl in the pod. Defaulted from KUBERNETES_SERVICE_HOST, which the kubelet
+	// sets in every pod, so the binary does the right thing in both places with
+	// nothing to configure.
+	inCluster bool
+}
+
+// HTTPGetter performs one GET and returns the status code and body.
+type HTTPGetter func(ctx context.Context, url string) (int, string, error)
+
+// httpGet is the real one. The timeout matches the `curl -m 15` it replaces: a
+// probe that cannot answer quickly is inconclusive, and the caller treats it
+// that way.
+func httpGet(ctx context.Context, url string) (int, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<16))
+	return res.StatusCode, string(body), err
 }
 
 // certificateTimeout bounds waitCertificate. Registering a CA with YBA is a
@@ -63,7 +97,24 @@ func New(spec *Spec, run Runner) *Deployer {
 		ybaTimeout:      DefaultYBATimeout,
 		universeTimeout: DefaultUniverseTimeout,
 		pollInterval:    DefaultPollInterval,
+		httpGet:         httpGet,
+		inCluster:       os.Getenv("KUBERNETES_SERVICE_HOST") != "",
 	}
+}
+
+// WithHTTPGetter replaces the HTTP seam, and WithInCluster overrides the
+// autodetect. Both exist for tests, and the second also for the case autodetect
+// cannot see: a binary running in a pod in one cluster against another through a
+// kubeconfig, where the yugaware Service name resolves to the wrong place or to
+// nothing.
+func (d *Deployer) WithHTTPGetter(g HTTPGetter) *Deployer {
+	d.httpGet = g
+	return d
+}
+
+func (d *Deployer) WithInCluster(in bool) *Deployer {
+	d.inCluster = in
+	return d
 }
 
 // WithLogger sends progress to log. A bring-up takes tens of minutes, so
@@ -161,6 +212,18 @@ func (d *Deployer) Preflight(ctx context.Context) error {
 				"RPC port will be encrypted. Set it explicitly to choose; it is create-time "+
 				"only, so changing it later rebuilds the universe", f)
 		}
+	}
+	// A placementInfo whose zones Validate could not find is one it did not
+	// check, and the cross-check against the provider is the whole reason that
+	// check exists — YBA rejects a zone mismatch as a failed task tens of
+	// minutes into a bring-up. Reported rather than refused: which shapes the
+	// CRD accepts is YBA's to decide and moves between releases, so an unknown
+	// one is more likely a release this predates than a mistake, and the API
+	// server rejects a genuinely wrong one on apply.
+	if d.spec.PlacementUnchecked() {
+		d.log("warning: universe.placementInfo is set but no zone code was found under " +
+			"regions[].zones[], so it was NOT checked against the provider's zones. A zone the " +
+			"provider does not have fails as a YBA task tens of minutes from now, not here")
 	}
 	for _, bin := range []string{"kubectl", "helm"} {
 		if _, err := d.run(ctx, nil, []string{bin, "version", "--client"}); err != nil {
@@ -263,6 +326,34 @@ func (d *Deployer) WithoutPrune() *Deployer {
 	return d
 }
 
+// WithoutWaits returns once the spec is APPLIED rather than once the foundation
+// is USABLE.
+//
+// For a caller that converges repeatedly. YBA retries every reference it cannot
+// resolve — a provider or certificate that is missing makes the universe create
+// throw and requeue, and a telemetry provider that is not Ready yet is picked up
+// by the next informer resync — so the waits buy a one-shot caller a finished
+// foundation, and buy a looping one only a slower loop.
+//
+// It drops more than the waits themselves: checkTServerService needs the
+// universe up, so it cannot run either. The caller gets a converge that has
+// written every CR and nothing more, and is expected to read the CRs back
+// itself. Up and Apply then return a nil Info whenever the address is not
+// resolvable yet, with no error.
+//
+// Prune still runs, and still deletes what the spec dropped. It does not need
+// the universe settled: a CR YBA cannot yet release is refused, marked and
+// requeued by YBA itself rather than being lost. What prune skips here is
+// WAITING for the deletions to land — see pruneDeclared.
+//
+// installYBA's own wait is NOT dropped. The CRs are rejected until YBA is
+// serving and has its single customer, so skipping that one would only move the
+// failure.
+func (d *Deployer) WithoutWaits() *Deployer {
+	d.noWaits = true
+	return d
+}
+
 // Up stands a foundation up from nothing and returns how to reach it.
 func (d *Deployer) Up(ctx context.Context) (*Info, error) {
 	return d.converge(ctx, true)
@@ -281,36 +372,177 @@ func (d *Deployer) Apply(ctx context.Context) (*Info, error) {
 
 // step is one unit of a converge. The sequence is a list rather than a chain of
 // calls so that a failure can name what it skipped — see IncompleteError.
+// StepID identifies a converge step for machines. The `name` beside it is prose
+// written for an error message and is free to be reworded; an ID is not, because
+// a caller reporting progress publishes it and anything reading that report then
+// depends on the spelling.
+type StepID string
+
+const (
+	StepPreflight      StepID = "preflight"
+	StepCRDs           StepID = "install-crds"
+	StepNamespace      StepID = "ensure-namespace"
+	StepYBA            StepID = "install-yba"
+	StepApplyResources StepID = "apply-resources"
+	StepWaitUniverse   StepID = "wait-universe"
+	StepPrune          StepID = "prune"
+	StepTServerService StepID = "verify-tserver-service"
+)
+
+// Steps is every step a converge can run, in order. A given run is a SUBSET:
+// --no-prune drops one and --apply-only drops two, so a caller showing progress
+// takes its total from the run rather than from len(Steps).
+var Steps = []StepID{
+	StepPreflight,
+	StepCRDs,
+	StepNamespace,
+	StepYBA,
+	StepApplyResources,
+	StepWaitUniverse,
+	StepPrune,
+	StepTServerService,
+}
+
 type step struct {
+	id   StepID
 	name string
 	run  func(context.Context) error
+	// mutating says this step WRITES to the cluster, which decides whether an
+	// interrupt may cut it short. See WithInterrupt.
+	mutating bool
+}
+
+// ErrInterrupted is a converge abandoned partway because the caller signalled
+// that its input is stale. It is not a failure and wants no backoff: nothing is
+// half-written, and the next converge starts from the spec that superseded this
+// one.
+var ErrInterrupted = errors.New("converge interrupted: the spec it was converging has been superseded")
+
+// WithInterrupt lets a looping caller abandon a converge when a newer spec
+// arrives, which is what stops one bad spec holding the loop for the whole
+// universe timeout.
+//
+// Only the steps that do not WRITE are abandoned. A mutating step runs to
+// completion even after ch closes, because being cut off midway is how the
+// damage happens: killing `helm upgrade --install` is exactly what leaves the
+// release in `pending-install`, which no later converge can get past without
+// uninstalling it first. The waits, the preflight and the Service check hold no
+// such state, so dropping them costs nothing but the time already spent.
+//
+// So an interrupt is not a cancel. A caller that needs the converge to STOP —
+// a pod being terminated — cancels the context instead, and accepts the wedge
+// that implies.
+func (d *Deployer) WithInterrupt(ch <-chan struct{}) *Deployer {
+	d.interrupt = ch
+	return d
+}
+
+// interrupted reports whether the interrupt has already fired, which is how a
+// cancelled step is told apart from a genuine failure.
+func (d *Deployer) interrupted() bool {
+	if d.interrupt == nil {
+		return false
+	}
+	select {
+	case <-d.interrupt:
+		return true
+	default:
+		return false
+	}
+}
+
+// stepContext derives the context one step runs under: the converge's own for a
+// mutating step, and one that also ends on the interrupt for the rest.
+func (d *Deployer) stepContext(ctx context.Context, s step) (context.Context, context.CancelFunc) {
+	if s.mutating {
+		return ctx, func() {}
+	}
+	return d.abandonable(ctx)
+}
+
+// abandonable derives a context that also ends when the interrupt fires.
+//
+// Used for whole steps that write nothing, and for the POLLING half of a step
+// that does: once a delete has been requested the cluster finishes it whether
+// or not anything is still watching, so waiting for it is abandonable even
+// though requesting it was not.
+func (d *Deployer) abandonable(ctx context.Context) (context.Context, context.CancelFunc) {
+	if d.interrupt == nil {
+		return ctx, func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-d.interrupt:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+// convergeSteps is the list this converge will run, which depends on the
+// options: --apply-only drops the wait and the Service check, --no-prune drops
+// the prune.
+func (d *Deployer) convergeSteps() []step {
+	steps := []step{
+		{id: StepPreflight, name: "preflight", run: d.Preflight},
+		{id: StepCRDs, name: "install the operator CRDs", run: d.applyCRDs, mutating: true},
+		{id: StepNamespace, name: "ensure the namespace", run: d.ensureNamespace, mutating: true},
+		{id: StepYBA, name: "install YBA", run: d.installYBA, mutating: true},
+		{id: StepApplyResources, name: "apply the custom resources", run: d.applyCRs, mutating: true},
+	}
+	if !d.noWaits {
+		steps = append(steps, step{id: StepWaitUniverse,
+			name: "wait for the universe to settle", run: d.waitUniverse})
+	}
+	if !d.noPrune {
+		// After the applies, and it does not need the universe settled. One
+		// edit can both stop the universe using a KMSConfig and drop the key,
+		// and deleting the config first is safe: KMSConfigReconciler refuses a
+		// delete while EncryptionAtRestUtil.configInUse, writes `InUse` to the
+		// CR and requeues it with incrementRetry false — forever. The finalizer
+		// holds the object until the disable task has actually released it. So
+		// the ordering is YBA's, and YBA does it.
+		steps = append(steps, step{id: StepPrune,
+			name: "prune objects the spec no longer declares", run: d.pruneDeclared, mutating: true})
+	}
+	if !d.noWaits {
+		// Reads the universe's own Service, so it cannot run before the
+		// universe is up. It goes with the wait rather than being separately
+		// optional.
+		steps = append(steps, step{id: StepTServerService,
+			name: "verify the tserver Service", run: d.checkTServerService})
+	}
+	return steps
 }
 
 func (d *Deployer) converge(ctx context.Context, initial bool) (*Info, error) {
-	steps := []step{
-		{"preflight", d.Preflight},
-		{"install the operator CRDs", d.applyCRDs},
-		{"ensure the namespace", d.ensureNamespace},
-		{"install YBA", d.installYBA},
-		{"apply the custom resources", d.applyCRs},
-		{"wait for the universe to settle", d.waitUniverse},
-	}
-	if !d.noPrune {
-		// After the universe has SETTLED, not merely after the applies. One
-		// edit can both stop the universe using a KMSConfig and drop the key;
-		// disabling encryption at rest is a YBA task, so deleting the config
-		// before that task finishes races a reference that is still live.
-		steps = append(steps, step{"prune objects the spec no longer declares", d.pruneDeclared})
-	}
-	steps = append(steps,
-		step{"verify the tserver Service", d.checkTServerService},
-		step{"create the databases", d.ensureDatabases},
-	)
+	steps := d.convergeSteps()
 
 	for i, s := range steps {
-		err := s.run(ctx)
+		// The interrupt is checked BETWEEN steps as well as inside one. A step
+		// already running is cut short only when it writes nothing, but once
+		// the spec is stale nothing NEW starts, whether it writes or not:
+		// every step is create-or-apply, so stopping between two of them
+		// strands nothing, and the next converge runs the lot from the spec
+		// that superseded this one. The previous step is the last that ran, so
+		// it is the one the error names.
+		if i > 0 && d.interrupted() {
+			return nil, stopAt(steps[i-1], steps[i:], ErrInterrupted)
+		}
+		stepCtx, cancel := d.stepContext(ctx, s)
+		err := s.run(stepCtx)
+		cancel()
 		if err == nil {
 			continue
+		}
+		// An interrupt is reported as one whatever the step said. A cancelled
+		// step fails with whatever it happened to be doing — a poll reporting
+		// a context error, a kubectl that was killed — and none of that is
+		// worth showing, or backing off over.
+		if d.interrupted() {
+			err = ErrInterrupted
 		}
 		// Nothing has run yet when the FIRST step fails, so there is no
 		// half-built foundation to report — just the reason. It is the
@@ -319,14 +551,18 @@ func (d *Deployer) converge(ctx context.Context, initial bool) (*Info, error) {
 		if i == 0 {
 			return nil, fmt.Errorf("%s: %w", s.name, err)
 		}
-		inc := &IncompleteError{Step: s.name, Err: err}
-		for _, rest := range steps[i+1:] {
-			inc.Skipped = append(inc.Skipped, rest.name)
-		}
-		return nil, inc
+		return nil, stopAt(s, steps[i+1:], err)
 	}
 	info, err := d.Connect(ctx)
 	if err != nil {
+		if d.noWaits {
+			// Expected rather than exceptional here: the Service the address
+			// comes from is created by the universe, which this converge did
+			// not wait for. The apply still succeeded, so report nil and let
+			// the caller ask again on its next pass.
+			d.log("connection details are not available yet: %v", err)
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read the connection details: %w", err)
 	}
 	if initial {
@@ -341,9 +577,10 @@ func (d *Deployer) converge(ctx context.Context, initial bool) (*Info, error) {
 // the failure that therefore did not run.
 //
 // It exists because the steps that get skipped are invisible: the universe can
-// be Ready and every pod healthy while `ensureDatabases` never ran, and the
-// omission then surfaces much later and somewhere else — as the amp controller
-// failing to open the state store in a database nobody created.
+// be Ready and every pod healthy while `prune` and `checkTServerService` never
+// ran, and both omissions surface much later and somewhere else — as an object
+// the spec stopped declaring that is still live, or as a consumer handed an
+// address with no Service behind it.
 //
 // It also says the foundation is resumable, which is not obvious: every step is
 // create-or-apply, so Apply picks up from where this stopped.
@@ -351,12 +588,18 @@ type IncompleteError struct {
 	Step    string
 	Skipped []string
 	Err     error
+
+	// ID and SkippedIDs are the same two things for a machine. Step and Skipped
+	// stay prose because they are what the message prints; a caller that
+	// publishes progress reads these instead, so rewording a step name cannot
+	// break it.
+	ID         StepID
+	SkippedIDs []StepID
 }
 
 func (e *IncompleteError) Error() string {
-	// The last step failing — `create the databases`, the case this type exists
-	// for — skips nothing, so there is no list to print. The foundation is
-	// still incomplete and still resumable.
+	// The last step failing skips nothing, so there is no list to print. The
+	// foundation is still incomplete and still resumable.
 	steps := ""
 	if len(e.Skipped) > 0 {
 		steps = "these steps did not run: " + strings.Join(e.Skipped, ", ") + "\n"
@@ -366,6 +609,17 @@ func (e *IncompleteError) Error() string {
 }
 
 func (e *IncompleteError) Unwrap() error { return e.Err }
+
+// stopAt reports a converge that ended at `at`, with `rest` the steps after it
+// that therefore did not run.
+func stopAt(at step, rest []step, err error) *IncompleteError {
+	inc := &IncompleteError{Step: at.name, ID: at.id, Err: err}
+	for _, s := range rest {
+		inc.Skipped = append(inc.Skipped, s.name)
+		inc.SkippedIDs = append(inc.SkippedIDs, s.id)
+	}
+	return inc
+}
 
 // pruneDeclared removes the objects this foundation owns that the spec no
 // longer declares.

@@ -193,7 +193,7 @@ Key overrides: `REGISTRY` (base registry+path, default `gcr.io/yugabyte`), `TAG`
 | | |
 |---|---|
 | `yugabyted` (default) | the inlined single-node StatefulSet. RF-1, no rolling upgrade, no backups — fine for a dev or CI stack, and what every deploy path here still uses. |
-| `operator` | a real universe managed by the YugabyteDB Kubernetes Operator, via the [`foundation/`](../../foundation) deployer ([architecture](../../foundation/ARCHITECTURE.md)): CRDs, the `yugaware` chart with the operator enabled, a `YBProvider` and `YBUniverse` CR, the tserver RPC Service and `yb_storage`. Needs `go` on PATH; `FOUNDATION_SPEC` points at the spec (default `foundation/examples/amp.yaml`). |
+| `operator` | a real universe managed by the YugabyteDB Kubernetes Operator, via the [`foundation/`](../../foundation) deployer ([architecture](../../foundation/ARCHITECTURE.md)): CRDs, the `yugaware` chart with the operator enabled, a `YBProvider` and `YBUniverse` CR and the tserver RPC Service. The database is `yb-database.sh`'s, run straight after — the deployer stopped creating it, and YBA creates it itself on a build carrying `yb.universe.create_yb_storage_db`. Needs `go` on PATH; `FOUNDATION_SPEC` points at the spec (default `foundation/examples/foundation-cli.yaml`). |
 
 The spec stands up a **3-node RF3** universe on `yb-standard`, placed explicitly
 on itest-dev's single zone, with the MAGE gflag seeded at create (it is
@@ -239,7 +239,7 @@ copied from the trust bundle into Secret `YB_CA_SECRET` (default
 `amp-ca-bundle-tls`), which the spec's `YBCertificate` must name. `TLS_ISSUER_KIND`
 has to stay `ClusterIssuer` — YBA deploys the universe into its own namespace and
 cannot reach a namespaced `Issuer`. See
-[`../../foundation/examples/amp.yaml`](../../foundation/examples/amp.yaml).
+[`../../foundation/examples/foundation-cli.yaml`](../../foundation/examples/foundation-cli.yaml).
 
 - [`tls/trust-root.sh`](tls/trust-root.sh) installs cert-manager and trust-manager
   when absent (never touching an existing install), bootstraps a root CA and the
@@ -255,7 +255,7 @@ cannot reach a namespaced `Issuer`. See
   (`YB_STORAGE_ROLE`, default `amp_storage`) in by certificate CN; then creates
   `yb_storage`.
 - [`tls/yb-storage-role.sh`](tls/yb-storage-role.sh) creates that role, from either
-  lane — the operator one gets its database from the foundation spec and would
+  lane — on the operator one the database comes from `yb-database.sh` and would
   otherwise have no role at all.
 
 The controller then gets a cert-manager certificate of its own (chart values

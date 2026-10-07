@@ -78,8 +78,23 @@ func (d *Deployer) prune(ctx context.Context, want []Manifest) error {
 			return err
 		}
 	}
+	// Everything is deleted; what is left is polling for it to land, and the
+	// operator finishes a deletion whether or not anything is watching.
+	//
+	// A caller that waits for nothing else does not wait for this either: it
+	// has already asked, and a CR YBA cannot release yet — a KMSConfig the
+	// universe still uses — is refused and requeued by YBA forever, so waiting
+	// would mean waiting out the universe's own task for no gain. The next
+	// converge reports whatever is still there.
+	if d.noWaits {
+		return nil
+	}
+	// And when it does wait, a superseded converge still gives this up rather
+	// than holding the loop for the universe timeout.
+	waitCtx, cancel := d.abandonable(ctx)
+	defer cancel()
 	for _, m := range stale {
-		if err := d.awaitGone(ctx, m, d.universeTimeout); err != nil {
+		if err := d.awaitGone(waitCtx, m, d.universeTimeout); err != nil {
 			return err
 		}
 	}

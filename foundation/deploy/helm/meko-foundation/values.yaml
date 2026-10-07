@@ -1,0 +1,97 @@
+# The Foundation object this pod reconciles. It is not created here — see
+# Chart.yaml — so this is the name to watch for.
+#
+# One pod per Foundation: the loop reconciles the object it was named, and
+# running two against one object would have them racing each other's helm
+# releases.
+foundation:
+  name: foundation
+
+image:
+  repository: quay.io/yugabyte/meko-foundation
+  # Defaults to the chart's appVersion, which is `latest`. Pin a `custom-<sha>`
+  # — the only other tag published — for an install that does not move.
+  tag: ""
+  pullPolicy: IfNotPresent
+# Names Secrets in this namespace, for a private registry.
+imagePullSecrets: []
+
+# Loop timings. All optional; empty means the binary's own default, which is
+# what the documentation describes.
+reconcile:
+  # How often the Foundation is re-read. Doubles as the debounce.
+  poll: ""
+  # Bounds on the wait after a FAILED converge.
+  minBackoff: ""
+  maxBackoff: ""
+  # Re-converge a settled foundation this often. Empty means never, and that is
+  # the right default: a converge runs `helm upgrade`, so a timer here cuts a
+  # release revision every interval for a foundation with nothing to do.
+  resync: ""
+
+rbac:
+  # The namespaced Role and its binding. Off only if you grant the
+  # ServiceAccount equivalent rights some other way.
+  create: true
+  # The cluster-scoped half: CustomResourceDefinitions, namespaces,
+  # StorageClasses, and ClusterRoles/ClusterRoleBindings with escalate and bind.
+  #
+  # READ THE README BEFORE TURNING THIS OFF, and before leaving it on. With it
+  # the pod can grant itself anything, so it is effectively cluster-admin.
+  # Without it the pod cannot install the operator's CRDs or the yugaware
+  # chart's cluster RBAC, and a converge fails at the first of those with a
+  # `forbidden` naming exactly what is missing.
+  clusterScoped: true
+  # Extra namespaces to grant namespaced rights in. Needed only when a provider
+  # zone's kubeNamespace puts the universe somewhere other than this namespace:
+  # the Service lookup, the certificate check and the pod dump all run there.
+  extraNamespaces: []
+
+serviceAccount:
+  create: true
+  # Defaults to the release's full name.
+  name: ""
+  annotations: {}
+
+# A converge shells kubectl and helm; helm rendering the yugaware chart is the
+# expensive part, and it is brief.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# How long the kubelet waits after SIGTERM before SIGKILL.
+#
+# On SIGTERM the loop gives up what it can and lets a step that WRITES finish,
+# because `helm upgrade --install` killed partway leaves the release holding a
+# lock that every later upgrade refuses. 10 minutes covers everything except a
+# cold yugaware install, which runs to the spec's own yba timeout — and an
+# eviction or node scale-down ignores this entirely. Either way the next start
+# clears the wedge: rolled back to the newest deployed revision, or uninstalled
+# only if none ever deployed. Raise it above your yba timeout to make that
+# recovery rarer.
+terminationGracePeriodSeconds: 600
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# The image is distroless-static and runs as nonroot. /tmp is a writable
+# emptyDir because helm and kubectl both want a cache and a config directory,
+# which the Dockerfile points there.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

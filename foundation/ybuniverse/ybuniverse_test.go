@@ -3,7 +3,6 @@ package ybuniverse
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestSettledWaitsForQueuedAndRunningActions is the regression test for the
@@ -71,43 +70,35 @@ func TestSettledWaitsForQueuedAndRunningActions(t *testing.T) {
 	}
 }
 
-// TestWatchReportsAFailedTaskWithoutEndingTheWait.
+// TestWatchReportsAFailedTaskAndNothingMore.
 //
 // A failed task is reported, and that is all: YBA retries with a backoff, and a
 // retry keeps the SAME task UUID, so nothing on this side separates a dead
-// create from one that is about to succeed. Ending the wait on it would fail
-// installs that recover. The report is what the operator actually needs.
-func TestWatchReportsAFailedTaskWithoutEndingTheWait(t *testing.T) {
-	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+// create from one that is about to succeed. The report is what the operator
+// actually needs.
+func TestWatchReportsAFailedTaskAndNothingMore(t *testing.T) {
 	st := Status{UniverseState: "Error Creating", Actions: []Action{
 		{ActionType: "EditGFlags", Status: ActionFailed, Message: "preview flag not allowed", TaskUUID: "t-9"},
 	}}
 	var w FailureWatch
-	report, stop := w.Observe(st, t0)
-	if stop {
-		t.Fatal("ended the wait on a failed task, which YBA may still be retrying")
-	}
+	report := w.Observe(st)
 	for _, want := range []string{"EditGFlags", "preview flag not allowed", "t-9", "yugaware log"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("report %q is missing %q", report, want)
 		}
 	}
-	// However long it sits there, it is still not this side's call to make.
-	if _, stop := w.Observe(st, t0.Add(FailureSettleWindow*10)); stop {
-		t.Error("ended the wait on a failed task after waiting a while, which is the same guess")
-	}
-	// And it is reported ONCE, not on every poll.
-	if report, _ := w.Observe(st, t0.Add(time.Minute)); report != "" {
+	// Reported ONCE, not on every poll.
+	if report := w.Observe(st); report != "" {
 		t.Errorf("re-reported the same failure: %q", report)
 	}
 	// A clean status clears it, so a later failure is reported again.
-	if report, _ := w.Observe(Status{UniverseState: StateReady}, t0.Add(2*time.Minute)); report != "" {
+	if report := w.Observe(Status{UniverseState: StateReady}); report != "" {
 		t.Errorf("reported a failure for a clean status: %q", report)
 	}
 	if w.Reason() != "" {
 		t.Errorf("Reason = %q after the failure cleared", w.Reason())
 	}
-	if report, _ := w.Observe(st, t0.Add(3*time.Minute)); report == "" {
+	if report := w.Observe(st); report == "" {
 		t.Error("a failure that came back was not reported again")
 	}
 }
@@ -164,83 +155,83 @@ func TestRenderKeepsTheBodysOwnName(t *testing.T) {
 	}
 }
 
-// TestWatchCatchesAnErrorStateWithNoFailedAction is the one failure the wait
-// does end on, and a regression test for a wait that would otherwise run to
-// timeout.
+// TestWatchNeverEndsTheWait is the regression test for the verdict this used to
+// make.
 //
 // YBA can reject a create BEFORE submitting a task: universeState becomes
-// "Error Creating" while the action stays "queued" with no message and no task
-// UUID. Observed exactly this on a spec whose ybSoftwareVersion was empty.
-// Nothing retries it, because YBA never accepted it.
-func TestWatchCatchesAnErrorStateWithNoFailedAction(t *testing.T) {
-	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st := Status{
+// "Error Creating" while the action stays "queued" with no task UUID. That was
+// treated as terminal on the grounds that YBA never accepted the spec and so
+// nothing would retry it — which is false. The reconciler throws before
+// submitting, AbstractReconciler swallows it, and the NO_OP enqueued alongside
+// the CREATE requeues CREATE; OperatorWorkQueue caps the backoff at 1800s and
+// the retry count at nothing. Ending the wait abandoned installs that recover.
+//
+// Observe now reports and returns, so the only thing this can assert is that
+// every shape reports once and keeps reporting changes.
+func TestWatchNeverEndsTheWait(t *testing.T) {
+	rejected := Status{
 		UniverseState: "Error Creating",
 		Actions:       []Action{{ActionType: "CreateKubernetesUniverse", Status: ActionQueued}},
 	}
 	var w FailureWatch
-	report, stop := w.Observe(st, t0)
-	if stop {
-		t.Fatal("ended the wait on the first reading, before the stale-generation window")
-	}
+	report := w.Observe(rejected)
 	if !strings.Contains(report, "Error Creating") || !strings.Contains(report, "yugaware log") {
 		t.Errorf("report %q does not name the state and where the explanation is", report)
 	}
-	if _, stop := w.Observe(st, t0.Add(FailureSettleWindow)); !stop {
-		t.Error("a rejection that held past the window did not end the wait")
+	if !strings.Contains(report, "retries") {
+		t.Errorf("report %q does not say YBA retries it, which is why the wait continues", report)
 	}
-	// And it must not fire on the states that are merely in progress.
+	// However long it sits there, it stays a report.
+	for i := 0; i < 100; i++ {
+		if r := w.Observe(rejected); r != "" {
+			t.Fatalf("re-reported an unchanged rejection on poll %d: %q", i, r)
+		}
+	}
+
+	// The states that are merely in progress report nothing at all.
 	for _, state := range []string{StateReady, StateCreating, StateEditing, StateDeleting} {
 		var w FailureWatch
-		w.Observe(Status{UniverseState: state}, t0)
-		if _, stop := w.Observe(Status{UniverseState: state}, t0.Add(FailureSettleWindow)); stop {
-			t.Errorf("watch fired on %q, which is not a failure", state)
+		if r := w.Observe(Status{UniverseState: state}); r != "" {
+			t.Errorf("reported %q, which is not a failure: %q", state, r)
 		}
 	}
 }
 
-// TestWatchRidesOutATransientErrorState is why even that one case waits.
-//
-// A healthy create was seen reporting "Error Creating" for a few seconds before
-// the operator enqueued its task — universeState has no observedGeneration
-// behind it, so a reading taken right after an apply can belong to the previous
-// generation. Failing on it aborted an install that went on to reach Ready with
-// six healthy pods.
+// A transient "Error Creating" is why ending the wait on it was wrong twice
+// over: a healthy create was seen reporting it for a few seconds before the
+// operator enqueued its task, because universeState has no observedGeneration
+// behind it and a reading taken right after an apply can belong to the previous
+// generation.
 func TestWatchRidesOutATransientErrorState(t *testing.T) {
-	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var w FailureWatch
-	if _, stop := w.Observe(Status{UniverseState: "Error Creating"}, t0); stop {
-		t.Fatal("ended the wait on a single Error Creating reading")
+	if r := w.Observe(Status{UniverseState: "Error Creating"}); r == "" {
+		t.Fatal("the first Error Creating reading was not reported")
 	}
 	// The operator picks the generation up: the state clears and work starts.
 	running := Status{
 		UniverseState: StateCreating,
 		Actions:       []Action{{ActionType: "CreateKubernetesUniverse", Status: ActionRunning, TaskUUID: "t-1"}},
 	}
-	if _, stop := w.Observe(running, t0.Add(15*time.Second)); stop {
-		t.Fatal("ended the wait on a running create")
+	if r := w.Observe(running); r != "" {
+		t.Errorf("reported a failure for a running create: %q", r)
 	}
-	if _, stop := w.Observe(Status{UniverseState: StateReady}, t0.Add(30*time.Second)); stop {
-		t.Fatal("ended the wait on a Ready universe")
+	if w.Reason() != "" {
+		t.Errorf("Reason = %q once the universe was progressing", w.Reason())
 	}
-	// The window must have been reset, not merely not yet elapsed: a second
-	// flicker much later is a fresh window, not the tail of the first one.
-	if _, stop := w.Observe(Status{UniverseState: "Error Creating"}, t0.Add(FailureSettleWindow*2)); stop {
-		t.Fatal("the first flicker's elapsed time was carried into the second")
+	if r := w.Observe(Status{UniverseState: StateReady}); r != "" {
+		t.Errorf("reported a failure for a Ready universe: %q", r)
 	}
 }
 
-// A create YBA accepted is never the rejection case, however bad its state
-// looks: the task UUID is the evidence that it got that far.
-func TestWatchDoesNotCallAnAcceptedCreateARejection(t *testing.T) {
-	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st := Status{
+// A create YBA accepted reports the accepted-but-failing wording, not the
+// rejection wording: the task UUID is the evidence that it got that far.
+func TestWatchDistinguishesAnAcceptedCreateFromARejection(t *testing.T) {
+	accepted := Status{
 		UniverseState: "Error Creating",
 		Actions:       []Action{{ActionType: "CreateKubernetesUniverse", Status: ActionQueued, TaskUUID: "t-1"}},
 	}
 	var w FailureWatch
-	w.Observe(st, t0)
-	if _, stop := w.Observe(st, t0.Add(FailureSettleWindow*5)); stop {
-		t.Error("treated a queued task as a spec YBA never accepted")
+	if r := w.Observe(accepted); r != "" {
+		t.Errorf("a queued task with a UUID is not a failure to report: %q", r)
 	}
 }

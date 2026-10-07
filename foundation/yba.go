@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,9 +20,14 @@ const (
 	helmRepoURL  = "https://charts.yugabyte.com"
 )
 
-// customerCountURL is YBA's own unauthenticated customer count, read from
-// inside the yugaware container.
-const customerCountURL = "http://localhost:9000/api/v1/customer_count"
+// YBA's own customer count. Unauthenticated by design — there is no API token
+// on this path, and creating one to ask this question would defeat the point —
+// which is what lets it be read over the Service from another pod as well as
+// from inside the yugaware container.
+const (
+	customerCountPath   = "/api/v1/customer_count"
+	customerCountPodURL = "http://localhost:9000" + customerCountPath
+)
 
 // releasesDir is where the yugaware image keeps the DB releases it bundles.
 const releasesDir = "/opt/yugabyte/releases"
@@ -35,6 +43,9 @@ func (d *Deployer) installYBA(ctx context.Context) error {
 		return err
 	}
 	release := d.spec.HelmRelease()
+	if err := d.clearWedgedRelease(ctx, release); err != nil {
+		return err
+	}
 	d.log("installing yugaware (release %s, chart %s) — this takes tens of minutes on a cold cluster", release, chart)
 
 	argv := []string{
@@ -206,25 +217,20 @@ func (d *Deployer) checkYBACustomer(ctx context.Context) error {
 			d.yugawareSelector())
 	}
 
-	res, err := d.kubectl(ctx, nil, "exec", "statefulset/"+names[0], "-c", "yugaware", "--",
-		"curl", "-s", "-m", "15", customerCountURL)
-	if err != nil {
-		return err
-	}
+	body, where, ok := d.readCustomerCount(ctx, "statefulset/"+names[0])
 	// An unreachable endpoint is inconclusive, not proof of a bad install — a
 	// hard failure here would turn a probe we cannot run into a broken deploy.
 	// A definitive wrong ANSWER below is a different matter.
-	if res.ExitCode != 0 {
-		d.log("warning: could not read %s from statefulset/%s; skipping the customer check",
-			customerCountURL, names[0])
+	if !ok {
+		d.log("warning: could not read the customer count from %s; skipping the check", where)
 		return nil
 	}
 	var doc struct {
 		Count *int `json:"count"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &doc); err != nil || doc.Count == nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(body)), &doc); err != nil || doc.Count == nil {
 		d.log("warning: could not parse a customer count from %q; skipping the check",
-			strings.TrimSpace(res.Stdout))
+			strings.TrimSpace(body))
 		return nil
 	}
 	switch n := *doc.Count; {
@@ -244,6 +250,172 @@ func (d *Deployer) checkYBACustomer(ctx context.Context) error {
 			"refuse every CR. Something registered a second customer — the YBA console can — and "+
 			"one of them has to be removed", n)
 	}
+}
+
+// clearWedgedRelease uninstalls a release that `helm upgrade --install` cannot
+// recover, and does nothing otherwise.
+//
+// A first install that times out leaves the release `failed`; one whose process
+// is killed part way leaves it `pending-install`. In both cases the release
+// RECORD exists, so `--install` no longer applies and helm takes the upgrade
+// path — which refuses, because there is no deployed revision to upgrade from.
+// Every later converge then fails the same way, with an error that has nothing
+// to do with whatever went wrong the first time. A pod makes this likely: the
+// install runs for tens of minutes and any rollout lands inside it.
+//
+// THE PREDICATE IS THE WHOLE SAFETY PROPERTY. It is not "the status looks bad":
+// uninstalling a working release removes the operator that holds every CR's
+// finalizer, which is the one thing `down` is carefully ordered to avoid. It is
+// "no revision has ever reached deployed", which is exactly the condition under
+// which an upgrade cannot work and an uninstall loses nothing — there is no
+// working release to lose. A `superseded` revision counts as deployed, because
+// that is what a previously-deployed revision becomes.
+//
+// Within a converge it fires once. Across converges a cause that persists will
+// see it fire again; the caller's backoff is what stops that becoming a tight
+// uninstall/reinstall loop.
+func (d *Deployer) clearWedgedRelease(ctx context.Context, release string) error {
+	res, err := d.helm(ctx, "history", release, "--namespace", d.spec.Namespace, "-o", "json")
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		// Overwhelmingly "release: not found", which is a fresh install and the
+		// common case. Anything else is a helm we cannot interrogate, and the
+		// install below will report it better than a guess here would.
+		return nil
+	}
+	var revisions []struct {
+		Revision int    `json:"revision"`
+		Status   string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &revisions); err != nil || len(revisions) == 0 {
+		return nil
+	}
+	// The newest revision that actually deployed, which is what a rollback
+	// returns to. helm history is ascending, so the last one wins.
+	good := 0
+	for _, r := range revisions {
+		if r.Status == "deployed" || r.Status == "superseded" {
+			good = r.Revision
+		}
+	}
+	last := revisions[len(revisions)-1].Status
+
+	// A release caught mid-operation holds a lock that `helm upgrade` refuses
+	// with "another operation (install/upgrade/rollback) is in progress", and
+	// nothing clears it on its own — so without this a converge fails forever.
+	//
+	// It is reached by the pod being KILLED during a helm call: an eviction, a
+	// node scaled down, or a SIGKILL at the end of terminationGracePeriodSeconds
+	// on an install that ran longer. That is not hypothetical; it is how this
+	// was found.
+	//
+	// Rolled back rather than uninstalled, and only when a good revision exists
+	// to return to: uninstalling here would take the operator that holds every
+	// CR's finalizer, which is the one thing worse than being stuck. Rollback
+	// restores a revision that was already running and releases the lock.
+	if good > 0 && strings.HasPrefix(last, "pending-") {
+		d.log("release %s is stuck at %q, which `helm upgrade` refuses — rolling back to "+
+			"revision %d, the newest that deployed", release, last, good)
+		rb, err := d.helm(ctx, "rollback", release, strconv.Itoa(good),
+			"--namespace", d.spec.Namespace, "--wait", "--timeout", d.ybaTimeout.String())
+		if err != nil {
+			return err
+		}
+		if rb.ExitCode != 0 {
+			return fmt.Errorf("release %s is stuck at %q and `helm rollback` to revision %d "+
+				"failed, so the install cannot proceed: %s",
+				release, last, good, strings.TrimSpace(rb.Stderr))
+		}
+		return nil
+	}
+	if good > 0 {
+		// A failed revision over a deployed one is ordinary: `helm upgrade`
+		// handles it, and uninstalling would be far more destructive than the
+		// problem.
+		return nil
+	}
+
+	d.log("release %s has %d revision(s) and none ever deployed (last: %s), so "+
+		"`helm upgrade --install` would refuse it — uninstalling to start clean",
+		release, len(revisions), last)
+	un, err := d.helm(ctx, "uninstall", release, "--namespace", d.spec.Namespace, "--ignore-not-found")
+	if err != nil {
+		return err
+	}
+	if un.ExitCode != 0 {
+		return fmt.Errorf("release %s is wedged at %q and `helm uninstall` failed, so the install "+
+			"cannot proceed: %s", release, last, strings.TrimSpace(un.Stderr))
+	}
+	return nil
+}
+
+// readCustomerCount asks YBA for its customer count, over whichever transport
+// can reach it.
+//
+// In a pod it is an ordinary GET of the yugaware Service: the endpoint is
+// unauthenticated by design, so there is nothing to arrange, and it means the
+// deployer needs no pods/exec permission for this check. Outside the cluster
+// that Service name resolves to nothing, so the CLI keeps exec'ing curl in the
+// yugaware container.
+// customerCountAttempts is how many times the probe is retried before it is
+// called inconclusive.
+//
+// The retry is on the TRANSPORT, not on the answer. A count of zero is a real,
+// permanent answer and fails immediately — the hook that would have created the
+// customer has already run or will never run. What is retried is yugaware not
+// answering yet: the rollout check above only proves the pod is Ready, and a
+// Play application serves its first request some way after that. Without this,
+// that window reads as "cannot check" and the install proceeds to have every CR
+// refused, which is the exact outcome this probe exists to prevent.
+const customerCountAttempts = 5
+
+func (d *Deployer) readCustomerCount(ctx context.Context, workload string) (body, where string, ok bool) {
+	for i := range customerCountAttempts {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return "", where, false
+			case <-time.After(d.pollInterval):
+			}
+		}
+		body, where, ok = d.readCustomerCountOnce(ctx, workload)
+		if ok {
+			return body, where, true
+		}
+	}
+	return "", where, false
+}
+
+func (d *Deployer) readCustomerCountOnce(ctx context.Context, workload string) (body, where string, ok bool) {
+	if d.inCluster {
+		url := d.customerCountURL()
+		code, body, err := d.httpGet(ctx, url)
+		if err != nil || code != http.StatusOK {
+			return "", url, false
+		}
+		return body, url, true
+	}
+	res, err := d.kubectl(ctx, nil, "exec", workload, "-c", "yugaware", "--",
+		"curl", "-s", "-m", "15", customerCountPodURL)
+	if err != nil || res.ExitCode != 0 {
+		return "", workload, false
+	}
+	return res.Stdout, workload, true
+}
+
+// customerCountURL addresses the chart's own yugaware-ui Service, which is what
+// the chart's customer-create hook posts to. Port 80 unless yugaware TLS is on,
+// in which case the chart serves 443 and 80 does not exist.
+func (d *Deployer) customerCountURL() string {
+	host := fmt.Sprintf("%s-yugaware-ui.%s.svc.cluster.local", d.spec.HelmRelease(), d.spec.Namespace)
+	if tls, _ := d.spec.YBA.Values["tls"].(map[string]any); tls != nil {
+		if on, _ := tls["enabled"].(bool); on {
+			return "https://" + host + customerCountPath
+		}
+	}
+	return "http://" + host + customerCountPath
 }
 
 // resolveChart returns the chart reference for the configured source.

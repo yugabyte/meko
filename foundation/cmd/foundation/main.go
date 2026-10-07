@@ -40,13 +40,20 @@ const usage = `foundation — stand up and converge a YugabyteDB foundation
 
   foundation render   -c SPEC [-o DIR]   render manifests; applies nothing
   foundation validate -c SPEC            parse and check the spec
-  foundation up       -c SPEC            first bring-up: CRDs, yugaware, universe, databases
+  foundation up       -c SPEC            first bring-up: CRDs, yugaware, the CRs, and wait
   foundation apply    -c SPEC            converge an existing foundation onto the spec
-  foundation status   -c SPEC            the universe's state, as JSON
+  foundation status   -c SPEC            YBA, every declared CR and the address, as JSON
   foundation connstr  -c SPEC [--shell]  connection details, as JSON or shell exports
   foundation down     -c SPEC [flags]    delete the universe, the release and its cluster RBAC
+  foundation reconcile --name N --namespace NS
+                                         converge a Foundation object whenever it changes,
+                                         and keep its status current. The pod's verb; takes
+                                         no -c, because the object carries the spec.
 
 Common flags: --kube-context, --namespace (override the spec).
+up/apply: --apply-only returns once the spec is applied rather than once the
+foundation is usable, for a caller that converges repeatedly; --publish-to NS
+also writes the address to a foundation-conn ConfigMap there.
 `
 
 func run(ctx context.Context, args []string) error {
@@ -70,6 +77,8 @@ func run(ctx context.Context, args []string) error {
 		return cmdConnstr(ctx, rest)
 	case "down":
 		return cmdDown(ctx, rest)
+	case "reconcile":
+		return cmdReconcile(ctx, rest)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return nil
@@ -229,6 +238,12 @@ func cmdConverge(ctx context.Context, args []string, initial bool) error {
 	shell := fs.Bool("shell", false, "emit connection details as shell exports instead of JSON")
 	noPrune := fs.Bool("no-prune", false,
 		"leave operator CRs the spec no longer declares on the cluster")
+	publishTo := fs.String("publish-to", "",
+		"also write the address to a `foundation-conn` ConfigMap in this namespace, "+
+			"for consumers to read with configMapKeyRef")
+	applyOnly := fs.Bool("apply-only", false,
+		"return once the spec is applied instead of once the foundation is usable: "+
+			"skips the waits and the Service check")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -239,6 +254,9 @@ func cmdConverge(ctx context.Context, args []string, initial bool) error {
 	d := deployer(spec).WithTimeouts(*ybaTimeout, *univTimeout, 0)
 	if *noPrune {
 		d = d.WithoutPrune()
+	}
+	if *applyOnly {
+		d = d.WithoutWaits()
 	}
 
 	start := time.Now()
@@ -269,12 +287,28 @@ func cmdConverge(ctx context.Context, args []string, initial bool) error {
 		if *noPrune {
 			resume += " --no-prune"
 		}
+		if *applyOnly {
+			resume += " --apply-only"
+		}
+		if *publishTo != "" {
+			resume += " --publish-to " + *publishTo
+		}
 		return fmt.Errorf("%w\n  %s", err, resume)
 	}
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "==> done in %s\n", time.Since(start).Round(time.Second))
+	if *publishTo != "" && info != nil {
+		if err := d.PublishConn(ctx, *publishTo, info); err != nil {
+			return err
+		}
+	}
+	if info == nil {
+		// --apply-only, and the universe has not produced its Service yet.
+		fmt.Fprintln(os.Stderr, "the spec is applied; connection details are not available yet")
+		return nil
+	}
 	return emit(info, *shell)
 }
 
@@ -288,11 +322,11 @@ func cmdStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	info, err := deployer(spec).Connect(ctx)
+	st, err := deployer(spec).Status(ctx)
 	if err != nil {
 		return err
 	}
-	return emit(info, false)
+	return emitJSON(st)
 }
 
 func cmdConnstr(ctx context.Context, args []string) error {
@@ -382,10 +416,49 @@ func emit(info *foundation.Info, shell bool) error {
 		fmt.Print(info.ShellExports())
 		return nil
 	}
-	b, err := json.MarshalIndent(info, "", "  ")
+	return emitJSON(info)
+}
+
+func emitJSON(v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
 	fmt.Println(string(b))
 	return nil
+}
+
+// cmdReconcile is the pod's verb. It takes no -c: the spec is the Foundation
+// object's, which is the whole point — one spec, edited in the cluster, with
+// no file to keep in step with it.
+func cmdReconcile(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("reconcile", flag.ContinueOnError)
+	name := fs.String("name", "", "name of the Foundation to reconcile (required)")
+	namespace := fs.String("namespace", "", "namespace it is in (required)")
+	kubeContext := fs.String("kube-context", "",
+		"kube context to use; empty in a pod, where there is no kubeconfig")
+	poll := fs.Duration("poll", 0, "how often to re-read the Foundation")
+	minBackoff := fs.Duration("min-backoff", 0, "first wait after a failed converge")
+	maxBackoff := fs.Duration("max-backoff", 0, "ceiling on that wait")
+	resync := fs.Duration("resync", 0,
+		"re-converge a settled foundation this often; 0 means never, and is the default "+
+			"because a converge runs `helm upgrade` and a settled foundation has nothing to do")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" || *namespace == "" {
+		return fmt.Errorf("--name and --namespace are required")
+	}
+	err := foundation.NewReconciler(nil, *namespace, *name, *kubeContext).
+		WithIntervals(*poll, *minBackoff, *maxBackoff, *resync).
+		WithLogger(func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "==> "+format+"\n", args...)
+		}).
+		Run(ctx)
+	// Run only ever returns because the context ended, which is a SIGTERM the
+	// pod was told to expect — not a failure to report as one.
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }

@@ -1,0 +1,119 @@
+suite: rbac
+templates:
+  - rbac.yaml
+release:
+  name: fdn
+  namespace: amp
+# Two helm-unittest behaviours shape everything below. An assertion with NO
+# document selector runs against every rendered document and must pass for all
+# of them, so a `contains` meant for the ClusterRole fails on the ServiceAccount
+# beside it. And `hasDocuments` ignores the selector and counts the whole
+# template, so it only says anything in a test that has no selector — which is
+# also why a selector that matches nothing is a failure, and therefore proof
+# that the document is there.
+tests:
+  # Five by default: ServiceAccount, Role, RoleBinding, ClusterRole,
+  # ClusterRoleBinding. hasDocuments counts the whole template and IGNORES the
+  # selector, so it only says anything in a test that has none.
+  - it: grants both halves by default
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: binds the cluster-scoped half to the pod's ServiceAccount
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: fdn-meko-foundation
+            namespace: amp
+
+  # The one grant that must never appear. The operator's CRDs are cluster-scoped
+  # and SHARED: deleting them deletes every other foundation's universe on the
+  # cluster. Nothing in the binary deletes one, and the RBAC says so too.
+  - it: never grants delete on CustomResourceDefinitions
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["apiextensions.k8s.io"]
+            resources: [customresourcedefinitions]
+            verbs: [get, list, watch, create, update, patch]
+
+  # Cluster-scoped objects are not namespaced, so two foundations in two
+  # namespaces of one cluster would install the same ClusterRole over each
+  # other — the second adopting the first's object, and either uninstall taking
+  # it from both.
+  - it: prefixes cluster-scoped names with the namespace
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: metadata.name
+          value: amp-fdn-meko-foundation
+
+  # Three documents and no more: ServiceAccount, Role, RoleBinding. A rendered
+  # ClusterRole would make it five.
+  - it: renders nothing cluster-scoped when that is turned off
+    set:
+      rbac.clusterScoped: false
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  # The namespaced grant is a wildcard on purpose — the pod installs the
+  # yugaware chart, whose contents change between the versions a spec picks —
+  # and that wildcard is what covers escalate and bind on the Roles in that
+  # release.
+  - it: grants everything within the namespace
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["*"]
+              resources: ["*"]
+              verbs: ["*"]
+      - equal:
+          path: metadata.namespace
+          value: amp
+
+  # A provider zone can put the universe in another namespace, and the Service
+  # lookup, the certificate check and the pod dump all run there.
+  - it: grants in every extra namespace as well as its own
+    set:
+      rbac.extraNamespaces: [universe-ns]
+    asserts:
+      # The five above plus a Role and a RoleBinding in the extra namespace.
+      - hasDocuments:
+          count: 7
+
+  # Every binding, in whichever namespace, names the ServiceAccount in the
+  # RELEASE's namespace — which is where the pod actually runs. Writing the
+  # loop's own namespace here instead would bind a Role to a ServiceAccount
+  # that does not exist, and the failure would be a forbidden tens of minutes
+  # into a converge.
+  - it: binds every Role back to the pod's own ServiceAccount
+    set:
+      rbac.extraNamespaces: [universe-ns]
+    documentSelector:
+      path: kind
+      value: RoleBinding
+      matchMany: true
+    asserts:
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: fdn-meko-foundation
+            namespace: amp

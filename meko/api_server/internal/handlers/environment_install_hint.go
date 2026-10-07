@@ -336,6 +336,16 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "# Prerequisites\n")
 	fmt.Fprintf(&b, "#   - YugabyteDB up and reachable from this cluster, with a yb_storage database:\n")
 	fmt.Fprintf(&b, "#       CREATE DATABASE yb_storage;\n")
+	fmt.Fprintf(&b, "#     Deployed with foundation/? Both YB and YB_SSLMODE below come off it\n")
+	fmt.Fprintf(&b, "#     (in the FOUNDATION's namespace, which need not be the one below):\n")
+	fmt.Fprintf(&b, "#       kubectl -n <foundation namespace> get foundation foundation \\\n")
+	fmt.Fprintf(&b, "#         -o jsonpath='{.status.address.ysql_host_ports}{\"\\n\"}{.status.address.ssl_mode}'\n")
+	fmt.Fprintf(&b, "#   - unless YB_SSLMODE=disable, TLS needs one thing in each direction:\n")
+	fmt.Fprintf(&b, "#       cert-manager and a ClusterIssuer (YB_TLS_ISSUER below). The chart asks\n")
+	fmt.Fprintf(&b, "#         it for a certificate for the controller and one per endpoint — needed\n")
+	fmt.Fprintf(&b, "#         even if your database authenticates by password\n")
+	fmt.Fprintf(&b, "#       a ConfigMap (YB_CA_CONFIGMAP below) with the CA that signed YugabyteDB's\n")
+	fmt.Fprintf(&b, "#         certificates as ca.crt — how sslmode=verify-full checks the server\n")
 	fmt.Fprintf(&b, "#   - a docker-registry Secret for quay.io/yugabyte, in the namespace below\n")
 	fmt.Fprintf(&b, "#   - helm logged in to quay.io with that Secret's credential — the chart is\n")
 	fmt.Fprintf(&b, "#     private, like the images:\n")
@@ -345,6 +355,22 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "# Fill these in, then paste the rest as-is.\n")
 	fmt.Fprintf(&b, "NS=%s\n", ns)
 	fmt.Fprintf(&b, "YB=<yb-tserver-host>:5433      # YugabyteDB tserver endpoint (host:port)\n")
+	// A universe the operator deploys is ENCRYPTED — both flags default true in
+	// the CRD — so a hardcoded sslmode=disable here fails at the first connect
+	// with "no pg_hba.conf entry ... no encryption". It has to be a variable,
+	// and `require` is the cheaper of the two encrypted modes: it does not
+	// authenticate the server, so no CA has to be the one the universe was
+	// issued from.
+	fmt.Fprintf(&b, "YB_SSLMODE=require             # disable (plaintext) | require (encrypted) |\n")
+	fmt.Fprintf(&b, "                               # verify-full (encrypted + server authenticated)\n")
+	// Both are needed for ANY encrypted mode, not just verify-*: the chart
+	// gives the controller and every endpoint a client certificate from
+	// cert-manager and mounts the CA bundle beside it, and a pod naming a
+	// Secret or ConfigMap that does not exist never starts.
+	fmt.Fprintf(&b, "YB_TLS_ISSUER=amp-ca           # cert-manager ClusterIssuer for the amp certificates\n")
+	fmt.Fprintf(&b, "YB_CA_CONFIGMAP=amp-ca-bundle  # ConfigMap in the namespace above holding, as ca.crt,\n")
+	fmt.Fprintf(&b, "                               # the root the DATABASE's certificates came from\n")
+	fmt.Fprintf(&b, "                               # Both are ignored when YB_SSLMODE=disable\n")
 	// Empty by default: the foundation's universe runs with YSQL auth off.
 	fmt.Fprintf(&b, "YB_PASSWORD=''                 # the yugabyte user's YSQL password, if YSQL auth is on\n")
 	fmt.Fprintf(&b, "AGENT_API_KEY='%s'   # shown once by the YCP console; revocable there\n", apiKeyPlaceholder)
@@ -389,6 +415,28 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 
 	fmt.Fprintf(&b, "# %d — install the amp controller and its reconcile-agent.\n", installStep)
 	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
+	// The DSN is assembled from the variables above rather than printed as one
+	// literal, so a customer changes YB_SSLMODE and nothing else. The three cert
+	// paths are the chart's own mount points and are not variables: they are
+	// where the deployment template puts tls.caBundleConfigMap and the issued
+	// client Secret, so naming any other path would point at a file the pod does
+	// not have.
+	//
+	// ENDPOINTS CONNECT ON THEIR OWN, so controller.endpoint.ybTlsMode has to be
+	// set too. The controller's DSN says nothing about them: left on the chart's
+	// plaintext default they fail at their first connect with "no pg_hba.conf
+	// entry ... no encryption" against an encrypted universe, while the
+	// controller itself is fine and the install reads as successful.
+	fmt.Fprintf(&b, "DSN=\"postgres://yugabyte@${YB}/yb_storage?sslmode=${YB_SSLMODE}\"\n")
+	fmt.Fprintf(&b, "TLS_ARGS=\"\"\n")
+	fmt.Fprintf(&b, "if [ \"${YB_SSLMODE}\" != disable ]; then\n")
+	fmt.Fprintf(&b, "  DSN=\"${DSN}&sslrootcert=/etc/amp/tls/ca/ca.crt\"\n")
+	fmt.Fprintf(&b, "  DSN=\"${DSN}&sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key\"\n")
+	fmt.Fprintf(&b, "  TLS_ARGS=\"--set tls.enabled=true\"\n")
+	fmt.Fprintf(&b, "  TLS_ARGS=\"${TLS_ARGS} --set-string tls.issuerRef.name=${YB_TLS_ISSUER}\"\n")
+	fmt.Fprintf(&b, "  TLS_ARGS=\"${TLS_ARGS} --set-string tls.caBundleConfigMap=${YB_CA_CONFIGMAP}\"\n")
+	fmt.Fprintf(&b, "  TLS_ARGS=\"${TLS_ARGS} --set-string controller.endpoint.ybTlsMode=${YB_SSLMODE}\"\n")
+	fmt.Fprintf(&b, "fi\n")
 	fmt.Fprintf(&b, "helm upgrade --install yb-amp-controller %s -n \"${NS}\" \\\n", ampControllerChart)
 	// Above the preflight hook's own budget. helm waits on a post-install hook for
 	// --timeout, which defaults to exactly 5m — the same as the preflight's default
@@ -398,7 +446,8 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "  --timeout 10m \\\n")
 	fmt.Fprintf(&b, "  --set-string imageTag=\"${TAG}\" \\\n")
 	// --set-string, not --set: the DSN's ? and = are mis-tokenized by --set.
-	fmt.Fprintf(&b, "  --set-string controller.databaseUrl=\"postgres://yugabyte@${YB}/yb_storage?sslmode=disable\" \\\n")
+	fmt.Fprintf(&b, "  --set-string controller.databaseUrl=\"${DSN}\" \\\n")
+	fmt.Fprintf(&b, "  ${TLS_ARGS} \\\n")
 	// Names the Secret only when step 1 created one; empty leaves the controller
 	// and its endpoints passwordless.
 	fmt.Fprintf(&b, "  --set-string controller.ybPasswordSecret.name=\"${YB_PASSWORD:+%s}\" \\\n", ybPasswordSecretName)

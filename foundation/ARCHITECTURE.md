@@ -4,7 +4,7 @@ A **foundation** is the YugabyteDB universe amp and meko keep their durable stat
 in, plus everything needed to stand it up and reach it. This module brings one up
 with the **YugabyteDB Kubernetes Operator**: apply the operator's CRDs, install
 the `yugaware` chart with the operator enabled, apply a `YBProvider` and a
-`YBUniverse`, wait, create the databases, and report one address.
+`YBUniverse`, wait, and report one address.
 
 It replaces a hand-rolled single-node `yugabyted` StatefulSet — RF-1, no rolling
 upgrade, no backups, no lifecycle management — with a real universe, and buys the
@@ -17,15 +17,22 @@ It lives at the repository root rather than under `amp/` for the same reason
 
 ## What actually runs
 
-Nothing of ours runs in the cluster. The CLI is a short-lived process that
-writes CRs and polls; the only long-lived controller in the picture is **YBA's
-operator thread, inside the yugaware pod**. That is the whole reason this module
-can be a CLI rather than a controller: the reconcile loop already exists and is
-somebody else's.
+There are two ways to run this, and they are the same code. The CLI is a
+short-lived process that writes CRs and polls. The pod is that same converge on
+a loop, reading its spec from a `Foundation` object instead of a file — see
+[The reconcile loop](#the-reconcile-loop).
+
+Either way **the real reconciler is somebody else's**: YBA's operator thread,
+inside the yugaware pod, is the only thing continuously driving the universe
+towards its CR. That is why the CLI form works at all, and why the pod can be a
+`kubectl get` on an interval rather than an operator framework — it is not the
+thing keeping the universe alive, it is the thing keeping the CRs in step with
+one spec.
 
 ```
-   spec file
-       │  foundation CLI — a short-lived process on a workstation or CI runner
+   spec file, or a Foundation object
+       │  foundation — a CLI run on a workstation or CI runner, or the same
+       │  converge on a loop in a pod
        │  kubectl apply --server-side;  helm upgrade --install
        ▼
    ┌───────────────────────────────────────────────────────────────────┐
@@ -90,7 +97,9 @@ foundation/
   crds.go        kubectl apply --server-side of the operator CRD bundle
   yba.go         helm upgrade --install of yugaware, and the customer check
   universe.go    apply the CRs, wait for the provider, wait for the universe
-  conn.go        find the tserver Service, build the DSN, create databases
+  conn.go        find the tserver Service and build the DSN
+  status.go      mirror every declared CR's own status, and the phase it adds up to
+  publish.go     write the address into the foundation-conn ConfigMap
   down.go        ordered teardown
   deployer.go    the converge sequence and its preflight
   runner.go      the command-runner seam every kubectl/helm call goes through
@@ -121,7 +130,7 @@ deployer is testable without a cluster.
 | every other CR the spec names | `applyCRs`, in document order | namespace | `down`, in reverse |
 | master/tserver pods, PVCs | **YBA**, from the CRs | universe namespace | YBA, on CR delete |
 | the tserver `ClusterIP` Service | **the YugabyteDB chart** | universe namespace | YBA, with the universe |
-| `yb_storage` | `ensureDatabases` | in the DB | — |
+| `yb_storage` | **the consumer** | in the DB | — |
 
 Two of those rows are the ones people get wrong.
 
@@ -154,7 +163,7 @@ inheriting the wrong one costs a rebuild.
 such problem in one error rather than one per run — a spec written before the
 deployer stopped defaulting is missing all of it at once. Errors and not advice
 because the deployer cannot finish without that Service either: `connstr`
-resolves nothing and the databases step fails.
+resolves nothing, so there is no address to report.
 
 It has no opinion at all about encryption: whether a universe is encrypted is the
 operator's call, and a spec that says nothing about either flag is accepted.
@@ -214,7 +223,7 @@ provider's `kubeNamespace`, `Validate` requires the universe's address contract,
 requires one universe and puts any provider and certificate above it, and
 `applyCRs` waits on the provider and runs the release check before the
 universe. Each of those exists because the deployer has to *do* something
-about that object — wait, connect, create databases — not because the kind is
+about that object — wait, connect — not because the kind is
 modelled. `yba.values:` is yugaware chart values verbatim on the
 same principle.
 
@@ -233,6 +242,19 @@ kinds to tell them apart.
 **Key order is apply order**, and teardown is its exact reverse. `Load` walks
 the document as a `yaml.Node` rather than decoding into a map, because Go
 randomises map iteration and would lose it.
+
+**The same CRs can be declared as a `resources:` list instead**, each entry
+`{kind, name, spec}`, with list order as apply order. Both forms parse — a spec
+moves without a flag day — but not in the same file: there is no reading of a
+document that interleaves a list with the keys around it, so `Load` refuses the
+mix rather than inventing an order.
+
+The list is what a `Foundation` CR will need. A CR's spec is stored as JSON, and
+`x-kubernetes-preserve-unknown-fields` content round-trips through a Go map in
+the API server, which has no ordering guarantee — so the key form would lose
+apply order there for exactly the reason a Go map does here. It also narrows the
+free-form part to one field, `resources[].spec`, which lets a schema stay strict
+on every setting instead of allowing any unrecognised top-level key.
 
 The alternative — a Go struct per CR, extended every time someone needs a field
 nobody modelled and re-extended on every operator release — is what this
@@ -269,7 +291,7 @@ written back to the CR:
 | `ybSoftwareVersion` is a release YBA has (`installYBA`, not `Validate` — it needs the cluster) | the same opaque `Error Creating`, from `Helm Package path not found for release` |
 | `numNodes ≥ replicationFactor` | the CRD constrains neither |
 | `placementInfo` zones exist in the provider | a failed task, tens of minutes in |
-| exactly one `YBUniverse`, and at most one `YBProvider` | `connstr`/`ensureDatabases`/the tserver lookup each resolve one universe, and a universe references one provider |
+| exactly one `YBUniverse`, and at most one `YBProvider` | `connstr` and the tserver lookup each resolve one universe, and a universe references one provider |
 | `YBProvider` above `YBUniverse` | keys apply top to bottom, and YBA rejects a universe whose provider has not registered |
 | every entry has a `name` and a `spec` | the API server rejects an empty name while naming no key in the file |
 | no `(kind, name)` twice | the API server treats the second as a server-side apply of the first, so one entry silently does nothing |
@@ -301,14 +323,76 @@ callable twice with the same result.
 `up` and `apply` share one path; the split is only about which steps are expected
 to be no-ops.
 
+**The pod waits for YBA and nothing after it**, which is `WithoutWaits` — the
+same switch `--apply-only` uses. The gates exist so a ONE-SHOT caller gets a
+finished foundation: each waits for a provider, certificate or telemetry
+provider to register before the universe naming it is applied. A loop gains
+nothing from them, because YBA resolves every one of those references itself and
+the loop re-reads each CR's status every poll anyway. They are also the one
+thing a superseded converge could not abandon, since they run inside `applyCRs`,
+which writes.
+
+`installYBA`'s own wait is not dropped and must not be: every CR is rejected
+until YBA is serving and has its single customer, so skipping it only moves the
+failure.
+
+**Prune does not need the universe settled**, and this is worth stating because
+the opposite is the intuitive guess. A single edit can both stop the universe
+using a `KMSConfig` and drop the config, and deleting the config first is safe:
+`KMSConfigReconciler.handleResourceDeletion` refuses while
+`EncryptionAtRestUtil.configInUse`, writes `InUse` to the CR, and requeues the
+delete with `incrementRetry` false — forever. The operator's own finalizer holds
+the object until the disable task has released it. So the ordering is YBA's, and
+YBA does it.
+
+What prune skips under `WithoutWaits` is only WAITING for the deletions to land.
+It still issues every one. Waiting would mean waiting out the universe's own
+task, on the caller that exists in order not to wait — and the next converge
+reports whatever is still there. It is for a caller that converges repeatedly: YBA
+retries every reference it cannot resolve, so the waits buy a one-shot caller a
+finished foundation and buy a looping one only a slower loop. It drops the
+universe wait and the per-CR gates, and with them the Service check, which reads
+the universe's own objects — so `Info` comes back nil until the address
+resolves. `installYBA`'s wait is not dropped: the CRs are rejected until YBA is
+serving and has its single customer.
+
 The steps are a named list rather than a chain of calls, because aborting in the
 middle leaves a foundation that *looks* finished — universe `Ready`, every pod
-healthy — while a later step never ran. A bring-up that died at the universe wait
-never created `yb_storage`, and the omission surfaced much later as the amp controller
-failing to open its state store. An aborted converge therefore returns an
-`IncompleteError` naming the steps it skipped, and the CLI adds the command that
-resumes it: every step is create-or-apply, so `apply` picks up from where the
-failure stopped.
+healthy — while a later step never ran, and that only surfaces much later and
+somewhere else. An aborted converge therefore returns an `IncompleteError`
+naming the steps it skipped, and the CLI adds the command that resumes it: every
+step is create-or-apply, so `apply` picks up from where the failure stopped.
+
+### An interrupt is not a cancel
+
+`WithInterrupt` lets a looping caller abandon a converge whose spec has been
+superseded, which is what stops one bad spec holding the loop for the whole
+45-minute universe timeout. Each step is marked as writing to the cluster or
+not, and the two halves are treated differently:
+
+- A step **already running** is cut short only if it writes nothing. Killing
+  `helm upgrade --install` partway is exactly what leaves the release holding a
+  lock later upgrades refuse; the waits, the preflight and the Service check
+  hold no such state, so dropping them costs only the time already spent.
+- A step that writes can still have an **abandonable half**. Prune issues every
+  delete and then polls for them to go, and the cluster finishes a delete
+  whether or not anything is watching — so the polling runs under the interrupt
+  even though the step is marked mutating. Without that, a superseded converge
+  waits out the universe timeout on CRs it has already deleted.
+- **Nothing new starts** once the interrupt has fired, whether it writes or not.
+  Every step is create-or-apply, so stopping between two of them strands
+  nothing.
+
+That between-steps gate is the load-bearing half, and not redundant with
+cancelling the context: a step that never consults its context — anything whose
+work is a single `kubectl` call — would otherwise run to completion on a spec
+already known to be stale.
+
+The result is `ErrInterrupted` rather than whatever the cancelled step happened
+to be doing, so a caller can tell a superseded converge from a broken one and
+not back off over it. A caller that needs the converge to genuinely *stop* — a
+pod being terminated — cancels the context instead, and accepts the wedge that
+implies. That is why the pod's `terminationGracePeriodSeconds` matters.
 
 1. **Preflight** — binaries on PATH, cluster reachable, helm ≥ 3.11, k8s ≥ 1.27,
    every storage class the spec names exists (and warns unless it binds
@@ -355,14 +439,14 @@ failure stopped.
    switched postgres and prometheus from Docker Hub to
    `quay.io/yugabyte/hardened-*`, which the itest robot cannot pull — the
    yugaware pod sits in `Init:ImagePullBackOff` and the install burns the full
-   `ybaTimeout` before saying so. `examples/amp.yaml` overrides both back.
+   `ybaTimeout` before saying so. `examples/foundation-cli.yaml` overrides both back.
 
    **`yb.universe.otel_collector_enabled` is off by default and read at
    startup.** It gates the collector sidecar YBA injects into the DB pods, so
    without it a universe declaring telemetry gets no collector and no error —
    and YBA reads its runtime config when yugaware starts, so it cannot be turned
    on afterwards from this path (nothing here holds a YBA API token).
-   `examples/amp.yaml` sets it through `yba.values.additionalAppConf`, which the
+   `examples/foundation-cli.yaml` sets it through `yba.values.additionalAppConf`, which the
    chart writes into `application.docker.conf`.
 
    2026.1.2 also added **Perf Advisor**, a subchart enabled by default that
@@ -385,7 +469,7 @@ failure stopped.
    hardened one does not, so moving only the registry resolves to a tag that
    does not exist.
 
-   This is what `examples/amp.yaml` deploys: `2026.1.3.0-b21`, for the
+   This is what `examples/foundation-cli.yaml` deploys: `2026.1.3.0-b21`, for the
    15-kind bundle — `KMSConfig`, `TelemetryProvider`, `UniverseKeyRotation` and
    `YBCertificate` are not in 2026.1.1's 12, and installing their CRDs is not
    enough on its own, since reconciling one needs a yugaware whose operator
@@ -424,6 +508,29 @@ failure stopped.
 4. **yugaware** — `helm upgrade --install --wait`, values file first and
    `--set-string` after, because helm gives `--set` precedence over `-f` and the
    settings in `HelmSets` must not be switchable off by a values file.
+
+   A wedged release is cleared first, and HOW depends on whether there is
+   anything to lose.
+
+   With **no `deployed` or `superseded` revision ever**, it is uninstalled. That
+   is a first install which timed out (`failed`) or was killed part way
+   (`pending-install`): the release *record* exists, so `--install` no longer
+   applies and the upgrade path refuses for want of a revision to upgrade from,
+   identically on every later converge.
+
+   With a good revision underneath and a **`pending-*`** one on top, it is
+   ROLLED BACK to the newest that deployed. A release caught mid-operation holds
+   a lock, and `helm upgrade` refuses it with "another operation
+   (install/upgrade/rollback) is in progress" — forever, because nothing clears
+   it on its own. That state is reached by the pod being killed during a helm
+   call: an eviction, a node scaled down, or SIGKILL at the end of
+   `terminationGracePeriodSeconds` on an install that ran longer. It is not
+   hypothetical — the GKE lane hit it when the autoscaler took the node.
+
+   Rollback and not uninstall, because an uninstall takes the operator that
+   holds every CR's finalizer: worse than the wedge. A revision that merely
+   `failed` over a good one is left alone entirely, since `helm upgrade` handles
+   that itself.
 5. **Customer check** — YBA must have exactly one, or the operator refuses every
    CR. See below.
 6. **Every CR the spec names, top to bottom.** A provider is waited for as
@@ -436,7 +543,7 @@ failure stopped.
    ready yet". The release check runs immediately before the universe.
 7. **Wait** for the universe to settle, then **prune** what the spec no longer
    declares.
-8. **Service check**, **databases**, **connection info**.
+8. **Service check** and **connection info**.
 
 ### Four ordering constraints that are not obvious
 
@@ -470,6 +577,21 @@ only evidence is in the yugaware log. `installYBA` reads YBA's own unauthenticat
 `customer_count` and fails with the reason rather than letting the universe wait
 time out. More than one customer breaks it the same way.
 
+It is a CHECK, not a wait: the chart creates the customer from a post-install
+hook, and helm runs those after `--wait` and waits for the hook Job itself, so by
+the time this runs the answer is already final. A count of zero therefore fails
+at once — on an upgrade the hook never runs at all, so waiting would buy the same
+answer later. What IS retried is yugaware not answering yet: `rollout status`
+proves the pod is Ready, not that a Play application is serving, and a probe that
+gave up on the first refused connection called itself inconclusive and let the
+install proceed into exactly the failure it exists to catch.
+
+Unauthenticated is what makes the transport a choice: in a pod this is a plain
+GET of the `yugaware-ui` Service, so the deployer needs no `pods/exec`, and
+outside the cluster that name resolves to nothing so the CLI keeps exec'ing
+`curl` in the container. `KUBERNETES_SERVICE_HOST` picks between them, since the
+kubelet sets it in every pod.
+
 **The DB release has to exist in the yugaware image, and that image drifts.** YBA needs a
 helm *package* for `ybSoftwareVersion`, not just the version string, and it only checks at
 universe-create — asynchronously, with the reason in its own log. Which releases a yugaware
@@ -490,9 +612,34 @@ definitive answer fails a deploy, which is the same rule the other probes in
 `yba.go` follow. A spec with no `Release` keeps the hard failure — the case
 that caught the re-cut.
 
-**`yb_storage` must exist before the consumer rolls out.** The amp controller's
-`db.Connect` targets it at startup, which is why database creation is a step of
-the bring-up rather than something the consumer does.
+**`yb_storage` must exist before the consumer rolls out**, and creating it is
+not this deployer's job. The amp controller's `db.Connect` targets it at
+startup, so the ordering is real — but the database belongs to whoever uses it,
+not to the universe, and this was the only step needing `pods/exec`, which a
+foundation running as a pod would have to hold permanently.
+
+**YBA now creates it**, through the global runtime flag
+`yb.universe.create_yb_storage_db` (INTERNAL, default false), which both
+examples set through `yba.values.additionalAppConf`. Two properties decide how
+to use it. It runs as a subtask of universe **CREATE**, so turning it on for a
+universe that already exists does nothing. And it landed on yugabyte-db's
+`2026.1` branch in `eab8d8b1d` on 2026-10-05, which chart `2026.1.3.0-b48` — cut
+2026-10-01, the newest at the time of writing — predates: on any build pinned
+today the key is inert. `amp/deploy/yb-database.sh` is what still creates the
+database on the GKE lane, and it becomes removable once a build carrying the
+subtask is pinned.
+
+**The database the reported DSN names is a constant**, `ReportedDatabase`. There
+was a `databases:` spec field for it and it earned nothing: the name travelled
+into the spec and straight back out, because a consumer always knows which
+database it wants. The DSN is a convenience for the CLI lane anyway — a
+consumer that wants another name builds its own from the parts beside it.
+
+It is amp's database. meko uses `meko_system` plus a per-datapack `DB_NAME`, so
+when meko moves onto a foundation it will assemble its own DSN, and nothing here
+changes for it. YBA's flag hardcodes the same name for the same reason —
+`CreateYbStorageDatabase` is a boolean with no name parameter — so it too covers
+an amp foundation and no other.
 
 **Teardown order is the reverse, and stranding a finalizer is unrecoverable.**
 Every CR carries the operator's finalizer and only the operator can clear it, so
@@ -543,6 +690,17 @@ as well.
 
 `connstr` emits exactly two things: `YB_HOST_PORTS` and `DB_URL`. That is the
 whole interface between a foundation and its consumer.
+
+`--publish-to NS` writes the same address into a `foundation-conn` **ConfigMap**,
+for a consumer that cannot run `connstr` — a pod reads it with
+`configMapKeyRef`, which is the only form Kubernetes can inject as an env var,
+and the amp controller takes its address that way. It carries the *parts*
+(`YB_HOST_PORTS`, `YB_SSLMODE`, `YB_UNIVERSE_NAMESPACE`) rather than a finished
+DSN, because `dsn` appends `sslrootcert`/`sslcert`/`sslkey` from paths that are
+facts about the consumer's own filesystem — `up-gke.sh` passes `/etc/amp/tls/…`
+paths that exist only in amp's pods — so one baked DSN cannot be right for
+everybody. A ConfigMap and not a Secret: no password, and the Service name is
+not secret either.
 
 **One address serves both compute lanes**, because the direct-RPC lane cannot be
 addressed separately. The deploy path has no way to set `tserver_rpc_addrs` —
@@ -607,7 +765,7 @@ and neither turned on here:
   `ServiceExport` beside the endpoint's Service, same name and labels, under
   `multicluster.mcsApiVersion`. It arrived in **2026.1.3**, which is what this
   spec pins, so it is a passthrough field on the spec's own `serviceEndpoints`
-  entry and needs no code change — `examples/amp.yaml` carries it commented out.
+  entry and needs no code change — `examples/foundation-cli.yaml` carries it commented out.
 
   Two caveats survive it. MCS is a spec needing an implementation (GKE MCS, AWS
   Cloud Map, Submariner, Cilium ClusterMesh), and it supplies **discovery, not
@@ -625,6 +783,28 @@ here could not express two consumers in two places.
 
 ## Readiness
 
+`status` reports every declared CR, not only the universe, and each entry is
+that CR's **own** status rather than a verdict computed here. Three kinds report
+readiness three different ways and none of it is derivable from the CRD — the
+providers have `state`, `YBCertificate` has a `success` bool, the universe has
+`universeState` plus `actions` — so `status.go` reads all three and keeps the
+raw wording beside its own Ready/Pending/Failed/Absent. That wording matters
+because the vocabulary is YBA's and open: `KMSConfig.status.state` documents four
+values as examples with no enum while its reconciler writes five, and
+`universeState` reports `Error Creating`, which the CRD never mentions. A kind
+with no readiness field at all still gets an entry saying so, rather than needing
+a case added first.
+
+Two classifications are judgement calls worth knowing. `InUse` counts as Ready —
+it is what a registration a universe holds reads, and calling it unready would
+report a working foundation as broken. An `Error*` universe counts as **Pending**,
+not Failed, for the same reason `FailureWatch` does not end the wait on it: YBA
+requeues CREATE forever, so the state heals on its own.
+
+`Phase` needs an address before it says `Ready`. Every CR being Ready is not the
+same as the foundation being usable, and reporting `Ready` without one sends a
+consumer at nothing.
+
 `YBUniverse.status` has **no `observedGeneration`**. Right after an apply the
 operator has not looked at the new spec and `universeState` still reads `Ready`
 from the *previous* generation, so a wait on state alone reports an edit as
@@ -632,7 +812,7 @@ applied before it starts. `ybuniverse.Settled` therefore also requires no
 `status.actions` entry to be `queued` or `running`; the operator enqueues an
 action before it begins work, which is what closes the hole.
 
-`ybuniverse.FailureWatch` reads what the CR says is wrong. Its job is mostly to
+`ybuniverse.FailureWatch` reads what the CR says is wrong. Its job is to
 **report**, not to adjudicate: without reading the CR back, a rejected spec
 presents as a wait that times out with the reason left where nobody looked.
 
@@ -648,16 +828,21 @@ That StatefulSet is looked up by label rather than named, for the same reason
 `yugawareStatefulSets` exists: the chart has renamed it across versions, so a
 hint built from the release name sends the reader to a pod that is not there.
 
-**One failure does end the wait: a spec YBA rejected before it made a task.**
-The action stays `queued` with no UUID while `universeState` becomes
-`Error Creating`, and nothing will retry it because YBA never accepted it — a
-task UUID anywhere is the evidence that it did. That one has to hold for
-`FailureSettleWindow` (2 minutes) first, because `universeState` has no
-`observedGeneration` behind it: a reading taken just after an apply can belong
-to the previous generation, and a healthy create was seen flickering through
-`Error Creating` seconds before its task appeared. The CRD documents four states
-as examples with no enum, and `Error Creating` is not among them, so the match is
-on the `Error` prefix.
+**No failure ends the wait, not even one that looks unrecoverable.** YBA can
+reject a spec before it makes a task — the action stays `queued` with no UUID
+while `universeState` becomes `Error Creating` — and it retries that forever:
+`YBUniverseReconciler` throws before submitting, `AbstractReconciler` only logs
+the exception, and the `NO_OP` enqueued alongside the CREATE finds no universe
+and requeues CREATE, with no retry cap and a backoff capped at 1800s. A cause
+that resolves, like a `KMSConfig` still `Creating` when the universe was applied,
+therefore heals on its own.
+
+The cost is that a genuinely dead spec runs to `universeTimeout`. That is the
+right trade: the two are indistinguishable from here — both `Error*` with no
+task, both retried forever — and the expensive mistake is giving up on one that
+would have worked. The timeout carries the reported reason and the command that
+reads the yugaware log. The CRD documents four states as examples with no enum,
+and `Error Creating` is not among them, so the match is on the `Error` prefix.
 
 **And a CR's status is not the authority on what YBA did.** `KMSConfig.status.state`
 exists and its CRD lists `InUse` among its values, but on a universe whose
@@ -666,6 +851,153 @@ encryption at rest is genuinely active it reaches `Ready` and stays there —
 with the key id while the CR never advances. Verify encryption at rest against
 `yb-admin`; reading it off the CR gives a false negative, which for an
 encryption feature is the wrong direction to be wrong in.
+
+## The Foundation CRD
+
+[`deploy/helm/meko-foundation-crd/templates/foundation.yaml`](deploy/helm/meko-foundation-crd/templates/foundation.yaml)
+declares
+`foundations.meko.yugabyte.com`, whose `spec` is the same thing `-c SPEC` is: one
+shape, whether a person applies it from a terminal or a pod converges it in a
+cluster. `TestCRDSchemaMatchesTheSpecStruct` compares the schema's properties
+against `Spec`'s yaml tags in both directions, because the schema is hand-written
+— there is no controller-gen in this module — and a field added to one and not
+the other is rejected at apply with an error that names the field but not the
+reason.
+
+**Everything is strictly validated except `resources[].spec` and `yba.values`**,
+which are `x-kubernetes-preserve-unknown-fields`. That is the same split `Load`
+makes when it keeps `KnownFields` on for the settings and off for CR bodies: a
+mistyped `namespaec:` has to be an error, while a CR body has to stay free-form
+so that any kind the pinned chart ships is reachable with no code change. Nothing
+is lost by it, because the API server validates those bodies against the
+operator's own CRD when they are applied. `resources` is a **list** for the
+reason `Spec.Resources` is one — `preserve-unknown-fields` content round-trips
+through a Go map in the API server, which has no ordering guarantee, and list
+order is apply order.
+
+**Status is strictly validated too, and that fails differently.** A status field
+the schema does not declare is silently **dropped** on write rather than
+rejected: the write succeeds and the field is simply not there afterwards.
+`TestCRDStatusMatchesTheStatusStruct` walks `Status` against the schema to catch
+it. `status.address` is therefore the shape `connstr --json` already prints,
+field for field — a second, prettier address type here would be a second contract
+to keep in step with the first.
+
+**`status.resourceStates` is a projection that exists only for the printer
+columns.** JSONPath cannot filter a list by one field and project another, so
+`.status.resources[?(@.kind=="YBUniverse")].state` is not expressible and the
+universe could not be a column at all. Several objects of one kind collapse to
+the state *furthest* from ready, so a column never reads `Ready` while one of two
+providers is failing; the list underneath keeps the per-object detail.
+
+**`deletionPolicy` defaults to `Retain`.** `kubectl delete foundation` reads as
+"remove this thing", and the two mistakes are not symmetric: an orphaned universe
+is recoverable by re-applying the same spec, a dropped database is not. A
+blocking finalizer would be worse than either — see
+[teardown order](#four-ordering-constraints-that-are-not-obvious) for why a
+namespace that enters `Terminating` with an unresolved finalizer can never be
+deleted.
+
+**The CRD ships as its own once-per-cluster release**, not inside the
+per-foundation chart. Under `crds/` helm never upgrades it, so a status field
+added later would never reach an existing install; as an ordinary template, one
+foundation's `helm uninstall` would delete it for every other foundation on the
+cluster. YBA's own CRD bundle is *not* in here and stays with `applyCRDs`: the
+spec picks its version through `CRDURL(chartVersion)`, and a chart owning it
+would let the two drift silently.
+
+## The reconcile loop
+
+`foundation reconcile --name N --namespace NS` is the pod's verb. It takes no
+`-c`: the spec is the Foundation object's, which is the point — one spec, edited
+in the cluster, with no file to keep in step with it.
+
+**It polls rather than watches.** The object is re-read every 30s and acted on
+when `metadata.generation` has moved. There is no stream to lose, no resync to
+arrange, and the interval *is* the debounce — a burst of edits inside one of
+them converges once, from the last. The cost is noticing an edit up to 30s late,
+against a bring-up measured in tens of minutes.
+
+**The converge runs in the background while the loop keeps reading.** That is
+what makes the status continuous instead of one write every three-quarters of an
+hour. Only one runs at a time, and a generation arriving while one is in flight
+interrupts it — see [An interrupt is not a cancel](#an-interrupt-is-not-a-cancel)
+for why that is not the same as cancelling it.
+
+**A failed converge backs off exponentially from one minute to thirty**, timed
+from when it *ended*: one that fails forty minutes in has already waited. There
+is no attempt limit, for the same reason YBA has none — every converge is
+create-or-apply, so retrying costs a poll's worth of kubectl and is the only
+behaviour that recovers from a cause which clears on its own. **A new generation
+clears the backoff**: the edit is the user's answer to whatever failed, and
+making them wait out a half-hour to find out whether it worked would be its own
+bug.
+
+**Everything the loop remembers is keyed on `metadata.uid`, not on the name.**
+Retain is the default deletion policy, so deleting the object and re-applying it
+is a supported thing to do — and it produces a *different* object at generation
+1, a generation the one before it had also reached. Keyed on the name, the
+re-apply reads as already converged and nothing runs: the start gate is
+`generation != lastGen`. The uid is what separates the two, since name,
+namespace and generation can all repeat. A converge still running for the old
+object carries its uid too, so its result is discarded rather than credited to
+the replacement.
+
+**A settled foundation is not re-converged.** `--resync` exists and defaults to
+off, because a converge runs `helm upgrade` and a foundation with nothing to do
+would otherwise cut a release revision every interval. The gap this leaves is
+somebody hand-editing a `YBUniverse` — YBA still reconciles the universe onto
+that edit, so the cluster stays consistent with the CR; it is the CR that drifts
+from the Foundation, until the next edit or a resync.
+
+**`status.observedGeneration` is the generation the last FINISHED converge was
+for, not the one on the object and not a claim that it worked** — a converge
+that failed advances it too, and the `Converged` condition is what says which it
+was. The gap between the two is the only way a reader can tell whether their
+edit has been acted on yet — no kind in the operator's bundle has an
+`observedGeneration`, which is the same hole `ybuniverse.Settled` works around.
+
+The loop writes the **status subresource and nothing else**. The object is the
+user's input; a controller that could edit it could edit the thing it is being
+judged against.
+
+Two fields behave differently in an object than in a file. `namespace` is
+optional and defaults to the object's own, so co-location needs nothing said.
+`kubeContext` is **refused** rather than ignored: the loop chose its cluster when
+it read the object, so the field cannot do what it says, and ignoring it would
+leave somebody believing they had aimed a foundation at another cluster.
+
+### Deletion, and the finalizer that is usually absent
+
+With the default `deletionPolicy: Retain` there is **no finalizer at all**. The
+object goes, the universe keeps running, and re-applying the same spec converges
+back onto it.
+
+That absence is the safety property. A finalizer on this object can only be
+cleared by this pod, and `kubectl delete namespace` removes the pod at the same
+moment as the object — leaving the namespace in `Terminating` for good, where
+`kubectl delete` is a no-op and there is nothing left running to release it. A
+blocking finalizer was the obvious design and is the wrong one.
+
+`deletionPolicy: Delete` does add one, because then there is something to do
+first. The finalizer **tracks the policy** rather than being set once, which is
+the escape hatch: flipping back to `Retain` drops it on the next pass and lets a
+stuck object go.
+
+The teardown is retried, but not forever. Past an hour from the deletion
+timestamp the finalizer is released anyway and what was left behind goes in the
+log, because a finalizer that never resolves is worse than an orphaned universe.
+A spec nobody can parse releases immediately for the same reason — the only edit
+that could fix it would be one on an object already being deleted.
+
+### Shutdown
+
+On SIGTERM the loop closes the interrupt and **waits for a converge in flight to
+finish**, rather than cancelling it: the steps that write are exactly the ones
+that must not be cut off. What remains is bounded by the pod's
+`terminationGracePeriodSeconds`, and the SIGKILL at the end of it is the wedge
+this is avoiding — so that grace period is sized for a helm install, not left at
+the 30-second default.
 
 ## Pruning: omission is deletion
 
@@ -750,7 +1082,7 @@ expand.
 
 Both encryption flags default to **`true`** in the CRD, so a spec that says
 nothing gets a universe it cannot be talked out of — and the deployer no longer
-writes a `false` over that, which it once did. `examples/amp.yaml` sets both true,
+writes a `false` over that, which it once did. `examples/foundation-cli.yaml` sets both true,
 which is what the amp lane deploys and what CI soaks.
 
 Turning them on takes four things besides the flags:
@@ -804,8 +1136,13 @@ is what made node-to-node possible at all.
   level-triggered. Wrapping it in an imperative write-ahead task system is *less*
   standard, not more.
 - **A CRD schema check.** See [above](#the-spec-and-where-validation-lives).
+- **controller-runtime, or any operator framework.** The loop is a `kubectl get`
+  on an interval and two `kubectl patch`es. A manager, informers and a workqueue
+  would buy caching and a shared watch for *one* object, and cost this module its
+  dependency list — which is a YAML parser, and is what lets the image be
+  distroless-static with helm and kubectl beside it.
 - **Go structs for any CR kind, the two required ones included.** The whole
-  point of the top-level-key form is that a kind shipped in a future chart is
+  point of the pass-through form is that a kind shipped in a future chart is
   usable the day its CRD is, with no drift check and nothing here to update.
   Generating structs from the CRD schemas would recreate exactly the per-CR type
   maintenance this module was built to replace.
@@ -818,7 +1155,19 @@ is what made node-to-node possible at all.
   contract. Its real value is remote declaration for a cluster nobody has kubectl
   on, which is a BYOC property; when that is the requirement it will be a thin
   backend rather than a rewrite.
-- **A published image.** The workflow `go run`s it from the checkout.
+- ~~**A helm chart.**~~ There are two now, and they are separate on purpose:
+  [`meko-foundation`](deploy/helm/meko-foundation) is the pod, and
+  [`meko-foundation-crd`](deploy/helm/meko-foundation-crd) is the CRD, installed
+  once per cluster because it is cluster-scoped and shared. Neither creates the
+  `Foundation` object — that is the user's input, and a chart owning it would
+  revert their edits on the next upgrade. The pod's RBAC is effectively
+  cluster-admin and the chart's README says so in the place a security review
+  will look.
+- ~~**A published image.**~~ There is one now: `quay.io/yugabyte/meko-foundation`,
+  built by [`build-image.sh`](build-image.sh) on merge to `main`. `go run` from a
+  checkout only works for someone who has the repo, and `go install` cannot work
+  at all — the module path `meko/foundation` is not a resolvable URL. CI and
+  local development still `go run`.
 
 One trap worth stating because it is one line of code away: do **not** report a
 foundation through `Backend.List()` or `StatusReport.Resources`. Anything the
@@ -840,4 +1189,15 @@ So it soaks in exactly one place — `/ci amp_deploy_gke_foundation` and its nig
 deploys `up-gke.sh` with `FOUNDATION=operator` and runs the agent-driven reconcile
 smoke against the universe, then tears it down and asserts nothing leaked.
 `meko_foundation` in [`meko-pr-build.yml`](../.github/workflows/meko-pr-build.yml)
-runs the unit tests, which need no cluster.
+runs the unit tests and the two charts' `helm lint` and `helm unittest`, none of
+which need a cluster.
+
+That lane runs the **pod**, not the CLI: it installs both charts, applies
+`examples/foundation-cr.yaml` and waits on `status.phase`, then hands the address
+off the status to `up-gke.sh`. Teardown deletes the object, which is the only
+thing anywhere that exercises the finalizer.
+
+The CLI therefore has no end-to-end coverage of its own — `up`, `down` and
+`connstr` run only in unit tests and the render goldens. The same Go runs either
+way (the loop calls `Apply`, the finalizer calls `Down`), so what is uncovered is
+the CLI's own surface: flag parsing, the resume hint, and `connstr`'s output.

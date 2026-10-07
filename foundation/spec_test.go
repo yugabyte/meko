@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// TestLoadExampleAmp is the check that keeps examples/amp.yaml honest: it is
+// TestLoadExampleAmp is the check that keeps examples/foundation-cli.yaml honest: it is
 // the file an operator copies, and a spec that no longer parses (or silently
 // loses a field to a rename) is a broken starting point.
 func TestLoadExampleAmp(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 
 	if spec.Namespace != "amp" {
 		t.Errorf("namespace = %q, want amp", spec.Namespace)
@@ -24,9 +24,6 @@ func TestLoadExampleAmp(t *testing.T) {
 	}
 	if rf, _ := intField(spec.universe(), "replicationFactor"); rf != 3 {
 		t.Errorf("universe.replicationFactor = %d, want 3", rf)
-	}
-	if got := spec.Databases; len(got) != 1 || got[0] != "yb_storage" {
-		t.Errorf("databases = %v, want [yb_storage]", got)
 	}
 	// The controller's DSN is passwordless, and enableYSQLAuth is create-time
 	// only, so this staying off is what keeps the example working against it.
@@ -231,7 +228,7 @@ func loadExample(t *testing.T, name string) *Spec {
 // defines. Left implicit, YBA picks the layout and a zone typo surfaces as a
 // failed task tens of minutes into a bring-up.
 func TestExampleIsThreeNodeRF3WithPlacement(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	if got := universeInt(spec.universe(), "numNodes"); got != 3 {
 		t.Errorf("numNodes = %d, want 3", got)
 	}
@@ -269,7 +266,7 @@ func TestExampleIsThreeNodeRF3WithPlacement(t *testing.T) {
 // because which flags are preview is YB's to decide and moves between releases.
 // YBA rejects a CSV that does not cover them, and that is the right authority.
 func TestExampleSeedsTheMageGFlag(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	g, _ := spec.universe()["gFlags"].(map[string]any)
 	for _, role := range []string{"masterGFlags", "tserverGFlags"} {
 		flags, _ := g[role].(map[string]any)
@@ -293,7 +290,7 @@ func TestValidateRejectsAPlacementTheProviderCannotSatisfy(t *testing.T) {
 			"zones": []any{map[string]any{"code": zone, "numNodes": nodes}},
 		}}}
 	}
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	spec.universe()["placementInfo"] = placement("us-west1-c", 3)
 	err := spec.Validate()
 	if err == nil {
@@ -313,7 +310,7 @@ func TestValidateRejectsAPlacementTheProviderCannotSatisfy(t *testing.T) {
 // This is here so the checks are not quietly reinstated: a removal needs a
 // test as much as an addition does.
 func TestValidateLeavesYBAsOwnRulesToYBA(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	spec.universe()["replicationFactor"] = 4
 	spec.universe()["numNodes"] = 4
 	spec.universe()["placementInfo"] = map[string]any{"regions": []any{map[string]any{
@@ -330,7 +327,7 @@ func TestValidateLeavesYBAsOwnRulesToYBA(t *testing.T) {
 // Immediate-binding one zone-pins the ~4.5 CPU pod before it schedules, which
 // is the whole reason preflight checks binding modes.
 func TestStorageClassesIncludesYugawareOwn(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	yw, _ := spec.YBA.Values["yugaware"].(map[string]any)
 	if yw["storageClass"] != "yb-standard" {
 		t.Fatalf("the example leaves yugaware.storageClass = %v; it would take the cluster default",
@@ -375,7 +372,7 @@ func TestValidateRejectsAnEmptyDBVersion(t *testing.T) {
 // YBA has, and the only one it ships is its own — so moving chartVersion moves
 // this too. Both are read off the same release line, which is what this pins.
 func TestExampleDBVersionMatchesTheChart(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	version := universeString(spec.universe(), "ybSoftwareVersion")
 	// The yugaware a chart installs bundles only its own release, so the two
 	// have to agree or the universe is created against a version YBA does not
@@ -401,7 +398,7 @@ func TestExampleDBVersionMatchesTheChart(t *testing.T) {
 // therefore sees exactly what the cluster gets. Move a default back into
 // rendering and this fails.
 func TestTheSpecIsTheRenderedBody(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	manifests, err := spec.Render()
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -438,7 +435,7 @@ func TestTheSpecIsTheRenderedBody(t *testing.T) {
 // running it twice must not accumulate — a second serviceEndpoints entry would
 // mean two Services fighting over one Namespaced endpoint.
 func TestLoadIsIdempotent(t *testing.T) {
-	yaml := readExample(t, "amp.yaml")
+	yaml := readExample(t, "foundation-cli.yaml")
 	first, err := Load([]byte(yaml))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -731,7 +728,7 @@ func TestTheDefaultChartIsResolvable(t *testing.T) {
 }
 
 func TestChartVersionIsRequiredForTheRepoSource(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	spec.ChartSource = ChartRepo
 	spec.ChartVersion = ""
 	if err := spec.Validate(); err == nil || !strings.Contains(err.Error(), "chartVersion is required") {
@@ -831,5 +828,140 @@ func TestPlacementIsNotCheckedAgainstAProviderWeDoNotDeclare(t *testing.T) {
 		"YBUniverse:\n  name: u\n  spec:\n" + testVersion + placement))
 	if err == nil || !strings.Contains(err.Error(), "the provider does not have") {
 		t.Fatalf("err = %v, want the zone mismatch", err)
+	}
+}
+
+// TestResourcesListRendersIdenticallyToTopLevelKinds.
+//
+// Both forms exist at once so a spec can move without a flag day. That is only
+// true if they mean exactly the same thing, so this renders a spec twice — once
+// each way — and compares the manifests byte for byte, order included.
+func TestResourcesListRendersIdenticallyToTopLevelKinds(t *testing.T) {
+	const topLevel = `
+namespace: amp
+chartVersion: "2026.1.3.0-b21"
+chartSource: path
+yba:
+  chart: https://example.invalid/yugaware.tgz
+  values: {yugaware: {defaultUser: {password: hunter2}}}
+YBProvider:
+  name: gke
+  spec:
+    cloudInfo: {kubernetes: {kubernetesProvider: gke}}
+    regions: [{code: us-west1, zones: [{code: us-west1-b}]}]
+YBUniverse:
+  name: foundation
+  spec:
+    universeName: foundation
+    numNodes: 1
+    replicationFactor: 1
+    ybSoftwareVersion: 2026.1.3.0-b21
+    providerName: gke
+    enableLoadBalancer: true
+    placementInfo:
+      cloudList: [{code: kubernetes, regionList: [{code: us-west1, azList: [{name: us-west1-b, numNodesInAZ: 1, replicationFactor: 1}]}]}]
+    kubernetesOverrides:
+      serviceEndpoints:
+        - {name: yb-tserver-conn, type: ClusterIP, scope: Namespaced, app: yb-tserver, ports: {tcp-ysql-port: "5433", tcp-rpc-port: "9100"}}
+`
+	const asList = `
+namespace: amp
+chartVersion: "2026.1.3.0-b21"
+chartSource: path
+yba:
+  chart: https://example.invalid/yugaware.tgz
+  values: {yugaware: {defaultUser: {password: hunter2}}}
+resources:
+  - kind: YBProvider
+    name: gke
+    spec:
+      cloudInfo: {kubernetes: {kubernetesProvider: gke}}
+      regions: [{code: us-west1, zones: [{code: us-west1-b}]}]
+  - kind: YBUniverse
+    name: foundation
+    spec:
+      universeName: foundation
+      numNodes: 1
+      replicationFactor: 1
+      ybSoftwareVersion: 2026.1.3.0-b21
+      providerName: gke
+      enableLoadBalancer: true
+      placementInfo:
+        cloudList: [{code: kubernetes, regionList: [{code: us-west1, azList: [{name: us-west1-b, numNodesInAZ: 1, replicationFactor: 1}]}]}]
+      kubernetesOverrides:
+        serviceEndpoints:
+          - {name: yb-tserver-conn, type: ClusterIP, scope: Namespaced, app: yb-tserver, ports: {tcp-ysql-port: "5433", tcp-rpc-port: "9100"}}
+`
+	render := func(src string) []Manifest {
+		t.Helper()
+		spec, err := Load([]byte(src))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		m, err := spec.Render()
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		return m
+	}
+	a, b := render(topLevel), render(asList)
+	if len(a) != len(b) {
+		t.Fatalf("rendered %d manifests from keys and %d from the list", len(a), len(b))
+	}
+	for i := range a {
+		// Name carries the index, so comparing it pins apply order too.
+		if a[i].Name != b[i].Name || a[i].Kind != b[i].Kind {
+			t.Errorf("manifest %d: keys gave %s/%s, list gave %s/%s",
+				i, a[i].Kind, a[i].Name, b[i].Kind, b[i].Name)
+		}
+		if string(a[i].JSON) != string(b[i].JSON) {
+			t.Errorf("manifest %d (%s) differs between the two forms:\nkeys: %s\nlist: %s",
+				i, a[i].Kind, a[i].JSON, b[i].JSON)
+		}
+	}
+}
+
+// Mixing the forms is refused rather than guessed at: apply order is document
+// order, and nothing says whether a list sits before or after the keys around
+// it.
+func TestMixingResourceFormsIsRefused(t *testing.T) {
+	_, err := Load([]byte(`
+namespace: amp
+chartVersion: "2026.1.3.0-b21"
+yba: {values: {yugaware: {defaultUser: {password: hunter2}}}}
+YBCertificate:
+  name: amp-ca
+  spec: {certType: K8S_CERT_MANAGER}
+resources:
+  - kind: YBUniverse
+    name: foundation
+    spec: {ybSoftwareVersion: 2026.1.3.0-b21}
+`))
+	if err == nil {
+		t.Fatal("a spec using both forms was accepted; its apply order is undefined")
+	}
+	for _, want := range []string{"YBCertificate", "YBUniverse", "resources"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q, so the fix is not obvious", err, want)
+		}
+	}
+}
+
+// An entry with no kind is the one mistake the list form makes possible that
+// the key form does not, so it gets its own message.
+func TestResourcesListRequiresAKind(t *testing.T) {
+	_, err := Load([]byte(`
+namespace: amp
+chartVersion: "2026.1.3.0-b21"
+yba: {values: {yugaware: {defaultUser: {password: hunter2}}}}
+resources:
+  - name: foundation
+    spec: {ybSoftwareVersion: 2026.1.3.0-b21}
+`))
+	if err == nil {
+		t.Fatal("an entry with no kind was accepted")
+	}
+	if !strings.Contains(err.Error(), "no kind") {
+		t.Errorf("error %q does not say the kind is missing", err)
 	}
 }

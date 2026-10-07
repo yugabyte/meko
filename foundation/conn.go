@@ -2,10 +2,8 @@ package foundation
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 )
 
@@ -25,9 +23,15 @@ type Info struct {
 	// from YSQLHostPorts' host with the RPC port appended. Reported so a reader
 	// can see which address must have 9100 open, and so CI can assert it.
 	RPCHostPorts string `json:"rpc_host_ports"`
-	// DBURL is a DSN for the first requested database, which is what the amp
-	// controller takes as DB_URL.
+	// DBURL is a DSN for ReportedDatabase, which is what the amp controller
+	// takes as DB_URL. Empty when it could not be completed — see dsn.
 	DBURL string `json:"db_url,omitempty"`
+	// SSLMode is what the universe implies, from its encryption flags and
+	// whether a rootCA names a CA a consumer can verify against. Reported
+	// alongside DBURL and not only inside it, because DBURL is absent whenever
+	// it could not be completed — and this is the field a consumer needs to
+	// build its own.
+	SSLMode string `json:"ssl_mode"`
 	// SQLEndpoints is what the CR reports in status.sqlEndpoints, carried for
 	// diagnostics only. It is deliberately NOT used as YSQLHostPorts: it may
 	// enumerate per-pod endpoints, and a per-pod list is exactly what a full
@@ -39,6 +43,20 @@ type Info struct {
 	// would otherwise have to re-derive it by splitting the host.
 	UniverseNamespace string `json:"universe_namespace"`
 }
+
+// ReportedDatabase is the database the reported DSN names.
+//
+// A constant, not a spec field. It was one, and the field earned nothing: the
+// name travelled into the spec and straight back out, since a consumer always
+// knows which database it wants. Hardcoding it costs a consumer that wants
+// another name nothing either — the DSN is a convenience, and the parts beside
+// it (YB_HOST_PORTS, and YB_SSLMODE in the ConfigMap) are what a consumer
+// assembles its own from.
+//
+// It is amp's database. meko uses meko_system and a per-datapack name, so when
+// meko moves onto a foundation it will build its own DSN from the parts rather
+// than this, and nothing here has to change for it.
+const ReportedDatabase = "yb_storage"
 
 // DSNOptions are libpq parameters the CONSUMER supplies. They are paths inside
 // the consumer's own container, so the spec cannot know them and deliberately
@@ -99,10 +117,9 @@ func (d *Deployer) Connect(ctx context.Context) (*Info, error) {
 		SQLEndpoints:  status.SQLEndpoints,
 
 		UniverseNamespace: d.spec.UniverseNamespace(),
+		SSLMode:           d.SSLMode(),
 	}
-	if len(d.spec.Databases) > 0 {
-		info.DBURL = d.dsn(info.YSQLHostPorts, d.spec.Databases[0])
-	}
+	info.DBURL = d.dsn(info.YSQLHostPorts, ReportedDatabase)
 	return info, nil
 }
 
@@ -177,167 +194,6 @@ func (d *Deployer) qualify(service string) string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local", service, d.spec.UniverseNamespace())
 }
 
-// ensureDatabases creates each requested database.
-//
-// The amp controller's db.Connect targets yb_storage AT STARTUP, so this must
-// finish before the controller rolls out — which is why it is a step of the
-// bring-up rather than something the consumer does.
-func (d *Deployer) ensureDatabases(ctx context.Context) error {
-	if len(d.spec.Databases) == 0 {
-		return nil
-	}
-	service, err := d.tserverServiceName(ctx)
-	if err != nil {
-		return err
-	}
-	selector, err := d.tserverSelector(ctx, service)
-	if err != nil {
-		return err
-	}
-	pod, err := d.tserverPod(ctx, selector)
-	if err != nil {
-		return err
-	}
-	// ysqlsh runs INSIDE the cluster, so it addresses the Service locally
-	// whatever scope consumers were told to use: a clusterset name would be a
-	// pointless detour through MCS from a pod sitting next to the tservers.
-	host := d.qualify(service)
-	for _, db := range d.spec.Databases {
-		if err := d.createDatabase(ctx, pod, host, db); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// tserverSelector reads the pod selector off the Service the chart created.
-//
-// Read rather than guessed: the chart's selector is the authoritative answer to
-// "which pods are tservers". Its label key depends on the chart's oldNamingStyle
-// value, and in a namespace holding two universes a hand-written selector could
-// send the ysqlsh exec to the wrong one.
-func (d *Deployer) tserverSelector(ctx context.Context, service string) (map[string]string, error) {
-	res, err := d.kubectlUniverse(ctx, nil, "get", "service", service, "-o", "jsonpath={.spec.selector}")
-	if err != nil {
-		return nil, err
-	}
-	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("Service %s not found in namespace %s: %s",
-			service, d.spec.UniverseNamespace(), strings.TrimSpace(res.Stderr))
-	}
-	var selector map[string]string
-	if err := json.Unmarshal([]byte(res.Stdout), &selector); err != nil {
-		return nil, fmt.Errorf("parse the selector of Service %s: %w", service, err)
-	}
-	if len(selector) == 0 {
-		return nil, fmt.Errorf("Service %s has no selector, so there is no way to tell which pods "+
-			"are tservers", service)
-	}
-	return selector, nil
-}
-
-// tserverPod finds a tserver pod to run ysqlsh in.
-func (d *Deployer) tserverPod(ctx context.Context, selector map[string]string) (string, error) {
-	res, err := d.kubectlUniverse(ctx, nil, "get", "pods", "-l", selectorArg(selector),
-		"-o", "jsonpath={.items[0].metadata.name}")
-	if err != nil {
-		return "", err
-	}
-	pod := strings.TrimSpace(res.Stdout)
-	if res.ExitCode != 0 || pod == "" {
-		return "", fmt.Errorf("no pod matching %q in namespace %s",
-			selectorArg(selector), d.spec.UniverseNamespace())
-	}
-	return pod, nil
-}
-
-// selectorArg renders a label set as kubectl's -l argument, sorted so the argv
-// is stable and testable.
-func selectorArg(selector map[string]string) string {
-	keys := make([]string, 0, len(selector))
-	for k := range selector {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+selector[k])
-	}
-	return strings.Join(parts, ",")
-}
-
-// createDatabase creates one database, tolerating one that already exists.
-//
-// Postgres has no CREATE DATABASE IF NOT EXISTS, so the recipe is the one
-// amp/deploy/up.sh already uses: probe pg_database, and treat an "already
-// exists" error from a racing create as success. A genuine connection failure
-// aborts rather than being misread as "absent" and triggering a spurious
-// create.
-//
-// ysqlsh is looked up rather than assumed on PATH: on a YBA-managed universe it
-// lives under the tserver's own Postgres install
-// (amp/deploy/meko-dev/amp-redeploy.sh does the same).
-//
-// On an encrypted universe it presents the node's own client certificate, which
-// the chart puts in every tserver pod — accepted by a `cert` hba rule, ignored
-// by a `trust` one, so it works without having to know which is in force.
-//
-// The chart provisions that directory as a projected volume — ca.crt renamed to
-// root.crt, tls.crt/tls.key to yugabytedb.crt/.key — at mode 0400 under /root.
-// On a YBA-managed universe an exec could not read it (libpq reported "does not
-// exist", which it also says for a stat it is not allowed to make), so this
-// degrades: the CA alone, then plain `require`.
-//
-// That degradation is safe only because no spec here legislates login policy. A
-// deployment that adds `hostssl ... yugabyte ... cert` makes yugabyte a
-// certificate login, and pg_hba being first-match-wins the degraded connection
-// is refused rather than falling through to a trust rule.
-//
-// It also means this is NOT a reliable detector of a certificate that fails to
-// name the endpoint Service: verify-full needs the CA, and where the CA is
-// unreadable this drops to `require`, which verifies nothing. The workflow
-// checks the SAN directly instead, reading the Certificate and then dialling the
-// name with the CA from the amp-ca-bundle ConfigMap.
-func (d *Deployer) createDatabase(ctx context.Context, pod, host, db string) error {
-	script := fmt.Sprintf(`set -euo pipefail
-Y=$(ls /home/yugabyte/tserver/postgres/bin/ysqlsh 2>/dev/null || command -v ysqlsh || echo ysqlsh)
-SSLMODE=%[4]s
-CONN="host=%[1]s port=%[2]d user=yugabyte dbname=yugabyte"
-if [ "$SSLMODE" != "disable" ]; then
-  if [ -r /root/.yugabytedb/root.crt ]; then
-    CONN="$CONN sslmode=$SSLMODE sslrootcert=/root/.yugabytedb/root.crt"
-    if [ -r /root/.yugabytedb/yugabytedb.key ]; then
-      CONN="$CONN sslcert=/root/.yugabytedb/yugabytedb.crt sslkey=/root/.yugabytedb/yugabytedb.key"
-    fi
-  else
-    CONN="$CONN sslmode=require"
-  fi
-fi
-exists=$("$Y" "$CONN" -tAc "SELECT 1 FROM pg_database WHERE datname='%[3]s'")
-if [ "$exists" = "1" ]; then
-  echo "exists"
-elif out=$("$Y" "$CONN" -c "CREATE DATABASE %[3]s" 2>&1); then
-  echo "created"
-elif printf '%%s' "$out" | grep -q "already exists"; then
-  echo "exists"
-else
-  printf 'CREATE DATABASE %[3]s failed: %%s\n' "$out" >&2
-  exit 1
-fi
-`, host, DefaultYSQLPort, db, d.sslMode())
-
-	res, err := d.kubectlUniverse(ctx, []byte(script), "exec", "-i", pod, "-c", "yb-tserver",
-		"--", "bash", "-s")
-	if err != nil {
-		return err
-	}
-	if res.ExitCode != 0 {
-		return fmt.Errorf("create database %s: %s", db, strings.TrimSpace(res.Stderr+res.Stdout))
-	}
-	d.log("database %s: %s", db, strings.TrimSpace(res.Stdout))
-	return nil
-}
-
 // sslMode is the DSN's sslmode, read off the universe body.
 //
 // There is only one body to read: the YBUniverse entry's Spec is applied
@@ -390,10 +246,24 @@ func (d *Deployer) sslMode() string { return d.SSLMode() }
 // dsn renders the DSN for one database: the universe's own sslmode, plus
 // whatever certificate paths the consumer supplied.
 //
+// It returns EMPTY when the sslmode requires a CA and the caller named none,
+// because such a DSN is worse than no DSN: libpq falls back to
+// ~/.postgresql/root.crt, which no consumer of this has, so the string parses
+// and then fails at the first connection.
+//
+// `connstr` refuses that case outright, with a message naming the fix, so a
+// human asking for a DSN is told why. The reconcile loop is the caller that
+// reaches here — it runs in a pod with no flags for anyone to pass — and it
+// reports no DSN at all rather than one that cannot work. A consumer in the
+// cluster reads the parts from the foundation-conn ConfigMap instead.
+//
 // The parameter order is fixed rather than map-ranged, because the DSN reaches
 // the amp controller as a Helm value and a re-ordered one would make every
 // converge look like a change.
 func (d *Deployer) dsn(hostPorts, db string) string {
+	if strings.HasPrefix(d.sslMode(), "verify") && d.dsnOpts.SSLRootCert == "" {
+		return ""
+	}
 	params := []string{"sslmode=" + url.QueryEscape(d.sslMode())}
 	for _, p := range []struct{ key, value string }{
 		{"sslrootcert", d.dsnOpts.SSLRootCert},

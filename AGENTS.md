@@ -95,7 +95,7 @@ why — the object graph, the ordering constraints, the address contract, what i
 deliberately absent — is [`foundation/ARCHITECTURE.md`](foundation/ARCHITECTURE.md). The
 bullets below are the things a reader would otherwise re-derive the hard way.
 
-`examples/amp.yaml` deploys the **unpublished build `2026.1.3.0-b21`**, for the 15-kind
+`examples/foundation-cli.yaml` deploys the **unpublished build `2026.1.3.0-b21`**, for the 15-kind
 CRD bundle and for `tls.extraSANs` (see the TLS note below). There is no special chart source for that: `releases.yugabyte.com` is public
 for reads and helm fetches a chart from a URL, so it is `chartSource: path` with the
 tarball's URL in `yba.chart` — nothing to download first, no credentials. The defaults
@@ -103,6 +103,19 @@ stay on the newest published line under `repo`, the only pairing that works with
 else set. The spec file is the deployer's **only** input — deploying a different build
 means a different spec, which is what the foundation workflow's `chart_version` dispatch
 writes for itself.
+
+**Two examples, two formats, one foundation.** `examples/foundation-cli.yaml` is what the
+CLI takes with `-c`; `examples/foundation-cr.yaml` is the same foundation as a `Foundation`
+object, in the `resources:` list form, which is what
+`/ci amp_deploy_gke_foundation` now applies. Neither is a wrapper for the other — each
+describes the inputs in the format its own consumer accepts, and the CR declares no
+namespace so `kubectl apply -n` picks one per run. Both are
+COMPLETE rather than minimal, and a test pins that they agree on everything deciding what
+the universe is — encryption, `sslMode` and gflags. That test exists because the
+CR example started as the smallest spec that merely *validated*, which is a different and
+dangerous thing: both encryption flags and the MAGE gflags are create-time only, so a
+customer copying a minimal example gets a universe that has to be rebuilt rather than
+edited. Neither example creates `yb_storage` — nothing in the foundation does.
 
 **The spec file is the source of truth and an update is a re-apply of it.** `render` emits the
 CRs and applies nothing, which is what makes a change reviewable as a manifest diff and the
@@ -113,12 +126,12 @@ server-side apply and a status the operator reconciles level-triggered.
 ```bash
 cd foundation
 go test -race ./...                                        # no cluster needed
-go run ./cmd/foundation validate -c examples/amp.yaml      # offline: parse + the rules YBA enforces late
-go run ./cmd/foundation render -c examples/amp.yaml -o manifests/   # applies nothing
-go run ./cmd/foundation up      -c examples/amp.yaml       # CRDs, yugaware, universe, databases
-go run ./cmd/foundation apply   -c examples/amp.yaml       # converge after editing the spec
-eval "$(go run ./cmd/foundation connstr -c examples/amp.yaml --shell)"
-go run ./cmd/foundation down    -c examples/amp.yaml
+go run ./cmd/foundation validate -c examples/foundation-cli.yaml      # offline: parse + the rules YBA enforces late
+go run ./cmd/foundation render -c examples/foundation-cli.yaml -o manifests/   # applies nothing
+go run ./cmd/foundation up      -c examples/foundation-cli.yaml       # CRDs, yugaware, the CRs, and wait
+go run ./cmd/foundation apply   -c examples/foundation-cli.yaml       # converge after editing the spec
+eval "$(go run ./cmd/foundation connstr -c examples/foundation-cli.yaml --shell)"
+go run ./cmd/foundation down    -c examples/foundation-cli.yaml
 ```
 
 `down` leaves the namespace and the CRDs alone by default, and both defaults are safety
@@ -126,25 +139,36 @@ properties rather than conveniences: the namespace is shared with the consumer's
 and the CRDs are cluster-scoped, so deleting them takes every other foundation on the
 cluster with them.
 
+The CLI also ships as **`quay.io/yugabyte/meko-foundation`**, carrying `kubectl` and
+`helm` pinned beside it, built by `foundation/build-image.sh` on merge to `main`
+(`.github/workflows/foundation-image.yml`). It exists because `go run` needs a checkout of
+a private repo and `go install` cannot work at all — the module path `meko/foundation` is
+not a resolvable URL. CI and local development still `go run`.
+
 Things a reader will otherwise re-derive the hard way:
 
-- **The Spec IS the rendered body.** Every universe default this deployer owns is applied
-  at parse time (`Spec.universeDefaults`), so the `YBUniverse` entry's `Spec` and the
-  rendered body are the same map and anything reading the Spec sees what the cluster gets.
-  When those defaults were applied at render time instead, `sslMode` read the raw map, missed
-  `enableClientToNodeEncrypt`, fell back to the CRD's `true` and emitted `sslmode=require`
-  against a universe rendered with TLS off. `TestTheSpecIsTheRenderedBody` compares the
-  two key sets so a default cannot drift back. The one exception is the provider's
-  `kubeNamespace`, which defaults from `s.Namespace` — overridden by `--namespace` *after*
-  `Load` — so `providerSpec` fills it in at render time on a deep copy.
+- **The Spec IS the rendered body.** The deployer writes nothing into the universe, so the
+  `YBUniverse` entry's `Spec` and the rendered body are the same map and anything reading
+  the Spec sees what the cluster gets. When defaults were applied at render time into a
+  copy, `sslMode` read the stale one: it missed `enableClientToNodeEncrypt`, fell back to
+  the CRD's `true` and emitted `sslmode=require` against a universe rendered with TLS off.
+  `TestTheSpecIsTheRenderedBody` compares the two key sets in both directions so a default
+  cannot drift back. The one exception is the provider's `kubeNamespace`, which defaults
+  from `s.Namespace` — overridden by `--namespace` *after* `Load` — so `providerSpec` fills
+  it in at render time on a deep copy.
 - **Every CR is a top-level key naming its KIND**, whose value is `{name, spec}` — `name` is
   `metadata.name`, `spec` is the CR's spec body VERBATIM, and a list under the key declares
   several objects of one kind. `YBProvider` and `YBUniverse` are two such keys and nothing
   more (only `YBUniverse` is required), so any of the bundle's kinds — 12 at chart 2026.1.1,
-  15 at 2026.1.2, which `examples/amp.yaml` now deploys — is reachable with no code change. An UPPERCASE-initial key is a kind and everything else must be a Spec field,
+  15 at 2026.1.2, which `examples/foundation-cli.yaml` now deploys — is reachable with no code change. An UPPERCASE-initial key is a kind and everything else must be a Spec field,
   which is what keeps `KnownFields` on for the settings — with free-form keys a mistyped
   `namespaec:` would become a CR rather than an error. **Key order is apply order** and
   teardown is its reverse, so `Load` walks a `yaml.Node` rather than decoding into a map.
+  The same CRs can instead go under a **`resources:` list** of `{kind, name, spec}`, with
+  list order as apply order; both forms parse but not in one file, since nothing orders a
+  list against the keys around it. The list is the form a `Foundation` CR needs — a CR spec
+  is JSON, and preserve-unknown-fields content round-trips through a Go map in the API
+  server, losing key order the same way.
   Nothing is modelled as Go structs, so every field the pinned release has is reachable and a
   new operator release needs no code change. Nothing re-checks them against the CRD's schema
   either: `kubectl apply` sends strict field validation, so the API server rejects an
@@ -159,6 +183,45 @@ Things a reader will otherwise re-derive the hard way:
   say the same thing slightly earlier, which is not a trade worth making. What `Validate`
   does check is only what no schema can express — YBA's own rules, which it enforces
   asynchronously inside the operator with nothing written back to the CR.
+- **The `Foundation` CRD (`foundation/deploy/helm/meko-foundation-crd/`) is hand-written, and both
+  halves have a drift guard.** Its `spec` is the `-c SPEC` file, so one shape serves a
+  person at a terminal and a pod in a cluster. There is no controller-gen in this module,
+  so `TestCRDSchemaMatchesTheSpecStruct` and `TestCRDStatusMatchesTheStatusStruct` compare
+  the schema against `Spec` and `Status` in both directions — **the two halves fail
+  differently**, and that is the point: an undeclared *spec* field is REJECTED at apply,
+  while an undeclared *status* field is silently DROPPED, so the write succeeds and the
+  field is just not there. `resources[].spec` and `yba.values` are the only
+  `preserve-unknown-fields` holes, the same split `Load` makes with `KnownFields`. Ship the
+  CRD as its own once-per-cluster release: under `crds/` helm never upgrades it, and as a
+  template one foundation's `helm uninstall` takes it from every other foundation.
+  `deletionPolicy` defaults to `Retain` because an orphaned universe is recoverable by
+  re-applying the spec and a dropped database is not.
+- **Two charts, and the pod's RBAC is effectively cluster-admin.**
+  `foundation/deploy/helm/meko-foundation` is the pod;
+  `meko-foundation-crd` is the CRD on its own, installed ONCE per cluster — under
+  `crds/` helm never upgrades it, and as a template one foundation's `helm uninstall`
+  deletes it for every other foundation. Neither chart creates the `Foundation` object:
+  it is the user's input, and a chart owning it would revert their edits on the next
+  upgrade. The RBAC is a namespaced **wildcard** (the pod installs the yugaware chart,
+  whose contents that chart changes between versions a spec picks) plus an enumerated
+  cluster-scoped half — and `escalate` on clusterroles with `create` on
+  clusterrolebindings is cluster-admin by construction, which installing the operator's
+  cluster RBAC requires and nothing can narrow away. `rbac.clusterScoped=false` drops it
+  to namespaced-only, at the price of a cluster admin having to install the operator CRDs
+  and the yugaware cluster RBAC by hand.
+- **The reconcile loop polls, and only its DEFAULT deletion behaviour is safe by
+  construction.** `foundation reconcile` re-reads the Foundation every 30s and converges
+  when `metadata.generation` moves — no watch, and the interval is the debounce. Three
+  things are not guessable. A failed converge backs off from the END of the converge, with
+  no attempt cap, and a **new generation clears the backoff** — otherwise the edit that
+  fixes a failure waits out a half-hour. `--resync` defaults to OFF, because a converge
+  runs `helm upgrade` and a settled foundation would otherwise cut a release revision
+  every interval. And **with `deletionPolicy: Retain` there is no finalizer at all**, which
+  is the safety property and not an oversight: only this pod can clear one, and
+  `kubectl delete namespace` removes the pod at the same moment as the object, leaving the
+  namespace in `Terminating` for good. Under `Delete` the finalizer tracks the policy, so
+  flipping back to `Retain` frees a stuck object, and the teardown gives up after an hour
+  rather than holding it open.
 - **A `YBProvider` is optional, and its storage class wins.** The operator has an
   auto-provider, and a universe can name one somebody else registered — but a Kubernetes
   provider is what carries the DB image registry and the per-zone storage class, neither
@@ -179,7 +242,11 @@ Things a reader will otherwise re-derive the hard way:
   specs YBA would take. itest-dev is single-zone, so the example places all three RF3 nodes
   in `us-west1-b`.
 - **`apply` prunes.** Anything carrying `app.kubernetes.io/managed-by=meko-foundation` in the
-  namespace that the spec no longer declares is deleted, after the universe settles. The
+  namespace that the spec no longer declares is deleted. It does NOT wait for the universe
+  to settle first, which is the intuitive guess and wrong: a KMSConfig the universe still
+  uses is refused by YBA, marked `InUse` and requeued forever, with the operator's own
+  finalizer holding the object until the disable task releases it — so the ordering is
+  YBA's. The
   candidate kinds come from `kubectl api-resources`, not from a list in Go, so nothing here
   needs keeping in step with the bundle. The label is the ownership boundary — a CR somebody
   else created is never touched — and `--no-prune` opts out.
@@ -228,7 +295,7 @@ Things a reader will otherwise re-derive the hard way:
   `multicluster.createServiceExports`, which rewrites node broadcast addresses so the smart
   driver's per-pod stage resolves cross-cluster, and a `ServiceExport` for the Service —
   which is `exportService: true` on the entry, from chart 2026.1.3. Both routes are a spec
-  edit and no code change; `examples/amp.yaml` carries the export commented out. Either way
+  edit and no code change; `examples/foundation-cli.yaml` carries the export commented out. Either way
   the address goes wherever the consumer is configured, not in this spec.
 - **The spec carries no address knob at all.** The address is the Service the chart created
   in the namespace just deployed into, which `checkTServerService` verified. Which address
@@ -453,7 +520,7 @@ nothing.
 | `amp_generate_image` | controller container image build |
 | `amp_extensions_local` | local-deploy extension regression test (`amp/test/integration/compute/extensions.sh --regress`): builds the real extension image and runs each externalized extension's own upstream regression suite against a throwaway `yb_amp_local` cluster. Also automatic when the diff touches `amp/deploy/extensions/`, and nightly on `main`. The lighter twin of `amp_deploy_gke` for extension-pipeline changes |
 | `amp_deploy_gke` | build + push four images to Quay, deploy to the itest-dev GKE cluster, smoke test. Also nightly on `main` |
-| `amp_deploy_gke_foundation` | the only suite that runs the **operator-managed foundation**, and the only one that runs an **encrypted** universe end to end: deploys with `FOUNDATION=operator` so `up-gke.sh` calls the `foundation/` deployer instead of its yugabyted StatefulSet, asserts the node certificates name the endpoint Service and that the session really is TLS, runs the agent-driven reconcile smoke against that universe, then tears it down and asserts no cluster-scoped RBAC leaked. Its own workflow and cron (03:17 UTC). Also nightly on `main` |
+| `amp_deploy_gke_foundation` | the only suite that runs the **operator-managed foundation**, the only one that runs an **encrypted** universe end to end, and the only one that runs the foundation as a **pod**: installs the CRD and controller charts, applies a `Foundation`, waits for its status, then hands the address it reports to `up-gke.sh` (`FOUNDATION=external`). Asserts the node certificates name the endpoint Service and that the session really is TLS, runs the agent-driven reconcile smoke, then DELETES the object — which is the only thing that exercises the finalizer — and asserts no cluster-scoped RBAC leaked. Its own workflow and cron (03:17 UTC). Also nightly on `main` |
 
 They are all `amp_`-prefixed because they belong to AMP; there is nothing equivalent for
 meko yet. Full contract (including `amp_deploy_gke_extensions` and what makes a change

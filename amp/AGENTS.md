@@ -211,7 +211,7 @@ handoff doc.)
   all read — bump YB there. The functional framework keeps one compiled-in copy
   (`ampstack.DefaultYBVersion`), and CI fails the PR until it matches. The
   operator-managed foundation pins its own universe build in
-  `foundation/examples/amp.yaml` with the yugaware chart it installs. The header
+  `foundation/examples/foundation-cli.yaml` with the yugaware chart it installs. The header
   of `versions.txt` says why for both.
 - Topology spawns from `yb_amp_local init --config <file>` then
   `yb_amp_local start`. All durable state goes to YB; local FS only holds

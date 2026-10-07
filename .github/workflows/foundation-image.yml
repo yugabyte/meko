@@ -1,0 +1,65 @@
+name: Foundation image
+
+# Builds the foundation CLI image (foundation/cmd/foundation, with kubectl and
+# helm) and pushes it to Quay (quay.io/yugabyte/meko-foundation), so a cluster
+# can run the deployer without a checkout of this private repo.
+#
+# A thin wrapper around foundation/build-image.sh: the script is the source of
+# truth for how the image is built and tagged, and stays runnable locally
+# (./foundation/build-image.sh [--no-push]). CI only supplies credentials and
+# calls it.
+#
+# Auth is a Quay robot account, delivered as repo secrets. When they are absent
+# (a fork, or before they are configured) the job still BUILDS the image with
+# --no-push and stays green, so main cannot go red waiting on secret setup.
+#
+#   - QUAY_AMP_TOKEN — the robot pair as "user:token", the secret every pushing
+#     workflow here uses. QUAY_USER stays unset; the build script splits the pair.
+#
+# The Quay repository must exist and the robot must have write on it before the
+# first push.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'foundation/**'
+      - '.github/workflows/foundation-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build & push foundation image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Push only when the robot credentials are present; otherwise build-only so
+      # the job is still a real compile+package check on forks and before setup.
+      - name: Build and push
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          # Only a main build may move the floating `latest` tag, so a dispatch
+          # from a branch cannot become what a no-tag deploy pulls.
+          latest=()
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            latest=(--no-latest)
+            echo "::notice::not on main — tagging custom-<sha> only, leaving :latest alone"
+          fi
+          if [ -n "${QUAY_TOKEN}" ]; then
+            echo "::notice::pushing quay.io/yugabyte/meko-foundation"
+            ./foundation/build-image.sh "${latest[@]}"
+          else
+            echo "::warning::QUAY_AMP_TOKEN not set — building the foundation image but skipping the push"
+            ./foundation/build-image.sh --no-push "${latest[@]}"
+          fi

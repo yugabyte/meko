@@ -1,8 +1,9 @@
 name: Amp foundation GKE (itest-dev)
 
 # Stands the amp stack up on an OPERATOR-MANAGED foundation — a real YugabyteDB
-# universe reconciled by the YugabyteDB Kubernetes Operator via foundation/ —
-# and asserts the amp reconcile-agent converges against it.
+# universe reconciled by the YugabyteDB Kubernetes Operator, declared as a
+# Foundation custom resource and converged by the foundation pod — and asserts
+# the amp reconcile-agent converges against it.
 #
 # This is the only place the operator path runs. Every other deploy
 # (amp-control-plane-gke.yml, amp/deploy/up.sh, meko's deploy-gke.sh,
@@ -10,21 +11,31 @@ name: Amp foundation GKE (itest-dev)
 # YBA adds a ~4.5 CPU yugaware pod and tens of minutes of install, which is far
 # too heavy for kind and too heavy to put on every deploy before it has soaked.
 #
-# Flow:
-#   images     — build + push the amp images plus the YCP control-plane and
-#                reconcile-agent images to Quay, tagged custom-<short-sha>.
-#   foundation — write the itest-dev kubeconfig, stand up an ephemeral YCP
-#                control plane (amp/deploy/ycp-up.sh), deploy the stack with
-#                FOUNDATION=operator so up-gke.sh calls the foundation deployer
-#                instead of applying its yugabyted StatefulSet, run the
-#                agent-driven reconcile smoke, then tear the foundation down and
-#                assert it left no cluster-scoped RBAC behind.
+# The foundation runs as a POD here, not as the CLI: this lane installs the two
+# charts, applies a Foundation object and waits for its status. That is what a
+# customer does, and it is the only place any of it runs — the CLI's own path is
+# covered by unit tests and render goldens, which need no cluster.
 #
-# `foundation down` runs as its own step rather than only in teardown: the
-# teardown path deletes the namespace, which would hide a broken down() forever.
-# Running it explicitly and then checking for orphaned ClusterRoles is the only
-# thing that keeps the teardown path honest, which is why this workflow is
-# ephemeral per run rather than reusing a standing foundation.
+# Flow:
+#   images     — build + push the amp images, the YCP control-plane and
+#                reconcile-agent images, and the foundation image, tagged
+#                custom-<short-sha>.
+#   foundation — write the itest-dev kubeconfig; install the CRD and the
+#                foundation controller; stand up the certificate trust root and
+#                copy the CA into the Secret the YBCertificate names; stand up
+#                an ephemeral YCP control plane; apply the Foundation and wait
+#                for Ready; read the address off its status and hand that to
+#                up-gke.sh (FOUNDATION=external); run the agent-driven reconcile
+#                smoke; then DELETE the object and assert it left nothing behind.
+#
+# Deleting the Foundation runs as its own step rather than only in teardown: the
+# teardown path deletes the namespace, which would hide a broken teardown
+# forever. It is also the only thing that exercises the finalizer — the example
+# ships deletionPolicy Retain, so the step flips it to Delete first, and the
+# universe going away is what proves the policy is tracked rather than fixed at
+# creation. Checking for orphaned ClusterRoles afterwards is what keeps that
+# honest, which is why this workflow is ephemeral per run rather than reusing a
+# standing foundation.
 #
 # Placement — separate from amp-control-plane-gke.yml, and on its own cron, so
 # two heavy GKE runs never contend for itest-dev. It fires only:
@@ -54,8 +65,9 @@ on:
           must also be pinned in amp/downloads_checksum.txt. 2026.1.3.0-b21 or
           LATER only: the spec this lane deploys is encrypted and needs the
           universe chart's tls.extraSANs, which arrived in 2026.1.3 — an older
-          chart renders no SAN for the endpoint Service and the bring-up fails
-          at its databases step. Empty deploys whatever the spec file names.
+          chart renders no SAN for the endpoint Service and every verify-full
+          consumer then fails the hostname check. Empty deploys whatever the
+          spec file names.
         required: false
         type: string
       db_version:
@@ -193,6 +205,25 @@ jobs:
             -t "$QUAY_NS/ycp-reconciler-agent:${{ steps.tag.outputs.tag }}" \
             ycp
 
+      # The foundation itself, which on this lane is a POD rather than the CLI:
+      # the deploy below installs the chart and applies a Foundation, so the
+      # image has to exist at this commit's tag before it can. --no-latest
+      # because `latest` belongs to main's own workflow, not to a PR.
+      #
+      # Through build-image.sh rather than a buildx line like the others, so the
+      # Dockerfile, the pinned kubectl/helm versions and the tag scheme stay in
+      # one place that is also runnable locally.
+      - name: Foundation image
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          # From the tag step's own output, not from the SHA again: that step
+          # truncates to 12 and the deploy job pins THAT, so computing it twice
+          # is how the image lands under a tag nothing references.
+          TAG='${{ steps.tag.outputs.tag }}'
+          IMAGE="$QUAY_NS/meko-foundation" SHA="${TAG#custom-}" \
+            foundation/build-image.sh --no-latest
+
   foundation:
     name: Amp foundation — deploy on an operator-managed universe
     needs: [decide, images]
@@ -211,15 +242,13 @@ jobs:
       NS: ci-pr-fnd-${{ github.event.pull_request.number || github.run_id }}
       PULL_SECRET: quay-pull-secret
       TAG: ${{ needs.images.outputs.tag }}
-      FOUNDATION_SPEC: foundation/examples/amp.yaml
+      FOUNDATION_CR: foundation/examples/foundation-cr.yaml
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: foundation/go.mod
-          cache-dependency-path: foundation/go.sum
-
+      # No Go toolchain: this job no longer builds or runs the foundation CLI.
+      # The deployer reaches the cluster as the image built above, driven by a
+      # Foundation object.
       - name: Write kubeconfig
         run: |
           mkdir -p "$HOME/.kube"
@@ -238,52 +267,67 @@ jobs:
       # read the YAML directly: a class is settable on the universe's volumes AND
       # on the provider's zones, and the provider's wins, so parsing one path
       # would check the wrong class.
-      - name: Validate the spec and check its storage classes
+      # The foundation as a POD, which is what this lane exists to exercise:
+      # the CRD once per cluster, the controller in this namespace, and a
+      # Foundation object it converges onto. No `foundation` CLI anywhere —
+      # the same Go runs, reached through the loop instead.
+      #
+      # The CRD release is cluster-scoped and shared, so it is upgraded rather
+      # than installed: a concurrent run on another namespace may already own it.
+      # BEFORE the chart, because the foundation image is private and the chart
+      # names this secret: without it the pod sits in ImagePullBackOff and the
+      # install times out on --wait with nothing but "context deadline exceeded".
+      # up-gke.sh mints the same secret later for the amp images; applying it
+      # here first is idempotent, and the yugaware chart the POD installs reads
+      # it too (yba.values.image.pullSecret).
+      - name: Namespace and pull secret
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
         run: |
-          cd foundation
-          # --namespace, the same override the deploy passes, so the facts
-          # describe THIS run rather than the spec file's checked-in namespace.
-          FACTS=$(go run ./cmd/foundation validate -c "$GITHUB_WORKSPACE/$FOUNDATION_SPEC" \
-            --namespace "$NS" --json)
-          echo "$FACTS"
-          # The DB pods land in the provider zones' kubeNamespace, which equals
-          # this namespace only because the spec leaves it unset. Read it rather
-          # than assume, so a spec that moves the universe cannot turn the
-          # Service assertions below into silent no-ops.
-          UNIVERSE_NS=$(echo "$FACTS" | python3 -c \
-            "import json,sys; print(json.load(sys.stdin)['universeNamespace'])")
-          echo "UNIVERSE_NS=$UNIVERSE_NS" >> "$GITHUB_ENV"
-          echo "universe namespace: $UNIVERSE_NS"
-          # The universe is encrypted, and the assertions further down depend on
-          # it: verify-full is what makes the certificate SAN load-bearing, and
-          # nodeToNode is what puts the compute hot path's RPC lane on TLS.
-          # Asserted here so a spec that lost a create-time-only flag fails in
-          # seconds rather than after the bring-up.
-          echo "$FACTS" | python3 -c "
-          import json,sys
-          t = json.load(sys.stdin)['tls']
-          want = {'clientToNode': True, 'nodeToNode': True, 'sslMode': 'verify-full'}
-          bad = {k: t.get(k) for k, v in want.items() if t.get(k) != v}
-          if bad or not t.get('rootCA'):
-              print('::error::the spec is not the encrypted shape this lane soaks: %s' % t)
-              sys.exit(1)
-          print('tls: %s' % t)
-          "
-          for SC in $(echo "$FACTS" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)['storageClasses']))"); do
-            MODE=$(kubectl get storageclass "$SC" -o jsonpath='{.volumeBindingMode}') \
-              || { echo "::error::storage class $SC does not exist on this cluster"; exit 1; }
-            echo "storage class $SC binds $MODE"
-            # Advisory, matching the deployer's own preflight: an Immediate class
-            # only bites a multi-zone cluster, where the PVC zone-pins the pod
-            # before it schedules.
-            [ "$MODE" = "WaitForFirstConsumer" ] || echo "::warning::$SC binds $MODE, not WaitForFirstConsumer"
-          done
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          AUTH=$(printf '%s' "$QUAY_TOKEN" | base64 -w0)
+          CFG=$(mktemp)
+          printf '{"auths":{"quay.io":{"auth":"%s"}}}' "$AUTH" > "$CFG"
+          kubectl -n "$NS" create secret generic "$PULL_SECRET" \
+            --type=kubernetes.io/dockerconfigjson \
+            --from-file=.dockerconfigjson="$CFG" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$CFG"
 
-      # The control-plane half: Postgres + api_server --control-plane-mode in
-      # this namespace, an `amp` environment registered on it, and the agent's
-      # credentials in the Secret it reads. Runs BEFORE the deploy so the agent
-      # can enroll as soon as it is up. Appends YCP_URL / YCP_ENV_ID /
-      # YCP_ADMIN_KEY / YCP_AGENT_SECRET to $GITHUB_ENV.
+      - name: Install the foundation CRD and controller
+        run: |
+          helm upgrade --install meko-foundation-crd \
+            foundation/deploy/helm/meko-foundation-crd --wait
+          helm upgrade --install fdn foundation/deploy/helm/meko-foundation \
+            -n "$NS" \
+            --set image.tag="$TAG" \
+            --set "imagePullSecrets[0].name=$PULL_SECRET" \
+            --wait --timeout 5m
+          kubectl -n "$NS" rollout status deploy/fdn-meko-foundation --timeout=5m
+
+      # The trust root BEFORE the object: YBA reads the YBCertificate's Secret as
+      # it applies the CR, and signs node certificates from the ClusterIssuer the
+      # provider names. Standing it up afterwards leaves the universe signed by
+      # nothing. up-gke.sh runs the same script again later for the controller's
+      # own certificate; it is idempotent.
+      - name: Certificate trust root, and the CA for YBA
+        run: |
+          TLS_ISSUER_NAME=amp-ca TLS_ISSUER_KIND=ClusterIssuer \
+          TLS_ISSUER_GROUP=cert-manager.io TLS_TRUST_NAMESPACES="$NS" \
+            amp/deploy/tls/trust-root.sh
+
+          # trust-manager publishes the CA as a ConfigMap and a CR can only name
+          # a Secret, so copy it. Through a file with the trailing newline put
+          # back: command substitution strips it and YBA rejects a PEM without
+          # one, writing the reason to the YBCertificate's status where nothing
+          # else would look.
+          CA=$(kubectl -n "$NS" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')
+          [ -n "$CA" ] || { echo "::error::amp-ca-bundle has no ca.crt in $NS"; exit 1; }
+          F=$(mktemp); printf '%s\n' "$CA" > "$F"
+          kubectl -n "$NS" create secret generic amp-ca-bundle-tls \
+            --from-file=ca.crt="$F" --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$F"
+
       - name: YCP control plane + register
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
@@ -301,18 +345,18 @@ jobs:
           YCP_BYOC_METRICS_URL="$YCP_BYOC_METRICS_URL" \
           amp/deploy/ycp-up.sh
 
-      # FOUNDATION=operator is the whole point: up-gke.sh skips its yugabyted
-      # StatefulSet, runs `foundation up` in this namespace instead, and takes
-      # YB_HOST_PORTS/DB_URL from the deployer's output rather than duplicating
-      # the Service name, port and DSN shape.
+      # No FOUNDATION=operator here any more: the universe is stood up by the
+      # POD, above, and up-gke.sh is pointed at the result with
+      # FOUNDATION=external and the address read off status.address — which is
+      # the shape a customer gets, since nothing of ours runs in their cluster
+      # but the pod.
       # The BYOC telemetry credentials, for the same reason the control-plane
       # workflow carries them: YCP_ENABLED=1 means agent.enabled=true, which is a
       # YCP-managed environment, and one that ships no telemetry comes up DEGRADED
       # — which the reconcile smoke below asserts against.
-      # A dispatch can name a build the spec file does not. The deployer takes
-      # a spec and nothing else, so this writes one: the example with three
-      # values replaced, which FOUNDATION_SPEC then points at. Doing it here
-      # rather than with deployer flags keeps the YAML the only input.
+      # A dispatch can name a build the example does not. The object is the
+      # deployer's only input, so this writes one: the example with three values
+      # replaced, which FOUNDATION_CR then points at.
       #
       # The release bucket is public, so the download needs no credentials,
       # and nothing in the deployer has to know where charts come from. It is
@@ -355,21 +399,62 @@ jobs:
             echo "db_version not given; using the chart's appVersion $DB_VERSION"
           fi
 
-          # Written next to the example so the `foundation down` step, which
-          # resolves FOUNDATION_SPEC relative to the repo root, finds it too.
-          # One line rather than a heredoc: this is inside an indented YAML
-          # block, and a heredoc body would carry that indentation into the
-          # Python source.
+          # Written next to the example, so a path relative to the repo root
+          # reaches it from every later step.
           OUT=foundation/examples/.ci-dispatch.yaml
-          CHART_VERSION="$CHART_VERSION" DB_VERSION="$DB_VERSION" OUT="$OUT" python3 -c 'import os,sys,yaml; s=yaml.safe_load(open(sys.argv[1])); s["chartVersion"]=os.environ["CHART_VERSION"]; s["chartSource"]="path"; s.setdefault("yba",{})["chart"]="/tmp/yugaware.tgz"; s["YBUniverse"]["spec"]["ybSoftwareVersion"]=os.environ["DB_VERSION"]; yaml.safe_dump(s,open(os.environ["OUT"],"w"),sort_keys=False)' "$FOUNDATION_SPEC"
+          # The CR's CRs are a LIST, so the universe is found by kind rather
+          # than by key. Written as one line because this sits in an indented
+          # YAML block and a heredoc body would carry that indentation into the
+          # Python source.
+          # yba.chart is the URL, not the file just downloaded: the deployer is a
+          # POD, and /tmp on this runner is not a path it can see. helm fetches a
+          # URL like any other chart, and the release bucket is public for reads,
+          # so the pod needs no credentials. The download above is still what
+          # proves the URL is pinned and what the appVersion was read from.
+          CHART_VERSION="$CHART_VERSION" DB_VERSION="$DB_VERSION" OUT="$OUT" URL="$URL" python3 -c 'import os,sys,yaml; d=yaml.safe_load(open(sys.argv[1])); s=d["spec"]; s["chartVersion"]=os.environ["CHART_VERSION"]; s["chartSource"]="path"; s.setdefault("yba",{})["chart"]=os.environ["URL"]; u=[r for r in s["resources"] if r["kind"]=="YBUniverse"][0]; u["spec"]["ybSoftwareVersion"]=os.environ["DB_VERSION"]; yaml.safe_dump(d,open(os.environ["OUT"],"w"),sort_keys=False)' "$FOUNDATION_CR"
 
-          # Proves the generated spec parses before a 25-minute bring-up
-          # depends on it.
-          (cd foundation && go run ./cmd/foundation validate -c "../$OUT")
-          echo "FOUNDATION_SPEC=$OUT" >> "$GITHUB_ENV"
-          echo "chart=$CHART_VERSION db=$DB_VERSION spec=$OUT"
+          echo "FOUNDATION_CR=$OUT" >> "$GITHUB_ENV"
+          echo "chart=$CHART_VERSION db=$DB_VERSION cr=$OUT"
 
-      - name: Deploy on the operator foundation (up-gke.sh)
+      - name: Apply the Foundation and wait for it
+        run: |
+          kubectl apply -n "$NS" -f "$FOUNDATION_CR"
+          # Ready means REACHABLE, not merely applied: every declared CR is
+          # ready AND there is an address. A spec the pod's preflight rejects
+          # never gets there, so the dump below prints the conditions, which is
+          # where that reason lands.
+          if ! kubectl wait --for=jsonpath='{.status.phase}'=Ready \
+                 -n "$NS" foundation/foundation --timeout=50m; then
+            echo "::error::the Foundation never became Ready"
+            kubectl -n "$NS" get foundation foundation -o yaml || true
+            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=200 || true
+            exit 1
+          fi
+
+      # The facts later assertions need, read off the object rather than
+      # re-derived: the universe namespace is wherever the provider zones put
+      # the DB pods, and the sslmode is what the universe's create-time
+      # encryption flags imply. Both are what a consumer would read.
+      - name: Read the address off the Foundation
+        run: |
+          UNIVERSE_NS=$(kubectl -n "$NS" get foundation foundation \
+            -o jsonpath='{.status.address.universe_namespace}')
+          YB_HOST_PORTS=$(kubectl -n "$NS" get foundation foundation \
+            -o jsonpath='{.status.address.ysql_host_ports}')
+          YB_SSLMODE=$(kubectl -n "$NS" get foundation foundation \
+            -o jsonpath='{.status.address.ssl_mode}')
+          for v in UNIVERSE_NS YB_HOST_PORTS YB_SSLMODE; do
+            eval "val=\$$v"
+            [ -n "$val" ] || { echo "::error::the Foundation status has no $v"; exit 1; }
+            echo "$v=$val" >> "$GITHUB_ENV"
+            echo "$v=$val"
+          done
+          # This lane asserts a verify-full session and a SAN naming the
+          # endpoint Service; an unencrypted universe would make both vacuous.
+          [ "$YB_SSLMODE" = "verify-full" ] || {
+            echo "::error::expected a verify-full universe, got $YB_SSLMODE"; exit 1; }
+
+      - name: Deploy amp onto the universe the Foundation built (up-gke.sh)
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
           YCP_BYOC_METRICS_URL: ${{ vars.BYOC_METRICS_URL || 'https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics' }}
@@ -379,8 +464,10 @@ jobs:
           AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
           export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
           NS="$NS" \
-          FOUNDATION=operator \
-          FOUNDATION_SPEC="$PWD/$FOUNDATION_SPEC" \
+          FOUNDATION=external \
+          YB_HOST_PORTS="$YB_HOST_PORTS" \
+          YB_SSLMODE="$YB_SSLMODE" \
+          YB_UNIVERSE_NAMESPACE="$UNIVERSE_NS" \
           REGISTRY="$QUAY_NS" \
           CONTROLLER_IMAGE_REPO=amp-controller \
           ENDPOINT_IMAGE_REPO=amp-endpoint \
@@ -497,7 +584,7 @@ jobs:
           #    CONSUMER would, with the consumer's trust store.
           #
           #    Nothing here tests client authentication: this spec sets no hba
-          #    rules, so there is no rule to prove. See examples/amp.yaml.
+          #    rules, so there is no rule to prove. See examples/foundation-cli.yaml.
           CA=$(kubectl -n "$NS" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')
           [ -n "$CA" ] || { echo "::error::no amp-ca-bundle in $NS to verify against"; exit 1; }
           kubectl -n "$UNIVERSE_NS" exec -i "$POD" -c yb-tserver -- bash -s <<EOF || {
@@ -544,10 +631,258 @@ jobs:
       # chart names a ClusterRole and ClusterRoleBinding after the helm release,
       # and a namespace delete never reclaims a cluster-scoped object — so
       # without this the leak is invisible until it collides with a later run.
-      - name: foundation down
+      # What an operator actually sees. A printer column whose jsonPath names
+      # a field nothing writes is an error NOWHERE — kubectl just prints an
+      # empty cell — so only reading the real output catches it.
+      - name: kubectl get and describe show the foundation
         run: |
-          go run ./cmd/foundation down -c "../$FOUNDATION_SPEC" --namespace "$NS"
-        working-directory: foundation
+          echo "== kubectl get foundation"
+          kubectl -n "$NS" get foundation
+          # Two guards, because a broken column fails two different ways. A
+          # path that resolves to nothing prints <none>, which keeps the field
+          # count right — so the per-column checks catch that; a path kubectl
+          # cannot evaluate drops the cell entirely, which the count catches.
+          ROW=$(kubectl -n "$NS" get foundation --no-headers)
+          echo "   row: $ROW"
+          set -- $ROW
+          # NAME PHASE YBA UNIVERSE PROVIDER READY AGE
+          [ "$#" -eq 7 ] || {
+            echo "::error::expected 7 columns, got $# — a blank cell collapses the row"; exit 1; }
+          [ "$2" = "Ready" ] || { echo "::error::PHASE is '$2', want Ready"; exit 1; }
+          [ "$4" = "Ready" ] || { echo "::error::UNIVERSE is '$4', want Ready"; exit 1; }
+          [ "$5" = "Ready" ] || { echo "::error::PROVIDER is '$5', want Ready"; exit 1; }
+          [ "$6" = "True" ]  || { echo "::error::READY is '$6', want True"; exit 1; }
+
+          echo "== kubectl describe foundation"
+          kubectl -n "$NS" describe foundation foundation
+          # Events are the record of what happened; the conditions only say
+          # what is true now. An operator looks here first, so an empty Events
+          # section is a real gap however good the status is.
+          # By the object's KIND rather than a field selector: we write
+          # events.k8s.io/v1 Events with `regarding`, which the core v1 API
+          # surfaces as involvedObject — reading it this way does not depend on
+          # which of the two kubectl picked.
+          REASONS=$(kubectl -n "$NS" get events -o jsonpath='{range .items[?(@.involvedObject.kind=="Foundation")]}{.reason}{" "}{end}')
+          echo "   event reasons: ${REASONS:-<none>}"
+          EV=$(printf '%s' "$REASONS" | wc -w)
+          [ "$EV" -gt 0 ] || {
+            echo "::error::no events were recorded about the Foundation"
+            kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
+            exit 1
+          }
+
+      # Everything above proves the happy path. This proves the two things a
+      # real foundation actually spends its life doing: rejecting a bad edit
+      # without damage, and converging the fix.
+      #
+      # The failure is a CR-application one and is deliberately harmless — an
+      # undeclared field, which the API server refuses under the strict
+      # validation `kubectl apply` sends, so the universe is never touched. The
+      # cert and provider ahead of it in the list apply fine; only the universe
+      # is rejected. That is the shape of a real typo.
+      - name: A bad edit is reported, and the fix converges
+        run: |
+          # Waits for a jsonpath to equal a value, printing the object when it
+          # does not. The loop polls every 30s, so nothing here is instant.
+          wait_for() {
+            local path="$1" want="$2" secs="${3:-180}" got=
+            for _ in $(seq 1 $((secs / 5))); do
+              got=$(kubectl -n "$NS" get foundation foundation -o jsonpath="$path" 2>/dev/null || true)
+              [ "$got" = "$want" ] && { echo "   $path = $got"; return 0; }
+              sleep 5
+            done
+            echo "::error::$path was '$got' after ${secs}s, want '$want'"
+            kubectl -n "$NS" get foundation foundation -o yaml || true
+            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=120 || true
+            return 1
+          }
+
+          GEN_BEFORE=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.metadata.generation}')
+          echo "generation before the bad edit: $GEN_BEFORE"
+
+          # `test` first, so a reordered resources list fails loudly here rather
+          # than silently patching the wrong CR.
+          kubectl -n "$NS" patch foundation foundation --type=json -p '[
+            {"op":"test","path":"/spec/resources/2/kind","value":"YBUniverse"},
+            {"op":"add","path":"/spec/resources/2/spec/numNodez","value":3}]'
+
+          # The loop has to NOTICE, report, and keep the foundation usable.
+          # Wait on the REASON, not the status. Converged passes through False
+          # twice: once as Converging while the converge is in flight, then as
+          # ConvergeFailed when it ends. Waiting for the status matches the
+          # first and reads a reason that has not settled — which is exactly
+          # what this step did on its first run.
+          echo "== waiting for the rejection to be reported"
+          wait_for '{.status.conditions[?(@.type=="Converged")].reason}' ConvergeFailed 240
+          STATUS=$(kubectl -n "$NS" get foundation foundation \
+            -o jsonpath='{.status.conditions[?(@.type=="Converged")].status}')
+          MSG=$(kubectl -n "$NS" get foundation foundation \
+            -o jsonpath='{.status.conditions[?(@.type=="Converged")].message}')
+          echo "   status=$STATUS"
+          echo "   message=$MSG"
+          [ "$STATUS" = "False" ] || {
+            echo "::error::Converged status is '$STATUS', want False"; exit 1; }
+          # The API server's own words, carried through rather than swallowed —
+          # a reader has to be able to see WHICH field was refused.
+          case "$MSG" in
+            *numNodez*) ;;
+            *) echo "::error::the message does not name the field the API server refused"; exit 1 ;;
+          esac
+          # The universe is untouched: a rejected apply must not take the
+          # foundation's address away from the consumer that is using it.
+          ADDR=$(kubectl -n "$NS" get foundation foundation \
+            -o jsonpath='{.status.address.ysql_host_ports}')
+          [ "$ADDR" = "$YB_HOST_PORTS" ] || {
+            echo "::error::the address changed under a rejected edit: '$ADDR'"; exit 1; }
+          echo "   address still $ADDR"
+
+          echo "== fixing the spec"
+          kubectl -n "$NS" patch foundation foundation --type=json -p '[
+            {"op":"remove","path":"/spec/resources/2/spec/numNodez"}]'
+
+          # A new generation clears the backoff, so this must NOT wait out the
+          # exponential retry the failure started. On the reason again, for the
+          # same reason as above.
+          wait_for '{.status.conditions[?(@.type=="Converged")].reason}' Converged 300
+          wait_for '{.status.conditions[?(@.type=="Converged")].status}' True 60
+          wait_for '{.status.phase}' Ready 300
+
+          GEN=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.metadata.generation}')
+          OBS=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.status.observedGeneration}')
+          echo "generation=$GEN observedGeneration=$OBS (was $GEN_BEFORE)"
+          [ "$GEN" != "$GEN_BEFORE" ] || {
+            echo "::error::the edits did not bump metadata.generation"; exit 1; }
+          # The gap between these two is the only way a reader can tell whether
+          # their edit has been acted on, so it has to close.
+          [ "$OBS" = "$GEN" ] || {
+            echo "::error::observedGeneration $OBS never caught up to generation $GEN"; exit 1; }
+
+      # The failure that found itself. The autoscaler evicted this pod during a
+      # helm upgrade, leaving the yugaware release at pending-upgrade — a lock
+      # every later `helm upgrade` refuses, which nothing clears on its own, so
+      # the foundation retried forever. Provoked deliberately now, because the
+      # fix is otherwise only unit-tested and an eviction will not oblige twice.
+      #
+      # Wedged by killing a real helm client mid-operation rather than by
+      # editing helm's storage: it is the actual mechanism, and a hand-written
+      # release record would prove only that we can parse what we wrote.
+      - name: A wedged helm release is rolled back, not retried forever
+        run: |
+          REL="${NS}-yugaware"
+          CHART=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.spec.yba.chart}')
+          BEFORE=$(helm history "$REL" -n "$NS" -o json | python3 -c \
+            'import json,sys; print(json.load(sys.stdin)[-1]["revision"])')
+          echo "last revision before: $BEFORE"
+
+          # --reuse-values so the attempt that gets killed cannot change what
+          # the release holds; all it is here for is the pending record helm
+          # writes before it starts work.
+          helm upgrade "$REL" "$CHART" -n "$NS" --reuse-values --wait --timeout 15m &
+          HPID=$!
+          STUCK=""
+          for _ in $(seq 1 40); do
+            ST=$(helm history "$REL" -n "$NS" -o json 2>/dev/null | python3 -c \
+              'import json,sys; print(json.load(sys.stdin)[-1]["status"])' 2>/dev/null || true)
+            case "$ST" in pending-*) STUCK="$ST"; break ;; esac
+            sleep 2
+          done
+          kill -9 "$HPID" 2>/dev/null || true
+          wait "$HPID" 2>/dev/null || true
+          [ -n "$STUCK" ] || {
+            echo "::error::could not wedge the release; helm never reported a pending revision"
+            helm history "$REL" -n "$NS" || true
+            exit 1
+          }
+          echo "release is wedged at $STUCK"
+          # Prove it really is a wedge: an upgrade now has to be refused, or
+          # the recovery below would pass without anything to recover from.
+          # Redirected, NOT piped into tee: `if cmd | tee` tests the exit status
+          # of tee, which is always 0, so the refusal this is looking for read as
+          # an acceptance and failed the step on its own evidence.
+          if helm upgrade "$REL" "$CHART" -n "$NS" --reuse-values --timeout 30s \
+               > /tmp/wedged.txt 2>&1; then
+            cat /tmp/wedged.txt
+            echo "::error::helm accepted an upgrade, so the release was not wedged"; exit 1
+          fi
+          cat /tmp/wedged.txt
+          grep -q "in progress" /tmp/wedged.txt || {
+            echo "::error::the refusal was not the lock we meant to create:"; cat /tmp/wedged.txt; exit 1; }
+
+          # A generation bump is what makes the loop converge now rather than on
+          # its own schedule. An unknown key under yba.values: helm passes it
+          # through and the chart ignores it, so the universe is untouched.
+          kubectl -n "$NS" patch foundation foundation --type=json -p '[
+            {"op":"add","path":"/spec/yba/values/ciWedgeProbe","value":"1"}]'
+
+          echo "== waiting for the loop to clear it and converge"
+          for _ in $(seq 1 90); do
+            PHASE=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            LAST=$(helm history "$REL" -n "$NS" -o json 2>/dev/null | python3 -c \
+              'import json,sys; print(json.load(sys.stdin)[-1]["status"])' 2>/dev/null || true)
+            [ "$PHASE" = "Ready" ] && [ "$LAST" = "deployed" ] && break
+            sleep 10
+          done
+          helm history "$REL" -n "$NS" || true
+          [ "$PHASE" = "Ready" ] || {
+            echo "::error::the foundation never recovered from the wedged release (phase=$PHASE)"
+            kubectl -n "$NS" get foundation foundation -o yaml || true
+            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=200 || true
+            exit 1
+          }
+          [ "$LAST" = "deployed" ] || {
+            echo "::error::the release is still at '$LAST', not deployed"; exit 1; }
+
+          # It has to have ROLLED BACK rather than uninstalled: an uninstall
+          # takes the operator holding every CR's finalizer with it.
+          kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=400 > /tmp/fdnlog.txt || true
+          grep -q "rolling back to revision" /tmp/fdnlog.txt || {
+            echo "::error::the release was cleared some other way than a rollback:"
+            grep -iE "wedg|rollback|uninstall" /tmp/fdnlog.txt || true
+            exit 1
+          }
+          echo "   recovered by rollback, and the universe is still here"
+          # The probe key stays. Removing it would bump the generation again and
+          # buy another full converge, on an object the next step deletes.
+
+      # Teardown through the OBJECT, which is the only thing that exercises the
+      # finalizer. The example ships deletionPolicy Retain, which is the right
+      # default for a customer — deleting it there leaves the universe running —
+      # so this flips it first. That the flip takes effect at all is the
+      # finalizer tracking the policy rather than being set once.
+      - name: Delete the Foundation (tears the universe down)
+        run: |
+          kubectl -n "$NS" patch foundation foundation --type=merge \
+            -p '{"spec":{"deletionPolicy":"Delete"}}'
+
+          # WAIT for the finalizer before deleting. The loop adds it on its next
+          # pass, up to one poll interval away, and an object deleted before it
+          # lands simply goes — taking nothing down with it and leaving the
+          # yugaware release and its cluster RBAC behind. That is not a
+          # hypothetical: it is what this step did on its first run, and what
+          # the leak assertion below caught.
+          #
+          # Waiting also ASSERTS the finalizer is added, which nothing else does.
+          for i in $(seq 1 60); do
+            FIN=$(kubectl -n "$NS" get foundation foundation \
+              -o jsonpath='{.metadata.finalizers}' 2>/dev/null || true)
+            case "$FIN" in *meko.yugabyte.com/teardown*) break ;; esac
+            [ "$i" -lt 60 ] || {
+              echo "::error::the loop never added its finalizer after the policy changed to Delete"
+              kubectl -n "$NS" get foundation foundation -o yaml || true
+              kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=100 || true
+              exit 1
+            }
+            sleep 5
+          done
+          echo "finalizer present; deleting"
+
+          if ! kubectl -n "$NS" delete foundation foundation --timeout=25m; then
+            echo "::error::the Foundation did not go; its finalizer is still held"
+            kubectl -n "$NS" get foundation foundation -o yaml || true
+            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=200 || true
+            exit 1
+          fi
+          helm uninstall fdn -n "$NS" || true
 
       - name: Assert nothing leaked
         run: |

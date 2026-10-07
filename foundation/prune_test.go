@@ -53,7 +53,7 @@ func rendered(t *testing.T, spec *Spec) []Manifest {
 // removing a key stops sending an object without removing it, and the spec
 // stops being the source of truth.
 func TestPruneDeletesWhatTheSpecDropped(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil,
 		"YBProvider/foundation", "YBUniverse/foundation", "KMSConfig/gone", "StorageConfig/also-gone")
 	if err := d.prune(context.Background(), rendered(t, spec)); err != nil {
@@ -70,7 +70,7 @@ func TestPruneDeletesWhatTheSpecDropped(t *testing.T) {
 // somebody else created is never in it — the namespace is shared with the
 // consumer's own workloads.
 func TestPruneLeavesUnlabelledObjectsAlone(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil, "YBProvider/foundation", "YBUniverse/foundation")
 	if err := d.prune(context.Background(), rendered(t, spec)); err != nil {
 		t.Fatalf("prune: %v", err)
@@ -112,7 +112,7 @@ func TestPruneIsANoOpWhenNothingWasDropped(t *testing.T) {
 // they are always in the keep set. This is the guard against a future Render
 // change quietly making the universe a prune candidate.
 func TestPruneNeverTouchesTheProviderOrUniverse(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil, "YBProvider/foundation", "YBUniverse/foundation", "Release/stale")
 	if err := d.prune(context.Background(), rendered(t, spec)); err != nil {
 		t.Fatalf("prune: %v", err)
@@ -138,7 +138,7 @@ func TestPruneFailsRatherThanAssumingNothingWhenDiscoveryFails(t *testing.T) {
 		{"discovery is empty", Result{Stdout: "\n"}, "refusing to decide what to delete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spec := loadExample(t, "amp.yaml")
+			spec := loadExample(t, "foundation-cli.yaml")
 			rec := &Recorder{Responses: []Response{
 				{Match: "api-resources", Result: tc.result},
 			}}
@@ -164,7 +164,7 @@ func TestPruneFailsRatherThanAssumingNothingWhenDiscoveryFails(t *testing.T) {
 // pruned with no code change, and what means there is nothing here to keep in
 // step with the bundle.
 func TestPruneDiscoversKindsFromTheCluster(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil, "YBProvider/foundation", "YBUniverse/foundation")
 	if err := d.prune(context.Background(), rendered(t, spec)); err != nil {
 		t.Fatalf("prune: %v", err)
@@ -183,7 +183,7 @@ func TestPruneDiscoversKindsFromTheCluster(t *testing.T) {
 // TestPruneIsNamespaceScoped: one foundation must not reach another's objects,
 // and two share a cluster routinely.
 func TestPruneIsNamespaceScoped(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil, "YBProvider/foundation", "YBUniverse/foundation", "Release/stale")
 	if err := d.prune(context.Background(), rendered(t, spec)); err != nil {
 		t.Fatalf("prune: %v", err)
@@ -204,7 +204,7 @@ func TestPruneIsNamespaceScoped(t *testing.T) {
 // disabling encryption at rest is a YBA TASK, so a prune that ran before the
 // universe settled would delete a config still referenced by a running edit.
 func TestPruneRunsAfterTheUniverseSettles(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, []Response{
 		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
 		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
@@ -245,7 +245,7 @@ func TestPruneRunsAfterTheUniverseSettles(t *testing.T) {
 // TestNoPruneSkipsTheStep covers the escape hatch, and that it is off by
 // default: the default has to be that the spec is the source of truth.
 func TestNoPruneSkipsTheStep(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil, "YBProvider/foundation", "YBUniverse/foundation", "Release/stale")
 	d = d.WithoutPrune()
 	if d.noPrune != true {
@@ -268,7 +268,7 @@ func TestNoPruneSkipsTheStep(t *testing.T) {
 // operator finalizer as one removed by `down`, so it needs the same
 // delete-then-poll-for-absence treatment rather than a bare delete.
 func TestPruneUsesDeleteCRSoFinalizersAreHandled(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil, "YBProvider/foundation", "YBUniverse/foundation", "Release/stale")
 	if err := d.prune(context.Background(), rendered(t, spec)); err != nil {
 		t.Fatalf("prune: %v", err)
@@ -296,7 +296,7 @@ func TestPruneUsesDeleteCRSoFinalizersAreHandled(t *testing.T) {
 // timeout and fail the converge. Issuing every delete first lets the operator
 // settle them in whatever order it needs.
 func TestPruneIssuesEveryDeleteBeforeWaiting(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d, rec := pruneDeployer(t, spec, nil,
 		"YBProvider/foundation", "YBUniverse/foundation",
 		"StorageConfig/backups", "BackupSchedule/nightly")

@@ -1,0 +1,121 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "meko-foundation.serviceAccountName" . }}
+  labels:
+    {{- include "meko-foundation.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.rbac.create }}
+{{- range (prepend .Values.rbac.extraNamespaces .Release.Namespace) }}
+---
+# A WILDCARD, within one namespace, and the reason is specific rather than
+# laziness: this pod runs `helm upgrade --install` of the YUGAWARE chart, whose
+# contents are that chart's to decide and to change between versions — and the
+# spec picks the version. An enumerated list of kinds would therefore go stale
+# on a chart bump, which is an ordinary spec edit, and the failure would be a
+# customer's upgrade dying on RBAC with the fix in a different repository.
+#
+# So: within this namespace the pod is an admin, which is what "it installs an
+# arbitrary chart here" already means. The grant is kept narrow where narrow is
+# worth something — see the ClusterRole below, which is enumerated.
+#
+# `*` covers escalate and bind too, which the chart needs: the yugaware release
+# contains Roles and RoleBindings, and Kubernetes refuses to let anything write
+# a Role granting what the writer does not already hold.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "meko-foundation.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "meko-foundation.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "meko-foundation.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "meko-foundation.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "meko-foundation.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "meko-foundation.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- if .Values.rbac.clusterScoped }}
+---
+# Enumerated, unlike the Role above, because at cluster scope a wildcard is
+# literally cluster-admin and the list here is short and stable — these are the
+# cluster-scoped objects the CONVERGE touches, not a third-party chart's
+# contents.
+#
+# It is still a very large grant. `escalate` on clusterroles plus create on
+# clusterrolebindings means this ServiceAccount can give itself anything, so in
+# practice it IS cluster-admin. That is not an oversight and cannot be narrowed
+# away: installing the yugaware chart with its operator enabled means creating
+# cluster-scoped RBAC for it, and Kubernetes will not let you create RBAC you do
+# not hold. README.md states this where a security review will find it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "meko-foundation.clusterName" . }}
+  labels:
+    {{- include "meko-foundation.labels" . | nindent 4 }}
+rules:
+  # The operator's CRD bundle, applied server-side at the start of every
+  # converge. No delete: the CRDs are cluster-scoped and shared, so deleting
+  # them would take every other foundation's universe with them, and nothing in
+  # this binary ever does.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: [customresourcedefinitions]
+    verbs: [get, list, watch, create, update, patch]
+  # Preflight lists namespaces to say which exist when the spec's is missing,
+  # and the converge creates and labels its own.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create, patch]
+  # Preflight reads volumeBindingMode: an Immediate class provisions the disk
+  # first and zone-pins the yugaware pod before it can schedule.
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses]
+    verbs: [get, list]
+  # The yugaware release's own cluster RBAC, which the operator needs.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterroles]
+    verbs: [get, list, watch, create, update, patch, delete, escalate]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterroles]
+    verbs: [bind]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterrolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "meko-foundation.clusterName" . }}
+  labels:
+    {{- include "meko-foundation.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "meko-foundation.clusterName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "meko-foundation.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

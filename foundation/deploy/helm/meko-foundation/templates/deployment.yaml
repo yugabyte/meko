@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "meko-foundation.fullname" . }}
+  labels:
+    {{- include "meko-foundation.labels" . | nindent 4 }}
+spec:
+  # ONE, and Recreate rather than RollingUpdate.
+  #
+  # Two of these against one Foundation would run two `helm upgrade`s at the
+  # same release, which is how a release ends up in pending-upgrade — and they
+  # would each interrupt nothing of the other's, because the interrupt is
+  # in-process. Recreate is the same argument applied to a rollout: the default
+  # strategy starts the new pod before the old one is gone, which is exactly
+  # the overlap this must not have. It costs a gap with no controller running,
+  # during which nothing happens to the universe.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "meko-foundation.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko-foundation.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "meko-foundation.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # See values.yaml: long enough for a step that WRITES to finish, because
+      # the SIGKILL at the end of it is what leaves helm wedged.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: foundation
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - reconcile
+            - --name
+            - {{ .Values.foundation.name | quote }}
+            # The object's namespace, which is also where the universe goes
+            # unless the spec says otherwise.
+            - --namespace
+            - {{ .Release.Namespace | quote }}
+            {{- with .Values.reconcile.poll }}
+            - --poll
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.reconcile.minBackoff }}
+            - --min-backoff
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.reconcile.maxBackoff }}
+            - --max-backoff
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.reconcile.resync }}
+            - --resync
+            - {{ . | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # The root filesystem is read-only, and both binaries want somewhere
+            # to write: the image points HELM_*_HOME and KUBECACHEDIR here, and
+            # the yba values file is written here too.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

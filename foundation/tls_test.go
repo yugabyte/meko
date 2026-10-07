@@ -21,7 +21,7 @@ import (
 // that validates, renders, deploys, and then fails every consumer's hostname
 // check forty minutes later.
 func TestExampleSANNamesTheEndpointService(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	crSpec := renderedSpec(t, spec, ybuniverse.KindUniverse)
 
 	overrides, _ := crSpec["kubernetesOverrides"].(map[string]any)
@@ -136,7 +136,7 @@ func TestEncryptionIsNobodysBusinessButTheOperators(t *testing.T) {
 // TestTheExamplesAreValid: both examples have to be ones a reader can copy, and
 // Load is now the whole check.
 func TestTheExamplesAreValid(t *testing.T) {
-	for _, name := range []string{"amp.yaml", "resources.yaml"} {
+	for _, name := range []string{"foundation-cli.yaml", "resources.yaml"} {
 		t.Run(name, func(t *testing.T) { loadExample(t, name) })
 	}
 }
@@ -260,62 +260,6 @@ func TestValidateRootCA(t *testing.T) {
 				t.Errorf("error %q does not name %q", err, tc.want)
 			}
 		})
-	}
-}
-
-// TestCreateDatabaseAuthenticatesWithTheNodeCertificate: with
-// `hostssl all yugabyte all cert` in the hba rules, the yugabyte role is a
-// certificate login and a bare ysqlsh is refused — so the bring-up would fail
-// at its last step, on a universe that is otherwise perfectly healthy.
-//
-// It does NOT reliably catch a missing SAN, though it once claimed to: where the
-// CA is unreadable — which is the case on a YBA-managed pod — it drops to
-// `require`, and `require` verifies nothing. The workflow checks the SAN.
-func TestCreateDatabaseAuthenticatesWithTheNodeCertificate(t *testing.T) {
-	rec := &Recorder{Responses: []Response{
-		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
-		{Match: "jsonpath={.spec.selector}", Result: Result{Stdout: tserverSelectorJSON}},
-		{Match: "get pods -l", Result: Result{Stdout: "yb-tserver-0"}},
-		{Match: "exec", Result: Result{Stdout: "exists\n"}},
-	}}
-	d, _ := testDeployer(t, rec)
-	if err := d.ensureDatabases(context.Background()); err != nil {
-		t.Fatalf("ensureDatabases: %v", err)
-	}
-	script := execStdin(t, rec)
-	for _, want := range []string{
-		"SSLMODE=verify-full",
-		"/root/.yugabytedb/root.crt",
-		"/root/.yugabytedb/yugabytedb.key",
-		// And a degraded path, valid because no spec here makes yugabyte a
-		// certificate login: the CA alone, then plain require.
-		"sslmode=require",
-	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("the create script is missing %q:\n%s", want, script)
-		}
-	}
-}
-
-// TestCreateDatabaseStaysPlaintextOnAPlaintextUniverse: the same script must
-// not offer certificates to a database that will not do TLS at all — that
-// fails the connection just as hard in the other direction.
-func TestCreateDatabaseStaysPlaintextOnAPlaintextUniverse(t *testing.T) {
-	rec := &Recorder{Responses: []Response{
-		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
-		{Match: "jsonpath={.spec.selector}", Result: Result{Stdout: tserverSelectorJSON}},
-		{Match: "get pods -l", Result: Result{Stdout: "yb-tserver-0"}},
-		{Match: "exec", Result: Result{Stdout: "exists\n"}},
-	}}
-	d, spec := testDeployer(t, rec)
-	spec.universe()["enableClientToNodeEncrypt"] = false
-	delete(spec.universe(), "rootCA")
-	if err := d.ensureDatabases(context.Background()); err != nil {
-		t.Fatalf("ensureDatabases: %v", err)
-	}
-	script := execStdin(t, rec)
-	if !strings.Contains(script, "SSLMODE=disable") {
-		t.Errorf("the create script does not carry the universe's own sslmode:\n%s", script)
 	}
 }
 

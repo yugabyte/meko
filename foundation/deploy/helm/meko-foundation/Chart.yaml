@@ -1,0 +1,34 @@
+apiVersion: v2
+name: meko-foundation
+description: >-
+  The foundation controller: one pod that reads a Foundation object and
+  converges a YugabyteDB universe onto it, through the YugabyteDB Anywhere
+  Kubernetes operator.
+#
+# It does NOT create the Foundation object. That object is the user's input, and
+# a chart that owned it would fight every `kubectl edit` — helm would revert on
+# the next upgrade. Install this, then apply a Foundation; NOTES.txt says so.
+#
+# meko-foundation-crd is not a dependency for the same reason the amp chart does
+# not depend on cert-manager: the CRD is cluster-scoped and installed once, so
+# making it a subchart would tie a shared object's lifecycle to whichever
+# foundation happened to be installed first.
+type: application
+version: 0.1.0
+# The image tag falls back to this, so it has to be a tag that EXISTS.
+# build-image.sh pushes exactly two: `custom-<sha>` for every build, and
+# `latest`, which only a build of main may move. There is no semver tag to name
+# here, and naming the chart's own version produced an image nothing ever
+# published — a default that fails at ImagePullBackOff rather than at install.
+# Pin image.tag to a `custom-<sha>` for a reproducible install.
+appVersion: "latest"
+keywords:
+  - meko
+  - foundation
+  - yugabytedb
+  - yugabyte-anywhere
+home: https://github.com/yugabyte/meko
+sources:
+  - https://github.com/yugabyte/meko
+maintainers:
+  - name: meko

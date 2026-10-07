@@ -1,0 +1,39 @@
+{{ include "meko-foundation.fullname" . }} is installed in {{ .Release.Namespace }}.
+
+Nothing happens until you apply the Foundation it is watching. This chart does
+not create it: it is your input, and a chart that owned it would revert your
+edits on the next upgrade.
+
+  kubectl -n {{ .Release.Namespace }} apply -f foundation-cr.yaml
+
+The object must be named {{ .Values.foundation.name }}. Start from
+foundation/examples/foundation-cr.yaml in the meko repository — it is complete
+rather than minimal, and marks every value you must replace. Both encryption
+flags and the MAGE gflags in it are create-time only, so a universe built
+without them has to be rebuilt rather than edited.
+
+The consumer's database (yb_storage, for amp) is created by YBA when the
+example's yb.universe.create_yb_storage_db flag is set AND the pinned build
+carries that subtask — see the chart README. Otherwise create it yourself, once
+the address below exists and before the consumer rolls out.
+
+Watch it converge:
+
+  kubectl -n {{ .Release.Namespace }} get foundation {{ .Values.foundation.name }} -w
+  kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "meko-foundation.fullname" . }}
+
+READY means reachable, not merely applied. When it is, the address is in the
+foundation-conn ConfigMap, for a consumer to mount with configMapKeyRef:
+
+  kubectl -n {{ .Release.Namespace }} get configmap foundation-conn -o yaml
+
+Deleting the Foundation LEAVES the universe running, which is the default and is
+recoverable — applying the same spec again converges back onto it. Set
+spec.deletionPolicy to Delete if you want deletion to tear it down, and read the
+chart's README first: that is the setting that puts a finalizer on the object.
+{{- if not .Values.rbac.clusterScoped }}
+
+rbac.clusterScoped is OFF, so this pod cannot install the operator's CRDs or the
+yugaware chart's cluster RBAC. Converges will fail with `forbidden` until a
+cluster admin has done both.
+{{- end }}

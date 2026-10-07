@@ -1,0 +1,30 @@
+suite: crd
+templates:
+  - foundation.yaml
+release:
+  name: meko-foundation-crd
+tests:
+  # `helm uninstall` must not take the CRD with it. Deleting a CRD deletes every
+  # object of that kind on the CLUSTER, so without this an accidental uninstall
+  # of this one release removes the input object out from under every foundation
+  # on it.
+  - it: survives helm uninstall
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  # The chart renders the CRD verbatim: the file is what the Go drift tests read,
+  # so anything templated in it would make the two disagree.
+  - it: installs exactly one object, the CRD
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: CustomResourceDefinition
+      - equal:
+          path: metadata.name
+          value: foundations.meko.yugabyte.com
+      - equal:
+          path: spec.scope
+          value: Namespaced

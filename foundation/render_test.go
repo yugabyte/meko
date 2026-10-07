@@ -14,7 +14,7 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files")
 
-// TestRenderGolden compares the rendered manifests for examples/amp.yaml
+// TestRenderGolden compares the rendered manifests for examples/foundation-cli.yaml
 // against golden files.
 //
 // This is the main testing dividend of having a `render` verb: what CI checks
@@ -23,7 +23,7 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // assertions. Regenerate with `go test ./... -update` and READ THE DIFF — a
 // changed golden file is a changed thing applied to a cluster.
 func TestRenderGolden(t *testing.T) {
-	for _, example := range []string{"amp.yaml", "resources.yaml"} {
+	for _, example := range []string{"foundation-cli.yaml", "resources.yaml"} {
 		t.Run(example, func(t *testing.T) {
 			checkGolden(t, example, strings.TrimSuffix(example, ".yaml"))
 		})
@@ -74,7 +74,7 @@ func checkGolden(t *testing.T, example, dir string) {
 // would show up as a spurious diff in review and would make GitOps re-apply an
 // unchanged object.
 func TestRenderIsDeterministic(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	spec.universe()["gFlags"] = map[string]any{"tserverGFlags": map[string]any{
 		"allowed_preview_flags_csv": "ysql_yb_enable_mage",
 		"ysql_yb_enable_mage":       "true",
@@ -111,7 +111,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 //   - scope Namespaced, which is skipped unless oldNamingStyle is off (YBA's
 //     choice, and not in the CRD's kubernetesOverrides schema)
 func TestServiceEndpointOverrideAsksTheChartForTheService(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	crSpec := renderedSpec(t, spec, ybuniverse.KindUniverse)
 
 	// Required gate, and NOT a request for public exposure: overriding the
@@ -174,7 +174,7 @@ func TestServiceEndpointOverrideAsksTheChartForTheService(t *testing.T) {
 // TestHelmSets covers the three settings that make this an operator-driven
 // foundation rather than a plain YBA install.
 func TestHelmSets(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	sets := spec.HelmSets()
 
 	if sets["yugaware.kubernetesOperatorEnabled"] != "true" {
@@ -209,7 +209,7 @@ func TestHelmSets(t *testing.T) {
 // to carry it — and the operator cannot reconcile a CR without those
 // ClusterRoles.
 func TestExampleEnablesRBAC(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rbac, _ := spec.YBA.Values["rbac"].(map[string]any)
 	if rbac["create"] != true {
 		t.Errorf("yba.values.rbac.create = %v, want true; the operator needs the ClusterRoles "+
@@ -270,7 +270,7 @@ func renderedSpec(t *testing.T, spec *Spec, kind string) map[string]any {
 // does not model, set in the spec file, must arrive in the CR unchanged — that
 // is what makes a new operator release need no code here.
 func TestPassthroughReachesTheCR(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	// Real CRD fields this package has no knowledge of.
 	spec.universe()["paused"] = false
 	spec.universe()["useYbdbInbuiltYbc"] = true
@@ -295,7 +295,7 @@ func TestPassthroughReachesTheCR(t *testing.T) {
 // dial is somewhere nothing predicted, and the single-namespace design the rest
 // of this module documents is false.
 func TestProviderZonesGetTheSpecNamespace(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	spec.Namespace = "ci-pr-fnd-7"
 
 	zones := renderedZones(t, spec)
@@ -327,7 +327,7 @@ func TestProviderZonesGetTheSpecNamespace(t *testing.T) {
 // foundation's namespace. The deployer then follows it — UniverseNamespace is
 // what every universe-facing lookup and the DSN use.
 func TestAZoneCanPutTheUniverseInItsOwnNamespace(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	zoneCloudInfo(t, spec)["kubeNamespace"] = "yb-amp"
 
 	if got := spec.UniverseNamespace(); got != "yb-amp" {
@@ -342,7 +342,7 @@ func TestAZoneCanPutTheUniverseInItsOwnNamespace(t *testing.T) {
 	}
 	// Unset, it is the foundation's namespace — co-location, which is what
 	// every consumer in this repo wants.
-	plain := loadExample(t, "amp.yaml")
+	plain := loadExample(t, "foundation-cli.yaml")
 	if got := plain.UniverseNamespace(); got != plain.Namespace {
 		t.Errorf("UniverseNamespace = %q, want the foundation's %q", got, plain.Namespace)
 	}
@@ -353,7 +353,7 @@ func TestAZoneCanPutTheUniverseInItsOwnNamespace(t *testing.T) {
 // first. That is a genuinely different feature (a per-zone address), and
 // refusing it beats picking silently.
 func TestProviderZonesMustAgreeOnOneNamespace(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	regions, _ := spec.provider()["regions"].([]any)
 	region, _ := regions[0].(map[string]any)
 	zoneCloudInfo(t, spec)["kubeNamespace"] = "yb-amp-a"
@@ -542,7 +542,7 @@ func TestTheBodyIsPassedThroughEvenWhenItHasAName(t *testing.T) {
 // went through: with the body passed through verbatim, a leftover body-level
 // name would reach the API server and be rejected there rather than here.
 func TestTheExampleKeepsItsNamesOutOfTheBodies(t *testing.T) {
-	for _, example := range []string{"amp.yaml", "resources.yaml"} {
+	for _, example := range []string{"foundation-cli.yaml", "resources.yaml"} {
 		spec := loadExample(t, example)
 		for _, kind := range []string{ybuniverse.KindProvider, ybuniverse.KindUniverse} {
 			if body := renderedSpec(t, spec, kind); body["name"] != nil {
@@ -558,7 +558,7 @@ func TestTheExampleKeepsItsNamesOutOfTheBodies(t *testing.T) {
 // ignored crdPath and told the reader to apply a bundle the spec had
 // overridden. The two must not be able to disagree.
 func TestCrdSourceHonoursTheOverride(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	if got := spec.CRDSource(); got != CRDURL(spec.ChartVersion) {
 		t.Errorf("CRDSource = %q, want the version's bundle when no override is set", got)
 	}

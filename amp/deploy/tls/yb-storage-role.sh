@@ -4,10 +4,11 @@
 #
 # Its own script because two different databases need it and neither can be the
 # other's home: the yugabyted TLS lane creates the database and the role
-# together (yugabyte-tls.sh), while an operator-managed universe gets the
-# DATABASE from the foundation spec's `databases:` and still has no role — the
-# role is amp's, not the universe's, so the foundation deployer has no business
-# creating it.
+# together (yugabyte-tls.sh), while on an operator-managed universe the database
+# comes from yb-database.sh (or, once a build carrying it is pinned, from YBA's
+# own yb.universe.create_yb_storage_db) and still has no role — the role is
+# amp's, not the universe's, so the foundation deployer has no business creating
+# either.
 #
 # Runs ysqlsh inside a tserver pod, logging in with the node's own client
 # certificate: the hba rules both lanes install make `yugabyte` a certificate
@@ -22,7 +23,7 @@
 #   YB_HOST_PORTS    host:port the pod should dial, as connstr reports it
 #   YB_STORAGE_ROLE  role to create (default amp_storage)
 #   YB_DATABASE      database to grant CONNECT on; must already exist (yb_storage)
-#   YB_EXEC_POD      tserver pod to exec into; discovered by label when unset
+#   YB_EXEC_POD      tserver pod to exec into; found from the published Service when unset
 set -euo pipefail
 
 NS="${NS:?NS is required}"
@@ -32,6 +33,8 @@ YB_STORAGE_ROLE="${YB_STORAGE_ROLE:-amp_storage}"
 YB_DATABASE="${YB_DATABASE:-yb_storage}"
 YB_EXEC_POD="${YB_EXEC_POD:-}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 say() { printf '\n==> %s\n' "$*"; }
 
@@ -39,13 +42,7 @@ say() { printf '\n==> %s\n' "$*"; }
 YB_HOST="${YB_HOST_PORTS%%:*}"
 
 if [ -z "${YB_EXEC_POD}" ]; then
-  # Two label shapes, because the chart's depends on oldNamingStyle and YBA
-  # picks that, not us.
-  for sel in "app.kubernetes.io/name=yb-tserver" "app=yb-tserver"; do
-    YB_EXEC_POD="$(kubectl -n "${UNIVERSE_NS}" get pods -l "$sel" \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-    [ -n "${YB_EXEC_POD}" ] && break
-  done
+  YB_EXEC_POD="$(UNIVERSE_NS="${UNIVERSE_NS}" "${SCRIPT_DIR}/../tserver-pod.sh" || true)"
 fi
 [ -n "${YB_EXEC_POD}" ] || die "no tserver pod in namespace ${UNIVERSE_NS}; set YB_EXEC_POD"
 

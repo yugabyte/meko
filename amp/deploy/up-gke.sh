@@ -37,6 +37,7 @@
 #   PULL_SECRET=gcr-pull-secret GCR_KEY_FILE=./gcr-sa-key.json deploy/up-gke.sh  # mint from a GCP SA key
 #   PULL_SECRET=quay-pull-secret PULL_SECRET_DOCKERCONFIGJSON="$(cat cfg.json)" deploy/up-gke.sh  # mint from a docker config.json
 #   FOUNDATION=operator deploy/up-gke.sh                          # operator-managed universe instead of yugabyted
+#   FOUNDATION=external YB_HOST_PORTS=... YB_SSLMODE=... deploy/up-gke.sh   # a universe already standing
 #   TLS=1 deploy/up-gke.sh                                        # TLS + certificate auth (see TLS below)
 #   EXTRA_HELM_SET="otel.enabled=false" deploy/up-gke.sh          # override any value this script sets
 set -euo pipefail
@@ -90,7 +91,7 @@ PULL_SECRET_DOCKERCONFIGJSON="${PULL_SECRET_DOCKERCONFIGJSON:-}"  # raw docker c
 # yugaware pod and tens of minutes of install, and is exercised by its own
 # on-demand workflow rather than by every deploy.
 FOUNDATION="${FOUNDATION:-yugabyted}"
-FOUNDATION_SPEC="${FOUNDATION_SPEC:-${REPO_ROOT}/../foundation/examples/amp.yaml}"
+FOUNDATION_SPEC="${FOUNDATION_SPEC:-${REPO_ROOT}/../foundation/examples/foundation-cli.yaml}"
 
 # shellcheck source=../scripts/versions.sh
 . "${SCRIPT_DIR}/../scripts/versions.sh"
@@ -266,7 +267,30 @@ case "${FOUNDATION}" in
     fi
     TLS="${_spec_tls_flag}"
     ;;
-  *) die "invalid FOUNDATION=${FOUNDATION} (want yugabyted|operator)" ;;
+  external)
+    # Someone else already built the universe — on the CI lane, the foundation
+    # POD from a Foundation object — and tells us how to reach it. TLS is still
+    # not an input: it follows the sslmode that universe reports, for the same
+    # reason it followed the spec under `operator`. Both encryption flags are
+    # create-time, so disagreeing with it would only produce a DSN the database
+    # refuses.
+    [ -n "${YB_HOST_PORTS:-}" ] || die "FOUNDATION=external needs YB_HOST_PORTS (host:port of the tserver Service)"
+    [ -n "${YB_SSLMODE:-}" ] || die "FOUNDATION=external needs YB_SSLMODE (what the universe reports)"
+    case "${YB_SSLMODE}" in
+      verify-full) _ext_tls_flag=1 ;;
+      disable)     _ext_tls_flag=0 ;;
+      # This lane wires the controller and every endpoint for verify-full
+      # against the amp-ca bundle, so an encrypted-but-unverified universe has
+      # no shape here: the endpoints would present certificates to a server
+      # that cannot check them, and verify nothing in return.
+      *) die "FOUNDATION=external got YB_SSLMODE=${YB_SSLMODE}: this lane serves disable or verify-full" ;;
+    esac
+    if [ -n "${TLS_EXPLICIT}" ] && [ "${TLS}" != "${_ext_tls_flag}" ]; then
+      die "TLS=${TLS} was asked for but the universe reports sslmode=${YB_SSLMODE}: the universe and the DSNs would disagree. The universe decides on this lane"
+    fi
+    TLS="${_ext_tls_flag}"
+    ;;
+  *) die "invalid FOUNDATION=${FOUNDATION} (want yugabyted|operator|external)" ;;
 esac
 case "${TLS}" in 0|1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
 case "${TLS_PERMISSIVE}" in 0|1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
@@ -373,9 +397,10 @@ fi
 # --- 4. the backing YugabyteDB ---
 if [ "${FOUNDATION}" = "operator" ]; then
   # An operator-managed universe, stood up by the foundation/ deployer: CRDs,
-  # the yugaware chart with the Kubernetes operator enabled, a YBUniverse CR,
-  # the tserver Service and yb_storage. It takes the namespace this script
-  # already created, so the amp pods stay co-located with the DB.
+  # the yugaware chart with the Kubernetes operator enabled, a YBUniverse CR and
+  # the tserver Service. It takes the namespace this script already created, so
+  # the amp pods stay co-located with the DB. yb_storage is ours to create,
+  # below.
   CONNSTR_ARGS=()
   if [ "${TLS}" = "1" ]; then
     # BEFORE the universe: YBA references the ClusterIssuer when it creates it,
@@ -433,14 +458,62 @@ if [ "${FOUNDATION}" = "operator" ]; then
   echo "   YB_HOST_PORTS : ${YB_HOST_PORTS}"
   echo "   DB_URL        : ${DB_URL}"
 
-  # The role endpoints log in as, by certificate CN. yb_storage itself came from
-  # the spec's `databases:`; the role did not, because it is amp's and not the
-  # universe's. Same script the yugabyted TLS lane uses, so there is one copy of
-  # the recipe.
+  # connstr exports the namespace the DB pods are in, which differs from ours
+  # whenever a provider zone names its own kubeNamespace.
+  _univ_ns="${YB_UNIVERSE_NAMESPACE:-${NS}}"
+
+  # The controller's db.Connect targets yb_storage at startup, so it must exist
+  # before the controller rolls out. The foundation deployer no longer creates
+  # it: the database belongs to whoever uses it, and on this lane that is us.
+  NS="${NS}" UNIVERSE_NS="${_univ_ns}" YB_HOST_PORTS="${YB_HOST_PORTS}" \
+  YB_DATABASE="yb_storage" \
+    "${SCRIPT_DIR}/yb-database.sh"
+
+  # The role endpoints log in as, by certificate CN — amp's, not the universe's,
+  # which is why it is a second script. Same one the yugabyted TLS lane uses, so
+  # there is one copy of the recipe.
   if [ "${TLS}" = "1" ]; then
-    # connstr exports the namespace the DB pods are in, which differs from ours
-    # whenever a provider zone names its own kubeNamespace.
-    _univ_ns="${YB_UNIVERSE_NAMESPACE:-${NS}}"
+    NS="${NS}" UNIVERSE_NS="${_univ_ns}" YB_HOST_PORTS="${YB_HOST_PORTS}" \
+    YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_DATABASE="yb_storage" \
+      "${SCRIPT_DIR}/tls/yb-storage-role.sh"
+  fi
+elif [ "${FOUNDATION}" = "external" ]; then
+  say "YugabyteDB (external: a universe already standing, at ${YB_HOST_PORTS})"
+
+  # The trust root is still ours to stand up even though the universe is not:
+  # it issues the CONTROLLER's and every ENDPOINT's client certificate, and
+  # publishes the CA as a ConfigMap they mount. Idempotent, so whoever built the
+  # universe having already run it is fine — and they must have, since YBA needs
+  # the issuer before it can sign a node certificate.
+  if [ "${TLS}" = "1" ]; then
+    say "certificate trust root (${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
+    TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" \
+    TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" TLS_TRUST_NAMESPACES="${NS}" \
+      "${SCRIPT_DIR}/tls/trust-root.sh"
+    TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}"
+  fi
+
+  # Assembled here for the same reason as the operator branch: the database and
+  # the certificate paths are amp's, and only the host and the sslmode came from
+  # whoever built the universe.
+  DB_URL="postgres://yugabyte@${YB_HOST_PORTS}/yb_storage?sslmode=${YB_SSLMODE}"
+  if [ "${TLS}" = "1" ]; then
+    DB_URL="${DB_URL}&sslrootcert=/etc/amp/tls/ca/ca.crt"
+    DB_URL="${DB_URL}&sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key"
+  fi
+  echo "   YB_HOST_PORTS : ${YB_HOST_PORTS}"
+  echo "   YB_SSLMODE    : ${YB_SSLMODE}"
+  echo "   DB_URL        : ${DB_URL}"
+
+  # Wherever the DB pods are. Defaults to ours, which is right whenever the
+  # universe was deployed into this namespace.
+  _univ_ns="${YB_UNIVERSE_NAMESPACE:-${NS}}"
+
+  NS="${NS}" UNIVERSE_NS="${_univ_ns}" YB_HOST_PORTS="${YB_HOST_PORTS}" \
+  YB_DATABASE="yb_storage" \
+    "${SCRIPT_DIR}/yb-database.sh"
+
+  if [ "${TLS}" = "1" ]; then
     NS="${NS}" UNIVERSE_NS="${_univ_ns}" YB_HOST_PORTS="${YB_HOST_PORTS}" \
     YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_DATABASE="yb_storage" \
       "${SCRIPT_DIR}/tls/yb-storage-role.sh"

@@ -21,7 +21,6 @@ package ybuniverse
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 // APIVersion and the kinds this package renders.
@@ -146,78 +145,49 @@ func Settled(st Status) (bool, string) {
 	return true, ""
 }
 
-// FailureSettleWindow is how long the one terminal signal must hold before the
-// wait acts on it. It exists only to outlast the stale-generation read, so it
-// is short.
-const FailureSettleWindow = 2 * time.Minute
-
-// FailureWatch reads what the CR says is wrong and decides the one case where
-// the wait should stop early. It is deliberately not clever: a rejected spec
-// fails asynchronously inside the operator, so without reading the CR back the
-// failure presents as a wait that times out with the reason left somewhere
-// nobody looked — and REPORTING that reason is the job. Adjudicating it is
-// mostly not.
+// FailureWatch reads what the CR says is wrong so the caller can report it. It
+// decides nothing, and must not: a rejected spec fails asynchronously inside the
+// operator, so without reading the CR back the failure presents as a wait that
+// times out with the reason left somewhere nobody looked.
 //
-// A failed task is reported and nothing more, because this side cannot tell a
-// dead create from one YBA is retrying. It retries with a backoff, and a retry
-// keeps the SAME task UUID (only a re-run gets a new one), so neither elapsed
-// time nor a count of tasks separates the two. Guessing costs a working
-// install; waiting costs the rest of the universe timeout, which the operator
-// can cut short themselves once the log has told them what broke.
-//
-// The exception is a spec YBA rejected BEFORE it submitted a task: the action
-// stays "queued" with no UUID while universeState becomes "Error Creating" —
-// observed on a spec whose ybSoftwareVersion was empty, where the only
-// explanation was a RuntimeException in the yugaware log. Nothing will retry
-// that, because YBA never accepted it, so the wait ends. It still has to
-// outlast FailureSettleWindow: universeState has no observedGeneration behind
-// it (see Settled), so a reading taken just after an apply can belong to the
-// previous generation, and a healthy create was seen flickering through
-// "Error Creating" seconds before its task appeared.
+// The tempting verdict is universeState "Error Creating" with no action carrying
+// a task UUID — YBA rejected the spec before accepting work, so nothing will
+// retry it. YBA does retry it: the reconciler throws before submitting,
+// AbstractReconciler only logs the exception, and the NO_OP enqueued alongside
+// the CREATE requeues CREATE, with no retry cap and a backoff capped at 1800s.
+// So the universe timeout is the only bound, and a cause that resolves heals on
+// its own.
 //
 // The zero value is ready to use, and it is stateful: one per wait.
 type FailureWatch struct {
-	// Window overrides FailureSettleWindow. Zero uses it.
-	Window time.Duration
-
-	since  time.Time
 	reason string
 }
 
 // Reason is the failure the CR currently shows, or "" when it shows none.
 func (w *FailureWatch) Reason() string { return w.reason }
 
-// Observe folds one status reading, taken at now, into the watch.
-//
-// report is non-empty the FIRST time a given failure is seen, for the caller to
-// log — a failure is worth telling someone about whether or not it ends the
-// wait. stop reports whether to give up.
-//
-// now is a parameter rather than time.Now() so this package stays free of
-// ambient state, and so a test can advance time without sleeping.
-func (w *FailureWatch) Observe(st Status, now time.Time) (report string, stop bool) {
-	reason, terminal := failureSignal(st)
+// Observe folds one status reading into the watch, returning a non-empty report
+// the FIRST time a given failure is seen and whenever it changes.
+func (w *FailureWatch) Observe(st Status) (report string) {
+	reason := failureSignal(st)
 	if reason == "" {
-		w.since, w.reason = time.Time{}, ""
-		return "", false
+		w.reason = ""
+		return ""
 	}
 	if reason != w.reason {
-		w.reason, w.since = reason, now
-		report = reason
+		w.reason = reason
+		return reason
 	}
-	if !terminal {
-		return report, false
-	}
-	window := w.Window
-	if window <= 0 {
-		window = FailureSettleWindow
-	}
-	return report, now.Sub(w.since) >= window
+	return ""
 }
 
-// failureSignal reports what the CR says is wrong, and whether it is a failure
-// nothing can retry.
-func failureSignal(st Status) (reason string, terminal bool) {
+// failureSignal reports what the CR says is wrong.
+//
+// A failed task says so and nothing more: YBA retries with a backoff, and a
+// retry keeps the SAME task UUID (only a re-run gets a new one), so neither
+// elapsed time nor a count of tasks separates a dead create from one about to
+// succeed.
+func failureSignal(st Status) string {
 	for _, a := range st.Actions {
 		if a.Status == ActionFailed {
 			msg := a.Message
@@ -225,17 +195,19 @@ func failureSignal(st Status) (reason string, terminal bool) {
 				msg = "no message"
 			}
 			return fmt.Sprintf("%s failed: %s (task %s) — YBA may retry it; the cause is in the "+
-				"yugaware log", describeAction(a), msg, a.TaskUUID), false
+				"yugaware log", describeAction(a), msg, a.TaskUUID)
 		}
 	}
-	// No task anywhere is what separates a rejection from a create in trouble:
-	// YBA writes a UUID as soon as it accepts the work.
+	// No task anywhere separates a rejection from a create in trouble: YBA
+	// writes a UUID as soon as it accepts the work. Both are retried, so this
+	// is reported rather than acted on.
 	if strings.HasPrefix(st.UniverseState, StateErrorPrefix) && !hasTask(st) {
 		return fmt.Sprintf("universeState is %q and no action carries a task — YBA rejected the "+
-			"spec before it created one, so the explanation is only in the yugaware log",
-			st.UniverseState), true
+			"spec before it created one, so the explanation is only in the yugaware log. It "+
+			"requeues CREATE and retries, so this is a report rather than a verdict",
+			st.UniverseState)
 	}
-	return "", false
+	return ""
 }
 
 func hasTask(st Status) bool {

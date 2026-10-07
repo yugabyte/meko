@@ -19,8 +19,8 @@
 # service (`strings yb-tserver | grep ThinClientService`) first.
 #
 # Not covered: the operator-managed foundation (`/ci amp_deploy_gke_foundation`)
-# pins its universe build in foundation/examples/amp.yaml, coupled to the
-# yugaware chart it installs. The same floor applies; move it too.
+# pins its universe build in foundation/examples/foundation-cr.yaml, coupled to
+# the yugaware chart it installs. The same floor applies; move it too.
 
 # The YugabyteDB container CI starts for the integration, migration, extension and
 # GKE-deploy suites; also the default for scripts/yb-local.sh and the yugabyted that

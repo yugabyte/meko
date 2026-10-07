@@ -47,9 +47,9 @@ func TestShellExportsSurvivesEval(t *testing.T) {
 	}
 }
 
-// An Info with no databases has no DBURL, and up-gke.sh checks for it — so the
-// export must be absent rather than present and empty, which would pass the
-// script's -n check with a broken value.
+// An Info the deployer could not build a DSN for has no DBURL, and up-gke.sh
+// checks for it — so the export must be absent rather than present and empty,
+// which would pass the script's -n check with a broken value.
 func TestShellExportsOmitsAnEmptyDBURL(t *testing.T) {
 	info := &Info{YSQLHostPorts: "h:5433", RPCHostPorts: "r:9100"}
 	if strings.Contains(info.ShellExports(), "DB_URL") {

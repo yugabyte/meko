@@ -124,7 +124,7 @@ func TestPreflightWarnsOnImmediateBinding(t *testing.T) {
 		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
 		{Match: "get storageclass", Result: Result{Stdout: "Immediate"}},
 	}}
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	var logged []string
 	d := New(spec, rec.Runner()).WithLogger(func(f string, a ...any) { logged = append(logged, f) })
 
@@ -189,7 +189,7 @@ func TestPreflightFailsOnAMissingPullSecret(t *testing.T) {
 // kubeConfigSecret), so a CR could name a Secret but never put one there.
 // Requiring the name in OUR namespace would fail specs that are correct.
 func TestPullSecretsIsOnlyYugawares(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	if got := spec.PullSecrets(); len(got) != 1 || got[0] != "quay-pull-secret" {
 		t.Fatalf("PullSecrets() = %v, want just yugaware's [quay-pull-secret]", got)
 	}
@@ -239,7 +239,7 @@ func TestPreflightNamesAMissingChartOrCrdPath(t *testing.T) {
 		{name: "a repo chart name is not a path", chart: "yugabytedb/yugaware", crdDir: crds, source: ChartRepo},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			spec := loadExample(t, "amp.yaml")
+			spec := loadExample(t, "foundation-cli.yaml")
 			spec.ChartSource = tc.source
 			spec.YBA.Chart = tc.chart
 			spec.CRDPath = tc.crdDir
@@ -299,7 +299,7 @@ func TestTelemetryProviderSecretsReadsReferencesNotValues(t *testing.T) {
 	}
 	// A spec with no telemetry declares no requirement — which is the state a
 	// foundation comes up in, before the install hint adds the export.
-	if got := loadExample(t, "amp.yaml").TelemetryProviderSecrets(); len(got) != 0 {
-		t.Errorf("amp.yaml requires %v; it declares no TelemetryProvider and should require none", got)
+	if got := loadExample(t, "foundation-cli.yaml").TelemetryProviderSecrets(); len(got) != 0 {
+		t.Errorf("foundation-cli.yaml requires %v; it declares no TelemetryProvider and should require none", got)
 	}
 }

@@ -375,7 +375,7 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   contract itself — `enableLoadBalancer: true` and a `serviceEndpoints` entry named
   `yb-tserver-conn` with `scope: Namespaced`, both ports (5433 **and** 9100) and
   `app: yb-tserver`. Every problem is reported at once; copy the block from
-  `foundation/examples/amp.yaml`.
+  `foundation/examples/foundation-cli.yaml`.
 
   **On an EXISTING universe you must also write both encryption flags explicitly.** The
   old deployer wrote them `false`, so a universe built from a silent spec is plaintext

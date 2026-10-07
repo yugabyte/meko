@@ -1,0 +1,31 @@
+apiVersion: v2
+name: meko-foundation-crd
+description: >-
+  The Foundation CustomResourceDefinition, on its own. Install it ONCE per
+  cluster, as its own release.
+#
+# Its own chart, and the CRD is an ordinary template rather than a crds/ entry.
+# Both halves matter:
+#
+#   - Under crds/, helm installs a CRD once and NEVER upgrades it, so a status
+#     field or a printer column added later would never reach a cluster that
+#     already had the old one.
+#   - As a template inside the per-foundation chart, the CRD would be a member
+#     of every release — and `helm uninstall` of ONE foundation would delete a
+#     cluster-scoped object every other foundation on the cluster depends on,
+#     taking their objects with it.
+#
+# Separating it means upgrading the schema is `helm upgrade` of this release,
+# and removing it is a deliberate uninstall of a chart that holds nothing else.
+type: application
+version: 0.1.0
+appVersion: "v1alpha1"
+keywords:
+  - meko
+  - foundation
+  - yugabytedb
+home: https://github.com/yugabyte/meko
+sources:
+  - https://github.com/yugabyte/meko
+maintainers:
+  - name: meko

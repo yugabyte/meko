@@ -12,16 +12,14 @@ import (
 	"time"
 )
 
-// testDeployer builds a Deployer over examples/amp.yaml with the waits
+// testDeployer builds a Deployer over examples/foundation-cli.yaml with the waits
 // shortened, so the poll tests run in milliseconds rather than tens of minutes.
 func testDeployer(t *testing.T, rec *Recorder) (*Deployer, *Spec) {
 	t.Helper()
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	d := New(spec, rec.Runner()).
 		WithTimeouts(time.Second, time.Second, time.Millisecond).
 		WithLogger(func(string, ...any) {})
-	// Scaled for the same reason as the timeouts.
-	d.failureWindow = 10 * time.Millisecond
 	return d, spec
 }
 
@@ -378,14 +376,15 @@ func TestWaitUniverseReportsFailuresWhileItWaits(t *testing.T) {
 	}
 }
 
-// The other half: a state that does NOT clear is still terminal, and still
-// well before the timeout — a genuinely rejected spec must not become a
-// 45-minute wait.
+// The other half: a state that does not clear runs to the timeout, and says
+// what the CR was reporting when it got there.
 //
-// The action is queued with NO taskUUID, which is the shape YBA leaves behind
-// when it rejects a spec before submitting a task. With a UUID it would be
-// accepted work, and waiting would be right.
-func TestWaitUniverseFailsOnAnErrorStateThatHolds(t *testing.T) {
+// This used to end the wait early, on the grounds that an action queued with no
+// taskUUID means YBA rejected the spec before submitting work and so nothing
+// would retry it. YBA does retry it — the reconciler throws, the NO_OP requeues
+// CREATE, and OperatorWorkQueue has no retry cap — so giving up after two
+// minutes abandoned installs that recover.
+func TestWaitUniverseRunsAnUnclearedErrorStateToTheTimeout(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "get ybuniverse", Result: Result{Stdout: rejectedStatus}},
 	}}
@@ -395,11 +394,15 @@ func TestWaitUniverseFailsOnAnErrorStateThatHolds(t *testing.T) {
 	if err == nil {
 		t.Fatal("waitUniverse succeeded on a universe stuck in Error Creating")
 	}
-	if strings.Contains(err.Error(), "did not settle") {
-		t.Errorf("reported as a timeout rather than a rejection: %v", err)
+	if !strings.Contains(err.Error(), "did not settle") {
+		t.Errorf("ended the wait early rather than letting YBA keep retrying: %v", err)
 	}
-	if !strings.Contains(err.Error(), "yugaware log") {
-		t.Errorf("error %q does not say where the explanation is", err)
+	// The timeout has to carry the reason and where to read more, since that is
+	// all a CI log keeps.
+	for _, want := range []string{"the CR was reporting", "Error Creating", "yugaware log"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("timeout error is missing %q:\n%s", want, err)
+		}
 	}
 }
 
@@ -495,7 +498,10 @@ func TestConnectBuildsTheConsumerContract(t *testing.T) {
 		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
 		{Match: "jsonpath={.spec.selector}", Result: Result{Stdout: tserverSelectorJSON}},
 	}}
+	// As up-gke.sh calls it: the example's universe is verify-full, and a
+	// verify-full DSN without a CA path is one the deployer refuses to build.
 	d, _ := testDeployer(t, rec)
+	d.WithDSNOptions(DSNOptions{SSLRootCert: "/etc/amp/tls/ca/ca.crt"})
 
 	info, err := d.Connect(context.Background())
 	if err != nil {
@@ -510,8 +516,8 @@ func TestConnectBuildsTheConsumerContract(t *testing.T) {
 	if want := ybaServiceName + ".amp.svc.cluster.local:9100"; info.RPCHostPorts != want {
 		t.Errorf("RPCHostPorts = %q, want %q", info.RPCHostPorts, want)
 	}
-	if !strings.HasSuffix(info.DBURL, "/yb_storage?sslmode=verify-full") {
-		t.Errorf("DBURL = %q, want the first database and the example's sslmode", info.DBURL)
+	if !strings.Contains(info.DBURL, "/yb_storage?sslmode=verify-full") {
+		t.Errorf("DBURL = %q, want the hardcoded database and the example's sslmode", info.DBURL)
 	}
 	// status.sqlEndpoints is carried for diagnostics but must NOT become
 	// YB_HOST_PORTS: it may enumerate per-pod endpoints.
@@ -532,69 +538,6 @@ func TestConnectBuildsTheConsumerContract(t *testing.T) {
 	// is worse than none because it reads as wired.
 	if strings.Contains(exports, "RPC") {
 		t.Errorf("ShellExports emits an RPC variable nothing consumes:\n%s", exports)
-	}
-}
-
-// TestEnsureDatabasesIsIdempotent: Postgres has no CREATE DATABASE IF NOT
-// EXISTS, so the script probes pg_database and tolerates a racing create.
-func TestEnsureDatabasesIsIdempotent(t *testing.T) {
-	rec := &Recorder{Responses: []Response{
-		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
-		{Match: "jsonpath={.spec.selector}", Result: Result{Stdout: tserverSelectorJSON}},
-		{Match: "get pods -l", Result: Result{Stdout: "yb-tserver-0"}},
-		{Match: "exec", Result: Result{Stdout: "exists\n"}},
-	}}
-	d, _ := testDeployer(t, rec)
-	if err := d.ensureDatabases(context.Background()); err != nil {
-		t.Fatalf("ensureDatabases: %v", err)
-	}
-
-	var exec Call
-	for _, c := range rec.Calls {
-		if strings.Contains(strings.Join(c.Argv, " "), " exec ") {
-			exec = c
-		}
-	}
-	if exec.Stdin == "" {
-		t.Fatalf("no exec call in %v", rec.Argvs())
-	}
-	got := strings.Join(exec.Argv, " ")
-	// The container has to be named: a tserver pod has sidecars.
-	if !strings.Contains(got, "-c yb-tserver") {
-		t.Errorf("exec argv = %q, want -c yb-tserver", got)
-	}
-	for _, want := range []string{
-		"SELECT 1 FROM pg_database WHERE datname='yb_storage'",
-		"CREATE DATABASE yb_storage",
-		"already exists",
-		// ysqlsh is looked up, not assumed on PATH: on a YBA-managed universe
-		// it lives under the tserver's own Postgres install.
-		"/home/yugabyte/tserver/postgres/bin/ysqlsh",
-	} {
-		if !strings.Contains(exec.Stdin, want) {
-			t.Errorf("the create script is missing %q:\n%s", want, exec.Stdin)
-		}
-	}
-	// set -e, so a genuine connection failure aborts rather than being misread
-	// as "absent" and triggering a spurious create.
-	if !strings.Contains(exec.Stdin, "set -euo pipefail") {
-		t.Error("the create script does not set -e; a failed probe would look like an absent database")
-	}
-}
-
-func TestEnsureDatabasesNamesTheSelectorWhenNoPodMatches(t *testing.T) {
-	rec := &Recorder{Responses: []Response{
-		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
-		{Match: "jsonpath={.spec.selector}", Result: Result{Stdout: tserverSelectorJSON}},
-		{Match: "get pods -l", Result: Result{Stdout: ""}},
-	}}
-	d, _ := testDeployer(t, rec)
-	err := d.ensureDatabases(context.Background())
-	if err == nil {
-		t.Fatal("ensureDatabases succeeded with no tserver pod")
-	}
-	if !strings.Contains(err.Error(), "app=yb-tserver,release=foundation-dfac") {
-		t.Errorf("error %q does not name the selector that failed to match", err)
 	}
 }
 
@@ -638,6 +581,19 @@ func TestDownOrderAndClusterScopedCleanup(t *testing.T) {
 	}
 	if del, uninstall := idx("delete -f -"), idx("uninstall"); del < 0 || uninstall < 0 || del > uninstall {
 		t.Errorf("CR deletes must precede the helm uninstall; argv order: %v", argvs)
+	}
+	// The published address is withdrawn, and before the universe is asked to
+	// go rather than after. Nothing else reclaims it: the labelled sweep asks
+	// only for the operator's API group, so a core-group ConfigMap is never a
+	// candidate however it is labelled, and a consumer left reading it would
+	// dial a Service that no longer exists.
+	unpublish := idx("delete configmap " + ConnConfigMap)
+	if unpublish < 0 {
+		t.Errorf("teardown left configmap/%s behind, still advertising the torn-down universe",
+			ConnConfigMap)
+	} else if del := idx("delete -f -"); del >= 0 && unpublish > del {
+		t.Error("the address was withdrawn after the universe was asked to go, leaving a window " +
+			"where it points at a Service being reclaimed")
 	}
 	// The chart's ClusterRole/ClusterRoleBinding are named after the release and
 	// a namespace delete never reclaims a cluster-scoped object.
@@ -803,7 +759,7 @@ func TestCheckTServerServiceWarnsWhenTheChartDidNotRenderIt(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ""}},
 	}}
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	var logged []string
 	d := New(spec, rec.Runner()).WithLogger(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
 
@@ -832,7 +788,7 @@ func TestCheckTServerServiceWarnsOnNoEndpoints(t *testing.T) {
 		{Match: "get service " + ybaServiceName, Result: Result{Stdout: tserverServiceJSON}},
 		{Match: "get endpoints", Result: Result{Stdout: ""}},
 	}}
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	var logged []string
 	d := New(spec, rec.Runner()).WithLogger(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
 
@@ -875,7 +831,7 @@ func TestDownLeavesAProviderTheSpecDoesNotDeclare(t *testing.T) {
 // TestDownDeletesADeclaredProvider: the other half — one this spec created
 // goes, after the universe that references it.
 func TestDownDeletesADeclaredProvider(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
@@ -975,7 +931,7 @@ func TestInstallYBAAcceptsExactlyOneCustomer(t *testing.T) {
 // customer-create job and defaults OFF, so setting the defaultUser fields alone
 // does nothing. Forced with --set so a values file cannot switch it off.
 func TestHelmSetsForcesTheCustomerCreateJob(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	if got := spec.HelmSets()["yugaware.defaultUser.enabled"]; got != "true" {
 		t.Errorf("yugaware.defaultUser.enabled = %q, want \"true\"; without it YBA comes up with "+
 			"zero customers and the operator refuses every CR", got)
@@ -985,7 +941,7 @@ func TestHelmSetsForcesTheCustomerCreateJob(t *testing.T) {
 // TestPreflightFailsWithoutADefaultUserPassword: the chart's job template
 // hard-fails on an empty password, but from inside helm tens of minutes in.
 func TestPreflightFailsWithoutADefaultUserPassword(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	yw, _ := spec.YBA.Values["yugaware"].(map[string]any)
 	user, _ := yw["defaultUser"].(map[string]any)
 	delete(user, "password")
@@ -1105,6 +1061,9 @@ func TestDSNMatchesTheRenderedUniverse(t *testing.T) {
 				delete(spec.universe(), "rootCA")
 			} else {
 				spec.universe()["rootCA"] = tc.rootCA
+			}
+			if strings.Contains(tc.want, "verify") {
+				d.WithDSNOptions(DSNOptions{SSLRootCert: "/etc/amp/tls/ca/ca.crt"})
 			}
 			info, err := d.Connect(context.Background())
 			if err != nil {
@@ -1255,7 +1214,7 @@ func TestDBReleaseCheckWarnsWhenTheSpecImportsARelease(t *testing.T) {
 // new appVersion, which moved the bundled release underneath a spec that had
 // been green for days.
 func TestDBReleaseCheckStillFailsWithoutAReleaseEntry(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	if spec.DeclaresRelease() {
 		t.Fatal("the fixture should not declare a Release")
 	}
@@ -1274,7 +1233,7 @@ func TestDBReleaseCheckStillFailsWithoutAReleaseEntry(t *testing.T) {
 // The matching release passes, and an unreadable probe is inconclusive rather
 // than fatal — a check we cannot run must not break a deploy.
 func TestDBReleaseCheckIsInconclusiveWhenItCannotRun(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	version := universeString(spec.universe(), "ybSoftwareVersion")
 	for _, probe := range []Result{
 		{Stdout: "some-other\n" + version + "\n"},
@@ -1406,7 +1365,7 @@ func TestDownAttemptsEveryCRPastAFailedDelete(t *testing.T) {
 // operator holding every CR's finalizer. The namespace is then permanently
 // Terminating with nothing left that can clear it.
 func TestDownRefusesToUninstallWhenItCannotRender(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	// A body JSON cannot marshal: a non-string map key.
 	spec.universe()["gFlags"] = map[any]any{1: "x"}
 	rec := &Recorder{}
@@ -1430,7 +1389,7 @@ func TestDownRefusesToUninstallWhenItCannotRender(t *testing.T) {
 // uninstall would then take the operator holding its finalizer and strand the
 // namespace.
 func TestDownReclaimsALabelledStrayTheSpecDropped(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\nkmsconfigs\n"}},
@@ -1457,7 +1416,7 @@ func TestDownReclaimsALabelledStrayTheSpecDropped(t *testing.T) {
 // TestDownDeletesEachRenderedObjectOnce: the stray sweep must not re-delete
 // what the reversed spec walk already handled.
 func TestDownDeletesEachRenderedObjectOnce(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
@@ -1481,7 +1440,7 @@ func TestDownDeletesEachRenderedObjectOnce(t *testing.T) {
 // for the whole FinalizerTimeout and then uninstalls the operator with the
 // pair still there — the same reason prune issues all of its deletes first.
 func TestDownIssuesEveryStrayDeleteBeforeWaiting(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\nstorageconfigs\nbackupschedules\n"}},
@@ -1539,7 +1498,7 @@ func TestDownIssuesEveryStrayDeleteBeforeWaiting(t *testing.T) {
 // partial failure does not strand the release; this is the one case where
 // stranding it is the better outcome.
 func TestDownKeepsTheReleaseWhenACRIsStuck(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rec := &Recorder{Responses: []Response{
 		// Never goes: the finalizer is stuck.
 		{Match: "get -f -", Result: Result{Stdout: "ybuniverse.operator.yugabyte.io/foundation"}},
@@ -1570,7 +1529,7 @@ func TestDownKeepsTheReleaseWhenACRIsStuck(t *testing.T) {
 // TestDownStillUninstallsWhenEveryCRWent: the guard above must not fire on a
 // clean teardown, or `down` would stop reclaiming the release at all.
 func TestDownStillUninstallsWhenEveryCRWent(t *testing.T) {
-	spec := loadExample(t, "amp.yaml")
+	spec := loadExample(t, "foundation-cli.yaml")
 	rec := &Recorder{Responses: []Response{
 		{Match: "get -f -", Result: Result{ExitCode: 1, Stderr: "NotFound"}},
 		{Match: "api-resources", Result: Result{Stdout: "ybuniverses\nybproviders\n"}},
@@ -1597,9 +1556,8 @@ func TestDownStillUninstallsWhenEveryCRWent(t *testing.T) {
 // aborted at the universe wait and said nothing about the steps after it.
 //
 // The universe was Ready and every pod healthy, so the foundation looked
-// finished — but `ensureDatabases` never ran, so yb_storage did not exist and
-// the omission surfaced much later as the amp controller failing to open its
-// state store.
+// finished — while the steps after the wait had not run at all, and that only
+// surfaced much later and somewhere else.
 func TestUpNamesTheStepsItSkipped(t *testing.T) {
 	rec := &Recorder{Responses: []Response{
 		{Match: "helm version", Result: Result{Stdout: "v3.20.0"}},
@@ -1626,9 +1584,9 @@ func TestUpNamesTheStepsItSkipped(t *testing.T) {
 	if incomplete.Step != "wait for the universe to settle" {
 		t.Errorf("Step = %q, want the step that actually failed", incomplete.Step)
 	}
-	// The one that mattered: the databases the consumer opens at startup.
-	if !slices.Contains(incomplete.Skipped, "create the databases") {
-		t.Errorf("Skipped = %v, missing the database step", incomplete.Skipped)
+	// The step after the failure, which a caller would otherwise assume ran.
+	if !slices.Contains(incomplete.Skipped, "verify the tserver Service") {
+		t.Errorf("Skipped = %v, missing the step after the failure", incomplete.Skipped)
 	}
 	if !strings.Contains(err.Error(), "rejected") {
 		t.Errorf("error %q dropped the operator's own reason", err)
@@ -1657,24 +1615,24 @@ func TestUpDoesNotReportPreflightAsIncomplete(t *testing.T) {
 	}
 }
 
-// TestIncompleteErrorWithNothingSkipped: the last step is `create the
-// databases`, which is the case this error type exists for — and it skips
-// nothing, so there is no list to print. The message must not trail off after
-// "did not run:".
+// TestIncompleteErrorWithNothingSkipped: the LAST step failing skips nothing,
+// so there is no list to print and the message must not trail off after "did
+// not run:".
 func TestIncompleteErrorWithNothingSkipped(t *testing.T) {
-	err := &IncompleteError{Step: "create the databases", Err: errors.New("connection refused")}
+	err := &IncompleteError{Step: "verify the tserver Service", Err: errors.New("connection refused")}
 	msg := err.Error()
 	if strings.Contains(msg, "did not run") {
 		t.Errorf("printed an empty skipped-step list:\n%s", msg)
 	}
-	for _, want := range []string{"create the databases", "connection refused", "incomplete", "resumes"} {
+	for _, want := range []string{"verify the tserver Service", "connection refused", "incomplete", "resumes"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message is missing %q:\n%s", want, msg)
 		}
 	}
 	// With steps skipped it still names them.
-	err.Skipped = []string{"verify the tserver Service", "create the databases"}
-	if msg := err.Error(); !strings.Contains(msg, "did not run: verify the tserver Service, create the databases") {
+	err.Skipped = []string{"prune objects the spec no longer declares", "verify the tserver Service"}
+	if msg := err.Error(); !strings.Contains(msg,
+		"did not run: prune objects the spec no longer declares, verify the tserver Service") {
 		t.Errorf("message does not list the skipped steps:\n%s", msg)
 	}
 }
@@ -1756,5 +1714,514 @@ func TestApplyStopsOnATelemetryProviderYBARefused(t *testing.T) {
 		if strings.Contains(c.Stdin, `"kind": "YBUniverse"`) {
 			t.Error("the universe was applied anyway, referencing a provider YBA refused")
 		}
+	}
+}
+
+// TestApplyOnlyStopsAtTheApplies is the contract WithoutWaits promises a looping
+// caller: every CR is written, and nothing that needs the universe runs.
+//
+// The Recorder answers only what the steps up to and including applyCRs ask
+// for, so a step past that would fall through to an empty result and fail. The
+// absence of those responses is what makes this an assertion rather than a
+// smoke test.
+func TestApplyOnlyStopsAtTheApplies(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "helm version", Result: Result{Stdout: "v3.20.0"}},
+		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
+		{Match: "get storageclass", Result: Result{Stdout: "WaitForFirstConsumer"}},
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.3.0-b21\n"}},
+	}}
+	d, _ := testDeployer(t, rec)
+	// Prune is orthogonal and needs its own discovery responses; this is about
+	// which steps WithoutWaits drops.
+	info, err := d.WithoutWaits().WithoutPrune().Up(context.Background())
+	if err != nil {
+		t.Fatalf("Up with WithoutWaits failed: %v", err)
+	}
+	// The address comes from a Service the universe has not created, so there is
+	// nothing to report — and that is not an error.
+	if info != nil {
+		t.Errorf("Info = %+v, want nil until the universe exists", info)
+	}
+
+	var applied, universeReads int
+	for _, a := range rec.Argvs() {
+		if strings.Contains(a, "apply --server-side") {
+			applied++
+		}
+		// HasSuffix, not Contains: "-o json" is a prefix of "-o jsonpath=",
+		// which the encryption check uses and which is not a status read.
+		if strings.Contains(a, "get ybuniverse") && strings.HasSuffix(a, "-o json") {
+			universeReads++
+		}
+		// installYBA's own waits are NOT dropped, so the yugaware rollout and
+		// customer probes are expected here. These are the ones that are.
+		for banned, what := range map[string]string{
+			"get ybprovider":        "the provider gate",
+			"get ybcertificate":     "the certificate gate",
+			"get telemetryprovider": "the telemetry gate",
+			"-c yb-tserver":         "the database exec, which needs tserver pods",
+			"-l serviceName=":       "the tserver Service check",
+		} {
+			if strings.Contains(a, banned) {
+				t.Errorf("--apply-only ran %s: %q", what, a)
+			}
+		}
+	}
+	if applied == 0 {
+		t.Error("no CR was applied, so the one thing --apply-only must still do did not happen")
+	}
+	// Connect reads the universe once to build an Info. More than that means
+	// something is polling it, which is the wait this is supposed to have
+	// dropped.
+	if universeReads > 1 {
+		t.Errorf("read the universe %d times; --apply-only should look once, not poll:\n%s",
+			universeReads, strings.Join(rec.Argvs(), "\n"))
+	}
+}
+
+// TestCustomerCountOverHTTPInCluster: in a pod the probe is a plain GET of the
+// yugaware Service, so the deployer needs no pods/exec permission for it.
+func TestCustomerCountOverHTTPInCluster(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "amp-yugaware-yugaware"}},
+	}}
+	var got string
+	d, _ := testDeployer(t, rec)
+	d = d.WithInCluster(true).WithHTTPGetter(func(_ context.Context, url string) (int, string, error) {
+		got = url
+		return 200, `{"count":1}`, nil
+	})
+	if err := d.checkYBACustomer(context.Background()); err != nil {
+		t.Fatalf("checkYBACustomer: %v", err)
+	}
+	want := "http://amp-yugaware-yugaware-ui.amp.svc.cluster.local/api/v1/customer_count"
+	if got != want {
+		t.Errorf("GET %q, want %q", got, want)
+	}
+	for _, c := range rec.Argvs() {
+		if strings.Contains(c, "exec") {
+			t.Errorf("exec'd in-cluster, which is the permission this removes: %q", c)
+		}
+	}
+}
+
+// A definitive wrong answer still fails, whatever the transport: a
+// customer-less YBA refuses every CR and cannot recover on its own, which is
+// why this probe is a hard check rather than a warning.
+func TestCustomerCountOverHTTPStillFailsOnZero(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "amp-yugaware-yugaware"}},
+	}}
+	d, _ := testDeployer(t, rec)
+	d = d.WithInCluster(true).WithHTTPGetter(func(_ context.Context, _ string) (int, string, error) {
+		return 200, `{"count":0}`, nil
+	})
+	err := d.checkYBACustomer(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no customer") {
+		t.Fatalf("err = %v, want the no-customer failure", err)
+	}
+}
+
+// An unreachable endpoint is inconclusive rather than fatal — the same rule the
+// exec path follows. A probe that cannot run must not break a deploy.
+func TestCustomerCountOverHTTPSkipsWhenUnreachable(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "amp-yugaware-yugaware"}},
+	}}
+	d, _ := testDeployer(t, rec)
+	d = d.WithInCluster(true).WithHTTPGetter(func(_ context.Context, _ string) (int, string, error) {
+		return 0, "", errors.New("connection refused")
+	})
+	if err := d.checkYBACustomer(context.Background()); err != nil {
+		t.Errorf("an unreachable probe failed the deploy: %v", err)
+	}
+}
+
+// yugaware TLS moves the Service from 80 to 443, and the chart does not serve
+// both, so the scheme has to follow the spec rather than be assumed.
+func TestCustomerCountURLFollowsYugawareTLS(t *testing.T) {
+	_, spec := testDeployer(t, &Recorder{})
+	d := New(spec, nil)
+	if got := d.customerCountURL(); !strings.HasPrefix(got, "http://") {
+		t.Errorf("plain yugaware got %q, want http", got)
+	}
+	spec.YBA.Values["tls"] = map[string]any{"enabled": true}
+	if got := d.customerCountURL(); !strings.HasPrefix(got, "https://") {
+		t.Errorf("TLS yugaware got %q, want https", got)
+	}
+}
+
+// A release that has ever been deployed is never touched. This is the whole
+// safety property of the guard: uninstalling a working release takes the
+// operator that holds every CR's finalizer, which is what `down` is ordered to
+// avoid. `superseded` is what a previously-deployed revision becomes, so it
+// counts.
+func TestWedgedReleaseGuardSparesAnythingEverDeployed(t *testing.T) {
+	for _, history := range []string{
+		`[{"revision":1,"status":"deployed"}]`,
+		`[{"revision":1,"status":"superseded"},{"revision":2,"status":"failed"}]`,
+		`[{"revision":1,"status":"superseded"},{"revision":2,"status":"pending-upgrade"}]`,
+	} {
+		rec := &Recorder{Responses: []Response{
+			{Match: "history", Result: Result{Stdout: history}},
+		}}
+		d, _ := testDeployer(t, rec)
+		if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+			t.Fatalf("history %s: %v", history, err)
+		}
+		for _, c := range rec.Argvs() {
+			if strings.Contains(c, "uninstall") {
+				t.Errorf("history %s was uninstalled; a release that ever deployed must be left alone", history)
+			}
+		}
+	}
+}
+
+// The case it exists for: a first install that died leaves a release record with
+// no deployed revision, and `helm upgrade --install` then takes the upgrade path
+// and refuses forever.
+func TestWedgedReleaseGuardClearsANeverDeployedRelease(t *testing.T) {
+	for _, history := range []string{
+		`[{"revision":1,"status":"pending-install"}]`,
+		`[{"revision":1,"status":"failed"}]`,
+		`[{"revision":1,"status":"failed"},{"revision":2,"status":"failed"}]`,
+	} {
+		rec := &Recorder{Responses: []Response{
+			{Match: "history", Result: Result{Stdout: history}},
+			{Match: "uninstall", Result: Result{}},
+		}}
+		d, _ := testDeployer(t, rec)
+		if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+			t.Fatalf("history %s: %v", history, err)
+		}
+		var uninstalled bool
+		for _, c := range rec.Argvs() {
+			if strings.Contains(c, "uninstall amp-yugaware") {
+				uninstalled = true
+			}
+		}
+		if !uninstalled {
+			t.Errorf("history %s was left wedged; every later converge would fail the same way", history)
+		}
+	}
+}
+
+// No release at all is the common case — a fresh install — and helm history
+// exits non-zero for it. Nothing to clear, and nothing to report.
+func TestWedgedReleaseGuardIgnoresAMissingRelease(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "history", Result: Result{ExitCode: 1, Stderr: "Error: release: not found"}},
+	}}
+	d, _ := testDeployer(t, rec)
+	if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+		t.Fatalf("a missing release was treated as a failure: %v", err)
+	}
+	for _, c := range rec.Argvs() {
+		if strings.Contains(c, "uninstall") {
+			t.Error("uninstalled a release that does not exist")
+		}
+	}
+}
+
+// A failed uninstall stops the install rather than letting helm report the wedge
+// again with a less useful message.
+func TestWedgedReleaseGuardReportsAFailedUninstall(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "history", Result: Result{Stdout: `[{"revision":1,"status":"pending-install"}]`}},
+		{Match: "uninstall", Result: Result{ExitCode: 1, Stderr: "another operation is in progress"}},
+	}}
+	d, _ := testDeployer(t, rec)
+	err := d.clearWedgedRelease(context.Background(), "amp-yugaware")
+	if err == nil {
+		t.Fatal("a failed uninstall was ignored")
+	}
+	for _, want := range []string{"pending-install", "another operation"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+}
+
+// TestStepIDsAreStableAndComplete.
+//
+// The IDs are a contract the moment anything publishes progress, so the prose
+// names must be free to change without breaking a reader. This pins the
+// spelling and, more importantly, that every step a converge can run has one —
+// a step added without an ID would report an empty string.
+func TestStepIDsAreStableAndComplete(t *testing.T) {
+	want := []StepID{
+		"preflight", "install-crds", "ensure-namespace", "install-yba",
+		"apply-resources", "wait-universe", "prune", "verify-tserver-service",
+	}
+	if !slices.Equal(Steps, want) {
+		t.Errorf("Steps = %v, want %v — these are published, so a change here is a contract change",
+			Steps, want)
+	}
+
+	// Every step the converge builds carries one, and they are unique.
+	d, _ := testDeployer(t, &Recorder{})
+	seen := map[StepID]bool{}
+	for _, s := range d.convergeSteps() {
+		if s.id == "" {
+			t.Errorf("step %q has no ID; it would publish as an empty string", s.name)
+		}
+		if seen[s.id] {
+			t.Errorf("step ID %q is used twice", s.id)
+		}
+		seen[s.id] = true
+		if !slices.Contains(Steps, s.id) {
+			t.Errorf("step ID %q is not in Steps, so a reader cannot know it exists", s.id)
+		}
+	}
+}
+
+// An aborted converge reports the skipped steps for machines as well as for
+// people, and the two lists describe the same steps.
+func TestIncompleteErrorCarriesIDsAlongsideProse(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "helm version", Result: Result{Stdout: "v3.20.0"}},
+		{Match: "version -o json", Result: Result{Stdout: `{"serverVersion":{"major":"1","minor":"31"}}`}},
+		{Match: "get storageclass", Result: Result{Stdout: "WaitForFirstConsumer"}},
+		{Match: "get ybprovider", Result: Result{Stdout: `{"status":{"state":"Ready"}}`}},
+		{Match: "get ybcertificate", Result: Result{Stdout: `{"status":{"success":true,"resourceUUID":"c1"}}`}},
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "ls /opt/yugabyte/releases", Result: Result{Stdout: "2026.1.3.0-b21\n"}},
+		{Match: "get ybuniverse", Result: Result{
+			Stdout: statusWithAction("Error Creating", "CreateKubernetesUniverse", "failed", "rejected")}},
+	}}
+	d, _ := testDeployer(t, rec)
+	_, err := d.Up(context.Background())
+	var incomplete *IncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("not an *IncompleteError: %v", err)
+	}
+	if incomplete.ID != StepWaitUniverse {
+		t.Errorf("ID = %q, want %q", incomplete.ID, StepWaitUniverse)
+	}
+	if len(incomplete.SkippedIDs) != len(incomplete.Skipped) {
+		t.Errorf("SkippedIDs %v and Skipped %v describe different numbers of steps",
+			incomplete.SkippedIDs, incomplete.Skipped)
+	}
+	if !slices.Contains(incomplete.SkippedIDs, StepTServerService) {
+		t.Errorf("SkippedIDs = %v, missing the step after the failure", incomplete.SkippedIDs)
+	}
+}
+
+// A verifying sslmode with no CA path produces NO DSN rather than a broken one.
+//
+// libpq would fall back to ~/.postgresql/root.crt, which no consumer of this
+// has, so the string parses and then fails at the first connection. `connstr`
+// refuses the case outright; the reconcile loop reaches here instead, because
+// it runs in a pod where there are no flags for anyone to pass — and it reports
+// no DSN rather than one that cannot work. A consumer in the cluster reads the
+// parts out of the foundation-conn ConfigMap.
+func TestNoDSNWhenItCouldNotWork(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Result: Result{Stdout: readyStatus()}},
+		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
+	}}
+	// The example names a rootCA, so this universe is verify-full, and nothing
+	// supplies a CA path — which is exactly how the reconcile loop runs.
+	d, _ := testDeployer(t, rec)
+	info, err := d.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if info.DBURL != "" {
+		t.Errorf("reported DSN %q, which libpq would resolve against a CA file no consumer has",
+			info.DBURL)
+	}
+	// The address itself is still reported: it is the part that works.
+	if info.YSQLHostPorts == "" {
+		t.Error("withheld the address along with the DSN")
+	}
+	if strings.Contains(info.ShellExports(), "DB_URL") {
+		t.Errorf("exported an empty DB_URL, which up-gke.sh's -n check would pass:\n%s",
+			info.ShellExports())
+	}
+}
+
+// The sslmode is reported on its own, not only inside the DSN. db_url is
+// absent whenever it could not be completed, so without this a consumer
+// reading a Foundation's status has a host and no way to know how to connect
+// to it — and could not assemble the DSN the deployer declined to build.
+func TestSSLModeIsReportedBesideTheDSN(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get ybuniverse", Result: Result{Stdout: readyStatus()}},
+		{Match: "get service -l " + TServerServiceLabels, Result: Result{Stdout: ybaServiceName}},
+	}}
+	d, _ := testDeployer(t, rec)
+	info, err := d.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	// The example names a rootCA, so there is no DSN without a CA path — and
+	// the mode is still reported.
+	if info.DBURL != "" {
+		t.Fatalf("expected no DSN for this universe, got %q", info.DBURL)
+	}
+	if info.SSLMode != "verify-full" {
+		t.Errorf("SSLMode = %q, want the universe's own", info.SSLMode)
+	}
+}
+
+// TestAReleaseStuckMidOperationIsRolledBack.
+//
+// A helm call killed partway leaves the release in `pending-upgrade`, which
+// holds a lock: every later `helm upgrade` fails with "another operation
+// (install/upgrade/rollback) is in progress", and nothing clears it on its own.
+// So a converge that hits this fails forever.
+//
+// How it is reached is not exotic — the pod being evicted, a node scaled down,
+// or SIGKILL at the end of terminationGracePeriodSeconds on an install that ran
+// longer. The GKE lane hit it when the cluster autoscaler took the node.
+//
+// Rolled back, never uninstalled: the yugaware release holds the operator that
+// owns every CR's finalizer, so removing it is worse than the wedge.
+func TestAReleaseStuckMidOperationIsRolledBack(t *testing.T) {
+	history := `[{"revision":1,"status":"superseded"},
+	             {"revision":2,"status":"deployed"},
+	             {"revision":3,"status":"pending-upgrade"}]`
+	rec := &Recorder{Responses: []Response{
+		{Match: "history", Result: Result{Stdout: history}},
+	}}
+	d, _ := testDeployer(t, rec)
+	if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+		t.Fatalf("clearWedgedRelease: %v", err)
+	}
+
+	argvs := strings.Join(rec.Argvs(), "\n")
+	if strings.Contains(argvs, "uninstall") {
+		t.Fatalf("uninstalled a release that has a deployed revision — that takes the operator "+
+			"holding every CR's finalizer:\n%s", argvs)
+	}
+	// To revision 2 by number, not a bare `helm rollback`: the bare form goes to
+	// the previous revision, which here is the pending one.
+	if !strings.Contains(argvs, "rollback amp-yugaware 2") {
+		t.Errorf("did not roll back to the newest deployed revision:\n%s", argvs)
+	}
+}
+
+// A release whose last revision merely FAILED, over a good one, is left alone:
+// `helm upgrade` handles that by itself, and touching it would be far more
+// destructive than the problem.
+func TestAFailedRevisionOverAGoodOneIsLeftAlone(t *testing.T) {
+	history := `[{"revision":1,"status":"deployed"},{"revision":2,"status":"failed"}]`
+	rec := &Recorder{Responses: []Response{{Match: "history", Result: Result{Stdout: history}}}}
+	d, _ := testDeployer(t, rec)
+	if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+		t.Fatalf("clearWedgedRelease: %v", err)
+	}
+	for _, unwanted := range []string{"uninstall", "rollback"} {
+		if strings.Contains(strings.Join(rec.Argvs(), "\n"), unwanted) {
+			t.Errorf("ran %q on a release an upgrade can fix on its own", unwanted)
+		}
+	}
+}
+
+// And a release stuck with NOTHING to roll back to is still uninstalled — the
+// pending-install case, where there is no good revision and nothing to lose.
+func TestAPendingInstallWithNoGoodRevisionIsStillUninstalled(t *testing.T) {
+	history := `[{"revision":1,"status":"pending-install"}]`
+	rec := &Recorder{Responses: []Response{{Match: "history", Result: Result{Stdout: history}}}}
+	d, _ := testDeployer(t, rec)
+	if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+		t.Fatalf("clearWedgedRelease: %v", err)
+	}
+	argvs := strings.Join(rec.Argvs(), "\n")
+	if !strings.Contains(argvs, "uninstall") {
+		t.Errorf("a release that never deployed was not cleared:\n%s", argvs)
+	}
+	if strings.Contains(argvs, "rollback") {
+		t.Errorf("tried to roll back to a revision that does not exist:\n%s", argvs)
+	}
+}
+
+// The rollback announces itself in a phrase the GKE lane greps for, because a
+// recovery that happened silently is indistinguishable from one that never had
+// to happen — and the lane has to tell "rolled back" from "uninstalled".
+//
+// Pinned here so a reword breaks in a second rather than 45 minutes into a run
+// on a real cluster.
+func TestTheRollbackSaysSoInTheLogTheLaneGrepsFor(t *testing.T) {
+	const phrase = "rolling back to revision" // amp-foundation-gke.yml greps this
+
+	history := `[{"revision":1,"status":"deployed"},{"revision":2,"status":"pending-upgrade"}]`
+	rec := &Recorder{Responses: []Response{{Match: "history", Result: Result{Stdout: history}}}}
+	var logged strings.Builder
+	spec := loadExample(t, "foundation-cli.yaml")
+	d := New(spec, rec.Runner()).
+		WithTimeouts(time.Second, time.Second, time.Millisecond).
+		WithLogger(func(f string, a ...any) { fmt.Fprintf(&logged, f+"\n", a...) })
+
+	if err := d.clearWedgedRelease(context.Background(), "amp-yugaware"); err != nil {
+		t.Fatalf("clearWedgedRelease: %v", err)
+	}
+	if !strings.Contains(logged.String(), phrase) {
+		t.Errorf("the log does not contain %q, which amp-foundation-gke.yml greps for:\n%s",
+			phrase, logged.String())
+	}
+}
+
+// TestTheCustomerProbeRetriesTheTransportButNotTheAnswer.
+//
+// `kubectl rollout status` proves yugaware's pod is Ready, not that its HTTP is
+// serving — a Play application answers its first request some way after that.
+// A probe that gave up on the first refused connection called itself
+// inconclusive, and the install then proceeded to have every CR refused by the
+// operator with an empty status, which is the exact outcome this probe exists
+// to prevent.
+//
+// The retry is on the transport only. A COUNT is a real answer: zero means the
+// hook has already run or will never run, and no amount of waiting changes it.
+func TestTheCustomerProbeRetriesTheTransportButNotTheAnswer(t *testing.T) {
+	// Refused twice, then answers — the yugaware startup window.
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "customer_count", Result: Result{ExitCode: 1, Stderr: "connection refused"}, Once: true},
+		{Match: "customer_count", Result: Result{ExitCode: 1, Stderr: "connection refused"}, Once: true},
+		{Match: "customer_count", Result: Result{Stdout: `{"count":1}`}},
+	}}
+	var logged strings.Builder
+	d, _ := testDeployer(t, rec)
+	d.WithLogger(func(f string, a ...any) { fmt.Fprintf(&logged, f+"\n", a...) })
+
+	if err := d.checkYBACustomer(context.Background()); err != nil {
+		t.Fatalf("checkYBACustomer: %v", err)
+	}
+	if strings.Contains(logged.String(), "skipping the check") {
+		t.Errorf("gave up on a yugaware that was still starting:\n%s", logged.String())
+	}
+	if !strings.Contains(logged.String(), "exactly one customer") {
+		t.Errorf("did not reach a verdict:\n%s", logged.String())
+	}
+}
+
+// A definitive zero is NOT retried: it is the answer, and the error says how to
+// fix it rather than how long to wait.
+func TestACustomerCountOfZeroFailsAtOnce(t *testing.T) {
+	rec := &Recorder{Responses: []Response{
+		{Match: "get statefulset", Result: Result{Stdout: "ci-yugaware-yugaware"}},
+		{Match: "customer_count", Result: Result{Stdout: `{"count":0}`}},
+	}}
+	d, _ := testDeployer(t, rec)
+	err := d.checkYBACustomer(context.Background())
+	if err == nil {
+		t.Fatal("a customer-less YBA passed; the operator refuses every CR on one")
+	}
+	if !strings.Contains(err.Error(), "post-install hook") {
+		t.Errorf("the error does not say why there is no customer: %v", err)
+	}
+	// One read, not five: the answer was definitive.
+	reads := 0
+	for _, a := range rec.Argvs() {
+		if strings.Contains(a, "customer_count") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Errorf("read the count %d times for an answer that was never going to change", reads)
 	}
 }

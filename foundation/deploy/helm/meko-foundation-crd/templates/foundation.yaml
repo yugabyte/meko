@@ -1,0 +1,305 @@
+# The Foundation CRD. A Foundation carries exactly what the CLI's `-c SPEC`
+# file carries, so one spec describes a foundation whether a person applies it
+# from a terminal or a pod converges it in a cluster.
+#
+# It has no helm templating in it on purpose: this is the file the Go drift
+# tests read, and reading it is then reading what gets applied. Chart.yaml has
+# why it is a chart of its own.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: foundations.meko.yugabyte.com
+  annotations:
+    # `helm uninstall` leaves it. Deleting a CRD deletes every object of that
+    # kind on the CLUSTER, so an accidental uninstall of this release would take
+    # the input object out from under every other foundation. Removing it for
+    # real is `kubectl delete crd foundations.meko.yugabyte.com`, which is the
+    # level of deliberateness that deserves.
+    helm.sh/resource-policy: keep
+spec:
+  group: meko.yugabyte.com
+  scope: Namespaced
+  names:
+    kind: Foundation
+    listKind: FoundationList
+    plural: foundations
+    singular: foundation
+    shortNames: [fdn]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        # YBA, the universe and the provider, because those are the three a
+        # customer asks about and `kubectl get foundation` should answer without
+        # -o yaml.
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: YBA
+          type: string
+          jsonPath: .status.yba.release
+        - name: Universe
+          type: string
+          jsonPath: .status.resourceStates.YBUniverse
+        - name: Provider
+          type: string
+          jsonPath: .status.resourceStates.YBProvider
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [resources]
+              properties:
+                namespace:
+                  type: string
+                  description: >-
+                    Namespace the yugaware release and the operator CRs go into.
+                    Shared with the consumer's own pods, which is why teardown
+                    never removes it. Defaults to this object's own namespace,
+                    so co-location needs nothing said; naming a different one is
+                    how the foundation is put elsewhere.
+                kubeContext:
+                  type: string
+                  description: >-
+                    Inert in a pod: in-cluster auth has no kubeconfig and
+                    therefore no named contexts, so a non-empty value makes every
+                    kubectl and helm call fail.
+                chartVersion:
+                  type: string
+                  description: >-
+                    The yugaware chart version, which doubles as the git ref the
+                    operator CRD bundle is fetched from.
+                chartSource:
+                  type: string
+                  enum: [repo, path]
+                crdPath:
+                  type: string
+                  description: >-
+                    Overrides where the operator CRD bundle comes from. Must be
+                    a path inside the pod (baked into the image or mounted) or an
+                    http(s) URL; a local path is how an air-gapped cluster with
+                    no egress supplies it.
+                deletionPolicy:
+                  type: string
+                  enum: [Retain, Delete]
+                  default: Retain
+                  description: >-
+                    What happens to the universe when this object is deleted.
+                    Retain leaves it running and is recoverable — re-applying the
+                    same spec converges back onto it. Delete tears it down, and
+                    like `foundation down` leaves the namespace and the
+                    cluster-scoped CRDs alone.
+                yba:
+                  type: object
+                  properties:
+                    chart:
+                      type: string
+                    values:
+                      type: object
+                      description: yugaware chart values, verbatim.
+                      x-kubernetes-preserve-unknown-fields: true
+                resources:
+                  type: array
+                  minItems: 1
+                  description: >-
+                    The operator CRs to apply, IN ORDER. List order is apply
+                    order and teardown is its reverse, which is why this is a
+                    list and not a map keyed by kind — a map's key order does not
+                    survive being stored as JSON.
+                  items:
+                    type: object
+                    required: [kind, spec]
+                    properties:
+                      kind:
+                        type: string
+                        description: The CR kind, such as YBUniverse.
+                      name:
+                        type: string
+                        description: metadata.name of the CR.
+                      spec:
+                        type: object
+                        description: >-
+                          The CR's spec body, VERBATIM. The only free-form part
+                          of this schema, so every setting above stays strictly
+                          validated — and nothing is lost by it, because the API
+                          server validates these bodies against the operator's
+                          own CRD when they are applied.
+                        x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              description: >-
+                Written by the foundation, never by a user. Each resource entry
+                is that CR's OWN status rather than a verdict, so a reference
+                that never becomes ready stays visible instead of being noticed
+                only while something happens to be waiting on it.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: >-
+                    The metadata.generation this status describes. A reader
+                    compares it to metadata.generation to know whether the status
+                    is about their edit or the one before it.
+                namespace:
+                  type: string
+                  description: >-
+                    The namespace the status was read from. Normally
+                    metadata.namespace, and not always: the CLI reports the same
+                    structure with --namespace able to override it.
+                phase:
+                  type: string
+                  enum: [Converging, Ready, Failed]
+                  description: >-
+                    Ready means REACHABLE, not merely applied: every declared CR
+                    is ready AND there is an address.
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]
+                yba:
+                  type: object
+                  properties:
+                    release:
+                      type: string
+                    installed:
+                      type: boolean
+                    customers:
+                      type: integer
+                      description: >-
+                        Exactly one, or the operator refuses every CR. Any other
+                        number is reported here because the failure is otherwise
+                        silent.
+                    message:
+                      type: string
+                resources:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      kind:
+                        type: string
+                      name:
+                        type: string
+                      state:
+                        type: string
+                        enum: [Absent, Pending, Ready, Failed]
+                      raw:
+                        type: string
+                        description: >-
+                          The CR's own state wording, kept because the
+                          vocabulary is YBA's and open — KMSConfig documents four
+                          values with no enum while its reconciler writes five,
+                          and universeState reports "Error Creating", which the
+                          CRD never mentions.
+                      message:
+                        type: string
+                      resource_uuid:
+                        type: string
+                resourceStates:
+                  type: object
+                  description: >-
+                    The same states keyed by kind, so a printer column can reach
+                    one — JSONPath cannot filter a list by field and project
+                    another in a column. Several objects of one kind collapse to
+                    the state furthest from ready.
+                  additionalProperties:
+                    type: string
+                    enum: [Absent, Pending, Ready, Failed]
+                address:
+                  type: object
+                  description: >-
+                    Absent until the universe has produced its Service. This is
+                    the SAME shape `foundation connstr --json` prints, field for
+                    field — a second, prettier address type here would be a
+                    second contract to keep in step with the first.
+                  properties:
+                    namespace:
+                      type: string
+                    universe_name:
+                      type: string
+                    state:
+                      type: string
+                    software_version:
+                      type: string
+                    num_nodes:
+                      type: integer
+                    ysql_host_ports:
+                      type: string
+                      description: >-
+                        YB_HOST_PORTS, and the only address the deploy path
+                        hands a consumer. The direct-RPC lane derives its own
+                        from this host, which is why the Service carries both
+                        client ports.
+                    rpc_host_ports:
+                      type: string
+                      description: Diagnostics only; nothing configures it.
+                    ssl_mode:
+                      type: string
+                      description: >-
+                        What the universe's encryption flags imply, and what a
+                        consumer must connect with. Always present, unlike
+                        db_url — it is the field you build your own DSN from.
+                    db_url:
+                      type: string
+                      description: >-
+                        A ready-to-use DSN, present only when one can be built.
+                        It is ABSENT whenever the sslmode requires a CA, because
+                        the path to that CA is a fact about the consumer's own
+                        filesystem and a DSN naming one it guessed would parse
+                        and then fail to connect. Build your own from the fields
+                        beside it:
+                        postgres://yugabyte@<ysql_host_ports>/yb_storage?sslmode=<ssl_mode>&sslrootcert=<your
+                        CA path>
+                    sql_endpoints:
+                      type: array
+                      items:
+                        type: string
+                      description: >-
+                        What the CR reports, for diagnostics. Deliberately not
+                        the address: it may enumerate per-pod endpoints, which a
+                        full move invalidates.
+                    universe_namespace:
+                      type: string
+                      description: >-
+                        Where the DB pods are — the provider zones'
+                        kubeNamespace, which need not be this one.
+                heartbeat:
+                  type: string
+                  format: date-time
+                  description: >-
+                    When this status was last written. Distinguishes "still
+                    converging" from "whatever writes this has been dead for an
+                    hour".
+                lastSuccess:
+                  type: string
+                  format: date-time

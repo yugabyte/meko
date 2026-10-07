@@ -79,6 +79,13 @@ func (d *Deployer) Down(ctx context.Context, opts DownOptions) error {
 	//
 	// The foundation CI asserts it is gone afterwards, so if YBA turns out not
 	// to reclaim it, the run says so rather than leaking silently.
+	// The published address stops being true the moment the universe is asked
+	// to go, so it is withdrawn first rather than left pointing at a Service
+	// about to be reclaimed.
+	if err := d.unpublishConn(ctx); err != nil {
+		fail("%v", err)
+	}
+
 	manifests, err := d.spec.Render()
 	if err != nil {
 		// Returned, not collected. Everything below removes the operator —

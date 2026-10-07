@@ -208,7 +208,7 @@ framework's universe request learning the TLS fields (`enableNodeToNodeEncrypt`,
 stacks can run encrypted. YBA on Kubernetes supports hot certificate reload from
 2025.2, so rotation on this path is a YBA action rather than a chart workaround.
 
-**This is what `foundation/examples/amp.yaml` now deploys**, and it is the shape
+**This is what `foundation/examples/foundation-cli.yaml` now deploys**, and it is the shape
 `/ci amp_deploy_gke_foundation` soaks: a `YBCertificate` carrying the `amp-ca` bundle,
 `certManagerIssuer*` on the provider zones, both encryption flags, and `ysql_hba_conf_csv`.
 
@@ -226,7 +226,7 @@ client.
 
 Beyond that specific breakage, login policy is not the foundation's to set: the universe
 is the universe, and who connects and how they prove it belongs where the consumer is
-configured. So `examples/amp.yaml` sets no hba rules at all. What the operator lane gives
+configured. So `examples/foundation-cli.yaml` sets no hba rules at all. What the operator lane gives
 you is both hops **encrypted** and the server **authenticated** (`sslmode=verify-full`,
 which is what its `tls.extraSANs` is for); clients are not authenticated by certificate,
 and with `enableYSQLAuth` off YugabyteDB's own defaults admit them. A deployment that

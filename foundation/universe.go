@@ -52,6 +52,9 @@ func (d *Deployer) applyCRs(ctx context.Context) error {
 		// resolves the reference when it reconciles — asynchronously, with the
 		// rejection arriving as a failed action tens of minutes later, or for
 		// telemetry as nothing at all. Ordering alone is not enough; the wait is.
+		if d.noWaits {
+			continue
+		}
 		switch m.Kind {
 		case ybuniverse.KindProvider, ybuniverse.KindTelemetryProvider:
 			if err := d.waitRegistered(ctx, m.Kind, m.ObjectName); err != nil {
@@ -300,9 +303,8 @@ func (d *Deployer) checkTServerService(ctx context.Context) error {
 }
 
 // checkTServerCertSANs confirms the node certificates name the address
-// consumers are given. It is the FIRST thing to notice a missing SAN — this
-// step runs before the databases one, whose ysqlsh would otherwise be the one
-// to fail the handshake.
+// consumers are given. It is what notices a missing SAN here rather than
+// leaving it to the first consumer that opens a verify-full connection.
 //
 // It is the one thing about a cert-manager universe that cannot be checked
 // offline. The spec asks for the Service FQDN through
@@ -380,9 +382,10 @@ func (d *Deployer) waitUniverse(ctx context.Context) error {
 	defer ticker.Stop()
 
 	// Stateful, and one per wait: it reports a failure the first time it sees
-	// one, and ends the wait only for the one failure nothing can retry (see
+	// one and whenever it changes. It ends nothing — YBA retries every failure
+	// state it can report, so the timeout below is the only bound (see
 	// ybuniverse.FailureWatch).
-	watch := ybuniverse.FailureWatch{Window: d.failureWindow}
+	var watch ybuniverse.FailureWatch
 	var lastReason string
 	var hinted bool
 	for {
@@ -391,12 +394,7 @@ func (d *Deployer) waitUniverse(ctx context.Context) error {
 			return err
 		}
 		if present {
-			// Report the failure whether or not it ends the wait. This side
-			// cannot tell a dead create from one YBA is retrying, so it mostly
-			// keeps waiting — and an operator watching it needs to know it is
-			// going badly, and where to look, without waiting for a verdict.
-			report, stop := watch.Observe(status, time.Now())
-			if report != "" {
+			if report := watch.Observe(status); report != "" {
 				d.log("universe %s: %s", d.spec.UniverseName(), report)
 				if !hinted {
 					// Once per wait: the reason names the yugaware log, this
@@ -404,10 +402,6 @@ func (d *Deployer) waitUniverse(ctx context.Context) error {
 					d.log("%s", d.yugawareLogHint(ctx))
 					hinted = true
 				}
-			}
-			if stop {
-				return fmt.Errorf("universe %s: %s\n%s",
-					d.spec.UniverseName(), watch.Reason(), d.yugawareLogHint(ctx))
 			}
 			if settled, why := ybuniverse.Settled(status); settled {
 				d.log("universe %s is Ready", d.spec.UniverseName())
@@ -428,7 +422,10 @@ func (d *Deployer) waitUniverse(ctx context.Context) error {
 			// CI log has.
 			failure := ""
 			if r := watch.Reason(); r != "" {
-				failure = "\nthe CR was reporting: " + r
+				// The reason says the explanation is in the yugaware log; this
+				// says how to read it on THIS install. It rides the error
+				// rather than only the log because a CI run keeps the error.
+				failure = "\nthe CR was reporting: " + r + "\n" + d.yugawareLogHint(ctx)
 			}
 			return fmt.Errorf("universe %s did not settle within %s (last: %s)%s\n%s",
 				d.spec.UniverseName(), d.universeTimeout, lastReason, failure, d.diagnose(ctx))

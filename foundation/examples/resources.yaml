@@ -171,7 +171,7 @@ YBUniverse:
     tserverVolume: {volumeSize: 100}
     # Transport security. Optional — omit both and the CRD's true applies, which
     # the deployer's DSN accounts for. Stated here because this example wants
-    # plaintext, to stay about declaring resources; examples/amp.yaml is the
+    # plaintext, to stay about declaring resources; examples/foundation-cli.yaml is the
     # encrypted one and shows what else TLS needs. Both are create-time only.
     enableClientToNodeEncrypt: false
     enableNodeToNodeEncrypt: false
@@ -182,7 +182,7 @@ YBUniverse:
     # serviceEndpoints at all. One Service carrying BOTH
     # tserver client ports, because the direct-RPC lane cannot be addressed
     # separately and derives its address by appending 9100 to the YSQL host.
-    # examples/amp.yaml has the full reasoning.
+    # examples/foundation-cli.yaml has the full reasoning.
     enableLoadBalancer: true
     kubernetesOverrides:
       serviceEndpoints:
@@ -235,6 +235,3 @@ YBUniverse:
               source: amp
               environment_id: acme-prod
               account_id: 3f2b1c00-0000-0000-0000-000000000009
-
-databases:
-  - yb_storage

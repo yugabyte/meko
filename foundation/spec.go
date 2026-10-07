@@ -68,7 +68,7 @@ const (
 	// The default is the newest PUBLISHED line, because it is the only thing
 	// that works with no other field set. A build is deployed by naming its
 	// tarball in yba.chart, which is a choice the spec has to make explicitly
-	// — see examples/amp.yaml.
+	// — see examples/foundation-cli.yaml.
 	DefaultChartVersion = "2026.1.1"
 	DefaultChartSource  = ChartRepo
 	DefaultChartRepo    = "yugabytedb/yugaware"
@@ -128,6 +128,25 @@ const (
 )
 
 // ChartSource is where the yugaware chart comes from.
+// DeletionPolicy is what happens to the universe when the object describing it
+// is deleted.
+type DeletionPolicy string
+
+const (
+	// DeletionRetain leaves the universe running, and is the default.
+	//
+	// An orphaned universe is recoverable: every step is create-or-apply and
+	// the operator CRs keep the managed-by label, so re-applying the same spec
+	// converges straight back onto it with nothing rebuilt and no data moved. A
+	// dropped database is not recoverable, so the two mistakes are not
+	// symmetric and the default goes to the one that can be undone.
+	DeletionRetain DeletionPolicy = "Retain"
+	// DeletionDelete tears the universe down, as `down` does — and like `down`,
+	// it leaves the namespace and the cluster-scoped CRDs alone: those are
+	// shared with the consumer's own pods and with every other foundation.
+	DeletionDelete DeletionPolicy = "Delete"
+)
+
 type ChartSource string
 
 const (
@@ -159,10 +178,11 @@ type Spec struct {
 
 	YBA YBASpec `yaml:"yba"`
 
-	// Databases are created after the universe reports Ready. The amp
-	// controller's db.Connect targets yb_storage AT STARTUP, so it must exist
-	// before the controller rolls out.
-	Databases []string `yaml:"databases"`
+	// DeletionPolicy decides what happens to the universe when a Foundation CR
+	// is deleted. It is inert for the CLI, whose `down` is an explicit command
+	// with its own flags; it exists for the pod, where deleting the CR is the
+	// only signal there is.
+	DeletionPolicy DeletionPolicy `yaml:"deletionPolicy"`
 
 	// Resources is every operator CR the spec declares, IN DOCUMENT ORDER.
 	//
@@ -181,7 +201,9 @@ type Spec struct {
 // StorageConfig and BackupSchedule. Folding the object name into the body would
 // collide with the CR's own.
 type Resource struct {
-	Kind string         `yaml:"-"`
+	// Kind is the key in the top-level form and a field in the `resources:`
+	// list form.
+	Kind string         `yaml:"kind"`
 	Name string         `yaml:"name"`
 	Spec map[string]any `yaml:"spec"`
 
@@ -219,7 +241,15 @@ type YBASpec struct {
 // It reaches a node at a time rather than decoding the whole document into a
 // map, because the map would lose the key order that apply and delete both
 // depend on.
-func Load(data []byte) (*Spec, error) {
+func Load(data []byte) (*Spec, error) { return load(data, "") }
+
+// LoadInNamespace is Load for a spec that came from an object which already has
+// a namespace of its own — a Foundation CR. The field is optional there in a
+// way it cannot be for a file, and the default has to be applied BEFORE
+// Validate, which requires one.
+func LoadInNamespace(data []byte, namespace string) (*Spec, error) { return load(data, namespace) }
+
+func load(data []byte, defaultNamespace string) (*Spec, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse spec: %w", err)
@@ -231,11 +261,20 @@ func Load(data []byte) (*Spec, error) {
 
 	settings := &yaml.Node{Kind: yaml.MappingNode}
 	var s Spec
+	var topLevelKinds, listed []Resource
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key, value := root.Content[i], root.Content[i+1]
 		if replacement, ok := renamedKeys[key.Value]; ok {
 			return nil, fmt.Errorf("parse spec: %q is no longer a spec field — declare it as the "+
 				"CR kind %q, whose value is {name, spec}", key.Value, replacement)
+		}
+		if key.Value == resourcesKey {
+			entries, err := decodeResourceList(value)
+			if err != nil {
+				return nil, fmt.Errorf("parse spec: %w", err)
+			}
+			listed = append(listed, entries...)
+			continue
 		}
 		if !isCRKind(key.Value) {
 			settings.Content = append(settings.Content, key, value)
@@ -245,13 +284,26 @@ func Load(data []byte) (*Spec, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse spec: %w", err)
 		}
-		s.Resources = append(s.Resources, entries...)
+		topLevelKinds = append(topLevelKinds, entries...)
 	}
+	// Both forms parse, so a spec can move without a flag day — but not both in
+	// one file: apply order is document order, and there is no reading of a file
+	// that interleaves a list with the keys around it.
+	if len(topLevelKinds) > 0 && len(listed) > 0 {
+		return nil, fmt.Errorf("parse spec: the CRs are declared both as top-level kinds (%s) and "+
+			"under %q (%s). Apply order is document order, and there is no order that interleaves "+
+			"the two — move them all into %q",
+			kindList(topLevelKinds), resourcesKey, kindList(listed), resourcesKey)
+	}
+	s.Resources = append(topLevelKinds, listed...)
 	if err := strictDecode(settings, &s); err != nil {
 		return nil, fmt.Errorf("parse spec: %w", err)
 	}
 
 	s.withDefaults()
+	if s.Namespace == "" {
+		s.Namespace = defaultNamespace
+	}
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
@@ -293,6 +345,59 @@ func isCRKind(key string) bool {
 
 // decodeResources reads one kind's value: a single entry, or a list of them
 // when a spec declares several of the same kind.
+// resourcesKey is the list form of the CR declarations:
+//
+//	resources:
+//	  - kind: YBProvider
+//	    name: gke
+//	    spec: { ... }
+//
+// It exists because a CR's spec is stored as JSON once the foundation is itself
+// a custom resource, and `x-kubernetes-preserve-unknown-fields` content
+// round-trips through a Go map in the API server, which has no ordering
+// guarantee. A list keeps apply order; a mapping of kind keys would lose it, for
+// the same reason Spec.Resources is a slice and not a map.
+//
+// It also lets the schema stay strict on every setting: the free-form part is
+// one field, `resources[].spec`, instead of every unrecognised top-level key.
+const resourcesKey = "resources"
+
+// decodeResourceList reads the `resources:` form. Order within the list is apply
+// order, as document order is for the top-level form.
+func decodeResourceList(value *yaml.Node) ([]Resource, error) {
+	if value.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("%s must be a list of {kind, name, spec}", resourcesKey)
+	}
+	out := make([]Resource, 0, len(value.Content))
+	for i, item := range value.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("%s[%d] must be a mapping of {kind, name, spec}", resourcesKey, i)
+		}
+		var r Resource
+		if err := strictDecode(item, &r); err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", resourcesKey, i, err)
+		}
+		if r.Kind == "" {
+			return nil, fmt.Errorf("%s[%d] has no kind; it is the CR kind to apply, such as "+
+				"YBUniverse", resourcesKey, i)
+		}
+		r.specGiven = r.Spec != nil
+		if r.Spec == nil {
+			r.Spec = map[string]any{}
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func kindList(rs []Resource) string {
+	names := make([]string, 0, len(rs))
+	for _, r := range rs {
+		names = append(names, r.Kind)
+	}
+	return strings.Join(names, ", ")
+}
+
 func decodeResources(kind string, value *yaml.Node) ([]Resource, error) {
 	switch value.Kind {
 	case yaml.MappingNode:
@@ -392,6 +497,9 @@ func (s *Spec) provider() map[string]any { return s.body(ybuniverse.KindProvider
 func (s *Spec) universe() map[string]any { return s.body(ybuniverse.KindUniverse) }
 
 func (s *Spec) withDefaults() {
+	if s.DeletionPolicy == "" {
+		s.DeletionPolicy = DeletionRetain
+	}
 	if s.ChartVersion == "" {
 		s.ChartVersion = DefaultChartVersion
 	}
@@ -522,6 +630,11 @@ func (s *Spec) Validate() error {
 			"set to https://releases.yugabyte.com/<build>/helm/yugaware-<line>.tgz")
 	default:
 		return fmt.Errorf("chartSource %q is not one of repo, path", s.ChartSource)
+	}
+	switch s.DeletionPolicy {
+	case DeletionRetain, DeletionDelete:
+	default:
+		return fmt.Errorf("deletionPolicy %q is not one of Retain, Delete", s.DeletionPolicy)
 	}
 	if s.ChartSource == ChartPath && s.YBA.Chart == "" {
 		return fmt.Errorf("chartSource path needs yba.chart set to the tarball or directory")
@@ -827,8 +940,8 @@ func portValue(v any) (int, bool) {
 // table of kinds here would be the thing that goes stale on the next chart.
 func (s *Spec) validateResources() error {
 	if s.count(ybuniverse.KindUniverse) != 1 {
-		// connstr, ensureDatabases and the tserver-Service lookup all resolve
-		// one universe in one namespace.
+		// connstr and the tserver-Service lookup both resolve one universe in
+		// one namespace.
 		return fmt.Errorf("exactly one %s is required; this spec declares %d",
 			ybuniverse.KindUniverse, s.count(ybuniverse.KindUniverse))
 	}
@@ -1252,4 +1365,28 @@ func (s *Spec) checkDefaultUser() error {
 			"empty password")
 	}
 	return nil
+}
+
+// PlacementUnchecked reports a placementInfo that validatePlacement walked
+// without finding a single zone code — so the cross-reference against the
+// provider's zones did nothing, and the spec passed validation on a check that
+// never ran.
+//
+// It is separate from Validate because the answer is a warning, not a refusal:
+// which shapes the CRD accepts is YBA's to decide and moves between releases,
+// so an unrecognised one is more likely a release this predates than a mistake.
+func (s *Spec) PlacementUnchecked() bool {
+	placement, ok := s.universe()["placementInfo"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, r := range asList(placement["regions"]) {
+		region, _ := r.(map[string]any)
+		for _, z := range asList(region["zones"]) {
+			if zone, _ := z.(map[string]any); zone["code"] != "" && zone["code"] != nil {
+				return false
+			}
+		}
+	}
+	return true
 }

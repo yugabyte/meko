@@ -1,12 +1,17 @@
 # The foundation the amp controller runs on: one YugabyteDB universe managed by
 # the YugabyteDB Kubernetes Operator, in the same namespace as the amp stack.
 #
-#   foundation render -c examples/amp.yaml -o manifests/   # manifests, no cluster
-#   foundation up     -c examples/amp.yaml                 # first bring-up
-#   foundation apply  -c examples/amp.yaml                 # converge after an edit
+#   foundation render -c examples/foundation-cli.yaml -o manifests/   # manifests, no cluster
+#   foundation up     -c examples/foundation-cli.yaml                 # first bring-up
+#   foundation apply  -c examples/foundation-cli.yaml                 # converge after an edit
 #
 # Every day-2 change — scale, software upgrade, gflags, disk grow, pause — is an
 # edit to this file followed by `apply`.
+#
+# The same foundation as an OBJECT, for the in-cluster pod to converge, is
+# examples/foundation-cr.yaml. It carries the same settings in the `resources:`
+# list form, and a test pins that the two agree on everything that decides what
+# the universe is — encryption, sslMode and gflags.
 #
 # REMOVING a CR key deletes the object on the next `apply`: this file is the
 # source of truth, so omission is deletion. Only objects this deployer created
@@ -145,9 +150,25 @@ yba:
     # comment on YBUniverse below. The two companion flags,
     # yb.universe.metrics_export_enabled and yb.telemetry.allow_otlp, both
     # default true and are not set here.
+    #
+    # yb.universe.create_yb_storage_db has YBA create the yb_storage database as
+    # a subtask of universe CREATE, which is what the consumer would otherwise
+    # do over `kubectl exec` (amp/deploy/yb-database.sh). GLOBAL, INTERNAL and
+    # defaults FALSE, so it has to be set here. Two things about it:
+    #
+    #   - CREATE-time only. It runs in the ConfigureUniverse phase of
+    #     CreateUniverse/CreateKubernetesUniverse, so turning it on for a
+    #     universe that already exists does nothing.
+    #   - It needs YBA from yugabyte-db 2026.1 at eab8d8b1d (2026-10-05) or
+    #     later. Chart 2026.1.3.0-b48 was cut on 2026-10-01 and predates it, so
+    #     on the build pinned above this key is inert and yb-database.sh is
+    #     still what creates the database. Setting it now is harmless — an
+    #     unknown runtime key is ignored — and makes the next chart bump the
+    #     only step needed.
     additionalAppConf:
       nonStringConf:
         "yb.universe.otel_collector_enabled": true
+        "yb.universe.create_yb_storage_db": true
 
     # Perf Advisor is new in 2026.1.2: a subchart, enabled by default, whose
     # image pulls under its OWN imagePullSecretName (yugabyte-k8s-pull-secret)
@@ -475,8 +496,3 @@ YBUniverse:
       tserverGFlags:
         allowed_preview_flags_csv: ysql_yb_enable_mage
         ysql_yb_enable_mage: "true"
-
-# The amp controller's db.Connect targets yb_storage at STARTUP, so it must
-# exist before the controller rolls out.
-databases:
-  - yb_storage

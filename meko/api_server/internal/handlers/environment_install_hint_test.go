@@ -70,7 +70,56 @@ func TestInstallHint_Amp(t *testing.T) {
 		// One value carries every image; without it they resolve to docker.io/amp/*.
 		`--set-string imageTag="${TAG}"`,
 		// --set-string, not --set: ? and = in the DSN are mis-tokenized by --set.
-		`--set-string controller.databaseUrl="postgres://yugabyte@${YB}/yb_storage?sslmode=disable"`,
+		`--set-string controller.databaseUrl="${DSN}"`,
+		// The DSN is ASSEMBLED from the variables above. It used to be printed
+		// with sslmode=disable baked in, which fails at the first connect
+		// against any encrypted database — and a universe the YugabyteDB
+		// operator deploys is encrypted, because both flags default true in its
+		// CRD.
+		`DSN="postgres://yugabyte@${YB}/yb_storage?sslmode=${YB_SSLMODE}"`,
+		"YB_SSLMODE=require",
+		// Any encrypted mode gives the controller AND every endpoint a client
+		// certificate from cert-manager and mounts the CA bundle beside it, so
+		// both have to be named or the pods never start.
+		"YB_TLS_ISSUER=amp-ca",
+		"YB_CA_CONFIGMAP=amp-ca-bundle",
+		`if [ "${YB_SSLMODE}" != disable ]; then`,
+		"--set tls.enabled=true",
+		"--set-string tls.issuerRef.name=${YB_TLS_ISSUER}",
+		"--set-string tls.caBundleConfigMap=${YB_CA_CONFIGMAP}",
+		// The controller's DSN names all THREE files the chart mounts, not only
+		// the CA: tls.enabled issues it a client certificate too.
+		"sslrootcert=/etc/amp/tls/ca/ca.crt",
+		"sslcert=/etc/amp/tls/client/tls.crt&sslkey=/etc/amp/tls/client/tls.key",
+		// And the endpoints are told separately. They connect to YugabyteDB
+		// themselves, so a hint that set only the controller's sslmode left
+		// every endpoint failing on "no pg_hba.conf entry ... no encryption"
+		// against the encrypted universe the operator deploys, while the
+		// install itself reported success.
+		"--set-string controller.endpoint.ybTlsMode=${YB_SSLMODE}",
+		// cert-manager becomes a prerequisite with it, so the hint says so.
+		"cert-manager and a ClusterIssuer",
+		// What the bundle is FOR: sslrootcert, which verifies the SERVER. amp's own
+		// certificate is verified by the database's trust store, never by this
+		// ConfigMap, so naming it "that issuer's CA" pointed at the wrong root.
+		// The bundle is mounted as sslrootcert, so it verifies the SERVER. amp's own
+		// certificate is checked by the database's trust store, never by this
+		// ConfigMap — "that issuer's CA" named the wrong root.
+		"the CA that signed YugabyteDB's",
+		// Both prerequisites name the variable they correspond to, since a
+		// prerequisite a reader cannot connect to a fill-in is one they skip.
+		"(YB_TLS_ISSUER below)",
+		// cert-manager is required because the chart has no way to encrypt without
+		// issuing a certificate — any non-disable ybTlsMode sets Sslcert, Sslkey
+		// and TLS.Enabled on every endpoint release — and NOT because the database
+		// asks for one. A YBA-managed universe installs no `cert` HBA rule (it
+		// cannot: YBA's own WaitForServer probes carry no certificate), so amp's
+		// is issued and never looked at, and the login is trust or YB_PASSWORD.
+		"even if your database authenticates by password",
+		"(YB_CA_CONFIGMAP below)",
+		// Where both values come from when the database was deployed by
+		// foundation/, so the customer reads them rather than hunting.
+		"{.status.address.ysql_host_ports}",
 		// The YSQL password, in a Secret both the controller and its endpoints
 		// read: a universe with YSQL auth on refuses either without it.
 		"YB_PASSWORD=''",
