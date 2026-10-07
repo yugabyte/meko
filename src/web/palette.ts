@@ -8,7 +8,7 @@ export function labelText(parts: LabelPart[]): string {
   return parts.map((p) => (typeof p === 'string' ? p : 'session' in p ? p.session : p.project)).join('');
 }
 
-/** The items whose label and keywords contain every word typed, in their order. */
+/** The items whose label and keywords contain every word typed, in any order; items keep their order. */
 export function filterItems<T extends { label: LabelPart[]; keywords: string }>(items: T[], q: string): T[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return items;

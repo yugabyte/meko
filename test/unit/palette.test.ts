@@ -21,6 +21,7 @@ describe('command palette labels', () => {
     expect(ids('')).toEqual(['move', 's1', 'home', 'settings']);
     expect(ids('settings')).toEqual(['move', 'settings']);
     expect(ids('move settings page')).toEqual(['move']);
+    expect(ids('page settings move')).toEqual(['move']);
     expect(ids('AGENT-K-LOCAL home')).toEqual(['home']);
     expect(ids('fix-login')).toEqual(['s1']);
     expect(ids('nothing like this')).toEqual([]);
