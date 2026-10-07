@@ -219,6 +219,17 @@ describe('the design prompts', () => {
     expect(sent).toMatch(/Don't change anything in the repo/);
     expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
   });
+
+  it('warns against tag-like text in an Artifact\'s Mermaid blocks, and only that', () => {
+    // The browser parses an Artifact's <pre class="mermaid"> before Mermaid reads it, so a
+    // `<session>` in a label becomes tags and the diagram fails (#50). Markdown fences don't.
+    // Only `<` before a letter, `/`, `!` or `?` opens a tag: arrows stay text and must stay allowed.
+    const design = DEFAULT_PROMPTS.design;
+    expect(design).toContain("In a Mermaid block in an Artifact's HTML, don't put `<` directly before a letter, `/`, `!` or `?` (such as `<session>` or `List<T>`)");
+    expect(design).toContain('Write `{session}` or "session id" instead. Arrows such as `->>`, `-->` and `<-->` are fine.');
+    expect(design).not.toMatch(/must not contain `<` or `>`/);
+    expect(design).toContain('```mermaid blocks render as diagrams there.');
+  });
 });
 
 describe('answers in the browser', () => {

@@ -5,7 +5,7 @@
 // can load to what Artifacts themselves may use (inline code, the two script CDNs, Google
 // Fonts, data: and blob: media), with no network requests of its own.
 
-import { mermaidLook } from './mermaid';
+import { DIAGRAM_FAILED, ERROR_CHARS, mermaidLook } from './mermaid';
 
 export const DESIGN_FRAME_CSP = [
   "default-src 'none'",
@@ -38,6 +38,11 @@ const OWN_MERMAID = /^<script\b[^>]*\bsrc\s*=[^>]*mermaid|\bfrom\s*["'][^"']*mer
  * The script that draws a page's Mermaid blocks, for a page that has them but leaves drawing them
  * to the claude.ai viewer; empty otherwise. Mermaid comes from jsdelivr, which the policy allows,
  * in strict mode, themed like the frame.
+ *
+ * Blocks are drawn one at a time, so one that doesn't draw is replaced by a note, Mermaid's error
+ * and its source (as text), not Mermaid's error graphic, and the rest still draw. The source is
+ * what Mermaid read, not what the page's HTML says: the browser has already parsed the block, so
+ * a `<session>` in a label shows up as the tags it became, matching the error.
  */
 export function mermaidLoader(html: string): string {
   if (!MERMAID_BLOCK.test(html) || (html.match(SCRIPT) ?? []).some((script) => OWN_MERMAID.test(script))) return '';
@@ -46,8 +51,32 @@ import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_VERSION}/dis
 const theme = document.documentElement.getAttribute('data-theme');
 const dark = theme ? theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
 const look = dark ? ${JSON.stringify(mermaidLook(true))} : ${JSON.stringify(mermaidLook(false))};
-mermaid.initialize({ ...look, startOnLoad: false, securityLevel: 'strict' });
-await mermaid.run({ querySelector: '.mermaid' });
+mermaid.initialize({ ...look, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true });
+const message = (err) => {
+  const text = String(err?.message ?? err?.str ?? err).trim() || 'unknown error';
+  return text.length > ${ERROR_CHARS} ? text.slice(0, ${ERROR_CHARS}) + '…' : text;
+};
+const pre = (text) => {
+  const el = document.createElement('pre');
+  el.style.cssText = 'white-space: pre-wrap; overflow-wrap: anywhere';
+  el.textContent = text;
+  return el;
+};
+for (const block of document.querySelectorAll('.mermaid')) {
+  const decode = document.createElement('textarea');
+  decode.innerHTML = block.innerHTML;
+  const source = decode.value.trim();
+  try {
+    await mermaid.run({ nodes: [block] });
+  } catch (err) {
+    const note = document.createElement('p');
+    note.textContent = ${JSON.stringify(DIAGRAM_FAILED)};
+    const box = document.createElement('div');
+    box.className = 'mermaid-error';
+    box.append(note, pre(message(err)), pre(source));
+    block.replaceWith(box);
+  }
+}
 </script>`;
 }
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DOMPurify from 'dompurify';
 import { renderMarkdown } from '../markdown';
-import { diagramAlt, drawDiagram, svgDataUrl, type Diagram } from '../mermaid';
+import { DIAGRAM_FAILED, diagramAlt, drawDiagram, svgDataUrl, type Diagram } from '../mermaid';
 import { useDarkTheme } from '../theme';
 import { Busy, Dialog } from './common';
 
@@ -89,7 +89,7 @@ function MermaidDiagram({ source, dark }: { source: string; dark: boolean }) {
         <p className="error-text">
           {'retry' in diagram && diagram.retry
             ? 'Couldn’t draw this diagram. Its source is below.'
-            : 'Couldn’t draw this diagram. Ask AgentK to fix it; its source is below.'}
+            : DIAGRAM_FAILED}
         </p>
         <pre className="mermaid-error-msg">{diagram.error}</pre>
         {code}

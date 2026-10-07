@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_DESIGN_HTML, artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from '../../src/server/design.js';
 import { DESIGN_FRAME_CSP, MERMAID_VERSION, designFrameDoc, mermaidLoader } from '../../src/web/design-frame.js';
-import { mermaidLook } from '../../src/web/mermaid.js';
+import { DIAGRAM_FAILED, ERROR_CHARS, mermaidLook } from '../../src/web/mermaid.js';
 
 describe('design capture', () => {
   let dir: string;
@@ -109,6 +109,25 @@ describe('design frame', () => {
     ]) {
       expect(mermaidLoader(block)).not.toBe('');
     }
+  });
+
+  it('shows the source of a block that does not draw instead of Mermaid\'s error graphic', () => {
+    const loader = mermaidLoader('<pre class="mermaid">sequenceDiagram\n  A->>B: save under pastes/<session>/</pre>');
+    // No error graphic, and each block on its own, so one that fails doesn't stop the rest.
+    expect(loader).toContain('suppressErrorRendering: true');
+    expect(loader).toContain('await mermaid.run({ nodes: [block] });');
+    expect(loader).not.toContain("querySelector: '.mermaid'");
+    // The source Mermaid read, entities decoded, kept before Mermaid empties the block.
+    expect(loader.indexOf('decode.innerHTML = block.innerHTML;')).toBeLessThan(loader.indexOf('await mermaid.run'));
+    // A failed block becomes the markdown designs' note, the error and the source, all as text.
+    expect(DIAGRAM_FAILED).toBe('Couldn’t draw this diagram. Ask AgentK to fix it; its source is below.');
+    expect(loader).toContain(`note.textContent = ${JSON.stringify(DIAGRAM_FAILED)};`);
+    expect(loader).toContain('box.append(note, pre(message(err)), pre(source));');
+    // Mermaid's error is cut where markdown designs cut it.
+    expect(loader).toContain(`text.length > ${ERROR_CHARS} ? text.slice(0, ${ERROR_CHARS}) + '…' : text`);
+    expect(loader).toContain('block.replaceWith(box);');
+    // The only HTML it writes is the block's own, into a detached <textarea>, which keeps tags as text.
+    expect(loader.match(/\.innerHTML\s*=.*/g)).toEqual(['.innerHTML = block.innerHTML;']);
   });
 
   it('adds no Mermaid when the page has no blocks or loads Mermaid itself', () => {

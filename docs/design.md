@@ -578,7 +578,13 @@ A diagram fits the column, a tap opens it full size, its source is a tap away, a
 parse shows Mermaid's error above its source, asking you to have AgentK fix it. An Artifact page with
 `class="mermaid"` blocks that leaves drawing them to the claude.ai viewer gets the same Mermaid
 version and look from jsdelivr, which the frame's policy already allows, so its diagrams show here
-too.
+too. They're drawn one at a time, and a block that doesn't draw is replaced by the same note,
+Mermaid's error and the source Mermaid read, as text, instead of Mermaid's error graphic. The usual
+cause is `<` directly before a letter, `/`, `!` or `?` in a label (`<session>`, `List<T>`): the
+browser parses the page first, so it becomes an HTML tag before Mermaid reads the block, here and
+in the claude.ai viewer alike. Any other `<` or `>`, such as the arrows `->>` and `<-->`, stays
+text. The Design prompt tells Claude not to write tag-like text in an Artifact's Mermaid blocks;
+markdown fences are taken out as text before any HTML parsing, so they're unaffected.
 
 **Open questions.** Besides the design, AgentK gives you its open questions in
 `~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "question", "context",
