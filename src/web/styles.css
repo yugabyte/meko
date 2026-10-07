@@ -1100,6 +1100,9 @@ textarea.input {
 .term-host {
   position: absolute;
   inset: 8px 4px 4px 10px;
+  /* xterm's layers go up to z-index 11; this keeps them inside the terminal, so what sits over it
+     (the context percent) only has to clear the terminal itself. */
+  isolation: isolate;
 }
 .xterm-host {
   width: 100%;
@@ -1216,26 +1219,27 @@ textarea.input {
 .ctx-ring.bad .arc {
   stroke: var(--bad);
 }
-/* The exact percent, in a pill centred over the ring while the mouse is on it. It floats, so the
-   footer doesn't shift; touch screens can't hover and have it in the ⋯ sheet instead. It rises into
-   the terminal, so it sits above xterm's layers (up to 11) and below menus and dialogs. */
-.ctx-pct {
-  display: none;
-  position: absolute;
-  z-index: 20;
-  bottom: calc(100% + 6px);
-  right: 7px;
-  transform: translateX(50%);
-  padding: 2px 6px;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow);
-  white-space: nowrap;
-  pointer-events: none;
-}
+/* The exact percent: written after the ring where nothing can hover (a touch screen of any width),
+   and a pill centred over the ring while a mouse is on it. The pill floats, so the footer doesn't
+   shift. It rises into the work area: above the terminal (whose own layers .term-host keeps to
+   itself) and its toast, below the Changes file menu, the panel resizer and dialogs. */
 @media (hover: hover) {
+  .ctx-pct {
+    display: none;
+    position: absolute;
+    z-index: 4;
+    bottom: calc(100% + 6px);
+    right: 7px;
+    transform: translateX(50%);
+    padding: 2px 6px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow);
+    white-space: nowrap;
+    pointer-events: none;
+  }
   .ctx:hover .ctx-pct {
     display: block;
   }

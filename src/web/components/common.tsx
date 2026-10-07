@@ -229,9 +229,9 @@ const CONTEXT_LEVEL_TEXT = { ok: '', warn: ' Getting full.', bad: ' Nearly full.
 /**
  * How full Claude's context window is: "context" and a ring that fills from 12 o'clock
  * counter-clockwise (a C at half, an O when full), blue, then amber from 75% and red from 95%.
- * The exact percent is in the meter's value and the tooltip, and pops up over the ring as soon as
- * the mouse is on it (the tooltip takes a second). `showPercent` writes it after the ring instead,
- * for the phone's ⋯ sheet, where nothing can be hovered.
+ * The exact percent is in the meter's value and the tooltip, and in `.ctx-pct`: written after the
+ * ring on a touch screen, and popped up over it as soon as a mouse is on it (the tooltip takes a
+ * second). `showPercent` always writes it after the ring, for the phone's ⋯ sheet.
  */
 export function ContextRing({ percent, showPercent = false }: { percent: number; showPercent?: boolean }) {
   const level = contextLevel(percent);

@@ -37,13 +37,21 @@ describe('contextArc', () => {
 });
 
 describe('ContextRing', () => {
-  it('pops the percent up over the ring on hover, on a desktop', () => {
+  it('pops the percent up over the ring on hover, and writes it where nothing can hover', () => {
     const html = renderToStaticMarkup(createElement(ContextRing, { percent: 80 }));
     expect(html).toContain('<span class="ctx-pct" aria-hidden="true">80%</span>');
-    const css = STYLES.slice(STYLES.indexOf('.ctx-pct {'), STYLES.indexOf('@media (prefers-reduced-motion', STYLES.indexOf('.ctx-pct {')));
-    // Hidden until hovered, and floated so the footer doesn't shift; a touch screen can't hover.
-    expect(css).toMatch(/\.ctx-pct \{[^}]*display: none;[^}]*position: absolute;/);
-    expect(css).toMatch(/@media \(hover: hover\) \{\s*\.ctx:hover \.ctx-pct \{\s*display: block;/);
+    // Only a device that can hover hides it and floats it, so a touch tablet's footer still shows it.
+    const hover = STYLES.slice(STYLES.indexOf('@media (hover: hover) {\n  .ctx-pct {'));
+    expect(hover).toMatch(/^@media \(hover: hover\) \{\s*\.ctx-pct \{[^}]*display: none;[^}]*position: absolute;[^}]*\}\s*\.ctx:hover \.ctx-pct \{\s*display: block;\s*\}\s*\}/);
+    expect(STYLES.match(/^\s*\.ctx-pct \{/gm)).toHaveLength(1);
+  });
+
+  it('sits over the terminal but under the Changes file menu', () => {
+    const z = (sel: string) => Number(STYLES.slice(STYLES.indexOf(`${sel} {`)).match(/z-index: (\d+);/)?.[1]);
+    expect(z('.ctx-pct')).toBeGreaterThan(z('.term-toast'));
+    expect(z('.ctx-pct')).toBeLessThan(z('.files-pop'));
+    // xterm's own layers (up to 11) stay inside the terminal.
+    expect(STYLES.slice(STYLES.indexOf('.term-host {')).split('}')[0]).toContain('isolation: isolate;');
   });
 
   it('writes the percent after the ring in the phone\'s sheet, with no pop-up', () => {
