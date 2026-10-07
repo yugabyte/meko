@@ -203,11 +203,15 @@ same words (without the mod too). The questions show:
 
 - in the design's **Questions** view, under **AgentK is asking**, at the top (its tab counts them);
 - in any stage, in a bar above the terminal, *AgentK asks: …* with **Answer**, and on a phone also
-  as the ⋯ sheet's first row (with a dot on ⋯). **Answer** opens the questions in a dialog (a sheet
-  from the bottom on a phone). Nothing opens by itself: you may be answering in the terminal.
+  as the ⋯ sheet's first row (with a dot on ⋯). **Answer** opens the questions in a dialog that
+  fills the window (a full-height sheet from the bottom on a phone): the questions scroll and
+  **Answer** stays at the bottom. Nothing opens by itself: you may be answering in the terminal.
 
 Each question is a card: its header, the options (radio rows, or checkboxes for a multi-select
-question, each with its description and its preview as preformatted text), and **Other** with a
+question, each with its description and its preview as preformatted text with a **Wrap lines**
+toggle for lines too long to fit: off at first on a desktop so tables and code stay aligned, on at
+first on a phone; in the dialog a preview grows to 60% of the window's height before it scrolls,
+40% on a phone), and **Other** with a
 text box, which is the dialog's "Other". `POST /api/sessions/:id/ask/:askId` checks the answers
 against the questions (labels must be the question's, one unless it's multi-select, the text
 within 10,000 characters) and hands them to the mod: the labels comma-joined, then the text, as the

@@ -3515,7 +3515,8 @@ div[id^='dak-mermaid-'] .label {
   cursor: default;
 }
 /* Questions Claude asks with AskUserQuestion (AskSheet.tsx): a bar above the terminal that opens
-   them, and the form, in a dialog (a sheet on a phone) or the design's Questions view. */
+   them, and the form, in a dialog (a sheet on a phone) or the design's Questions view. The dialog
+   fills the window so previews have room: the questions scroll, and the footer with Answer stays. */
 .ask-bar {
   flex: none;
   display: flex;
@@ -3557,6 +3558,47 @@ div[id^='dak-mermaid-'] .label {
   font-family: var(--mono);
   font-size: 12px;
   white-space: pre;
+}
+.ask-preview-hd {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.ask-preview-hd + .ask-preview {
+  margin-top: 4px;
+}
+.ask-preview.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dialog.ask-dialog {
+  width: 100%;
+  height: calc(100vh - 32px);
+}
+.ask-dialog .dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.ask-dialog .ask-form {
+  flex: 1;
+  min-height: 0;
+}
+.ask-dialog .dq-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.ask-dialog .ask-foot {
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+/* A preview spans its card, and grows to 60% of the window's height before it scrolls. */
+.ask-dialog .dq-opt-text {
+  flex: 1;
+}
+.ask-dialog .ask-preview {
+  max-height: 60vh;
 }
 .sheet-item.ask .sheet-item-label {
   min-width: 0;
@@ -4033,6 +4075,13 @@ div[id^='dak-mermaid-'] .label {
   /* A dialog without a footer (Settings) ends with its body, which clears the home indicator. */
   .dialog-body:last-child {
     padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Claude's questions take the whole sheet, which shrinks for the keyboard. */
+  .dialog.ask-dialog {
+    height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top, 0px) - 8px);
+  }
+  .ask-dialog .ask-preview {
+    max-height: calc(var(--app-h, 100dvh) * 0.4);
   }
   .pal-list {
     max-height: 55dvh;
