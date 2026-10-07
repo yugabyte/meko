@@ -3,7 +3,7 @@ name: open-pr
 description: >-
   Open a new pull request against `main` for the current branch in this repo.
   Push the branch first, write a title carrying the tracking ticket
-  (`[MEKO-123] <component>: <title>`) and a body with the sections AGENTS.md
+  (`[MEKO-123]`, `[AMP-55]` or any Jira key: `[<KEY>-<num>] <component>: <title>`) and a body with the sections AGENTS.md
   requires, and link any tracked ticket or issue. Use for "open a PR", "create a
   pull request", `gh pr create`, or any flow that ends in a new PR. If a PR
   already exists for the branch, this is the wrong skill — use `git-push` (it
@@ -45,12 +45,14 @@ A PR title must carry the tracking reference so the change is traceable. Mirror
 the commit subject convention (see the `commit` skill):
 
 ```
-[MEKO-<num>] <component>: <title>      # with a ticket
+[<KEY>-<num>] <component>: <title>     # with a Jira ticket
+[#<issue>] <component>: <title>        # with a GitHub issue in this repo
 <component>: <title>                   # without one
 ```
 
-- `[MEKO-<num>]` — the tracking ticket for meko work. For **AMP** work use
-  `[#<issue>]`, a GitHub issue in this repo (see the `create-amp-issue` skill).
+- `[<KEY>-<num>]` — the tracking Jira ticket, in whichever project tracks the
+  work: `MEKO-`, `AMP-`, `CLOUDGA-`, `PLAT-`, …. Work tracked as a GitHub issue
+  in this repo uses `[#<issue>]` (see the `create-amp-issue` skill).
   **Omit the tag entirely when the work genuinely has no ticket or issue**; never
   invent a placeholder like `[MEKO-xxx]` or guess a number, since it looks
   greppable but resolves to nothing.
@@ -64,6 +66,8 @@ Examples:
 ```
 [MEKO-123] meko_ui: make Create Cluster pg_version selectable
 [MEKO-377] api_server: serve promote-memories over PAT
+[AMP-55] test/functional: add stress/sqlancer, SQLancer logic-bug oracles against amp endpoints (opt-in)
+[CLOUDGA-37256] api_server: fix the amp install hint's credentials, telemetry and foundation steps
 api_server: make the app usable without Cognito
 ```
 
@@ -100,8 +104,31 @@ the expensive case. What wastes their time is the other stuff — a description 
 narrates the diff, or a paragraph where a line would do
 ([`AGENTS.md > Prose discipline`](../../../AGENTS.md#prose-discipline--write-for-the-reader-not-for-volume)).
 Link related PRs/issues with **full URLs**, never bare `#123`.
-Add `Closes <full issue URL>` when the PR completes a tracked GitHub issue so the
-merge auto-closes it.
+
+### Closes lines — say which tickets the merge finishes
+
+When the PR completes a ticket, put a `Closes` line for it in the body, one per
+line, at the start of the line:
+
+```
+Closes https://yugabyte.atlassian.net/browse/AMP-55
+Closes https://github.com/yugabyte/meko/issues/123
+```
+
+- **Jira** (`AMP`, `MEKO`): on merge, the `jira-on-merge` workflow comments the
+  PR link on the ticket and moves it to Done (`MEKO`: Merged to Main). It reads
+  only lines that are exactly `Closes`, `Fixes` or `Resolves` (capitalized)
+  followed by ticket URLs or keys, so put nothing else on the line. A key in the
+  title or in prose is only a reference: `[AMP-55] ...` or "Fixes the flake
+  AMP-73 reported" closes nothing.
+- **Other Jira projects** (`CLOUDGA`, `PLAT`, …): still write the `Closes` line so
+  the reader sees what the PR finishes, but the workflow leaves those tickets
+  alone. Move them yourself once the PR merges.
+- **GitHub issues**: GitHub closes them itself on merge.
+
+Write it only for a ticket the PR finishes. Leave it off for partial progress, and
+for tickets the PR merely mentions, such as bugs a new test found: those must stay
+open.
 
 ### On-demand CI directives — request the right suites
 

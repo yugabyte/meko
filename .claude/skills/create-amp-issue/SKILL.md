@@ -132,8 +132,9 @@ This lets `git log --oneline` be cross-referenced against the issue list, and
 GitHub auto-links the commit on the issue. Use `Closes #<num>` / `Fixes #<num>`
 in the PR body or final commit to auto-close on merge.
 
-Note the two tag forms this repo accepts — `[MEKO-<num>]` for meko work,
-`[#<issue>]` for AMP work; see the `commit` skill. Don't invent a number: if there's no issue, either file one or omit the
+Note the two tag forms this repo accepts: a Jira key from any project
+(`[AMP-55]`, `[MEKO-12]`, `[CLOUDGA-37256]`, …) when a Jira ticket tracks the
+work, and `[#<issue>]` for a GitHub issue; see the `commit` skill. Don't invent a number: if there's no issue, either file one or omit the
 tag entirely.
 
 ## When NOT to fire

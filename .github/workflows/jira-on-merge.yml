@@ -1,0 +1,35 @@
+name: Jira — move closed tickets on merge
+
+# When a PR merges to main, moves each Jira ticket its body closes
+# (`Closes AMP-55`) to its project's merged state and comments the PR link.
+# Keys in the title or prose are references only. See
+# .github/scripts/jira-on-merge.js.
+#
+# Needs the JIRA_API_TOKEN secret: a scoped API token of a Jira service account
+# that can comment on and transition AMP and MEKO tickets. Without it the job
+# runs dry and only logs.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  jira_on_merge:
+    if: github.event.pull_request.merged == true
+    name: Jira — move closed tickets on merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@v9
+        env:
+          JIRA_CLOUD_ID: e4163c53-6733-4be6-922f-899f939ce695 # yugabyte.atlassian.net
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        with:
+          script: |
+            await require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/jira-on-merge.js`).run({ context, core });

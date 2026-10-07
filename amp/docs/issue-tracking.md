@@ -72,16 +72,20 @@ merge.
 ## Commit subjects
 
 ```
-[#<issue>] <area>: <sub-component>: <title>
+[<KEY>-<num>] <area>: <sub-component>: <title>    # Jira ticket, e.g. [AMP-55], [CLOUDGA-37256]
+[#<issue>] <area>: <sub-component>: <title>       # GitHub issue in this repo
 ```
 
 `<area>` is either a **subsystem** — `compute` / `control_plane` / `voyager` /
 `perf_advisor`, mirroring the labels above — or a **meta token** for work that
 touches no subsystem: `pm`, `docs`, `ci`, `build`, `tools`. The meta tokens are
-commit-subject-only; they are not issue labels. `[#<issue>]` and
-`<sub-component>` are optional.
+commit-subject-only; they are not issue labels. The tag is optional, and any Jira
+project's key works: use the ticket that tracks the work. `<sub-component>` is optional.
 
 See the `commit` skill's "Subject format" for the full spec. Close issues with
 `Closes <full issue URL>` when the work ships — **use a full URL, not a bare
 `#<num>`**: AMP's issues were renumbered by the migration, so a bare number can
-silently resolve to an unrelated meko item.
+silently resolve to an unrelated meko item. The same line closes a Jira ticket
+(`Closes https://yugabyte.atlassian.net/browse/AMP-55`): on merge,
+[`.github/workflows/jira-on-merge.yml`](../../.github/workflows/jira-on-merge.yml)
+moves it to Done and comments the PR link.

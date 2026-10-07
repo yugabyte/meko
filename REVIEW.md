@@ -71,7 +71,8 @@ targets — don't exceed them.
   were renumbered by the monorepo migration, so a bare number can resolve to an
   unrelated item.
 
-Title conventions differ per tree (`[MEKO-<num>]` vs `[#<issue>]`) — see each guide.
+Titles carry a Jira key from any project (`[MEKO-12]`, `[AMP-55]`, `[CLOUDGA-37256]`, …) or
+`[#<issue>]` for a GitHub issue; the rest of the format differs per tree — see each guide.
 
 ## Upgrade safety — every PR
 

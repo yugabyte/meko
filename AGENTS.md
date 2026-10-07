@@ -392,8 +392,9 @@ and the hook's test suite: [`meko/AGENTS.md`](meko/AGENTS.md).
 
 ### Tracking references
 
-Commit subjects and PR titles carry `[MEKO-<num>]` for meko work or `[#<issue>]` for
-AMP work, and **omit the tag entirely** when there is genuinely no ticket — never
+Commit subjects and PR titles carry the tracking ticket: a Jira key from any project
+(`[MEKO-12]`, `[AMP-55]`, `[CLOUDGA-37256]`, `[PLAT-22775]`, …) or `[#<issue>]` for a
+GitHub issue in this repo. They **omit the tag entirely** when there is genuinely no ticket — never
 invent a placeholder or guess a number.
 
 #### `[#N]` in commits that predate the monorepo merge means an *amp* number

@@ -111,7 +111,8 @@ Confirm the diff didn't leave these stale (see the `commit` skill):
 The repo-wide rules (no agent attribution, what the body must explain, full URLs) are
 in the root [`REVIEW.md`](../REVIEW.md). On top of those:
 
-- Title follows the subject convention (`[#<issue>] <area>: <sub-component>: <title>`).
+- Title follows the subject convention (`[<KEY>-<num>] <area>: <sub-component>: <title>`
+  with a Jira key from any project such as `[AMP-55]`, or `[#<issue>]` for a GitHub issue).
 - Links the tracked issue with `Closes <full issue URL>` when it completes one — a
   bare `#<n>` is unsafe, since AMP's issues were renumbered by the monorepo migration.
 - Area label (`amp_*`) + `AMP:` milestone on the linked issue — see

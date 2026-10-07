@@ -212,9 +212,10 @@ git log --oneline origin/main..HEAD    # re-read the full set of commits
 ```
 
 - **Title** — must carry the tracking reference so the change is traceable,
-  mirroring the commit subject style: `[MEKO-<num>] <component>: <title>` for meko
-  work (e.g. `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`), or
-  `[#<issue>]` for AMP work tracked as a GitHub issue in this repo. When there is no ticket or
+  mirroring the commit subject style: `[<KEY>-<num>] <component>: <title>` with
+  the Jira ticket from any project (e.g. `[MEKO-123] meko_ui: make Create Cluster
+  pg_version selectable`, `[AMP-55] ...`, `[CLOUDGA-37256] ...`), or
+  `[#<issue>]` for work tracked as a GitHub issue in this repo. When there is no ticket or
   issue, omit the tag and start at `<component>:` — never invent `[MEKO-xxx]` or
   guess a number. If the branch grew from one commit to several, the title should
   describe the branch as a whole, not just the first commit.
@@ -238,6 +239,9 @@ Apply the update:
 ```
 gh pr edit <number> --title "<refreshed title>" --body "<refreshed summary>"
 ```
+
+Keep the body's `Closes <url>` lines when you rewrite it: on merge they are what
+closes the PR's GitHub issues and Jira tickets (see the `open-pr` skill).
 
 Only touch the title/body when the branch content actually changed what they
 should say. A one-commit follow-up that the existing summary already covers

@@ -138,7 +138,9 @@ The repo-wide rules (no agent attribution, what the body must explain, full URLs
 in the root [`REVIEW.md`](../REVIEW.md). On top of those:
 
 - **Title carries the tracking ticket** — e.g.
-  `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`. An untagged
+  `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`. A Jira key from
+  any project is fine (`[AMP-55]`, `[CLOUDGA-37256]`, …), as is `[#<issue>]` for a
+  GitHub issue; don't ask for a `MEKO-` ticket instead. An untagged
   title is correct when there is genuinely no ticket, so don't ask for a
   placeholder like `[MEKO-xxx]`. Do flag an invented or guessed number.
 - Body includes the `open-pr` sections that apply: Summary, Files changed, Testing,

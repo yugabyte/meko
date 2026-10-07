@@ -336,13 +336,16 @@ git commit -m "..."
 The commit subject follows:
 
 ```
-[MEKO-<num>] <component>: <title>      # with a ticket
+[<KEY>-<num>] <component>: <title>     # with a Jira ticket
+[#<issue>] <component>: <title>        # with a GitHub issue in this repo
 <component>: <title>                   # without one
 ```
 
-- **`[MEKO-<num>]`** — the tracking ticket, first so `git log --oneline` is
-  greppable by ticket. For **AMP** work the equivalent is `[#<issue>]`, a GitHub
-  issue in this repo (see the `create-amp-issue` skill). **Omit the tag entirely
+- **`[<KEY>-<num>]`** — the tracking ticket, first so `git log --oneline` is
+  greppable by ticket. Any Jira project's key works (`MEKO-`, `AMP-`, `CLOUDGA-`,
+  `PLAT-`, …): use the ticket that actually tracks the work, whichever project it
+  is in. Work tracked as a GitHub issue in this repo uses `[#<issue>]` instead
+  (see the `create-amp-issue` skill). **Omit the tag entirely
   when the work genuinely has no ticket or issue** — start with `<component>:`.
   Never invent a placeholder like `[MEKO-xxx]` or guess a number: a tag that
   resolves to nothing is worse than no tag, because it looks greppable but isn't,
@@ -359,6 +362,8 @@ Examples (all real subjects from this repo's history):
 ```
 [MEKO-377] api_server: serve promote-memories over PAT so memory_promote works from MCP
 [MEKO-375] meko_ui: integrate Meko Admin console + align theme to meko_admin
+[AMP-55] test/functional: add stress/sqlancer, SQLancer logic-bug oracles against amp endpoints (opt-in)
+[CLOUDGA-37256] api_server: fix the amp install hint's credentials, telemetry and foundation steps
 api_server: make the app usable without Cognito
 docs(mcp-server): datapack_update takes name/description, not connection_string
 ```
@@ -419,12 +424,15 @@ is cheapest here, at commit time.
 If this commit advances or completes a tracked ticket or GitHub issue:
 
 - **Reference it** with the subject tag (see Subject format above) so the work is
-  linked: `[MEKO-<num>]` for meko work, `[#<issue>]` for AMP work tracked as a
-  GitHub issue in this repo. Omit the tag entirely when there is genuinely no
-  ticket — never invent a placeholder or guess a number.
-- **Close it when the work ships.** Put `Closes <full issue URL>` in the PR body
-  (or the final commit message) so merge auto-closes a GitHub issue, or move the
-  JIRA ticket once merged. Link with full URLs, never bare `#123`.
+  linked: `[<KEY>-<num>]` for a Jira ticket in any project (`[MEKO-12]`,
+  `[AMP-55]`, `[CLOUDGA-37256]`), `[#<issue>]` for a GitHub issue in this repo.
+  Omit the tag entirely when there is genuinely no ticket — never invent a
+  placeholder or guess a number.
+- **Close it when the work ships.** Put `Closes <full ticket or issue URL>` in the
+  PR body so the merge closes it: GitHub closes the issue, and the
+  `jira-on-merge` workflow moves an `AMP` or `MEKO` ticket (see the `open-pr`
+  skill); move a ticket in another Jira project yourself once the PR merges.
+  Link with full URLs, never bare `#123`.
 
 Don't leave a shipped fix's ticket open "to close later" — that gap is exactly
 when the tracker misleads. If the commit only partially advances the ticket,

@@ -12,7 +12,7 @@
 # The `ci` commit prefix produces subjects like
 # `ci: bump the github-actions group with 3 updates`, which already matches this
 # repo's untagged subject convention — a dependency bump has no ticket, so it
-# correctly carries no `[MEKO-<num>]` tag.
+# correctly carries no ticket tag.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
