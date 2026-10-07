@@ -261,7 +261,7 @@ outside Design. Without it (no mod, or an older session) Claude writes the file 
 **Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context` and a ring for
 the latest measurement. The ring fills counter-clockwise from 12 o'clock (a C at 50%, a closed O
 at 100%), so its shape gives the level without colour; its arc is blue, amber from 75% and red
-from 95%. The exact percent is in its tooltip and its meter value, and written after the ring in the ⋯ sheet, where a phone can't open a tooltip. It is cleared when Claude is relaunched or
+from 95%. The exact percent is in its tooltip and its meter value, and shown with the ring: with a mouse it pops up over the ring as soon as the mouse is on it (the tooltip takes a second), floating so the footer doesn't shift; on a touch screen, which can't hover, it is written after the ring, in the footer on a tablet and in the ⋯ sheet on a phone. It is cleared when Claude is relaunched or
 `/clear`ed, until the next turn measures it again. The plan limits in the measurement are merged
 like the status line's (see [Plan limits](#token-usage)).
 
