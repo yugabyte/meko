@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { AskAnswerInput, AskQuestion, AskRequest, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { useIsMobile } from '../hooks/useMedia';
 import { cx } from '../util';
 import { Busy, Dialog } from './common';
 
@@ -18,6 +19,35 @@ function toAnswer(q: AskQuestion, i: number, p: Pick): AskAnswerInput | null {
   const text = p.other ? p.text.trim() : '';
   const labels = q.multiSelect ? p.labels : p.labels.slice(0, 1);
   return labels.length || text ? { question: i, labels, text } : null;
+}
+
+/**
+ * An option's preview, kept as preformatted text so tables and code line up, with a **Wrap lines**
+ * toggle for lines too long for the screen. Wrapped from the start on a phone, where most are.
+ */
+function AskPreview({ text }: { text: string }) {
+  const mobile = useIsMobile();
+  const [wrap, setWrap] = useState<boolean | null>(null);
+  const on = wrap ?? mobile;
+  return (
+    <>
+      <span className="ask-preview-hd">
+        <button
+          type="button"
+          className={cx('btn small', on && 'on')}
+          aria-pressed={on}
+          // The preview is inside the option's label: toggling must not pick the option.
+          onClick={(e) => {
+            e.preventDefault();
+            setWrap(!on);
+          }}
+        >
+          Wrap lines
+        </button>
+      </span>
+      <pre className={cx('ask-preview', on && 'wrap')}>{text}</pre>
+    </>
+  );
 }
 
 function AskCard({ q, n, p, disabled, onChange }: { q: AskQuestion; n: number; p: Pick; disabled: boolean; onChange: (p: Pick) => void }) {
@@ -48,7 +78,7 @@ function AskCard({ q, n, p, disabled, onChange }: { q: AskQuestion; n: number; p
               <span className="dq-opt-text">
                 <span className="dq-label">{o.label}</span>
                 {o.description && <span className="dq-detail">{o.description}</span>}
-                {o.preview && <pre className="ask-preview">{o.preview}</pre>}
+                {o.preview && <AskPreview text={o.preview} />}
               </span>
             </label>
           );
@@ -140,11 +170,14 @@ export function AskBar({ ask, onOpen }: { ask: AskRequest; onOpen: () => void })
   );
 }
 
-/** The questions Claude is asking, over the terminal (a sheet from the bottom on a phone). */
+/**
+ * The questions Claude is asking, over the terminal: it fills the window (a full-height sheet on a
+ * phone), so previews have room, and the questions scroll under a footer that keeps **Answer** in view.
+ */
 export function AskSheet({ session, onClose }: { session: Session; onClose: () => void }) {
   const ask = session.asking;
   return (
-    <Dialog title="AgentK is asking" onClose={onClose}>
+    <Dialog title="AgentK is asking" className="ask-dialog" onClose={onClose}>
       {ask ? (
         <AskForm key={ask.id} session={session} ask={ask} onDone={onClose} />
       ) : (
