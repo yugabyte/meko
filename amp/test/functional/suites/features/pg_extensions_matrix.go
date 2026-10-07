@@ -29,7 +29,7 @@ import (
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
 	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements", "tsm_system_rows",
-	"postgres_fdw", "dict_int", "pgsentinel",
+	"postgres_fdw", "dict_int", "unaccent", "pgsentinel",
 }
 
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
@@ -483,6 +483,11 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 		return fmt.Errorf("dict_int ts_lexize over its intdict dictionary: %w", err)
 	} else if lex != "{123456}" {
 		return fmt.Errorf("ts_lexize('intdict', '12345678') returned %s, want {123456}: dict_int's default maxlen of 6 did not truncate", lex)
+	}
+	if plain, err := c.QueryString(ctx, "SELECT unaccent('Hôtel crème brûlée')"); err != nil {
+		return fmt.Errorf("unaccent() over its default dictionary: %w", err)
+	} else if plain != "Hotel creme brulee" {
+		return fmt.Errorf("unaccent('Hôtel crème brûlée') returned %q, want \"Hotel creme brulee\": the dictionary did not load unaccent.rules from share/postgresql/tsearch_data", plain)
 	}
 
 	return fdwLoopbackCanary(ctx, c, table)

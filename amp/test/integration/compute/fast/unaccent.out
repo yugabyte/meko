@@ -1,0 +1,25 @@
+CREATE EXTENSION
+      unaccent
+--------------------
+ Hotel creme brulee
+(1 row)
+
+ ts_lexize
+-----------
+ {Hotel}
+(1 row)
+
+CREATE TEXT SEARCH CONFIGURATION
+ALTER TEXT SEARCH CONFIGURATION
+          to_tsvector
+--------------------------------
+ 'brulee':3 'creme':2 'hotel':1
+(1 row)
+
+ ?column?
+----------
+ t
+(1 row)
+
+DROP TEXT SEARCH CONFIGURATION
+DROP EXTENSION

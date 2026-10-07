@@ -505,7 +505,7 @@ jobs:
       - name: pg_regress suite (upstream PostgreSQL + contrib)
         env:
           INTEGRATION_PORT_BASE: "18000"
-        run: test/integration/compute/pg_regress.sh --no-build --contrib postgres_fdw --contrib dict_int
+        run: test/integration/compute/pg_regress.sh --no-build --contrib postgres_fdw --contrib dict_int --contrib unaccent
 
       - name: Collect YugabyteDB logs
         if: failure()
