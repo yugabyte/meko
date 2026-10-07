@@ -85,9 +85,12 @@ use utils::lsn::Lsn;
 use utils::payload_codec;
 use yb_tokio_postgres as tokio_postgres;
 
+mod batched_upsert;
 mod gc;
 #[cfg(test)]
 mod test_support;
+
+use batched_upsert::{META_LANE, PAGES_LANE, SLRU_PAGES_LANE};
 
 // GC's storage layer is a submodule for size only; its public surface stays
 // `page_store::…` so the drain and the emitter keep their imports.
@@ -1229,10 +1232,8 @@ fn columns_to_key_bytes(sp: u32, db: u32, rel: u32, fork: i16, blk: u32) -> Byte
 /// Rows per upsert batch in `put_pages` / `put_slru_pages` /
 /// `gc_enqueue_candidates`. The value is inherited from the multi-row INSERT
 /// these replaced, where PostgreSQL's 65535-parameter cap set the ceiling;
-/// on the thin lane it simply bounds how many rows ride one `Perform`.
-/// Only `put_pages` dispatches its chunks concurrently (base 2 ×
-/// `scale_factor`); `put_slru_pages` runs at base 1 and
-/// `gc_enqueue_candidates` strictly serially.
+/// on the thin lane it simply bounds how many rows ride one `Perform`. Each
+/// writer's fan-out is on its `batched_upsert` lane.
 const ROWS_PER_INSERT: usize = 500;
 
 /// Rows per chunk in `put_meta`. Larger than [`ROWS_PER_INSERT`] because
@@ -1575,8 +1576,8 @@ impl PageStore {
 
     // ------------------- payload compression --------------------------------
 
-    /// Wrap every payload in the [`payload_codec`] envelope, once, before
-    /// the `put_*` write path binds it.
+    /// Wrap `plain` in the [`payload_codec`] envelope, counting it in `tally`,
+    /// before the `put_*` write path binds it.
     ///
     /// This is the *only* place the pageserver produces encoded payloads.
     /// Everything upstream of `PageStore` — `PageWriter`'s delta tallies,
@@ -1585,132 +1586,76 @@ impl PageStore {
     /// compression needed no changes there. Keep it that way: an encoded
     /// payload escaping above this boundary would silently reinterpret
     /// page bytes as record bytes.
-    fn encode_payloads<'a>(
-        &self,
-        table: &'static str,
-        payloads: impl ExactSizeIterator<Item = &'a Bytes>,
-    ) -> (Vec<Bytes>, PayloadTally) {
-        let mut out = Vec::with_capacity(payloads.len());
-        let mut tally = PayloadTally::new(table);
-        for plain in payloads {
-            let (encoded, outcome) = payload_codec::encode(plain, self.payload_codec);
-            tally.add(plain.len(), encoded.len(), outcome);
-            out.push(encoded);
-        }
-        (out, tally)
+    fn encode_payload(&self, plain: &Bytes, tally: &mut PayloadTally) -> Bytes {
+        let (encoded, outcome) = payload_codec::encode(plain, self.payload_codec);
+        tally.add(plain.len(), encoded.len(), outcome);
+        encoded
     }
 
     // ------------------- pages ---------------------------------------------
 
     pub async fn put_pages(&self, branch_id: BranchId, rows: &[Arc<PageRow>]) -> Result<()> {
-        self.write_gate("write to amp_storage.pages");
-        // Encode once, before the write binds anything: a bind of
-        // `row.payload` directly writes plaintext with no codec tag, which
-        // the read path then rejects.
-        let (encoded, tally) = self.encode_payloads("pages", rows.iter().map(|r| &r.payload));
-        let p = self.thinclient.current().await;
-        let started = std::time::Instant::now();
-        self.put_pages_thin(&p, branch_id, rows, &encoded).await?;
-        crate::metrics::YB_STORE_OP_SECONDS
-            .with_label_values(&["put_pages", "yb_thin_client"])
-            .observe(started.elapsed().as_secs_f64());
+        let mut tally = PayloadTally::new("pages");
+        let branch_b = branch_id.to_bytes();
+        self.upsert_batched(
+            &PAGES_LANE,
+            branch_id,
+            rows,
+            |pages, i, row| {
+                // Encode before binding: a bind of `row.payload` directly
+                // writes plaintext with no codec tag, which the read path
+                // then rejects.
+                let payload = self.encode_payload(&row.payload, &mut tally);
+                Self::page_upsert(pages, &branch_b, i, row, payload)
+            },
+            |chunk| {
+                for row in chunk {
+                    pageserver_api::write_trace::trace_stage("put_pages_ok", &row.key, row.lsn);
+                }
+            },
+        )
+        .await?;
         tally.record();
         Ok(())
     }
-    async fn put_pages_thin(
-        &self,
-        p: &ThinClientTables,
-        branch_id: BranchId,
-        rows: &[Arc<PageRow>],
-        encoded: &[Bytes],
-    ) -> Result<()> {
-        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
-        let chunks = self.page_upsert_chunks(p, branch_id, rows, encoded)?;
 
-        // Fenced per chunk, not per flush (#1737). A flush grows with the
-        // endpoint (768 MiB at 64 vCPU) while the lease window does not, and
-        // fenced whole, a flush that needs longer than the window is refused at
-        // its deadline and resubmitted whole, forever. Upserts are idempotent,
-        // so a chunk resubmitted alone is safe.
-        utils::write_fence::global()
-            .write_fenced_each(
-                "write to amp_storage.pages",
-                server_fenced,
-                chunks,
-                parallelism,
-                |chunk, deadline| {
-                    upsert_page_chunk(
-                        Arc::clone(&p.client),
-                        Arc::clone(chunk),
-                        branch_id,
-                        deadline,
-                    )
-                },
-            )
-            .await
-    }
-
-    /// `rows` as the `amp_storage.pages` upserts [`Self::put_pages_thin`] sends,
-    /// [`ROWS_PER_INSERT`] to a chunk, each with the traced keys it carries.
-    fn page_upsert_chunks(
-        &self,
-        p: &ThinClientTables,
-        branch_id: BranchId,
-        rows: &[Arc<PageRow>],
-        encoded: &[Bytes],
-    ) -> Result<Vec<Arc<PageUpsertChunk>>> {
+    /// Row `i` of a [`Self::put_pages`] batch as its `amp_storage.pages`
+    /// upsert, binding the already-encoded `payload`.
+    fn page_upsert(
+        pages: &Arc<yb_thin_client::TableHandle>,
+        branch_b: &Bytes,
+        i: usize,
+        row: &PageRow,
+        payload: Bytes,
+    ) -> Result<yb_thin_client::UpsertRow> {
         use yb_thin_client::{BindValue, UpsertRow};
-        let pages = &p.pages;
-        let branch_b = branch_id.to_bytes();
-
-        let mut chunks = Vec::new();
-        for (chunk, enc_chunk) in rows
-            .chunks(ROWS_PER_INSERT)
-            .zip(encoded.chunks(ROWS_PER_INSERT))
-        {
-            if chunk.is_empty() {
-                continue;
-            }
-            let mut batch = Vec::with_capacity(chunk.len());
-            for (i, row) in chunk.iter().enumerate() {
-                let (sp, db, rel, fork, blk) =
-                    key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
-                // key_values are in PRIMARY KEY order, not declaration
-                // order: bucket_id first, (lsn, will_init) last, is_image
-                // out in the value list. Neither CHECK fires on this lane,
-                // so `page_bucket_id` here is the only thing keeping these
-                // rows findable.
-                batch.push(UpsertRow::new(
-                    pages,
-                    vec![
-                        BindValue::I16(page_bucket_id(rel, blk)),
-                        BindValue::Bytes(branch_b.clone()),
-                        BindValue::I16(DEFAULT_VERSION),
-                        BindValue::U32(sp),
-                        BindValue::U32(db),
-                        BindValue::U32(rel),
-                        BindValue::I16(fork),
-                        BindValue::U32(blk),
-                        BindValue::I64(row.lsn.0 as i64),
-                        BindValue::Bool(row.will_init),
-                    ],
-                    &[
-                        ("is_image", BindValue::Bool(row.is_image)),
-                        ("payload", BindValue::Bytes(enc_chunk[i].clone())),
-                    ],
-                )?);
-            }
-            let traced_in_chunk: Vec<(Key, Lsn)> = chunk
-                .iter()
-                .filter(|row| pageserver_api::write_trace::is_traced(&row.key))
-                .map(|row| (row.key, row.lsn))
-                .collect();
-            for (k, l) in &traced_in_chunk {
-                pageserver_api::write_trace::trace_stage("put_pages_in", k, *l);
-            }
-            chunks.push(Arc::new((batch, traced_in_chunk)));
-        }
-        Ok(chunks)
+        let (sp, db, rel, fork, blk) =
+            key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
+        // key_values are in PRIMARY KEY order, not declaration order:
+        // bucket_id first, (lsn, will_init) last, is_image out in the value
+        // list. Neither CHECK fires on this lane, so `page_bucket_id` here is
+        // the only thing keeping these rows findable.
+        let upsert = UpsertRow::new(
+            pages,
+            vec![
+                BindValue::I16(page_bucket_id(rel, blk)),
+                BindValue::Bytes(branch_b.clone()),
+                BindValue::I16(DEFAULT_VERSION),
+                BindValue::U32(sp),
+                BindValue::U32(db),
+                BindValue::U32(rel),
+                BindValue::I16(fork),
+                BindValue::U32(blk),
+                BindValue::I64(row.lsn.0 as i64),
+                BindValue::Bool(row.will_init),
+            ],
+            &[
+                ("is_image", BindValue::Bool(row.is_image)),
+                ("payload", BindValue::Bytes(payload)),
+            ],
+        )?;
+        pageserver_api::write_trace::trace_stage("put_pages_in", &row.key, row.lsn);
+        Ok(upsert)
     }
 
     /// Per-key chain read. `key` must be a valid relation-page Key.
@@ -2031,15 +1976,35 @@ impl PageStore {
     // ------------------- slru_pages ---------------------------------------
 
     pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
-        self.write_gate("write to amp_storage.slru_pages");
-        let (encoded, tally) = self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
-        let p = self.thinclient.current().await;
-        let started = std::time::Instant::now();
-        self.put_slru_pages_thin(&p, branch_id, rows, &encoded)
-            .await?;
-        crate::metrics::YB_STORE_OP_SECONDS
-            .with_label_values(&["put_slru_pages", "yb_thin_client"])
-            .observe(started.elapsed().as_secs_f64());
+        use yb_thin_client::{BindValue, UpsertRow};
+        let mut tally = PayloadTally::new("slru_pages");
+        let branch_b = branch_id.to_bytes();
+        self.upsert_batched(
+            &SLRU_PAGES_LANE,
+            branch_id,
+            rows,
+            |slru, _, row| {
+                let payload = self.encode_payload(&row.payload, &mut tally);
+                Ok(UpsertRow::new(
+                    slru,
+                    vec![
+                        BindValue::Bytes(branch_b.clone()),
+                        BindValue::I16(DEFAULT_VERSION),
+                        BindValue::I16(slru_kind_to_i16(row.kind)),
+                        BindValue::U32(row.segno),
+                        BindValue::I16(slru_blknum(row.blknum)?),
+                        BindValue::I64(row.lsn.0 as i64),
+                        BindValue::Bool(row.will_init),
+                    ],
+                    &[
+                        ("is_image", BindValue::Bool(row.is_image)),
+                        ("payload", BindValue::Bytes(payload)),
+                    ],
+                )?)
+            },
+            |_| {},
+        )
+        .await?;
         tally.record();
         Ok(())
     }
@@ -2208,89 +2173,9 @@ impl PageStore {
         Ok(by_block)
     }
 
-    async fn put_slru_pages_thin(
-        &self,
-        p: &ThinClientTables,
-        branch_id: BranchId,
-        rows: &[SlruPageRow],
-        encoded: &[Bytes],
-    ) -> Result<()> {
-        use yb_thin_client::{BindValue, UpsertRow};
-        let slru = &p.slru_pages;
-        let parallelism = pageserver_api::config::scale_count(1, self.scale_factor);
-        let branch_b = branch_id.to_bytes();
-
-        let mut chunks = Vec::new();
-        for (chunk, enc_chunk) in rows
-            .chunks(ROWS_PER_INSERT)
-            .zip(encoded.chunks(ROWS_PER_INSERT))
-        {
-            if chunk.is_empty() {
-                continue;
-            }
-            let mut batch = Vec::with_capacity(chunk.len());
-            for (row, enc) in chunk.iter().zip(enc_chunk) {
-                batch.push(UpsertRow::new(
-                    slru,
-                    vec![
-                        BindValue::Bytes(branch_b.clone()),
-                        BindValue::I16(DEFAULT_VERSION),
-                        BindValue::I16(slru_kind_to_i16(row.kind)),
-                        BindValue::U32(row.segno),
-                        BindValue::I16(slru_blknum(row.blknum)?),
-                        BindValue::I64(row.lsn.0 as i64),
-                        BindValue::Bool(row.will_init),
-                    ],
-                    &[
-                        ("is_image", BindValue::Bool(row.is_image)),
-                        ("payload", BindValue::Bytes(enc.clone())),
-                    ],
-                )?);
-            }
-            chunks.push(Arc::new(batch));
-        }
-
-        // Fenced per chunk, not per batch, like `put_pages` (#1737).
-        utils::write_fence::global()
-            .write_fenced_each(
-                "write to amp_storage.slru_pages",
-                server_fenced,
-                chunks,
-                parallelism,
-                |batch, deadline| {
-                    let (batch, client) = (Arc::clone(batch), Arc::clone(&p.client));
-                    async move {
-                        // Full retry budget inside `upsert`, no session rotation
-                        // (see put_pages' thin lane).
-                        client.upsert(&batch, deadline.into()).await.with_context(|| {
-                            format!("put_slru_pages(yb_thin_client) branch={branch_id} chunk_rows={}", batch.len())
-                        })?;
-                        Ok(())
-                    }
-                },
-            )
-            .await
-    }
-
     // ------------------- meta ---------------------------------------------
 
-    pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
-        self.write_gate("write to amp_storage.meta");
-        // Encode once, before the write binds anything (same discipline as
-        // `put_pages`). Most meta payloads — rel-size sentinels are 4 bytes —
-        // fall under `MIN_COMPRESS_BYTES` and stay raw; directory listings and
-        // aux files are the ones that benefit.
-        let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
-        let p = self.thinclient.current().await;
-        let started = std::time::Instant::now();
-        self.put_meta_thin(&p, branch_id, rows, &encoded).await?;
-        crate::metrics::YB_STORE_OP_SECONDS
-            .with_label_values(&["put_meta", "yb_thin_client"])
-            .observe(started.elapsed().as_secs_f64());
-        tally.record();
-        Ok(())
-    }
-    /// Direct-RPC lane for [`PageStore::put_meta`].
+    /// Upsert `rows` into `amp_storage.meta`.
     ///
     /// `key_values` are in PRIMARY KEY order — `((branch_id) HASH, version
     /// ASC, key ASC, lsn DESC)` — not declaration order; `payload` is the lone
@@ -2299,38 +2184,26 @@ impl PageStore {
     ///
     /// The write is an upsert: a row replayed by the ingest window's
     /// re-flush overwrites in place instead of failing on duplicate PK.
-    async fn put_meta_thin(
-        &self,
-        p: &ThinClientTables,
-        branch_id: BranchId,
-        rows: &[MetaRow],
-        encoded: &[Bytes],
-    ) -> Result<()> {
+    pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
-        let meta = &p.meta;
-        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
+        // Most meta payloads — rel-size sentinels are 4 bytes — fall under
+        // `MIN_COMPRESS_BYTES` and stay raw; directory listings and aux files
+        // are the ones that benefit.
+        let mut tally = PayloadTally::new("meta");
         let branch_b = branch_id.to_bytes();
-
-        let mut chunks = Vec::new();
-        for (chunk, enc_chunk) in rows
-            .chunks(META_ROWS_PER_INSERT)
-            .zip(encoded.chunks(META_ROWS_PER_INSERT))
-        {
-            if chunk.is_empty() {
-                continue;
-            }
-            let mut batch = Vec::with_capacity(chunk.len());
-            for (i, (row, enc)) in chunk.iter().zip(enc_chunk).enumerate() {
-                // Nothing is dispatched yet (the futures below are only
-                // polled by `buffer_unordered`), so a bad key fails the whole
-                // batch before any chunk reaches YB — fail-fast.
+        self.upsert_batched(
+            &META_LANE,
+            branch_id,
+            rows,
+            |meta, i, row| {
                 if row.key.len() != KEY_SIZE {
                     bail!(
                         "put_meta row {i}: key bytes wrong length ({})",
                         row.key.len()
                     );
                 }
-                batch.push(UpsertRow::new(
+                let payload = self.encode_payload(&row.payload, &mut tally);
+                Ok(UpsertRow::new(
                     meta,
                     vec![
                         BindValue::Bytes(branch_b.clone()),
@@ -2338,38 +2211,14 @@ impl PageStore {
                         BindValue::Bytes(row.key.clone()),
                         BindValue::I64(row.lsn.0 as i64),
                     ],
-                    &[("payload", BindValue::Bytes(enc.clone()))],
-                )?);
-            }
-            chunks.push(Arc::new(batch));
-        }
-
-        // Fenced per chunk, not per batch, like `put_pages` (#1737).
-        utils::write_fence::global()
-            .write_fenced_each(
-                "write to amp_storage.meta",
-                server_fenced,
-                chunks,
-                parallelism,
-                |batch, deadline| {
-                    let (batch, client) = (Arc::clone(batch), Arc::clone(&p.client));
-                    async move {
-                        // Full retry budget inside `upsert`, no session rotation
-                        // (see put_pages' thin lane).
-                        client
-                            .upsert(&batch, deadline.into())
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "put_meta(yb_thin_client) branch={branch_id} chunk_rows={}",
-                                    batch.len()
-                                )
-                            })?;
-                        Ok(())
-                    }
-                },
-            )
-            .await
+                    &[("payload", BindValue::Bytes(payload))],
+                )?)
+            },
+            |_| {},
+        )
+        .await?;
+        tally.record();
+        Ok(())
     }
 
     /// Read the latest payload for `key` at LSN ≤ `target_lsn`.
@@ -3100,37 +2949,6 @@ pub(crate) fn server_fenced(e: &anyhow::Error) -> bool {
         .is_some_and(yb_thin_client::YbError::is_fenced)
 }
 
-/// One `amp_storage.pages` upsert, with the traced keys it carries.
-type PageUpsertChunk = (Vec<yb_thin_client::UpsertRow>, Vec<(Key, Lsn)>);
-
-/// Write one [`PageStore::put_pages_thin`] chunk under `deadline`, the lease
-/// deadline `WriteFence::write_fenced_each` hands it.
-async fn upsert_page_chunk(
-    client: Arc<yb_thin_client::TsClient>,
-    chunk: Arc<PageUpsertChunk>,
-    branch_id: BranchId,
-    deadline: Option<utils::write_fence::WriteToken>,
-) -> Result<()> {
-    let (batch, traced) = &*chunk;
-    // Full retry budget (inside `upsert`): this lane has no YSQL fallback, so
-    // it rides out transient failures itself. There is no per-attempt session
-    // rotation — the shim owns the session pool and the tserver does the
-    // routing. A terminal failure fails the flush.
-    client
-        .upsert(batch, deadline.into())
-        .await
-        .with_context(|| {
-            format!(
-                "put_pages(yb_thin_client) branch={branch_id} chunk_rows={}",
-                batch.len()
-            )
-        })?;
-    for (k, l) in traced {
-        pageserver_api::write_trace::trace_stage("put_pages_ok", k, *l);
-    }
-    Ok(())
-}
-
 /// Invariants that every chain returned by `read_chain` / `scan_range` /
 /// `read_slru_chain` / `scan_slru_range` must satisfy *for a single key*
 /// when iterated in the SQL's `lsn DESC, will_init DESC` order, i.e.
@@ -3492,7 +3310,7 @@ mod payload_envelope_tests {
     use super::*;
     use utils::payload_codec::Codec;
 
-    /// Every write path must bind the `encode_payloads` output, never a
+    /// Every write path must bind the `encode_payload` output, never a
     /// row's plaintext `payload`.
     ///
     /// This is a source-level guard because the failure it catches is
@@ -3526,7 +3344,7 @@ mod payload_envelope_tests {
         assert!(
             raw_binds.is_empty(),
             "these write paths bind a row's PLAINTEXT payload instead of the \
-             encoded buffer from `encode_payloads` — pages written this way \
+             encoded buffer from `encode_payload` — pages written this way \
              have no codec tag and `decode_payload` will reject them on \
              read:\n{}",
             raw_binds.join("\n")
@@ -3790,11 +3608,11 @@ mod tests {
     /// the fence, which `write_fenced_each` resubmits or exits on; and the same
     /// rows under a live deadline land.
     ///
-    /// Each chunk goes through `upsert_page_chunk`, the write `put_pages_thin`
-    /// fences, with the deadline passed in rather than read from the process's
-    /// fence, so the write is reached with its lease already over: the stalled
-    /// writer the local check cannot stop. Going through `put_pages_thin` itself
-    /// would exit the test on the refusal, as a lapsed lease should.
+    /// The rows go through `upsert_chunk`, the write `upsert_batched` fences,
+    /// with the deadline passed in rather than read from the process's fence,
+    /// so the write is reached with its lease already over: the stalled writer
+    /// the local check cannot stop. Going through `put_pages` itself would exit
+    /// the test on the refusal, as a lapsed lease should.
     #[tokio::test]
     async fn a_page_write_past_its_deadline_is_refused_and_none_land() {
         let (store, schema) = make_store("fence").await;
@@ -3808,7 +3626,6 @@ mod tests {
             .iter()
             .map(|k| page_row(k.clone(), 10, true, true, b"img"))
             .collect();
-        let (encoded, _) = store.encode_payloads("pages", rows.iter().map(|r| &r.payload));
         let p = store.thinclient.current().await;
         let now_us = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3816,23 +3633,20 @@ mod tests {
             .as_micros() as u64;
         let minute_us = 60_000_000;
 
-        let chunks = store
-            .page_upsert_chunks(&p, branch, &rows, &encoded)
-            .unwrap();
+        let (mut tally, branch_b) = (PayloadTally::new("pages"), branch.to_bytes());
+        let upserts = batched_upsert::build_upserts(&p, &PAGES_LANE, &rows, |pages, i, row| {
+            let payload = store.encode_payload(&row.payload, &mut tally);
+            PageStore::page_upsert(pages, &branch_b, i, row, payload)
+        })
+        .unwrap();
         let write_under = |deadline_us: u64| {
-            let (chunks, client) = (&chunks, &p.client);
-            async move {
-                for chunk in chunks {
-                    upsert_page_chunk(
-                        Arc::clone(client),
-                        Arc::clone(chunk),
-                        branch,
-                        Some(deadline_us),
-                    )
-                    .await?;
-                }
-                Ok::<(), anyhow::Error>(())
-            }
+            batched_upsert::upsert_chunk(
+                &p.client,
+                &PAGES_LANE,
+                branch,
+                &upserts,
+                yb_thin_client::WriteDeadline::EpochMicros(deadline_us),
+            )
         };
 
         let err = write_under(now_us - minute_us)
@@ -4706,6 +4520,99 @@ mod tests {
                 .expect("row");
             assert_eq!(got.payload.as_ref(), format!("v{i}").as_bytes());
         }
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Same again for put_slru_pages: two full chunks and part of a third.
+    #[tokio::test]
+    async fn put_slru_pages_chunks_large_batches() {
+        let (store, schema) = make_store("chunk_slru").await;
+        let branch = rand_branch();
+        let n: u32 = 1100;
+        let rows: Vec<SlruPageRow> = (0..n)
+            .map(|blk| clog_row(blk, 10, true, true, format!("s{blk}").as_bytes()))
+            .collect();
+        store.put_slru_pages(branch, &rows).await.unwrap();
+
+        for blk in [0u32, n / 2, n - 1] {
+            let chain = store
+                .read_slru_chain(branch, SlruKind::Clog, 1, blk, Lsn(100))
+                .await
+                .unwrap();
+            assert_eq!(chain.len(), 1, "blk {blk}");
+            assert_eq!(chain[0].payload.as_ref(), format!("s{blk}").as_bytes());
+        }
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Every row of a batch is built before its first chunk is sent, so a bad
+    /// row in a later chunk fails the call with nothing written. The error
+    /// names the row by its index in the batch, not in its chunk.
+    #[tokio::test]
+    async fn put_meta_bad_row_fails_before_any_chunk_lands() {
+        let (store, schema) = make_store("meta_bad_row").await;
+        let branch = rand_branch();
+        let key = |i: u32| {
+            let mut buf = vec![0u8; KEY_SIZE];
+            buf[0] = 0x60;
+            buf[14..18].copy_from_slice(&i.to_be_bytes());
+            Bytes::from(buf)
+        };
+        // Past the first 2000-row chunk.
+        let mut rows: Vec<MetaRow> = (0..2500)
+            .map(|i| MetaRow {
+                key: key(i),
+                lsn: Lsn(10),
+                payload: Bytes::from_static(b"v"),
+            })
+            .collect();
+        rows[2100].key = Bytes::from_static(b"short");
+
+        let err = store
+            .put_meta(branch, &rows)
+            .await
+            .expect_err("a bad key must fail the write");
+        assert!(format!("{err:#}").contains("put_meta row 2100:"), "{err:#}");
+        for i in [0, 1999, 2000] {
+            assert!(
+                store
+                    .read_meta(branch, &key(i), Lsn(100))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "row {i} landed although the batch had a bad row"
+            );
+        }
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A write publishes its payload tally under its table once it lands.
+    #[tokio::test]
+    async fn put_meta_publishes_its_payload_bytes() {
+        let (store, schema) = make_store("meta_tally").await;
+        let branch = rand_branch();
+        let logical = || {
+            crate::metrics::YB_PAYLOAD_LOGICAL_BYTES
+                .with_label_values(&["meta"])
+                .get()
+        };
+        let rows: Vec<MetaRow> = (0..3u32)
+            .map(|i| {
+                let mut buf = vec![0u8; KEY_SIZE];
+                buf[0] = 0x60;
+                buf[14..18].copy_from_slice(&i.to_be_bytes());
+                MetaRow {
+                    key: Bytes::from(buf),
+                    lsn: Lsn(10),
+                    payload: Bytes::from(vec![7u8; 100]),
+                }
+            })
+            .collect();
+
+        let before = logical();
+        store.put_meta(branch, &rows).await.unwrap();
+        // At least: other tests write meta through the same counter.
+        assert!(logical() - before >= 300, "{} -> {}", before, logical());
         drop_schema(&store, &schema).await;
     }
 

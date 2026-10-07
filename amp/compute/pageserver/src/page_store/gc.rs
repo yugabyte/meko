@@ -543,31 +543,11 @@ impl PageStore {
     /// replay overwrites in place. The lone non-PK column
     /// `relsize` is fixed by that identity (a shrink's size as of its
     /// `due_lsn`), so the overwrite stays byte-identical.
-    pub async fn gc_enqueue_candidates(
-        &self,
-        branch_id: BranchId,
-        rows: &[PendingGcRow],
-    ) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        // The same two fences as every other write: the local check, then the
-        // deadline the leader enforces.
-        self.write_gate("write to amp_storage.pending_gc");
-        let p = self.thinclient.current().await;
-        let started = std::time::Instant::now();
-        self.gc_enqueue_candidates_thin(&p, branch_id, rows).await?;
-        crate::metrics::YB_STORE_OP_SECONDS
-            .with_label_values(&["gc_enqueue_candidates", "yb_thin_client"])
-            .observe(started.elapsed().as_secs_f64());
-        Ok(())
-    }
-    /// Direct-RPC lane for [`PageStore::gc_enqueue_candidates`].
     ///
     /// `key_values` are in PRIMARY KEY order — `((branch_id, bucket_id)
-    /// HASH, version, due_lsn, key, gc_kind)`; `relsize` is the lone non-key column,
-    /// and it is nullable (set on shrink candidates only), so a `None` binds
-    /// as `BindValue::Null` rather than being omitted.
+    /// HASH, version, due_lsn, key, gc_kind)`; `relsize` is nullable (set on
+    /// shrink candidates only), so a `None` binds as `BindValue::Null` rather
+    /// than being omitted.
     ///
     /// `bucket_id` is computed here by `gc_bucket_id` — it is placement only,
     /// deliberately not a generated column precisely so this lane can write
@@ -575,28 +555,19 @@ impl PageStore {
     /// constraint, so nothing is lost by writing it client-side; a
     /// mis-computed bucket would hide a candidate from the drain's per-bucket
     /// fan-out (a missed candidate, not a lost page).
-    ///
-    /// The write is an upsert: a replayed candidate overwrites in place, and
-    /// since `relsize` is fixed by the PK identity the overwrite stays
-    /// byte-identical.
-    async fn gc_enqueue_candidates_thin(
+    pub async fn gc_enqueue_candidates(
         &self,
-        p: &ThinClientTables,
         branch_id: BranchId,
         rows: &[PendingGcRow],
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
-        let pending_gc = &p.pending_gc;
-        // Sequential: candidate volume is a rounding error next to the page
-        // writes it trails.
-        let parallelism = 1;
         let branch_b = branch_id.to_bytes();
-
-        let mut chunks = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
-            let mut batch = Vec::with_capacity(chunk.len());
-            for row in chunk {
-                batch.push(UpsertRow::new(
+        self.upsert_batched(
+            &super::batched_upsert::PENDING_GC_LANE,
+            branch_id,
+            rows,
+            |pending_gc, _, row| {
+                Ok(UpsertRow::new(
                     pending_gc,
                     vec![
                         BindValue::Bytes(branch_b.clone()),
@@ -613,31 +584,11 @@ impl PageStore {
                             None => BindValue::Null,
                         },
                     )],
-                )?);
-            }
-            chunks.push(Arc::new(batch));
-        }
-
-        // Fenced per chunk, not per batch, like `put_pages` (#1737).
-        utils::write_fence::global()
-            .write_fenced_each(
-                "write to amp_storage.pending_gc",
-                super::server_fenced,
-                chunks,
-                parallelism,
-                |batch, deadline| {
-                    let (batch, client) = (Arc::clone(batch), Arc::clone(&p.client));
-                    async move {
-                        // Full retry budget inside `upsert`, no session rotation
-                        // (see put_pages' thin lane).
-                        client.upsert(&batch, deadline.into()).await.with_context(|| {
-                            format!("gc_enqueue_candidates(yb_thin_client) branch={branch_id} chunk_rows={}", batch.len())
-                        })?;
-                        Ok(())
-                    }
-                },
-            )
-            .await
+                )?)
+            },
+            |_| {},
+        )
+        .await
     }
 
     /// Fetch up to `limit` due candidates (`floor < due_lsn <= cutoff`),
@@ -2039,6 +1990,19 @@ mod tests {
             thin_op_count("gc_enqueue_candidates") > before,
             "gc_enqueue_candidates did not reach the lane"
         );
+    }
+
+    /// A batch over `ROWS_PER_INSERT` lands whole through the serial lane's
+    /// several chunks.
+    #[tokio::test]
+    async fn gc_enqueue_candidates_chunks_large_batches() {
+        let (pg, _) = make_store("gc_chunks").await;
+        let branch = rand_branch();
+        let batch: Vec<PendingGcRow> = (0..1100i64)
+            .map(|i| gc_cand(16401, 0, i, 100 + i as u64))
+            .collect();
+        pg.gc_enqueue_candidates(branch, &batch).await.unwrap();
+        assert_eq!(all_pending(&pg, branch).await.len(), batch.len());
     }
 
     const GC_SPC: u32 = 1663;

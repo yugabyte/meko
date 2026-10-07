@@ -6431,7 +6431,7 @@ mod tests {
     /// variant is *new code* — it conflicts with nothing, compiles fine, and
     /// silently writes untagged plaintext that the read path then rejects.
     /// That is exactly how the `yb_thin_client` writes reached the
-    /// pageserver's `put_pages_thin`: clean auto-merge, clippy clean, every
+    /// pageserver's `put_pages`: clean auto-merge, clippy clean, every
     /// unit test green, and the cluster could not start because it failed to
     /// decode its own pages.
     #[test]

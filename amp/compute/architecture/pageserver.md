@@ -382,8 +382,10 @@ keep working on decoded bytes. Keep it that way — an encoded payload
 escaping above this boundary would silently reinterpret page bytes as
 record bytes.
 
-- Encode: one call at the top of each `put_pages` / `put_slru_pages` /
-  `put_meta`, before anything binds a payload.
+- Encode: `encode_payload`, called per row inside each of `put_pages` /
+  `put_slru_pages` / `put_meta`'s row mappings, which `upsert_batched`
+  (`page_store/batched_upsert.rs`) runs after the write gate and before
+  any chunk is sent.
 - Decode: `decode_payload`, reached from `row_to_page` / `row_to_meta`
   (the YSQL cold-path reads) and `assemble_page_chain` /
   `assemble_slru_chain` / `decode_meta_row` (the hot path). The two scan
@@ -625,11 +627,12 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    trip) plus the SLRU/meta buffers, then dispatch chunked writes
    against `amp_storage.pages` / `slru_pages` / `meta` on the
    hot-path store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`)
-   and 2000 for meta (`META_ROWS_PER_INSERT`), dispatched in parallel via
-   `stream::iter(...).buffer_unordered(N)` with base N = 2/1/2
-   (× `scale_factor`), then the `pending_gc` candidates the batch
-   produced. All four writes — `put_pages`, `put_slru_pages`, `put_meta`,
-   `gc_enqueue_candidates` — run as PGSQL_UPSERT batches with per-row
+   and 2000 for meta (`META_ROWS_PER_INSERT`), up to N in flight with
+   base N = 2/1/2 (× `scale_factor`), then the `pending_gc` candidates
+   the batch produced, one chunk at a time. All four writes — `put_pages`,
+   `put_slru_pages`, `put_meta`, `gc_enqueue_candidates` — share one path
+   (`page_store/batched_upsert.rs`, a lane per table) and run as
+   PGSQL_UPSERT batches with per-row
    response verification (a dropped row surfaces as a batch error, not a
    short count). Because the writes upsert, a retry after partial-chunk
    success cannot PK-conflict.

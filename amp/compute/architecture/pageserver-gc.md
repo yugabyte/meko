@@ -702,7 +702,7 @@ ingest/materialiser lanes or compute reads. It is not the statement count: each
 backends serve those statements rather than how many are issued (#1182).
 Candidate *inserts* ride the direct-RPC lane alongside the page writes they
 trail, as PGSQL_UPSERT batches
-(`gc_enqueue_candidates_thin`); their volume is a rounding error next to
+(`gc_enqueue_candidates`); their volume is a rounding error next to
 the page writes. The drain itself has no thin lane — select, actions and
 dequeue are YSQL only.
 
