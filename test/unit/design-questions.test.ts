@@ -219,6 +219,15 @@ describe('the design prompts', () => {
     expect(sent).toMatch(/Don't change anything in the repo/);
     expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
   });
+
+  it('warns that a Mermaid block in an Artifact must not hold < or > as text', () => {
+    // The browser parses an Artifact's <pre class="mermaid"> before Mermaid reads it, so a
+    // `<session>` in a label becomes tags and the diagram fails (#50). Markdown fences don't.
+    const design = DEFAULT_PROMPTS.design;
+    expect(design).toContain("A Mermaid block in an Artifact's HTML must not contain `<` or `>` as text (such as `<session>` or `List<T>`)");
+    expect(design).toContain('Write `{session}` or "session id" instead.');
+    expect(design).toContain('```mermaid blocks render as diagrams there.');
+  });
 });
 
 describe('answers in the browser', () => {

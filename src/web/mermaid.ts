@@ -19,8 +19,10 @@ export const DIAGRAM_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-
 
 /** Most drawn diagrams kept, so a revision that leaves a diagram alone doesn't draw it again. */
 const MAX_CACHED = 50;
-/** Most characters of Mermaid's error message shown. */
-const ERROR_CHARS = 600;
+/** Most characters of Mermaid's error message shown, in markdown designs and Artifact frames alike. */
+export const ERROR_CHARS = 600;
+/** Shown above Mermaid's error and the source of a diagram that doesn't draw (`design-frame.ts` too). */
+export const DIAGRAM_FAILED = 'Couldn’t draw this diagram. Ask AgentK to fix it; its source is below.';
 
 /** A drawn diagram, or why it couldn't be drawn (`retry`: Mermaid itself didn't load, so it isn't cached). */
 export type Diagram = { svg: string; width: number | null; height: number | null } | { error: string; retry?: boolean };
