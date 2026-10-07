@@ -413,8 +413,10 @@ export class SessionManager {
     }
     const start: StartStage = req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
-    // A project's repo moved or deleted since it was opened would otherwise fail on its first git call.
-    if (!isMainRepo(repo)) throw new HttpError(400, `${repo} isn't a git repo any more. Was it moved or deleted?`);
+    // A project's repo moved or deleted since it was opened. Checked here because the first git
+    // calls below don't notice (hasCommits counts a git error as having commits), so the first to
+    // fail would be the base branch check, blaming the branch name.
+    if (!isMainRepo(repo)) throw new HttpError(400, `${repo} isn't a git repo any more: it was moved or deleted. Put it back there to start sessions in it.`);
     // A review must be of an open PR on GitHub; its head is fetched with the worktree.
     const review = kind === 'review-pr' ? await this.reviewTarget(repo, req.pr) : null;
     // A task given a PR works on the PR's branch, against its base.

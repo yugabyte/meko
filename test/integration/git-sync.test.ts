@@ -135,7 +135,7 @@ describe('new sessions start from an up-to-date base (real git)', () => {
   it('blames a missing repo, not a good branch name, when git can\'t run', async () => {
     await expect(checkBranchName(repo, 'main')).resolves.toBeUndefined();
     const gone = join(home, 'gone');
-    await expect(checkBranchName(gone, 'main')).rejects.toThrow(`${gone} isn't there any more, so git can't run in it.`);
+    await expect(checkBranchName(gone, 'main')).rejects.toThrow(`${gone} isn't there any more, so git can't run in it. Put it back there and try again.`);
     await expect(checkBranchName(gone, 'a..b')).rejects.toThrow(/isn't there any more/);
     await expect(addWorktree(gone, wt(), 'ak/x', 'main')).rejects.toThrow(/isn't there any more/);
   });

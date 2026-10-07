@@ -136,7 +136,7 @@ describe('sessions in another repo and on a branch you name (real tmux + git, fa
     renameSync(env.repo, `${env.repo}-moved`);
     try {
       await expect(env.core.sessions.create(p.id, { name: 'Gone', prompt: 'hi', kind: 'quick', baseBranch: 'main' }))
-        .rejects.toMatchObject({ status: 400, message: `${env.repo} isn't a git repo any more. Was it moved or deleted?` });
+        .rejects.toMatchObject({ status: 400, message: `${env.repo} isn't a git repo any more: it was moved or deleted. Put it back there to start sessions in it.` });
       expect(sessionCount()).toBe(0);
     } finally {
       renameSync(`${env.repo}-moved`, env.repo);
