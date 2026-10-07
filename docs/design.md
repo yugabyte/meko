@@ -294,8 +294,9 @@ Session states, shown with a dot in the rail and on each tab:
 changes: the branch, worktree, tmux session and Meko agent id were named from it once, at the start,
 and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
 empty, longer than 100 characters or hold control characters. The project's activity notes the
-rename, the session's Meko conversation is retitled in the background (`conversation_update`;
-Meko off or failing, it keeps the old title), and Claude reads the new name in its system prompt
+rename, the session's Meko conversation is retitled in the background (`conversation_update`, in
+the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
+keeps the old title), and Claude reads the new name in its system prompt
 the next time it's launched. Claude Code's own name for the conversation (`--name`, given at the
 first launch) stays. An archived session can't be renamed.
 

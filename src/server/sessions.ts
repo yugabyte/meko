@@ -28,7 +28,7 @@ import { ModLinks, type DroppedPrompt } from './modlink.js';
 import { DESIGN_READY } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
 import {
-  STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionRepo, sessionRow, sessionRows, slugify, toSession,
+  STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
@@ -1895,9 +1895,12 @@ export class SessionManager {
     }
   }
 
-  /** Gives the session's Meko conversation its new name; Meko off or failing, it keeps the old one. */
+  /**
+   * Gives the session's Meko conversation its new name, in the datapack the session was launched
+   * with (after a switch, that's still the old one). Meko off or failing, it keeps the old name.
+   */
   private async retitleConversation(r: SessionRow): Promise<void> {
-    const dp = dedicatedDatapack(this.db, r.project_id);
+    const dp = sessionDatapack(this.db, r);
     if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);

@@ -132,6 +132,19 @@ describe('switching the dedicated datapack', () => {
     expect(await sentTo(after.id, 'after')).toBe(NEW.id);
   });
 
+  it("retitles a running session's Meko conversation in the datapack it was launched with", async () => {
+    const s = await env.core.sessions.create(p.id, { name: 'Before', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
+    await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: true });
+    env.meko.calls.length = 0;
+    env.core.sessions.rename(s.id, { name: 'Renamed' });
+    const retitled = await waitFor(() => env.meko.calls.find((c) => c.name === 'retitleConversation'), (c) => !!c, 5000, 'the Meko retitle');
+    const row = env.core.sessions.row(s.id);
+    expect(retitled!.args.slice(0, 4)).toEqual([sessionAgentId(row), OLD.id, 'conv-1', 'Renamed (Switch)']);
+    // Its conversation is looked up there too, never made in the new datapack.
+    expect(env.meko.calls.filter((c) => c.name === 'ensureConversation').map((c) => c.args[1])).toEqual([OLD.id]);
+  });
+
   describe('over HTTP', () => {
     let app: FastifyInstance;
     let cookie: string;
