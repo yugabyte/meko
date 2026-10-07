@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { STAGE_LABELS, type ProjectWithSessions, type Session } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
+import { filterItems, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { STATUS_TEXT, cx, liveSessions } from '../util';
 import { StatusDot, trapTab } from './common';
 
 interface Item {
   id: string;
-  label: string;
+  /** Session and project names are parts of their own, so they don't read as commands. */
+  label: LabelPart[];
   hint: string;
   keywords: string;
   run: () => void;
@@ -49,7 +51,7 @@ export function CommandPalette({
     if (current) {
       out.push({
         id: 'new-session',
-        label: `New session in ${current.name}`,
+        label: ['New session in ', { project: current.name }],
         hint: 'Action',
         keywords: 'new session task start',
         run: () => onNewSession(current.id),
@@ -58,7 +60,7 @@ export function CommandPalette({
     if (currentSession && !moveBlockedIn(currentSession.stage)) {
       out.push({
         id: 'move-session',
-        label: `Move ${currentSession.name} to another stage`,
+        label: ['Move ', { session: currentSession.name }, ' to another stage'],
         hint: 'Action',
         keywords: 'change type stage move exploration explore plan quick code design pr review',
         run: onMoveSession,
@@ -67,7 +69,7 @@ export function CommandPalette({
     if (currentSession) {
       out.push({
         id: 'rename-session',
-        label: `Rename ${currentSession.name}`,
+        label: ['Rename ', { session: currentSession.name }],
         hint: 'Action',
         keywords: 'rename name title session',
         run: onRenameSession,
@@ -77,7 +79,7 @@ export function CommandPalette({
       for (const s of liveSessions(p)) {
         out.push({
           id: `s-${s.id}`,
-          label: s.name,
+          label: [{ session: s.name }],
           hint: `${p.name} · ${STAGE_LABELS[s.stage]} · ${STATUS_TEXT[s.status]}`,
           keywords: `${p.name} ${s.name} ${s.branch}`,
           dot: s.status,
@@ -88,7 +90,7 @@ export function CommandPalette({
     for (const p of projects) {
       out.push({
         id: `home-${p.id}`,
-        label: `${p.name}: project home`,
+        label: [{ project: p.name }, ': project home'],
         hint: 'Datapacks, search, activity, settings',
         keywords: `${p.name} home datapack search settings`,
         run: () => navigate({ view: 'home', projectId: p.id }),
@@ -96,27 +98,20 @@ export function CommandPalette({
       if (p.id !== currentProjectId) {
         out.push({
           id: `ns-${p.id}`,
-          label: `New session in ${p.name}`,
+          label: ['New session in ', { project: p.name }],
           hint: 'Action',
           keywords: `new session ${p.name}`,
           run: () => onNewSession(p.id),
         });
       }
     }
-    out.push({ id: 'new-project', label: 'Open project', hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
-    out.push({ id: 'usage', label: 'Usage', hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
-    out.push({ id: 'settings', label: 'Settings', hint: 'Action', keywords: 'settings password update totp', run: onSettings });
+    out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
+    out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
+    out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
   }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onRenameSession, onSettings]);
 
-  const shown = useMemo(() => {
-    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!terms.length) return items;
-    return items.filter((it) => {
-      const hay = `${it.label} ${it.keywords}`.toLowerCase();
-      return terms.every((t) => hay.includes(t));
-    });
-  }, [items, q]);
+  const shown = useMemo(() => filterItems(items, q), [items, q]);
 
   useEffect(() => setIdx(0), [q]);
   useEffect(() => {
@@ -173,7 +168,17 @@ export function CommandPalette({
               onClick={() => choose(it)}
             >
               {it.dot ? <StatusDot status={it.dot} /> : <span className="pal-icon">›</span>}
-              <span className="pal-label">{it.label}</span>
+              <span className="pal-label">
+                {it.label.map((part, j) =>
+                  typeof part === 'string' ? (
+                    part
+                  ) : 'session' in part ? (
+                    <span key={j} className="pal-session">{part.session}</span>
+                  ) : (
+                    <span key={j} className="pal-project">{part.project}</span>
+                  ),
+                )}
+              </span>
               <span className="pal-hint">{it.hint}</span>
             </button>
           ))}

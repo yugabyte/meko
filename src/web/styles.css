@@ -2093,6 +2093,14 @@ div[id^='dak-mermaid-'] .label {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Names in a label, so a session called "Settings page" doesn't read as the Settings command. */
+.pal-session {
+  color: var(--accent);
+  font-weight: 500;
+}
+.pal-project {
+  font-weight: 600;
+}
 .pal-hint {
   color: var(--muted);
   font-size: 12px;

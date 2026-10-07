@@ -665,7 +665,9 @@ terminal**, which hides it for that start in this page.
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
-session or project home, create a session, or move or rename the one on screen. On Linux and Windows these use Ctrl, so the terminal
+session or project home, create a session, or move or rename the one on screen; session names show
+in the accent colour and project names in bold, so they don't read as commands. On Linux and
+Windows these use Ctrl, so the terminal
 doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
 it has focus. To copy from the terminal, drag across the text: tmux selects it and sends it as
 OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) selects in the
