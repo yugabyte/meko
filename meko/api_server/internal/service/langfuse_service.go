@@ -42,6 +42,9 @@ type LangfuseService struct {
 	adminAPIKey      string
 	httpClient       *http.Client
 	noRedirectClient *http.Client
+	// provisionBackoff is the wait before each EnsureProjectForDatapack
+	// retry; its length is the number of retries.
+	provisionBackoff []time.Duration
 }
 
 // ErrLangfuseDBNotConfigured is re-exported from the repository so
@@ -99,6 +102,21 @@ var ErrConversationNotFound = errors.New("conversation not found")
 
 var errObserveInvalidCredentials error = errors.New("observe credentials invalid")
 
+// ErrLangfuseUnavailable wraps a failure to provision a datapack's Langfuse
+// project. Handlers map it to a 503 with a generic message: the wrapped
+// error names internal Langfuse hosts and must only be logged.
+var ErrLangfuseUnavailable = errors.New("langfuse unavailable")
+
+// LangfuseProvisionBudget bounds EnsureProjectForDatapack, retries included
+// (for a datapack create, provisioning plus its rollback). It sits under the
+// 60s nginx proxy_read_timeout in front of /api/v1 so the request answers
+// before the caller's connection is cut.
+const LangfuseProvisionBudget = 45 * time.Second
+
+// langfuseProjectDeleteTimeout bounds the Langfuse project delete during a
+// datapack delete, which goes ahead without it. A var so tests can shrink it.
+var langfuseProjectDeleteTimeout = 10 * time.Second
+
 func NewLangfuseService(cfg LangfuseConfig) *LangfuseService {
 	return &LangfuseService{
 		repo:        repository.NewLangfuseRepo(cfg.SystemDB, cfg.DataDB, cfg.LangfuseDB),
@@ -113,6 +131,7 @@ func NewLangfuseService(cfg LangfuseConfig) *LangfuseService {
 				return http.ErrUseLastResponse
 			},
 		},
+		provisionBackoff: []time.Duration{time.Second, 3 * time.Second},
 	}
 }
 
@@ -124,6 +143,7 @@ func (s *LangfuseService) Enabled() bool {
 }
 
 func (s *LangfuseService) GenerateProjectKeysForDatapack(
+	ctx context.Context,
 	accountID string,
 	accountEmail string,
 	firstName string,
@@ -147,11 +167,12 @@ func (s *LangfuseService) GenerateProjectKeysForDatapack(
 		return existing, nil
 	}
 
-	org, err := s.ensureOrgMapping(accountID, accountEmail)
+	org, err := s.ensureOrgMapping(ctx, accountID, accountEmail)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.ensureOrgUser(
+		ctx,
 		org,
 		accountID,
 		accountEmail,
@@ -161,13 +182,14 @@ func (s *LangfuseService) GenerateProjectKeysForDatapack(
 		return nil, err
 	}
 
-	return s.ensureProjectMapping(accountID, datapackID, datapackName, org)
+	return s.ensureProjectMapping(ctx, accountID, datapackID, datapackName, org)
 }
 
 // ProvisionForDatapack ensures a langfuse_project_mapping row exists
 // for (account, datapack). Best-effort: returns nil when Langfuse is
-// disabled or upstream provisioning fails (errors are logged).
-// Idempotent: a no-op when a mapping is already present.
+// disabled or upstream provisioning fails (errors are logged). Used by
+// signup, which must not fail over Langfuse; datapack create uses
+// EnsureProjectForDatapack and rolls back instead.
 func (s *LangfuseService) ProvisionForDatapack(
 	account *models.Account,
 	datapackID, datapackName string,
@@ -175,14 +197,9 @@ func (s *LangfuseService) ProvisionForDatapack(
 	if !s.Enabled() || account == nil {
 		return nil
 	}
-	keys, err := s.GenerateProjectKeysForDatapack(
-		account.ID,
-		account.Email,
-		account.FirstName,
-		account.LastName,
-		datapackID,
-		datapackName,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), LangfuseProvisionBudget)
+	defer cancel()
+	keys, err := s.EnsureProjectForDatapack(ctx, account, datapackID, datapackName)
 	if err != nil {
 		slog.Error("langfuse mapping provisioning failed",
 			"user_id", account.ID,
@@ -195,12 +212,61 @@ func (s *LangfuseService) ProvisionForDatapack(
 	return keys
 }
 
+// EnsureProjectForDatapack provisions the datapack's Langfuse project and
+// mapping row, retrying the whole idempotent chain with backoff until it
+// succeeds, the attempts run out, or ctx expires. Failures wrap
+// ErrLangfuseUnavailable. Idempotent: returns the existing mapping if any.
+func (s *LangfuseService) EnsureProjectForDatapack(
+	ctx context.Context,
+	account *models.Account,
+	datapackID, datapackName string,
+) (*ProjectKeys, error) {
+	if !s.Enabled() {
+		return nil, fmt.Errorf("langfuse is not configured")
+	}
+	if account == nil {
+		return nil, fmt.Errorf("account is required")
+	}
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		keys, err := s.GenerateProjectKeysForDatapack(
+			ctx,
+			account.ID,
+			account.Email,
+			account.FirstName,
+			account.LastName,
+			datapackID,
+			datapackName,
+		)
+		if err == nil {
+			return keys, nil
+		}
+		lastErr = err
+		if attempt >= len(s.provisionBackoff) {
+			break
+		}
+		slog.Warn("langfuse mapping provisioning attempt failed; retrying",
+			"datapack_id", datapackID, "attempt", attempt+1, "error", err)
+		timer := time.NewTimer(s.provisionBackoff[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("%w: %w", ErrLangfuseUnavailable, lastErr)
+		case <-timer.C:
+		}
+	}
+	return nil, fmt.Errorf("%w: %w", ErrLangfuseUnavailable, lastErr)
+}
+
 // CleanupForDeletedDatapack deletes the Langfuse project (best-effort)
 // and removes its local mapping row after a datapack deletion.
 //
 // Behavior:
 //   - no-op when Langfuse is disabled or mapping is absent
 //   - treats remote 404 as already deleted
+//   - logs and carries on when Langfuse can't delete the project (down,
+//     slow, 5xx): the project is orphaned rather than blocking the
+//     datapack delete
 //   - always removes local mapping to avoid stale references
 func (s *LangfuseService) CleanupForDeletedDatapack(ownerUserID, datapackID string) error {
 	if s == nil || s.repo == nil {
@@ -227,9 +293,16 @@ func (s *LangfuseService) CleanupForDeletedDatapack(ownerUserID, datapackID stri
 		}
 		if org != nil {
 			path := "/api/public/projects/" + url.PathEscape(mapping.ProjectID)
-			delErr := s.doJSON(http.MethodDelete, path, basicAuth(org.PublicKey, org.SecretKey), nil, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), langfuseProjectDeleteTimeout)
+			delErr := s.doJSONCtx(ctx, http.MethodDelete, path, basicAuth(org.PublicKey, org.SecretKey), nil, nil)
+			cancel()
 			if delErr != nil && !strings.Contains(delErr.Error(), "status 404") {
-				return fmt.Errorf("delete langfuse project %s: %w", mapping.ProjectID, delErr)
+				slog.Error("langfuse project delete failed; project orphaned",
+					"datapack_id", datapackID,
+					"owner_user_id", ownerUserID,
+					"langfuse_project_id", mapping.ProjectID,
+					"error", delErr,
+				)
 			}
 		}
 	}
@@ -238,6 +311,37 @@ func (s *LangfuseService) CleanupForDeletedDatapack(ownerUserID, datapackID stri
 		return err
 	}
 	return nil
+}
+
+// DiscardProjectsForDatapack undoes a failed provision for a datapack whose
+// create is being rolled back: it deletes every Langfuse project tagged with
+// the datapack (attempts that died before writing the mapping leave untracked
+// ones) and the mapping row, if any. Best-effort on the Langfuse side;
+// failures are logged and the projects orphaned.
+func (s *LangfuseService) DiscardProjectsForDatapack(ctx context.Context, ownerUserID, datapackID string) error {
+	if !s.Enabled() {
+		return nil
+	}
+	org, err := s.repo.GetOrgMapping(ownerUserID)
+	if err != nil {
+		return err
+	}
+	if org != nil {
+		projects, listErr := s.listDatapackProjects(ctx, org, datapackID)
+		if listErr != nil {
+			slog.Error("langfuse project lookup failed during rollback; projects may be orphaned",
+				"datapack_id", datapackID, "owner_user_id", ownerUserID, "error", listErr)
+		}
+		for _, p := range projects {
+			path := "/api/public/projects/" + url.PathEscape(p.ID)
+			delErr := s.doJSONCtx(ctx, http.MethodDelete, path, basicAuth(org.PublicKey, org.SecretKey), nil, nil)
+			if delErr != nil && !strings.Contains(delErr.Error(), "status 404") {
+				slog.Error("langfuse project delete failed during rollback; project orphaned",
+					"datapack_id", datapackID, "langfuse_project_id", p.ID, "error", delErr)
+			}
+		}
+	}
+	return s.repo.DeleteProjectMapping(datapackID)
 }
 
 type updateProjectReq struct {
@@ -329,6 +433,7 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 	datapackID string,
 	grantRole string,
 ) error {
+	ctx := context.Background()
 	if !s.Enabled() {
 		return nil
 	}
@@ -352,7 +457,7 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 		if ownerEmail == "" {
 			return fmt.Errorf("langfuse org mapping not found for owner %s", ownerUserID)
 		}
-		org, err = s.ensureOrgMapping(ownerUserID, ownerEmail)
+		org, err = s.ensureOrgMapping(ctx, ownerUserID, ownerEmail)
 		if err != nil {
 			return err
 		}
@@ -370,7 +475,7 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 		if strings.TrimSpace(datapackName) == "" {
 			return fmt.Errorf("langfuse project mapping not found for datapack %s", datapackID)
 		}
-		projectMapping, err = s.ensureProjectMapping(ownerUserID, datapackID, datapackName, org)
+		projectMapping, err = s.ensureProjectMapping(ctx, ownerUserID, datapackID, datapackName, org)
 		if err != nil {
 			return err
 		}
@@ -391,11 +496,11 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 		s.adminAPIKey,
 		orgRole,
 	)
-	if err := s.createOrgUser(org, body, true); err != nil {
+	if err := s.createOrgUser(ctx, org, body, true); err != nil {
 		return err
 	}
 
-	userIDs, err := s.listOrgUserIDsByEmail(org, loginEmail)
+	userIDs, err := s.listOrgUserIDsByEmail(ctx, org, loginEmail)
 	if err != nil {
 		return err
 	}
@@ -447,6 +552,7 @@ func (s *LangfuseService) BootstrapObserveSession(
 	firstName string,
 	lastName string,
 ) (*ObserveBootstrapResult, error) {
+	ctx := context.Background()
 	if !s.Enabled() {
 		return nil, fmt.Errorf("langfuse is not configured")
 	}
@@ -459,11 +565,12 @@ func (s *LangfuseService) BootstrapObserveSession(
 		return nil, fmt.Errorf("email is required")
 	}
 
-	org, err := s.ensureOrgMapping(accountID, accountEmail)
+	org, err := s.ensureOrgMapping(ctx, accountID, accountEmail)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.ensureOrgUser(
+		ctx,
 		org,
 		accountID,
 		accountEmail,
@@ -485,7 +592,6 @@ func (s *LangfuseService) BootstrapObserveSession(
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
 	loginSetCookies, err := s.observeCredentialsLogin(
 		ctx,
 		loginEmail,
@@ -579,7 +685,7 @@ func (s *LangfuseService) reconcileSharedMembershipsForRecipient(
 	return firstErr
 }
 
-func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*orgMapping, error) {
+func (s *LangfuseService) ensureOrgMapping(ctx context.Context, accountID, accountEmail string) (*orgMapping, error) {
 	existing, err := s.repo.GetOrgMapping(accountID)
 	if err != nil {
 		return nil, err
@@ -589,14 +695,14 @@ func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*org
 	}
 
 	orgName := fmt.Sprintf("meko-org-%s", langfuseShortID(accountID))
-	orgResp, err := s.createOrg(orgName, accountID, accountEmail)
+	orgResp, err := s.createOrg(ctx, orgName, accountID, accountEmail)
 	if err != nil {
 		if !strings.Contains(err.Error(), "status 409") {
 			return nil, err
 		}
 		slog.Info("langfuse org already exists, looking up by name",
 			"account_id", accountID, "org_name", orgName)
-		orgResp, err = s.getOrgByName(orgName)
+		orgResp, err = s.getOrgByName(ctx, orgName)
 		if err != nil {
 			return nil, fmt.Errorf("lookup existing langfuse org: %w", err)
 		}
@@ -605,7 +711,7 @@ func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*org
 		}
 	}
 
-	keyResp, err := s.createOrgAPIKey(orgResp.ID, accountID)
+	keyResp, err := s.createOrgAPIKey(ctx, orgResp.ID, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -624,6 +730,7 @@ func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*org
 }
 
 func (s *LangfuseService) ensureProjectMapping(
+	ctx context.Context,
 	accountID string,
 	datapackID string,
 	datapackName string,
@@ -634,7 +741,24 @@ func (s *LangfuseService) ensureProjectMapping(
 		projectName = fmt.Sprintf("meko-%s", langfuseShortID(accountID))
 	}
 
-	projectResp, err := s.createProject(org.PublicKey, org.SecretKey, projectName, accountID, datapackID, datapackName)
+	// A previous attempt may have created the project and then failed before
+	// writing the mapping (key minting failed, or the response was lost).
+	// Reuse it rather than creating a suffixed duplicate.
+	// A failed lookup falls through to creating: a duplicate project beats
+	// a failed create.
+	existing, err := s.listDatapackProjects(ctx, org, datapackID)
+	if err != nil {
+		slog.Warn("langfuse project lookup failed; creating a new project",
+			"datapack_id", datapackID, "error", err)
+	}
+	var projectResp *createProjectResp
+	if len(existing) > 0 {
+		projectResp = &existing[0]
+	} else {
+		projectResp, err = s.createProject(
+			ctx, org.PublicKey, org.SecretKey, projectName, accountID, datapackID, datapackName,
+		)
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "status 409") {
 			sfx, sfxErr := randomHexSuffix(4)
@@ -643,6 +767,7 @@ func (s *LangfuseService) ensureProjectMapping(
 			}
 			uniqueProjectName := fmt.Sprintf("%s-%s", projectName, sfx)
 			projectResp, err = s.createProject(
+				ctx,
 				org.PublicKey,
 				org.SecretKey,
 				uniqueProjectName,
@@ -658,7 +783,7 @@ func (s *LangfuseService) ensureProjectMapping(
 		}
 	}
 
-	keyResp, err := s.createProjectAPIKey(org.PublicKey, org.SecretKey, projectResp.ID, accountID)
+	keyResp, err := s.createProjectAPIKey(ctx, org.PublicKey, org.SecretKey, projectResp.ID, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -1116,7 +1241,7 @@ type createOrgResp struct {
 	Name string `json:"name"`
 }
 
-func (s *LangfuseService) createOrg(name, accountID, accountEmail string) (*createOrgResp, error) {
+func (s *LangfuseService) createOrg(ctx context.Context, name, accountID, accountEmail string) (*createOrgResp, error) {
 	body := createOrgReq{
 		Name: name,
 		Metadata: map[string]interface{}{
@@ -1126,7 +1251,8 @@ func (s *LangfuseService) createOrg(name, accountID, accountEmail string) (*crea
 		},
 	}
 	var out createOrgResp
-	if err := s.doJSON(http.MethodPost, "/api/admin/organizations", bearerAuth(s.adminAPIKey), body, &out); err != nil {
+	auth := bearerAuth(s.adminAPIKey)
+	if err := s.doJSONCtx(ctx, http.MethodPost, "/api/admin/organizations", auth, body, &out); err != nil {
 		return nil, fmt.Errorf("create langfuse org: %w", err)
 	}
 	if out.ID == "" {
@@ -1141,9 +1267,10 @@ type listOrgsResp struct {
 
 // getOrgByName lists all Langfuse orgs and returns the one matching the given name.
 // Returns (nil, nil) if no org with that name exists.
-func (s *LangfuseService) getOrgByName(name string) (*createOrgResp, error) {
+func (s *LangfuseService) getOrgByName(ctx context.Context, name string) (*createOrgResp, error) {
 	var out listOrgsResp
-	if err := s.doJSON(http.MethodGet, "/api/admin/organizations", bearerAuth(s.adminAPIKey), nil, &out); err != nil {
+	auth := bearerAuth(s.adminAPIKey)
+	if err := s.doJSONCtx(ctx, http.MethodGet, "/api/admin/organizations", auth, nil, &out); err != nil {
 		return nil, fmt.Errorf("list langfuse orgs: %w", err)
 	}
 	for i := range out.Data {
@@ -1163,11 +1290,11 @@ type createAPIKeyResp struct {
 	SecretKey string `json:"secretKey"`
 }
 
-func (s *LangfuseService) createOrgAPIKey(orgID, accountID string) (*createAPIKeyResp, error) {
+func (s *LangfuseService) createOrgAPIKey(ctx context.Context, orgID, accountID string) (*createAPIKeyResp, error) {
 	body := createAPIKeyReq{Note: fmt.Sprintf("meko-org-%s", langfuseShortID(accountID))}
 	var out createAPIKeyResp
 	path := fmt.Sprintf("/api/admin/organizations/%s/apiKeys", orgID)
-	if err := s.doJSON(http.MethodPost, path, bearerAuth(s.adminAPIKey), body, &out); err != nil {
+	if err := s.doJSONCtx(ctx, http.MethodPost, path, bearerAuth(s.adminAPIKey), body, &out); err != nil {
 		return nil, fmt.Errorf("create langfuse org api key: %w", err)
 	}
 	if out.PublicKey == "" || out.SecretKey == "" {
@@ -1187,7 +1314,44 @@ type createProjectResp struct {
 	Name string `json:"name"`
 }
 
-func (s *LangfuseService) createProject(orgPublicKey, orgSecretKey, projectName, accountID, datapackID, datapackName string) (*createProjectResp, error) {
+type orgProjectsResp struct {
+	Projects []struct {
+		Metadata map[string]interface{} `json:"metadata"`
+		ID       string                 `json:"id"`
+		Name     string                 `json:"name"`
+	} `json:"projects"`
+}
+
+// listDatapackProjects returns the org's projects whose metadata names
+// datapackID, as createProject tags them. A Langfuse without the
+// organizations/projects endpoint (404) reports none.
+func (s *LangfuseService) listDatapackProjects(
+	ctx context.Context,
+	org *orgMapping,
+	datapackID string,
+) ([]createProjectResp, error) {
+	var out orgProjectsResp
+	err := s.doJSONCtx(ctx, http.MethodGet, "/api/public/organizations/projects",
+		basicAuth(org.PublicKey, org.SecretKey), nil, &out)
+	if err != nil {
+		if strings.Contains(err.Error(), "status 404") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list langfuse projects: %w", err)
+	}
+	var found []createProjectResp
+	for _, p := range out.Projects {
+		if id, ok := p.Metadata["datapack_id"].(string); ok && id == datapackID && p.ID != "" {
+			found = append(found, createProjectResp{ID: p.ID, Name: p.Name})
+		}
+	}
+	return found, nil
+}
+
+func (s *LangfuseService) createProject(
+	ctx context.Context,
+	orgPublicKey, orgSecretKey, projectName, accountID, datapackID, datapackName string,
+) (*createProjectResp, error) {
 	body := createProjectReq{
 		Name:      projectName,
 		Retention: 0,
@@ -1199,7 +1363,8 @@ func (s *LangfuseService) createProject(orgPublicKey, orgSecretKey, projectName,
 		},
 	}
 	var out createProjectResp
-	if err := s.doJSON(http.MethodPost, "/api/public/projects", basicAuth(orgPublicKey, orgSecretKey), body, &out); err != nil {
+	auth := basicAuth(orgPublicKey, orgSecretKey)
+	if err := s.doJSONCtx(ctx, http.MethodPost, "/api/public/projects", auth, body, &out); err != nil {
 		return nil, fmt.Errorf("create langfuse project: %w", err)
 	}
 	if out.ID == "" {
@@ -1208,11 +1373,14 @@ func (s *LangfuseService) createProject(orgPublicKey, orgSecretKey, projectName,
 	return &out, nil
 }
 
-func (s *LangfuseService) createProjectAPIKey(orgPublicKey, orgSecretKey, projectID, accountID string) (*createAPIKeyResp, error) {
+func (s *LangfuseService) createProjectAPIKey(
+	ctx context.Context,
+	orgPublicKey, orgSecretKey, projectID, accountID string,
+) (*createAPIKeyResp, error) {
 	body := createAPIKeyReq{Note: fmt.Sprintf("meko-project-%s", langfuseShortID(accountID))}
 	var out createAPIKeyResp
 	path := fmt.Sprintf("/api/public/projects/%s/apiKeys", projectID)
-	if err := s.doJSON(http.MethodPost, path, basicAuth(orgPublicKey, orgSecretKey), body, &out); err != nil {
+	if err := s.doJSONCtx(ctx, http.MethodPost, path, basicAuth(orgPublicKey, orgSecretKey), body, &out); err != nil {
 		return nil, fmt.Errorf("create langfuse project api key: %w", err)
 	}
 	if out.PublicKey == "" || out.SecretKey == "" {
@@ -1279,6 +1447,7 @@ func buildScimUserReqWithRole(
 }
 
 func (s *LangfuseService) ensureOrgUser(
+	ctx context.Context,
 	org *orgMapping,
 	accountID string,
 	accountEmail string,
@@ -1294,21 +1463,22 @@ func (s *LangfuseService) ensureOrgUser(
 	}
 	loginEmail := langfuseLoginEmail(accountID, email)
 
-	userIDs, err := s.listOrgUserIDsByEmail(org, loginEmail)
+	userIDs, err := s.listOrgUserIDsByEmail(ctx, org, loginEmail)
 	if err != nil {
 		return err
 	}
 	if len(userIDs) > 0 {
 		// User already exists — enforce the OWNER role and done.
-		return s.ensureOrgUserRole(org, loginEmail, "OWNER")
+		return s.ensureOrgUserRole(ctx, org, loginEmail, "OWNER")
 	}
 
 	// New user — create via SCIM; role is embedded in the request body.
 	body := buildScimUserReq(loginEmail, firstName, lastName, email, s.adminAPIKey)
-	return s.createOrgUser(org, body, true)
+	return s.createOrgUser(ctx, org, body, true)
 }
 
 func (s *LangfuseService) createOrgUser(
+	ctx context.Context,
 	org *orgMapping,
 	requestBody scimUserReq,
 	allowConflict bool,
@@ -1319,7 +1489,7 @@ func (s *LangfuseService) createOrgUser(
 	}
 
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		s.host+"/api/public/scim/Users",
 		bytes.NewReader(raw),
@@ -1356,11 +1526,11 @@ type scimUsersListResponse struct {
 	} `json:"Resources"`
 }
 
-func (s *LangfuseService) listOrgUserIDsByEmail(org *orgMapping, email string) ([]string, error) {
+func (s *LangfuseService) listOrgUserIDsByEmail(ctx context.Context, org *orgMapping, email string) ([]string, error) {
 	filter := url.QueryEscape(fmt.Sprintf("userName eq \"%s\"", email))
 	path := "/api/public/scim/Users?filter=" + filter
 	var out scimUsersListResponse
-	if err := s.doJSON(http.MethodGet, path, basicAuth(org.PublicKey, org.SecretKey), nil, &out); err != nil {
+	if err := s.doJSONCtx(ctx, http.MethodGet, path, basicAuth(org.PublicKey, org.SecretKey), nil, &out); err != nil {
 		return nil, fmt.Errorf("list langfuse scim users: %w", err)
 	}
 	ids := make([]string, 0, len(out.Resources))
@@ -1388,12 +1558,13 @@ func (s *LangfuseService) recreateOrgUser(
 	firstName string,
 	lastName string,
 ) error {
+	ctx := context.Background()
 	email := strings.TrimSpace(accountEmail)
 	if org == nil || email == "" {
 		return fmt.Errorf("org mapping and email are required")
 	}
 	loginEmail := langfuseLoginEmail(accountID, email)
-	userIDs, err := s.listOrgUserIDsByEmail(org, loginEmail)
+	userIDs, err := s.listOrgUserIDsByEmail(ctx, org, loginEmail)
 	if err != nil {
 		return err
 	}
@@ -1404,13 +1575,14 @@ func (s *LangfuseService) recreateOrgUser(
 	}
 
 	body := buildScimUserReq(loginEmail, firstName, lastName, email, s.adminAPIKey)
-	if err := s.createOrgUser(org, body, false); err != nil {
+	if err := s.createOrgUser(ctx, org, body, false); err != nil {
 		return err
 	}
-	return s.ensureOrgUserRole(org, loginEmail, "OWNER")
+	return s.ensureOrgUserRole(ctx, org, loginEmail, "OWNER")
 }
 
 func (s *LangfuseService) ensureOrgUserRole(
+	ctx context.Context,
 	org *orgMapping,
 	email string,
 	role string,
@@ -1426,7 +1598,7 @@ func (s *LangfuseService) ensureOrgUserRole(
 	if role == "" {
 		return fmt.Errorf("role is required")
 	}
-	userIDs, err := s.listOrgUserIDsByEmail(org, email)
+	userIDs, err := s.listOrgUserIDsByEmail(ctx, org, email)
 	if err != nil {
 		return err
 	}
@@ -1440,7 +1612,8 @@ func (s *LangfuseService) ensureOrgUserRole(
 	}
 	for _, id := range userIDs {
 		path := "/api/public/scim/Users/" + id
-		if err := s.doJSON(
+		if err := s.doJSONCtx(
+			ctx,
 			http.MethodPut,
 			path,
 			basicAuth(org.PublicKey, org.SecretKey),
@@ -1569,6 +1742,16 @@ func basicAuth(user, pass string) requestAuth {
 }
 
 func (s *LangfuseService) doJSON(method, path string, auth requestAuth, reqBody interface{}, out interface{}) error {
+	return s.doJSONCtx(context.Background(), method, path, auth, reqBody, out)
+}
+
+func (s *LangfuseService) doJSONCtx(
+	ctx context.Context,
+	method, path string,
+	auth requestAuth,
+	reqBody interface{},
+	out interface{},
+) error {
 	var bodyReader io.Reader
 	if reqBody != nil {
 		raw, err := json.Marshal(reqBody)
@@ -1579,7 +1762,7 @@ func (s *LangfuseService) doJSON(method, path string, auth requestAuth, reqBody 
 	}
 
 	url := s.host + path
-	req, err := http.NewRequestWithContext(context.Background(), method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

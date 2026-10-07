@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -56,6 +57,7 @@ func NewDatapackHandler(
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Failure	503		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks [post]
 func (h *DatapackHandler) Create(c echo.Context) error {
@@ -96,8 +98,18 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 		}
 	}
 
-	resp, err := h.svc.Create(req)
+	resp, err := h.svc.CreateProvisioned(c.Request().Context(), req, account)
 	if err != nil {
+		// Checked first: the wrapped upstream error names internal Langfuse
+		// hosts and must only be logged (CreateProvisioned already did).
+		if errors.Is(err, service.ErrCreateRollbackFailed) {
+			return apiError(c, http.StatusServiceUnavailable, "LANGFUSE_UNAVAILABLE",
+				"Could not finish setting up the datapack. Please retry.")
+		}
+		if errors.Is(err, service.ErrLangfuseUnavailable) {
+			return apiError(c, http.StatusServiceUnavailable, "LANGFUSE_UNAVAILABLE",
+				"Could not finish setting up the datapack; nothing was created. Please retry.")
+		}
 		// Tier datapack cap → 402. DatapackLimitResponse dispatches on the tier
 		// (Free → Standard, Standard → Pro) — the cap fires for both gated tiers
 		// (datapack_service.go), so a Standard user must not be told to upgrade
@@ -131,12 +143,6 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 			slog.Warn("datapack created but filing failed (non-fatal; stays unfiled)",
 				"datapack_id", resp.DatapackID, "folder_id", req.FolderID, "error", pErr)
 		}
-	}
-
-	// Eagerly provision the Langfuse mapping (best-effort) so observe
-	// / conversations work without waiting for the UI's lazy bootstrap.
-	if h.langfuse != nil {
-		h.langfuse.ProvisionForDatapack(account, resp.DatapackID, resp.Name)
 	}
 
 	redactCreateResponse(resp)
@@ -434,17 +440,16 @@ func (h *DatapackHandler) GenerateLangfuseProjectKeys(c echo.Context) error {
 			"INTERNAL_ERROR", "datapack not resolved by middleware")
 	}
 
-	keys, err := h.langfuse.GenerateProjectKeysForDatapack(
-		account.ID,
-		account.Email,
-		account.FirstName,
-		account.LastName,
-		dp.ID,
-		dp.Name,
-	)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), service.LangfuseProvisionBudget)
+	defer cancel()
+	keys, err := h.langfuse.EnsureProjectForDatapack(ctx, account, dp.ID, dp.Name)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		slog.Error("langfuse project provisioning failed",
+			"user_id", account.ID, "datapack_id", dp.ID, "error", err)
+		// Same status and code as before; only the message is generic, since
+		// the error can name internal Langfuse hosts.
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Could not set up the datapack's Langfuse project. Please retry.")
 	}
 
 	return ok(c, http.StatusOK, keys)

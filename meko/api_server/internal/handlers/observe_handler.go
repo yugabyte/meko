@@ -64,8 +64,10 @@ func (h *ObserveHandler) BootstrapSession(c echo.Context) error {
 		account.LastName,
 	)
 	if err != nil {
+		// The error can wrap a *url.Error naming the internal Langfuse host.
+		slog.Error("observe session bootstrap failed", "user_id", account.ID, "error", err)
 		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+			"INTERNAL_ERROR", "Could not open the Langfuse session. Please retry.")
 	}
 	for _, rawCookie := range result.SetCookies {
 		c.Response().Header().Add(echo.HeaderSetCookie, rawCookie)

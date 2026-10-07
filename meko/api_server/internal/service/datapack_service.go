@@ -323,6 +323,74 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 		return nil, fmt.Errorf("failed to create datapack: %w", err)
 	}
 
+	return &CreateResponse{
+		DatapackID:  res.DatapackID,
+		AgentID:     res.AgentID,
+		Name:        req.Name,
+		MCPUserName: res.MCPUserName,
+		MCPServer: MCPServerInfo{
+			URL:    fmt.Sprintf("https://%s.mcp.mekodev.com/mcp", res.UserID),
+			APIKey: res.MCPPassword,
+		},
+		DBAccess: DBAccessInfo{
+			UserName: res.MCPUserName,
+			Password: res.MCPPassword,
+			ConnStr:  res.ConnStr,
+		},
+	}, nil
+}
+
+// ErrCreateRollbackFailed marks a CreateProvisioned failure whose rollback
+// also failed, so the datapack row may still exist without a Langfuse project.
+var ErrCreateRollbackFailed = errors.New("datapack create rollback failed")
+
+// CreateProvisioned is Create plus the datapack's Langfuse project. A
+// datapack without its project fails every scoped MCP call ("No Langfuse
+// project found"), so when Langfuse is enabled and provisioning fails the
+// create is rolled back — row, lifetime creation count, universe slot and
+// any half-made Langfuse projects — and the error wraps
+// ErrLangfuseUnavailable (plus ErrCreateRollbackFailed if the rollback
+// itself failed).
+func (s *DatapackService) CreateProvisioned(
+	ctx context.Context,
+	req CreateRequest,
+	account *models.Account,
+) (*CreateResponse, error) {
+	resp, err := s.Create(req)
+	if err != nil {
+		return nil, err
+	}
+	if s.langfuseSvc == nil || !s.langfuseSvc.Enabled() {
+		s.trackDatapackCreated(ctx, req, resp.DatapackID)
+		return resp, nil
+	}
+	// The rollback gets its own langfuseProjectDeleteTimeout afterwards, so
+	// provisioning gives that much of the budget back: the Langfuse calls of
+	// provision + rollback together stay within LangfuseProvisionBudget, under
+	// the 60s nginx proxy_read_timeout in front of /api/v1 and the MCP proxy.
+	// Detached from the request's cancellation: a client that hangs up should
+	// not turn a provisioning that would succeed into a rollback.
+	pctx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx), LangfuseProvisionBudget-langfuseProjectDeleteTimeout)
+	defer cancel()
+	if _, err := s.langfuseSvc.EnsureProjectForDatapack(pctx, account, resp.DatapackID, resp.Name); err != nil {
+		slog.Error("langfuse provisioning failed; rolling back datapack create",
+			"user_id", req.UserID, "datapack_id", resp.DatapackID, "error", err)
+		if rbErr := s.rollbackCreate(req.UserID, resp.DatapackID); rbErr != nil {
+			slog.Error("datapack create rollback failed; datapack left without a langfuse project",
+				"user_id", req.UserID, "datapack_id", resp.DatapackID, "error", rbErr)
+			return nil, fmt.Errorf("%w: %w (%w: %v)", ErrLangfuseUnavailable, err, ErrCreateRollbackFailed, rbErr)
+		}
+		return nil, err
+	}
+	s.trackDatapackCreated(ctx, req, resp.DatapackID)
+	return resp, nil
+}
+
+// trackDatapackCreated emits Rudderstack datapack_created for a datapack
+// that is fully set up. CreateProvisioned calls it once provisioning has
+// succeeded, so a create that is rolled back never reports one.
+func (s *DatapackService) trackDatapackCreated(ctx context.Context, req CreateRequest, datapackID string) {
 	// Rudderstack datapack_created. This closes the MCP / PAT / direct-
 	// API funnel gap: those callers never had a UI to fire trackEvent,
 	// so the event only lands from here. UI creates are deliberately
@@ -354,29 +422,39 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 		// provisioner seeded row 1 at signup and this call landed row 2.
 		s.telemetry.Track(ctx, req.UserID, telemetry.EventDatapackCreated, map[string]any{
 			"email":           req.Email,
-			"datapack_id":     res.DatapackID,
+			"datapack_id":     datapackID,
 			"datapack_name":   req.Name,
 			"total_datapacks": total,
 			"is_first":        total == 2,
 			"source":          source,
 		})
 	}
+}
 
-	return &CreateResponse{
-		DatapackID:  res.DatapackID,
-		AgentID:     res.AgentID,
-		Name:        req.Name,
-		MCPUserName: res.MCPUserName,
-		MCPServer: MCPServerInfo{
-			URL:    fmt.Sprintf("https://%s.mcp.mekodev.com/mcp", res.UserID),
-			APIKey: res.MCPPassword,
-		},
-		DBAccess: DBAccessInfo{
-			UserName: res.MCPUserName,
-			Password: res.MCPPassword,
-			ConnStr:  res.ConnStr,
-		},
-	}, nil
+// rollbackCreate undoes a Create for CreateProvisioned. It runs on a fresh
+// context: the request's may be the one that just expired.
+func (s *DatapackService) rollbackCreate(userID, datapackID string) error {
+	dp, err := s.repo.GetByID(userID, datapackID)
+	if err != nil {
+		return fmt.Errorf("look up datapack: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), langfuseProjectDeleteTimeout)
+	defer cancel()
+	if err := s.langfuseSvc.DiscardProjectsForDatapack(ctx, userID, datapackID); err != nil {
+		// Still roll back the row: a datapack without its project is the
+		// worse leftover.
+		slog.Error("langfuse cleanup failed during create rollback",
+			"user_id", userID, "datapack_id", datapackID, "error", err)
+	}
+	if err := s.repo.RollbackCreate(userID, datapackID); err != nil {
+		return err
+	}
+	if dp != nil {
+		if err := s.ybaSvc.ReleaseUniverse(dp.UniverseID); err != nil {
+			slog.Warn("failed to release universe slot", "universe_id", dp.UniverseID, "error", err)
+		}
+	}
+	return nil
 }
 
 // List returns datapacks belonging to the given user.
@@ -474,7 +552,8 @@ func (s *DatapackService) Update(
 
 // Delete removes the Langfuse project (when configured), deletes the
 // datapack registry entry, and releases the universe slot. There is no
-// per-datapack database to drop in the multi-tenant model.
+// per-datapack database to drop in the multi-tenant model. Langfuse being
+// unreachable does not block the delete: the project is orphaned and logged.
 func (s *DatapackService) Delete(userID, datapackID string) error {
 	if datapackID == "" {
 		return fmt.Errorf("datapack_id is required")

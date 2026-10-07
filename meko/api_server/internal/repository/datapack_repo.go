@@ -621,6 +621,50 @@ func (r *DatapackRepo) Delete(userID, name string) error {
 	return nil
 }
 
+// RollbackCreate undoes a Create whose datapack never became usable: it
+// deletes the row and its agent_access link and gives back the lifetime
+// datapack_creation count that Create took, in one transaction, so a failed
+// create doesn't spend quota.
+func (r *DatapackRepo) RollbackCreate(userID, datapackID string) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			slog.Warn("rollback error", "datapack_id", datapackID, "error", rbErr)
+		}
+	}()
+
+	res, err := tx.Exec(
+		`DELETE FROM meko_system.datapacks
+		 WHERE user_id = $1 AND datapack_id = $2`,
+		userID, datapackID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete datapack: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("datapack %q not found", datapackID)
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM meko_system.agent_access
+		 WHERE user_id = $1 AND datapack_id = $2`,
+		userID, datapackID,
+	); err != nil {
+		return fmt.Errorf("failed to delete agent_access link: %w", err)
+	}
+	if err := DecrementRequestCountTx(tx, userID, MetricDatapackCreation); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit datapack rollback: %w", err)
+	}
+	return nil
+}
+
 // DeleteByID removes a datapack by user and stable datapack UUID.
 func (r *DatapackRepo) DeleteByID(userID, datapackID string) error {
 	res, err := r.db.Exec(

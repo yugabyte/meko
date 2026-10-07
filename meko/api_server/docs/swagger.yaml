@@ -1553,6 +1553,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
       summary: Create a datapack

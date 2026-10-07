@@ -28,6 +28,8 @@ To create additional datapacks:
 1. Click **Add Datapack**.
 1. Follow the instructions in the configure wizard.
 
+If Meko can't finish setting up the datapack's tracing project, creation fails with `Could not finish setting up the datapack; nothing was created. Please retry.` Nothing is left behind, so retry with the same name.
+
 > [!NOTE] Free tier
 >
 > Free accounts can create up to **10 datapacks**. When you reach the limit, **Add Datapack** is disabled until you upgrade. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.

@@ -1865,6 +1865,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
                     }
                 }
             }

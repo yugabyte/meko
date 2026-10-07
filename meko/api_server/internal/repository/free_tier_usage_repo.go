@@ -80,3 +80,23 @@ func IncrementRequestCountTx(tx *sql.Tx, userID, metricName string) error {
 	}
 	return nil
 }
+
+// DecrementRequestCountTx undoes one IncrementRequestCountTx inside tx,
+// never going below zero. Only for compensating a create that is being
+// rolled back; deletes deliberately leave the lifetime counter alone.
+func DecrementRequestCountTx(tx *sql.Tx, userID, metricName string) error {
+	if tx == nil {
+		return fmt.Errorf("free_tier_usage: transaction is nil")
+	}
+	_, err := tx.Exec(
+		`UPDATE meko_system.free_tier_usage
+		    SET request_count = GREATEST(request_count - 1, 0),
+		        updated_at    = now()
+		  WHERE user_id = $1 AND metric_name = $2`,
+		userID, metricName,
+	)
+	if err != nil {
+		return fmt.Errorf("free_tier_usage: decrement %s for %s: %w", metricName, userID, err)
+	}
+	return nil
+}
