@@ -556,13 +556,7 @@ impl PageStore {
         self.write_gate("write to amp_storage.pending_gc");
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        utils::write_fence::global()
-            .write_fenced(
-                "write to amp_storage.pending_gc",
-                super::server_fenced,
-                |deadline| self.gc_enqueue_candidates_thin(&p, branch_id, rows, deadline.into()),
-            )
-            .await?;
+        self.gc_enqueue_candidates_thin(&p, branch_id, rows).await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["gc_enqueue_candidates", "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
@@ -590,7 +584,6 @@ impl PageStore {
         p: &ThinClientTables,
         branch_id: BranchId,
         rows: &[PendingGcRow],
-        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pending_gc = &p.pending_gc;
@@ -599,7 +592,7 @@ impl PageStore {
         let parallelism = 1;
         let branch_b = branch_id.to_bytes();
 
-        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        let mut chunks = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             let mut batch = Vec::with_capacity(chunk.len());
             for row in chunk {
@@ -622,26 +615,29 @@ impl PageStore {
                     )],
                 )?);
             }
-            let client = Arc::clone(&p.client);
-            let chunk_rows = batch.len();
-            futs.push(Box::pin(async move {
-                // Full retry budget inside `upsert`, no session rotation
-                // (see put_pages' thin lane).
-                client.upsert(&batch, deadline).await.with_context(|| {
-                    format!(
-                        "gc_enqueue_candidates(yb_thin_client) branch={branch_id} \
-                         chunk_rows={chunk_rows}"
-                    )
-                })?;
-                Ok(())
-            }));
+            chunks.push(Arc::new(batch));
         }
 
-        futures::stream::iter(futs)
-            .buffer_unordered(parallelism)
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(())
+        // Fenced per chunk, not per batch, like `put_pages` (#1737).
+        utils::write_fence::global()
+            .write_fenced_each(
+                "write to amp_storage.pending_gc",
+                super::server_fenced,
+                chunks,
+                parallelism,
+                |batch, deadline| {
+                    let (batch, client) = (Arc::clone(batch), Arc::clone(&p.client));
+                    async move {
+                        // Full retry budget inside `upsert`, no session rotation
+                        // (see put_pages' thin lane).
+                        client.upsert(&batch, deadline.into()).await.with_context(|| {
+                            format!("gc_enqueue_candidates(yb_thin_client) branch={branch_id} chunk_rows={}", batch.len())
+                        })?;
+                        Ok(())
+                    }
+                },
+            )
+            .await
     }
 
     /// Fetch up to `limit` due candidates (`floor < due_lsn <= cutoff`),

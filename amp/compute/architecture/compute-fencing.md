@@ -229,8 +229,13 @@ deadline when the write is submitted and decides what a refusal means:
   same lease and nobody else can have written the branch in between.
   Without this a write that merely outlasts its deadline — the supervisor
   renewing the lease while it is in flight — would fence an endpoint that
-  still holds its lease. The loop cannot spin: each resubmission carries a
-  strictly newer token.
+  still holds its lease. Each resubmission carries a strictly newer token,
+  but that alone does not end the loop: a write that needs longer than a
+  lease window (10–15 s) is refused under every token (#1737). So the
+  pageserver fences per chunk, not per batch
+  (`WriteFence::write_fenced_each`): each chunk (500 rows; 2,000 for `meta`) reads the
+  deadline when it is submitted and a refusal resubmits that chunk alone. A
+  flush grows with the endpoint (768 MiB at 64 vCPU); a chunk does not.
 - **No newer token** → the lease is over, and the process exits with the same
   code as the local check (`66`). The server's view wins even when the local
   clock thinks the token is still live, since the two disagree by up to the

@@ -521,8 +521,11 @@ impl WriteFence {
     /// deadline is read when the write is submitted, so a write that outlasts
     /// it is refused even when the supervisor renewed the lease while it was in
     /// flight; exiting then would fence an endpoint that still holds its lease
-    /// (#1333 is that cascade on the renewal side). The loop cannot spin: each
-    /// resubmission carries a strictly newer token than the last.
+    /// (#1333 is that cascade on the renewal side). Each resubmission carries a
+    /// strictly newer token than the last, but nothing bounds the loop: a write
+    /// that cannot land within one lease window is refused and resent for as
+    /// long as the lease keeps renewing. Keep each write small enough to land in
+    /// one, splitting a big one with [`Self::write_fenced_each`] (#1737).
     ///
     /// A refused batch may have been partly applied, since the leader judges
     /// each tablet on its own. Re-sending is safe because every write here is
@@ -573,6 +576,40 @@ impl WriteFence {
                 other => return other,
             }
         }
+    }
+
+    /// [`Self::write_fenced`] once per item, up to `parallelism` at a time, for a
+    /// write too big to land inside one lease window: each item reads the
+    /// deadline when it is submitted, and a refusal resubmits that item alone.
+    ///
+    /// Fenced as one write, a batch that needs longer than the window is refused
+    /// at its deadline and resubmitted whole under the renewal, which it cannot
+    /// meet either — forever, while the lease stays healthy (#1737). Per item,
+    /// no single write is bigger than one item.
+    ///
+    /// Returns the first error that is not a refusal; items still in flight are
+    /// dropped with it.
+    pub async fn write_fenced_each<I, E, Fut>(
+        &self,
+        what: &str,
+        is_fenced: impl Fn(&E) -> bool,
+        items: Vec<I>,
+        parallelism: usize,
+        attempt: impl Fn(&I, Option<WriteToken>) -> Fut,
+    ) -> Result<(), E>
+    where
+        Fut: std::future::Future<Output = Result<(), E>>,
+    {
+        use futures::{StreamExt, TryStreamExt};
+        let (is_fenced, attempt) = (&is_fenced, &attempt);
+        futures::stream::iter(items)
+            .map(|item| async move {
+                self.write_fenced(what, is_fenced, |deadline| attempt(&item, deadline))
+                    .await
+            })
+            .buffer_unordered(parallelism.max(1))
+            .try_collect::<()>()
+            .await
     }
 }
 
@@ -889,6 +926,73 @@ mod tests {
             .await
             .expect("the resubmission lands");
         assert_eq!(*seen.lock().unwrap(), vec![Some(first), Some(renewed)]);
+    }
+
+    /// The #1737 shape: a batch whose items are submitted over time, while the
+    /// supervisor renews the lease. Each item must carry the deadline current
+    /// when it is submitted, not the one the batch started under, and a refused
+    /// item is resubmitted alone — the items that landed are not sent again.
+    #[tokio::test]
+    async fn write_fenced_each_fences_every_item_on_its_own() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        let tokens: Vec<WriteToken> = (1..=5)
+            .map(|s| token_at(now + Duration::from_secs(s * 5)))
+            .collect();
+        fence.set_token(tokens[0]);
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let refused_once = std::sync::atomic::AtomicBool::new(false);
+        fence
+            .write_fenced_each("t", is_fenced, vec![0usize, 1, 2], 1, |&item, d| {
+                seen.lock().unwrap().push((item, d));
+                // Time passes while the item is written: the lease renews.
+                fence.set_token(tokens[seen.lock().unwrap().len()]);
+                let refuse =
+                    item == 1 && !refused_once.swap(true, std::sync::atomic::Ordering::Relaxed);
+                async move { if refuse { Err(TestErr::Fenced) } else { Ok(()) } }
+            })
+            .await
+            .expect("every item lands");
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                (0, Some(tokens[0])),
+                (1, Some(tokens[1])),
+                (1, Some(tokens[2])),
+                (2, Some(tokens[3])),
+            ],
+            "items 0 and 2 written once, item 1 resubmitted alone under the renewal"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_fenced_each_stops_at_the_first_other_error() {
+        let fence = WriteFence::new();
+        fence.arm();
+        fence.set_token(token_at(SystemTime::now() + Duration::from_secs(10)));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let err = fence
+            .write_fenced_each("t", is_fenced, vec![0usize, 1, 2], 1, |&item, _| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    if item == 1 {
+                        Err(TestErr::Other)
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err, TestErr::Other);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "not the fence's to retry, and nothing after it is sent"
+        );
     }
 
     #[tokio::test]

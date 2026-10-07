@@ -1002,7 +1002,10 @@ The first four are thin-client writes, so they also carry the token to the
 leader as `ignore_after_hybrid_time`, which refuses a row whose deadline has
 passed by the time the write is applied — the stalled writer the local check
 cannot see. A refusal is resubmitted under a renewed token if one has arrived,
-and otherwise exits like the local check (`WriteFence::write_fenced`). The rest
+and otherwise exits like the local check (`WriteFence::write_fenced`). Each
+chunk (500 rows; 2,000 for `meta`) is fenced on its own (`write_fenced_each`),
+so a refusal resends one chunk, not the flush: a whole flush can outgrow a lease
+window, and fenced whole it would be refused and resent forever (#1737). The rest
 are YSQL, which has no such field, so the local check is all that guards them.
 
 Past the deadline the process **exits** (code 66) rather than returning an

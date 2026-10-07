@@ -67,7 +67,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::StreamExt;
 use itertools::{Either, Itertools as _};
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::PayloadCompression;
@@ -1597,11 +1597,7 @@ impl PageStore {
         let (encoded, tally) = self.encode_payloads("pages", rows.iter().map(|r| &r.payload));
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        utils::write_fence::global()
-            .write_fenced("write to amp_storage.pages", server_fenced, |deadline| {
-                self.put_pages_thin(&p, branch_id, rows, &encoded, deadline.into())
-            })
-            .await?;
+        self.put_pages_thin(&p, branch_id, rows, &encoded).await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_pages", "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
@@ -1614,14 +1610,47 @@ impl PageStore {
         branch_id: BranchId,
         rows: &[Arc<PageRow>],
         encoded: &[Bytes],
-        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
+        let chunks = self.page_upsert_chunks(p, branch_id, rows, encoded)?;
+
+        // Fenced per chunk, not per flush (#1737). A flush grows with the
+        // endpoint (768 MiB at 64 vCPU) while the lease window does not, and
+        // fenced whole, a flush that needs longer than the window is refused at
+        // its deadline and resubmitted whole, forever. Upserts are idempotent,
+        // so a chunk resubmitted alone is safe.
+        utils::write_fence::global()
+            .write_fenced_each(
+                "write to amp_storage.pages",
+                server_fenced,
+                chunks,
+                parallelism,
+                |chunk, deadline| {
+                    upsert_page_chunk(
+                        Arc::clone(&p.client),
+                        Arc::clone(chunk),
+                        branch_id,
+                        deadline,
+                    )
+                },
+            )
+            .await
+    }
+
+    /// `rows` as the `amp_storage.pages` upserts [`Self::put_pages_thin`] sends,
+    /// [`ROWS_PER_INSERT`] to a chunk, each with the traced keys it carries.
+    fn page_upsert_chunks(
+        &self,
+        p: &ThinClientTables,
+        branch_id: BranchId,
+        rows: &[Arc<PageRow>],
+        encoded: &[Bytes],
+    ) -> Result<Vec<Arc<PageUpsertChunk>>> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pages = &p.pages;
-        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let branch_b = branch_id.to_bytes();
 
-        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        let mut chunks = Vec::new();
         for (chunk, enc_chunk) in rows
             .chunks(ROWS_PER_INSERT)
             .zip(encoded.chunks(ROWS_PER_INSERT))
@@ -1666,29 +1695,9 @@ impl PageStore {
             for (k, l) in &traced_in_chunk {
                 pageserver_api::write_trace::trace_stage("put_pages_in", k, *l);
             }
-            let client = Arc::clone(&p.client);
-            let chunk_rows = batch.len();
-            futs.push(Box::pin(async move {
-                // Full retry budget (inside `upsert`): this lane has no YSQL
-                // fallback, so it rides out transient failures itself. There is
-                // no per-attempt session rotation — the shim owns the session
-                // pool and the tserver does the routing. A terminal failure
-                // fails the flush.
-                client.upsert(&batch, deadline).await.with_context(|| {
-                    format!("put_pages(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}")
-                })?;
-                for (k, l) in &traced_in_chunk {
-                    pageserver_api::write_trace::trace_stage("put_pages_ok", k, *l);
-                }
-                Ok(())
-            }));
+            chunks.push(Arc::new((batch, traced_in_chunk)));
         }
-
-        futures::stream::iter(futs)
-            .buffer_unordered(parallelism)
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(())
+        Ok(chunks)
     }
 
     /// Per-key chain read. `key` must be a valid relation-page Key.
@@ -2018,12 +2027,7 @@ impl PageStore {
         let (encoded, tally) = self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        utils::write_fence::global()
-            .write_fenced(
-                "write to amp_storage.slru_pages",
-                server_fenced,
-                |deadline| self.put_slru_pages_thin(&p, branch_id, rows, &encoded, deadline.into()),
-            )
+        self.put_slru_pages_thin(&p, branch_id, rows, &encoded)
             .await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_slru_pages", "yb_thin_client"])
@@ -2204,14 +2208,13 @@ impl PageStore {
         branch_id: BranchId,
         rows: &[SlruPageRow],
         encoded: &[Bytes],
-        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let slru = &p.slru_pages;
         let parallelism = pageserver_api::config::scale_count(1, self.scale_factor);
         let branch_b = branch_id.to_bytes();
 
-        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        let mut chunks = Vec::new();
         for (chunk, enc_chunk) in rows
             .chunks(ROWS_PER_INSERT)
             .zip(encoded.chunks(ROWS_PER_INSERT))
@@ -2238,25 +2241,29 @@ impl PageStore {
                     ],
                 )?);
             }
-            let client = Arc::clone(&p.client);
-            let chunk_rows = batch.len();
-            futs.push(Box::pin(async move {
-                // Full retry budget inside `upsert`, no session rotation
-                // (see put_pages' thin lane).
-                client.upsert(&batch, deadline).await.with_context(|| {
-                    format!(
-                        "put_slru_pages(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}"
-                    )
-                })?;
-                Ok(())
-            }));
+            chunks.push(Arc::new(batch));
         }
 
-        futures::stream::iter(futs)
-            .buffer_unordered(parallelism)
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(())
+        // Fenced per chunk, not per batch, like `put_pages` (#1737).
+        utils::write_fence::global()
+            .write_fenced_each(
+                "write to amp_storage.slru_pages",
+                server_fenced,
+                chunks,
+                parallelism,
+                |batch, deadline| {
+                    let (batch, client) = (Arc::clone(batch), Arc::clone(&p.client));
+                    async move {
+                        // Full retry budget inside `upsert`, no session rotation
+                        // (see put_pages' thin lane).
+                        client.upsert(&batch, deadline.into()).await.with_context(|| {
+                            format!("put_slru_pages(yb_thin_client) branch={branch_id} chunk_rows={}", batch.len())
+                        })?;
+                        Ok(())
+                    }
+                },
+            )
+            .await
     }
 
     // ------------------- meta ---------------------------------------------
@@ -2270,11 +2277,7 @@ impl PageStore {
         let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
         let p = self.thinclient.current().await;
         let started = std::time::Instant::now();
-        utils::write_fence::global()
-            .write_fenced("write to amp_storage.meta", server_fenced, |deadline| {
-                self.put_meta_thin(&p, branch_id, rows, &encoded, deadline.into())
-            })
-            .await?;
+        self.put_meta_thin(&p, branch_id, rows, &encoded).await?;
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_meta", "yb_thin_client"])
             .observe(started.elapsed().as_secs_f64());
@@ -2296,14 +2299,13 @@ impl PageStore {
         branch_id: BranchId,
         rows: &[MetaRow],
         encoded: &[Bytes],
-        deadline: yb_thin_client::WriteDeadline,
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let meta = &p.meta;
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let branch_b = branch_id.to_bytes();
 
-        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        let mut chunks = Vec::new();
         for (chunk, enc_chunk) in rows
             .chunks(META_ROWS_PER_INSERT)
             .zip(encoded.chunks(META_ROWS_PER_INSERT))
@@ -2333,23 +2335,35 @@ impl PageStore {
                     &[("payload", BindValue::Bytes(enc.clone()))],
                 )?);
             }
-            let client = Arc::clone(&p.client);
-            let chunk_rows = batch.len();
-            futs.push(Box::pin(async move {
-                // Full retry budget inside `upsert`, no session rotation
-                // (see put_pages' thin lane).
-                client.upsert(&batch, deadline).await.with_context(|| {
-                    format!("put_meta(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}")
-                })?;
-                Ok(())
-            }));
+            chunks.push(Arc::new(batch));
         }
 
-        futures::stream::iter(futs)
-            .buffer_unordered(parallelism)
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(())
+        // Fenced per chunk, not per batch, like `put_pages` (#1737).
+        utils::write_fence::global()
+            .write_fenced_each(
+                "write to amp_storage.meta",
+                server_fenced,
+                chunks,
+                parallelism,
+                |batch, deadline| {
+                    let (batch, client) = (Arc::clone(batch), Arc::clone(&p.client));
+                    async move {
+                        // Full retry budget inside `upsert`, no session rotation
+                        // (see put_pages' thin lane).
+                        client
+                            .upsert(&batch, deadline.into())
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "put_meta(yb_thin_client) branch={branch_id} chunk_rows={}",
+                                    batch.len()
+                                )
+                            })?;
+                        Ok(())
+                    }
+                },
+            )
+            .await
     }
 
     /// Read the latest payload for `key` at LSN ≤ `target_lsn`.
@@ -3080,6 +3094,37 @@ pub(crate) fn server_fenced(e: &anyhow::Error) -> bool {
         .is_some_and(yb_thin_client::YbError::is_fenced)
 }
 
+/// One `amp_storage.pages` upsert, with the traced keys it carries.
+type PageUpsertChunk = (Vec<yb_thin_client::UpsertRow>, Vec<(Key, Lsn)>);
+
+/// Write one [`PageStore::put_pages_thin`] chunk under `deadline`, the lease
+/// deadline `WriteFence::write_fenced_each` hands it.
+async fn upsert_page_chunk(
+    client: Arc<yb_thin_client::TsClient>,
+    chunk: Arc<PageUpsertChunk>,
+    branch_id: BranchId,
+    deadline: Option<utils::write_fence::WriteToken>,
+) -> Result<()> {
+    let (batch, traced) = &*chunk;
+    // Full retry budget (inside `upsert`): this lane has no YSQL fallback, so
+    // it rides out transient failures itself. There is no per-attempt session
+    // rotation — the shim owns the session pool and the tserver does the
+    // routing. A terminal failure fails the flush.
+    client
+        .upsert(batch, deadline.into())
+        .await
+        .with_context(|| {
+            format!(
+                "put_pages(yb_thin_client) branch={branch_id} chunk_rows={}",
+                batch.len()
+            )
+        })?;
+    for (k, l) in traced {
+        pageserver_api::write_trace::trace_stage("put_pages_ok", k, *l);
+    }
+    Ok(())
+}
+
 /// Invariants that every chain returned by `read_chain` / `scan_range` /
 /// `read_slru_chain` / `scan_slru_range` must satisfy *for a single key*
 /// when iterated in the SQL's `lsn DESC, will_init DESC` order, i.e.
@@ -3717,12 +3762,14 @@ mod tests {
     /// The page write carries the lease to the leader. Rows submitted under a
     /// deadline that has passed are refused and none of them land, across the
     /// buckets — so tablets — one flush spreads them over; the refusal reads as
-    /// the fence, which `put_pages` resubmits or exits on; and the same rows
-    /// under a live deadline land.
+    /// the fence, which `write_fenced_each` resubmits or exits on; and the same
+    /// rows under a live deadline land.
     ///
-    /// The deadline is passed in rather than read from the process's fence, so
-    /// the write is reached with its lease already over: the stalled writer the
-    /// local check cannot stop.
+    /// Each chunk goes through `upsert_page_chunk`, the write `put_pages_thin`
+    /// fences, with the deadline passed in rather than read from the process's
+    /// fence, so the write is reached with its lease already over: the stalled
+    /// writer the local check cannot stop. Going through `put_pages_thin` itself
+    /// would exit the test on the refusal, as a lapsed lease should.
     #[tokio::test]
     async fn a_page_write_past_its_deadline_is_refused_and_none_land() {
         let (store, schema) = make_store("fence").await;
@@ -3744,14 +3791,26 @@ mod tests {
             .as_micros() as u64;
         let minute_us = 60_000_000;
 
-        let err = store
-            .put_pages_thin(
-                &p,
-                branch,
-                &rows,
-                &encoded,
-                yb_thin_client::WriteDeadline::EpochMicros(now_us - minute_us),
-            )
+        let chunks = store
+            .page_upsert_chunks(&p, branch, &rows, &encoded)
+            .unwrap();
+        let write_under = |deadline_us: u64| {
+            let (chunks, client) = (&chunks, &p.client);
+            async move {
+                for chunk in chunks {
+                    upsert_page_chunk(
+                        Arc::clone(client),
+                        Arc::clone(chunk),
+                        branch,
+                        Some(deadline_us),
+                    )
+                    .await?;
+                }
+                Ok::<(), anyhow::Error>(())
+            }
+        };
+
+        let err = write_under(now_us - minute_us)
             .await
             .expect_err("a page write under a lapsed deadline must be refused");
         assert!(
@@ -3769,14 +3828,7 @@ mod tests {
             );
         }
 
-        store
-            .put_pages_thin(
-                &p,
-                branch,
-                &rows,
-                &encoded,
-                yb_thin_client::WriteDeadline::EpochMicros(now_us + minute_us),
-            )
+        write_under(now_us + minute_us)
             .await
             .expect("a page write under a live deadline lands");
         for k in &keys {
