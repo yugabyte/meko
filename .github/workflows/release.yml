@@ -35,6 +35,7 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       release: ${{ steps.p.outputs.release }}
       rebuild: ${{ steps.p.outputs.rebuild }}
@@ -70,6 +71,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.release == 'true' && needs.plan.outputs.rebuild == 'false'
     runs-on: ubuntu-latest
+    # A hung step would otherwise hold the release concurrency group for GitHub's 6h default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,7 +81,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: sudo apt-get update && sudo apt-get install -y tmux git build-essential
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux git build-essential
       - run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.com"
@@ -262,6 +265,7 @@ jobs:
     # failure stops the release, so SHA256SUMS never loses an existing darwin tarball.
     if: always() && needs.build.result == 'success' && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # create the tag and release, upload assets, prune old releases
       id-token: write # attest build provenance
