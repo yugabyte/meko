@@ -22,6 +22,7 @@ export function CommandPalette({
   onNewProject,
   onNewSession,
   onMoveSession,
+  onRenameSession,
   onSettings,
 }: {
   projects: ProjectWithSessions[];
@@ -33,6 +34,8 @@ export function CommandPalette({
   onNewSession: (projectId: string) => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMoveSession: () => void;
+  /** Opens the Rename session dialog for the session on screen. */
+  onRenameSession: () => void;
   onSettings: () => void;
 }) {
   const [q, setQ] = useState('');
@@ -59,6 +62,15 @@ export function CommandPalette({
         hint: 'Action',
         keywords: 'change type stage move exploration explore plan quick code design pr review',
         run: onMoveSession,
+      });
+    }
+    if (currentSession) {
+      out.push({
+        id: 'rename-session',
+        label: `Rename ${currentSession.name}`,
+        hint: 'Action',
+        keywords: 'rename name title session',
+        run: onRenameSession,
       });
     }
     for (const p of projects) {
@@ -95,7 +107,7 @@ export function CommandPalette({
     out.push({ id: 'usage', label: 'Usage', hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: 'Settings', hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onRenameSession, onSettings]);
 
   const shown = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);

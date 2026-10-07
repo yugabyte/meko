@@ -289,6 +289,17 @@ Session states, shown with a dot in the rail and on each tab:
 - **Recovered** after a restart
 - **Exited**
 
+**Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
+**Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
+changes: the branch, worktree, tmux session and Meko agent id were named from it once, at the start,
+and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
+empty, longer than 100 characters or hold control characters. The project's activity notes the
+rename, the session's Meko conversation is retitled in the background (`conversation_update`, in
+the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
+keeps the old title), and Claude reads the new name in its system prompt
+the next time it's launched. Claude Code's own name for the conversation (`--name`, given at the
+first launch) stays. An archived session can't be renamed.
+
 ### Open project
 
 You open a project on a repo you already have, with a new datapack or one that exists (the
@@ -650,7 +661,7 @@ terminal**, which hides it for that start in this page.
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
-session or project home, or create a session. On Linux and Windows these use Ctrl, so the terminal
+session or project home, create a session, or move or rename the one on screen. On Linux and Windows these use Ctrl, so the terminal
 doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
 it has focus. To copy from the terminal, drag across the text: tmux selects it and sends it as
 OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) selects in the

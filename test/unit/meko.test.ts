@@ -123,6 +123,16 @@ describe('Meko client', () => {
     expect(meko.calls.filter((c) => c.name === 'datapack_describe').map((c) => c.args.conversation_id)).toEqual(['conv-1', 'conv-2']);
   });
 
+  it("retitles a conversation in its datapack, as the agent that owns it", async () => {
+    meko.tools.conversation_update = () => ({ status: 'updated' });
+    await client.retitleConversation('claude_code:x-1', 'd1', 'conv-9', 'New (Demo)');
+    expect(meko.calls.find((c) => c.name === 'conversation_update')?.args).toEqual({
+      agent_id: 'claude_code:x-1', datapack_id: 'd1', conversation_id: 'conv-9', title: 'New (Demo)',
+    });
+    meko.tools.conversation_update = () => ({ error: 'not_found' });
+    await expect(client.retitleConversation('claude_code:x-1', 'd1', 'conv-9', 'New (Demo)')).rejects.toThrow(/not_found/);
+  });
+
   it('uses the service conversation when Meko creates one', async () => {
     meko.tools.conversation_create = () => ({ id: 'conv-1' });
     meko.tools.datapack_list = () => [];

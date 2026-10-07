@@ -270,6 +270,18 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0 });
     expect((await app.inject({ url: `/api/sessions/${s.json().id}/changes` })).statusCode).toBe(401);
 
+    // Renaming: behind login and the origin check, the body checked.
+    const rename = (payload: unknown, headers: Record<string, string> = { cookie }) =>
+      app.inject({ method: 'PATCH', url: `/api/sessions/${s.json().id}`, headers, payload: payload as object });
+    expect((await rename({ name: 'Renamed' }, {})).statusCode).toBe(401);
+    expect((await rename({ name: 'Renamed' }, { cookie, origin: 'https://evil.example' })).statusCode).toBe(403);
+    expect((await rename({ name: ['x'] })).statusCode).toBe(400);
+    expect((await rename({ name: '' })).json().error).toBe('Give the session a name.');
+    expect((await app.inject({ method: 'PATCH', url: '/api/sessions/nope', headers: { cookie }, payload: { name: 'x' } })).statusCode).toBe(404);
+    const renamed = await rename({ name: 'Renamed' });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ name: 'Renamed', branch: 'ak/api-session' });
+
     // Review comments: create, edit and delete drafts; everything behind login.
     const url = `/api/sessions/${s.json().id}/comments`;
     const draft = { path: 'a.ts', side: 'new', line: 1, endLine: 1, excerpt: 'x', body: 'Why?' };

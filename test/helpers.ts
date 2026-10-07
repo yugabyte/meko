@@ -50,6 +50,7 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
     addMemory: rec('addMemory', undefined),
     putArtifact: rec('putArtifact', undefined),
     ensureConversation: rec('ensureConversation', 'conv-1'),
+    retitleConversation: rec('retitleConversation', undefined),
     ...overrides,
   };
   return base as unknown as MekoClient & { calls: typeof calls };

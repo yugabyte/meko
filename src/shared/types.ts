@@ -1244,6 +1244,14 @@ export interface UpdateProjectRequest {
   settings?: Partial<ProjectSettings>;
 }
 
+/** The longest session name a rename takes. */
+export const SESSION_NAME_MAX = 100;
+
+export interface UpdateSessionRequest {
+  /** The new name: trimmed, at most SESSION_NAME_MAX characters, no control characters. */
+  name?: string;
+}
+
 export interface AttachDatapackRequest {
   id: string;
   name: string;
@@ -1425,6 +1433,9 @@ export type TermServerMessage =
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
 //        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.
+// PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in AgentK and its Meko conversation; the
+//        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
+//        long name or one with control characters, 409 for an archived session)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
