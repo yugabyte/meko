@@ -40,7 +40,7 @@ func (s prefixedSink) Add(name, kind string, content []byte) error {
 // collectDiagnostics is the runLifecycle pre-teardown hook: before any cleanup
 // deletes the amp namespace, gather the k8s failure evidence (controller +
 // endpoint + co-located YB pod logs, events, describe of unhealthy pods) into the
-// test's persisting sink. Gated by report.collect_diagnostics (on_failure by
+// test's persisting sink. Gated by report.collect_diagnostics (always by
 // default) against the run's outcome — runErr is the lifecycle's phase error, and
 // a body may also have marked t failed directly. Best-effort throughout: any
 // collection error is logged and swallowed so teardown still runs.

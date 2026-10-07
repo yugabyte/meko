@@ -52,12 +52,9 @@ const (
 
 // DefaultCollectDiagnostics is the default report.collect_diagnostics mode:
 // gather k8s diagnostics (amp + backing pod logs, describes, events) before
-// teardown only for a run that needs explaining. Nobody reads a green run's
-// controller logs, and collecting them cost every passing test a pod-log pull
-// per pod at teardown and tens of megabytes of stored blobs per run.
-// Set report.collect_diagnostics=always to keep them for green runs too (a
-// deployment being bisected, say), or never to collect nothing at all.
-const DefaultCollectDiagnostics = "on_failure"
+// teardown for every run, green ones included. Set it to on_failure to skip
+// green runs, or never to collect nothing at all.
+const DefaultCollectDiagnostics = "always"
 
 // newT builds a test context. emit may be nil (no reporter).
 func newT(ctx context.Context, env Environment, seed *Seed, opts *Config, masker *Masker, result *Result, emit emitter) *T {

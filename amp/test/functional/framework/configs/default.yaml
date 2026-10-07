@@ -1432,12 +1432,10 @@ report:
   max_metrics_retained: 10000
   # When to collect Kubernetes diagnostics (controller/endpoint/YB pod logs —
   # current AND previous-instance — plus namespace events and pod describes)
-  # into the run's artifacts BEFORE teardown deletes the namespace. on_failure
-  # (default) collects only for a run that needs explaining — nobody reads a
-  # green run's controller logs, and collecting them costs a pod-log pull per
-  # pod at teardown and tens of megabytes of stored blobs per run. always
-  # collects every run; never disables it.
-  collect_diagnostics: on_failure
+  # into the run's artifacts BEFORE teardown deletes the namespace. always
+  # (default) collects every run; on_failure collects only for a run that
+  # needs explaining; never disables it.
+  collect_diagnostics: always
 
 # task.* keys are per-invocation `ampqa task <name>` arguments (task.host,
 # task.artifact, ...), not framework defaults, so they are not declared here

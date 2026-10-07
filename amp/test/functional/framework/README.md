@@ -380,7 +380,7 @@ flow (`suites/features/diagnostics.go`) and the `stress` combined-load
 scenario (`suites/stress/combined_load.go`) call it via the `runLifecycle`
 `onBeforeTeardown` hook — after the phases, before any teardown, on its own
 budget — and persist via `T.AttachBytes`. The policy is `report.
-collect_diagnostics` = `on_failure` (default) / `always` / `never`
+collect_diagnostics` = `always` (default) / `on_failure` / `never`
 (`diag.ShouldCollect`). Known gap: the core-level generic `env.Collect`
 (`core/lifecycle.go`) currently discards, and the features *external-backing*
 YB namespace isn't yet threaded to the hook — the amp namespace

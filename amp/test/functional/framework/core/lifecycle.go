@@ -402,12 +402,11 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 	// bounded deadline, independent of the test context, so collection still
 	// happens after a test timeout.
 	//
-	// What the env gathers is ATTACHED to the result when the run needs
-	// explaining. It used to be dropped into a discard sink: the env did the work
+	// What the env gathers is ATTACHED to the result. It used to be dropped into a discard sink: the env did the work
 	// — controller logs, pod logs, events — and the bytes went nowhere, so a test
 	// that failed outside the amp-feature flow (which collects for itself) landed
 	// with a single error line and no evidence at all. Gated by
-	// report.collect_diagnostics so a green run does not haul logs per test.
+	// report.collect_diagnostics.
 	// Drain before Collect: both run on their own deadlines, and the series are
 	// result data (metrics), not attachments. A test that sampled its own backing
 	// still drains — to stop the sampler — but its series are discarded, because
