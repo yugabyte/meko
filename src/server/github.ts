@@ -49,9 +49,12 @@ export async function findPr(worktree: string, branch: string, since: number, an
   return pickPr(JSON.parse(out || '[]') as PrRef[], since, anyOpen);
 }
 
-/** PR <number> of the repo gh works on from <cwd>, as findPr reports one. */
-export async function prByNumber(cwd: string, number: number): Promise<PrRef> {
-  return JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--json', 'number,url,state,createdAt,isCrossRepository,baseRefName')) as PrRef;
+/** `--repo <owner/name>` when <repo> is given, so gh reads that repo's PR rather than its default repo for the folder. */
+const repoArg = (repo?: string | null): string[] => (repo ? ['--repo', repo] : []);
+
+/** PR <number> of <repo> (default: the repo gh works on from <cwd>), as findPr reports one. */
+export async function prByNumber(cwd: string, number: number, repo?: string | null): Promise<PrRef> {
+  return JSON.parse(await gh(cwd, 'pr', 'view', String(number), ...repoArg(repo), '--json', 'number,url,state,createdAt,isCrossRepository,baseRefName')) as PrRef;
 }
 
 /**
@@ -130,8 +133,8 @@ export interface PrStatus {
   headRefOid: string;
 }
 
-export async function prStatus(worktree: string, number: number): Promise<PrStatus> {
-  const out = await gh(worktree, 'pr', 'view', String(number), '--json',
+export async function prStatus(worktree: string, number: number, repo?: string | null): Promise<PrStatus> {
+  const out = await gh(worktree, 'pr', 'view', String(number), ...repoArg(repo), '--json',
     'number,url,title,body,state,reviews,comments,statusCheckRollup,reviewDecision,mergeable,mergeStateStatus,headRefOid');
   return JSON.parse(out) as PrStatus;
 }
@@ -226,14 +229,14 @@ export function isTrustedAuthor(item: { author: Author | null; authorAssociation
  * Logins of the bots (GitHub Apps) that reviewed a PR. `gh pr view` doesn't say which authors
  * are bots; the REST API does.
  */
-export async function botLogins(worktree: string, number: number): Promise<string[]> {
-  const out = await gh(worktree, 'api', '--paginate', `repos/{owner}/{repo}/pulls/${number}/reviews?per_page=100`,
+export async function botLogins(worktree: string, number: number, repo?: string | null): Promise<string[]> {
+  const out = await gh(worktree, 'api', '--paginate', `repos/${repo ?? '{owner}/{repo}'}/pulls/${number}/reviews?per_page=100`,
     '--jq', '.[] | select(.user.type == "Bot") | .user.login');
   return out.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
-export async function comment(worktree: string, number: number, body: string): Promise<void> {
-  await gh(worktree, 'pr', 'comment', String(number), '--body', body);
+export async function comment(worktree: string, number: number, body: string, repo?: string | null): Promise<void> {
+  await gh(worktree, 'pr', 'comment', String(number), ...repoArg(repo), '--body', body);
 }
 
 export async function resolveMergeMethod(worktree: string, method: MergeMethod): Promise<'squash' | 'merge' | 'rebase'> {
@@ -311,6 +314,7 @@ export interface PrInfo {
   baseRefName: string;
   headRefOid: string;
   createdAt: string;
+  updatedAt?: string;
   /** The head branch, in `headRepo`. */
   headRefName?: string;
   /** `owner/name` of the repo the head branch is in (a fork's, for a PR from a fork); null when GitHub doesn't say (the fork was deleted). */
@@ -333,11 +337,11 @@ function headRepoOf(r: HeadFields): string | null {
 /** A PR of any repo, by its `owner/name` and number. */
 export async function prInfo(cwd: string, repo: string, number: number): Promise<PrInfo> {
   const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--repo', repo, '--json',
-    'number,url,title,body,author,state,baseRefName,headRefOid,createdAt,headRefName,headRepository,headRepositoryOwner,isCrossRepository')) as
+    'number,url,title,body,author,state,baseRefName,headRefOid,createdAt,updatedAt,headRefName,headRepository,headRepositoryOwner,isCrossRepository')) as
     Omit<PrInfo, 'author' | 'headRepo'> & HeadFields & { author: Author | null };
   return {
     number: r.number, url: r.url, title: r.title, body: r.body, author: r.author?.login ?? '', state: r.state, baseRefName: r.baseRefName,
-    headRefOid: r.headRefOid, createdAt: r.createdAt, headRefName: r.headRefName, headRepo: headRepoOf(r), isCrossRepository: r.isCrossRepository,
+    headRefOid: r.headRefOid, createdAt: r.createdAt, updatedAt: r.updatedAt, headRefName: r.headRefName, headRepo: headRepoOf(r), isCrossRepository: r.isCrossRepository,
   };
 }
 

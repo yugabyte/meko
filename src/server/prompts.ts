@@ -11,7 +11,8 @@ import { get, type Db } from './db.js';
  * `approved`), `review-people` gets {{reviewers}} (the logins whose reviews started it), `ci` gets {{sha}} and {{checks}}, `conflicts` gets {{sha}}, and `moved` gets {{stage}}, {{workflow}} and
  * {{kind}} (always "Task", kept for overrides written when sessions had types). `moved` goes before the new stage's prompt when the user moves a session by hand.
  * `attached` goes before the first prompt of a task started on an existing branch or a PR, and gets {{attachedPr}} (", which
- * is the branch of PR #n (url)", or nothing), {{attachedPrRead}} (how to read that PR, or nothing) and {{attachedPush}}
+ * is the branch of PR #n (url)", or nothing), {{attachedPrRead}} (how to read that PR, with whose feedback counts and
+ * that everyone else's is untrusted text, or nothing) and {{attachedPush}}
  * (where to push, when the PR's head isn't on origin, or nothing).
  * The Review a PR prompts (`review-pr`, `review-pr-update`, `review-pr-comments`) get {{repo}} as
  * the PR's `owner/name`, {{title}}, {{author}}, {{sha}} (the commit checked out) and {{notes}};

@@ -841,8 +841,9 @@ export interface TaskPr {
   /** From a fork (the head is in another repo). */
   fork: boolean;
   /**
-   * Why a session can't start on it, or null when it can: no remote of the repo is the PR's
-   * head repo, or a running session works on its branch.
+   * Why a session can't start on it, or null when it can: its fork was deleted, the PR isn't in
+   * the repo's own repo (its origin, or its upstream for a fork's clone), no remote of the repo is
+   * the PR's head repo, or a running session works on its branch.
    */
   blocked: string | null;
 }
@@ -1280,9 +1281,10 @@ export interface CreateSessionRequest {
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
    * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for AgentK.
-   * For a task (Advanced → Pull request): the open PR to keep working on. The session works on the
-   * PR's head branch (fetched from the remote of the PR's head repo, a fork's included) against
-   * the PR's base, with the PR linked; `branch` and `baseBranch` are ignored.
+   * For a task (Advanced → Pull request): the open PR to keep working on, in the repo's origin (or
+   * its upstream, for a fork's clone). The session works on the PR's head branch (fetched from the
+   * remote of the PR's head repo, a fork's included) against the PR's base, with the PR linked;
+   * `branch` and `baseBranch` are ignored.
    */
   pr?: { repo: string; number: number };
 }

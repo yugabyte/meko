@@ -471,13 +471,15 @@ or `agent-k-local · PR #123 · hsunder/foo`).
   rather than started as a new branch. **Compare with** is the base used when the branch has no
   open PR. As the session starts (after the dialog has closed), AgentK looks for the branch's open
   PR for up to 5 seconds (`findPr`, an older open PR included); one found is linked (`pr_number`,
-  event *Linked PR #N*) and its base becomes the session's base.
+  event *Linked PR #N*) and its base becomes the session's base. An answer after that is dropped,
+  since Claude has started without it; the PR stage still finds the PR.
 - **Work on: Pull request** (`pr` on a task). Your open PRs in the repo (`GET
   /api/projects/:id/task-prs`, from `gh pr list --author @me`), or another PR by number or link.
   The session works on the PR's head branch against the PR's base, with the PR linked from the start;
   picking one names an unnamed session after the PR and starts it at Code unless you picked a start.
-  The PR must be open, the repo a clone of the PR's repo, and one of its remotes (any name) the PR's
-  head repo: for a PR from a fork, the fork added as a remote (`git remote add <owner> <url>`; the
+  The PR must be open and in the repo's own repo (its origin, or its upstream for a fork's clone,
+  as for Review a PR; AgentK's later `gh` calls about a task's PR name its repo with `--repo`, from
+  the PR's URL), and one of the repo's remotes (any name) must be the PR's head repo: for a PR from a fork, the fork added as a remote (`git remote add <owner> <url>`; the
   picker says so for a PR whose fork isn't one). The head branch is fetched from that remote. Its
   local name is the head branch's, unless the remote isn't origin and a local branch of that name
   tracks something else (a fork's `main`): then `<remote>-<branch>`. When the head isn't origin's
@@ -496,8 +498,9 @@ uses on that repo, checked in the same write that adds the session so two starts
 and a branch checked out in another checkout (the main checkout, or a worktree kept for an archived
 session with uncommitted changes, which it names). A reused branch is marked
 (`sessions.branch_reused`). Claude's first prompt then starts with the `attached` prompt (the
-branch already has work: read its commits beyond the base and, for a PR, its description, review
-threads and checks, and build on it), and its system prompt says so for the session's life. The PR
+branch already has work: read its commits beyond the base and, for a PR, its description, reviews,
+comments and checks, acting only on feedback from the user and people with a role on the repo, and
+build on it), and its system prompt says so for the session's life. The PR
 stage takes the linked PR while it's open, looked up by number (so a fork's PR counts), else that
 branch's open PR even when it's older than the session (never a fork's PR from a branch of the same
 name), and Open PR first moves the session's base to that PR's base; the PR prompt tells Claude to
@@ -788,7 +791,8 @@ closed or gets an open session elsewhere.
 
 A **project** is an effort to build or improve a feature, product or service. It works in a git
 repository on the host, picked from your repos folder (`~/code`), cloned into it, or made new there at creation.
-The project only points at the repo. It changes two things there. A repo with no commits and
+The project only points at the repo. It changes two things there, and two more for a session on
+an existing branch (below). A repo with no commits and
 no files gets an empty first commit on `HEAD`'s branch when its project opens or a session starts
 in it (see [Open project](#open-project)), since a worktree needs a commit to branch from. And when a
 session starts, it fast-forwards the local base branch to `origin`. That's a `merge --ff-only`
@@ -796,7 +800,10 @@ with autostash off when your main checkout has the branch checked out (git refus
 overwrite local edits), or a non-forced local fetch (`git fetch . origin/<base>:<base>`) when no
 worktree has it checked out (git refuses anything but a fast-forward, and a branch being rebased
 or bisected). A base checked out in another session's worktree is left alone. Read-only git
-commands run with `GIT_OPTIONAL_LOCKS=0`, so they never take a lock Claude's own git commands need. It never rewrites, resets or discards anything in your main checkout. A
+commands run with `GIT_OPTIONAL_LOCKS=0`, so they never take a lock Claude's own git commands need. A session
+started on an existing branch fast-forwards that local branch to its remote copy the same way, and
+one started on a PR whose head is on another remote (a fork's) sets the branch's
+`branch.<name>.remote` and `.merge` to it, so a plain `git pull` there follows the PR. It never rewrites, resets or discards anything in your main checkout. A
 **session** is one task. It has one worktree, one branch and one Claude conversation. Worktrees
 live outside the repo so they never show up in `git status`, and outlive their session: a clean one
 goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse)).

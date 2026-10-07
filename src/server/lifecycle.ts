@@ -18,6 +18,15 @@ import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
 
+/**
+ * The `owner/name` a session's PR is in, from its URL, for gh's `--repo`: the clone's default repo
+ * for gh isn't always the PR's (a fork's clone, or a PR picked in the upstream). Undefined when the
+ * URL isn't a github.com PR's, and gh then uses its default.
+ */
+function prRepoOf(url: string | null): string | undefined {
+  return github.prFromUrl(url)?.repo;
+}
+
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
 /** How long a requested merge may leave the PR open (a merge queue) before the session goes back to Review. */
@@ -547,7 +556,7 @@ export class Lifecycle {
     const pr = await this.branchPr(row, true).catch(() => null);
     let adopt = false;
     if (pr?.state === 'OPEN') {
-      const st = await github.prStatus(cwd, pr.number).catch(() => null);
+      const st = await github.prStatus(cwd, pr.number, prRepoOf(pr.url)).catch(() => null);
       const repo = sessionRepo(this.db, row);
       adopt = !!st && !!repo && !(await lacksLocalCommits(repo, row.branch, st))
         && (!this.sessions.ownsWorktree(row) || (await uncommittedCount(row.worktree_path)) === 0);
@@ -722,12 +731,12 @@ export class Lifecycle {
 
   /**
    * The branch's PR: the one linked when the session started on an existing branch or a PR, while
-   * it's open (found by number, so a fork's PR, or one whose head branch has another name, counts),
+   * it's open (found by number in the PR's own repo, so a fork's PR, or one whose head branch has another name, counts),
    * else the one findPr finds by the branch's name (<anyOpen> as there).
    */
   private async branchPr(row: SessionRow, anyOpen: boolean, cwd = this.ghCwd(row)): Promise<github.PrRef | null> {
     if (row.branch_reused && row.pr_number) {
-      const linked = await github.prByNumber(cwd, row.pr_number).catch(() => null);
+      const linked = await github.prByNumber(cwd, row.pr_number, prRepoOf(row.pr_url)).catch(() => null);
       if (linked?.state === 'OPEN') return linked;
     }
     return github.findPr(cwd, row.branch, row.created_at, anyOpen);
@@ -825,7 +834,7 @@ export class Lifecycle {
     const p = projectRow(this.db, before.project_id);
     if (!p) return;
     this.lastPoll.set(id, Date.now());
-    const st = await github.prStatus(this.ghCwd(before), before.pr_number);
+    const st = await github.prStatus(this.ghCwd(before), before.pr_number, prRepoOf(before.pr_url));
     const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(sessionRepo(this.db, before) ?? p.repo_path, before.branch, st));
     // Merge & Close ends in an archive, which would keep a dirty worktree on the branch.
     const uncommitted = this.sessions.ownsWorktree(before) ? await uncommittedCount(before.worktree_path) : 0;
@@ -944,7 +953,7 @@ export class Lifecycle {
   /** The PR's bot reviewers, or null (retry at the next poll) when GitHub can't say. */
   private async botLogins(row: SessionRow, pr: number): Promise<string[] | null> {
     try {
-      return await github.botLogins(this.ghCwd(row), pr);
+      return await github.botLogins(this.ghCwd(row), pr, prRepoOf(row.pr_url));
     } catch (e) {
       this.warn(row.id, 'Looking up bot reviewers', e);
       return null;
@@ -1107,7 +1116,7 @@ export class Lifecycle {
     if (force && row.review_state !== 'refused') throw new HttpError(409, 'Force review is only for PRs AgentK declined.');
     const pr = row.pr_number;
     await this.serial(row.id, async () => {
-      await github.comment(row.worktree_path, pr, force ? '/agentk review force' : '/agentk review');
+      await github.comment(row.worktree_path, pr, force ? '/agentk review force' : '/agentk review', prRepoOf(row.pr_url));
       this.sessions.update(row.id, { review_state: 'waiting', agentk_seen: 1 });
       this.sessions.event(row.id, 'review', force ? 'Forced an AgentK review' : 'Requested another AgentK review');
       this.lastPoll.delete(row.id);
