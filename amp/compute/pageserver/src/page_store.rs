@@ -782,20 +782,38 @@ trait RowCells {
 
 impl RowCells for yb_thin_client::Row {
     fn cell_i64(&self, i: usize) -> Result<i64> {
-        Ok(self[i].as_i64()?)
+        Ok(row_cell(self, i)?.as_i64()?)
     }
     fn cell_bool(&self, i: usize) -> Result<bool> {
-        Ok(self[i].as_bool()?)
+        Ok(row_cell(self, i)?.as_bool()?)
     }
     fn cell_bytes(&self, i: usize) -> Result<Bytes> {
-        Ok(self[i].as_bytes()?.clone())
+        Ok(row_cell(self, i)?.as_bytes()?.clone())
     }
 }
 
-/// The bound key prefix selecting ONE page's chain in `pages`: all eight
-/// leading key columns, so the rows it spans are exactly that page's versions
-/// and the read is a single clustered seek on one tablet. Callers append the
-/// `lsn` bound, targets and limit that decide how much of the chain they want.
+/// Cell `i` of `row`; a row with fewer cells than the read targeted is an error, not a panic.
+fn row_cell(row: &yb_thin_client::Row, i: usize) -> Result<&yb_thin_client::Value> {
+    row.get(i).with_context(|| format!("row has {} cells, no cell {i}", row.len()))
+}
+
+/// Columns every chain read fetches, set by [`page_chain_read`] and [`slru_segment_read`]; rows
+/// are read back at the `CHAIN_*` positions.
+const CHAIN_TARGETS: [&str; 5] = ["lsn", "is_image", "will_init", "payload", "blknum"];
+const CHAIN_LSN: usize = 0;
+const CHAIN_IS_IMAGE: usize = 1;
+const CHAIN_WILL_INIT: usize = 2;
+const CHAIN_PAYLOAD: usize = 3;
+const CHAIN_BLKNUM: usize = 4;
+/// Columns a `meta` read fetches, and where each sits in the row.
+const META_TARGETS: [&str; 2] = ["lsn", "payload"];
+const META_LSN: usize = 0;
+const META_PAYLOAD: usize = 1;
+
+/// The bound key prefix selecting ONE page's chain in `pages`: all eight leading key columns, so
+/// the rows it spans are exactly that page's versions and the read is a single clustered seek on
+/// one tablet, fetching [`CHAIN_TARGETS`]. Callers append the `lsn` bound and limit that decide
+/// how much of the chain they want.
 ///
 /// Shared by [`PageStore::read_chain_thin`] and
 /// [`PageStore::scan_one_fork_thin`] rather than restated: the bind ORDER is
@@ -822,12 +840,13 @@ fn page_chain_read(
             BindValue::I16(fork),
             BindValue::U32(blk),
         ],
-    )?)
+    )?
+    .targets(pages, &CHAIN_TARGETS)?)
 }
 
-/// The shared prefix of every thin `slru_pages` read: `branch` is the
-/// whole hash key; version/kind/segno are range columns, bound as equality
-/// scan conds. Callers append their own `blknum`/`lsn` conds and targets.
+/// The shared prefix of every thin `slru_pages` read, fetching [`CHAIN_TARGETS`]: `branch` is the
+/// whole hash key; version/kind/segno are range columns, bound as equality scan conds. Callers
+/// append their own `blknum`/`lsn` conds.
 fn slru_segment_read(
     slru: &yb_thin_client::TableHandle,
     branch: &bytes::Bytes,
@@ -839,7 +858,8 @@ fn slru_segment_read(
         RangeRead::new(slru, vec![BindValue::Bytes(branch.clone())])?
             .cond(slru, "version", CondOp::Eq, BindValue::I16(DEFAULT_VERSION))?
             .cond(slru, "kind", CondOp::Eq, BindValue::I16(kind_i))?
-            .cond(slru, "segno", CondOp::Eq, BindValue::U32(segno))?,
+            .cond(slru, "segno", CondOp::Eq, BindValue::U32(segno))?
+            .targets(slru, &CHAIN_TARGETS)?,
     )
 }
 
@@ -872,12 +892,11 @@ async fn fetch_chain_rows_thin(
     client: &yb_thin_client::TsClient,
     table: &Arc<yb_thin_client::TableHandle>,
     read: yb_thin_client::RangeRead,
-    will_init_idx: usize,
 ) -> Result<Vec<yb_thin_client::Row>> {
     client
         .read_scan(table, &read, Vec::new, |chain, rows| -> anyhow::Result<bool> {
             for row in rows {
-                let anchor = row.cell_bool(will_init_idx)?;
+                let anchor = row.cell_bool(CHAIN_WILL_INIT)?;
                 chain.push(row);
                 if anchor {
                     return Ok(true);
@@ -992,30 +1011,27 @@ where
     })
 }
 
-/// Decode the raw rows of a single-key chain fetch (targets
-/// `[.., lsn, is_image, will_init, payload]` starting at `off`) into
-/// [`PageRow`]s for `key`. The collectors hand them over in PK order, cut at the base, so a row
-/// out of that order is a decode bug and fails the read.
+/// Decode the raw rows of a chain fetch into [`PageRow`]s for `key`. The collectors hand them over
+/// in PK order, cut at the base, so a row out of that order is a decode bug and fails the read.
 fn assemble_page_chain<R: RowCells>(
     key: Key,
     raw: Vec<R>,
-    off: usize,
     where_: &str,
 ) -> Result<Vec<Arc<PageRow>>> {
     let mut last_row = None;
     raw.into_iter()
         .map(|row| {
-            let lsn = Lsn(row.cell_i64(off)? as u64);
-            let will_init = row.cell_bool(off + 2)?;
+            let lsn = Lsn(row.cell_i64(CHAIN_LSN)? as u64);
+            let will_init = row.cell_bool(CHAIN_WILL_INIT)?;
             check_chain_step(&mut last_row, lsn, will_init, || {
                 format!("pages key={key} ({where_})")
             })?;
             Ok(Arc::new(PageRow {
                 key,
                 lsn,
-                is_image: row.cell_bool(off + 1)?,
+                is_image: row.cell_bool(CHAIN_IS_IMAGE)?,
                 will_init,
-                payload: decode_payload(&row.cell_bytes(off + 3)?, || {
+                payload: decode_payload(&row.cell_bytes(CHAIN_PAYLOAD)?, || {
                     format!("pages row key={key} lsn={lsn} ({where_})")
                 })?,
             }))
@@ -1045,14 +1061,13 @@ fn assemble_slru_chain<R: RowCells>(
     segno: u32,
     blknum: u32,
     raw: Vec<R>,
-    off: usize,
     where_: &str,
 ) -> Result<Vec<SlruPageRow>> {
     let mut last_row = None;
     raw.into_iter()
         .map(|row| {
-            let lsn = Lsn(row.cell_i64(off)? as u64);
-            let will_init = row.cell_bool(off + 2)?;
+            let lsn = Lsn(row.cell_i64(CHAIN_LSN)? as u64);
+            let will_init = row.cell_bool(CHAIN_WILL_INIT)?;
             check_chain_step(&mut last_row, lsn, will_init, || {
                 format!("slru_pages kind={kind:?} segno={segno} blknum={blknum} ({where_})")
             })?;
@@ -1061,9 +1076,9 @@ fn assemble_slru_chain<R: RowCells>(
                 segno,
                 blknum,
                 lsn,
-                is_image: row.cell_bool(off + 1)?,
+                is_image: row.cell_bool(CHAIN_IS_IMAGE)?,
                 will_init,
-                payload: decode_payload(&row.cell_bytes(off + 3)?, || {
+                payload: decode_payload(&row.cell_bytes(CHAIN_PAYLOAD)?, || {
                     format!(
                         "slru_pages row kind={kind:?} segno={segno} \
                              blknum={blknum} lsn={lsn} ({where_})"
@@ -1074,26 +1089,24 @@ fn assemble_slru_chain<R: RowCells>(
         .collect()
 }
 
-/// Feed one fetched page of a multi-block scan (targets
-/// `[blknum, lsn, is_image, will_init, payload]`) into the per-block
-/// collector. Used by the direct-RPC scan loops.
+/// Feed one fetched page of a multi-block scan into the per-block collector. Used by the
+/// direct-RPC scan loops.
 fn feed_scan_rows<R: RowCells>(collector: &mut ChainCollector<R>, rows: Vec<R>) -> Result<()> {
     for row in rows {
-        let blk = row.cell_i64(0)?;
-        let will_init = row.cell_bool(3)?;
+        let blk = row.cell_i64(CHAIN_BLKNUM)?;
+        let will_init = row.cell_bool(CHAIN_WILL_INIT)?;
         collector.push(blk, will_init, row)?;
     }
     Ok(())
 }
 
-/// Decode a `meta` row fetched with targets `[lsn, payload]` for `key`.
-/// Used by the direct-RPC lane.
-fn decode_meta_row<R: RowCells>(key: &[u8], r: &R) -> Result<MetaRow> {
-    let lsn = Lsn(r.cell_i64(0)? as u64);
+/// Decode a `meta` row fetched with [`META_TARGETS`] for `key`. Used by the direct-RPC lane.
+fn decode_meta_row<R: RowCells>(key: &[u8], row: &R) -> Result<MetaRow> {
+    let lsn = Lsn(row.cell_i64(META_LSN)? as u64);
     Ok(MetaRow {
         key: Bytes::copy_from_slice(key),
         lsn,
-        payload: decode_payload(&r.cell_bytes(1)?, || {
+        payload: decode_payload(&row.cell_bytes(META_PAYLOAD)?, || {
             format!("meta row key={} lsn={lsn}", hex::encode(key))
         })?,
     })
@@ -1748,16 +1761,15 @@ impl PageStore {
         let pages = &p.pages;
         let read = page_chain_read(pages, &branch_id.to_bytes(), sp, db, rel, fork, blk)?
             .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
-            .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
             .limit(self.page_chain_read_limit);
         let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
-        let raw = fetch_chain_rows_thin(&p.client, pages, read, 2)
+        let raw = fetch_chain_rows_thin(&p.client, pages, read)
             .await
             .with_context(|| {
                 format!("thin-lane chain read for branch={branch_id} key={key} lsn<={target}")
             })?;
 
-        assemble_page_chain(key, raw, 0, "read_chain_thin")
+        assemble_page_chain(key, raw, "read_chain_thin")
     }
 
     /// One bound single-block chain read per entry of `blks`, all riding one
@@ -1796,10 +1808,6 @@ impl PageStore {
                     blk,
                     page_chain_read(pages, &branch_b, sp, db, rel, fork, blk)?
                         .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
-                        .targets(
-                            pages,
-                            &["blknum", "lsn", "is_image", "will_init", "payload"],
-                        )?
                         .limit(self.page_chain_read_limit),
                 ))
             })
@@ -1818,7 +1826,7 @@ impl PageStore {
         let mut by_key = HashMap::with_capacity(chains.len());
         for (&(blk, _), raw) in block_reads.iter().zip(chains) {
             let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
-            let chain = assemble_page_chain(key, raw, 1, read.caller_label())?;
+            let chain = assemble_page_chain(key, raw, read.caller_label())?;
             if !chain.is_empty() {
                 by_key.insert(key, chain);
             }
@@ -2080,9 +2088,8 @@ impl PageStore {
                 BindValue::I16(slru_blknum(blknum)?),
             )?
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
-            .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
             .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
-        let raw = fetch_chain_rows_thin(&p.client, slru, read, 2)
+        let raw = fetch_chain_rows_thin(&p.client, slru, read)
             .await
             .with_context(|| {
                 format!(
@@ -2091,7 +2098,7 @@ impl PageStore {
                 )
             })?;
 
-        assemble_slru_chain(kind, segno, blknum, raw, 0, "read_slru_chain_thin")
+        assemble_slru_chain(kind, segno, blknum, raw, "read_slru_chain_thin")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2126,7 +2133,6 @@ impl PageStore {
                             BindValue::I16(slru_blknum(blk)?),
                         )?
                         .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
-                        .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
                         .limit(mode.page_rows()),
                 ))
             })
@@ -2144,7 +2150,7 @@ impl PageStore {
 
         let mut by_block = HashMap::with_capacity(chains.len());
         for (&(blk, _), raw) in block_reads.iter().zip(chains) {
-            let chain = assemble_slru_chain(kind, segno, blk, raw, 1, "scan_slru_range_thin")?;
+            let chain = assemble_slru_chain(kind, segno, blk, raw, "scan_slru_range_thin")?;
             if !chain.is_empty() {
                 by_block.insert(blk, chain);
             }
@@ -2404,7 +2410,7 @@ impl PageStore {
                 BindValue::Bytes(Bytes::copy_from_slice(key)),
             )?
             .cond(meta, "lsn", CondOp::Le, BindValue::I64(target_lsn.0 as i64))?
-            .targets(meta, &["lsn", "payload"])?
+            .targets(meta, &META_TARGETS)?
             .limit(1);
         // The meta PK clusters `lsn DESC`, so the forward scan's first row is the
         // newest version at or below the target — exactly what we want. `on_page`
@@ -3237,38 +3243,57 @@ mod chain_collector_tests {
 }
 
 #[cfg(test)]
+mod column_layout_tests {
+    //! The column positions rows are read back by must name the columns each read fetches.
+    use super::*;
+
+    #[test]
+    fn positions_name_their_columns() {
+        assert_eq!(CHAIN_TARGETS[CHAIN_LSN], "lsn");
+        assert_eq!(CHAIN_TARGETS[CHAIN_IS_IMAGE], "is_image");
+        assert_eq!(CHAIN_TARGETS[CHAIN_WILL_INIT], "will_init");
+        assert_eq!(CHAIN_TARGETS[CHAIN_PAYLOAD], "payload");
+        assert_eq!(CHAIN_TARGETS[CHAIN_BLKNUM], "blknum");
+        assert_eq!(META_TARGETS[META_LSN], "lsn");
+        assert_eq!(META_TARGETS[META_PAYLOAD], "payload");
+    }
+}
+
+#[cfg(test)]
 mod assemble_chain_tests {
     //! `assemble_page_chain` / `assemble_slru_chain` reject a chain whose decoded rows are out of
     //! `lsn DESC, will_init DESC` order.
     use super::test_support::page_key;
     use super::*;
 
-    /// `(lsn, is_image, will_init)` with a raw-codec payload, at offset 0.
+    /// `(lsn, is_image, will_init)` with a raw-codec payload, laid out as [`CHAIN_TARGETS`].
     struct Cells(i64, bool, bool);
 
     impl RowCells for Cells {
         fn cell_i64(&self, i: usize) -> Result<i64> {
-            anyhow::ensure!(i == 0, "cell {i} is not an i64");
+            anyhow::ensure!(i == CHAIN_LSN, "cell {i} is not the lsn");
             Ok(self.0)
         }
         fn cell_bool(&self, i: usize) -> Result<bool> {
             match i {
-                1 => Ok(self.1),
-                2 => Ok(self.2),
+                CHAIN_IS_IMAGE => Ok(self.1),
+                CHAIN_WILL_INIT => Ok(self.2),
                 _ => anyhow::bail!("cell {i} is not a bool"),
             }
         }
-        fn cell_bytes(&self, _i: usize) -> Result<Bytes> {
+        fn cell_bytes(&self, i: usize) -> Result<Bytes> {
+            anyhow::ensure!(i == CHAIN_PAYLOAD, "cell {i} is not the payload");
             Ok(Bytes::from_static(b"\x00p"))
         }
     }
 
     fn page(rows: Vec<Cells>) -> Result<Vec<Arc<PageRow>>> {
-        assemble_page_chain(Key::from_slice(&page_key(1663, 5, 16384, 0, 1)), rows, 0, "test")
+        let key = Key::from_slice(&page_key(1663, 5, 16384, 0, 1));
+        assemble_page_chain(key, rows, "test")
     }
 
     fn slru(rows: Vec<Cells>) -> Result<Vec<SlruPageRow>> {
-        assemble_slru_chain(SlruKind::Clog, 0, 1, rows, 0, "test")
+        assemble_slru_chain(SlruKind::Clog, 0, 1, rows, "test")
     }
 
     fn error<T: std::fmt::Debug>(result: Result<T>) -> String {
