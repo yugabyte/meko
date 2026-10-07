@@ -170,11 +170,20 @@ export type SyncResult =
 
 /**
  * Throws unless <name> is a plain branch name git accepts. Names reach git as
- * arguments, so one starting with "-" would be read as an option.
+ * arguments, so one starting with "-" would be read as an option. Only git's
+ * refusal (exit 1) means a bad name: git that couldn't run at all (<repo> gone,
+ * say) throws what went wrong instead, so a good name isn't blamed.
  */
 export async function checkBranchName(repo: string, name: string): Promise<void> {
-  if (!name || name.startsWith('-') || (await tryGit(repo, 'check-ref-format', `refs/heads/${name}`)) === null) {
-    throw new Error(`"${name}" isn't a valid branch name.`);
+  const invalid = new Error(`"${name}" isn't a valid branch name.`);
+  if (!name || name.startsWith('-')) throw invalid;
+  try {
+    await git(repo, 'check-ref-format', `refs/heads/${name}`);
+  } catch (e) {
+    if ((e as { code?: unknown }).code === 1) throw invalid;
+    if (!existsSync(repo)) throw new Error(`${repo} isn't there any more, so git can't run in it.`, { cause: e });
+    const err = e as { stderr?: string; message?: string };
+    throw new Error(`Couldn't run git in ${repo} to check the branch name "${name}": ${(err.stderr || err.message || '').trim().split('\n')[0] || 'git failed'}`, { cause: e });
   }
 }
 

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, w
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
-import { BranchGoneError, addWorktree, restoreWorktree } from '../../src/server/git.js';
+import { BranchGoneError, addWorktree, checkBranchName, restoreWorktree } from '../../src/server/git.js';
 import { changedImage, changes, diffStat } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -130,6 +130,14 @@ describe('new sessions start from an up-to-date base (real git)', () => {
       await expect(addWorktree(repo, wt(), 'ak/x', base), base).rejects.toThrow(/isn't a valid branch name/);
     }
     expect(existsSync(wt())).toBe(false);
+  });
+
+  it('blames a missing repo, not a good branch name, when git can\'t run', async () => {
+    await expect(checkBranchName(repo, 'main')).resolves.toBeUndefined();
+    const gone = join(home, 'gone');
+    await expect(checkBranchName(gone, 'main')).rejects.toThrow(`${gone} isn't there any more, so git can't run in it.`);
+    await expect(checkBranchName(gone, 'a..b')).rejects.toThrow(/isn't there any more/);
+    await expect(addWorktree(gone, wt(), 'ak/x', 'main')).rejects.toThrow(/isn't there any more/);
   });
 
   it('restores a missing worktree from its branch, or origin, without touching main', async () => {
