@@ -71,7 +71,8 @@ export function SheetItem({
 }
 
 /**
- * Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost.
+ * Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost
+ * (a branch the session started on that existed before it is kept).
  * Archive waits for uncommitted files to be committed (the server refuses it too).
  * Shown in the session header on desktop and in the session sheet on phones.
  */
@@ -168,7 +169,11 @@ export function EndSessionButton({
   if (session.prNumber) warnings.push(`PR #${session.prNumber} and the remote branch stay on GitHub.`);
   return (
     <span className="confirm-inline">
-      <span className="confirm-prompt">Delete the worktree and branch {session.branch}?</span>
+      <span className="confirm-prompt">
+        {session.branchReused
+          ? `Delete the worktree? Branch ${session.branch} is kept: it existed before this session.`
+          : `Delete the worktree and branch ${session.branch}?`}
+      </span>
       {warnings.map((w) => (
         <span key={w} className="confirm-warn">
           {w}

@@ -380,6 +380,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN conflict_head TEXT;
   ALTER TABLE sessions ADD COLUMN conflict_fixes INTEGER NOT NULL DEFAULT 0;
   `,
+  // 24: a task started on a PR whose head isn't origin's branch of the same name (a fork's, say):
+  // the remote and the branch there its pushes go to. NULL: origin, under the session's branch.
+  `
+  ALTER TABLE sessions ADD COLUMN push_remote TEXT;
+  ALTER TABLE sessions ADD COLUMN push_branch TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

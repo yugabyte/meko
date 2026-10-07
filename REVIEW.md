@@ -121,7 +121,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
-      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), and an
+      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), the same
+      fast-forward of an existing branch a session starts on (from its remote, a fork's for a fork's
+      PR), setting that branch's `branch.<b>.remote`/`.merge` to a fork's PR head, and an
       empty first commit on HEAD's branch of a repo with no commits and no files
       (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
       empty folder typed under Other folder is made a repo only after the name check), never a
