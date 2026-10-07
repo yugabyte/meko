@@ -9,7 +9,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
-  ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs,
+  ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import {
@@ -27,6 +27,7 @@ import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 import { usageOverview } from './usage.js';
+import { taskPrs } from './taskprs.js';
 import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 
 /** A browser with this much unsent data skips state snapshots until it catches up. */
@@ -327,6 +328,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Params: { id: string } }>('/api/projects/:id/pr-reviewers', async (req): Promise<PrReviewers[]> => core.prReview.reviewers(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/review-prs', async (req): Promise<ReviewablePrs> =>
     core.prReview.reviewable(req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
+  app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/task-prs', async (req): Promise<TaskPrs> =>
+    taskPrs(core, req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
   app.get('/api/usage', async () => usageOverview(core.db));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 

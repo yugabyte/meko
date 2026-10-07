@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session } from '../../shared/types';
+import { START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { repoFolder, slugify } from '../util';
+import { cx, repoFolder, slugify } from '../util';
+import { AttachPrPicker } from './AttachPrPicker';
 import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
 /** A review's default name, from its PR. */
 const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
+
+/** What a task works on (Advanced → Work on): a new branch from a base, an existing branch, or an open PR's branch. */
+type WorkOn = 'new' | 'branch' | 'pr';
+const WORK_ON: { value: WorkOn; label: string }[] = [
+  { value: 'new', label: 'New branch' },
+  { value: 'branch', label: 'Existing branch' },
+  { value: 'pr', label: 'Pull request' },
+];
 
 export function NewSessionDialog({
   project,
@@ -27,20 +36,26 @@ export function NewSessionDialog({
   const [nameEdited, setNameEdited] = useState(!!initial?.name);
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   const [start, setStart] = useState<StartChoice>(initial?.kind === 'review-pr' ? 'review-pr' : (initial?.start ?? 'design'));
+  // A retry starts where the failed start asked to.
+  const startPicked = useRef(!!initial?.start);
   const review = start === 'review-pr';
+  const [workOn, setWorkOn] = useState<WorkOn>(initial?.kind !== 'review-pr' && initial?.pr ? 'pr' : initial?.existingBranch ? 'branch' : 'new');
+  const [existing, setExisting] = useState(initial?.existingBranch ? (initial.branch ?? '') : '');
+  const [taskPr, setTaskPr] = useState<TaskPr | null>(null);
   const [prList, setPrList] = useState<ReviewablePrs | null>(null);
   const [prListError, setPrListError] = useState<string | null>(null);
   const [picked, setPicked] = useState<ReviewablePr | null>(null);
   // A retry opens Advanced when it asked for more than the defaults there.
   const [advanced, setAdvanced] = useState(
-    !!initial && (!!initial.repoPath || !!initial.branch || (!!initial.baseBranch && initial.baseBranch !== project.defaultBranch)),
+    !!initial && (!!initial.repoPath || !!initial.branch || (initial.kind !== 'review-pr' && !!initial.pr)
+      || (!!initial.baseBranch && initial.baseBranch !== project.defaultBranch)),
   );
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [reposError, setReposError] = useState<string | null>(null);
   const [repoPath, setRepoPath] = useState(initial?.repoPath ?? project.repoPath);
   const [branches, setBranches] = useState<string[] | null>(null);
   const [baseBranch, setBaseBranch] = useState(initial?.baseBranch ?? project.defaultBranch);
-  const [branch, setBranch] = useState(initial?.branch ?? '');
+  const [branch, setBranch] = useState(initial?.existingBranch ? '' : (initial?.branch ?? ''));
   // A retry's base branch outlasts the first load of another repo's branches.
   const keepBase = useRef(initial?.baseBranch);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +152,39 @@ export function NewSessionDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pick only when the list or type changes
   }, [review, prList]);
 
+  // A retry on a PR looks it up again, so it's picked as before (unless it can't be any more).
+  const retryTaskPr = useRef(initial?.kind !== 'review-pr' ? initial?.pr : undefined);
+  useEffect(() => {
+    const want = retryTaskPr.current;
+    if (!want) return;
+    retryTaskPr.current = undefined;
+    let live = true;
+    api
+      .taskPrs(project.id, { pr: `${want.repo}#${want.number}`, repoPath: initial?.repoPath })
+      .then((r) => {
+        const pr = r.prs[0];
+        if (live && pr && !pr.blocked) setTaskPr(pr);
+      })
+      .catch(() => {
+        // Nothing picked: the user picks the PR again.
+      });
+    return () => {
+      live = false;
+    };
+  }, [project.id, initial?.repoPath]);
+
+  // Picking a PR names an unnamed session after it, and starts it at Code unless a start was picked.
+  const pickTaskPr = (pr: TaskPr | null) => {
+    setTaskPr(pr);
+    if (!pr) return;
+    if (!nameEdited) setName(pr.title.slice(0, 100).trim());
+    if (!startPicked.current) setStart('code');
+  };
+  const chooseStart = (c: StartChoice) => {
+    startPicked.current = true;
+    setStart(c);
+  };
+
   // The scanned repos load the first time Advanced opens.
   useEffect(() => {
     if (!advanced || repos || reposError) return;
@@ -156,11 +204,20 @@ export function NewSessionDialog({
   // A review's repo is the PR's clone, which may not be listed yet (Advanced never opened, or just cloned).
   if (!repoChoices.some((r) => r.path === repoPath)) repoChoices.push({ path: repoPath, label: repoFolder(repoPath) });
   const reviewBranch = picked ? `${project.settings.branchPrefix}review-pr-${picked.number}` : '';
-  const canStart = review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches;
+  const typedExists = workOn === 'new' && !!branch.trim() && !!branches?.includes(branch.trim());
+  const ready = workOn === 'branch' ? !!existing.trim() : workOn === 'pr' ? !!taskPr : true;
+  const canStart = review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches && ready;
   const chooseRepo = (path: string) => {
     setRepoPath(path);
+    // Another repo has other PRs.
+    setTaskPr(null);
     if (path === project.repoPath) setBaseBranch(project.defaultBranch);
   };
+  const workSummary = workOn === 'pr'
+    ? (taskPr ? `PR #${taskPr.number} · ${taskPr.headRefName}` : 'a pull request')
+    : workOn === 'branch'
+      ? `on ${existing.trim() || 'an existing branch'}`
+      : `from ${baseBranch || 'its default branch'} · ${branch.trim() || autoBranch}`;
 
   const create = async () => {
     setError(null);
@@ -179,11 +236,15 @@ export function NewSessionDialog({
           : {
             name: name.trim(),
             prompt: prompt.trim() || undefined,
-            baseBranch,
+            baseBranch: workOn === 'pr' ? undefined : baseBranch,
             kind: 'task',
             start: start === 'review-pr' ? undefined : start,
             repoPath: inProjectRepo ? undefined : repoPath,
-            branch: branch.trim() || undefined,
+            ...(workOn === 'pr' && taskPr
+              ? { pr: { repo: taskPr.repo, number: taskPr.number } }
+              : workOn === 'branch'
+                ? { branch: existing.trim(), existingBranch: true }
+                : { branch: branch.trim() || undefined }),
           },
       );
       onCreated(s);
@@ -226,7 +287,7 @@ export function NewSessionDialog({
             autoFocus
           />
         </Field>
-        <StartPicker id="ns-start" value={start} onChange={setStart} />
+        <StartPicker id="ns-start" value={start} onChange={chooseStart} />
         {review && (
           <ReviewPrPicker
             project={project}
@@ -284,7 +345,7 @@ export function NewSessionDialog({
               <span className="advanced-summary mono">
                 {review
                   ? `${repoFolder(repoPath)}${picked ? ` · PR #${picked.number} · ${reviewBranch}` : ''}`
-                  : `${repoFolder(repoPath)} · from ${baseBranch || 'its default branch'} · ${branch.trim() || autoBranch}`}
+                  : `${repoFolder(repoPath)} · ${workSummary}`}
               </span>
             )}
           </button>
@@ -316,37 +377,92 @@ export function NewSessionDialog({
               )}
               {!review && (
                 <>
-                  <Field label="Base branch">
-                    <select
-                      id="ns-base"
-                      className="input"
-                      value={baseBranch}
-                      disabled={!branches}
-                      onChange={(e) => setBaseBranch(e.target.value)}
-                    >
-                      {(branches ?? [baseBranch]).map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
+                  <div className="field">
+                    <span className="label" id="ns-work-on-label">
+                      Work on
+                    </span>
+                    <div className="seg work-on" role="radiogroup" aria-labelledby="ns-work-on-label">
+                      {WORK_ON.map((w) => (
+                        <button
+                          key={w.value}
+                          id={`ns-work-on-${w.value}`}
+                          type="button"
+                          role="radio"
+                          aria-checked={workOn === w.value}
+                          className={cx(workOn === w.value && 'on')}
+                          onClick={() => setWorkOn(w.value)}
+                        >
+                          {w.label}
+                        </button>
                       ))}
-                      {branches?.length === 0 && <option value="">The repo's default branch</option>}
-                    </select>
-                  </Field>
-                  <Field
-                    label="Branch"
-                    hint="Left empty, AgentK names it from the session name. An existing branch is picked up as it is, unless a running session uses it."
-                  >
-                    <input
-                      id="ns-branch"
-                      className="input mono"
-                      placeholder={autoBranch}
-                      value={branch}
-                      autoCapitalize="off"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      onChange={(e) => setBranch(e.target.value)}
-                    />
-                  </Field>
+                    </div>
+                  </div>
+                  {workOn !== 'pr' && (
+                    <Field
+                      label={workOn === 'branch' ? 'Compare with' : 'Base branch'}
+                      hint={workOn === 'branch' ? "Used when the branch has no open PR. With one, the PR's base is used." : undefined}
+                    >
+                      <select
+                        id="ns-base"
+                        className="input"
+                        value={baseBranch}
+                        disabled={!branches}
+                        onChange={(e) => setBaseBranch(e.target.value)}
+                      >
+                        {(branches ?? [baseBranch]).map((b) => (
+                          <option key={b} value={b}>
+                            {b}
+                          </option>
+                        ))}
+                        {branches?.length === 0 && <option value="">The repo's default branch</option>}
+                      </select>
+                    </Field>
+                  )}
+                  {workOn === 'new' && (
+                    <Field
+                      label="Branch"
+                      hint={
+                        typedExists
+                          ? `${branch.trim()} already exists: AgentK works on it as it is, without starting a new branch.`
+                          : 'Left empty, AgentK names it from the session name.'
+                      }
+                    >
+                      <input
+                        id="ns-branch"
+                        className="input mono"
+                        placeholder={autoBranch}
+                        value={branch}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        onChange={(e) => setBranch(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                  {workOn === 'branch' && (
+                    <Field
+                      label="Branch"
+                      hint="One of your local branches, or type one that's only on origin. AgentK checks it out as it is (fast-forwarded to origin when it's behind) and picks up its open PR."
+                    >
+                      <input
+                        id="ns-existing-branch"
+                        className="input mono"
+                        list="ns-existing-branches"
+                        placeholder="Branch name"
+                        value={existing}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        onChange={(e) => setExisting(e.target.value)}
+                      />
+                      <datalist id="ns-existing-branches">
+                        {(branches ?? []).map((b) => (
+                          <option key={b} value={b} />
+                        ))}
+                      </datalist>
+                    </Field>
+                  )}
+                  {workOn === 'pr' && <AttachPrPicker project={project} repoPath={repoPath} picked={taskPr} onPick={pickTaskPr} />}
                 </>
               )}
             </div>

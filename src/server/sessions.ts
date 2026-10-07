@@ -7,12 +7,12 @@ import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
 import {
-  BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fetchPrHead, git,
-  gitRaw, isIdleWorktree, prRef, remoteFor, removeWorktree, restoreWorktree, reuseWorktree, tryGit, uncommittedCount, unpushedCount,
-  worktreeClean, type SyncResult,
+  BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward,
+  fetchPrHead, git, gitRaw, isIdleWorktree, prLocalBranch, prRef, remoteFor, remoteOf, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
+  worktreeClean, type BranchSource, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
-import { isRepoName, issueText, prInfo, type PrInfo } from './github.js';
+import { findPr, isRepoName, issueText, prInfo, type PrInfo } from './github.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -67,6 +67,16 @@ interface ReviewTarget {
   remote: string;
 }
 
+/**
+ * The open PR a new task works on: what GitHub says about it, the local branch it works on, and
+ * where that branch's commits are (the remote of the PR's head repo, and the head branch there).
+ */
+interface AttachTarget {
+  info: PrInfo;
+  branch: string;
+  from: BranchSource;
+}
+
 /** Longest setInterval delay Node honours, in whole seconds (2^31-1 ms). */
 export const MAX_TIMER_SECS = Math.floor((2 ** 31 - 1) / 1000);
 const QUARTER_HOUR = 15 * 60 * 1000;
@@ -95,9 +105,27 @@ const RECOVERY_BACKOFF_MS = 5 * 60 * 1000;
  */
 const SESSION_ENV_UNSET = ['MEKO_CHECKPOINT_INTERVAL'];
 
-/** The "created" event: where the branch started, and what happened to the local base. */
-function startedText(branch: string, base: string, sync: SyncResult | null, reused: boolean): string {
-  if (reused) return `Started on the existing branch ${branch} (base ${base})`;
+/** Where a session on another remote's PR branch pushes (see `SessionRow.push_remote`). */
+export function pushLine(row: SessionRow): string {
+  const to = row.push_branch ?? row.branch;
+  return `Push this branch to ${row.push_remote} as ${to}, where the PR's head is, not to origin: \`git push ${row.push_remote} HEAD:${to}\`.`;
+}
+
+/** How long a new session on an existing branch looks for that branch's open PR before Claude starts anyway. */
+const LINK_PR_MS = 5000;
+
+/**
+ * The "created" event: where the branch started, and what happened to the local base. For an
+ * existing branch, <sync> is what happened to it: fast-forwarded to its remote's copy, or not.
+ */
+function startedText(branch: string, base: string, sync: SyncResult | null, reused: boolean, from?: BranchSource, pr?: number): string {
+  if (reused) {
+    const on = pr ? `Started on ${branch}, the branch of PR #${pr}` : `Started on the existing branch ${branch}`;
+    const remote = from ? `${from.remote}/${from.branch}` : `origin/${branch}`;
+    const note = sync?.kind === 'updated' ? `; fast-forwarded it to ${remote}`
+      : sync?.kind === 'skipped' ? `; it wasn't updated from ${remote}: ${sync.reason}` : '';
+    return `${on} (base ${base})${note}`;
+  }
   switch (sync?.kind) {
     case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to origin/${base})`;
     case 'current': return `Started on ${branch} from ${base} (already up to date with origin)`;
@@ -330,6 +358,7 @@ export class SessionManager {
     for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch'] as const) {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
+    if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
@@ -343,7 +372,11 @@ export class SessionManager {
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A review must be of an open PR on GitHub; its head is fetched with the worktree.
     const review = kind === 'review-pr' ? await this.reviewTarget(repo, req.pr) : null;
-    const name = (req.name ?? '').trim() || (review ? `Review #${review.info.number} ${review.info.title}`.slice(0, 100).trim() : '');
+    // A task given a PR works on the PR's branch, against its base.
+    const attach = kind === 'task' && req.pr != null ? await this.attachTarget(repo, req.pr) : null;
+    const name = (req.name ?? '').trim()
+      || (review ? `Review #${review.info.number} ${review.info.title}`.slice(0, 100).trim() : '')
+      || (attach ? attach.info.title.slice(0, 100).trim() : '');
     if (!name) throw new HttpError(400, 'Give the session a name.');
     const notes = review ? (req.prompt ?? '').trim() : '';
     const stage: Stage = review ? 'reviewing-pr' : start;
@@ -360,9 +393,17 @@ export class SessionManager {
         throw new HttpError(400, errMsg(e));
       }
     }
-    const wanted = review ? '' : (req.branch ?? '').trim();
-    const where = wanted ? await this.checkWantedBranch(repo, wanted) : null;
-    const base = review?.info.baseRefName || (req.baseBranch ?? '').trim() || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
+    const wanted = review ? '' : attach ? attach.branch : (req.branch ?? '').trim();
+    const existing = !!req.existingBranch && !attach && !review;
+    if (existing && !wanted) throw new HttpError(400, 'Pick the existing branch to work on.');
+    const from: BranchSource = attach?.from ?? { remote: 'origin', branch: wanted };
+    const where = wanted ? await this.checkWantedBranch(repo, wanted, from) : null;
+    if (existing && !where) throw new HttpError(400, `Branch ${wanted} isn't in ${basename(repo)} or on its origin. Check the name, or pick New branch to start it.`);
+    if (attach && !where) {
+      throw new HttpError(400, `PR #${attach.info.number}'s branch ${from.branch} isn't on ${from.remote} any more, so there's nothing to work on.`);
+    }
+    const base = review?.info.baseRefName || attach?.info.baseRefName || (req.baseBranch ?? '').trim()
+      || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
     // Checked now: once the dialog has closed, a typo would only show up as a failed start. A
     // review's base comes from GitHub and is fetched with the PR.
     if (!review) {
@@ -377,8 +418,12 @@ export class SessionManager {
     // What Try again fills the New session dialog with, should the start fail.
     const request: CreateSessionRequest = {
       name, prompt: (req.prompt ?? '').trim() || undefined, kind, start: review ? undefined : start,
-      baseBranch: review ? undefined : base, repoPath: req.repoPath, branch: wanted || undefined, pr: review ? { repo: review.repo, number: review.info.number } : undefined,
+      baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
+      existingBranch: existing || undefined,
+      pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
     };
+    // Pushes go where the PR's head is, when that isn't origin's branch of the same name.
+    const push = attach && (from.remote !== 'origin' || from.branch !== wanted) ? from : null;
 
     const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
     const branch = wanted || `${settings.branchPrefix}${slug}`;
@@ -397,12 +442,13 @@ export class SessionManager {
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
-                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug }),
-        review?.info.number ?? null, review?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null, review?.info.author ?? null,
-        sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null);
+        review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
+        review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
+        push?.remote ?? null, push ? push.branch : null);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -411,7 +457,7 @@ export class SessionManager {
     // Starting again under the same name replaces the failed start.
     this.failed.delete(id);
     this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
-    const done = this.finishCreate(id, { request, repo, worktree, reused, branch, base, where, review, task, notes })
+    const done = this.finishCreate(id, { request, repo, worktree, reused, branch, base, where, from, review, attach, linkPr: existing, task, notes })
       .finally(() => this.creating.delete(id));
     return { session: this.get(id), done };
   }
@@ -419,7 +465,9 @@ export class SessionManager {
   /** The slow part of `begin`: the PR head for a review, the worktree, then Claude. */
   private async finishCreate(id: string, c: {
     request: CreateSessionRequest; repo: string; worktree: string; reused: boolean; branch: string; base: string;
-    where: 'local' | 'origin' | null; review: ReviewTarget | null; task: string; notes: string;
+    where: 'local' | 'remote' | null; from: BranchSource; review: ReviewTarget | null; attach: AttachTarget | null;
+    /** Look for the existing branch's open PR (Advanced → Existing branch). */
+    linkPr: boolean; task: string; notes: string;
   }): Promise<Session> {
     const { repo, review, branch, base, task } = c;
     // A review searches on the PR: its title and description (where the author's design is
@@ -437,14 +485,22 @@ export class SessionManager {
       }
       if (sha !== review.info.headRefOid) this.update(id, { review_sha: sha, pr_head_sha: sha, pr_new_commits: 0 });
     }
-    const made = await this.makeWorktree(id, c.request, repo, c.worktree, c.reused, branch, base, !!c.where, sha);
+    // An existing local branch catches up with its remote's copy first, when that's a fast-forward.
+    const caughtUp = c.where === 'local' ? await fastForward(repo, branch, c.from).catch((e: unknown) => ({ kind: 'skipped' as const, reason: errMsg(e) })) : null;
+    const made = await this.makeWorktree(id, c.request, repo, c.worktree, c.reused, branch, base, c.where ? c.from : null, sha);
+    if (c.attach && this.row(id).push_remote) {
+      await trackSource(repo, branch, c.from).catch((e: unknown) => this.core.log.warn(`couldn't make ${branch} track ${c.from.remote}/${c.from.branch} for ${id}`, errMsg(e)));
+    }
     const started = review && sha
       ? `Checked out PR #${review.info.number} of ${review.repo} at ${sha.slice(0, 7)} on ${branch} (base ${base})`
-      : startedText(branch, base, made.sync, !!c.where);
+      : startedText(branch, base, caughtUp, !!c.where, c.where ? c.from : undefined, c.attach?.info.number);
     this.event(id, 'created', started + (made.reused ? ` in a reused worktree (${basename(made.path)})` : ''), { reused: made.reused });
+    if (c.linkPr) await within(this.linkBranchPr(id), LINK_PR_MS);
 
     const row = this.row(id);
-    const prompt = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
+    const first = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
+    // A session on an existing branch is told so first, so it builds on the work there.
+    const prompt = first && row.branch_reused && row.kind !== 'review-pr' ? `${this.prompt(row, 'attached', this.attachedVars(row))}\n\n${first}` : first;
     this.setStartup(id, 'launch');
     await within(naming, NAME_CONVERSATION_MS);
     try {
@@ -468,7 +524,7 @@ export class SessionManager {
    * and kept as a failed start.
    */
   private async makeWorktree(
-    id: string, request: CreateSessionRequest, repo: string, path: string, claimed: boolean, branch: string, base: string, fromOrigin: boolean, at?: string,
+    id: string, request: CreateSessionRequest, repo: string, path: string, claimed: boolean, branch: string, base: string, from: BranchSource | null, at?: string,
   ): Promise<{ sync: SyncResult | null; reused: boolean; path: string }> {
     const pool = this.core.worktrees;
     let current = path;
@@ -478,7 +534,7 @@ export class SessionManager {
         await addReviewWorktree(repo, wt, branch, at, reuse);
         return null;
       }
-      return reuse ? reuseWorktree(repo, wt, branch, base, fromOrigin) : addWorktree(repo, wt, branch, base, fromOrigin);
+      return reuse ? reuseWorktree(repo, wt, branch, base, from) : addWorktree(repo, wt, branch, base, from);
     };
     try {
       if (claimed) {
@@ -553,13 +609,14 @@ export class SessionManager {
   }
 
   /**
-   * Checks a branch the user typed: a valid name that no running session uses and no checkout
-   * has. Returns where it already exists (local, or only on origin), or null for a new branch.
+   * Checks a branch the user typed (or a PR's): a valid name that no running session uses and no
+   * checkout has. Returns where it already exists (local, or only on <from>'s remote, origin by
+   * default), or null for a new branch.
    */
-  private async checkWantedBranch(repo: string, branch: string): Promise<'local' | 'origin' | null> {
-    let where: 'local' | 'origin' | null;
+  private async checkWantedBranch(repo: string, branch: string, from: BranchSource = { remote: 'origin', branch }): Promise<'local' | 'remote' | null> {
+    let where: 'local' | 'remote' | null;
     try {
-      where = await existingBranch(repo, branch);
+      where = await existingBranch(repo, branch, from);
     } catch (e) {
       throw new HttpError(400, errMsg(e));
     }
@@ -607,6 +664,69 @@ export class SessionManager {
       throw new HttpError(400, `PR #${pr.number} of ${pr.repo} is ${info.state === 'MERGED' ? 'merged' : 'closed'}, so there's nothing to review.`);
     }
     return { repo: pr.repo, info, remote };
+  }
+
+  /**
+   * The open PR a new task session works on (Advanced → Pull request): it must be open, <repo> a
+   * clone of its repo, and one of <repo>'s remotes its head repo (origin, or a fork's remote). The
+   * local branch is prLocalBranch's.
+   */
+  private async attachTarget(repo: string, pr: CreateSessionRequest['pr']): Promise<AttachTarget> {
+    if (!pr || typeof pr !== 'object' || !isRepoName(pr.repo) || !Number.isInteger(pr.number) || pr.number <= 0) {
+      throw new HttpError(400, 'Pick the pull request to work on.');
+    }
+    if (!(await remoteOf(repo, pr.repo))) {
+      throw new HttpError(400, `${basename(repo)} isn't a clone of ${pr.repo}, where PR #${pr.number} is. Pick a clone of ${pr.repo} under Advanced.`);
+    }
+    let info: PrInfo;
+    try {
+      info = await prInfo(repo, pr.repo, pr.number);
+    } catch (e) {
+      throw new HttpError(400, `Couldn't read PR #${pr.number} of ${pr.repo} from GitHub: ${errMsg(e)}`);
+    }
+    if (info.state !== 'OPEN') {
+      throw new HttpError(400, `PR #${pr.number} of ${pr.repo} is ${info.state === 'MERGED' ? 'merged' : 'closed'}. Pick an open PR, or start on its branch under Existing branch.`);
+    }
+    const head = info.headRefName;
+    if (!head) throw new HttpError(400, `GitHub didn't say which branch PR #${pr.number} of ${pr.repo} is on.`);
+    if (!info.headRepo) throw new HttpError(400, `PR #${pr.number}'s head repo is gone (its fork was deleted), so its branch can't be fetched.`);
+    const remote = await remoteOf(repo, info.headRepo);
+    if (!remote) {
+      const owner = info.headRepo.split('/')[0];
+      throw new HttpError(400, `PR #${pr.number}'s branch is on ${info.headRepo}, which isn't a remote of ${basename(repo)}. Add it (git remote add ${owner} https://github.com/${info.headRepo}.git), then try again.`);
+    }
+    const from = { remote, branch: head };
+    return { info, branch: await prLocalBranch(repo, from), from };
+  }
+
+  /**
+   * A new session on an existing branch (Advanced → Existing branch) takes the branch's open PR, when
+   * it has one: the PR is linked, and its base becomes the session's base.
+   */
+  private async linkBranchPr(id: string): Promise<void> {
+    const row = this.row(id);
+    let pr: Awaited<ReturnType<typeof findPr>>;
+    try {
+      pr = await findPr(row.worktree_path, row.branch, row.created_at, true);
+    } catch (e) {
+      this.core.log.warn(`couldn't look for the open PR of ${row.branch} for ${id}`, errMsg(e));
+      return;
+    }
+    const cur = sessionRow(this.db, id);
+    if (!pr || pr.state !== 'OPEN' || !cur || cur.pr_number) return;
+    const base = pr.baseRefName && pr.baseRefName !== cur.base_branch ? pr.baseRefName : null;
+    this.update(id, { pr_number: pr.number, pr_url: pr.url, ...(base ? { base_branch: base } : {}) });
+    this.event(id, 'pr-linked', `Linked PR #${pr.number}${base ? `; base set to ${base}, its base` : ''}`, { url: pr.url });
+  }
+
+  /** The `attached` prompt's placeholders: the PR the branch is on, and where to push when that's not origin. */
+  private attachedVars(row: SessionRow): Record<string, string> {
+    const pr = row.pr_number;
+    return {
+      attachedPr: pr ? `, which is the branch of PR #${pr} (${row.pr_url ?? ''})` : '',
+      attachedPrRead: pr ? `, and the PR's description, review threads and checks (\`gh pr view ${pr} --comments\`, \`gh pr checks ${pr}\`)` : '',
+      attachedPush: row.push_remote ? `\n\n${pushLine(row)}` : '',
+    };
   }
 
   /** Where Claude writes a markdown design during the Design stage (outside the repo). */
@@ -710,6 +830,9 @@ export class SessionManager {
     const lines = [
       `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
+    if (row.kind !== 'review-pr' && row.branch_reused) {
+      lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
+    }
     if (dedicated) {
       lines.push(`Meko: this project's dedicated datapack is "${dedicated.name}" (datapack_id ${dedicated.id}). Pass that datapack_id and agent_id "${launchedAgentId(row)}" on Meko calls that write.`);
     }
@@ -1390,7 +1513,8 @@ export class SessionManager {
         await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');
         await this.archive(row, { keepBranch: true });
         break;
-      case 'discard': await this.archive(row, { keepBranch: false, force: true }); break;
+      // A branch the session started on existed before it, and isn't the session's to delete.
+      case 'discard': await this.archive(row, { keepBranch: !!row.branch_reused, force: true }); break;
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
@@ -1494,9 +1618,11 @@ export class SessionManager {
     const [uncommittedFiles, unpushedCommits] = await Promise.all([
       owned ? uncommittedCount(row.worktree_path) : 0,
       // A review branch holds the author's commits, which are safe on GitHub: only the user's own count.
-      repo && row.kind === 'review-pr' && row.review_sha
-        ? commitsBeyond(repo, row.branch, row.review_sha).then((n) => n ?? unpushedCount(repo, row.branch, row.base_branch))
-        : repo ? unpushedCount(repo, row.branch, row.base_branch) : 0,
+      // A branch that existed before the session is kept by Discard, so none of its commits are lost.
+      row.branch_reused ? 0
+        : repo && row.kind === 'review-pr' && row.review_sha
+          ? commitsBeyond(repo, row.branch, row.review_sha).then((n) => n ?? unpushedCount(repo, row.branch, row.base_branch))
+          : repo ? unpushedCount(repo, row.branch, row.base_branch) : 0,
     ]);
     return { worktreeExists: owned && existsSync(row.worktree_path), uncommittedFiles, unpushedCommits };
   }

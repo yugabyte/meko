@@ -457,6 +457,8 @@ export interface Session {
   claudeSessionId: string;
   branch: string;
   baseBranch: string;
+  /** The branch existed before the session started on it (an existing branch or a PR's): Discard keeps it. */
+  branchReused: boolean;
   /** The repo the session works in (the project's unless another one was picked). */
   repoPath: string;
   worktreePath: string;
@@ -820,6 +822,35 @@ export interface ReviewablePr {
 export interface ReviewablePrs {
   prs: ReviewablePr[];
   /** Set when GitHub couldn't be searched (the list is then empty). */
+  error?: string;
+}
+
+/** An open PR a new task session can work on (New session → Advanced → Pull request). */
+export interface TaskPr {
+  /** `owner/name` on GitHub: the repo the PR is in. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** The PR's head branch, in `headRepo`. */
+  headRefName: string;
+  /** `owner/name` of the repo the head branch is in: a fork's, for a PR from a fork. */
+  headRepo: string;
+  baseRefName: string;
+  updatedAt: string;
+  /** From a fork (the head is in another repo). */
+  fork: boolean;
+  /**
+   * Why a session can't start on it, or null when it can: no remote of the repo is the PR's
+   * head repo, or a running session works on its branch.
+   */
+  blocked: string | null;
+}
+
+/** GET /api/projects/:id/task-prs: your open PRs in a repo, or the one asked for. */
+export interface TaskPrs {
+  prs: TaskPr[];
+  /** Set when GitHub couldn't be asked (the list is then empty). */
   error?: string;
 }
 
@@ -1232,6 +1263,12 @@ export interface CreateSessionRequest {
    */
   branch?: string;
   /**
+   * With `branch`: the session works on that existing branch (Advanced → Existing branch), so a
+   * branch that's neither local nor on origin is a 400 rather than a new branch. Its open PR, if
+   * any, is linked as the session starts and its base becomes the session's base.
+   */
+  existingBranch?: boolean;
+  /**
    * Defaults to `task`. The old session types still work: `explore`, `plan` and `quick` are a task
    * starting at Explore, Design and Code (`start` wins when both are given).
    */
@@ -1243,6 +1280,9 @@ export interface CreateSessionRequest {
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
    * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for AgentK.
+   * For a task (Advanced → Pull request): the open PR to keep working on. The session works on the
+   * PR's head branch (fetched from the remote of the PR's head repo, a fork's included) against
+   * the PR's base, with the PR linked; `branch` and `baseBranch` are ignored.
    */
   pr?: { repo: string; number: number };
 }
@@ -1372,10 +1412,14 @@ export type TermServerMessage =
 // GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
 //        project's datapacks, in any repo; with `pr` (a number, #number, owner/name#number or PR link) that one PR,
 //        a bare number looked up in `repoPath` (default: the project's repo); 400 for a PR that can't be found)
+// GET    /api/projects/:id/task-prs?repoPath=&pr= → TaskPrs   (your open PRs in `repoPath` (default: the project's
+//        repo), newest first; with `pr` (a number, #number, owner/name#number or PR link) that one PR; 400 for a PR
+//        that can't be found or isn't open)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
-//        base branch neither the repo nor its origin has, or a repo that isn't a scanned one; 409 for a branch a running session uses or another checkout has. Review a PR:
+//        base branch neither the repo nor its origin has, a repo that isn't a scanned one, an `existingBranch` that doesn't exist, or a task's
+//        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has. Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
 //        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.

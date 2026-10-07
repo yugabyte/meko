@@ -16,7 +16,7 @@ import { HttpError } from './projects.js';
 import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
-import { workflowLine } from './sessions.js';
+import { pushLine, workflowLine } from './sessions.js';
 
 const POLL_MS = 15000;
 const REVIEW_POLL_MS = 45000;
@@ -457,7 +457,8 @@ export class Lifecycle {
    */
   private async sendPr(row: SessionRow, check: (r: SessionRow) => void, lead?: string): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
-    const footer = await this.prFooter(row);
+    // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
+    const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
     const cur = this.sessions.row(row.id);
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
@@ -543,7 +544,7 @@ export class Lifecycle {
    */
   private async moveToReview(row: SessionRow): Promise<void> {
     const cwd = this.ghCwd(row);
-    const pr = await github.findPr(cwd, row.branch, row.created_at, true).catch(() => null);
+    const pr = await this.branchPr(row, true).catch(() => null);
     let adopt = false;
     if (pr?.state === 'OPEN') {
       const st = await github.prStatus(cwd, pr.number).catch(() => null);
@@ -632,7 +633,7 @@ export class Lifecycle {
    * base, so the PR prompt, the diff and the Changes panel compare with what the PR merges into.
    */
   private async followPrBase(row: SessionRow): Promise<void> {
-    const pr = await github.findPr(this.ghCwd(row), row.branch, row.created_at, true).catch(() => null);
+    const pr = await this.branchPr(row, true).catch(() => null);
     const base = pr?.state === 'OPEN' ? pr.baseRefName : undefined;
     if (!base || base === row.base_branch) return;
     this.sessions.update(row.id, { base_branch: base });
@@ -719,6 +720,19 @@ export class Lifecycle {
     this.enqueue(id, 'review-people', { reviewers: [...new Set([...earlier, ...logins])].join(', ') });
   }
 
+  /**
+   * The branch's PR: the one linked when the session started on an existing branch or a PR, while
+   * it's open (found by number, so a fork's PR, or one whose head branch has another name, counts),
+   * else the one findPr finds by the branch's name (<anyOpen> as there).
+   */
+  private async branchPr(row: SessionRow, anyOpen: boolean, cwd = this.ghCwd(row)): Promise<github.PrRef | null> {
+    if (row.branch_reused && row.pr_number) {
+      const linked = await github.prByNumber(cwd, row.pr_number).catch(() => null);
+      if (linked?.state === 'OPEN') return linked;
+    }
+    return github.findPr(cwd, row.branch, row.created_at, anyOpen);
+  }
+
   /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */
   private ghCwd(row: SessionRow): string {
     if (existsSync(row.worktree_path) && this.sessions.ownsWorktree(row)) return row.worktree_path;
@@ -775,7 +789,7 @@ export class Lifecycle {
     const before = sessionRow(this.db, id);
     if (!before || before.stage !== 'pr' || before.desired !== 'running') return;
     // A session on a branch that existed before it takes that branch's open PR, however old.
-    const pr = await github.findPr(before.worktree_path, before.branch, before.created_at, !!before.branch_reused);
+    const pr = await this.branchPr(before, !!before.branch_reused, before.worktree_path);
     if (!pr || sessionRow(this.db, id)?.stage !== 'pr') return;
     // The PR it had before a move back to Code, merged or closed since: wait for the new one.
     if (pr.number === before.pr_number && pr.state !== 'OPEN') return;
@@ -1341,7 +1355,8 @@ export class Lifecycle {
     const { worktreeFreed, worktree } = await this.sessions.archive(row, { keepBranch: true });
     if (repo) {
       if (worktreeFreed && !keep) await deleteBranch(repo, row.branch);
-      if (!keep && st.headRefOid) {
+      // A head on another remote (a fork's) is that fork owner's to delete.
+      if (!keep && st.headRefOid && !row.push_remote) {
         // Often already deleted by GitHub. The lease deletes it only while it's still the PR's head.
         await tryGit(repo, 'push', `--force-with-lease=refs/heads/${row.branch}:${st.headRefOid}`, 'origin', '--delete', row.branch);
       }

@@ -105,6 +105,13 @@ export interface SessionRow {
   pr_remote: string | null;
   /** The user's notes for AgentK, given when the review started. */
   review_notes: string | null;
+  /**
+   * A task started on a PR whose head is on another remote, or under another name, than origin's
+   * branch of the session's name (a fork's PR): where its pushes go. NULL: origin.
+   */
+  push_remote: string | null;
+  /** The branch on push_remote (the PR's head branch); NULL: the session's branch. */
+  push_branch: string | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {
@@ -214,6 +221,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     claudeSessionId: r.claude_session_id,
     branch: r.branch,
     baseBranch: r.base_branch,
+    branchReused: !!r.branch_reused,
     repoPath: sessionRepo(db, r) ?? '',
     worktreePath: r.worktree_path,
     tmuxName: r.tmux_name,

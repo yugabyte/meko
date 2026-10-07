@@ -49,6 +49,11 @@ export async function findPr(worktree: string, branch: string, since: number, an
   return pickPr(JSON.parse(out || '[]') as PrRef[], since, anyOpen);
 }
 
+/** PR <number> of the repo gh works on from <cwd>, as findPr reports one. */
+export async function prByNumber(cwd: string, number: number): Promise<PrRef> {
+  return JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--json', 'number,url,state,createdAt,isCrossRepository,baseRefName')) as PrRef;
+}
+
 /**
  * The newest PR opened since `since`, an open one first. With `anyOpen`, an older open PR from this
  * repo (not a fork's branch of the same name) counts too.
@@ -306,13 +311,65 @@ export interface PrInfo {
   baseRefName: string;
   headRefOid: string;
   createdAt: string;
+  /** The head branch, in `headRepo`. */
+  headRefName?: string;
+  /** `owner/name` of the repo the head branch is in (a fork's, for a PR from a fork); null when GitHub doesn't say (the fork was deleted). */
+  headRepo?: string | null;
+  isCrossRepository?: boolean;
+}
+
+interface HeadFields {
+  headRepository?: { name?: string } | null;
+  headRepositoryOwner?: { login?: string } | null;
+}
+
+/** `owner/name` of a PR's head repo, from gh's headRepository and headRepositoryOwner. */
+function headRepoOf(r: HeadFields): string | null {
+  const owner = r.headRepositoryOwner?.login;
+  const name = r.headRepository?.name;
+  return owner && name ? `${owner}/${name}` : null;
 }
 
 /** A PR of any repo, by its `owner/name` and number. */
 export async function prInfo(cwd: string, repo: string, number: number): Promise<PrInfo> {
   const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--repo', repo, '--json',
-    'number,url,title,body,author,state,baseRefName,headRefOid,createdAt')) as Omit<PrInfo, 'author'> & { author: Author | null };
-  return { ...r, author: r.author?.login ?? '' };
+    'number,url,title,body,author,state,baseRefName,headRefOid,createdAt,headRefName,headRepository,headRepositoryOwner,isCrossRepository')) as
+    Omit<PrInfo, 'author' | 'headRepo'> & HeadFields & { author: Author | null };
+  return {
+    number: r.number, url: r.url, title: r.title, body: r.body, author: r.author?.login ?? '', state: r.state, baseRefName: r.baseRefName,
+    headRefOid: r.headRefOid, createdAt: r.createdAt, headRefName: r.headRefName, headRepo: headRepoOf(r), isCrossRepository: r.isCrossRepository,
+  };
+}
+
+export interface OpenPr {
+  /** `owner/name` of the repo the PR is in (from its URL). */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  headRefName: string;
+  headRepo: string | null;
+  baseRefName: string;
+  isCrossRepository: boolean;
+  updatedAt: string;
+}
+
+/** The viewer's open PRs in the repo gh works on from <cwd>, newest first. */
+export async function myOpenPrs(cwd: string, limit = 30): Promise<OpenPr[]> {
+  const out = await gh(cwd, 'pr', 'list', '--author', '@me', '--state', 'open', '--limit', String(limit), '--json',
+    'number,title,url,headRefName,headRepository,headRepositoryOwner,baseRefName,isCrossRepository,updatedAt');
+  const prs = JSON.parse(out || '[]') as (Omit<OpenPr, 'repo' | 'headRepo'> & HeadFields)[];
+  return prs
+    .map((p): OpenPr | null => {
+      const at = prFromUrl(p.url);
+      if (!at) return null;
+      return {
+        repo: at.repo, number: p.number, title: p.title, url: p.url, headRefName: p.headRefName, headRepo: headRepoOf(p),
+        baseRefName: p.baseRefName, isCrossRepository: !!p.isCrossRepository, updatedAt: p.updatedAt,
+      };
+    })
+    .filter((p): p is OpenPr => p !== null)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
 export interface FoundPr {

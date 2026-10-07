@@ -71,8 +71,10 @@ your phone can connect.
   branches and datapack stay: opening its datapack again brings the same project back, with its
   sessions, settings and usage.
   New sessions start from the base branch after it's fast-forwarded to `origin`. Under
-  **Advanced** a session can work in another of your repos, or on a branch you name, including an
-  existing one no running session uses.
+  **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
+  existing work: an **existing branch** (its open PR is linked), or one of your open **pull
+  requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on
+  what's there instead of branching from it, and picks the PR up at PR & Review.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of

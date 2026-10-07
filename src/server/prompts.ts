@@ -10,13 +10,16 @@ import { get, type Db } from './db.js';
  * {{comments}}, `design-answers` gets {{count}} and {{answers}} (`approved-answers` only {{answers}}, and goes before
  * `approved`), `review-people` gets {{reviewers}} (the logins whose reviews started it), `ci` gets {{sha}} and {{checks}}, `conflicts` gets {{sha}}, and `moved` gets {{stage}}, {{workflow}} and
  * {{kind}} (always "Task", kept for overrides written when sessions had types). `moved` goes before the new stage's prompt when the user moves a session by hand.
+ * `attached` goes before the first prompt of a task started on an existing branch or a PR, and gets {{attachedPr}} (", which
+ * is the branch of PR #n (url)", or nothing), {{attachedPrRead}} (how to read that PR, or nothing) and {{attachedPush}}
+ * (where to push, when the PR's head isn't on origin, or nothing).
  * The Review a PR prompts (`review-pr`, `review-pr-update`, `review-pr-comments`) get {{repo}} as
  * the PR's `owner/name`, {{title}}, {{author}}, {{sha}} (the commit checked out) and {{notes}};
  * `review-pr-update` also gets {{oldSha}} and {{count}}, and `review-pr-comments` {{count}} and {{comments}}.
  */
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'conflicts' | 'ci' | 'continue' | 'continue-review' | 'comments'
-  | 'moved' | 'review-pr' | 'review-pr-update' | 'review-pr-comments';
+  | 'moved' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-comments';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   explore: `You are in the Explore stage of an AgentK Local task.
@@ -61,6 +64,8 @@ Revise the design to match: update the same Artifact (republish the same file) o
   code: `Task: {{task}}
 
 Implement this on the current branch ({{branch}}). Follow the repo's conventions (CLAUDE.md, contributing docs), add or update tests, and run the repo's tests and checks before you finish. Don't open a pull request yet.`,
+
+  attached: `This session continues existing work: you're on the branch {{branch}}{{attachedPr}}, which already has commits. Before you start, read what's there: the commits beyond {{base}} (\`git log --oneline {{base}}..HEAD\`){{attachedPrRead}}. Build on that work; don't start over or rewrite its history.{{attachedPush}}`,
 
   pr: `Open a pull request for this work.
 

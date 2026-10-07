@@ -451,8 +451,10 @@ Archive and Discard wait up to a minute for a session that's still starting, the
 ask you to try again once its startup steps are done; on a big repo the worktree can take longer
 than that, and a start can't be cancelled.
 
-**Advanced**, collapsed by default under the first prompt, holds the repo, the base branch and the
-branch; closed, it shows them on one line (`agent-k-local · from main · ak/fix-retry-backoff`).
+**Advanced**, collapsed by default under the first prompt, holds the repo and what the session works
+on: a new branch from a base, an existing branch, or an open pull request's branch. Closed, it shows
+them on one line (`agent-k-local · from main · ak/fix-retry-backoff`, `agent-k-local · on hsunder/foo`,
+or `agent-k-local · PR #123 · hsunder/foo`).
 
 - **Repo.** The project's repo, or any other repo the Open project dialog lists (the scanned repos
   only, loaded when Advanced first opens; `GET /api/repos/branches` gives a repo's branches and
@@ -460,19 +462,48 @@ branch; closed, it shows them on one line (`agent-k-local · from main · ak/fix
   settings, usage), but its worktree, branch, PR and cleanup are in that repo: `sessions.repo_path`
   holds it, and everything after create reads it from there. The session's system prompt names the
   repo, and its footer shows the repo's folder before the branch.
-- **Base branch.** The repo's default branch unless you pick another.
-- **Branch.** Left empty, `<prefix><slug of the name>`. A typed name is used as it is, with no
-  prefix. An existing branch is picked up as it is (not fast-forwarded), after `git fetch origin
-  <branch>`; one only on origin gets a local branch at `origin/<branch>`, and one origin no longer
-  has loses its stale `refs/remotes/origin/<branch>` and starts fresh from the base. The server refuses (409) a
-  branch a running session of any project uses on that repo, checked in the same write that adds
-  the session so two starts can't both have it, and a branch checked out in another checkout (the
-  main checkout, or a worktree kept for an archived session with uncommitted changes, which it
-  names). A reused branch is marked (`sessions.branch_reused`), so the PR stage takes that branch's
-  open PR even when it's older than the session (never a fork's PR from a branch of the same name),
-  and Open PR first moves the session's base to that PR's base; the PR prompt tells Claude to update
-  an existing PR rather than open another. Archive, Discard and Merge & Close treat a reused
-  branch like any other: Discard and Merge & Close delete it.
+- **Work on: New branch** (the default). **Base branch** is the repo's default branch unless you pick
+  another. **Branch**, left empty, is `<prefix><slug of the name>`; a typed name is used as it is,
+  with no prefix. A typed name that already exists is worked on as it is, as under Existing branch
+  but without the PR lookup (the field says so when it matches a local branch).
+- **Work on: Existing branch** (`existingBranch: true` with `branch`). One of the repo's local
+  branches (offered as you type), or one only on origin. A name that's in neither is refused (400)
+  rather than started as a new branch. **Compare with** is the base used when the branch has no
+  open PR. As the session starts (after the dialog has closed), AgentK looks for the branch's open
+  PR for up to 5 seconds (`findPr`, an older open PR included); one found is linked (`pr_number`,
+  event *Linked PR #N*) and its base becomes the session's base.
+- **Work on: Pull request** (`pr` on a task). Your open PRs in the repo (`GET
+  /api/projects/:id/task-prs`, from `gh pr list --author @me`), or another PR by number or link.
+  The session works on the PR's head branch against the PR's base, with the PR linked from the start;
+  picking one names an unnamed session after the PR and starts it at Code unless you picked a start.
+  The PR must be open, the repo a clone of the PR's repo, and one of its remotes (any name) the PR's
+  head repo: for a PR from a fork, the fork added as a remote (`git remote add <owner> <url>`; the
+  picker says so for a PR whose fork isn't one). The head branch is fetched from that remote. Its
+  local name is the head branch's, unless the remote isn't origin and a local branch of that name
+  tracks something else (a fork's `main`): then `<remote>-<branch>`. When the head isn't origin's
+  branch of the session's name, the session records where it pushes (`sessions.push_remote`,
+  `push_branch`), the branch tracks it, and Claude's system prompt and PR prompt say to push there
+  (`git push <remote> HEAD:<branch>`). Merge & Close then leaves the fork's branch alone. A PR whose
+  branch a running session uses is listed but can't be picked.
+
+On an existing branch (from either mode, or a typed name that exists), the branch is fetched first:
+`git fetch origin <branch>` (or the PR head's remote). One only on the remote gets a local branch at
+its remote-tracking ref; one the remote no longer has loses its stale remote-tracking ref and, typed
+under New branch, starts fresh from the base. A local branch that's behind its remote copy is
+fast-forwarded (never forced); one with commits the remote lacks is used as it is, and the created
+event says why it wasn't updated. The server refuses (409) a branch a running session of any project
+uses on that repo, checked in the same write that adds the session so two starts can't both have it,
+and a branch checked out in another checkout (the main checkout, or a worktree kept for an archived
+session with uncommitted changes, which it names). A reused branch is marked
+(`sessions.branch_reused`). Claude's first prompt then starts with the `attached` prompt (the
+branch already has work: read its commits beyond the base and, for a PR, its description, review
+threads and checks, and build on it), and its system prompt says so for the session's life. The PR
+stage takes the linked PR while it's open, looked up by number (so a fork's PR counts), else that
+branch's open PR even when it's older than the session (never a fork's PR from a branch of the same
+name), and Open PR first moves the session's base to that PR's base; the PR prompt tells Claude to
+update an existing PR rather than open another. Moving the session to PR & Review picks the PR up
+(*Back on PR #N*). Archive keeps a reused branch like any other, and so does Discard (the branch
+existed before the session); Merge & Close deletes it once the PR has merged.
 
 ### Changes
 
@@ -825,7 +856,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
-| Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch. It first warns about uncommitted files and commits that no remote has. The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
+| Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
 | Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](#open-project)). |
 
 ```sql
@@ -857,6 +888,8 @@ CREATE TABLE sessions (
   pr_new_commits INTEGER, pr_state TEXT,  -- commits on the PR since review_sha (NULL: rewritten); OPEN | CLOSED | MERGED
   pr_remote TEXT,                  -- Review a PR: the clone's remote the PR is fetched from (origin, or upstream for a fork)
   review_notes TEXT,               -- Review a PR: the user's notes for AgentK
+  push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
+                                   --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
   pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
@@ -1023,7 +1056,7 @@ stateDiagram-v2
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
+| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
 | 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
@@ -1058,7 +1091,7 @@ stateDiagram-v2
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`,
+  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `attached`,
   `review-pr`, `review-pr-update`, `review-pr-comments`) with `.agent-k/stages/<name>.md`. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),

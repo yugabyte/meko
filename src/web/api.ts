@@ -26,6 +26,7 @@ import type {
   PrReviewers,
   RepoInfo,
   ReviewablePrs,
+  TaskPrs,
   ReviewComment,
   SearchResult,
   SendCommentsResult,
@@ -139,6 +140,10 @@ export const api = {
   home: (id: string) => get<ProjectHome>(`/api/projects/${enc(id)}/home`),
   prReviewers: (id: string) => get<PrReviewers[]>(`/api/projects/${enc(id)}/pr-reviewers`),
   /** The project's PRs to review, or with `pr` the one PR typed (a bare number in `repoPath`). */
+  taskPrs: (id: string, q: { pr?: string; repoPath?: string } = {}) => {
+    const qs = [q.pr ? `pr=${enc(q.pr)}` : '', q.repoPath ? `repoPath=${enc(q.repoPath)}` : ''].filter(Boolean).join('&');
+    return get<TaskPrs>(`/api/projects/${enc(id)}/task-prs${qs ? `?${qs}` : ''}`);
+  },
   reviewPrs: (id: string, q: { pr?: string; repoPath?: string } = {}) =>
     get<ReviewablePrs>(`/api/projects/${enc(id)}/review-prs${q.pr ? `?pr=${enc(q.pr)}${q.repoPath ? `&repoPath=${enc(q.repoPath)}` : ''}` : ''}`),
   usage: () => get<UsageOverview>('/api/usage'),

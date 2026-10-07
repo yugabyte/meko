@@ -179,16 +179,57 @@ export async function checkBranchName(repo: string, name: string): Promise<void>
 }
 
 /**
- * Where an existing branch is, after fetching it from origin: `local`, only on `origin` (fetched
- * into refs/remotes/origin), or null when it's in neither. A branch origin no longer has (merged
- * and deleted on GitHub) loses its stale refs/remotes/origin copy, so it never counts as on origin.
+ * Where a session's existing branch comes from on a remote: <branch> of <remote>, kept at
+ * refs/remotes/<remote>/<branch>. Usually origin's branch of the same name; a PR from a fork has
+ * its head on the fork's remote, maybe under another name than the local branch.
  */
-export async function existingBranch(repo: string, branch: string): Promise<'local' | 'origin' | null> {
+export interface BranchSource {
+  remote: string;
+  branch: string;
+}
+
+/** The remote-tracking ref of a BranchSource. */
+export function sourceRef(from: BranchSource): string {
+  return `refs/remotes/${from.remote}/${from.branch}`;
+}
+
+/**
+ * Where an existing branch is, after fetching it from <from> (origin's branch of the same name by
+ * default): `local`, only on the `remote` (fetched into refs/remotes/<remote>), or null when it's in
+ * neither. A branch the remote no longer has (merged and deleted on GitHub) loses its stale
+ * remote-tracking copy, so it never counts as on the remote.
+ */
+export async function existingBranch(repo: string, branch: string, from: BranchSource = { remote: 'origin', branch }): Promise<'local' | 'remote' | null> {
   await checkBranchName(repo, branch);
-  const err = await gitError(repo, 'fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`);
-  if (err && /couldn't find remote ref/i.test(err)) await tryGit(repo, 'update-ref', '-d', `refs/remotes/origin/${branch}`);
+  await checkBranchName(repo, from.branch);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(from.remote)) throw new Error(`"${from.remote}" isn't a remote name.`);
+  const err = await gitError(repo, 'fetch', '--quiet', from.remote, `+refs/heads/${from.branch}:${sourceRef(from)}`);
+  if (err && /couldn't find remote ref/i.test(err)) await tryGit(repo, 'update-ref', '-d', sourceRef(from));
   if (await revParse(repo, `refs/heads/${branch}`)) return 'local';
-  return (await revParse(repo, `refs/remotes/origin/${branch}`)) ? 'origin' : null;
+  return (await revParse(repo, sourceRef(from))) ? 'remote' : null;
+}
+
+/**
+ * The local branch a session on a PR works on, whose head is <from>: the head branch's name, unless
+ * <from> isn't origin and a local branch of that name tracks something else (a fork's `main` must
+ * never land on the local main); then `<remote>-<head branch>`.
+ */
+export async function prLocalBranch(repo: string, from: BranchSource): Promise<string> {
+  if (from.remote === 'origin') return from.branch;
+  if (!(await revParse(repo, `refs/heads/${from.branch}`))) return from.branch;
+  const [r, m] = await Promise.all([
+    tryGit(repo, 'config', '--get', `branch.${from.branch}.remote`), tryGit(repo, 'config', '--get', `branch.${from.branch}.merge`),
+  ]);
+  return r === from.remote && m === `refs/heads/${from.branch}` ? from.branch : `${from.remote}-${from.branch}`;
+}
+
+/**
+ * Makes <branch> track <from> (`branch.<name>.remote` and `.merge`), so a plain `git pull` and,
+ * where the names match, `git push` go to the PR's head rather than origin.
+ */
+export async function trackSource(repo: string, branch: string, from: BranchSource): Promise<void> {
+  await git(repo, 'config', `branch.${branch}.remote`, from.remote);
+  await git(repo, 'config', `branch.${branch}.merge`, `refs/heads/${from.branch}`);
 }
 
 /**
@@ -208,9 +249,10 @@ export async function baseExists(repo: string, base: string): Promise<boolean> {
  * to origin/<base> first (after a fetch) so new work starts from the latest
  * upstream. If <base> can't be fast-forwarded, the branch starts from
  * origin/<base> instead. Returns null when the branch already existed. With
- * <fromOrigin>, a branch that is only on origin gets a local branch at origin/<branch>.
+ * <from>, a branch that is only on that remote (fetched by existingBranch) gets
+ * a local branch at its remote-tracking ref.
  */
-export async function addWorktree(repo: string, path: string, branch: string, base: string, fromOrigin = false): Promise<SyncResult | null> {
+export async function addWorktree(repo: string, path: string, branch: string, base: string, from: BranchSource | null = null): Promise<SyncResult | null> {
   await checkBranchName(repo, base);
   await checkBranchName(repo, branch);
   await tryGit(repo, 'fetch', '--quiet', 'origin', base);
@@ -218,8 +260,8 @@ export async function addWorktree(repo: string, path: string, branch: string, ba
     await git(repo, 'worktree', 'add', path, branch);
     return null;
   }
-  if (fromOrigin && (await revParse(repo, `refs/remotes/origin/${branch}`))) {
-    await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, `origin/${branch}`);
+  if (from && (await revParse(repo, sourceRef(from)))) {
+    await git(repo, 'worktree', 'add', '--no-track', '-b', branch, path, sourceRef(from));
     return null;
   }
   const { sync, start } = await startPoint(repo, base);
@@ -241,9 +283,9 @@ async function startPoint(repo: string, base: string): Promise<{ sync: SyncResul
  * Puts a new session's branch in an idle worktree of <repo>, keeping its ignored files (build
  * outputs). The branch starts where addWorktree would start it. Throws, changing nothing, unless
  * <path> is a clean worktree of <repo> on a detached HEAD. Returns null when the branch already existed.
- * <fromOrigin> is as for addWorktree.
+ * <from> is as for addWorktree.
  */
-export async function reuseWorktree(repo: string, path: string, branch: string, base: string, fromOrigin = false): Promise<SyncResult | null> {
+export async function reuseWorktree(repo: string, path: string, branch: string, base: string, from: BranchSource | null = null): Promise<SyncResult | null> {
   await checkBranchName(repo, base);
   await checkBranchName(repo, branch);
   if (!(await isIdleWorktree(repo, path))) throw new Error(`${path} isn't a clean worktree of ${repo} with a detached HEAD`);
@@ -252,8 +294,8 @@ export async function reuseWorktree(repo: string, path: string, branch: string, 
     await git(path, 'checkout', '--quiet', branch);
     return null;
   }
-  if (fromOrigin && (await revParse(repo, `refs/remotes/origin/${branch}`))) {
-    await git(path, 'checkout', '--quiet', '--no-track', '-b', branch, `origin/${branch}`);
+  if (from && (await revParse(repo, sourceRef(from)))) {
+    await git(path, 'checkout', '--quiet', '--no-track', '-b', branch, sourceRef(from));
     return null;
   }
   const { sync, start } = await startPoint(repo, base);
@@ -305,7 +347,7 @@ export async function discardChanges(path: string): Promise<void> {
 }
 
 /**
- * Fast-forwards the local <branch> to origin/<branch> (already fetched); never
+ * Fast-forwards the local <branch> to origin/<branch> (or <from>'s branch; already fetched); never
  * forces. Where the main checkout has the branch checked out this is
  * `merge --ff-only`, which git refuses when it would overwrite local edits
  * (autostash off, so edits are never stashed and re-applied). A branch checked
@@ -313,20 +355,21 @@ export async function discardChanges(path: string): Promise<void> {
  * moves by a non-forced local fetch: fast-forward only, a compare-and-swap, and
  * git refuses a branch that is checked out, rebased or bisected anywhere.
  */
-export async function fastForward(repo: string, branch: string): Promise<SyncResult> {
-  const remote = await revParse(repo, `refs/remotes/origin/${branch}`);
+export async function fastForward(repo: string, branch: string, from: BranchSource = { remote: 'origin', branch }): Promise<SyncResult> {
+  const ref = sourceRef(from);
+  const remote = await revParse(repo, ref);
   if (!remote) return { kind: 'no-upstream' };
   const local = await revParse(repo, `refs/heads/${branch}`);
   if (!local) return { kind: 'skipped', reason: `there's no local ${branch} branch` };
   if (local === remote) return { kind: 'current' };
   if ((await tryGit(repo, 'merge-base', '--is-ancestor', local, remote)) === null) {
-    return { kind: 'skipped', reason: `local ${branch} has commits that aren't on origin` };
+    return { kind: 'skipped', reason: `local ${branch} has commits that aren't on ${from.remote}` };
   }
   const at = await checkedOutAt(repo, branch);
   if (at && !samePath(at, repo)) return { kind: 'skipped', reason: `${branch} is checked out in another worktree (${at})` };
   const err = at
     ? await gitError(at, '-c', 'merge.autoStash=false', 'merge', '--ff-only', '--quiet', remote)
-    : await gitError(repo, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '.', `refs/remotes/origin/${branch}:refs/heads/${branch}`);
+    : await gitError(repo, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '.', `${ref}:refs/heads/${branch}`);
   if (!err) return { kind: 'updated' };
   return { kind: 'skipped', reason: at ? `git couldn't fast-forward it in ${at}: ${err}` : `git couldn't fast-forward it: ${err}` };
 }
@@ -568,6 +611,33 @@ export async function remoteFor(repo: string, ghRepo: string): Promise<'upstream
   if (githubRepo(remotes.upstream)?.toLowerCase() === want) return 'upstream';
   if (githubRepo(remotes.origin)?.toLowerCase() === want) return 'origin';
   return null;
+}
+
+/**
+ * The remotes of <repo> on GitHub, by the `owner/name` (lowercased) each is: when two remotes are
+ * the same repo, `origin` first, then `upstream`, then the others by name.
+ */
+export async function githubRemotes(repo: string): Promise<Map<string, string>> {
+  const out = (await tryGit(repo, 'config', '--get-regexp', '^remote\\..*\\.url$')) ?? '';
+  const found: { name: string; repo: string }[] = [];
+  for (const line of out.split('\n')) {
+    const m = /^remote\.(.+)\.url\s+(\S.*)$/.exec(line.trim());
+    const gh = m ? githubRepo(m[2].trim()) : null;
+    if (m && gh) found.push({ name: m[1], repo: gh.toLowerCase() });
+  }
+  const rank = (n: string) => (n === 'origin' ? 0 : n === 'upstream' ? 1 : 2);
+  found.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+  const map = new Map<string, string>();
+  for (const f of found) if (!map.has(f.repo)) map.set(f.repo, f.name);
+  return map;
+}
+
+/**
+ * The remote of <repo> that is GitHub's <ghRepo> (`owner/name`), any remote name (see
+ * githubRemotes), or null when none is. For a PR's head, which may be on a fork the user added as a remote.
+ */
+export async function remoteOf(repo: string, ghRepo: string): Promise<string | null> {
+  return (await githubRemotes(repo)).get(ghRepo.toLowerCase()) ?? null;
 }
 
 /** Where a Review a PR session keeps the PR's head in its repo (outside refs/heads, so no branch list shows it). */
