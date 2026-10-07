@@ -36,7 +36,8 @@ function AskPreview({ text }: { text: string }) {
           type="button"
           className={cx('btn small', on && 'on')}
           aria-pressed={on}
-          // The preview is inside the option's label: toggling must not pick the option.
+          // Inside the option's label, but a label ignores clicks on a button, so this never picks the
+          // option; preventDefault keeps the click from doing anything else.
           onClick={(e) => {
             e.preventDefault();
             setWrap(!on);

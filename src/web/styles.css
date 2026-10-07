@@ -3593,7 +3593,7 @@ div[id^='dak-mermaid-'] .label {
   padding-top: 10px;
   border-top: 1px solid var(--rule);
 }
-/* A preview spans its card, and shows about 30 lines before it scrolls. */
+/* A preview spans its card, and grows to 60% of the window's height before it scrolls. */
 .ask-dialog .dq-opt-text {
   flex: 1;
 }
