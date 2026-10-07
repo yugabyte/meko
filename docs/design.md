@@ -712,13 +712,16 @@ dialog holds the id the server gave it (the file's name), with the same strip of
 **Start session** waits for uploads still running, then names the images in
 `CreateSessionRequest.images`, at most 20. The server takes only ids of that project's staged
 images, checked with the other quick checks, so a refused start leaves them in the dialog; once
-the session's row is in, it moves them to the session's `pastes/<session>/`. The first prompt
-reaches Claude on its command line, where a path isn't taken as an attached image, so the paths
-are added to the task (a review's notes) with a line asking Claude to open each with its Read
-tool, and the hooks settings file allows `Read` on the pastes folder so that doesn't stop for a
-permission prompt. Being in the task, they go with every later prompt that names the task (a move
-from Explore, a relaunch without resume); at Explore, images with no text are the first prompt.
-AgentK's Meko search at start uses the task's text alone. Staged images no session started with
+the session's row is in, it moves them to the session's `pastes/<session>/` and keeps the paths of
+the ones that got there (`sessions.start_images`). One gone by then (swept, or taken by another
+start) is left out, and the session's activity log says to paste it into the terminal. The first
+prompt reaches Claude on its command line, where a path isn't taken as an attached image, so
+every prompt that names the task (a review's notes) adds the paths with a line asking Claude to
+open each with its Read tool: the first prompt, a move from Explore, a relaunch without resume.
+The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
+prompt. The images aren't the task: at Explore, images with no text are a first prompt, but the
+session still has no task (`Session.hasTask`), so moving it on asks for one. AgentK's Meko search
+at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that

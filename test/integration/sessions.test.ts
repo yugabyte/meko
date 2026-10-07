@@ -644,17 +644,41 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const paths = [a, b].map((i) => join(pastes, s.id, i));
     for (const path of paths) expect(readFileSync(path)).toEqual(png);
     expect(existsSync(join(stagedDir(pastes, p.id), a))).toBe(false);
-    const task = `It overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`;
-    expect(env.core.sessions.row(s.id).initial_prompt).toBe(task);
+    // Kept apart from the task, and added to it in Claude's prompts.
+    expect(env.core.sessions.row(s.id).initial_prompt).toBe('It overflows on phones');
     const prompt = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args.at(-1);
-    expect(prompt).toContain(task);
+    expect(prompt).toContain(`Task: It overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`);
 
-    // At Explore, images alone are a first prompt.
+    // At Explore, images alone are a first prompt, but not a task: moving on asks for one.
     const c = env.core.sessions.stageImage(p.id, png).id;
     const e = await env.core.sessions.create(p.id, { name: 'Look at this', start: 'explore', images: [c] });
-    expect(env.core.sessions.row(e.id).initial_prompt).toBe(`Images the user attached (open each with the Read tool to see it):\n- ${join(pastes, e.id, c)}`);
+    expect(e.hasTask).toBe(false);
+    expect(env.core.sessions.row(e.id).initial_prompt).toBeNull();
     await waitFor(() => argvLog(env), (l) => l.length > 1, 10000, 'second launch');
-    expect(argvLog(env)[1].args.at(-1)).toContain(join(pastes, e.id, c));
+    expect(argvLog(env)[1].args.at(-1)).toContain(`Task: Images the user attached (open each with the Read tool to see it):\n- ${join(pastes, e.id, c)}`);
+    await waitFor(() => env.core.sessions.get(e.id).status, (st) => st === 'idle', 10000, 'Explore turn');
+    await expect(env.core.sessions.move(e.id, { stage: 'design' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
+    const moved = await env.core.sessions.move(e.id, { stage: 'design', task: 'Make the footer wrap' });
+    expect(moved.hasTask).toBe(true);
+    await waitFor(() => transcriptText(moved.claudeSessionId), (t) => t.includes('You are in the Design stage'), 10000, 'Design prompt');
+    // The typed task, with the images still going with it.
+    const designPrompt = transcriptText(moved.claudeSessionId).split('\n').find((l) => l.includes('You are in the Design stage'))!;
+    expect(designPrompt).toContain('Task: Make the footer wrap');
+    expect(designPrompt).toContain(join(pastes, e.id, c));
+
+    // An image gone before it could be moved (swept, or taken by another start) is left out, and the activity log says so.
+    const d = env.core.sessions.stageImage(p.id, png).id;
+    const gone = env.core.sessions.stageImage(p.id, png).id;
+    const starting = env.core.sessions.begin(p.id, { name: 'Half there', prompt: 'Look', start: 'code', images: [d, gone] });
+    // The images are checked before begin's first await.
+    rmSync(join(stagedDir(pastes, p.id), gone));
+    const { session: h, done } = await starting;
+    await done;
+    const half = (await waitFor(() => argvLog(env).map((l) => l.args.at(-1) ?? '').find((a) => a.includes(join(pastes, h.id))), (a) => !!a, 10000, 'third launch'))!;
+    expect(half).toContain(join(pastes, h.id, d));
+    expect(half).not.toContain(gone);
+    expect(get<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'images'", h.id)?.text)
+      .toBe("An image you added wasn't on the host any more when the session started, so AgentK doesn't have it. Paste it into the terminal.");
 
     // Closing the project removes what's still staged.
     env.core.sessions.stageImage(p.id, png);

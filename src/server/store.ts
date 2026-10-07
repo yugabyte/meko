@@ -105,6 +105,8 @@ export interface SessionRow {
   pr_remote: string | null;
   /** The user's notes for AgentK, given when the review started. */
   review_notes: string | null;
+  /** The images added in the New session dialog that reached the session: a JSON list of paths. */
+  start_images: string | null;
   /**
    * A task started on a PR whose head is on another remote, or under another name, than origin's
    * branch of the session's name (a fork's PR): where its pushes go. NULL: origin.

@@ -1306,7 +1306,8 @@ export interface CreateSessionRequest {
   pr?: { repo: string; number: number };
   /**
    * Images for the first prompt (a review's notes), by the ids `POST /api/projects/:id/images`
-   * returned for this project. Their paths are added to the task (or the notes) for Claude to read.
+   * returned for this project. They're kept apart from the task, and their paths go with it (a
+   * review's notes) in Claude's prompts, for Claude to read.
    * A failed start keeps them in its request, but the images themselves are gone by then.
    */
   images?: string[];

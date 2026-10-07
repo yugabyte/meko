@@ -386,6 +386,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN push_remote TEXT;
   ALTER TABLE sessions ADD COLUMN push_branch TEXT;
   `,
+  // 25: the images added in the New session dialog, as a JSON list of their paths in the session's
+  // pastes folder. Kept apart from the task, so a session started at Explore with only images
+  // still has no task.
+  `
+  ALTER TABLE sessions ADD COLUMN start_images TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {
