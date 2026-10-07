@@ -29,7 +29,7 @@ import (
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
 	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements", "tsm_system_rows",
-	"postgres_fdw", "pgsentinel",
+	"postgres_fdw", "dict_int", "pgsentinel",
 }
 
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
@@ -478,6 +478,11 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 		return fmt.Errorf("tsm_system_rows TABLESAMPLE over the canary table, which documentdb depends on: %w", err)
 	} else if n != 5 {
 		return fmt.Errorf("TABLESAMPLE SYSTEM_ROWS(5) returned %d rows out of 20, want exactly 5", n)
+	}
+	if lex, err := c.QueryString(ctx, "SELECT ts_lexize('intdict', '12345678')::text"); err != nil {
+		return fmt.Errorf("dict_int ts_lexize over its intdict dictionary: %w", err)
+	} else if lex != "{123456}" {
+		return fmt.Errorf("ts_lexize('intdict', '12345678') returned %s, want {123456}: dict_int's default maxlen of 6 did not truncate", lex)
 	}
 
 	return fdwLoopbackCanary(ctx, c, table)

@@ -1,0 +1,18 @@
+CREATE EXTENSION
+ ts_lexize
+-----------
+ {123456}
+(1 row)
+
+ALTER TEXT SEARCH DICTIONARY
+ ts_lexize
+-----------
+ {}
+(1 row)
+
+ ts_lexize
+-----------
+ {1234}
+(1 row)
+
+DROP EXTENSION

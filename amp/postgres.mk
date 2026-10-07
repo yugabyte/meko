@@ -127,6 +127,7 @@ postgres-install-%: postgres-configure-% \
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_stat_statements install
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/tsm_system_rows install
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/postgres_fdw install
+	$(MAKE) -C $(BUILD_DIR)/$*/contrib/dict_int install
 
 .PHONY: FORCE
 FORCE:

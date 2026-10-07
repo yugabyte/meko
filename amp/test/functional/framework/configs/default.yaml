@@ -170,16 +170,17 @@ env:
     endpoint_memory_gib_per_vcpu: 2
     # Pinned to known-good tags; bump as new builds publish, and keep the pair
     # from one build: the chart in the controller image names the libraries the
-    # endpoint image must ship. custom-99ef0d8ddbe9 is the first build that bakes
-    # pgsentinel (#1446), which pg_extensions_matrix requires. Tags before #280
+    # endpoint image must ship. custom-851059bce is the first build that bakes
+    # both pgsentinel (#1446) and dict_int (AMP-78), which pg_extensions_matrix
+    # requires. Tags before #280
     # (custom-4f1ca53, custom-0e2131d) ran the storage controller as a separate
     # subprocess that crash-loops on "Insecure config!", so avoid them. The ecr
     # flavor's equivalents, amp/controller:tailnet-mig0010 and
     # amp/endpoint:phase1-20260703-154251, predate pgsentinel: a `registry: ecr`
     # run without an image override fails pg_extensions_matrix on it until those
     # are rebuilt.
-    controller_image: "amp-controller:custom-99ef0d8ddbe9"
-    endpoint_image: "amp-endpoint:custom-99ef0d8ddbe9"
+    controller_image: "amp-controller:custom-851059bce"
+    endpoint_image: "amp-endpoint:custom-851059bce"
     # quay.io robot credentials for the pull secret (custom/release builds
     # pushed by the amp build pipeline live there). Empty -> no quay auth.
     # quay_token is redacted from the recorded config snapshot and masked in
@@ -509,6 +510,7 @@ functional:
       - pg_stat_statements
       - tsm_system_rows
       - postgres_fdw
+      - dict_int
       - pgsentinel
     catalog:
       - "pgvector:vector"
