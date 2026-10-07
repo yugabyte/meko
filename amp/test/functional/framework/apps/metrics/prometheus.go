@@ -182,6 +182,11 @@ func samplePrometheus(
 	}
 	values := parseExposition(res.Stdout, entries)
 	meta := parseExpositionMeta(res.Stdout, entries)
+	since := st.lastAnswer
+	st.lastAnswer = now
+	if st.firstAnswer.IsZero() {
+		st.firstAnswer = now
+	}
 	names := make([]string, 0, len(values))
 	for name := range values {
 		names = append(names, name)
@@ -219,13 +224,16 @@ func samplePrometheus(
 		if e.Kind == KindGauge && meta[name].counter {
 			e.Kind = KindCounter
 		}
-		if rd, ok := derive(name, values[name], e, now, st); ok {
+		if _, ok := st.firstSeen[name]; !ok {
+			st.firstSeen[name] = now
+		}
+		if rd, ok := derive(name, values[name], e, now, since, st); ok {
 			rd.desc = meta[name].desc
 			out = append(out, rd)
 		}
 	}
 	for _, base := range pairOrder {
-		out = append(out, derivePair(pairs[base], now, st)...)
+		out = append(out, derivePair(pairs[base], now, since, st)...)
 	}
 	return out
 }
@@ -239,7 +247,7 @@ func samplePrometheus(
 // value here is a SUM over label sets: a tserver's per-tablet counters drop when a
 // tablet moves off it, with no restart, and re-basing that would read the whole
 // remaining total as one interval's work.
-func derive(name string, v float64, e Entry, now time.Time, st *podState) (reading, bool) {
+func derive(name string, v float64, e Entry, now, since time.Time, st *podState) (reading, bool) {
 	prev, seen := st.prom[name]
 	st.prom[name] = promSample{value: v, at: now}
 	rd := reading{name: e.Title, unit: e.Unit, round: e.Round, at: now, raw: []string{name}}
@@ -247,7 +255,7 @@ func derive(name string, v float64, e Entry, now time.Time, st *podState) (readi
 		rd.value = v / e.DivideBy
 		return rd, true
 	}
-	base, ok := counterBase(prev, seen, st)
+	base, ok := counterBase(prev, seen, since, st)
 	if !ok {
 		return reading{}, false
 	}
@@ -260,14 +268,18 @@ func derive(name string, v float64, e Entry, now time.Time, st *podState) (readi
 	return rd, true
 }
 
-// counterBase is the sample a counter's delta is measured from: the previous one
-// or, on a pod that appeared after sampling began, zero as of podState.newSince —
-// otherwise a replacement's first interval, often the one a fault test is judging,
-// is lost. A pod already running when sampling began has neither, so its first
-// sample only seeds.
-func counterBase(prev promSample, seen bool, st *podState) (promSample, bool) {
+// counterBase is the sample a counter's delta is measured from: the previous one;
+// zero as of the previous scrape when the series was absent from it, since a
+// labelled counter is only exported from its first increment and that increment
+// is often the fault being judged; or, on a pod that appeared after sampling
+// began, zero as of podState.newSince. A pod already running when sampling began
+// has none of these on its first scrape, which only seeds.
+func counterBase(prev promSample, seen bool, since time.Time, st *podState) (promSample, bool) {
 	if seen {
 		return prev, true
+	}
+	if !since.IsZero() {
+		return promSample{at: since}, true
 	}
 	if !st.newSince.IsZero() {
 		return promSample{at: st.newSince}, true
@@ -281,7 +293,7 @@ func counterBase(prev promSample, seen bool, st *podState) (promSample, bool) {
 // include list does) hands the reader a "sum per second" that means nothing.
 // Both need a base to measure from (see counterBase); a counter reset or an idle
 // interval (no calls) yields no latency point rather than a division by zero.
-func derivePair(p *histPair, now time.Time, st *podState) []reading {
+func derivePair(p *histPair, now, since time.Time, st *podState) []reading {
 	if p == nil || !p.haveCount || !p.haveSum {
 		return nil
 	}
@@ -289,8 +301,8 @@ func derivePair(p *histPair, now time.Time, st *podState) []reading {
 	prevSum, seenSum := st.prom[p.sumName]
 	st.prom[p.countName] = promSample{value: p.count, at: now}
 	st.prom[p.sumName] = promSample{value: p.sum, at: now}
-	baseCount, okCount := counterBase(prevCount, seenCount, st)
-	baseSum, okSum := counterBase(prevSum, seenSum, st)
+	baseCount, okCount := counterBase(prevCount, seenCount, since, st)
+	baseSum, okSum := counterBase(prevSum, seenSum, since, st)
 	if !okCount || !okSum {
 		return nil
 	}

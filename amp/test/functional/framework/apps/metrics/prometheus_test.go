@@ -108,10 +108,10 @@ func TestDeriveCounterBecomesTitledRate(t *testing.T) {
 	st := newPodState()
 	e := normalize(Entry{Match: `^log_bytes_logged$`, Title: "WAL bytes", Kind: KindCounter, Unit: "MiB/s", DivideBy: 1 << 20})
 	t0 := time.Unix(1730000000, 0)
-	if _, ok := derive("log_bytes_logged", 0, e, t0, st); ok {
+	if _, ok := derive("log_bytes_logged", 0, e, t0, time.Time{}, st); ok {
 		t.Errorf("first counter sample produced a reading; a rate needs a delta")
 	}
-	rd, ok := derive("log_bytes_logged", 10*(1<<20), e, t0.Add(10*time.Second), st)
+	rd, ok := derive("log_bytes_logged", 10*(1<<20), e, t0.Add(10*time.Second), time.Time{}, st)
 	if !ok {
 		t.Fatalf("second counter sample produced nothing")
 	}
@@ -128,7 +128,7 @@ func TestDeriveGaugePassesThroughScaled(t *testing.T) {
 	st := newPodState()
 	e := normalize(Entry{Match: `^mem_tracker$`, Title: "Memory tracker", Unit: "MiB", DivideBy: 1 << 20})
 	t0 := time.Unix(1730000000, 0)
-	rd, ok := derive("mem_tracker", 8*(1<<20), e, t0, st)
+	rd, ok := derive("mem_tracker", 8*(1<<20), e, t0, time.Time{}, st)
 	if !ok || rd.name != "Memory tracker" || rd.unit != "MiB" || rd.value != 8 {
 		t.Fatalf("first gauge sample = %+v (ok %v), want Memory tracker 8 MiB", rd, ok)
 	}
@@ -140,11 +140,11 @@ func TestDeriveSkipsCounterReset(t *testing.T) {
 	st := newPodState()
 	e := normalize(Entry{Match: `^log_bytes_logged$`, Title: "WAL bytes", Kind: KindCounter})
 	t0 := time.Unix(1730000000, 0)
-	derive("log_bytes_logged", 5000, e, t0, st)
-	if _, ok := derive("log_bytes_logged", 10, e, t0.Add(10*time.Second), st); ok {
+	derive("log_bytes_logged", 5000, e, t0, time.Time{}, st)
+	if _, ok := derive("log_bytes_logged", 10, e, t0.Add(10*time.Second), time.Time{}, st); ok {
 		t.Errorf("counter reset produced a reading")
 	}
-	rd, ok := derive("log_bytes_logged", 110, e, t0.Add(20*time.Second), st)
+	rd, ok := derive("log_bytes_logged", 110, e, t0.Add(20*time.Second), time.Time{}, st)
 	if !ok || rd.value != 10 {
 		t.Errorf("post-reset rate = %+v (ok %v), want 10 /s", rd, ok)
 	}
@@ -159,12 +159,33 @@ func TestDeriveMeasuresANewPodsFirstCounterSampleFromZero(t *testing.T) {
 	st := newPodState()
 	st.newSince = t0
 
-	rd, ok := derive("tasks_reclaimed_total", 20, e, t0.Add(10*time.Second), st)
+	rd, ok := derive("tasks_reclaimed_total", 20, e, t0.Add(10*time.Second), time.Time{}, st)
 	if !ok || rd.value != 2 {
 		t.Fatalf("first sample on a new pod = %+v (ok %v), want 2 /s since the listing before it", rd, ok)
 	}
-	if _, ok := derive("tasks_reclaimed_total", 5, e, t0.Add(20*time.Second), st); ok {
+	if _, ok := derive("tasks_reclaimed_total", 5, e, t0.Add(20*time.Second), time.Time{}, st); ok {
 		t.Errorf("counter reset on a new pod produced a reading")
+	}
+}
+
+// A labelled counter is exported from its first increment, so a series missing
+// from the previous scrape of a running pod was zero then.
+func TestCounterAbsentFromThePreviousScrapeIsMeasuredFromZero(t *testing.T) {
+	entries := compiled(t, Entry{Match: `^errors_total$`, Title: "Errors", Kind: KindCounter})
+	ex := &fakeRunner{out: []execpkg.Result{
+		{Stdout: "other_total 1\n"},
+		{Stdout: "other_total 1\nerrors_total 30\n"},
+	}}
+	st := newPodState()
+	t0 := time.Unix(1730000000, 0)
+	logf := func(string, ...any) {}
+
+	if got := samplePrometheus(context.Background(), ex, 9898, pageserverPromPath, entries, st, t0, logf); len(got) != 0 {
+		t.Fatalf("first scrape = %+v, want nothing", got)
+	}
+	got := samplePrometheus(context.Background(), ex, 9898, pageserverPromPath, entries, st, t0.Add(15*time.Second), logf)
+	if len(got) != 1 || math.Abs(got[0].value-2) > 1e-9 {
+		t.Fatalf("scrape where errors_total first appears = %+v, want 2 /s since the previous scrape", got)
 	}
 }
 
@@ -329,5 +350,38 @@ func TestPromCmdFallsBackToDevTCP(t *testing.T) {
 	}
 	if strings.Contains(cmd, "grep -v") {
 		t.Error("comment lines must reach the parser (# HELP / # TYPE carry metadata)")
+	}
+}
+
+func TestAbsentBeforeNeedsAnAnsweredScrapeWithoutTheSeries(t *testing.T) {
+	t0 := time.Unix(1730000000, 0)
+	fault := t0.Add(time.Minute)
+	pod := func(answered, seen time.Time) *podState {
+		st := newPodState()
+		st.firstAnswer = answered
+		if !seen.IsZero() {
+			st.firstSeen["errors_total"] = seen
+		}
+		return st
+	}
+	cases := []struct {
+		name   string
+		states map[string]*podState
+		want   bool
+	}{
+		{"appeared mid-fault", map[string]*podState{"ps/a": pod(t0, fault.Add(time.Second))}, true},
+		{"exported on the seeding scrape", map[string]*podState{"ps/a": pod(t0, t0)}, false},
+		{"exposition first answered mid-fault", map[string]*podState{"ps/a": pod(fault.Add(time.Second), fault.Add(2*time.Second))}, false},
+		{"never exported", map[string]*podState{"ps/a": pod(t0, time.Time{})}, false},
+		{"one pod of two exported it from the start", map[string]*podState{
+			"ps/a": pod(t0, fault.Add(time.Second)), "ps/b": pod(t0, t0),
+		}, false},
+		{"another role's pod", map[string]*podState{"other/a": pod(t0, fault.Add(time.Second))}, false},
+	}
+	for _, tc := range cases {
+		s := &Sampler{states: tc.states}
+		if got := s.AbsentBefore("ps", "errors_total", fault); got != tc.want {
+			t.Errorf("%s: AbsentBefore = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

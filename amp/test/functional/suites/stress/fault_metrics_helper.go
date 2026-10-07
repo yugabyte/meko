@@ -36,6 +36,9 @@ type faultMetricSpec struct {
 	Title string
 	Raw   string
 	Means string
+	// Labelled: exported only from its first increment, so its absence from an
+	// exposition that answered before the fault reads as zero.
+	Labelled bool
 }
 
 type faultMetricsWatch struct {
@@ -77,7 +80,7 @@ func pageserverFaultMetrics() (metrics.Source, []faultMetricSpec) {
 		},
 	}
 	return src, []faultMetricSpec{
-		{Title: "YB client errors", Raw: "yb_client_errors_total",
+		{Title: "YB client errors", Raw: "yb_client_errors_total", Labelled: true,
 			Means: "YugabyteDB client errors the pageserver classified and retried while the node was unreachable"},
 		{Title: "YB store op latency", Raw: "pageserver_yb_store_op_seconds",
 			Means: "how long a PageStore round trip to YugabyteDB takes"},
@@ -185,7 +188,7 @@ func (w *faultMetricsWatch) Assert(t *core.T) error {
 			s.Set(spec.Raw+"_baseline_samples", m.pre)
 			s.Set(spec.Raw+"_peak", round4(m.peak))
 			s.Set(spec.Raw+"_settled", round4(m.settled))
-			if m.pre == 0 {
+			if m.pre == 0 && !(spec.Labelled && w.sampler.AbsentBefore(w.src.Tag, spec.Raw, start)) {
 				blind = append(blind, fmt.Sprintf("%s carries no sample before the fault, so a rise over its baseline would mean nothing (%s)", spec.Raw, spec.Means))
 				continue
 			}

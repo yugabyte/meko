@@ -323,6 +323,10 @@ type target struct {
 	role role
 }
 
+// key is per role as well as per pod: yugabyted's master and tserver roles
+// select the same pod and are sampled concurrently.
+func (tg target) key() string { return tg.role.tag + "/" + tg.pod }
+
 // Sampler polls a set of pods on an interval until stopped.
 type Sampler struct {
 	kube  *k8s.Kubectl
@@ -337,6 +341,9 @@ type Sampler struct {
 	mu    sync.Mutex
 	store map[string]*series
 	keys  []string
+
+	// Owned by the loop goroutine; read only once it has exited.
+	states map[string]*podState
 }
 
 // series accumulates one metric's lines in arrival order.
@@ -444,6 +451,28 @@ func (s *Sampler) Stop() []Series {
 	return out
 }
 
+// AbsentBefore reports whether raw, on the pods of role tag that ever exported
+// it, was missing from an exposition those pods answered before t: the case of
+// a labelled counter, exported only from its first increment, that was zero
+// then. Call it after Stop.
+func (s *Sampler) AbsentBefore(tag, raw string, t time.Time) bool {
+	found := false
+	for key, st := range s.states {
+		if !strings.HasPrefix(key, tag+"/") {
+			continue
+		}
+		seen, ok := st.firstSeen[raw]
+		if !ok {
+			continue
+		}
+		if st.firstAnswer.IsZero() || !st.firstAnswer.Before(t) || !seen.After(st.firstAnswer) {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
 // discover lists the pods behind each role's label selector. A role whose
 // selector errors or matches nothing contributes nothing. listedAt holds, per
 // role tag, when a listing that succeeded was started; a failed one is absent,
@@ -470,8 +499,9 @@ func (s *Sampler) discover(ctx context.Context) (out []target, listedAt map[stri
 func (s *Sampler) loop(ctx context.Context, targets []target, listedAt map[string]time.Time) {
 	defer close(s.done)
 	states := make(map[string]*podState, len(targets))
+	s.states = states
 	for _, tg := range targets {
-		states[tg.pod] = newPodState()
+		states[tg.key()] = newPodState()
 	}
 	tick := time.NewTicker(s.cfg.SampleInterval)
 	defer tick.Stop()
@@ -497,7 +527,7 @@ func (s *Sampler) loop(ctx context.Context, targets []target, listedAt map[strin
 func (s *Sampler) rediscover(ctx context.Context, have []target, states map[string]*podState, listedAt map[string]time.Time) []target {
 	seen := make(map[string]bool, len(have))
 	for _, tg := range have {
-		seen[tg.role.tag+"/"+tg.pod] = true
+		seen[tg.key()] = true
 	}
 	// Bounded like a tick's probes (sampleAll): the listing runs in front of them
 	// every tick, and a kubectl get against an apiserver the fault is degrading
@@ -507,15 +537,15 @@ func (s *Sampler) rediscover(ctx context.Context, have []target, states map[stri
 	defer cancel()
 	found, listed := s.discover(lctx)
 	for _, tg := range found {
-		key := tg.role.tag + "/" + tg.pod
+		key := tg.key()
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		if states[tg.pod] == nil {
+		if states[tg.key()] == nil {
 			st := newPodState()
 			st.newSince = listedAt[tg.role.tag]
-			states[tg.pod] = st
+			states[tg.key()] = st
 		}
 		have = append(have, tg)
 	}
@@ -538,7 +568,7 @@ func (s *Sampler) sampleAll(ctx context.Context, targets []target, states map[st
 		go func(tg target) {
 			defer wg.Done()
 			ex := s.kube.ForPod(tg.pod, tg.role.container)
-			st := states[tg.pod]
+			st := states[tg.key()]
 			s.record(tg, sampleCgroup(tctx, ex, st, now, s.logf))
 			s.record(tg, samplePrometheus(tctx, ex, tg.role.port, tg.role.path, tg.role.entries, st, now, s.logf))
 		}(tg)
@@ -702,6 +732,12 @@ type podState struct {
 	// its process began after it and every counter on it counted up from zero.
 	// Zero for a pod that was already running when sampling began.
 	newSince time.Time
+
+	firstAnswer time.Time
+	lastAnswer  time.Time
+	firstSeen   map[string]time.Time
 }
 
-func newPodState() *podState { return &podState{prom: map[string]promSample{}} }
+func newPodState() *podState {
+	return &podState{prom: map[string]promSample{}, firstSeen: map[string]time.Time{}}
+}

@@ -17,7 +17,7 @@ import (
 const (
 	DefaultRedpathWedgeDeadline = 20 * time.Minute
 	DefaultRedpathRetryWait     = 60 * time.Second
-	DefaultRedpathAPIDeadline   = 10 * time.Second
+	DefaultRedpathAPIDeadline   = 30 * time.Second
 	DefaultRedpathOrphanTimeout = 45 * time.Minute
 	DefaultRedpathQuotaHeadroom = 0
 	DefaultRedpathFaultHold     = 90 * time.Second

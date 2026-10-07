@@ -448,7 +448,8 @@ functional:
   #   retry_wait: the settle before the same request is retried once the fault is
   #     gone.
   #   api_deadline: how long a read the controller cannot serve may take to say
-  #     so (meko#1242 reports about two minutes).
+  #     so (meko#1242 reports about two minutes). The pool's bounded dial and
+  #     ping answer 503 in about 11s, so the bound sits clear of that.
   #   orphan_timeout: the sweeper budget for compute left behind by a failed
   #     task. The controller leaves an orphan alone for gc-grace (30m), then
   #     sweeps every gc-interval (5m).
@@ -466,7 +467,7 @@ functional:
     inject: true
     wedge_deadline: "20m"
     retry_wait: "60s"
-    api_deadline: "10s"
+    api_deadline: "30s"
     orphan_timeout: "45m"
     quota_headroom: 0
     fault_hold: "90s"
