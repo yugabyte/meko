@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, makeEnv, tempDir, waitFor, type TestEnv } from '../helpers.js';
@@ -129,6 +129,18 @@ describe('sessions in another repo and on a branch you name (real tmux + git, fa
         .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/isn't a valid branch name/) });
     }
     expect(sessionCount()).toBe(1);
+  });
+
+  it('says the project\'s repo is gone rather than blaming the base branch', async () => {
+    const p = await project();
+    renameSync(env.repo, `${env.repo}-moved`);
+    try {
+      await expect(env.core.sessions.create(p.id, { name: 'Gone', prompt: 'hi', kind: 'quick', baseBranch: 'main' }))
+        .rejects.toMatchObject({ status: 400, message: `${env.repo} isn't a git repo any more: it was moved or deleted. Put it back there to start sessions in it.` });
+      expect(sessionCount()).toBe(0);
+    } finally {
+      renameSync(`${env.repo}-moved`, env.repo);
+    }
   });
 
   it('picks up an existing local branch as it is, or one only on origin', async () => {
