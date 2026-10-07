@@ -480,7 +480,37 @@ func (k *Kubectl) LogsAll(ctx context.Context, target string, tail int) (string,
 // LogsAllPrevious is LogsAll for the PREVIOUS container instances (crash-loop
 // evidence). It errors when no container of the pod ever restarted.
 func (k *Kubectl) LogsAllPrevious(ctx context.Context, target string, tail int) (string, error) {
-	return k.logsAll(ctx, target, tail, true)
+	out, err := k.logsAll(ctx, target, tail, true)
+	if err == nil {
+		return out, nil
+	}
+	// --all-containers --previous fails outright when any container has no
+	// previous instance, so an endpoint whose compute crashed beside a sidecar
+	// that never did lost exactly the log that says why (run 4b86a821).
+	getTarget := []string{target}
+	if !strings.Contains(target, "/") {
+		getTarget = []string{"pod", target}
+	}
+	res, gerr := k.exec(ctx, nil, append(append([]string{"get"}, getTarget...),
+		"-o", `jsonpath={range .status.containerStatuses[?(@.restartCount>0)]}{.name}{"\n"}{end}`)...)
+	if gerr != nil {
+		return "", err
+	}
+	podName := target[strings.LastIndex(target, "/")+1:]
+	var b strings.Builder
+	for _, c := range strings.Fields(res.Stdout) {
+		blob, cerr := k.LogsPrevious(ctx, target, c, tail)
+		if cerr != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimRight(blob, "\n"), "\n") {
+			fmt.Fprintf(&b, "[pod/%s/%s] %s\n", podName, c, line)
+		}
+	}
+	if b.Len() == 0 {
+		return "", err
+	}
+	return b.String(), nil
 }
 
 func (k *Kubectl) logsAll(ctx context.Context, target string, tail int, previous bool) (string, error) {
