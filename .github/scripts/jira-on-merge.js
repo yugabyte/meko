@@ -21,12 +21,11 @@ const REF = String.raw`(?:\[[A-Z][A-Z0-9]+-\d+\]\(${URL}\)|(?:${URL})|[A-Z][A-Z0
 const CLOSE_LINE = new RegExp(String.raw`^\s*(?:[-*]\s+)?(?:Closes|Fixes|Resolves):?\s+(${REF}(?:\s*,\s*${REF}|\s+${REF})*)\s*\.?\s*$`);
 const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
-// The projects this closes, each with its workflow's global transition (usable
-// from any status) and the statuses that already count as merged. MEKO parks a
-// merged ticket at Merged to Main; its later Pushed to dev must not be undone.
+// The projects this closes, each with its workflow's global Done transition
+// (usable from any status).
 const TARGETS = {
-  AMP: { transition: "31", status: "Done", merged: ["Done"] },
-  MEKO: { transition: "2", status: "Merged to Main", merged: ["Merged to Main", "Pushed to dev"] },
+  AMP: { transition: "31", status: "Done" },
+  MEKO: { transition: "31", status: "Done" },
 };
 
 function closedKeys(body, projects) {
@@ -91,7 +90,7 @@ async function run({ context, core }) {
     }
     try {
       const { status } = (await jira(`/rest/api/3/issue/${key}?fields=status`)).fields;
-      if (status.statusCategory.key === "done" || target.merged.includes(status.name)) {
+      if (status.statusCategory.key === "done") {
         core.info(`${key}: already ${status.name}; left alone.`);
         continue;
       }

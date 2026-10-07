@@ -116,11 +116,11 @@ Closes https://github.com/yugabyte/meko/issues/123
 ```
 
 - **Jira** (`AMP`, `MEKO`): on merge, the `jira-on-merge` workflow comments the
-  PR link on the ticket and moves it to Done (`MEKO`: Merged to Main). It reads
-  only lines that are exactly `Closes`, `Fixes` or `Resolves` (capitalized)
-  followed by ticket URLs or keys, so put nothing else on the line. A key in the
-  title or in prose is only a reference: `[AMP-55] ...` or "Fixes the flake
-  AMP-73 reported" closes nothing.
+  PR link on the ticket and moves it to Done. It reads only lines that are
+  exactly `Closes`, `Fixes` or `Resolves` (capitalized) followed by ticket URLs
+  or keys, so put nothing else on the line. A key in the title or in prose is
+  only a reference: `[AMP-55] ...` or "Fixes the flake AMP-73 reported" closes
+  nothing.
 - **Other Jira projects** (`CLOUDGA`, `PLAT`, …): still write the `Closes` line so
   the reader sees what the PR finishes, but the workflow leaves those tickets
   alone. Move them yourself once the PR merges.

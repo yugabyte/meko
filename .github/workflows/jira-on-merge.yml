@@ -1,7 +1,7 @@
 name: Jira — move closed tickets on merge
 
 # When a PR merges to main, moves each Jira ticket its body closes
-# (`Closes AMP-55`) to its project's merged state and comments the PR link.
+# (`Closes AMP-55`) to Done and comments the PR link.
 # Keys in the title or prose are references only. See
 # .github/scripts/jira-on-merge.js.
 #
