@@ -47,6 +47,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
@@ -107,7 +108,23 @@ type Backend struct {
 	lastSeenExt []string
 	// adminReady is set once the agent's admin user exists (see ensureYCPAdmin).
 	adminReady bool
+	// lastHealth is each endpoint's last health verdict and when it was read,
+	// guarded by mu, so a tick whose read came back without one repeats it (see
+	// endpointHealth).
+	lastHealth map[reconcile.ResourceKey]heldHealth
+	// now is the clock endpointHealth ages verdicts by; nil means time.Now.
+	now func() time.Time
 }
+
+type heldHealth struct {
+	health ampclient.EndpointHealth
+	at     time.Time
+}
+
+// healthStaleAfter is how long a held verdict is repeated without a note that
+// it is old. The engine's default StuckAfter, so a reading this old is flagged
+// on the same clock as a resource that has stopped moving.
+const healthStaleAfter = 10 * time.Minute
 
 // updateFuncs is every kind Update can converge, mapped to how. It is the one
 // place that set is written down: Update dispatches through it, and
@@ -503,17 +520,16 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 					epPath := join([]string{poolPath, cl.Name, br.Name, epName})
 					idx.endpoint[epPath] = ep.Id
 					idx.endpointRow[epPath] = ep
-					ready := ep.Address != ""
-					state := "provisioning"
-					if ready {
-						state = "ready"
-					}
+					epKey := reconcile.ResourceKey{Kind: KindEndpoint, Name: epPath}
+					h, readAt := b.endpointHealth(epKey, ep.Health)
+					ready, state, detail := endpointState(ep.Address, h, readAt, b.clock())
 					out = append(out, reconcile.Actual{
-						Key:         reconcile.ResourceKey{Kind: KindEndpoint, Name: epPath},
+						Key:         epKey,
 						Parent:      reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
 						ObservedGen: observedGen(ep.YcpGeneration),
 						Ready:       ready,
 						State:       state,
+						Detail:      detail,
 						Attrs:       endpointAttrs(ep),
 					})
 				}
@@ -529,6 +545,11 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 	}
 	b.mu.Lock()
 	b.lastSeen = seen
+	for k := range b.lastHealth {
+		if _, ok := idx.endpoint[k.Name]; !ok {
+			delete(b.lastHealth, k)
+		}
+	}
 	b.mu.Unlock()
 
 	return out, idx, nil
@@ -1570,3 +1591,70 @@ func httpErr(code int, body []byte) error {
 }
 
 var _ reconcile.Backend = (*Backend)(nil)
+
+// endpointHealth returns the verdict to judge an endpoint by, and when it was
+// read. The controller omits health when its pod read fails, and the agent
+// cannot tell that from a controller that predates the field, so an endpoint
+// that has reported health keeps its last verdict through a tick without one:
+// otherwise a single failed read flips a crash-looping endpoint to ready and
+// restarts its stuck timer. Falling back to the address instead would show a
+// held not_ready as ready — exactly the illusion of recovery this avoids. A
+// status this agent does not know is handled the same way. Nil only when the
+// endpoint has never reported a verdict this agent understands.
+func (b *Backend) endpointHealth(key reconcile.ResourceKey, h *ampclient.EndpointHealth) (*ampclient.EndpointHealth, time.Time) {
+	now := b.clock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if h != nil && (h.Status == ampclient.Ready || h.Status == ampclient.NotReady) {
+		if b.lastHealth == nil {
+			b.lastHealth = map[reconcile.ResourceKey]heldHealth{}
+		}
+		b.lastHealth[key] = heldHealth{health: *h, at: now}
+		return h, now
+	}
+	if prev, ok := b.lastHealth[key]; ok {
+		return &prev.health, prev.at
+	}
+	return nil, time.Time{}
+}
+
+func (b *Backend) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
+}
+
+// endpointState reads an endpoint's readiness. The address says only that it
+// was deployed once — the controller never clears it — so where there is a
+// health verdict, that decides: a crash-looping pod is not_ready, and past
+// StuckAfter degrades the environment with the pod's reason. With none (a
+// controller that predates health, or one that has never managed to read the
+// pod) the address is all there is, and it reads as ready.
+//
+// A verdict read more than healthStaleAfter ago keeps its state but says how old
+// it is, so a held reading is not mistaken for a current one.
+func endpointState(address string, h *ampclient.EndpointHealth, readAt, now time.Time) (ready bool, state, detail string) {
+	if address == "" {
+		return false, "provisioning", ""
+	}
+	if h == nil {
+		return true, "ready", ""
+	}
+	ready = h.Status != ampclient.NotReady
+	state = "ready"
+	if !ready {
+		state = "not_ready"
+		if h.Reason != nil {
+			detail = *h.Reason
+		}
+	}
+	if now.Sub(readAt) >= healthStaleAfter {
+		last := "last reading " + state
+		if detail != "" {
+			last = "last: " + detail
+		}
+		detail = fmt.Sprintf("health not read since %s; %s", readAt.UTC().Format(time.RFC3339), last)
+	}
+	return ready, state, detail
+}

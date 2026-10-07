@@ -291,3 +291,28 @@ func TestInventorySeparatesRejectionFromImmutability(t *testing.T) {
 		t.Errorf("synthetic row = %+v, want state=rejected with a reason", got)
 	}
 }
+
+// A backend's own reason for a non-Ready resource reaches the row: on its own
+// before the resource is stuck, and appended to the stuck message after.
+func TestInventoryCarriesBackendDetail(t *testing.T) {
+	fresh := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/rw"}
+	stuck := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/ro"}
+	const why = "container endpoint exited with code 1"
+	res := reconcile.Result{
+		Actual: []reconcile.Actual{
+			{Key: fresh, State: "not_ready", Detail: why},
+			{Key: stuck, State: "not_ready", Detail: why},
+		},
+		Stuck: map[reconcile.ResourceKey]time.Duration{stuck: 6 * time.Minute},
+	}
+	byID := map[string]api.ResourceStatus{}
+	for _, r := range inventory(res) {
+		byID[r.ID] = r
+	}
+	if got := byID["endpoint/p/c/main/rw"]; got.State != "not_ready" || got.Error != why {
+		t.Errorf("fresh row = %+v, want state not_ready and error %q", got, why)
+	}
+	if got := byID["endpoint/p/c/main/ro"]; !strings.HasPrefix(got.Error, "no progress:") || !strings.HasSuffix(got.Error, ": "+why) {
+		t.Errorf("stuck row error = %q, want the no-progress message ending in %q", got.Error, why)
+	}
+}

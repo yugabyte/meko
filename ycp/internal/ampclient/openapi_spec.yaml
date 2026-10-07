@@ -2378,6 +2378,34 @@ components:
         created_at:
           type: string
           format: date-time
+        health:
+          $ref: '#/components/schemas/EndpointHealth'
+
+    EndpointHealth:
+      type: object
+      required: [status]
+      description: |
+        Whether the endpoint's pod is serving right now, read from the workload
+        at request time rather than stored. `address` says only that the endpoint
+        was deployed once: it is never cleared, so it stays set through a crash
+        loop or a redeploy that never came up. Absent when the deployer cannot
+        tell — not running in-cluster, a deployer with no pod to read, or a read
+        that failed. Absence is no information: it says neither that the pod is
+        serving nor that it is not.
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+          description: |
+            `ready` when the endpoint's pod is Ready, which covers every
+            container in it — the compute and any sidecar such as the documentdb
+            gateway. `not_ready` otherwise, including when there is no pod at all.
+        reason:
+          type: string
+          description: |
+            Why the endpoint is `not_ready`, as the pod reports it: a container
+            that cannot start, one that exited, a pod that cannot be scheduled.
+            Absent when `ready`.
 
     UpdateBranchSettingsRequest:
       type: object

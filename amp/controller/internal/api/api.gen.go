@@ -128,6 +128,24 @@ func (e EndpointConnectivityMode) Valid() bool {
 	}
 }
 
+// Defines values for EndpointHealthStatus.
+const (
+	NotReady EndpointHealthStatus = "not_ready"
+	Ready    EndpointHealthStatus = "ready"
+)
+
+// Valid indicates whether the value is a known member of the EndpointHealthStatus enum.
+func (e EndpointHealthStatus) Valid() bool {
+	switch e {
+	case NotReady:
+		return true
+	case Ready:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MigrationRunOperation.
 const (
 	Assess  MigrationRunOperation = "assess"
@@ -851,7 +869,16 @@ type Endpoint struct {
 	// `null` if it has none. Opaque — the control plane stores and forwards
 	// it without interpreting it.
 	ExtendedConfig *map[string]interface{} `json:"extended_config,omitempty"`
-	Id             openapi_types.UUID      `json:"id"`
+
+	// Health Whether the endpoint's pod is serving right now, read from the workload
+	// at request time rather than stored. `address` says only that the endpoint
+	// was deployed once: it is never cleared, so it stays set through a crash
+	// loop or a redeploy that never came up. Absent when the deployer cannot
+	// tell — not running in-cluster, a deployer with no pod to read, or a read
+	// that failed. Absence is no information: it says neither that the pod is
+	// serving nor that it is not.
+	Health *EndpointHealth    `json:"health,omitempty"`
+	Id     openapi_types.UUID `json:"id"`
 
 	// Name The caller's handle for this endpoint, unique among its branch's endpoints. Empty when the endpoint was created without one.
 	Name string `json:"name"`
@@ -1053,6 +1080,30 @@ type EndpointConnectivity struct {
 // filtering has to move into the shard's proxy, which is not built yet.
 // Use `nlb_internal` or `nlb_external` for an endpoint that needs one.
 type EndpointConnectivityMode string
+
+// EndpointHealth Whether the endpoint's pod is serving right now, read from the workload
+// at request time rather than stored. `address` says only that the endpoint
+// was deployed once: it is never cleared, so it stays set through a crash
+// loop or a redeploy that never came up. Absent when the deployer cannot
+// tell — not running in-cluster, a deployer with no pod to read, or a read
+// that failed. Absence is no information: it says neither that the pod is
+// serving nor that it is not.
+type EndpointHealth struct {
+	// Reason Why the endpoint is `not_ready`, as the pod reports it: a container
+	// that cannot start, one that exited, a pod that cannot be scheduled.
+	// Absent when `ready`.
+	Reason *string `json:"reason,omitempty"`
+
+	// Status `ready` when the endpoint's pod is Ready, which covers every
+	// container in it — the compute and any sidecar such as the documentdb
+	// gateway. `not_ready` otherwise, including when there is no pod at all.
+	Status EndpointHealthStatus `json:"status"`
+}
+
+// EndpointHealthStatus `ready` when the endpoint's pod is Ready, which covers every
+// container in it — the compute and any sidecar such as the documentdb
+// gateway. `not_ready` otherwise, including when there is no pod at all.
+type EndpointHealthStatus string
 
 // EndpointList defines model for EndpointList.
 type EndpointList struct {

@@ -556,6 +556,9 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 			rs.Error = err.Error()
 		} else if d, ok := res.Stuck[act.Key]; ok {
 			rs.Error = fmt.Sprintf("no progress: %q for %s", act.State, d.Round(time.Second))
+			if act.Detail != "" {
+				rs.Error += ": " + act.Detail
+			}
 		} else if err, ok := res.Permanent[act.Key]; ok {
 			rs.State, rs.Error = reconcile.PermanentReasonOf(err).State(), err.Error()
 		} else if err, ok := res.Updating[act.Key]; ok {
@@ -563,6 +566,8 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 			// says what is happening, so "generation 3 declared, 1 applied" is legible
 			// rather than something an operator has to infer from a stale attr.
 			rs.State, rs.Error = "updating", err.Error()
+		} else if act.Detail != "" {
+			rs.Error = act.Detail
 		}
 		out = append(out, rs)
 	}

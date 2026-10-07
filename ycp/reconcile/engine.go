@@ -65,6 +65,11 @@ type Actual struct {
 	// created. State is the backend's free-form status for reporting.
 	Ready bool
 	State string
+	// Detail is the backend's own account of why a resource is not Ready — an
+	// endpoint whose pod is crash-looping, say. It is the resource's error when the
+	// engine has no reason of its own, and is appended to a stuck one. Empty when
+	// Ready, or when the backend cannot say.
+	Detail string
 	// Progress is an optional marker of forward motion within State — a fleet
 	// roll's done/total, say. A change restarts the engine's stuck timers, so work
 	// that is long by design but still moving is not reported stuck; one that

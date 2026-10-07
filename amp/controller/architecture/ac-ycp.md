@@ -178,6 +178,26 @@ pairs with a fork's `parent_branch_id` so a console can rebuild the fork tree
 (the containment tree is already derivable from `ID`/`Parent`). The controller
 exposes no live/head LSN, so the only LSN reported is the branch fork point.
 
+## Endpoint readiness
+
+An endpoint is `provisioning` until it has an address. After that the controller's
+`health` decides: `not_ready` with the pod's reason in `Error`, or `ready`. The
+address alone is not evidence — it is set at create and never cleared, so before
+`health` a crash-looping endpoint read `ready` indefinitely (meko#1746). A `not_ready`
+endpoint left in that state past `StuckAfter` is stuck, which degrades the
+environment; the reason stays on the row.
+
+`health` is absent when the controller predates it, runs a deployer with no pods to
+read, or failed to read them, and the agent cannot tell those apart. So an endpoint
+that has reported a verdict keeps it through a tick without one — otherwise one
+failed read flips a down endpoint to `ready` and restarts its stuck timer — and only
+one that never has falls back to the address. Falling back for a held `not_ready`
+would show a down endpoint as recovered. A held verdict keeps its state indefinitely;
+once it is older than 10 minutes (the engine's default `StuckAfter`) the row's
+`Error` says so — `health not read since <time>; last: <reason>` — so it is not
+mistaken for a current reading. A status value the agent does not know is treated
+as absent. The held verdict is in-process, so an agent restart drops it.
+
 ## Settings are reported whole
 
 Each settings surface is one attr holding a JSON **object**, keys sorted, not one
@@ -325,12 +345,12 @@ endpoints a failed run never reached, and a task whose set is already applied
 everywhere deploys nothing. (Names only, so a catalog revision that moves an
 extension's *image* without renaming it does not land through this path — the fleet
 upgrade re-renders extensions for that.) The endpoint's
-recorded address is never blanked (the redeploy re-records it, since a ClusterIP
-address is the pod IP and the old one is dead), so the agent's readiness check —
-address non-empty — stays true throughout, including the window where the row still
-names a retired pod. The endpoint therefore never reads as non-Ready or stuck across
-a redeploy, and never as failed if one goes wrong: what an endpoint actually mounts
-is not in the amp API, so the agent cannot check it.
+recorded address is never blanked, so the address cannot say whether the redeploy
+came up. The endpoint's `health` does: while the new pod starts the endpoint reads
+`not_ready`, and one that never becomes Ready stays that way, goes stuck, and
+degrades the environment with the pod's reason (see
+[Endpoint readiness](#endpoint-readiness)). What an endpoint actually mounts is not
+in the amp API, so the agent cannot check that part.
 
 A branch's set only grows: there is no remove API, so a fork's endpoints always mount
 a superset of what its inherited objects need. Dropping a name from the spec is

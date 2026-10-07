@@ -1161,7 +1161,9 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 		return nil, fmt.Errorf("get endpoint: %w", err)
 	}
 	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
-	return GetEndpoint200JSONResponse(endpointToAPI(ep, c.documentDBGatewayReachable(branchExts, ep))), nil
+	out := endpointToAPI(ep, c.documentDBGatewayReachable(branchExts, ep))
+	out.Health = c.endpointHealth(ctx, []core.Endpoint{ep})[ep.ID]
+	return GetEndpoint200JSONResponse(out), nil
 }
 
 // caBundleSource is the deployer's optional ability to report the CA behind an
@@ -1219,9 +1221,12 @@ func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRe
 	}
 	// One lookup for the page: every endpoint here is on the same branch.
 	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
+	health := c.endpointHealth(ctx, endpoints)
 	out := make([]Endpoint, 0, len(endpoints))
 	for _, e := range endpoints {
-		out = append(out, endpointToAPI(e, c.documentDBGatewayReachable(branchExts, e)))
+		ep := endpointToAPI(e, c.documentDBGatewayReachable(branchExts, e))
+		ep.Health = health[e.ID]
+		out = append(out, ep)
 	}
 	return ListEndpoints200JSONResponse(EndpointList{Endpoints: out, Total: total, Count: len(out)}), nil
 }
@@ -1895,6 +1900,40 @@ func (c *Controllers) documentDBGatewayReachable(branchExts []string, e core.End
 		return r.DocumentDBGatewayReachable(e.Connectivity)
 	}
 	return true
+}
+
+// endpointHealth reads whether each endpoint's pod is serving, in one call to
+// the deployer. It returns nil — so no endpoint reports health — when the
+// deployer cannot say or the read failed: absent means unknown to a caller, and
+// a failed read must not render a page of healthy endpoints as not_ready.
+func (c *Controllers) endpointHealth(ctx context.Context, eps []core.Endpoint) map[uuid.UUID]*EndpointHealth {
+	r, ok := c.prov.Deployer.(deploy.EndpointHealthReader)
+	if !ok || len(eps) == 0 {
+		return nil
+	}
+	ids := make([]string, len(eps))
+	for i, e := range eps {
+		ids[i] = deploy.EndpointName(e.ID)
+	}
+	got, err := r.EndpointHealth(ctx, ids)
+	if err != nil {
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "endpoint health unreadable", slog.String("error", err.Error()))
+		return nil
+	}
+	out := make(map[uuid.UUID]*EndpointHealth, len(eps))
+	for _, e := range eps {
+		h, ok := got[deploy.EndpointName(e.ID)]
+		if !ok {
+			continue
+		}
+		if h.Ready {
+			out[e.ID] = &EndpointHealth{Status: Ready}
+			continue
+		}
+		reason := h.Reason
+		out[e.ID] = &EndpointHealth{Status: NotReady, Reason: &reason}
+	}
+	return out
 }
 
 // branchExtensions reads a branch's opted-in extension set. A failure here is

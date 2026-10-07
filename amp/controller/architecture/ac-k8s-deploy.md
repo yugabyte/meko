@@ -141,6 +141,18 @@ Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 kill-before-create retire (ac-highlvl.md §4); `--wait` blocks until the
 resources are gone.
 
+### Endpoint health is read live
+
+An endpoint's `address` is recorded at create and never cleared, so it cannot say
+whether the endpoint is serving. `GET`/list endpoints therefore report `health`
+from the pod itself: one pod LIST per request, selected by the release's
+`app.kubernetes.io/instance` label (which every chart version sets, unlike the
+newer identity labels). `ready` is the pod's `Ready` condition, which covers the
+sidecars too; otherwise the reason is the same pod diagnosis a failed deploy
+carries. A terminating pod is ignored, since under `Recreate` it is the old one. A
+failed read reports no `health` rather than `not_ready`. The Docker and local
+deployers do not implement it.
+
 ### Labels: identity and tags
 
 Every endpoint's objects carry five identity labels, from `deploy.IdentityLabels`:

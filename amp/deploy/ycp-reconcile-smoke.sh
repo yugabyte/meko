@@ -467,10 +467,9 @@ else
   esac
 
   # The half the branch row cannot show. The add redeploys the endpoint (a new pod,
-  # since the ImageVolume set is fixed at pod start) and the agent cannot tell you
-  # whether that worked: the amp API does not report what an endpoint mounts, and
-  # the recorded address is never blanked, so the inventory keeps saying "ready".
-  # A pull failure on the extension image looks exactly like success from YCP.
+  # since the ImageVolume set is fixed at pod start). The inventory reports the
+  # endpoint not_ready while that pod is down, but not what it mounts — the amp API
+  # does not say — so the mount itself is checked on the pod.
   #
   # Wait the endpoint's whole startup budget, not the create-path budget above.
   # This pod restarts onto a branch that already has data, so /data (an emptyDir)
