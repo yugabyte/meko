@@ -457,7 +457,8 @@ work elsewhere. The page shows the session from the reply until a state push bri
 review's PR head, making the worktree and starting Claude follow in the background. If the worktree
 or the PR head can't be had there, the session is removed (its worktree slot goes back to the pool)
 and becomes a **failed start** (`AppState.failedStarts`, kept in memory until dismissed, at most
-20): a banner says what went wrong, with **Try again**, which opens the dialog filled in as before,
+20): a banner says what went wrong, with **Try again**, which opens the dialog filled in as before
+(without its images: they're removed with the failed start, and the dialog says to add them again),
 and **Dismiss** (`DELETE /api/failed-starts/:id`), and the project's notifications, when on, send
 one. Starting a session under the same name again replaces its failed start. When a failed start
 is the reason the project's last session went away, the Close project offer stays away. Claude
@@ -703,6 +704,23 @@ Claude gets `Ctrl+V` as before. On a phone, an image pasted into the compose box
 still pastes into the box), and the image key at the end of the key bar's ▾ row picks images to
 hold.
 
+Images can go with a session's first prompt too: paste them into the New session dialog's First
+prompt field (a review's Notes), drop them on it, or pick them with **Add image**. There's no
+session yet, so each one uploads to the project as it's added (`POST /api/projects/:id/images`,
+the same checks), is saved owner-only under `~/.agent-k-local/pastes/.new/<project>/`, and the
+dialog holds the id the server gave it (the file's name), with the same strip of thumbnails.
+**Start session** waits for uploads still running, then names the images in
+`CreateSessionRequest.images`, at most 20. The server takes only ids of that project's staged
+images, checked with the other quick checks, so a refused start leaves them in the dialog; once
+the session's row is in, it moves them to the session's `pastes/<session>/`. The first prompt
+reaches Claude on its command line, where a path isn't taken as an attached image, so the paths
+are added to the task (a review's notes) with a line asking Claude to open each with its Read
+tool, and the hooks settings file allows `Read` on the pastes folder so that doesn't stop for a
+permission prompt. Being in the task, they go with every later prompt that names the task (a move
+from Explore, a relaunch without resume); at Explore, images with no text are the first prompt.
+AgentK's Meko search at start uses the task's text alone. Staged images no session started with
+are removed after a day (at startup and hourly), and a project's when it's closed.
+
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
 names no session) reopens the session last open there in this browser, kept in `localStorage`.
 When that session is closed, or none was open there yet, it opens the one with the most recent
@@ -837,6 +855,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
   pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
+  pastes/.new/<project>/<time>-<random>.<ext>  # images added in the New session dialog, until a session starts with them (or a day)
 
 # config.toml (excerpt)
 [server]

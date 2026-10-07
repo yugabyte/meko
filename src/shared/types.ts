@@ -1004,6 +1004,15 @@ export interface PastedImage {
   path: string;
 }
 
+/** The most images a new session can start with. */
+export const MAX_START_IMAGES = 20;
+
+/** An image added in the New session dialog, saved on the host until the session is created with it. */
+export interface StagedImage {
+  /** What `CreateSessionRequest.images` names it by. */
+  id: string;
+}
+
 /** One file that differs between a session's worktree and where its branch left the base. */
 export interface ChangedFile {
   path: string;
@@ -1295,6 +1304,12 @@ export interface CreateSessionRequest {
    * `branch` and `baseBranch` are ignored.
    */
   pr?: { repo: string; number: number };
+  /**
+   * Images for the first prompt (a review's notes), by the ids `POST /api/projects/:id/images`
+   * returned for this project. Their paths are added to the task (or the notes) for Claude to read.
+   * A failed start keeps them in its request, but the images themselves are gone by then.
+   */
+  images?: string[];
 }
 
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
@@ -1430,9 +1445,14 @@ export type TermServerMessage =
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
 //        base branch neither the repo nor its origin has, a repo that isn't a scanned one, an `existingBranch` that doesn't exist, or a task's
 //        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has. Review a PR:
-//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo). Answers once
+//        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
+//        `images` that aren't this project's staged images, or more than MAX_START_IMAGES). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
-//        is). A worktree or PR fetch that fails then removes the session and adds it to AppState.failedStarts.
+//        is). A worktree or PR fetch that fails then removes the session (and its images) and adds it to AppState.failedStarts.
+// POST   /api/projects/:id/images  image bytes → StagedImage   (an image added in the New session dialog: checked as
+//        for POST /api/sessions/:id/images, 404 for an unknown project. Saved under ~/.agent-k-local/pastes/.new/<project>/
+//        until a session is created with it, which moves it to the session's folder; removed after a day otherwise,
+//        or when the project is closed)
 // PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in AgentK and its Meko conversation; the
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
 //        long name or one with control characters, 409 for an archived session)

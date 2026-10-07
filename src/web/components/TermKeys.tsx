@@ -199,7 +199,7 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           setMore(false);
         }}
       />
-      <HeldImages term={term} touch />
+      <HeldImages held={term.held} hint="sent with your message" />
       <form
         className="compose"
         onSubmit={(e) => {

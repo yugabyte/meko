@@ -14,6 +14,7 @@ import { all, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles, writeModFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
+import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { MekoClient } from './meko.js';
@@ -61,6 +62,8 @@ const INVITE_SYNC_MS = 5 * 60 * 1000;
 const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 /** How often archived sessions' Meko pins are cleared away. */
 const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
+/** How often images staged in the New session dialog that no session started with are looked for. */
+const STAGED_SWEEP_MS = 60 * 60 * 1000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
@@ -282,6 +285,7 @@ export class Core extends EventEmitter {
     void this.sessions.refreshDiffStats().catch(() => undefined);
     pruneSessionEvents(this.db);
     this.prunePins();
+    this.sweepStaged();
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
@@ -291,6 +295,7 @@ export class Core extends EventEmitter {
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
+      this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
       this.callHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
       void this.syncInvites();
@@ -359,6 +364,14 @@ export class Core extends EventEmitter {
       this.hookCheck = null;
     });
     return this.hookCheck;
+  }
+
+  private sweepStaged(): void {
+    try {
+      sweepStaged(this.paths.pastes);
+    } catch (e) {
+      this.log.warn('removing old images from the New session dialog failed', errMsg(e));
+    }
   }
 
   private prunePins(): void {

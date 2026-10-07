@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -17,9 +17,9 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
-import { removePastes, savePastedImage } from './pastes.js';
+import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import {
   EDIT_TOOLS, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
@@ -303,6 +303,12 @@ export class SessionManager {
     return { path: savePastedImage(this.core.paths.pastes, row.id, data) };
   }
 
+  /** Saves an image added in the New session dialog, until a session is created with it. */
+  stageImage(projectId: string, data: unknown): StagedImage {
+    if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
+    return { id: stageImage(this.core.paths.pastes, projectId, data) };
+  }
+
   byToken(token: string): SessionRow | undefined {
     return get<SessionRow>(this.db, 'SELECT * FROM sessions WHERE hook_token = ?', token);
   }
@@ -378,6 +384,7 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
+    const images = checkStaged(this.core.paths.pastes, projectId, req.images);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
@@ -440,6 +447,7 @@ export class SessionManager {
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
       existingBranch: existing || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
+      images: images.length ? images : undefined,
     };
     // Pushes go where the PR's head is, when that isn't origin's branch of the same name.
     const push = attach && (from.remote !== 'origin' || from.branch !== wanted) ? from : null;
@@ -447,6 +455,11 @@ export class SessionManager {
     const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
     const branch = wanted || `${settings.branchPrefix}${slug}`;
     const id = `${projectId}--${slug}`;
+    // The images go with the task, or with a review's notes (its task is the PR), as paths in the
+    // session's folder, where they're moved once the row is in.
+    const imagePaths = images.map((i) => claimedPath(this.core.paths.pastes, id, i));
+    const prompted = review ? task : withAttachedImages(task, imagePaths);
+    const notesWithImages = review ? withAttachedImages(notes, imagePaths) : notes;
     const now = Date.now();
     const pool = this.core.worktrees;
     // GitHub's head until the fetch says otherwise (the PR may move in between).
@@ -464,19 +477,21 @@ export class SessionManager {
                       pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
-        randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug }),
+        randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, prompted || null, now, now, sessionAgentId({ id, slug }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
-        review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
+        review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notesWithImages || null,
         push?.remote ?? null, push ? push.branch : null);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
+    const missed = claimStaged(this.core.paths.pastes, projectId, images, id);
+    if (missed.length) this.core.log.warn(`${missed.length} of the images for ${id} were gone before they could be moved: ${missed.join(', ')}`);
     // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
     this.creating.add(id);
     // Starting again under the same name replaces the failed start.
     this.failed.delete(id);
-    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
-    const done = this.finishCreate(id, { request, repo, worktree, reused, branch, base, where, from, review, attach, linkPr: existing, task, notes })
+    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!prompted });
+    const done = this.finishCreate(id, { request, repo, worktree, reused, branch, base, where, from, review, attach, linkPr: existing, task: prompted, search: task, notes })
       .finally(() => this.creating.delete(id));
     return { session: this.get(id), done };
   }
@@ -486,12 +501,14 @@ export class SessionManager {
     request: CreateSessionRequest; repo: string; worktree: string; reused: boolean; branch: string; base: string;
     where: 'local' | 'remote' | null; from: BranchSource; review: ReviewTarget | null; attach: AttachTarget | null;
     /** Look for the existing branch's open PR (Advanced → Existing branch). */
-    linkPr: boolean; task: string; notes: string;
+    linkPr: boolean;
+    /** The task as Claude gets it (with the images' paths); `search` is its text alone, and `notes` a review's. */
+    task: string; search: string; notes: string;
   }): Promise<Session> {
     const { repo, review, branch, base, task } = c;
     // A review searches on the PR: its title and description (where the author's design is
     // summed up), and the user's notes.
-    this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), c.notes].filter(Boolean).join('\n') : task);
+    this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), c.notes].filter(Boolean).join('\n') : c.search);
     const naming = this.nameConversation(this.row(id));
     let sha: string | undefined;
     if (review) {
@@ -599,6 +616,8 @@ export class SessionManager {
     this.startup.delete(id);
     this.recall.drop(id);
     release();
+    // Its images go too: Try again says to add them again.
+    removePastes(this.core.paths.pastes, id);
     run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
     this.core.changed();
     return new HttpError(400, message);
@@ -1816,6 +1835,7 @@ export class SessionManager {
       removePastes(this.core.paths.pastes, row.id);
       this.core.questions.forget(row.id);
     }
+    removeStaged(this.core.paths.pastes, projectId);
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
     if (p) {
       const repos = new Set([p.repo_path, ...sessionRows(this.db, projectId).map((r) => r.repo_path).filter((r): r is string => !!r)]);

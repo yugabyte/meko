@@ -38,6 +38,7 @@ import type {
   SetDedicatedDatapackRequest,
   SetupRequest,
   ShareDatapackRequest,
+  StagedImage,
   TotpEnrollResponse,
   UpdateProjectRequest,
   UpdateSessionRequest,
@@ -151,6 +152,11 @@ export const api = {
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
+  /** Saves an image added in the New session dialog, for `CreateSessionRequest.images`; checked by its bytes. */
+  stageImage: (projectId: string, image: Blob) =>
+    request<StagedImage>('POST', `/api/projects/${enc(projectId)}/images`, undefined, {
+      raw: { data: image, type: image.type.startsWith('image/') ? image.type : 'image/png' },
+    }),
   dismissFailedStart: (id: string) => request<void>('DELETE', `/api/failed-starts/${enc(id)}`),
   sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),

@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
+  EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareDatapackRequest, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
@@ -373,6 +373,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   await app.register(async (scope) => {
     scope.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: MAX_PASTE_BYTES }, (_req, body, done) => done(null, body));
     scope.post<{ Params: { id: string } }>('/api/sessions/:id/images', async (req): Promise<PastedImage> => core.sessions.pasteImage(req.params.id, req.body));
+    // One added in the New session dialog, before there's a session: kept under the project until one starts with it.
+    scope.post<{ Params: { id: string } }>('/api/projects/:id/images', async (req): Promise<StagedImage> => core.sessions.stageImage(req.params.id, req.body));
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));

@@ -81,7 +81,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
       saved owner-only under the session's `pastes/` folder with a name the server picks; the
       browser only gets the path back. The route's `image/*` parser stays in its own scope, so no
-      other route takes a non-JSON body.
+      other route takes a non-JSON body. Images staged in the New session dialog
+      (`POST /api/projects/:id/images`) are named by id only: `CreateSessionRequest.images` never
+      takes a path, and an id is matched to the server's name pattern inside that project's
+      staging folder.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no

@@ -72,7 +72,7 @@ export function TerminalPane({ session, onAsk }: { session: Session; onAsk?: () 
         )}
       </div>
       {/* Touch screens show held images above the compose box instead. */}
-      {!touch && <HeldImages term={term} touch={false} />}
+      {!touch && <HeldImages held={term.held} hint="sent with your next Enter" />}
       {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} />}
     </div>
   );

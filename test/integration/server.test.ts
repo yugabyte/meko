@@ -361,6 +361,29 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect((await app.inject({ method: 'POST', url: `/api/sessions/${sid}/actions/archive`, headers: { cookie } })).statusCode).toBe(200);
     expect(existsSync(join(env.core.paths.pastes, sid))).toBe(false);
     expect((await paste(png)).statusCode).toBe(409);
+
+    // Images added in the New session dialog: behind login and the origin check, staged under the project.
+    const stage = (payload: Buffer | string, headers: Record<string, string> = {}, project = pid) =>
+      app.inject({ method: 'POST', url: `/api/projects/${project}/images`, headers: { cookie, 'content-type': 'image/png', ...headers }, payload });
+    expect((await stage(png, { cookie: '' })).statusCode).toBe(401);
+    expect((await stage(png, { origin: 'https://evil.example' })).statusCode).toBe(403);
+    expect((await stage('just text', { 'content-type': 'text/plain' })).statusCode).toBe(415);
+    expect((await stage(Buffer.from('<svg/>'), { 'content-type': 'image/svg+xml' })).statusCode).toBe(415);
+    expect((await stage(png, {}, 'nope')).statusCode).toBe(404);
+    const staged = await stage(png);
+    expect(staged.statusCode).toBe(200);
+    const id: string = staged.json().id;
+    expect(id).toMatch(/^\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+    const withImage = await app.inject({
+      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'With an image', start: 'code', images: [id] },
+    });
+    expect(withImage.statusCode).toBe(200);
+    expect(existsSync(join(env.core.paths.pastes, withImage.json().id, id))).toBe(true);
+    // An id is used once: it's moved into the session's folder.
+    const reused = await app.inject({
+      method: 'POST', url: `/api/projects/${pid}/sessions`, headers: { cookie }, payload: { name: 'Again', start: 'code', images: [id] },
+    });
+    expect(reused.statusCode).toBe(400);
   });
 });
 
