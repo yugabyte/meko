@@ -147,8 +147,9 @@ export function ProjectView({
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
     </span>
   );
-  // Measured by AgentK's mod after each turn; null without it.
-  const contextText = session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} />;
+  // Measured by AgentK's mod after each turn; null without it. The phone's sheet has no tooltips, so it writes the percent too.
+  const contextText = (showPercent: boolean) =>
+    session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} />;
   const mekoText = (
     <span title="The project's Meko datapack">
       Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
@@ -324,7 +325,7 @@ export function ProjectView({
             </button>
           )}
           {!mobile && tokensText}
-          {!mobile && contextText}
+          {!mobile && contextText(false)}
           {!mobile && mekoText}
           {stageText}
         </footer>
@@ -362,7 +363,7 @@ export function ProjectView({
             <>
               {branchText}
               {tokensText}
-              {contextText}
+              {contextText(true)}
               {mekoText}
               {stageText}
             </>

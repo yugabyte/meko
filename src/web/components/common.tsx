@@ -229,9 +229,10 @@ const CONTEXT_LEVEL_TEXT = { ok: '', warn: ' Getting full.', bad: ' Nearly full.
 /**
  * How full Claude's context window is: "context" and a ring that fills from 12 o'clock
  * counter-clockwise (a C at half, an O when full), blue, then amber from 75% and red from 95%.
- * The exact percent is in the tooltip and the meter's value.
+ * The exact percent is in the tooltip and the meter's value; `showPercent` also writes it after
+ * the ring, for the phone's ⋯ sheet, where a tooltip can't be opened.
  */
-export function ContextRing({ percent }: { percent: number }) {
+export function ContextRing({ percent, showPercent = false }: { percent: number; showPercent?: boolean }) {
   const level = contextLevel(percent);
   const arc = contextArc(percent);
   return (
@@ -249,7 +250,8 @@ export function ContextRing({ percent }: { percent: number }) {
         <circle className="track" cx="8" cy="8" r="6" />
         {/* A circle's stroke starts at 3 o'clock and runs clockwise; reflecting it across the
             bottom-left to top-right diagonal starts it at 12 and runs it counter-clockwise.
-            A full ring drops the dashes, which can leave a hairline where the ends meet. */}
+            A full ring drops the dashes, since a 100/100 dash can leave a hairline where the
+            ends meet. */}
         <circle
           className="arc"
           cx="8"
@@ -260,6 +262,7 @@ export function ContextRing({ percent }: { percent: number }) {
           strokeDasharray={arc < 100 ? `${arc} 100` : undefined}
         />
       </svg>
+      {showPercent && `${percent}%`}
     </span>
   );
 }
