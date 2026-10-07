@@ -216,6 +216,21 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 /** For a button's pointer and mouse down: tapping it keeps focus (and the on-screen keyboard) where it is. */
 export const keepFocus = (e: SyntheticEvent) => e.preventDefault();
 
+/** From this full, the context ring shows in the warning colour. */
+export const CONTEXT_WARN_PERCENT = 75;
+/** From this full, the context ring shows in the danger colour. */
+export const CONTEXT_BAD_PERCENT = 95;
+
+/** How worried to look about a context window this full, in percent. */
+export function contextLevel(percent: number): 'ok' | 'warn' | 'bad' {
+  return percent >= CONTEXT_BAD_PERCENT ? 'bad' : percent >= CONTEXT_WARN_PERCENT ? 'warn' : 'ok';
+}
+
+/** The length of the context ring's arc, out of 100: the percent, kept to 0–100. */
+export function contextArc(percent: number): number {
+  return Math.min(100, Math.max(0, percent));
+}
+
 export function totalTokens(u: TokenUsage): number {
   return u.input + u.output + u.cacheRead + u.cacheWrite;
 }

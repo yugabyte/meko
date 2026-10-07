@@ -17,7 +17,7 @@ import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
-import { Busy, Check, ConfirmButton, DatapackName, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -25,9 +25,6 @@ import { EndSessionButton, SessionSheet } from './SessionSheet';
 import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
-
-/** From this full, the footer's context fill shows in the warning color. */
-const CONTEXT_WARN_PERCENT = 85;
 
 const REVIEW_TEXT: Record<Session['reviewState'], string> = {
   none: 'no PR',
@@ -151,16 +148,7 @@ export function ProjectView({
     </span>
   );
   // Measured by AgentK's mod after each turn; null without it.
-  // Nearly full shows by a ⚠ as well as the warning colour.
-  const contextFull = session?.contextPercent != null && session.contextPercent >= CONTEXT_WARN_PERCENT;
-  const contextText = session && session.contextPercent !== null && (
-    <span
-      className={contextFull ? 'warn-text' : undefined}
-      title={`How full Claude's context window is, measured after each turn.${contextFull ? ' Nearly full:' : ''} Claude compacts the conversation when it fills up.`}
-    >
-      {contextFull && '⚠ '}context {session.contextPercent}%
-    </span>
-  );
+  const contextText = session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} />;
   const mekoText = (
     <span title="The project's Meko datapack">
       Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}

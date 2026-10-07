@@ -1194,6 +1194,32 @@ textarea.input {
 .foot .del {
   color: var(--bad);
 }
+/* The context ring: fills as Claude's context window does (see ContextRing). */
+.ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ctx-ring {
+  flex: none;
+}
+.ctx-ring .track {
+  stroke: var(--rule);
+}
+.ctx-ring .arc {
+  stroke: var(--accent);
+}
+.ctx-ring.warn .arc {
+  stroke: var(--warn);
+}
+.ctx-ring.bad .arc {
+  stroke: var(--bad);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ctx-ring .arc {
+    transition: stroke-dasharray 0.4s ease, stroke 0.4s ease;
+  }
+}
 
 /* ---------- Side panels (design, changes) ---------- */
 .side-panel {
