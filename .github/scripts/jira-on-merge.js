@@ -42,12 +42,16 @@ function closedKeys(body, projects) {
 
 // The token is a service-account (scoped) API token: it is sent as a Bearer
 // token to the api.atlassian.com gateway, not with basic auth to the site URL.
+// Node's fetch sends `Accept-Language: *`, for which Jira answers a service
+// account in Chinese (JRACLOUD-98857); the two language headers force English.
 async function jira(path, init = {}) {
   const res = await fetch(`https://api.atlassian.com/ex/jira/${process.env.JIRA_CLOUD_ID}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${process.env.JIRA_API_TOKEN}`,
       Accept: "application/json",
+      "Accept-Language": "en",
+      "X-Force-Accept-Language": "true",
       "Content-Type": "application/json",
     },
   });
