@@ -121,7 +121,7 @@ your phone can connect.
   in the terminal, whichever comes first. During Design you can send answers or approve while AgentK
   is still working: the answers wait in Claude for the turn to end, and the approval goes when the
   turn ends if it left the design alone. AgentK gives you its design questions through a tool, so
-  they show as soon as it has them. After each turn the footer shows how full
+  they show as soon as it has them. After each turn a ring in the footer shows how full
   Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml` and restart
   the server (the file is read at startup): AgentK then types its prompts into the terminal, running
   sessions included, though those keep the mod loaded until they're relaunched

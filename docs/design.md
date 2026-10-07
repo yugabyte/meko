@@ -254,8 +254,10 @@ when they differ from the ones kept, the design's time moves on and the change c
 the design (the same list again changes nothing). The tool is refused
 outside Design. Without it (no mod, or an older session) Claude writes the file as before.
 
-**Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context N%` from the
-latest measurement, from 85% in the warning colour and led by ⚠ (so it reads without colour too). It is cleared when Claude is relaunched or
+**Context fill.** The session footer (and the ⋯ sheet on a phone) shows `context` and a ring for
+the latest measurement. The ring fills counter-clockwise from 12 o'clock (a C at 50%, a closed O
+at 100%), so its shape gives the level without colour; its arc is blue, amber from 75% and red
+from 95%. The exact percent is in its tooltip and its meter value, and written after the ring in the ⋯ sheet, where a phone can't open a tooltip. It is cleared when Claude is relaunched or
 `/clear`ed, until the next turn measures it again. The plan limits in the measurement are merged
 like the status line's (see [Plan limits](#token-usage)).
 
