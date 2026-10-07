@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage } from '../shared/types.js';
-import { START_STAGES, STAGE_LABELS } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffStat } from './changes.js';
@@ -37,6 +37,25 @@ import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
 const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
+
+/** A session's Meko conversation title. */
+function conversationTitle(session: string, project: string): string {
+  return `${session} (${project})`;
+}
+
+/**
+ * A new session name, checked: a string, its runs of whitespace (line breaks included) made one
+ * space, not empty, at most SESSION_NAME_MAX characters, and no other control characters.
+ */
+export function sessionName(v: unknown): string {
+  if (typeof v !== 'string') throw new HttpError(400, 'The name must be text.');
+  const name = v.replace(/\s+/g, ' ').trim();
+  if (!name) throw new HttpError(400, 'Give the session a name.');
+  if ([...name].length > SESSION_NAME_MAX) throw new HttpError(400, `The name can be at most ${SESSION_NAME_MAX} characters.`);
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) throw new HttpError(400, 'The name can\'t have control characters.');
+  return name;
+}
 
 /** The status detail while Claude asks the user something: its first question, shortened. */
 export function askDetail(question: string): string {
@@ -1544,6 +1563,25 @@ export class SessionManager {
   }
 
   /**
+   * Renames a session. Only its name changes: the branch, worktree, tmux session and Meko agent id
+   * were named once, at the start. The running Claude sees the new name in its system prompt at its
+   * next launch, and the session's Meko conversation is retitled in the background.
+   */
+  rename(id: string, req: UpdateSessionRequest): Session {
+    const r = this.row(id);
+    if (r.desired === 'archived') throw new HttpError(409, 'This session is archived, so it can\'t be renamed.');
+    if (req.name !== undefined) {
+      const name = sessionName(req.name);
+      if (name !== r.name) {
+        this.update(id, { name });
+        this.event(id, 'renamed', `Renamed from "${r.name}" to "${name}"`);
+        void this.retitleConversation(this.row(id));
+      }
+    }
+    return this.get(id);
+  }
+
+  /**
    * Ends a review: archives the session (which drops the PR's head ref) and deletes its review
    * branch, kept when it has commits of the user's own. Refused while the worktree has uncommitted files.
    */
@@ -1857,13 +1895,25 @@ export class SessionManager {
     }
   }
 
+  /** Gives the session's Meko conversation its new name; Meko off or failing, it keeps the old one. */
+  private async retitleConversation(r: SessionRow): Promise<void> {
+    const dp = dedicatedDatapack(this.db, r.project_id);
+    if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
+    try {
+      const conv = await this.conversationId(r, dp);
+      await this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id));
+    } catch (e) {
+      this.core.log.warn(`renaming the Meko conversation for ${r.id} failed`, errMsg(e));
+    }
+  }
+
   /**
    * The id of the session's Meko conversation in its project's dedicated datapack (keyed by the
    * Claude session id, so the plugin's hooks and AgentK share it), titled after the session if
    * Meko doesn't have it yet. Callers check that Meko is on.
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
-    const title = `${r.name} (${projectRow(this.db, r.project_id)?.name ?? r.project_id})`;
+    const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
     return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
   }
 

@@ -9,7 +9,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest,
-  ShareDatapackRequest, UpdateProjectRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  ShareDatapackRequest, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import {
@@ -351,6 +351,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
     return core.sessions.action(req.params.id, action, req.body);
   });
+  app.patch<{ Params: { id: string }; Body: UpdateSessionRequest | null }>('/api/sessions/:id', async (req) =>
+    core.sessions.rename(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));

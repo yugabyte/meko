@@ -225,6 +225,7 @@ export function SessionSheet({
   onAsk,
   onHome,
   onMove,
+  onRename,
   onAct,
   onClose,
 }: {
@@ -244,6 +245,8 @@ export function SessionSheet({
   onHome: () => void;
   /** Opens the Move to another stage dialog. */
   onMove: () => void;
+  /** Opens the Rename session dialog. */
+  onRename: () => void;
   onAct: (a: SessionAction) => Promise<void>;
   onClose: () => void;
 }) {
@@ -281,6 +284,9 @@ export function SessionSheet({
             Move to another stage
           </SheetItem>
         )}
+        <SheetItem hint="›" onClick={then(onRename)}>
+          Rename session
+        </SheetItem>
         <SheetItem hint="›" onClick={then(onHome)}>
           Project home
         </SheetItem>

@@ -51,6 +51,7 @@ export function ProjectView({
   meko,
   onNewSession,
   onMove,
+  onRename,
   onMenu,
   onError,
 }: {
@@ -62,6 +63,8 @@ export function ProjectView({
   onNewSession: () => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMove: (preset?: MovePreset) => void;
+  /** Opens the Rename session dialog. */
+  onRename: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onError: (msg: string) => void;
@@ -188,12 +191,14 @@ export function ProjectView({
           aria-selected={s.id === session?.id}
           className={cx('tab', s.id === session?.id && 'sel')}
           onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
+          // A double-click renames it (on a phone: Rename session in the ⋯ sheet).
+          onDoubleClick={mobile ? undefined : () => onRename(s.id)}
           title={[
             s.name,
             STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
             STAGE_LABELS[s.stage],
             `${formatTokens(totalTokens(s.usage))} tokens`,
-          ].join(' · ')}
+          ].join(' · ') + (mobile ? '' : '\nDouble-click to rename')}
         >
           <StatusDot status={s.status} />
           <span className="tab-name">{s.name}</span>
@@ -372,6 +377,7 @@ export function ProjectView({
           onAsk={() => setAsking(true)}
           onHome={goHome}
           onMove={() => onMove()}
+          onRename={() => onRename(session.id)}
           onAct={act}
           onClose={() => setSheet(false)}
         />

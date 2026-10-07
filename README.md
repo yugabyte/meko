@@ -135,7 +135,8 @@ your phone can connect.
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
   at any point between turns: an exploration that should ship moves on to Code or opens a PR with
-  **Move on…**, and a session in review can go back to Code or Design.
+  **Move on…**, and a session in review can go back to Code or Design. Rename a session any time
+  (double-click its tab): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each

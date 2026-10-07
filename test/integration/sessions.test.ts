@@ -184,6 +184,40 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
   });
 
+  it('renames a session, and its Meko conversation, but keeps its branch, worktree, tmux session and Meko agent id', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Old name', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const agentId = sessionAgentId(env.core.sessions.row(s.id));
+
+    const renamed = env.core.sessions.rename(s.id, { name: '  New\n  name ' });
+    expect(renamed).toMatchObject({ name: 'New name', branch: s.branch, worktreePath: s.worktreePath, tmuxName: s.tmuxName });
+    expect(env.core.state().projects[0].sessions[0].name).toBe('New name');
+    expect(env.core.sessions.row(s.id).meko_agent_id).toBe(agentId);
+    expect((await env.core.projects.home(p.id)).activity.find((a) => a.kind === 'renamed')).toMatchObject({ text: 'Renamed from "Old name" to "New name"' });
+    const retitled = await waitFor(() => env.meko.calls.filter((c) => c.name === 'retitleConversation'), (c) => c.length === 1, 5000, 'the Meko retitle');
+    expect(retitled[0].args.slice(0, 4)).toEqual([agentId, 'dp-agent-k-local-test-demo', 'conv-1', 'New name (Demo)']);
+
+    // The same name again changes nothing; a bad one is refused.
+    env.core.sessions.rename(s.id, { name: 'New name' });
+    env.core.sessions.rename(s.id, {});
+    expect(env.meko.calls.filter((c) => c.name === 'retitleConversation')).toHaveLength(1);
+    expect(() => env.core.sessions.rename(s.id, { name: ' ' })).toThrow(expect.objectContaining({ status: 400, message: 'Give the session a name.' }));
+    expect(() => env.core.sessions.rename(s.id, { name: 'x'.repeat(101) })).toThrow(expect.objectContaining({ status: 400 }));
+    expect(() => env.core.sessions.rename(s.id, { name: 'bell\u0007' })).toThrow(expect.objectContaining({ status: 400 }));
+    expect(() => env.core.sessions.rename(s.id, { name: 42 as unknown as string })).toThrow(expect.objectContaining({ status: 400 }));
+    expect(env.core.sessions.get(s.id).name).toBe('New name');
+
+    // Meko failing leaves the rename done.
+    env.meko.retitleConversation = async () => {
+      throw new Error('Meko is down');
+    };
+    expect(env.core.sessions.rename(s.id, { name: 'Third' }).name).toBe('Third');
+
+    await env.core.sessions.action(s.id, 'archive');
+    expect(() => env.core.sessions.rename(s.id, { name: 'Fourth' })).toThrow(expect.objectContaining({ status: 409 }));
+  });
+
   it("searches Meko for the task when a session is created, and gives Claude what it found at SessionStart", async () => {
     const p = await newProject();
     env.meko.search = async (...args: unknown[]) => {

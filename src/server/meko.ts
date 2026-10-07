@@ -202,6 +202,11 @@ export class MekoClient {
     return id;
   }
 
+  /** Gives a conversation a new title; Meko changes it only when `agentId` owns the conversation. */
+  async retitleConversation(agentId: string, datapackId: string, conversationId: string, title: string, timeoutMs?: number): Promise<void> {
+    await this.call('conversation_update', { agent_id: agentId, datapack_id: datapackId, conversation_id: conversationId, title }, timeoutMs);
+  }
+
   /**
    * Conversation id for server-originated calls (list, create, describe), which Meko requires.
    * conversation_create needs a datapack (or an account default), which a new user doesn't have
