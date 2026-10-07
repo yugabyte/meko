@@ -161,6 +161,17 @@ export function designQuestionsLine(questionsFile: string): string {
 }
 
 /**
+ * `text` (a task, or a review's notes) with the images added in the New session dialog. The first
+ * prompt goes to Claude on its command line, where a path isn't read as an attached image, so
+ * Claude is asked to open each one; the hooks settings let it read them without asking.
+ */
+export function withAttachedImages(text: string, paths: string[]): string {
+  if (!paths.length) return text;
+  const list = `Images the user attached (open each with the Read tool to see it):\n${paths.map((p) => `- ${p}`).join('\n')}`;
+  return text ? `${text}\n\n${list}` : list;
+}
+
+/**
  * The ToolSearch query that loads the Meko search tool, under the Meko server's own name
  * (`mcp__meko__…`) or a plugin's (`mcp__plugin_…_meko__…`).
  */

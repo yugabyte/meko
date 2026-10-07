@@ -1,13 +1,13 @@
-import type { SessionTerminal } from '../terminals';
+import type { HeldImages as Held } from '../heldImages';
 import { cx, keepFocus } from '../util';
 
 /**
- * The images waiting to go to Claude with the next Enter (or the compose box's Send on touch
- * screens), each with a ✕ to take it out. Under the terminal on a desktop, above the compose box on
- * touch screens.
+ * Images waiting to go to Claude, each with a ✕ to take it out: a terminal's (sent with the next
+ * Enter, or the compose box's Send on touch screens; under the terminal on a desktop, above the
+ * compose box on touch screens) or the New session dialog's (sent with the first prompt).
  */
-export function HeldImages({ term, touch }: { term: SessionTerminal; touch: boolean }) {
-  const images = term.held.list;
+export function HeldImages({ held, hint }: { held: Held<Blob>; hint: string }) {
+  const images = held.list;
   if (!images.length) return null;
   const count = images.length === 1 ? '1 image' : `${images.length} images`;
   return (
@@ -23,7 +23,7 @@ export function HeldImages({ term, touch }: { term: SessionTerminal; touch: bool
               title="Remove"
               onPointerDown={keepFocus}
               onMouseDown={keepFocus}
-              onClick={() => term.held.remove(img.id)}
+              onClick={() => held.remove(img.id)}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true">
                 <path d="M6 6l12 12 M18 6L6 18" />
@@ -33,7 +33,7 @@ export function HeldImages({ term, touch }: { term: SessionTerminal; touch: bool
         ))}
       </div>
       <span className="held-hint" aria-live="polite">
-        {count} {touch ? 'sent with your message' : 'sent with your next Enter'}
+        {count} {hint}
       </span>
     </div>
   );

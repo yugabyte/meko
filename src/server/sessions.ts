@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -17,9 +17,9 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
-import { removePastes, savePastedImage } from './pastes.js';
+import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import {
   EDIT_TOOLS, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
@@ -137,6 +137,23 @@ const LINK_PR_MS = 5000;
  * The "created" event: where the branch started, and what happened to the local base. For an
  * existing branch, <sync> is what happened to it: fast-forwarded to its remote's copy, or not.
  */
+/** The paths of the images added in the New session dialog that reached the session. */
+export function startImages(row: SessionRow): string[] {
+  if (!row.start_images) return [];
+  try {
+    const paths: unknown = JSON.parse(row.start_images);
+    return Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A review's notes line for its prompt, with the images added in the New session dialog; empty without either. */
+function reviewNotes(row: SessionRow): string {
+  const notes = withAttachedImages(row.review_notes ? `The user's notes for you: ${row.review_notes}` : '', startImages(row));
+  return notes ? `${notes}\n` : '';
+}
+
 function startedText(branch: string, base: string, sync: SyncResult | null, reused: boolean, from?: BranchSource, pr?: number): string {
   if (reused) {
     const on = pr ? `Started on ${branch}, the branch of PR #${pr}` : `Started on the existing branch ${branch}`;
@@ -303,6 +320,12 @@ export class SessionManager {
     return { path: savePastedImage(this.core.paths.pastes, row.id, data) };
   }
 
+  /** Saves an image added in the New session dialog, until a session is created with it. */
+  stageImage(projectId: string, data: unknown): StagedImage {
+    if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
+    return { id: stageImage(this.core.paths.pastes, projectId, data) };
+  }
+
   byToken(token: string): SessionRow | undefined {
     return get<SessionRow>(this.db, 'SELECT * FROM sessions WHERE hook_token = ?', token);
   }
@@ -378,6 +401,7 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
+    const images = checkStaged(this.core.paths.pastes, projectId, req.images);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
@@ -440,6 +464,7 @@ export class SessionManager {
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
       existingBranch: existing || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
+      images: images.length ? images : undefined,
     };
     // Pushes go where the PR's head is, when that isn't origin's branch of the same name.
     const push = attach && (from.remote !== 'origin' || from.branch !== wanted) ? from : null;
@@ -471,11 +496,21 @@ export class SessionManager {
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
+    // The images move into the session's folder now; only the ones that got there go to Claude.
+    const missed = claimStaged(this.core.paths.pastes, projectId, images, id);
+    const moved = images.filter((i) => !missed.includes(i)).map((i) => claimedPath(this.core.paths.pastes, id, i));
+    if (moved.length) this.update(id, { start_images: JSON.stringify(moved) });
+    if (missed.length) {
+      // Removed meanwhile (by the daily sweep, the project closing, or another start that took them).
+      const what = missed.length === 1 ? "An image you added wasn't" : `${missed.length} of the images you added weren't`;
+      this.event(id, 'images', `${what} on the host any more when the session started, so AgentK doesn't have ${missed.length === 1 ? 'it' : 'them'}. Paste ${missed.length === 1 ? 'it' : 'them'} into the terminal.`);
+      this.core.log.warn(`${missed.length} of the images for ${id} were gone before they could be moved: ${missed.join(', ')}`);
+    }
     // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
     this.creating.add(id);
     // Starting again under the same name replaces the failed start.
     this.failed.delete(id);
-    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: !!task });
+    this.setStartup(id, 'worktree', { resumed: false, hasPrompt: this.hasFirstPrompt(this.row(id)) });
     const done = this.finishCreate(id, { request, repo, worktree, reused, branch, base, where, from, review, attach, linkPr: existing, task, notes })
       .finally(() => this.creating.delete(id));
     return { session: this.get(id), done };
@@ -522,7 +557,7 @@ export class SessionManager {
     }
 
     const row = this.row(id);
-    const first = task ? this.prompt(row, this.firstPrompt(row), { task }) : null;
+    const first = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     // A session on an existing branch is told so first, so it builds on the work there.
     const prompt = first && row.branch_reused && row.kind !== 'review-pr' ? `${this.prompt(row, 'attached', this.attachedVars(row))}\n\n${first}` : first;
     this.setStartup(id, 'launch');
@@ -599,6 +634,8 @@ export class SessionManager {
     this.startup.delete(id);
     this.recall.drop(id);
     release();
+    // Its images go too: Try again says to add them again.
+    removePastes(this.core.paths.pastes, id);
     run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
     this.core.changed();
     return new HttpError(400, message);
@@ -773,6 +810,14 @@ export class SessionManager {
     return join(this.core.paths.designs, row.id, 'questions.json');
   }
 
+  /**
+   * Whether the session starts with a prompt: it has a task, or images from the New session dialog
+   * (at Explore, images alone are a first prompt; the session still has no task to move on with).
+   */
+  hasFirstPrompt(row: SessionRow): boolean {
+    return !!row.initial_prompt || startImages(row).length > 0;
+  }
+
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
     if (row.stage === 'explore') return 'explore';
@@ -795,11 +840,12 @@ export class SessionManager {
         title: row.pr_title ?? '',
         author: row.pr_author ?? 'its author',
         sha: row.review_sha ?? '',
-        notes: row.review_notes ? `The user's notes for you: ${row.review_notes}\n` : '',
+        notes: reviewNotes(row),
       }
       : {};
     const text = render(loadPrompt(this.db, name, row.worktree_path), {
-      task: row.initial_prompt ?? '',
+      // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
+      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(row.initial_prompt ?? '', startImages(row)),
       branch: row.branch,
       base: row.base_branch,
       pr: row.pr_number,
@@ -1475,7 +1521,7 @@ export class SessionManager {
   private restoreStartup(row: SessionRow): void {
     const since = row.last_event_at ?? row.created_at;
     const resumed = row.status_detail === 'Resuming';
-    this.startup.set(row.id, { step: 'loading', stepSince: since, startedAt: since, resumed, hasPrompt: !resumed && !!row.initial_prompt });
+    this.startup.set(row.id, { step: 'loading', stepSince: since, startedAt: since, resumed, hasPrompt: !resumed && this.hasFirstPrompt(row) });
     this.core.changed();
   }
 
@@ -1502,7 +1548,7 @@ export class SessionManager {
     const resume = this.transcriptExists(row);
 
     let prompt: string | null = null;
-    if (!resume) prompt = row.initial_prompt ? this.prompt(row, this.firstPrompt(row)) : null;
+    if (!resume) prompt = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     else if (cont) prompt = this.prompt(row, row.stage === 'review' ? 'continue-review' : 'continue');
 
     this.busy.delete(row.id);
@@ -1620,7 +1666,7 @@ export class SessionManager {
       });
     }
     const resume = this.transcriptExists(row);
-    const firstPrompt = resume ? null : row.initial_prompt ? this.prompt(row, this.firstPrompt(row)) : null;
+    const firstPrompt = resume ? null : this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     this.setStatus(row.id, 'starting', 'Resuming');
     this.startup.delete(row.id);
     this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });
@@ -1816,6 +1862,7 @@ export class SessionManager {
       removePastes(this.core.paths.pastes, row.id);
       this.core.questions.forget(row.id);
     }
+    removeStaged(this.core.paths.pastes, projectId);
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
     if (p) {
       const repos = new Set([p.repo_path, ...sessionRows(this.db, projectId).map((r) => r.repo_path).filter((r): r is string => !!r)]);

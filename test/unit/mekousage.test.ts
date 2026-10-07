@@ -157,7 +157,7 @@ describe('Meko calls in transcripts', () => {
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
     db.exec('DROP TABLE design_answers');
-    for (const c of ['push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+    for (const c of ['start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
@@ -165,7 +165,7 @@ describe('Meko calls in transcripts', () => {
     db.exec('ALTER TABLE sessions DROP COLUMN meko_agent_id; DROP TABLE project_events');
     db.exec('DROP TABLE meko_preloads; ALTER TABLE sessions DROP COLUMN first_turn_end_at');
     db.exec('ALTER TABLE sessions DROP COLUMN meko_datapack_id; ALTER TABLE sessions DROP COLUMN meko_datapack_name');
-    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 8}`);
+    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 9}`);
     db.close();
     db = openDb(path);
     expect(schemaVersion(db)).toBe(v);

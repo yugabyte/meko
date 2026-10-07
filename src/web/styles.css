@@ -3710,6 +3710,26 @@ div[id^='dak-mermaid-'] .label {
   color: var(--muted);
   white-space: nowrap;
 }
+/* The New session dialog's images for the first prompt: Add image, then the held ones. */
+.ns-images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.ns-images .held-images {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border-top: 0;
+  background: none;
+}
+@media (pointer: coarse) {
+  .ns-images .btn.small {
+    min-height: 40px;
+  }
+}
 
 @media (pointer: coarse) {
   .th-sort {

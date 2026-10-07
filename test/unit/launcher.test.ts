@@ -11,12 +11,12 @@ import { tmuxName } from '../../src/server/tmux.js';
 import { tempDir } from '../helpers.js';
 
 describe('the hooks settings file', () => {
-  it('allows editing designs and publishing Artifacts, with Edit() rules only', () => {
+  it('allows editing designs, publishing Artifacts and reading pasted images, with Edit() rules only for edits', () => {
     const paths = getPaths(join(tempDir('akl-hooks-'), 'ak'));
     writeHookFiles(paths);
     const allow: string[] = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).permissions.allow;
     // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
-    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact']);
+    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`]);
   });
 });
 

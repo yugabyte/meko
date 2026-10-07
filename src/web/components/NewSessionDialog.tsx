@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
+import { MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { pastedImages } from '../clipboard';
+import { HeldImages as HeldImageList } from '../heldImages';
 import { cx, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
 import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
+import { HeldImages } from './HeldImages';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
 /** A review's default name, from its PR. */
@@ -61,6 +64,38 @@ export function NewSessionDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inProjectRepo = repoPath === project.repoPath;
+
+  // Images for the first prompt (a review's notes): each uploads as it's added, kept under the
+  // project until the session is created with it.
+  const [, setHeldChanged] = useState(0);
+  const [held] = useState(
+    () =>
+      new HeldImageList<Blob>({
+        upload: async (image) => (await api.stageImage(project.id, image)).id,
+        thumb: (image) => URL.createObjectURL(image),
+        revoke: (url) => URL.revokeObjectURL(url),
+        onChange: () => setHeldChanged((n) => n + 1),
+        onError: (e) => setError(`Couldn't add the image: ${errorMessage(e)}`),
+      }),
+  );
+  // The thumbnails go with the dialog.
+  useEffect(() => () => held.clear(), [held]);
+  const imagePicker = useRef<HTMLInputElement>(null);
+  const hold = (images: Blob[]) => {
+    if (!images.length) return;
+    if (images.some((i) => i.size > MAX_PASTE_BYTES)) {
+      setError(`Couldn't add ${images.length === 1 ? 'the image' : 'the images'}: images over ${MAX_PASTE_BYTES / 1024 / 1024} MB can't be pasted.`);
+      return;
+    }
+    if (held.size + images.length > MAX_START_IMAGES) {
+      setError(`A session can start with at most ${MAX_START_IMAGES} images.`);
+      return;
+    }
+    setError(null);
+    held.add(images);
+  };
+  // A failed start's images are removed with it, so Try again can't send them.
+  const lostImages = held.size ? 0 : (initial?.images?.length ?? 0);
 
   // The chosen repo's branches; picking another repo starts from its default branch.
   useEffect(() => {
@@ -223,6 +258,10 @@ export function NewSessionDialog({
     setError(null);
     setBusy(true);
     try {
+      // Images still uploading are waited for. One that failed is taken out and named (onError), and nothing starts.
+      const ready = await held.ready();
+      if (!ready) return;
+      const images = ready.length ? ready.flatMap((i) => (i.path ? [i.path] : [])) : undefined;
       const s = await api.createSession(
         project.id,
         review && picked
@@ -232,6 +271,7 @@ export function NewSessionDialog({
             kind: 'review-pr',
             repoPath: inProjectRepo ? undefined : repoPath,
             pr: { repo: picked.repo, number: picked.number },
+            images,
           }
           : {
             name: name.trim(),
@@ -240,6 +280,7 @@ export function NewSessionDialog({
             kind: 'task',
             start: start === 'review-pr' ? undefined : start,
             repoPath: inProjectRepo ? undefined : repoPath,
+            images,
             ...(workOn === 'pr' && taskPr
               ? { pr: { repo: taskPr.repo, number: taskPr.number } }
               : workOn === 'branch'
@@ -262,7 +303,7 @@ export function NewSessionDialog({
       footer={
         <>
           <button className="btn primary" disabled={!canStart} onClick={create}>
-            {busy ? <Busy label="Starting" /> : review ? 'Start review' : 'Start session'}
+            {busy ? <Busy label={held.uploading ? 'Uploading' : 'Starting'} /> : review ? 'Start review' : 'Start session'}
           </button>
         </>
       }
@@ -306,11 +347,11 @@ export function NewSessionDialog({
         <Field
           label={review ? 'Notes for AgentK (optional)' : 'First prompt (optional)'}
           hint={
-            review
+            (review
               ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
               : start === 'explore'
                 ? 'What should AgentK do? You can also type it in the terminal.'
-                : 'What should AgentK do? Left empty, AgentK starts on the name as the task.'
+                : 'What should AgentK do? Left empty, AgentK starts on the name as the task.') + ' Images can be pasted or dropped in.'
           }
         >
           <textarea
@@ -326,8 +367,58 @@ export function NewSessionDialog({
                 create();
               }
             }}
+            onPaste={(e) => {
+              // A paste with images holds them; text (a spreadsheet's cells come with a picture) pastes as usual.
+              const images = pastedImages(e.clipboardData);
+              if (!images.length) return;
+              e.preventDefault();
+              hold(images);
+            }}
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes('Files')) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'copy';
+            }}
+            onDrop={(e) => {
+              if (!e.dataTransfer.types.includes('Files')) return;
+              e.preventDefault();
+              const images = pastedImages(e.dataTransfer);
+              if (images.length) hold(images);
+              else setError('Only images can be dropped here: PNG, JPEG, GIF or WebP.');
+            }}
           />
+          <div className="ns-images">
+            <button type="button" id="ns-add-image" className="btn small" onClick={() => imagePicker.current?.click()}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <circle cx="9" cy="10" r="1.6" />
+                <path d="M21 16l-5-5-9 9" />
+              </svg>
+              Add image
+            </button>
+            <HeldImages held={held} hint={review ? 'sent with your notes' : 'sent with the first prompt'} />
+            {lostImages > 0 && (
+              <span className="hint">
+                {lostImages === 1 ? "The image from the start that failed wasn't kept." : `The ${lostImages} images from the start that failed weren't kept.`} Add
+                them again.
+              </span>
+            )}
+          </div>
         </Field>
+        {/* Outside the field's label, so a tap on the label doesn't open the picker. */}
+        <input
+          ref={imagePicker}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            // Cleared, so picking the same image again still fires a change.
+            e.target.value = '';
+            hold(files);
+          }}
+        />
         <div className="advanced">
           <button
             type="button"

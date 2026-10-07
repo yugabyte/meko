@@ -204,8 +204,9 @@ export function writeHookFiles(paths: Paths): void {
     // The design file lives outside the repo; writing it, and publishing the design as an
     // Artifact (private by default), shouldn't stop for a permission prompt. Edit() rules cover
     // every file-editing tool, Write included; Claude Code ignores Write() rules and warns about them.
+    // Images added in the New session dialog reach Claude as paths in its first prompt, for it to read.
     permissions: {
-      allow: [`Edit(/${paths.designs}/**)`, 'Artifact'],
+      allow: [`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`],
     },
     statusLine: {
       type: 'command',

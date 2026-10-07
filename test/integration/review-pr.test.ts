@@ -116,7 +116,11 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     const p = await project();
     const head = pushToPr(7, 'widget.ts');
     pr(7);
-    const s = await env.core.sessions.create(p.id, { name: '', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 7 }, prompt: 'the polling' });
+    // An image added in the dialog goes with the notes: a review's task is the PR.
+    const image = env.core.sessions.stageImage(p.id, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])).id;
+    const s = await env.core.sessions.create(p.id, {
+      name: '', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 7 }, prompt: 'the polling', images: [image],
+    });
     await idle(s.id, 'first turn');
     const got = env.core.sessions.get(s.id);
     expect(got).toMatchObject({
@@ -137,6 +141,10 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     const t = transcript(s.id);
     expect(t).toContain("You're assisting the user while they review PR #7 (https://github.com/acme/demo/pull/7) by dana");
     expect(t).toContain("The user's notes for you: the polling");
+    // The transcript is JSON lines, so the prompt's new lines are escaped there.
+    const notes = `The user's notes for you: the polling\n\nImages the user attached (open each with the Read tool to see it):\n- ${join(env.core.paths.pastes, s.id, image)}\n`;
+    expect(t).toContain(JSON.stringify(notes).slice(1, -1));
+    expect(env.core.sessions.row(s.id).initial_prompt).toBe('Review PR #7 of acme/demo: Add the widget');
     expect(t).toContain('gh pr view 7 --repo acme/demo --comments');
     // The diff is against the remote's base the review fetched, never the local branch.
     expect(t).toContain('the base is origin/main.');
