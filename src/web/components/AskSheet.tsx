@@ -172,7 +172,7 @@ export function AskBar({ ask, onOpen }: { ask: AskRequest; onOpen: () => void })
 
 /**
  * The questions Claude is asking, over the terminal: it fills the window (a full-height sheet on a
- * phone), so previews have room, and the questions scroll under a footer that keeps **Answer** in view.
+ * phone), so previews have room; the questions scroll while the footer keeps **Answer** in view.
  */
 export function AskSheet({ session, onClose }: { session: Session; onClose: () => void }) {
   const ask = session.asking;
