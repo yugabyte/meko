@@ -24,6 +24,10 @@ type GuardFinding struct {
 	Workload string
 	Detail   string
 	Fatal    bool
+	// Count and Matches identify an http_5xx series: how many answers it
+	// counted, and whether a call (method, path) a body noted is one of them.
+	Count   int
+	Matches func(method, path string) bool
 }
 
 func (f GuardFinding) String() string { return f.Kind + " " + f.Workload + ": " + f.Detail }
@@ -52,16 +56,25 @@ type guardWindow struct {
 	// excused are the finding kinds some overlapping body tolerates, which is
 	// what makes one of them unattributable.
 	excused map[string]bool
+	opened  time.Time
+}
+
+type served5xx struct {
+	at     time.Time
+	method string
+	path   string
+	by     *guardWindow
 }
 
 var guardActive = struct {
 	sync.Mutex
-	open map[string][]*guardWindow
-}{open: map[string][]*guardWindow{}}
+	open   map[string][]*guardWindow
+	served map[string][]served5xx
+}{open: map[string][]*guardWindow{}, served: map[string][]served5xx{}}
 
-func openWindow(env Environment, tolerates []string) *guardWindow {
+func openWindow(env Environment, tolerates []string, opened time.Time) *guardWindow {
 	h := env.Handles()
-	w := &guardWindow{key: h.Cluster + "/" + h.Namespace, tolerates: tolerates, excused: map[string]bool{}}
+	w := &guardWindow{key: h.Cluster + "/" + h.Namespace, tolerates: tolerates, excused: map[string]bool{}, opened: opened}
 	guardActive.Lock()
 	defer guardActive.Unlock()
 	for _, o := range guardActive.open[w.key] {
@@ -76,17 +89,70 @@ func openWindow(env Environment, tolerates []string) *guardWindow {
 	return w
 }
 
-func closeWindow(w *guardWindow) map[string]bool {
+// closeWindow returns the kinds overlapping bodies tolerate, and the 5xx
+// answers other bodies' own calls received between w opening and cutoff.
+func closeWindow(w *guardWindow, cutoff time.Time) (map[string]bool, []served5xx) {
 	guardActive.Lock()
 	defer guardActive.Unlock()
 	open := guardActive.open[w.key]
 	for i, o := range open {
 		if o == w {
-			guardActive.open[w.key] = append(open[:i], open[i+1:]...)
+			open = append(open[:i], open[i+1:]...)
+			guardActive.open[w.key] = open
 			break
 		}
 	}
-	return w.excused
+	var others []served5xx
+	for _, s := range guardActive.served[w.key] {
+		if s.by != w && !s.at.Before(w.opened) && !s.at.After(cutoff) {
+			others = append(others, s)
+		}
+	}
+	keep := guardActive.served[w.key][:0]
+	for _, s := range guardActive.served[w.key] {
+		for _, o := range open {
+			if !s.at.Before(o.opened) {
+				keep = append(keep, s)
+				break
+			}
+		}
+	}
+	guardActive.served[w.key] = keep
+	return w.excused, others
+}
+
+// NoteServerError pins a 5xx that a body's own call (made with ctx) got on that
+// body, so the guard does not fail the bodies beside it on the stack.
+func NoteServerError(ctx context.Context, method, path string) {
+	t, _ := ctx.Value(tKey{}).(*T)
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	w := t.guard
+	t.mu.Unlock()
+	if w == nil {
+		return
+	}
+	guardActive.Lock()
+	defer guardActive.Unlock()
+	if !slices.Contains(guardActive.open[w.key], w) {
+		return
+	}
+	guardActive.served[w.key] = append(guardActive.served[w.key], served5xx{at: time.Now(), method: method, path: path, by: w})
+}
+
+func servedElsewhere(f GuardFinding, others []served5xx) bool {
+	if f.Kind != GuardHTTP5xx || f.Matches == nil || f.Count <= 0 {
+		return false
+	}
+	n := 0
+	for _, s := range others {
+		if f.Matches(s.method, s.path) {
+			n++
+		}
+	}
+	return n >= f.Count
 }
 
 type guardState struct {
@@ -100,11 +166,11 @@ type guardState struct {
 // FailNow or panic. Left open, it would excuse every later body on the stack.
 func (st *guardState) release() {
 	if st != nil && st.window != nil {
-		closeWindow(st.window)
+		closeWindow(st.window, time.Now())
 	}
 }
 
-func guardMark(env Environment, cfg *Config, test Test) *guardState {
+func guardMark(t *T, env Environment, cfg *Config, test Test) *guardState {
 	g, ok := env.(Guarded)
 	if !ok || test.Unguarded || !guardEnabled(cfg) {
 		return nil
@@ -115,13 +181,21 @@ func guardMark(env Environment, cfg *Config, test Test) *guardState {
 	if err != nil {
 		return &guardState{g: g, markErr: err}
 	}
-	return &guardState{g: g, mark: mark, window: openWindow(env, test.Tolerates)}
+	// The window opens after the mark's counter read and closes (cutoff in
+	// guardCheck) before the check's, so a note excuses only an answer the
+	// counter delta includes.
+	w := openWindow(env, test.Tolerates, time.Now())
+	t.mu.Lock()
+	t.guard = w
+	t.mu.Unlock()
+	return &guardState{g: g, mark: mark, window: w}
 }
 
 // guardCheck runs on its own deadline, like Collect, so a body that spent its
 // timeout is still checked. A fatal finding is recorded as concurrent instead
 // of failing the test only when an overlapping body on the same stack
-// tolerates that kind, because that body may have caused it.
+// tolerates that kind, because that body may have caused it, or when the 5xx
+// answers were all received by overlapping bodies' own calls.
 func guardCheck(t *T, test Test, st *guardState) error {
 	if st == nil {
 		return nil
@@ -133,8 +207,9 @@ func guardCheck(t *T, test Test, st *guardState) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultGuardTimeout)
 	defer cancel()
+	cutoff := time.Now()
 	findings, err := st.g.GuardCheck(ctx, st.mark)
-	excused := closeWindow(st.window)
+	excused, others := closeWindow(st.window, cutoff)
 	return t.Step("service_guard", func(h *StepHandle) error {
 		if err != nil {
 			return fmt.Errorf("guard could not check the services: %w", err)
@@ -146,6 +221,8 @@ func guardCheck(t *T, test Test, st *guardState) error {
 				other = append(other, f.String())
 			case excused[f.Kind]:
 				concurrent = append(concurrent, f.String())
+			case servedElsewhere(f, others):
+				concurrent = append(concurrent, f.String()+", all to an overlapping test's own calls")
 			default:
 				fatal = append(fatal, f.String())
 			}

@@ -40,6 +40,18 @@ type T struct {
 	skipped    bool
 	skipMsg    string
 	teardowns  []func(context.Context) error
+	guard      *guardWindow
+}
+
+type tKey struct{}
+
+// Value lets a context derived from t find t, which is how a client reports a
+// 5xx to the guard window of the body that made the call.
+func (t *T) Value(key any) any {
+	if key == (tKey{}) {
+		return t
+	}
+	return t.Context.Value(key)
 }
 
 // OnTeardown registers fn to run after the test body and the environment's

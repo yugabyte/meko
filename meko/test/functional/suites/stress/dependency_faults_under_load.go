@@ -18,7 +18,7 @@ func init() {
 		Category:   core.Stress,
 		Tags:       []string{"stress"},
 		OwningTeam: core.TeamPlatform,
-		Env:        dedicated,
+		Env:        withMCPReplicas("dependency_faults_under_load"),
 		Timeout:    90 * time.Minute,
 		Tolerates:  []string{core.GuardPodRestart, core.GuardHTTP5xx},
 		Params:     append([]string{"chaos"}, paramPrefixes...),
@@ -74,7 +74,7 @@ func dependencyFaultsUnderLoad(t *core.T) error {
 				db := kube.InNamespace(b.Namespace)
 				sts, _ := db.GetSelector(t, "statefulset", "app=yugabyted", "{.items[0].metadata.name}")
 				if sts != "" {
-					faults = append(faults, podDelete(o, workload{name: "yugabyted", kube: db, selector: "app=yugabyted", prefix: "", owner: "statefulset/" + sts}))
+					faults = append(faults, podDelete(o, workload{name: "yugabyted", kube: db, selector: "app=yugabyted", prefix: "", owner: "statefulset/" + sts, settle: o.GetDuration(prefix+"db_settle_within", 10*time.Minute)}))
 				}
 			} else {
 				rig.Logf("stress: the database is not RF3 in its own namespace (%v), no database pod is deleted", err)

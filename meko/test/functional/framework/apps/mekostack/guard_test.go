@@ -44,8 +44,32 @@ func TestRequestFindings(t *testing.T) {
 	if got[0].Detail != "DELETE /api/v1/datapacks/:datapack_id 500 answered 4 time(s)" {
 		t.Errorf("deltas across pods should add up: %+v", got[0])
 	}
+	if f := got[0]; f.Method != "DELETE" || f.Route != "/api/v1/datapacks/:datapack_id" || f.Count != 4 {
+		t.Errorf("series = %s %s x%d, want DELETE /api/v1/datapacks/:datapack_id x4", f.Method, f.Route, f.Count)
+	}
 	if requestFindings(after, after) != nil {
 		t.Errorf("no new 5xx is no finding")
+	}
+}
+
+func TestFindingMatches(t *testing.T) {
+	f := Finding{Kind: FindingHTTP5xx, Method: "POST", Route: "/api/v1/datapacks/:datapack_id/knowledge-bases/upload"}
+	for path, want := range map[string]bool{
+		"/api/v1/datapacks/4483b702/knowledge-bases/upload":     true,
+		"/api/v1/datapacks/4483b702/knowledge-bases/upload?x=1": true,
+		"/api/v1/datapacks/4483b702":                            false,
+		"/api/v1/datapacks/4483b702/knowledge-bases/upload/2":   false,
+		"/api/v1/agents/4483b702/knowledge-bases/upload":        false,
+	} {
+		if got := f.Matches("POST", path); got != want {
+			t.Errorf("Matches(POST, %s) = %v, want %v", path, got, want)
+		}
+	}
+	if f.Matches("GET", "/api/v1/datapacks/4483b702/knowledge-bases/upload") {
+		t.Errorf("another method matched")
+	}
+	if !(Finding{Method: "GET", Route: "/api/v1/files/*path"}).Matches("GET", "/api/v1/files/a/b/c") {
+		t.Errorf("a * segment should match the rest")
 	}
 }
 

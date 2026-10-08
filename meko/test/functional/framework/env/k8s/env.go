@@ -116,7 +116,10 @@ func (e *Env) GuardCheck(ctx context.Context, mark any) ([]core.GuardFinding, er
 	}
 	out := make([]core.GuardFinding, len(fs))
 	for i, f := range fs {
-		out[i] = core.GuardFinding{Kind: f.Kind, Workload: f.Workload, Detail: f.Detail, Fatal: f.Fatal}
+		out[i] = core.GuardFinding{Kind: f.Kind, Workload: f.Workload, Detail: f.Detail, Fatal: f.Fatal, Count: f.Count}
+		if f.Route != "" {
+			out[i].Matches = f.Matches
+		}
 	}
 	return out, nil
 }

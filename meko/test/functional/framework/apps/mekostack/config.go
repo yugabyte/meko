@@ -67,6 +67,8 @@ type Config struct {
 	DatabaseImage string
 
 	APIReplicas int
+	// MCPReplicas, when set, overrides the values files' meko-mcp-server count.
+	MCPReplicas int
 	// APIConfig is extra api-server env, KEY=VALUE, for runtime feature flags the
 	// presets leave off.
 	APIConfig []string
@@ -123,6 +125,7 @@ func FromConfig(get Getter) (Config, error) {
 		ImageTags:     map[string]string{},
 		DatabaseImage: get.GetString("env.mekostack.images.database", ""),
 		APIReplicas:   get.GetInt("env.mekostack.api_replicas", 0),
+		MCPReplicas:   get.GetInt("env.mekostack.mcp_replicas", 0),
 		APIConfig:     get.GetStringSlice("env.mekostack.api_config", nil),
 		Auth:          AuthMode(get.GetString("env.mekostack.auth", string(AuthNone))),
 		CognitoMock: cognitomock.Spec{
@@ -201,6 +204,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.APIReplicas < 1 {
 		errs = append(errs, fmt.Errorf("env.mekostack.api_replicas = %d, want at least 1", cfg.APIReplicas))
+	}
+	if cfg.MCPReplicas < 0 {
+		errs = append(errs, fmt.Errorf("env.mekostack.mcp_replicas = %d, want 0 or more", cfg.MCPReplicas))
 	}
 	switch cfg.Auth {
 	case "", AuthNone, AuthCognitoMock:

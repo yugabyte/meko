@@ -1,6 +1,7 @@
 package stress
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -23,6 +24,7 @@ type workload struct {
 	selector string
 	prefix   string
 	owner    string // deployment/<name> or statefulset/<name>
+	settle   time.Duration
 }
 
 func (w workload) pods(ctx context.Context) ([]string, error) {
@@ -98,7 +100,7 @@ func podDelete(o *core.Config, w workload) fault {
 			return victim, nil, action.Inject(t, chaos.NewPodTarget(w.name, w.kube, victim, ""))
 		},
 		settled: func(t *core.T, victim string) error {
-			return t.WaitFor(fmt.Sprintf("%s to have every replica back after %s was deleted", w.owner, victim), 5*time.Minute, 3*time.Second, func() (bool, error) {
+			return t.WaitFor(fmt.Sprintf("%s to have every replica back after %s was deleted", w.owner, victim), cmp.Or(w.settle, 5*time.Minute), 3*time.Second, func() (bool, error) {
 				return w.ready(t, victim)
 			})
 		},

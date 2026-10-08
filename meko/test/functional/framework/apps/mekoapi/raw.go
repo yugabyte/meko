@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+
+	"github.com/yugabyte/meko/meko/test/functional/framework/core"
 )
 
 // Response is what Raw returns: the status whatever it is, and the body.
@@ -37,6 +39,9 @@ func (c *Client) Raw(ctx context.Context, method, path string, body any) (Respon
 		return Response{}, err
 	}
 	out := Response{Status: resp.StatusCode, Body: raw}
+	if resp.StatusCode >= 500 {
+		core.NoteServerError(ctx, method, apiPrefix+path)
+	}
 	var env envelope
 	_ = json.Unmarshal(raw, &env)
 	if env.Error != nil {

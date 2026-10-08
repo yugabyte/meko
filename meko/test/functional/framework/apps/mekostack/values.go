@@ -163,6 +163,9 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 	if cfg.Backing != nil && !cfg.Backing.bundled() {
 		cfg.Backing.valuesFor(v, cfg.dbPassword(s), cfg.RagWorkers)
 	}
+	if cfg.MCPReplicas > 0 {
+		v["mekoMcpServer"].(map[string]any)["replicas"] = cfg.MCPReplicas
+	}
 	if cfg.MockLLM() {
 		env := cfg.llmEnv()
 		gw := v["inferenceGateway"].(map[string]any)["config"].(map[string]any)

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/yugabyte/meko/meko/test/functional/framework/core"
 )
 
 const (
@@ -159,6 +161,9 @@ func (c *Client) exchange(ctx context.Context, method, path, contentType string,
 		e := &Error{Method: method, Path: path, Status: resp.StatusCode, Body: truncate(string(raw), 512)}
 		if env.Error != nil {
 			e.Code, e.Message = env.Error.Code, env.Error.Message
+		}
+		if resp.StatusCode >= 500 {
+			core.NoteServerError(ctx, method, apiPrefix+path)
 		}
 		if c.onError != nil {
 			c.onError(e)

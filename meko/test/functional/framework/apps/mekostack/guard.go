@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -48,6 +49,32 @@ type Finding struct {
 	Workload string
 	Detail   string
 	Fatal    bool
+	// Method, Route (the api-server's template, "/api/v1/datapacks/:datapack_id")
+	// and Count name an http_5xx series.
+	Method string
+	Route  string
+	Count  int
+}
+
+// Matches reports whether a call to method and a concrete path is one of an
+// http_5xx finding's series: a ":name" segment matches any one segment, "*"
+// the rest, and the query is ignored.
+func (f Finding) Matches(method, path string) bool {
+	if f.Route == "" || method != f.Method {
+		return false
+	}
+	path, _, _ = strings.Cut(path, "?")
+	r := strings.Split(strings.Trim(f.Route, "/"), "/")
+	p := strings.Split(strings.Trim(path, "/"), "/")
+	for i, seg := range r {
+		if strings.HasPrefix(seg, "*") {
+			return true
+		}
+		if i >= len(p) || !strings.HasPrefix(seg, ":") && seg != p[i] {
+			return false
+		}
+	}
+	return len(p) == len(r)
 }
 
 // GuardMark is where the stack's services stood before a test body.
@@ -263,7 +290,10 @@ func requestFindings(before, after map[string]float64) []Finding {
 	sort.Strings(keys)
 	var out []Finding
 	for _, k := range keys {
-		out = append(out, Finding{Kind: FindingHTTP5xx, Workload: apiDeployment, Detail: fmt.Sprintf("%s answered %g time(s)", k, totals[k]), Fatal: true})
+		method, rest, _ := strings.Cut(k, " ")
+		route, _, _ := strings.Cut(rest, " ")
+		out = append(out, Finding{Kind: FindingHTTP5xx, Workload: apiDeployment, Detail: fmt.Sprintf("%s answered %g time(s)", k, totals[k]), Fatal: true,
+			Method: method, Route: route, Count: int(math.Ceil(totals[k]))})
 	}
 	return out
 }

@@ -157,6 +157,8 @@ env:
       database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2"
     # api-server replicas. Three, so a migration runs while other replicas serve.
     api_replicas: 3
+    # meko-mcp-server replicas, 0 keeps the values files' count (1 in values-dev.yaml).
+    mcp_replicas: 0
     # Extra api-server env, KEY=VALUE, for runtime feature flags the chart presets
     # leave off. Projects and conversation search ship in the UI, so the stack
     # runs them.
@@ -992,6 +994,9 @@ stress:
     max_error_rate: 0.10
     # The kills cost 5xx answers; recovery and the quiet error rate judge them.
     http_5xx_allowed: 100000
+    # Production runs 3. With 1, every kill is a full MCP outage, and the kill windows
+    # alone exceed max_error_rate.
+    mcp_replicas: 2
   # Ingest that must survive the text worker dying mid-document.
   kb_ingest_with_worker_kills:
     duration: 30m
@@ -1022,6 +1027,10 @@ stress:
     hold: 60s
     llm_slow: 8s
     recover_within: 2m
+    mcp_replicas: 2
+    # Under this load a deleted yugabyted pod on 2 CPUs took over 5 min to pass its
+    # ysqlsh readiness probe, while the load recovered in 18 s.
+    db_settle_within: 10m
     recovery_error_rate: 0.2
     quiet_error_rate: 0.02
     max_error_rate: 0.15

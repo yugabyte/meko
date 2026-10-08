@@ -89,15 +89,18 @@ func TestGuardOff(t *testing.T) {
 	}
 }
 
-func runPair(t *testing.T, a, b core.Test) []*core.Result {
+func runPair(t *testing.T, a, b core.Test, findings ...core.GuardFinding) []*core.Result {
 	t.Helper()
+	if len(findings) == 0 {
+		findings = []core.GuardFinding{restart}
+	}
 	cfg, err := core.LoadConfigNoDefaults(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, results := core.RunTests(context.Background(), []core.Test{a, b},
 		core.RunOptions{Parallel: 2, Seed: core.NewRunSeed(1, true), Config: cfg,
-			Provider: guardedProvider{guardedEnv{findings: []core.GuardFinding{restart}}}})
+			Provider: guardedProvider{guardedEnv{findings: findings}}})
 	return results
 }
 
@@ -155,5 +158,85 @@ func TestGuardSkipClosesItsWindow(t *testing.T) {
 	run(core.Test{Name: "skipper", Tolerates: []string{core.GuardPodRestart}, Run: func(t *core.T) error { t.Skip("no"); return nil }})
 	if r := run(core.Test{Name: "later", Run: func(*core.T) error { return nil }}); r.Status != core.StatusFailed {
 		t.Errorf("later = %s, want failed on the restart", r.Status)
+	}
+}
+
+func upload5xx(n int) core.GuardFinding {
+	return core.GuardFinding{Kind: core.GuardHTTP5xx, Workload: "meko-api-server", Fatal: true,
+		Detail: fmt.Sprintf("POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload 500 answered %d time(s)", n),
+		Count:  n, Matches: func(method, path string) bool {
+			path, _, _ = strings.Cut(path, "?")
+			return method == "POST" && strings.HasSuffix(path, "/knowledge-bases/upload")
+		}}
+}
+
+// uploader's own call gets the 500 while bystander is open, and bystander
+// checks only after it.
+func uploaderAndBystander(path string) (core.Test, core.Test) {
+	open, noted := make(chan struct{}), make(chan struct{})
+	uploader := core.Test{Name: "uploader", Run: func(t *core.T) error {
+		<-open
+		ctx, cancel := context.WithCancel(t)
+		defer cancel()
+		core.NoteServerError(ctx, "POST", path)
+		close(noted)
+		return nil
+	}}
+	bystander := core.Test{Name: "bystander", Run: func(*core.T) error {
+		close(open)
+		<-noted
+		return nil
+	}}
+	return uploader, bystander
+}
+
+func TestGuardPinsA5xxOnTheBodyWhoseCallGotIt(t *testing.T) {
+	up, by := uploaderAndBystander("/api/v1/datapacks/4483b702/knowledge-bases/upload?x=1")
+	results := runPair(t, up, by, upload5xx(1))
+	if results[0].Status != core.StatusFailed {
+		t.Errorf("uploader = %s, want failed", results[0].Status)
+	}
+	if r := results[1]; r.Status != core.StatusPassed {
+		t.Errorf("bystander = %s (%s), want passed", r.Status, r.ErrorSummary)
+	}
+}
+
+func TestGuardFailsA5xxNoOtherBodyAccountsFor(t *testing.T) {
+	for name, tc := range map[string]struct {
+		path  string
+		count int
+	}{
+		"more answers than calls": {"/api/v1/datapacks/4483b702/knowledge-bases/upload", 2},
+		"another route":           {"/api/v1/datapacks/4483b702", 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			up, by := uploaderAndBystander(tc.path)
+			if r := runPair(t, up, by, upload5xx(tc.count))[1]; r.Status != core.StatusFailed {
+				t.Errorf("bystander = %s, want failed", r.Status)
+			}
+		})
+	}
+}
+
+// A note made after its body's window closed (a goroutine, a teardown)
+// excuses nothing: that body's guard has already run and will never fail on it.
+func TestGuardIgnoresANoteFromAClosedWindow(t *testing.T) {
+	open, noted := make(chan struct{}), make(chan struct{})
+	uploader := core.Test{Name: "uploader", Run: func(t *core.T) error {
+		<-open
+		t.OnTeardown(func(context.Context) error {
+			core.NoteServerError(t, "POST", "/api/v1/datapacks/x/knowledge-bases/upload")
+			close(noted)
+			return nil
+		})
+		return nil
+	}}
+	bystander := core.Test{Name: "bystander", Run: func(*core.T) error {
+		close(open)
+		<-noted
+		return nil
+	}}
+	if r := runPair(t, uploader, bystander, upload5xx(1))[1]; r.Status != core.StatusFailed {
+		t.Errorf("bystander = %s, want failed", r.Status)
 	}
 }

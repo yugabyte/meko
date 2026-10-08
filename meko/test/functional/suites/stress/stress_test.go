@@ -59,6 +59,7 @@ func TestDefaultsCarryEveryKeyAndFitThePATCap(t *testing.T) {
 		"stress.recall_under_mcp_pod_kills.duration", "stress.recall_under_mcp_pod_kills.kill_interval", "stress.recall_under_mcp_pod_kills.quiet_error_rate",
 		"stress.kb_ingest_with_worker_kills.duration", "stress.kb_ingest_with_worker_kills.ingest_timeout", "stress.kb_ingest_with_worker_kills.kill_interval",
 		"stress.dependency_faults_under_load.duration", "stress.dependency_faults_under_load.hold", "stress.dependency_faults_under_load.fault_interval",
+		"stress.dependency_faults_under_load.mcp_replicas", "stress.dependency_faults_under_load.db_settle_within", "stress.recall_under_mcp_pod_kills.mcp_replicas",
 		"apps.mekoload.image", "apps.mekoload.port", "apps.mekoload.release.repo",
 	} {
 		if !cfg.Has(k) {

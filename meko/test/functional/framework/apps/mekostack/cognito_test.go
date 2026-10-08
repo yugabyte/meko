@@ -351,3 +351,20 @@ func TestNewAccountsWaitsForTheDefaultDatapacksToHaveProjects(t *testing.T) {
 		t.Fatalf("polled %d times, want it to stop at the poll that saw all 3 accounts", polls)
 	}
 }
+
+func TestMCPReplicasOverrideTheValuesFiles(t *testing.T) {
+	dp, _ := NewDataPlaneSecrets(nil)
+	m := MinIO{AccessKey: "ak", SecretKey: "sk", APIEndpoint: "http://minio:9000", WorkerEndpoint: "http://10.0.0.1:9000"}
+	for replicas, want := range map[int]any{0: nil, 2: 2} {
+		cfg := testConfig(t)
+		cfg.MCPReplicas = replicas
+		v, err := cfg.Values(dp, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mcp, _ := v["mekoMcpServer"].(map[string]any)
+		if got := mcp["replicas"]; got != want {
+			t.Errorf("MCPReplicas %d: mekoMcpServer.replicas = %v, want %v", replicas, got, want)
+		}
+	}
+}

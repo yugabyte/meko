@@ -15,7 +15,7 @@ func init() {
 		Category:   core.Stress,
 		Tags:       []string{"stress"},
 		OwningTeam: core.TeamMCPServer,
-		Env:        dedicated,
+		Env:        withMCPReplicas("recall_under_mcp_pod_kills"),
 		Tolerates:  []string{core.GuardPodRestart, core.GuardHTTP5xx},
 		Params:     append([]string{"chaos"}, paramPrefixes...),
 		Description: "Client pods recall from seeded datapacks (memory_search, context_search, knowledgebase_search, describe, the memories pages), " +

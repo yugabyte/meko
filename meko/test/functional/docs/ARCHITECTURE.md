@@ -302,7 +302,8 @@ the test (`failed`, step `service_guard`) unless the test lists its kind in `Tol
 
 On a shared stack the window covers every test running in it. A fatal finding is excused
 only when an overlapping test on the same stack tolerates that kind, because that test may
-have caused it. Otherwise it fails every test that overlapped. `Unguarded: true` skips the
+have caused it, or when it is an `http_5xx` whose answers all went to overlapping tests' own
+`mekoapi` calls, which already fail those tests. Otherwise it fails every test that overlapped. `Unguarded: true` skips the
 guard for a body that never calls the stack's services. `-o guard.enabled=false` turns it off
 for a run.
 

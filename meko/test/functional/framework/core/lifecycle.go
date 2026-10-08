@@ -386,7 +386,7 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 			}
 		}
 		if test.Run != nil {
-			st := guardMark(env, opts.Config, test)
+			st := guardMark(t, env, opts.Config, test)
 			defer st.release()
 			err := errors.Join(test.Run(t), guardCheck(t, test, st))
 			if err != nil {

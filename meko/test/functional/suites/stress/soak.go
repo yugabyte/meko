@@ -5,6 +5,8 @@ package stress
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,18 @@ import (
 // dedicated is the environment every stress test asks for: a whole stack that
 // no other test shares, and a slot of the cluster's capacity for it.
 var dedicated = core.EnvSpec{Sharing: core.Exclusive, Shape: core.DedicatedStack, ClusterSlots: 1, BackingConfig: loadtest.StackConfig}
+
+// withMCPReplicas is dedicated with meko-mcp-server at stress.<key>.mcp_replicas, so
+// deleting one of its pods is a failover the load can ride out.
+func withMCPReplicas(key string) core.EnvSpec {
+	spec := dedicated
+	spec.BackingConfig = func(cfg *core.Config) map[string]string {
+		o := map[string]string{"env.mekostack.mcp_replicas": strconv.Itoa(cfg.GetInt("stress."+key+".mcp_replicas", 2))}
+		maps.Copy(o, loadtest.StackConfig(cfg))
+		return o
+	}
+	return spec
+}
 
 var paramPrefixes = []string{"stress", "apps.mekoload", "env.k8s", "env.mekostack", "timeouts"}
 
