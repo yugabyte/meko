@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/lib/pq"
+
+	"meko/api_server/internal/memtable"
 )
 
 // DatapackRollupRepo answers "how much is in these datapacks, and who put it
@@ -22,12 +24,14 @@ import (
 //   - knowledge_bases and conversation_history_search are
 //     PARTITION BY HASH (tenant_id) and tenant_id IS the datapack, so the
 //     planner prunes to one partition per datapack.
-//   - meko_mem0_collection is PARTITION BY HASH (meko_datapack_id,
-//     meko_user_id, meko_agent_id). Constraining only the datapack cannot
-//     prune, so it index-scans all 128 partitions. That is inherent to the
-//     table, not to this query: MemoriesRepo.CountByDatapack pays the same
-//     fan-out for ONE datapack, and the point of grouping here is to pay it
-//     once for the project rather than once per datapack.
+//   - The memory table is memtable.Table(). The default,
+//     meko_mem0_collection, is PARTITION BY HASH (meko_datapack_id,
+//     meko_user_id, meko_agent_id): constraining only the datapack cannot
+//     prune, so it index-scans all 128 partitions, and grouping here pays
+//     that fan-out once for the project rather than once per datapack.
+//     meko_mem0_memories is PARTITION BY HASH (meko_datapack_id), so it
+//     prunes to one partition per datapack and grouping only saves round
+//     trips.
 //
 // Reads the DATA database, not meko_system.
 type DatapackRollupRepo struct {
@@ -171,7 +175,7 @@ func (r *DatapackRollupRepo) eachMemoryGroup(
 		        COALESCE(meko_agent_id, ''),
 		        COUNT(*),
 		        COUNT(*) FILTER (WHERE meko_promotion_user_action IS NULL)
-		 FROM   datapacks.meko_mem0_collection
+		 FROM   `+memtable.Table()+`
 		 WHERE  meko_datapack_id = ANY($1)
 		 GROUP  BY meko_datapack_id, meko_user_id, meko_agent_id`,
 		ids,

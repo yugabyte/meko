@@ -1,0 +1,67 @@
+# memory.collectionName names the table meko-mcp-server writes memories to and
+# the api-server reads them from. Rendering it into only one Deployment splits
+# them across two tables with nothing failing, so both are asserted together.
+suite: memory collection
+templates:
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+  - templates/meko-mcp-server/deployment.yaml
+  - templates/meko-mcp-server/configmap.yaml
+tests:
+  - it: renders the collection into both Deployments, and search tuning into MCP only
+    values:
+      - ../values-aws.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      mekoMcpServer.image.tag: t
+      memory.collectionName: meko_mem0_memories
+      memory.exactSearchMaxRows: "2000"
+      memory.hnswEfSearch: "400"
+      memory.kbExactSearchMaxRows: "2000"
+      memory.kbHnswEfSearch: "400"
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_COLLECTION_NAME, value: meko_mem0_memories }
+      - template: templates/meko-mcp-server/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_COLLECTION_NAME, value: meko_mem0_memories }
+      - template: templates/meko-mcp-server/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_EXACT_SEARCH_MAX_ROWS, value: "2000" }
+      - template: templates/meko-mcp-server/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: KB_HNSW_EF_SEARCH, value: "400" }
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_EXACT_SEARCH_MAX_ROWS, value: "2000" }
+
+  - it: renders none of them by default, so older images see no new variables
+    values:
+      - ../values-aws.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      mekoMcpServer.image.tag: t
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_COLLECTION_NAME }
+          any: true
+      - template: templates/meko-mcp-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_COLLECTION_NAME }
+          any: true
+      - template: templates/meko-mcp-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEM0_HNSW_EF_SEARCH }
+          any: true

@@ -177,6 +177,10 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: SYSTEM_DB_NAME } }
 - name: SYSTEM_DB_SSL_MODE
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: SYSTEM_DB_SSL_MODE } }
+{{- with .Values.memory.collectionName }}
+- name: MEM0_COLLECTION_NAME
+  value: {{ . | quote }}
+{{- end }}
 {{- if $c.basePath }}
 - name: MEKO_YCP_BASE_PATH
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: MEKO_YCP_BASE_PATH } }

@@ -12,17 +12,12 @@ import (
 	"github.com/lib/pq"
 
 	"meko/api_server/internal/llm"
+	"meko/api_server/internal/memtable"
 	"meko/api_server/internal/models"
 )
 
 const (
-	memoriesTableSQL    = `datapacks.meko_mem0_collection`
 	knowledgeBasesTable = `datapacks.knowledge_bases`
-	// entitiesTableSQL holds one row per distinct entity mem0 extracted from a
-	// memory, with payload.linked_memory_ids naming the memories that mention
-	// it. Deleting or promoting a memory has to prune those links, or the
-	// entity outlives every memory that justified it.
-	entitiesTableSQL = `datapacks.meko_mem0_collection_entities`
 )
 
 // Mem0V2CutoffTS gates delete: pre-v2 rows have graph residue this repo doesn't clean.
@@ -143,7 +138,7 @@ func (repo *MemoriesRepo) CountByDatapack(ctx context.Context, datapackID string
 
 	query := fmt.Sprintf(
 		`SELECT COUNT(*) FROM %s WHERE meko_datapack_id = $1::uuid`,
-		memoriesTableSQL,
+		memtable.Table(),
 	)
 
 	countCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -180,7 +175,7 @@ func (repo *MemoriesRepo) CountLearningsByDatapack(ctx context.Context, datapack
 
 	query := fmt.Sprintf(
 		`SELECT COUNT(*) FROM %s WHERE meko_datapack_id = $1::uuid AND meko_promotion_user_action IS NULL`,
-		memoriesTableSQL,
+		memtable.Table(),
 	)
 
 	countCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -229,7 +224,7 @@ func pruneEntityLinks(
 		   AND NOT EXISTS (
 		         SELECT 1 FROM jsonb_array_elements_text(payload->'linked_memory_ids') v
 		         WHERE NOT (v = ANY($4::text[])))`,
-		entitiesTableSQL,
+		memtable.EntitiesTable(),
 	)
 	orphanRes, err := tx.ExecContext(ctx, deleteOrphansQ,
 		datapackID, userID, agentID, pq.Array(memoryIDs))
@@ -252,7 +247,7 @@ func pruneEntityLinks(
 		   AND EXISTS (
 		         SELECT 1 FROM jsonb_array_elements_text(payload->'linked_memory_ids') v
 		         WHERE v = ANY($4::text[]))`,
-		entitiesTableSQL,
+		memtable.EntitiesTable(),
 	)
 	pruneRes, err := tx.ExecContext(ctx, pruneQ,
 		datapackID, userID, agentID, pq.Array(memoryIDs))
@@ -315,7 +310,7 @@ func (repo *MemoriesRepo) DeleteByIDForUser(
 	fetchQ := fmt.Sprintf(
 		`SELECT meko_agent_id, meko_created_at FROM %s
 		 WHERE id = $1::uuid AND meko_datapack_id = $2::uuid AND meko_user_id = $3::uuid`,
-		memoriesTableSQL,
+		memtable.Table(),
 	)
 	slog.Debug("executing SQL", "func", "DeleteByIDForUser", "query", fetchQ,
 		"args", []any{memoryID, datapackID, userID})
@@ -343,7 +338,7 @@ func (repo *MemoriesRepo) DeleteByIDForUser(
 		   AND meko_user_id = $3::uuid
 		   AND meko_agent_id = $4
 		   AND meko_created_at = $5`,
-		memoriesTableSQL,
+		memtable.Table(),
 	)
 	slog.Debug("executing SQL", "func", "DeleteByIDForUser", "query", deleteQ,
 		"args", []any{memoryID, datapackID, userID, agentID, createdAt})
@@ -422,7 +417,8 @@ func (repo *MemoriesRepo) ListByFilter(
 		n++
 	}
 
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s m WHERE %s`, memoriesTableSQL, whereSQL)
+	//nolint:gosec // memtable.Table() admits only a plain identifier; values are bound as parameters.
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s m WHERE %s`, memtable.Table(), whereSQL)
 	countCtx, cancelCount := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelCount()
 	slog.Debug("executing SQL", "func", "ListByFilter", "query", countQuery, "args", args)
@@ -448,7 +444,7 @@ func (repo *MemoriesRepo) ListByFilter(
 			COALESCE(m.meko_conversation_id::text, '') AS conversation_id,
 			m.meko_user_id::text,
 			m.meko_created_at`
-	const fromSQL = memoriesTableSQL + ` m`
+	fromSQL := memtable.Table() + ` m`
 
 	var vector []float64
 	if filter.IsPaidUserType() {

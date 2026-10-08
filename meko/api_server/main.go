@@ -27,6 +27,7 @@ import (
 
 	"meko/api_server/internal/api"
 	"meko/api_server/internal/db"
+	"meko/api_server/internal/memtable"
 	"meko/api_server/internal/metrics"
 	"meko/api_server/internal/repository"
 	adminrepo "meko/api_server/internal/repository/admin"
@@ -362,7 +363,16 @@ func run() error {
 		os.Getenv("MEKO_LABS_AGENTK_ADMIN_EMAIL"),
 		"Account a Labs datapack is shared with so the shared AgentK deployment can read it. Invites to this one address are auto-accepted instead of left pending; empty disables auto-accept.")
 
+	mem0CollectionName := flag.String("mem0-collection-name",
+		envOrDefault("MEM0_COLLECTION_NAME", memtable.Default),
+		"mem0 memory collection in the datapacks schema. Must match meko-mcp-server's MEM0_COLLECTION_NAME, "+
+			"which writes it: set meko_mem0_memories on both once data migration 000006 is backfilled")
+
 	flag.Parse()
+
+	if err := memtable.Set(*mem0CollectionName); err != nil {
+		return err
+	}
 
 	resolvedLogLevel := parseLogLevel(*logLevel)
 	slog.SetDefault(slog.New(

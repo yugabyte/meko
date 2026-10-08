@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"meko/api_server/internal/memtable"
 )
 
-// Data-plane table names for the memory counters. These mirror the
-// constants used by the shared repositories; duplicated here so the admin
-// package stays self-contained.
+// The promoted-memories table for the counters, mirroring the shared
+// repositories' constant. The memory table itself comes from memtable, which
+// the api-server configures at startup.
 const (
-	memoriesTableSQL        = `datapacks.meko_mem0_collection`
 	promotedCollectionTable = `datapacks.promoted_collection`
 )
 
@@ -27,7 +28,7 @@ func (r *AdminRepo) CountPrivateMemoriesAll(ctx context.Context, start, endExclu
 		where = " WHERE TRUE" + pred
 	}
 	var n int64
-	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, memoriesTableSQL) + where
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, memtable.Table()) + where
 	if err := r.dataDB.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("memories count all: %w", err)
 	}
@@ -44,7 +45,7 @@ func (r *AdminRepo) CountPrivateMemoriesByUser(ctx context.Context, userID strin
 	pred, rangeArgs := rangePredicate("meko_created_at", start, endExclusive, 2)
 	args := append([]any{userID}, rangeArgs...)
 	var n int64
-	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE meko_user_id = $1::uuid`, memoriesTableSQL) + pred
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE meko_user_id = $1::uuid`, memtable.Table()) + pred
 	if err := r.dataDB.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("memories count by user: %w", err)
 	}

@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+
+	"meko/api_server/internal/memtable"
 )
 
 // ErrLangfuseDBNotConfigured is returned by repo methods that need the
@@ -1469,12 +1471,13 @@ func (r *LangfuseRepo) mem0PerMessageWindow(
 	// so this only trims fetch cost.
 	lower, upper := windowScanBounds(windows)
 
-	const q = `
+	//nolint:gosec // memtable.Table() admits only a plain identifier; values are bound as parameters.
+	q := `
 SELECT id::text AS memory_id,
        COALESCE(payload->>'data', '') AS memory_text,
        meko_created_at,
        false AS promoted
-FROM   datapacks.meko_mem0_collection
+FROM   ` + memtable.Table() + `
 WHERE  meko_datapack_id = $1::uuid
   AND  meko_conversation_id = $2::uuid
   AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
@@ -3200,11 +3203,11 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
 		return out, nil
 	}
 
-	const matchedCTE = `WITH matched AS (
+	matchedCTE := `WITH matched AS (
     SELECT id,
            payload,
            CASE WHEN embeddings IS NOT NULL THEN 1 ELSE 0 END AS vector
-    FROM   datapacks.meko_mem0_collection
+    FROM   ` + memtable.Table() + `
     WHERE  meko_datapack_id = $1::uuid
       AND  meko_conversation_id = $2::uuid
       AND  id::text = ANY($3::text[])
@@ -3271,7 +3274,7 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByTexts(
 	// caller assigns offsets in trace-time ascending order, and mem0 rows
 	// are persisted in the same order their spans fire, so rn=0 → oldest
 	// match → trace-time-first occurrence is the correct alignment.
-	const matchedCTE = `WITH wanted AS (
+	matchedCTE := `WITH wanted AS (
     SELECT key, off
     FROM   UNNEST($3::text[], $4::int[]) AS t(key, off)
 ),
@@ -3281,7 +3284,7 @@ candidates AS (
            embeddings,
            meko_created_at,
            btrim(regexp_replace(lower(COALESCE(payload->>'data', payload->>'memory', payload->>'text', payload->>'content', '')), '[^a-z0-9]+', ' ', 'g')) AS normalized
-    FROM   datapacks.meko_mem0_collection
+    FROM   ` + memtable.Table() + `
     WHERE  meko_datapack_id = $1::uuid
       AND  meko_conversation_id = $2::uuid
 ),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"meko/api_server/internal/memtable"
 	"meko/api_server/internal/models"
 )
 
@@ -208,7 +209,7 @@ func (r *DatapackMetricsRepo) fetchConversationCount(ctx context.Context, datapa
 func (r *DatapackMetricsRepo) fetchMemoryExtractionCount(ctx context.Context, datapackID string, m *models.DatapackMetrics) error {
 	err := r.dataDB.QueryRowContext(ctx,
 		`SELECT COUNT(*)
-		 FROM datapacks.meko_mem0_collection
+		 FROM `+memtable.Table()+`
 		 WHERE meko_datapack_id = $1::uuid`,
 		datapackID,
 	).Scan(&m.MemoryExtractionCount)
@@ -230,7 +231,7 @@ func (r *DatapackMetricsRepo) fetchChunkCounts(ctx context.Context, datapackID s
 
 	err = r.dataDB.QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(SUM(octet_length(payload->>'data')), 0)
-		 FROM datapacks.meko_mem0_collection
+		 FROM `+memtable.Table()+`
 		 WHERE meko_datapack_id = $1::uuid`,
 		datapackID,
 	).Scan(&m.MemoryChunkCount, &m.MemoryBytes)

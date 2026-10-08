@@ -11,6 +11,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"meko/api_server/internal/memtable"
 	"meko/api_server/internal/models"
 )
 
@@ -19,7 +20,6 @@ import (
 // plumbing is gone now that the root connection has cross-tenant access and
 // the schema is fixed.
 const (
-	memoriesSourceTable                = `datapacks.meko_mem0_collection`
 	knowledgeBaseTable                 = `datapacks.knowledge_bases`
 	promotedCollectionTable            = `datapacks.promoted_collection`
 	mem0GraphVertexEmbeddingsTable     = `datapacks.meko_mem0_graph_vertex_embeddings`
@@ -51,7 +51,7 @@ func (r *PromoteMemoriesRepo) MarkAsKept(
 		   SET meko_promotion_user_action = 'keep_as_memory'::datapacks.meko_promotion_user_action
 		 WHERE meko_datapack_id = $1::uuid
 		   AND id = ANY($2::uuid[])
-		   AND meko_promotion_user_action IS NULL`, memoriesSourceTable)
+		   AND meko_promotion_user_action IS NULL`, memtable.Table())
 	updCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	res, err := r.db.ExecContext(updCtx, q, datapackID, pq.Array(memoryIDs))
@@ -176,7 +176,7 @@ func (r *PromoteMemoriesRepo) Promote(
 		  AND m.embeddings IS NOT NULL
 		  AND m.meko_conversation_id IS NOT NULL
 		  AND m.meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action`,
-		memoriesSourceTable)
+		memtable.Table())
 	fetchArgs := []any{datapackID, pq.Array(memoryIDs)}
 
 	slog.Debug("executing SQL", "func", "Promote", "query", fetchQ, "args", fetchArgs)
@@ -416,7 +416,9 @@ func (r *PromoteMemoriesRepo) Promote(
 	}
 
 	// 7. Delete the just-promoted rows from mem0. Ownership of the memory
-	deleteQ := fmt.Sprintf(`DELETE FROM %s WHERE id = ANY($1::uuid[]) AND meko_datapack_id = $2::uuid`, memoriesSourceTable)
+	//nolint:gosec // memtable.Table() admits only a plain identifier; values are bound as parameters.
+	deleteQ := fmt.Sprintf(`DELETE FROM %s WHERE id = ANY($1::uuid[]) AND meko_datapack_id = $2::uuid`,
+		memtable.Table())
 	slog.Debug("executing SQL", "func", "Promote", "query", deleteQ, "args", []any{fetchedIDs, datapackID})
 	deleteRes, err := tx.ExecContext(txCtx, deleteQ, pq.Array(fetchedIDs), datapackID)
 	if err != nil {
