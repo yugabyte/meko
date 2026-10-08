@@ -1,0 +1,168 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Listing datapacks after MEKO-781",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "callers",
+      "label": "Callers"
+    },
+    {
+      "id": "mcp",
+      "label": "meko-mcp-server (#383)"
+    },
+    {
+      "id": "api",
+      "label": "api-server (meko#1590)"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "ycp",
+      "lane": "callers",
+      "col": 0,
+      "type": "external",
+      "label": "ycp agent",
+      "sublabel": "needs every id",
+      "width": 132
+    },
+    {
+      "id": "agent",
+      "lane": "callers",
+      "col": 3,
+      "type": "external",
+      "label": "MCP agent",
+      "sublabel": "find one datapack",
+      "width": 132
+    },
+    {
+      "id": "dlist",
+      "lane": "mcp",
+      "col": 3,
+      "type": "backend",
+      "label": "datapack_list",
+      "sublabel": "array, \u2264 1000",
+      "width": 132
+    },
+    {
+      "id": "dsearch",
+      "lane": "mcp",
+      "col": 5,
+      "type": "backend",
+      "label": "datapack_search",
+      "sublabel": "query \u00b7 cursor",
+      "width": 132
+    },
+    {
+      "id": "stream",
+      "lane": "api",
+      "col": 0,
+      "type": "backend",
+      "label": "GET, no limit",
+      "sublabel": "stream bare array",
+      "tag": "unchanged shape",
+      "width": 132
+    },
+    {
+      "id": "page",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "GET with limit",
+      "sublabel": "keyset page",
+      "tag": "\u2264 1000 rows",
+      "width": 132
+    },
+    {
+      "id": "idx",
+      "lane": "api",
+      "col": 5,
+      "type": "database",
+      "label": "idx_datapacks_user_created",
+      "sublabel": "migration 000019",
+      "width": 196
+    },
+    {
+      "id": "toomany",
+      "lane": "mcp",
+      "col": 1,
+      "type": "security",
+      "label": "too_many_datapacks",
+      "sublabel": "over the threshold",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "ycp-stream",
+      "from": "ycp",
+      "to": "stream",
+      "variant": "emphasis"
+    },
+    {
+      "id": "agent-list",
+      "from": "agent",
+      "to": "dlist"
+    },
+    {
+      "id": "agent-search",
+      "from": "agent",
+      "to": "dsearch",
+      "variant": "emphasis"
+    },
+    {
+      "id": "list-page",
+      "from": "dlist",
+      "to": "page",
+      "label": "limit=1000"
+    },
+    {
+      "id": "search-page",
+      "from": "dsearch",
+      "to": "page"
+    },
+    {
+      "id": "page-idx",
+      "from": "page",
+      "to": "idx",
+      "variant": "dashed"
+    },
+    {
+      "id": "list-refuse",
+      "from": "dlist",
+      "to": "toomany",
+      "label": "has_more",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Legacy stream",
+      "items": [
+        "Same bare array, written row by row",
+        "Mid-stream error aborts the connection"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Paged mode",
+      "items": [
+        "Cursor bound to sort and filters",
+        "100 rows at 50k datapacks: 104-194 ms"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Before",
+      "items": [
+        "Unpaged list at 1M: 13.3 s",
+        "OOM-killed a 2 GiB api-server"
+      ]
+    }
+  ]
+}

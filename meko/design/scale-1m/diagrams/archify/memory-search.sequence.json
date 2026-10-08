@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "memory_search after MEKO-784",
+    "viewBox": [
+      1080,
+      870
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "Agent",
+      "sublabel": "MCP client"
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "meko-mcp-server",
+      "sublabel": "memory_search"
+    },
+    {
+      "id": "mem0",
+      "type": "backend",
+      "label": "meko-mem0",
+      "sublabel": "PGVector.search"
+    },
+    {
+      "id": "llm",
+      "type": "cloud",
+      "label": "Embedder",
+      "sublabel": "LiteLLM \u00b7 Bedrock"
+    },
+    {
+      "id": "yb",
+      "type": "database",
+      "label": "YugabyteDB",
+      "sublabel": "meko_mem0_memories"
+    }
+  ],
+  "segments": [
+    {
+      "from": 156,
+      "to": 256,
+      "label": "Request"
+    },
+    {
+      "from": 278,
+      "to": 450,
+      "label": "Route"
+    },
+    {
+      "from": 472,
+      "to": 536,
+      "label": "\u2264 2,000 rows"
+    },
+    {
+      "from": 558,
+      "to": 658,
+      "label": "> 2,000 rows"
+    },
+    {
+      "from": 680,
+      "to": 744,
+      "label": "Return"
+    }
+  ],
+  "messages": [
+    {
+      "id": "call",
+      "from": "agent",
+      "to": "mcp",
+      "y": 170,
+      "label": "memory_search(query, datapack)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "access",
+      "from": "mcp",
+      "to": "yb",
+      "y": 206,
+      "label": "access check",
+      "variant": "security"
+    },
+    {
+      "id": "access-ok",
+      "from": "yb",
+      "to": "mcp",
+      "y": 242,
+      "label": "owner ok",
+      "variant": "return"
+    },
+    {
+      "id": "search",
+      "from": "mcp",
+      "to": "mem0",
+      "y": 292,
+      "label": "search(datapack, user)"
+    },
+    {
+      "id": "embed",
+      "from": "mem0",
+      "to": "llm",
+      "y": 328,
+      "label": "embed query"
+    },
+    {
+      "id": "embed-ret",
+      "from": "llm",
+      "to": "mem0",
+      "y": 364,
+      "label": "1536-d vector",
+      "variant": "return"
+    },
+    {
+      "id": "count",
+      "from": "mem0",
+      "to": "yb",
+      "y": 400,
+      "label": "count(*) \u2026 LIMIT 2001"
+    },
+    {
+      "id": "count-ret",
+      "from": "yb",
+      "to": "mem0",
+      "y": 436,
+      "label": "n",
+      "variant": "return"
+    },
+    {
+      "id": "exact",
+      "from": "mem0",
+      "to": "yb",
+      "y": 486,
+      "label": "MATERIALIZED CTE: PK prefix, exact rank",
+      "variant": "emphasis"
+    },
+    {
+      "id": "exact-ret",
+      "from": "yb",
+      "to": "mem0",
+      "y": 522,
+      "label": "top k, recall 1.00",
+      "variant": "return"
+    },
+    {
+      "id": "ef",
+      "from": "mem0",
+      "to": "yb",
+      "y": 572,
+      "label": "SET LOCAL hnsw.ef_search = 400",
+      "variant": "dashed"
+    },
+    {
+      "id": "ann",
+      "from": "mem0",
+      "to": "yb",
+      "y": 608,
+      "label": "ORDER BY <=> LIMIT k (HNSW, 1 partition)"
+    },
+    {
+      "id": "ann-ret",
+      "from": "yb",
+      "to": "mem0",
+      "y": 644,
+      "label": "top k",
+      "variant": "return"
+    },
+    {
+      "id": "ret",
+      "from": "mem0",
+      "to": "mcp",
+      "y": 694,
+      "label": "memories",
+      "variant": "return"
+    },
+    {
+      "id": "done",
+      "from": "mcp",
+      "to": "agent",
+      "y": 730,
+      "label": "results",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "mcp",
+      "from": 170,
+      "to": 734,
+      "type": "backend"
+    },
+    {
+      "participant": "mem0",
+      "from": 292,
+      "to": 698,
+      "type": "backend"
+    },
+    {
+      "participant": "yb",
+      "from": 202,
+      "to": 246,
+      "type": "database"
+    },
+    {
+      "participant": "yb",
+      "from": 396,
+      "to": 648,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Small datapack",
+      "items": [
+        "Rows come by primary-key prefix",
+        "2.2 ms p50, recall 1.00 at 100k datapacks"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Large datapack",
+      "items": [
+        "One partition's HNSW index, not 128",
+        "ef_search 400 lifts recall on 5,000 rows 0.56 to 0.94"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Settings",
+      "items": [
+        "MEM0_EXACT_SEARCH_MAX_ROWS=2000",
+        "MEM0_HNSW_EF_SEARCH=400"
+      ]
+    }
+  ]
+}

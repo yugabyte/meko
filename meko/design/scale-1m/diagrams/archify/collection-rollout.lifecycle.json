@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Rolling out meko_mem0_memories",
+    "viewBox": [
+      980,
+      700
+    ],
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Rollout (meko#1591 deploy notes)"
+    },
+    {
+      "id": "roll",
+      "label": "During the switch"
+    },
+    {
+      "id": "terminal",
+      "label": "Later release"
+    }
+  ],
+  "states": [
+    {
+      "id": "migrated",
+      "type": "start",
+      "label": "Migrated",
+      "sublabel": "000006: empty tables",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "floor 6"
+    },
+    {
+      "id": "released",
+      "type": "active",
+      "label": "Libraries out",
+      "sublabel": "mem0 2.0.14.5 + MCP",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "backfilled",
+      "type": "active",
+      "label": "Backfilled",
+      "sublabel": "backfill_memories.py",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "idempotent"
+    },
+    {
+      "id": "compacted",
+      "type": "waiting",
+      "label": "Compacted",
+      "sublabel": "270 ms to 17 ms",
+      "lane": "main",
+      "col": 3,
+      "step": "04"
+    },
+    {
+      "id": "switched",
+      "type": "success",
+      "label": "Switched",
+      "sublabel": "collectionName, both",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "catchup",
+      "type": "active",
+      "label": "Catch-up copy",
+      "sublabel": "--since roll start",
+      "lane": "roll",
+      "col": 2,
+      "width": 130
+    },
+    {
+      "id": "split",
+      "type": "failure",
+      "label": "One side only",
+      "sublabel": "api misses writes",
+      "lane": "roll",
+      "col": 1,
+      "width": 112
+    },
+    {
+      "id": "contract",
+      "type": "neutral",
+      "label": "Contract",
+      "sublabel": "stop writing, drop old",
+      "lane": "terminal",
+      "col": 2
+    }
+  ],
+  "transitions": [
+    {
+      "from": "migrated",
+      "to": "released"
+    },
+    {
+      "from": "released",
+      "to": "backfilled"
+    },
+    {
+      "from": "backfilled",
+      "to": "compacted"
+    },
+    {
+      "from": "compacted",
+      "to": "switched",
+      "variant": "emphasis"
+    },
+    {
+      "from": "compacted",
+      "to": "split",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "security"
+    },
+    {
+      "from": "split",
+      "to": "catchup",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "switched",
+      "to": "catchup",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "dashed"
+    },
+    {
+      "from": "catchup",
+      "to": "contract",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Expand only",
+      "items": [
+        "Old pods keep the old table until step 05",
+        "Raises the data-plane downgrade floor to 6"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "One setting, two services",
+      "items": [
+        "Chart memory.collectionName feeds both",
+        "MEM0_COLLECTION_NAME must match"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Recovery",
+      "items": [
+        "One side only: switch the other, then catch up",
+        "Point both back at meko_mem0_collection",
+        "Copy back memories written in between"
+      ]
+    }
+  ]
+}

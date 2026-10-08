@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "KB import through the RAG worker",
+    "viewBox": [
+      1080,
+      806
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "suite",
+      "type": "external",
+      "label": "mcp_suite.py",
+      "sublabel": "import mode"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "api-server",
+      "sublabel": "UploadFile"
+    },
+    {
+      "id": "s3",
+      "type": "database",
+      "label": "MinIO",
+      "sublabel": "meko-kb-store"
+    },
+    {
+      "id": "yb",
+      "type": "database",
+      "label": "YugabyteDB",
+      "sublabel": "dist_rag \u00b7 knowledge_bases"
+    },
+    {
+      "id": "rag",
+      "type": "backend",
+      "label": "rag-agent-text",
+      "sublabel": "one task per pod"
+    },
+    {
+      "id": "llm",
+      "type": "cloud",
+      "label": "LiteLLM",
+      "sublabel": "Titan v1 embed"
+    }
+  ],
+  "segments": [
+    {
+      "from": 156,
+      "to": 328,
+      "label": "Upload"
+    },
+    {
+      "from": 350,
+      "to": 594,
+      "label": "Index"
+    },
+    {
+      "from": 616,
+      "to": 680,
+      "label": "Wait"
+    }
+  ],
+  "messages": [
+    {
+      "id": "up",
+      "from": "suite",
+      "to": "api",
+      "y": 170,
+      "label": "POST /knowledge-bases/upload",
+      "variant": "emphasis"
+    },
+    {
+      "id": "put",
+      "from": "api",
+      "to": "s3",
+      "y": 206,
+      "label": "PutObject"
+    },
+    {
+      "id": "reg",
+      "from": "api",
+      "to": "yb",
+      "y": 242,
+      "label": "register in dist_rag.documents"
+    },
+    {
+      "id": "queue",
+      "from": "api",
+      "to": "yb",
+      "y": 278,
+      "label": "_queue_source_documents(source)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "accepted",
+      "from": "api",
+      "to": "suite",
+      "y": 314,
+      "label": "202 Accepted",
+      "variant": "return"
+    },
+    {
+      "id": "claim",
+      "from": "rag",
+      "to": "yb",
+      "y": 364,
+      "label": "claim task: LIMIT 1, FIFO, all tenants"
+    },
+    {
+      "id": "task",
+      "from": "yb",
+      "to": "rag",
+      "y": 400,
+      "label": "PREPROCESS task",
+      "variant": "return"
+    },
+    {
+      "id": "read",
+      "from": "rag",
+      "to": "s3",
+      "y": 436,
+      "label": "GetObject"
+    },
+    {
+      "id": "bytes",
+      "from": "s3",
+      "to": "rag",
+      "y": 472,
+      "label": "document",
+      "variant": "return"
+    },
+    {
+      "id": "embed",
+      "from": "rag",
+      "to": "llm",
+      "y": 508,
+      "label": "embed chunks"
+    },
+    {
+      "id": "vecs",
+      "from": "llm",
+      "to": "rag",
+      "y": 544,
+      "label": "vectors",
+      "variant": "return"
+    },
+    {
+      "id": "write",
+      "from": "rag",
+      "to": "yb",
+      "y": 580,
+      "label": "insert knowledge_bases chunks, COMPLETED",
+      "variant": "emphasis"
+    },
+    {
+      "id": "poll",
+      "from": "suite",
+      "to": "api",
+      "y": 630,
+      "label": "document status (--index-wait)",
+      "variant": "dashed"
+    },
+    {
+      "id": "status",
+      "from": "api",
+      "to": "suite",
+      "y": 666,
+      "label": "indexed",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "api",
+      "from": 170,
+      "to": 318,
+      "type": "backend"
+    },
+    {
+      "participant": "rag",
+      "from": 364,
+      "to": 584,
+      "type": "backend"
+    },
+    {
+      "participant": "api",
+      "from": 630,
+      "to": 670,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "MEKO-788 (meko#1611)",
+      "items": [
+        "Upload called build_index: re-queued every pending document",
+        "657,782 tasks for 5,690 documents; now one source only"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Worker limits",
+      "items": [
+        "One task at a time, FIFO across every tenant",
+        "No lease reaper and no retries (rag_agent source)"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Scaling knob",
+      "items": [
+        "RAG_REPLICAS in stack/deploy.sh",
+        "The chart hard-codes one replica"
+      ]
+    }
+  ]
+}

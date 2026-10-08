@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Scale-test harness",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "laptop",
+      "type": "external",
+      "label": "run.sh",
+      "sublabel": "laptop, kubectl",
+      "pos": [
+        40,
+        360
+      ],
+      "size": [
+        130,
+        64
+      ]
+    },
+    {
+      "id": "sqljobs",
+      "type": "backend",
+      "label": "SQL jobs",
+      "sublabel": "seed \u00b7 probe \u00b7 variants",
+      "pos": [
+        1060,
+        80
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "suite",
+      "type": "backend",
+      "label": "mcp_suite.py",
+      "sublabel": "surface \u00b7 load \u00b7 import",
+      "pos": [
+        260,
+        520
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "meko-mcp-server",
+      "sublabel": "3 replicas",
+      "pos": [
+        520,
+        520
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "api-server",
+      "sublabel": "3 replicas",
+      "pos": [
+        520,
+        360
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "rag",
+      "type": "backend",
+      "label": "rag-agent-text",
+      "sublabel": "RAG_REPLICAS",
+      "pos": [
+        1060,
+        700
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "litellm",
+      "type": "backend",
+      "label": "LiteLLM",
+      "sublabel": "OpenAI API on Bedrock",
+      "pos": [
+        780,
+        700
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "langfuse",
+      "type": "backend",
+      "label": "Langfuse",
+      "sublabel": "one project",
+      "pos": [
+        520,
+        700
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "yb",
+      "type": "database",
+      "label": "YugabyteDB RF3",
+      "sublabel": "3 \u00d7 r5dn.8xlarge",
+      "pos": [
+        1060,
+        200
+      ],
+      "size": [
+        170,
+        416
+      ],
+      "tag": "1M datapacks"
+    },
+    {
+      "id": "bedrock",
+      "type": "cloud",
+      "label": "Amazon Bedrock",
+      "sublabel": "Haiku 4.5 \u00b7 Titan v1",
+      "pos": [
+        780,
+        880
+      ],
+      "size": [
+        170,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "EKS amp-bench \u00b7 namespace meko-onemil",
+      "wraps": [
+        "sqljobs",
+        "suite",
+        "mcp",
+        "api",
+        "litellm",
+        "langfuse",
+        "yb",
+        "rag"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "start-sql",
+      "from": "laptop",
+      "to": "sqljobs",
+      "label": "Jobs"
+    },
+    {
+      "id": "start-suite",
+      "from": "laptop",
+      "to": "suite",
+      "label": "Jobs"
+    },
+    {
+      "id": "sql-yb",
+      "from": "sqljobs",
+      "to": "yb",
+      "label": "COPY \u00b7 SQL",
+      "variant": "emphasis",
+      "labelAt": [
+        1200,
+        172
+      ]
+    },
+    {
+      "id": "suite-mcp",
+      "from": "suite",
+      "to": "mcp",
+      "label": "MCP + PAT",
+      "variant": "emphasis",
+      "labelAt": [
+        475,
+        580
+      ]
+    },
+    {
+      "id": "mcp-api",
+      "from": "mcp",
+      "to": "api",
+      "label": "REST"
+    },
+    {
+      "id": "api-yb",
+      "from": "api",
+      "to": "yb",
+      "label": "SQL"
+    },
+    {
+      "id": "mcp-yb",
+      "from": "mcp",
+      "to": "yb",
+      "label": "mem0 \u00b7 SQL"
+    },
+    {
+      "id": "mcp-llm",
+      "from": "mcp",
+      "to": "litellm",
+      "label": "LLM \u00b7 embed"
+    },
+    {
+      "id": "mcp-trace",
+      "from": "mcp",
+      "to": "langfuse",
+      "label": "traces",
+      "variant": "dashed",
+      "labelAt": [
+        640,
+        642
+      ]
+    },
+    {
+      "id": "llm-bedrock",
+      "from": "litellm",
+      "to": "bedrock",
+      "label": "IRSA",
+      "variant": "security",
+      "labelAt": [
+        900,
+        822
+      ]
+    },
+    {
+      "id": "suite-api",
+      "from": "suite",
+      "to": "api",
+      "label": "upload \u00b7 list"
+    },
+    {
+      "id": "rag-yb",
+      "from": "rag",
+      "to": "yb",
+      "label": "tasks \u00b7 chunks"
+    },
+    {
+      "id": "rag-llm",
+      "from": "rag",
+      "to": "litellm",
+      "label": "embed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "SQL layer",
+      "items": [
+        "Seeds synthetic datapacks straight into the tables",
+        "Runs the production SQL; recall@10 vs exact search"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "MCP layer",
+      "items": [
+        "Real stack, released or branch images",
+        "All 25 tools; one PAT per account",
+        "KB import through the RAG text worker"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Isolation",
+      "items": [
+        "Tainted nodegroups beside the amp benchmarks",
+        "Bedrock reached through a scoped IRSA role",
+        "Images built on the cluster with Kaniko"
+      ]
+    }
+  ]
+}

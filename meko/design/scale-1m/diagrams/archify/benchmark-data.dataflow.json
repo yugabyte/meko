@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Benchmark data path",
+    "viewBox": [
+      1080,
+      640
+    ],
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    {
+      "label": "Generate"
+    },
+    {
+      "label": "Seed"
+    },
+    {
+      "label": "Hold"
+    },
+    {
+      "label": "Measure"
+    },
+    {
+      "label": "Report"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "workload",
+      "type": "backend",
+      "label": "workload.py",
+      "sublabel": "f(i, seed)",
+      "stage": 0,
+      "row": 1,
+      "tag": "deterministic",
+      "width": 100
+    },
+    {
+      "id": "seed",
+      "type": "backend",
+      "label": "seed.py",
+      "sublabel": "COPY, N workers",
+      "stage": 1,
+      "row": 0,
+      "tag": "idempotent"
+    },
+    {
+      "id": "truth",
+      "type": "backend",
+      "label": "Ground truth",
+      "sublabel": "recomputed vectors",
+      "stage": 2,
+      "row": 1,
+      "tag": "no DB read"
+    },
+    {
+      "id": "stackseed",
+      "type": "backend",
+      "label": "seed_stack.sh",
+      "sublabel": "PATs \u00b7 Langfuse rows",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "tables",
+      "type": "database",
+      "label": "Datapack tables",
+      "sublabel": "mem0 \u00b7 KB \u00b7 system",
+      "stage": 2,
+      "row": 0,
+      "tag": "47.5M vectors"
+    },
+    {
+      "id": "pats",
+      "type": "database",
+      "label": "PAT Secret",
+      "sublabel": "one per account",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "probe",
+      "type": "backend",
+      "label": "probe \u00b7 variants",
+      "sublabel": "production SQL",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "suite",
+      "type": "backend",
+      "label": "mcp_suite \u00b7 listbench",
+      "sublabel": "MCP and REST",
+      "stage": 3,
+      "row": 2,
+      "width": 150
+    },
+    {
+      "id": "results",
+      "type": "external",
+      "label": "Results",
+      "sublabel": "p50 \u00b7 p95 \u00b7 recall@10",
+      "stage": 4,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "workload",
+      "to": "seed",
+      "label": "rows"
+    },
+    {
+      "from": "workload",
+      "to": "truth",
+      "label": "queries",
+      "route": "straight"
+    },
+    {
+      "from": "workload",
+      "to": "stackseed",
+      "label": "accounts"
+    },
+    {
+      "from": "seed",
+      "to": "tables",
+      "label": "COPY",
+      "variant": "emphasis"
+    },
+    {
+      "from": "stackseed",
+      "to": "pats",
+      "label": "mint"
+    },
+    {
+      "from": "tables",
+      "to": "probe",
+      "label": "top 10",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          745,
+          157
+        ]
+      ]
+    },
+    {
+      "from": "truth",
+      "to": "probe",
+      "label": "exact top 10",
+      "variant": "dashed",
+      "route": "straight"
+    },
+    {
+      "from": "pats",
+      "to": "suite",
+      "label": "auth"
+    },
+    {
+      "from": "probe",
+      "to": "results",
+      "label": "latency \u00b7 recall",
+      "route": "straight"
+    },
+    {
+      "from": "suite",
+      "to": "results",
+      "label": "latency \u00b7 errors"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Synthetic data",
+      "items": [
+        "2,000 topics; 3 per datapack",
+        "20% active; lognormal account sizes"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Truth outside the DB",
+      "items": [
+        "Vectors recomputed from the datapack index",
+        "Recall compares against exact search"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Seeded at 1M",
+      "items": [
+        "1,050,000 datapacks, 9,170 accounts",
+        "Main range seeded in 124 min"
+      ]
+    }
+  ]
+}

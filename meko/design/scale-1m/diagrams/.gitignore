@@ -1,0 +1,3 @@
+# Rebuilt by render.py: the interactive Archify pages, and SVGs that load their fonts from the web.
+archify/*.html
+img/*.svg
