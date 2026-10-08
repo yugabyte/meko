@@ -53,6 +53,63 @@ describe("CreateDatapackStage", () => {
     expect(field.value).toMatch(/^adlc-code-review-[A-Z][a-z]{2}\d{1,2}$/);
   });
 
+  // The list arrives from a query, so it is empty on the first render. Seeding
+  // the field from useState once took the suggestion before the names were
+  // known and offered one already taken, which POST /datapacks rejects.
+  it("re-derives the suggestion when the datapack list arrives late", () => {
+    const props = {
+      loading: false,
+      selectedId: null,
+      onSelect: vi.fn(),
+      onCreate: vi.fn().mockResolvedValue(undefined),
+      creating: false,
+      hasHitDatapackCount: false,
+      onComplete: vi.fn(),
+    };
+    const { rerender } = render(<CreateDatapackStage datapacks={[]} {...props} />);
+
+    const field = () => screen.getByLabelText("Create a datapack") as HTMLInputElement;
+    const firstSuggestion = field().value;
+    expect(firstSuggestion).toMatch(/^adlc-code-review-[A-Z][a-z]{2}\d{1,2}$/);
+
+    rerender(
+      <CreateDatapackStage
+        datapacks={[{ datapack_id: "dp-9", datapack_name: firstSuggestion, user_id: "u1" }]}
+        {...props}
+      />,
+    );
+
+    expect(field().value).toBe(`${firstSuggestion}-2`);
+  });
+
+  // ... but only until the user has an opinion. Re-deriving over a typed name
+  // would overwrite what they are in the middle of writing.
+  it("stops re-deriving once the user types", () => {
+    const props = {
+      loading: false,
+      selectedId: null,
+      onSelect: vi.fn(),
+      onCreate: vi.fn().mockResolvedValue(undefined),
+      creating: false,
+      hasHitDatapackCount: false,
+      onComplete: vi.fn(),
+    };
+    const { rerender } = render(<CreateDatapackStage datapacks={[]} {...props} />);
+
+    const field = () => screen.getByLabelText("Create a datapack") as HTMLInputElement;
+    const suggestion = field().value;
+    fireEvent.change(field(), { target: { value: "my-own-pack" } });
+
+    rerender(
+      <CreateDatapackStage
+        datapacks={[{ datapack_id: "dp-9", datapack_name: suggestion, user_id: "u1" }]}
+        {...props}
+      />,
+    );
+
+    expect(field().value).toBe("my-own-pack");
+  });
+
   // Creating is the path this step opens on: a lab run writes sample
   // standards and memories, which should not land in a datapack the user
   // already relies on.

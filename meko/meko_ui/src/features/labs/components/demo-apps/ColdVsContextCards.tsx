@@ -30,8 +30,9 @@ export function ColdVsContextCards({
   frontierModelLabel,
   frontierModelId,
 }: {
-  /** Null when the run returned prose the agent didn't structure, so the
-   *  count is unknown rather than zero. */
+  /** Null when no count can honestly be claimed -- prose, an unfinished run,
+   *  or an empty list, which means either a clean diff or a response the
+   *  agent could not read. See lib/countableFindings. */
   findingsCount: number | null;
   /** Context tokens the retrieval sent, and what the same review carries
    *  with no datapack to query. Null when nothing was retrieved. */
@@ -85,7 +86,7 @@ export function ColdVsContextCards({
         eyebrow="With Meko Datapack"
         headline={
           findingsCount === null
-            ? "Answered in prose"
+            ? "No count to report"
             : `${findingsCount} issue${findingsCount === 1 ? "" : "s"} found`
         }
         headlineTone={findingsCount === null ? "muted" : "good"}

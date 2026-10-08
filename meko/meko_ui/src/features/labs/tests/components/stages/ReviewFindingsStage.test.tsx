@@ -74,6 +74,66 @@ function runWith(overrides: Partial<PrReviewRunState> = {}): PrReviewRunState {
 afterEach(cleanup);
 
 describe("ReviewFindingsStage", () => {
+  // THE bug path. review.py returns `findings: []` both for a clean diff and
+  // for a response it could not parse, and recoverReviewFindings has already
+  // tried to tell them apart. What is left is unresolvable, so claiming "No
+  // blocking issues found" over the model's own words is how a diff with a
+  // SQL injection in it read as clean.
+  it("shows the response rather than claiming clean when findings are empty", async () => {
+    okTrace();
+    render(
+      <ReviewFindingsStage
+        run={runWith({
+          reviewFindings: [],
+          reviewText: "The team_id parameter is concatenated straight into the SQL string.",
+        })}
+        datapackId="dp-1"
+        onGoToRunReview={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/concatenated straight into the SQL string/)).toBeTruthy();
+    expect(screen.queryByText(/No blocking issues found/i)).toBeNull();
+    expect(screen.queryByText(/Run the review first/i)).toBeNull();
+  });
+
+  // "unstructured" is the other route to the same screen: a deployed image
+  // whose done event carries no findings key at all.
+  it("shows the response when the agent reported no structured findings", async () => {
+    okTrace();
+    render(
+      <ReviewFindingsStage
+        run={runWith({
+          reviewFindings: "unstructured",
+          reviewText: "The team_id parameter is concatenated straight into the SQL string.",
+        })}
+        datapackId="dp-1"
+        onGoToRunReview={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/concatenated straight into the SQL string/)).toBeTruthy();
+    expect(screen.queryByText(/Run the review first/i)).toBeNull();
+  });
+
+  // `run` is non-null from the moment the run stage mounts (its effect
+  // reports state up immediately), and stage completion outlives the run
+  // itself, so a reload lands here with reviewFindings still null. That is
+  // "go and run one", not "the agent answered in prose".
+  it("sends the user back to the run step when no review has completed", () => {
+    okTrace();
+    render(
+      <ReviewFindingsStage
+        run={runWith({ reviewFindings: null, reviewText: null })}
+        datapackId="dp-1"
+        onGoToRunReview={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/Run the review first/i)).toBeTruthy();
+    expect(screen.queryByText(/What the review said/i)).toBeNull();
+  });
+
   // The whole claim of this step is that the comments came from rules the
   // user loaded, so the rules sit on the comment they explain.
   it("attaches the rules a comment echoes to that comment", async () => {

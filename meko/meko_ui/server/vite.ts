@@ -15,8 +15,18 @@ export async function setupVite(server: Server, app: Express) {
     allowedHosts: true as const,
   };
 
+  // vite.config.ts exports a FUNCTION of { command, mode }, so it has to be
+  // called before it can be spread -- spreading the function itself yields an
+  // empty object, which silently drops the plugins, the `@` aliases and
+  // envPrefix, and `configFile: false` stops vite loading the file to make up
+  // for it. tsc does not catch that: spreading a function type is legal.
+  const resolvedConfig =
+    typeof viteConfig === "function"
+      ? await viteConfig({ command: "serve", mode: "development" })
+      : await viteConfig;
+
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedConfig,
     configFile: false,
     customLogger: {
       ...viteLogger,

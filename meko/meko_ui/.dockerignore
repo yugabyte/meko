@@ -8,3 +8,8 @@ npm-debug.log*
 .DS_Store
 *.md
 terminals
+
+# Never ship a developer .env into an image layer: it can carry secrets, and
+# vite inlines any var matching envPrefix at build time.
+.env
+.env.*

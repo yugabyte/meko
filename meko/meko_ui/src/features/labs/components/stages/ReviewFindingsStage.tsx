@@ -9,6 +9,8 @@
 
 import { useMemo } from "react";
 
+import { MarkdownMessage } from "@/components/markdown-message";
+
 import {
   ANTHROPIC_REFERENCE_FINDINGS,
   ANTHROPIC_REFERENCE_IS_POPULATED,
@@ -16,6 +18,7 @@ import {
   type ReviewFinding,
 } from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
 import { useReviewRetrieval } from "../../hooks/useReviewRetrieval";
+import { countableFindings } from "../../lib/countableFindings";
 import { parseUnifiedDiff } from "../../lib/diffExcerpt";
 import type { RetrievedSource } from "../../lib/findingGrounding";
 import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
@@ -38,7 +41,9 @@ export function ReviewFindingsStage({
   onGoToRunReview,
 }: {
   /** The Chapter 3 run, owned by LabStageSlot so it survives this stage
-   *  unmounting — null until the user has actually run a review. */
+   *  unmounting. NOT null-until-reviewed: PrReviewDemoApp reports state up on
+   *  mount, so this is non-null as soon as the run stage has been opened.
+   *  `run.reviewFindings === null` is what means "no completed review". */
   run: PrReviewRunState | null;
   datapackId: string | null;
   onGoToRunReview: () => void;
@@ -47,7 +52,7 @@ export function ReviewFindingsStage({
     datapackId,
     conversationId: run?.conversationId ?? null,
   });
-  const findings = Array.isArray(run?.reviewFindings) ? run.reviewFindings : null;
+  const findings = countableFindings(run?.reviewFindings);
   const modelLabel = run?.selectedModelId ? MODEL_LABELS[run.selectedModelId] : null;
   const diffContent = run?.diffContent ?? null;
 
@@ -81,7 +86,11 @@ export function ReviewFindingsStage({
     [findings],
   );
 
-  if (!run || sorted === null) {
+  // `run` is non-null from the moment the run stage mounts, so the review
+  // itself is what to test for. `reviewFindings === null` means no completed
+  // review -- ordinary here, since stage completion is persisted and the run
+  // is not, so a reload lands on this step with nothing to show.
+  if (!run || run.reviewFindings === null) {
     return (
       <div className="flex flex-1 flex-col items-start gap-4 overflow-y-auto p-6">
         <LabStageHeader
@@ -92,6 +101,31 @@ export function ReviewFindingsStage({
         <button type="button" onClick={onGoToRunReview} className="text-sm text-primary underline">
           Go to Run the review
         </button>
+      </div>
+    );
+  }
+
+  // countableFindings has already folded an empty list in here: it means
+  // either a clean diff or a response the agent could not read, and only the
+  // text tells them apart.
+  if (sorted === null) {
+    return (
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+        <LabStageHeader
+          eyebrow="Chapter 3 · Step 2"
+          title="What the review said"
+          lede="Nothing came back that can sit against a line of the diff, so here is the response as it arrived."
+          tags={modelLabel ? [modelLabel] : undefined}
+        />
+        {run.reviewText ? (
+          <div className="rounded-md border border-border bg-card p-4 text-sm">
+            <MarkdownMessage text={run.reviewText} />
+          </div>
+        ) : (
+          <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
+            The run returned no text either. Run the review again.
+          </p>
+        )}
       </div>
     );
   }

@@ -5,6 +5,7 @@
 
 import { estimateCost } from "../../lib/bedrockPricing";
 import type { PrReviewRunState } from "../demo-apps/PrReviewDemoApp";
+import { countableFindings } from "../../lib/countableFindings";
 import { MODEL_LABELS } from "../demo-apps/ReviewAgentConfigPanel";
 
 export function SessionRunsTable({ runs }: { runs: PrReviewRunState[] }) {
@@ -35,7 +36,7 @@ export function SessionRunsTable({ runs }: { runs: PrReviewRunState[] }) {
             const usage = run.reviewUsage!;
             const modelId = run.selectedModelId!;
             const cost = estimateCost(modelId, usage);
-            const findings = Array.isArray(run.reviewFindings) ? run.reviewFindings.length : null;
+            const findings = countableFindings(run.reviewFindings)?.length ?? null;
             return (
               <tr key={run.conversationId ?? index}>
                 <td className="py-2">{MODEL_LABELS[modelId]}</td>

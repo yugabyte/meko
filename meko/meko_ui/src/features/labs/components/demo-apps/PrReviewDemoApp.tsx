@@ -31,6 +31,7 @@ import type { ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
 import type { ReviewFinding } from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
 import { SAMPLE_DIFF_CONTENT, SAMPLE_DIFF_TITLE } from "../../data/adlcReviewAgentLab/sampleDiff";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
+import { recoverReviewFindings } from "../../lib/recoverReviewFindings";
 import type { LabDemoAppConfig } from "../../types";
 import { FindingsList } from "./FindingsList";
 import { PrDiffViewer } from "./PrDiffViewer";
@@ -320,11 +321,30 @@ export function PrReviewDemoApp({
             // message.content correct either way.
             setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: event.review } : m)));
             // "findings" in event distinguishes "the key is genuinely absent"
-            // (an old deployed image) from "present but empty" (a real "no
-            // issues found" result) -- event.findings ?? null would collapse
-            // both to the same state and get stuck showing a loading
-            // spinner forever against an old image.
-            if (isReviewPrompt) setReviewFindings("findings" in event ? (event.findings ?? []) : "unstructured");
+            // (an old deployed image) from "present", whatever its value --
+            // event.findings ?? null would collapse both to the same state
+            // and get stuck showing a loading spinner forever against an old
+            // image. A PRESENT empty array is not a "no issues" result; see
+            // countableFindings.
+            if (isReviewPrompt) {
+              const reported = "findings" in event ? (event.findings ?? []) : null;
+              // An empty list is the agent saying either "clean diff" or "I
+              // could not read my own response" -- it sends [] for both. When
+              // the raw text it also sends parses into findings, it was the
+              // second. See recoverReviewFindings.
+              const recovered = reported && reported.length === 0
+                ? recoverReviewFindings(event.review)
+                : null;
+              setReviewFindings(recovered ?? reported ?? "unstructured");
+              // Set here, beside the findings, not only after the loop: an
+              // error frame arriving after `done`, a dropped connection or an
+              // unmount all skip the post-loop assignment, which would leave
+              // the findings from this run next to the previous run's text --
+              // and Chapter 3's step 2 renders that text when the findings
+              // cannot be counted. The post-loop line stays for the case where
+              // no `done` frame arrives at all.
+              setReviewText(event.review);
+            }
             if (isReviewPrompt && event.usage) setReviewUsage(event.usage);
             if (isReviewPrompt && event.context_stats) setContextStats(event.context_stats);
             session.bumpRefreshTick();

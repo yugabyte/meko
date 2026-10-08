@@ -8,7 +8,7 @@
 // fills its datapack with sample standards and memories, which is not what
 // someone wants landing in a datapack they already rely on.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, Loader2, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -63,7 +63,18 @@ export function CreateDatapackStage({
   const setShowCreate = setCreateChosen;
   // Seeded, not placeholder text: a name the user can accept with one click
   // is the point, and they can still overwrite it.
-  const [newName, setNewName] = useState(() => suggestDatapackName());
+  //
+  // `null` means untouched, so the suggestion keeps re-deriving as the
+  // datapack list loads. Seeding state once would take the suggestion before
+  // the list arrived, offer a name that is already taken, and fail the create
+  // -- the same stale-baseline shape useNewlyAdded had.
+  const [typedName, setTypedName] = useState<string | null>(null);
+  const suggestedName = useMemo(
+    () => suggestDatapackName(datapacks.map((dp) => dp.datapack_name)),
+    [datapacks],
+  );
+  const newName = typedName ?? suggestedName;
+  const setNewName = setTypedName;
   const [createError, setCreateError] = useState<string | null>(null);
 
   const handleCreate = async () => {
@@ -72,7 +83,7 @@ export function CreateDatapackStage({
     setCreateError(null);
     try {
       await onCreate(trimmed);
-      setNewName("");
+      setTypedName(null);
       setShowCreate(false);
       onComplete();
     } catch (err) {

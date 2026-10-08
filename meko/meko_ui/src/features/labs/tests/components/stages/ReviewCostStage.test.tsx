@@ -92,6 +92,25 @@ describe("ReviewCostStage", () => {
     expect(onGoToRunReview).toHaveBeenCalled();
   });
 
+  // review.py sends `findings: []` for a clean diff AND for a response it could
+  // not parse. Rendering "0 issues found" in the good tone over the second is
+  // the same false-clean claim this chapter exists to remove, two steps later.
+  it("does not report zero issues found when the findings list is empty", () => {
+    renderStage(
+      <ReviewCostStage
+        run={runWith({ reviewFindings: [] })}
+        datapackId="dp-1"
+        onGoToRunReview={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/0 issues found/i)).toBeNull();
+    // And not "Answered in prose" either: an empty list is usually a parse
+    // the agent could not do, or a clean diff, neither of which is prose.
+    expect(screen.queryByText(/Answered in prose/i)).toBeNull();
+    expect(screen.getByText(/No count to report/i)).toBeTruthy();
+  });
+
   it("shows the chosen model's real token usage from the run", () => {
     renderStage(
       <ReviewCostStage

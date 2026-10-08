@@ -262,6 +262,76 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(screen.queryByText(/no issues found/i)).toBeNull();
   });
 
+  // reviewText used to be assigned only after the stream loop ended, so a
+  // throw anywhere after `done` left this run's findings beside the PREVIOUS
+  // run's text -- and Chapter 3's step 2 renders that text whenever the
+  // findings cannot be counted.
+  it("keeps the review text with the findings when the stream throws after done", async () => {
+    mockInvokeDeployment.mockReturnValue(
+      (async function* () {
+        yield { type: "meta", conversation_id: "conv-1" };
+        yield { type: "done", review: "No issues found.", findings: [] };
+        throw new Error("connection dropped");
+      })(),
+    );
+    // Asserted on the reported run state, not on screen: the assistant bubble
+    // renders from `messages`, which IS set in the done branch, so a rendered
+    // assertion passes whether or not reviewText was.
+    const onRunChange = vi.fn();
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        onRunChange={onRunChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    await waitFor(() => {
+      const last = onRunChange.mock.calls.at(-1)?.[0];
+      expect(last?.reviewFindings).toEqual([]);
+      expect(last?.reviewText).toBe("No issues found.");
+    });
+  });
+
+  // The wiring that IS this fix. The two tests below use prose and a
+  // well-formed empty list, so both would still pass if the recovery call
+  // were dropped -- this one would not.
+  it("recovers findings the agent could not parse out of its own response", async () => {
+    // An excerpt of a real Ministral 14B run (adlc-code-review-Oct7,
+    // 2026-10-07): the agent sent findings=[] because one location pasted
+    // the offending query and left its quotes raw, and the review itself is
+    // sitting intact in `review`.
+    const malformed = [
+      "```json",
+      '{"findings": [',
+      '  {"severity": "critical",',
+      '   "location": "SELECT user_id FROM spend WHERE team_id = " + team_id + " GROUP BY user_id",',
+      '   "comment": "Interpolates team_id into SQL without parameterization."}',
+      "]}",
+      "```",
+    ].join("\n");
+    mockInvokeDeployment.mockReturnValue(
+      fakeStream([
+        { type: "meta", conversation_id: "conv-1" },
+        { type: "done", review: malformed, findings: [] },
+      ]),
+    );
+    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /run review/i }));
+
+    // The comment text alone proves nothing: it is inside the raw response
+    // too, so a dump of the unparsed JSON would satisfy it. The severity chip
+    // is only rendered by FindingsList, so it is what separates "recovered
+    // and structured" from "printed the blob".
+    await waitFor(() => expect(screen.getByText("critical")).toBeTruthy());
+    expect(screen.getByText(/Interpolates team_id into SQL/)).toBeTruthy();
+    expect(screen.queryByText(/"severity"/)).toBeNull();
+  });
+
   it("shows the raw response, not a false 'no issues found', when the model's output didn't parse as JSON", async () => {
     // review.py degrades a malformed response to findings=[] rather than
     // failing the review, but the raw text it couldn't parse is still in

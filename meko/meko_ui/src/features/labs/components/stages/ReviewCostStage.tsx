@@ -18,6 +18,7 @@ import {
   ANTHROPIC_REFERENCE_OUTPUT_TOKENS,
 } from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
 import { computeSavingsPct, estimateCost } from "../../lib/bedrockPricing";
+import { countableFindings } from "../../lib/countableFindings";
 import {
   coldContextTokens,
   FRONTIER_MODEL_ID,
@@ -65,9 +66,10 @@ export function ReviewCostStage({
     );
   }
 
-  // Structured findings are an array; "unstructured" means the agent replied
-  // in prose, which is a different thing from finding nothing.
-  const findings = Array.isArray(run?.reviewFindings) ? run.reviewFindings : null;
+  // null covers prose, an unfinished run AND an empty list -- see
+  // countableFindings. An empty list reaching here as "0 issues found" in the
+  // good tone is the same false-clean claim this chapter exists to avoid.
+  const findings = countableFindings(run?.reviewFindings);
   const findingsCount = findings ? findings.length : null;
 
   const modelLabel = MODEL_LABELS[modelId];

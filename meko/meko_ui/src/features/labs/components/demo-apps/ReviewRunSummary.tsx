@@ -11,6 +11,7 @@ import { Brain, FileDiff, ListChecks, Search, Sparkles } from "lucide-react";
 import { WarningBanner } from "@/components/ui/warning-banner";
 
 import type { ReviewFinding } from "../../data/adlcReviewAgentLab/anthropicReferenceReview";
+import { countableFindings } from "../../lib/countableFindings";
 import { BehindTheScenes, type PipelineStep } from "../stages/BehindTheScenes";
 import type { ContextStats } from "./PrReviewDemoApp";
 
@@ -26,8 +27,8 @@ export function ReviewRunSummary({
   modelLabel,
   enabledTools,
 }: {
-  /** "unstructured" when the agent answered in prose, which is a different
-   *  thing from finding nothing, so no count is claimed for it. */
+  /** Passed through to countableFindings: anything but a non-empty array
+   *  leaves the counts unclaimed rather than reported as zero. */
   findings: ReviewFinding[] | "unstructured";
   usage: { input_tokens: number; output_tokens: number } | null;
   stats: ContextStats | null;
@@ -37,7 +38,7 @@ export function ReviewRunSummary({
   modelLabel: string;
   enabledTools: string[];
 }) {
-  const structured = Array.isArray(findings) ? findings : null;
+  const structured = countableFindings(findings);
   const critical = structured?.filter((f) => f.severity === "critical").length ?? null;
   const major = structured?.filter((f) => f.severity === "major").length ?? null;
 
@@ -84,7 +85,7 @@ export function ReviewRunSummary({
       label: "Findings parsed",
       detail:
         structured === null
-          ? "The agent answered in prose"
+          ? "Nothing to count"
           : `${structured.length} comment${structured.length === 1 ? "" : "s"}, each with a severity`,
     },
   ];
@@ -106,7 +107,7 @@ export function ReviewRunSummary({
             <span className={major ? "text-warning" : undefined}>{major} major</span>
           </>
         ) : (
-          <span>the agent answered in prose, so nothing was counted</span>
+          <span>no countable findings, so nothing is claimed here</span>
         )}
       </div>
 
@@ -118,9 +119,7 @@ export function ReviewRunSummary({
           {stats && stats.kb_chunks_retrieved > 0 && stats.kb_chunks_total != null
             ? `It asked for ${stats.kb_chunks_retrieved} of your ${stats.kb_chunks_total} chunks instead of reading all of them`
             : "It asked the datapack for what this diff needed instead of carrying the whole document"}
-          {structured && structured.length > 0
-            ? ", and found what the cold run missed."
-            : "."}{" "}
+          {structured ? ", and found what the cold run missed." : "."}{" "}
           Read the findings next.
         </WarningBanner>
       )}
