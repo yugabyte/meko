@@ -155,7 +155,7 @@ export function FolderNameDialog({
                 id="folder-dialog-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="coding_standards"
+                placeholder="folder-name"
                 disabled={mode === "rename" && !folderId}
                 autoComplete="off"
               />
@@ -167,7 +167,7 @@ export function FolderNameDialog({
                 id="folder-dialog-description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="What belongs in here?"
+                placeholder="Describe the datapacks (context) to be stored in this folder"
                 rows={2}
                 disabled={mode === "rename" && !folderId}
               />

@@ -5,18 +5,12 @@
 // anyone else. Only datapacks the caller OWNS are offered: a shared datapack
 // filed here belongs to someone else's account.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { ConfirmByTypingDialog } from "@/components/ui/confirm-by-typing-dialog";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import type { Datapack } from "@/lib/api/mekoApi";
@@ -56,8 +50,22 @@ export function ProjectDangerZoneCard({
   const deleteProjectMut = useDeleteProject();
   const deleteDatapackMut = useDeleteDatapackInTree();
 
-  const ownedIds = new Set(ownDatapacks.map((d) => d.datapack_id));
-  const deletable = datapacks.filter((d) => ownedIds.has(d.datapack_id));
+  // Memoized together: `deletable` is derived, so memoizing only the options
+  // off it would rebuild them every render anyway.
+  const { deletable, deletableOptions } = useMemo(() => {
+    const ownedIds = new Set(ownDatapacks.map((d) => d.datapack_id));
+    const owned = datapacks.filter((d) => ownedIds.has(d.datapack_id));
+    return {
+      deletable: owned,
+      // Keyed by id, not name: two datapacks may share a name, and cmdk
+      // collapses items that share a value into one keyboard target.
+      deletableOptions: owned.map<ComboboxOption>((d) => ({
+        value: d.datapack_id,
+        label: d.datapack_name,
+      })),
+    };
+  }, [datapacks, ownDatapacks]);
+
   const doomed = deletable.find((d) => d.datapack_id === doomedId);
 
   const handleDeleteProject = async () => {
@@ -180,18 +188,25 @@ export function ProjectDangerZoneCard({
         onConfirm={handleDeleteDatapack}
       >
         <Label htmlFor="danger-datapack">Datapack</Label>
-        <Select value={doomedId} onValueChange={setDoomedId}>
-          <SelectTrigger id="danger-datapack">
-            <SelectValue placeholder="Select a datapack" />
-          </SelectTrigger>
-          <SelectContent>
-            {deletable.map((d) => (
-              <SelectItem key={d.datapack_id} value={d.datapack_id}>
-                {d.datapack_name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Searchable rather than a plain Select: a project can hold hundreds
+            of datapacks, and scrolling an unfiltered list to find the one you
+            mean is a poor last step before an irreversible delete. Combobox
+            caps the list height and scrolls it.
+
+            modal because this sits inside one: the popover portals outside
+            DialogContent, and the Dialog's scroll lock would otherwise cancel
+            every wheel event over the list. */}
+        <Combobox
+          id="danger-datapack"
+          modal
+          options={deletableOptions}
+          value={doomedId}
+          onChange={setDoomedId}
+          placeholder="Select a datapack"
+          searchPlaceholder="Search datapacks…"
+          emptyText="No matching datapacks."
+          className="w-full"
+        />
       </ConfirmByTypingDialog>
     </Card>
   );

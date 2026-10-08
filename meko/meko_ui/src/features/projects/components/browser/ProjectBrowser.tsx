@@ -1,7 +1,7 @@
 // The folders-and-datapacks browser: selection, search, paging, renaming and
 // the add-datapack dialog live here, and SplitPaneLayout is presentation.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Datapack } from "@/lib/api/mekoApi";
 import type { ProjectDetail } from "@/lib/api/projectsApi";
 import type { DatapackPathMap } from "@/lib/api/projectsApi";
@@ -46,7 +46,16 @@ export function ProjectBrowser({
   datapackPaths: DatapackPathMap;
   learningsCount: number;
 }) {
-  const [selection, setSelection] = useState<TreeSelection>(PROJECT_SELECTION);
+  // Opens on the first folder rather than the project. Landing on the project
+  // showed a summary the page header already carries, and left the contents
+  // pane closed -- so "Add a datapack", the main thing to do here, was behind
+  // a click nobody knew to make. Falls back to the project when there are no
+  // folders yet, which is the one case with nothing to open.
+  const [selection, setSelection] = useState<TreeSelection>(() =>
+    detail.folders.length > 0
+      ? { kind: "folder", folderId: detail.folders[0].folder_id }
+      : PROJECT_SELECTION,
+  );
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [folderDialog, setFolderDialog] = useState<"create" | "rename" | null>(null);
@@ -68,6 +77,20 @@ export function ProjectBrowser({
     setQuery("");
     setPage(1);
   }, [openFolderId]);
+
+  // The initializer above runs once, so a project that had no folders when it
+  // mounted keeps PROJECT_SELECTION after its first folder is created -- the
+  // contents pane stays shut and "Add a datapack" is back behind a click.
+  // Only on the empty -> non-empty edge, so selecting the project row on a
+  // project that already has folders is never overridden.
+  const hadFolders = useRef(detail.folders.length > 0);
+  useEffect(() => {
+    const has = detail.folders.length > 0;
+    if (!hadFolders.current && has) {
+      setSelection({ kind: "folder", folderId: detail.folders[0].folder_id });
+    }
+    hadFolders.current = has;
+  }, [detail.folders]);
 
   const props: BrowserProps = {
     detail,

@@ -28,6 +28,18 @@ type ComboboxProps = {
   disabled?: boolean;
   className?: string; // trigger width / extra classes
   align?: "start" | "center" | "end";
+  /** Put on the trigger, so a <Label htmlFor> can point at it. */
+  id?: string;
+  /** Set this when the combobox is inside a modal Dialog. The popover content
+   *  is portalled to <body>, outside DialogContent, and a modal Dialog's
+   *  scroll lock cancels wheel and touch scrolling everywhere outside its own
+   *  subtree -- so the capped list cannot be scrolled by mouse at all. A modal
+   *  popover installs its own lock covering its content, which restores it. */
+  modal?: boolean;
+  /** ARIA gives role=combobox its name from the author, never from its
+   *  contents, so a trigger with neither this nor a Label is nameless to a
+   *  screen reader however clear its placeholder reads. */
+  "aria-label"?: string;
 };
 
 export function Combobox({
@@ -40,16 +52,21 @@ export function Combobox({
   disabled,
   className,
   align = "start",
+  id,
+  "aria-label": ariaLabel,
+  modal = false,
 }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.value === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen} modal={modal}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           role="combobox"
+          id={id}
+          aria-label={ariaLabel}
           aria-expanded={open}
           disabled={disabled}
           className={cn("w-64 justify-between font-normal", className)}

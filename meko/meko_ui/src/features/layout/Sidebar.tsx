@@ -14,14 +14,12 @@ import {
   PlayCircle,
   Sparkles,
   BookOpen,
-  Users,
   Settings as SettingsIcon,
   CreditCard,
   Gauge,
   FlaskConical,
   FolderTree,
 } from "lucide-react";
-import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -38,7 +36,7 @@ import { CURRENT_USER_QUERY_KEY, useCurrentUser } from "@/hooks/useCurrentUser";
 import { DATAPACKS_QUERY_KEY, useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@/lib/browserEvents";
 import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
-import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
+import { ROUTES } from "@/app/routes/paths";
 import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { resetTelemetry, trackEvent } from "@/lib/telemetry/rudderstack";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
@@ -48,23 +46,7 @@ import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
 import { isByocEnabled } from "@/lib/byoc";
 import { useProjectsEnabled } from "@/lib/projectsFeature";
-
-/**
- * Cap the nested "Datapacks" list at this many rows before it starts to
- * scroll internally. Without a cap, a user with 30+ datapacks pushes
- * everything below — Observe, Feedback, Sign out — off-screen unless
- * they scroll the whole sidebar.
- */
-const MAX_VISIBLE_DATAPACKS = 7;
-
-/**
- * Approximate height of one rendered row in the datapacks list.
- * `py-1.5` adds 12px of vertical padding; `text-xs` text + the
- * `gap-0.5` between siblings round the per-row footprint to ~28px.
- * Driving the cap off this constant means changing the row chrome
- * automatically rescopes the scroll threshold.
- */
-const DATAPACK_ROW_HEIGHT_PX = 28;
+import { SidebarDatapackList } from "@/features/layout/SidebarDatapackList";
 
 export default function Sidebar() {
   const location = useLocation();
@@ -515,50 +497,10 @@ export default function Sidebar() {
               </Button>
             </div>
             {datapacksExpanded ? (
-              <div
-                className="flex flex-col gap-0.5 border-l border-white/10 ml-4 pl-2 mt-0.5 overflow-y-auto"
-                style={{ maxHeight: MAX_VISIBLE_DATAPACKS * DATAPACK_ROW_HEIGHT_PX }}
-              >
-                {datapackList.map((dp) => (
-                  <NavLink
-                    key={dp.datapack_id}
-                    to={datapackDetailPath(dp.datapack_id)}
-                    title={dp.datapack_name}
-                    className={() => {
-                      const basePath = datapackDetailPath(dp.datapack_id);
-                      const onDatapackSubroute =
-                        location.pathname === basePath ||
-                        location.pathname.startsWith(`${basePath}/`);
-                      // Keep the datapack highlighted whenever the current route is
-                      // under that datapack path. If a datapack_id query is present,
-                      // also require id match to avoid ambiguity on stale links.
-                      const idMatches = !activeDatapackId || activeDatapackId === dp.datapack_id;
-                      const isActive = onDatapackSubroute && idMatches;
-                      return cn(
-                        "flex items-center rounded-md py-1.5 pl-2 pr-2 text-xs font-medium transition-colors min-w-0",
-                        isActive
-                          ? "bg-foreground/10 text-foreground"
-                          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                      );
-                    }}
-                  >
-                    {/*
-                      `flex-1` on the name span makes it occupy all the
-                      free horizontal space inside the row. That pushes
-                      the share icon flush to the right edge regardless
-                      of name length — without it, short names left the
-                      icon floating mid-row right next to the text.
-                    */}
-                    <span className="min-w-0 flex-1 truncate">{dp.datapack_name}</span>
-                    {!isDatapackListGrantOwner(dp) ? (
-                      <Users
-                        className="ml-1.5 h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300/80"
-                        aria-label="Shared with you"
-                      />
-                    ) : null}
-                  </NavLink>
-                ))}
-              </div>
+              <SidebarDatapackList
+                datapacks={datapackList}
+                activeDatapackId={activeDatapackId}
+              />
             ) : null}
           </div>
         )}

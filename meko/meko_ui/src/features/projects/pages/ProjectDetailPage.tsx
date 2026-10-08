@@ -117,7 +117,6 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
                   </h1>
                 </div>
                 <p className="text-muted-foreground text-sm max-w-2xl leading-relaxed">
-                  {description ? `${description} · ` : ""}
                   {countLabel(totals.datapacks, "datapack")} in{" "}
                   {countLabel(data.folders.length, "folder")} ·{" "}
                   {countLabel(data.members.people, "person", "people")} ·{" "}
@@ -127,6 +126,15 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
               </div>
 
             </div>
+
+            {/* On its own line rather than prefixed to the counts above,
+                where a sentence wedged in front of "2 datapacks in 3 folders"
+                read as the first item of the same list. */}
+            {description ? (
+              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                {description}
+              </p>
+            ) : null}
 
             <Tabs
               value={tab}
