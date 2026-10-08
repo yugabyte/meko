@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 
 use crate::error::{self, YbError};
 use crate::ffi;
+use crate::metrics::{ATTEMPT_SECONDS, AttemptOutcome, ERRORS, Op, RETRIES_EXHAUSTED};
 
 // ---- public value types ------------------------------------------------
 
@@ -588,6 +589,8 @@ const MAX_SCAN_RESTARTS: usize = 5;
 /// by re-issuing this particular call (a read-restart on a pinned continuation
 /// — see [`TsClient::read`]), so the caller can react instead of burning the
 /// budget replaying the same failure.
+///
+/// `what` names the call in logs and is the `op` label of its metrics.
 async fn with_retries<T, F, Fut>(
     what: &str,
     give_up: impl Fn(&YbError) -> bool,
@@ -599,10 +602,25 @@ where
 {
     let mut backoff = BACKOFF_INITIAL;
     for attempt in 1..=MAX_ATTEMPTS {
-        match f().await {
+        let started = std::time::Instant::now();
+        let result = f().await;
+        let outcome = if result.is_ok() {
+            AttemptOutcome::Ok
+        } else {
+            AttemptOutcome::Error
+        };
+        ATTEMPT_SECONDS
+            .with_label_values(&[what, outcome.into()])
+            .observe(started.elapsed().as_secs_f64());
+        match result {
             Ok(v) => return Ok(v),
             Err(e) => {
-                if !e.is_retryable() || give_up(&e) || attempt == MAX_ATTEMPTS {
+                ERRORS.with_label_values(&[what, e.code()]).inc();
+                let retryable = e.is_retryable() && !give_up(&e);
+                if !retryable || attempt == MAX_ATTEMPTS {
+                    if retryable {
+                        RETRIES_EXHAUSTED.with_label_values(&[what, e.code()]).inc();
+                    }
                     // WARN even the last attempt: a caller may absorb this
                     // error, and a failure that burned the whole budget must
                     // not vanish with it.
@@ -798,7 +816,7 @@ impl TsClient {
         // unpinned page instead retries here — it gets a fresh read point.
         let pinned = read_time_ht != 0 || ops.iter().any(|o| o.paging_state.is_some());
         with_retries(
-            "read",
+            Op::Read.into(),
             |e| pinned && e.is_read_restart(),
             || self.read_once(ops, read_time_ht),
         )
@@ -1018,7 +1036,12 @@ impl TsClient {
         let ignore_after = deadline.ignore_after_hybrid_time()?;
         // Upserts are idempotent (full-overwrite by primary key), so every
         // retryable class is safe to re-issue: nothing to give up early on.
-        with_retries("upsert", |_| false, || self.upsert_once(rows, ignore_after)).await
+        with_retries(
+            Op::Upsert.into(),
+            |_| false,
+            || self.upsert_once(rows, ignore_after),
+        )
+        .await
     }
 
     /// One write `Perform`, no retries. [`Self::upsert`] wraps this with the
@@ -1209,6 +1232,22 @@ mod tests {
 
     use super::{MAX_ATTEMPTS, WriteDeadline, next_scan_page, with_retries};
     use crate::error::YbError;
+    use crate::metrics::{ATTEMPT_SECONDS, AttemptOutcome, ERRORS, RETRIES_EXHAUSTED};
+
+    // The registry is process-global, so each test counts under its own `op`.
+    fn errors(op: &str, code: &str) -> u64 {
+        ERRORS.with_label_values(&[op, code]).get()
+    }
+
+    fn exhausted(op: &str, code: &str) -> u64 {
+        RETRIES_EXHAUSTED.with_label_values(&[op, code]).get()
+    }
+
+    fn attempts(op: &str, outcome: AttemptOutcome) -> u64 {
+        ATTEMPT_SECONDS
+            .with_label_values(&[op, outcome.into()])
+            .get_sample_count()
+    }
 
     /// The encoding the leader compares against its own clock: physical
     /// microseconds above 12 logical bits. Sending raw micros would read as a
@@ -1277,7 +1316,7 @@ mod tests {
     async fn with_retries_rides_out_transient_failures() {
         let calls = Cell::new(0);
         let out: Result<u8, YbError> = with_retries(
-            "t",
+            "rides_out",
             |_| false,
             || async {
                 calls.set(calls.get() + 1);
@@ -1291,6 +1330,10 @@ mod tests {
         .await;
         assert_eq!(out.unwrap(), 7);
         assert_eq!(calls.get(), 3, "should retry until success");
+        assert_eq!(errors("rides_out", "try_again"), 2);
+        assert_eq!(exhausted("rides_out", "try_again"), 0);
+        assert_eq!(attempts("rides_out", AttemptOutcome::Error), 2);
+        assert_eq!(attempts("rides_out", AttemptOutcome::Ok), 1);
     }
 
     /// A non-retryable error is surfaced on the first attempt — no budget burn.
@@ -1298,7 +1341,7 @@ mod tests {
     async fn with_retries_gives_up_immediately_on_fatal() {
         let calls = Cell::new(0);
         let out: Result<u8, YbError> = with_retries(
-            "t",
+            "fatal",
             |_| false,
             || async {
                 calls.set(calls.get() + 1);
@@ -1308,6 +1351,8 @@ mod tests {
         .await;
         assert!(out.is_err());
         assert_eq!(calls.get(), 1, "Invalid is not retryable");
+        assert_eq!(errors("fatal", "invalid"), 1);
+        assert_eq!(exhausted("fatal", "invalid"), 0, "no budget was spent");
     }
 
     /// `give_up` short-circuits an otherwise-retryable class: a read-restart on
@@ -1317,7 +1362,7 @@ mod tests {
     async fn with_retries_honours_give_up_for_pinned_read_restart() {
         let calls = Cell::new(0);
         let out: Result<u8, YbError> = with_retries(
-            "t",
+            "give_up",
             |e| e.is_read_restart(),
             || async {
                 calls.set(calls.get() + 1);
@@ -1327,6 +1372,8 @@ mod tests {
         .await;
         assert!(out.unwrap_err().is_read_restart());
         assert_eq!(calls.get(), 1, "give_up must not burn the budget");
+        assert_eq!(errors("give_up", "read_restart"), 1);
+        assert_eq!(exhausted("give_up", "read_restart"), 0);
     }
 
     /// The budget is bounded — a permanently-failing retryable error stops.
@@ -1334,7 +1381,7 @@ mod tests {
     async fn with_retries_bounds_the_budget() {
         let calls = Cell::new(0);
         let out: Result<u8, YbError> = with_retries(
-            "t",
+            "budget",
             |_| false,
             || async {
                 calls.set(calls.get() + 1);
@@ -1344,6 +1391,12 @@ mod tests {
         .await;
         assert!(out.is_err());
         assert_eq!(calls.get(), MAX_ATTEMPTS);
+        assert_eq!(errors("budget", "network"), MAX_ATTEMPTS as u64);
+        assert_eq!(exhausted("budget", "network"), 1);
+        assert_eq!(
+            attempts("budget", AttemptOutcome::Error),
+            MAX_ATTEMPTS as u64
+        );
     }
 
     /// A bind must carry its column's own type: the tserver builds the key

@@ -5,7 +5,8 @@
 
 use crate::ffi;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, strum_macros::EnumIter, strum_macros::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum YbError {
     /// Bad arguments / misuse — never retry.
     #[error("yb_thin_client invalid: {0}")]
@@ -51,6 +52,12 @@ impl YbError {
     /// The leader refused the write because its deadline had passed.
     pub fn is_fenced(&self) -> bool {
         matches!(self, YbError::Fenced(_))
+    }
+
+    /// The `code` label this error is counted under. Renaming a variant
+    /// renames the label.
+    pub fn code(&self) -> &'static str {
+        self.into()
     }
 }
 

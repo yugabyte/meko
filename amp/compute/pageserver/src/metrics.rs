@@ -3854,4 +3854,5 @@ pub fn preinitialize_metrics(
     Lazy::force(&tokio_epoll_uring::THREAD_LOCAL_METRICS_STORAGE);
 
     tenant_throttling::preinitialize_global_metrics();
+    yb_thin_client::init_metrics();
 }

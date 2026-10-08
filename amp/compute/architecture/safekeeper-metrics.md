@@ -49,6 +49,11 @@ Emitted by the consumer task's `flush_batch` (`yb_wal_storage.rs`).
 | `safekeeper_yb_wal_batch_rows` | Histogram | — | Coalesced rows per write (~1 = sequential WAL coalescing into single rows or no batching; near 50 = `FLUSH_ROWS_THRESHOLD` saturating). |
 | `safekeeper_yb_wal_batch_bytes` | Histogram | — | Payload bytes per write (pre-coalescing chunk bytes). |
 
+The thin-client lane's own series, `yb_thin_client_errors_total`,
+`yb_thin_client_retries_exhausted_total`, `yb_thin_client_attempt_seconds` and
+`yb_thin_client_connection_recycles_total`, come from the shared crate and are
+described in [`yugabyte.md` §Thin-client metrics](yugabyte.md#thin-client-metrics).
+
 ## WAL cache / YB reads (global)
 
 The `WalCache` fronts `amp_storage.wals` on the read path; misses fall

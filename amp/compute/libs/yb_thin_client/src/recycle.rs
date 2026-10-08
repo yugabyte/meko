@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use crate::client::{TlsOpts, TsClient, TsClientConfig};
 use crate::error::YbError;
+use crate::metrics::{CONNECTION_RECYCLES, RecycleOutcome, RecycleTrigger};
 
 /// How long to wait before retrying a rebuild that failed. The current
 /// generation keeps serving meanwhile, so this paces the retry only — no
@@ -186,8 +187,8 @@ impl<T: Send + Sync + 'static> Recycling<T> {
     /// Infallible on purpose: every hot-path call site goes through here, and
     /// a lifetime bound that could inject a new error class into getpage or
     /// WAL flush would be a worse bargain than the staleness it prevents. A
-    /// failed rebuild is logged, counted by the caller's own error paths when
-    /// the stale generation eventually fails, and retried later.
+    /// failed rebuild is logged, counted in
+    /// `yb_thin_client_connection_recycles_total`, and retried later.
     ///
     /// At most one caller rebuilds at a time; the rest carry on with the
     /// current generation rather than queueing behind a connect they don't
@@ -213,8 +214,16 @@ impl<T: Send + Sync + 'static> Recycling<T> {
             live.opened_at.elapsed()
         };
         let (forced, request) = self.forced_request();
+        let trigger = if forced {
+            RecycleTrigger::TlsReload
+        } else {
+            RecycleTrigger::Lifetime
+        };
         match (self.open)().await {
             Ok(fresh) => {
+                CONNECTION_RECYCLES
+                    .with_label_values(&[trigger.into(), RecycleOutcome::Ok.into()])
+                    .inc();
                 tracing::info!(
                     "yb_thin_client {}: recycled the connection after {age:?} \
                      ({})",
@@ -238,6 +247,9 @@ impl<T: Send + Sync + 'static> Recycling<T> {
                 fresh
             }
             Err(e) => {
+                CONNECTION_RECYCLES
+                    .with_label_values(&[trigger.into(), RecycleOutcome::Failed.into()])
+                    .inc();
                 tracing::warn!(
                     "yb_thin_client {}: could not recycle the connection after {age:?}, \
                      keeping the current one: {e}",
@@ -309,6 +321,15 @@ mod tests {
 
     use super::{OpenFn, Recycling, due_at};
     use crate::error::YbError;
+    use crate::metrics::{CONNECTION_RECYCLES, RecycleOutcome, RecycleTrigger};
+
+    // Tests run in parallel against the process-global registry and share
+    // these labels, so they assert only that the count rose.
+    fn recycles(trigger: RecycleTrigger, outcome: RecycleOutcome) -> u64 {
+        CONNECTION_RECYCLES
+            .with_label_values(&[trigger.into(), outcome.into()])
+            .get()
+    }
 
     /// A pool over plain `usize` generations, with the shim swapped out: each
     /// rebuild hands out the next integer, or fails if `fail_from` has been
@@ -350,8 +371,10 @@ mod tests {
             usize::MAX,
         )
         .await;
+        let before = recycles(RecycleTrigger::Lifetime, RecycleOutcome::Ok);
         assert_eq!(*pool.current().await, 1, "expired → rebuilt");
         assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert!(recycles(RecycleTrigger::Lifetime, RecycleOutcome::Ok) > before);
         // The fresh generation is young, so the next call must not rebuild.
         assert_eq!(*pool.current().await, 1);
         assert_eq!(opens.load(Ordering::SeqCst), 1, "no rebuild storm");
@@ -362,8 +385,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_rebuild_keeps_the_current_generation() {
         let (pool, opens) = pool(Duration::from_secs(900), Duration::from_secs(901), 1).await;
+        let before = recycles(RecycleTrigger::Lifetime, RecycleOutcome::Failed);
         assert_eq!(*pool.current().await, 0, "kept the old generation");
         assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert!(recycles(RecycleTrigger::Lifetime, RecycleOutcome::Failed) > before);
         for _ in 0..5 {
             assert_eq!(*pool.current().await, 0);
         }
@@ -406,8 +431,10 @@ mod tests {
     async fn recycle_now_replaces_a_young_generation_once() {
         let (pool, opens) = pool(Duration::from_secs(900), Duration::ZERO, usize::MAX).await;
         assert_eq!(*pool.current().await, 0, "young: nothing to do");
+        let before = recycles(RecycleTrigger::TlsReload, RecycleOutcome::Ok);
         pool.recycle_now();
         assert_eq!(*pool.current().await, 1, "forced → rebuilt");
+        assert!(recycles(RecycleTrigger::TlsReload, RecycleOutcome::Ok) > before);
         assert_eq!(*pool.current().await, 1, "request consumed");
         assert_eq!(opens.load(Ordering::SeqCst), 1);
     }
@@ -462,8 +489,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_forced_rebuild_stays_pending() {
         let (pool, opens) = pool(Duration::from_secs(900), Duration::ZERO, 1).await;
+        let before = recycles(RecycleTrigger::TlsReload, RecycleOutcome::Failed);
         pool.recycle_now();
         assert_eq!(*pool.current().await, 0, "kept the old generation");
+        assert!(recycles(RecycleTrigger::TlsReload, RecycleOutcome::Failed) > before);
         assert_eq!(opens.load(Ordering::SeqCst), 1);
         // Cooldown suppresses the retry, but the request is still standing.
         assert_eq!(*pool.current().await, 0);

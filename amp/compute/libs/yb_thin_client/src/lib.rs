@@ -12,6 +12,7 @@ mod barren;
 mod client;
 mod error;
 mod ffi;
+mod metrics;
 mod recycle;
 mod tls_watch;
 
@@ -21,4 +22,5 @@ pub use client::{
     TableHandle, TlsOpts, TsClient, TsClientConfig, UpsertRow, Value, ValueType, WriteDeadline,
 };
 pub use error::YbError;
+pub use metrics::init as init_metrics;
 pub use recycle::{RECYCLE_RETRY_COOLDOWN, Recycling};

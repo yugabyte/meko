@@ -348,6 +348,7 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
         None => None,
     };
 
+    yb_thin_client::init_metrics();
     let yb_wal = YbWalConn::from_conf(&conf).await?;
 
     let global_timelines = Arc::new(GlobalTimelines::new(conf.clone(), yb_wal.clone()));

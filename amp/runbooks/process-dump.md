@@ -91,7 +91,9 @@ host(s)` in the log; on the thin-client lane `connection_lifetime_ms` (default
 15 min) re-resolves `tserver_rpc_addrs` (see
 `compute/architecture/yugabyte.md` → "Bounding a connection's life"). A wedge
 that outlasts both is not this failure: check
-`yb_client_connection_recycles_total{outcome="failed"}` on `/metrics` and
+`yb_client_connection_recycles_total{outcome="failed"}` (YSQL lane) and
+`yb_thin_client_connection_recycles_total{outcome="failed"}` (thin-client lane)
+on `/metrics` and
 `getent hosts <host_ports name>` from the pod to tell a stale cache apart from a
 cluster that is simply unreachable. If a restart is needed anyway it is
 lossless — the WAL is durable in the safekeeper and `amp_storage.wals`; the

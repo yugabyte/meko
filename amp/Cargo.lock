@@ -6743,6 +6743,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "metrics",
+ "once_cell",
+ "strum",
+ "strum_macros",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

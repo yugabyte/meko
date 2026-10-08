@@ -138,6 +138,23 @@ intentional, not silently ignored.
   Each daemon logs the effective counts in its
   `thin-client hot path ready …` line at startup.
 
+### Thin-client metrics
+
+The `yb_thin_client` crate (`src/metrics.rs`) defines these series, and both
+the pageserver and the safekeeper export them on `/metrics`. Each read or
+upsert goes through the crate's `with_retries`, which tries a `Perform` up
+to 10 times while the error is retryable (`network`,
+`try_again`, `read_restart`), with backoff from 50 ms doubling to 2 s. Every
+series exists at 0 from process start, so `increase()` sees the first
+event.
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `yb_thin_client_errors_total` | IntCounterVec | `op`, `code` | One per failed `Perform` attempt, retried or not, so a call that succeeds on its third attempt adds 2. `op` is `read` or `upsert`. `code` is the `YbError` class: `network`, `try_again`, `read_restart`, `fenced`, `invalid`, `schema` or `other`. |
+| `yb_thin_client_retries_exhausted_total` | IntCounterVec | `op`, `code` | Calls that failed all 10 attempts with a retryable error and returned it to the caller. `code` is `network`, `try_again` or `read_restart`. For `network` and `try_again` the read or pageserver write failed. A safekeeper `upsert` does not end there: the WAL consumer retries the batch until it lands, and `safekeeper_wal_consumer_batch_retries_total` shows whether it is still retrying. A `read_restart` count does not mean the read failed: the scan that made the call starts over on a fresh read point and may succeed. A call that fails with any other code is not retried, so it is not counted here. A read restart on a pinned scan is not counted either, because the scan starts over from its first page instead of retrying that page. The 10 attempts take about 9 s when each one fails immediately (the backoff sleeps alone), and about 110 s when each one waits out the 10 s RPC timeout. An increase in `network` or `try_again` means YB was unreachable or unhealthy for at least that long. Alert on any increase in those two codes. |
+| `yb_thin_client_attempt_seconds` | HistogramVec | `op`, `outcome` | Time taken by one `Perform` attempt, from building the request to decoding the reply. It includes any session the shim reopens before sending. `outcome` is `ok` or `error`. `pageserver_yb_store_op_seconds` and `safekeeper_yb_wal_insert_seconds` time the whole operation, including retries and backoff. This histogram times each attempt separately. A failed attempt that lasts the full RPC timeout (10 s by default) points to a tserver that keeps the connection open but does not answer. A failed attempt that ends quickly points to a closed or refused connection. Buckets run from 0.5 ms to about 16 s. |
+| `yb_thin_client_connection_recycles_total` | IntCounterVec | `trigger`, `outcome` | Rebuilds of the thin client. A rebuild replaces the shim client and the table handles opened on it, re-resolves `tserver_rpc_addrs`, and opens new connections. `trigger` is `lifetime` when the client reached `connection_lifetime_ms` (15 min by default), or `tls_reload` when the TLS files changed. `outcome` is `ok` when the new client replaced the old one, or `failed` when the rebuild failed. After a failure the old client keeps serving, and the next rebuild waits at least 10 s. A rebuild runs on the first read or write after the lifetime passes or the TLS files change, so a lane with no traffic is not rebuilt. A `failed` count that keeps rising means the lane cannot replace its client. |
+
 ### Bounding a call (`connect_timeout_ms` / `statement_timeout_ms`)
 
 Two more keys on the same block bound how long a YSQL call may take. Both
@@ -230,7 +247,8 @@ transports' behaviour aligned and to give every connection a bounded life.
 Recycling is **best-effort and cannot cost availability**: a reopen that
 fails leaves the existing connection serving and is retried no more than
 once every 10s (`RECYCLE_RETRY_COOLDOWN`), logged at WARN and counted by
-`yb_client_connection_recycles_total{outcome="failed"}`.
+`yb_client_connection_recycles_total{outcome="failed"}` on the YSQL lane and
+`yb_thin_client_connection_recycles_total{outcome="failed"}` on the thin one.
 
 When the connection block names a client certificate (`sslcert`/`sslkey`),
 `yb_client_cert_not_after_seconds` carries its `notAfter` as Unix seconds so
