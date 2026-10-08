@@ -1,28 +1,33 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DesignDoc, DesignQuestion, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { approvalSent, clearDrafts, draftFor, draftsBlocker, draftsPersist, toRequest, useDesignDrafts, type Draft } from '../design-answers';
+import {
+  approvalSent, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts, type Draft,
+} from '../design-answers';
 import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../util';
 import { AskForm } from './AskSheet';
 import { Busy } from './common';
 
-function StateChip({ q, d }: { q: DesignQuestion; d: Draft }) {
+function StateChip({ q, d, answerable }: { q: DesignQuestion; d: Draft; answerable: boolean }) {
   if (q.status === 'resolved') return <span className="dq-chip done">✓ Resolved</span>;
   if (d.custom && d.text.trim() && q.options.length) return <span className="dq-chip custom">✎ Custom</span>;
   if (d.choice !== null || (d.custom && d.text.trim())) return <span className="dq-chip answered">✓ Answered</span>;
-  return <span className="dq-chip open">● Open</span>;
+  return <span className="dq-chip open">{answerable ? '● Open' : '● Unanswered'}</span>;
 }
 
 function QuestionCard({
   q,
   n,
   d,
+  answerable,
   editable,
   onChange,
 }: {
   q: DesignQuestion;
   n: number;
   d: Draft;
+  /** False past Design: nothing is picked for the user. */
+  answerable: boolean;
   editable: boolean;
   onChange: (d: Draft) => void;
 }) {
@@ -34,7 +39,7 @@ function QuestionCard({
       <div className="dq-top">
         <span className="dq-n">Q{n}</span>
         <span className="dq-q">{q.question}</span>
-        <StateChip q={q} d={d} />
+        <StateChip q={q} d={d} answerable={answerable} />
       </div>
       {q.context && <p className="dq-ctx">{q.context}</p>}
       {q.options.length > 0 && (
@@ -117,6 +122,11 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
     ?? (!request.answers.length && !request.feedback.trim() ? 'Answer a question or write feedback first.' : null);
   // AgentK is mid-turn with its mod running: answers go now and wait in Claude, an approval waits here.
   const held = heldForTurnEnd(session);
+  // Answers to questions that are no longer open (resolved as they were sent) are done with.
+  useEffect(() => {
+    const pruned = pruneDrafts(doc.questions, loadDrafts(session.id));
+    if (pruned) saveDrafts(session.id, pruned);
+  }, [doc.questions, session.id]);
   const queued = session.approvalQueued
     ? 'Approved: it goes to AgentK when this turn ends. If the turn changes the design, you’re asked again.'
     : null;
@@ -132,7 +142,7 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
         await api.sessionAction(session.id, 'cancel-approval');
       } else if (what === 'revise') {
         await api.reviseDesign(session.id, request);
-        clearDrafts(session.id);
+        revisionSent(session.id);
         setNote(held ? 'Sent. AgentK takes them when this turn ends, then revises the design.' : 'Sent to AgentK. The design is updated when its turn ends.');
       } else {
         // An approval queued for the turn's end keeps the answers until it's sent, in case it's dropped.
@@ -163,7 +173,8 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
                 key={q.id}
                 q={q}
                 n={number.get(q.id) ?? 0}
-                d={draftFor(q, drafts.answers[q.id])}
+                d={shownDraft(q, drafts.answers[q.id], editable)}
+                answerable={editable}
                 editable={canEdit}
                 onChange={(d) => update((x) => ({ ...x, answers: { ...x.answers, [q.id]: d } }))}
               />
@@ -184,16 +195,25 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
         )}
 
         {resolved.length > 0 && (
-          <details className="dq-section dq-decided">
+          // Open when nothing else is, so what was answered shows at once.
+          <details className="dq-section dq-decided" open={!open.length}>
             <summary>Decided ({resolved.length})</summary>
-            <ul>
+            <ol className="dq-list">
               {resolved.map((q) => (
-                <li key={q.id}>
-                  <span className="dq-n">Q{number.get(q.id)}</span> <span className="dq-q">{q.question}</span>
-                  {q.decision && <p className="dq-ctx">{q.decision}</p>}
+                <li key={q.id} className="dq-card">
+                  <div className="dq-top">
+                    <span className="dq-n">Q{number.get(q.id)}</span>
+                    <span className="dq-q">{q.question}</span>
+                    <span className="dq-chip done">✓ Resolved</span>
+                  </div>
+                  {q.decision && (
+                    <p className="dq-decision">
+                      <span className="dq-decision-label">Decision</span> {q.decision}
+                    </p>
+                  )}
                 </li>
               ))}
-            </ul>
+            </ol>
           </details>
         )}
 

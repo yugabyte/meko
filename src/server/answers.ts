@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import type { DesignAnswerInput, DesignQuestion } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get } from './db.js';
-import { ANSWER_MAX, ANSWERS_PROMPT_MAX, answersCount, formatAnswers, questionsFileText, questionsFromMarkdown, readDesignQuestions } from './design.js';
+import { ANSWER_MAX, ANSWERS_PROMPT_MAX, answeredQuestion, answersCount, formatAnswers, questionsFileText, questionsFromMarkdown, readDesignQuestions } from './design.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
 import type { SessionRow } from './store.js';
@@ -84,11 +84,7 @@ export class DesignQuestionStore {
     // What was kept, read before the file is replaced.
     if (hasDesign) this.get(row);
     const prev = this.cache.get(row.id);
-    const file = this.core.sessions.questionsFile(row);
-    mkdirSync(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, questionsFileText(questions));
-    renameSync(tmp, file);
+    this.write(row, questions);
     if (!hasDesign) {
       this.cache.delete(row.id);
       return true;
@@ -98,6 +94,28 @@ export class DesignQuestionStore {
     return !prev || prev.json !== next.json || prev.source !== next.source;
   }
 
+  /**
+   * The user's answers, as they go to Claude: each question answered is resolved, with the answer
+   * as its decision, and with `all` (an approval: nothing revisits the questions after it) so is
+   * every other open one, left to AgentK. Written to the questions file and kept, so the user sees
+   * what they sent in any browser, and the next turn end doesn't count it as AgentK's change.
+   * Questions from a markdown design are written only with `all`: until then AgentK revises its
+   * "Open questions" list, which a questions file would hide. True when anything changed. Throws
+   * when the file can't be written.
+   */
+  record(row: SessionRow, answers: DesignAnswerInput[], all: boolean): boolean {
+    this.get(row);
+    const cur = this.cache.get(row.id)!;
+    if (cur.source === 'markdown' && !all) return false;
+    const byId = new Map(answers.map((a) => [a.questionId, a]));
+    const next = cur.questions.map((q) => (q.status === 'open' && (all || byId.has(q.id)) ? answeredQuestion(q, byId.get(q.id)) : q));
+    const e = entry(next, 'file');
+    if (e.json === cur.json) return false;
+    this.write(row, next);
+    this.cache.set(row.id, e);
+    return true;
+  }
+
   /** Loads the questions of every running session in Design. */
   preload(): void {
     for (const row of all<SessionRow>(this.core.db, `SELECT * FROM sessions WHERE desired = 'running' AND stage = 'design'`)) this.get(row);
@@ -105,6 +123,15 @@ export class DesignQuestionStore {
 
   forget(id: string): void {
     this.cache.delete(id);
+  }
+
+  /** Replaces a session's questions file. */
+  private write(row: SessionRow, questions: DesignQuestion[]): void {
+    const file = this.core.sessions.questionsFile(row);
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, questionsFileText(questions));
+    renameSync(tmp, file);
   }
 
   private read(row: SessionRow, skipFile = false): Entry {
@@ -120,6 +147,14 @@ export class DesignQuestionStore {
 /** Refused: the browser's answers are to questions AgentK has changed since. */
 const STALE = 'AgentK changed its questions since you answered. Review them and try again.';
 
+/** The user's answers to the design's open questions, checked: formatted for Claude, and as sent. */
+export interface CheckedAnswers {
+  text: string;
+  /** For the prompt's first line: "2 answers to open questions and other feedback". */
+  count: string;
+  answers: DesignAnswerInput[];
+}
+
 /**
  * The user's answers to the design's open questions (and other feedback) from a request body,
  * checked against the current questions and formatted for Claude, with the count for the
@@ -127,7 +162,7 @@ const STALE = 'AgentK changed its questions since you answered. Review them and 
  * answers too long for one prompt, and a 409 for an answer to a question that's no longer open
  * or whose options changed.
  */
-export function designAnswers(body: unknown, questions: DesignQuestion[]): { text: string; count: string } | null {
+export function designAnswers(body: unknown, questions: DesignQuestion[]): CheckedAnswers | null {
   if (body === undefined || body === null) return null;
   if (typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Answers must be {answers, feedback}.');
   const b = body as Record<string, unknown>;
@@ -175,5 +210,5 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): { tex
   if (text.length > ANSWERS_PROMPT_MAX) {
     throw new HttpError(400, `Your answers come to ${text.length.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to AgentK at once. Shorten some.`);
   }
-  return { text, count: answersCount(answers, feedback) };
+  return { text, count: answersCount(answers, feedback), answers };
 }

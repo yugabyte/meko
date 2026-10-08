@@ -616,10 +616,12 @@ and jumps to them. The full page on a wide screen shows the questions in a colum
 instead. Each open question is a card: the question, its context, the options as radio rows with
 AgentK's recommendation marked and picked to start with, **Custom answer**, and one text box: a
 note on the option picked (optional), or the answer itself with Custom answer (or when there are no
-options). Resolved questions collapse under **Decided** with their decision. **Other feedback**
+options). Resolved questions are listed under **Decided** as read-only cards with their decision,
+open when no question is left open, else collapsed. Past Design, an open question shows nothing
+picked and reads *Unanswered*, never the recommendation. **Other feedback**
 takes anything else about the design. Question text renders as plain text, never HTML.
 
-Answers aren't stored on the server. The browser keeps them per session in localStorage
+Drafts aren't stored on the server. The browser keeps them per session in localStorage
 (`ak-design-answers:<session>`, `src/web/design-answers.ts`), in step across tabs, so a reload or
 the full page keeps them; their text boxes are reload-safe. An option is kept by label too: when
 a revision moves it, the pick follows it; when it's gone, the question starts over at the
@@ -630,14 +632,32 @@ the ⋯ sheet take you to the questions, and the approval goes from their footer
 answers**. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
 recommendation (its own judgment when it has none). **Send for revision** sends them as the `design-answers` prompt instead, and AgentK
-revises the design and marks each answered question resolved. Without AgentK's mod it only works
+revises the design. Without AgentK's mod it only works
 while Claude is at its prompt (between turns, or with the design waiting for approval, never over a
 permission or question prompt); otherwise the button says why, and nothing is queued. With the mod
 both work mid-turn: see [Answers and approvals mid-turn](#agentks-mod-in-claude). The server checks the
 answers against the current questions: one to a question no longer open, or whose option's label
 changed, is refused (409) so the user looks again; answers too long for one prompt (50,000
-characters) are refused too. After either goes out, the browser forgets the drafts (an approval queued for the turn's end keeps
-them, in case it's dropped). Answers reach
+characters) are refused too.
+
+Once the answers have gone to Claude, the server records them in `questions.json`
+(`DesignQuestionStore.record`): each answered question is resolved, with the answer as its decision
+(the option's label, then ` — ` and the note if there is one, or the custom answer). An approval
+also resolves every other open question, as *Left to AgentK: <recommended option>* (or *Left to
+AgentK* without one), since nothing revisits the questions after it. The file is written the same
+way as the tool's (temp file, then rename), the kept questions are replaced, and the design's time
+moves on so every browser shows them; this isn't a change AgentK made in its turn, so it neither
+drops a queued approval nor marks the design ready. Before recording answers to revise the design,
+the server reads the file again, so a change AgentK made mid-turn counts as its own and the answers
+go on top of it. The `design-answers` prompt tells Claude they're already resolved, to keep them so
+(it may reword a decision). A markdown design's questions are only written with the approval: until
+then AgentK revises its "Open questions" list, which a questions file would hide. Nothing is
+recorded when the send fails, and a file that can't be written is logged (the answers went).
+
+After an approval goes out, the browser forgets the drafts (an approval queued for the turn's end
+keeps them, in case it's dropped). After a revision it forgets the feedback and keeps the answers
+until their questions are no longer open, so they still show until the questions come back
+resolved, and for a markdown design's questions until AgentK changes them. Answers reach
 Meko in the revised design and the session's conversation.
 
 ### Side panels

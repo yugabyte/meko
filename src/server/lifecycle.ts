@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
-import { designAnswers } from './answers.js';
+import { designAnswers, type CheckedAnswers } from './answers.js';
 import { artifactUrlIn, checkToolQuestions, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
@@ -13,7 +13,7 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
+import { KIND_LABELS, STAGE_LABELS, type DesignAnswerInput, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
@@ -106,7 +106,7 @@ export class Lifecycle {
    * Approvals given while AgentK was busy (with the mod live), waiting for the turn to end: the
    * user's answers to the design's questions, or null. In memory only, like the answers.
    */
-  private queuedApprovals = new Map<string, { text: string; count: string } | null>();
+  private queuedApprovals = new Map<string, CheckedAnswers | null>();
   /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
   private closing = new Set<string>();
   /** Sessions with a Merge request in flight. */
@@ -353,7 +353,7 @@ export class Lifecycle {
   }
 
   /** Moves the session to Code and sends Claude the approval, with the user's answers ahead of it. */
-  private async sendApproval(id: string, answers: { text: string; count: string } | null): Promise<void> {
+  private async sendApproval(id: string, answers: CheckedAnswers | null): Promise<void> {
     this.designApproved(id, 'you');
     try {
       const cur = this.sessions.row(id);
@@ -364,6 +364,26 @@ export class Lifecycle {
       if (this.sessions.row(id).stage === 'code') this.sessions.setStage(id, 'design', 'auto');
       throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
     }
+    this.recordAnswers(id, answers?.answers ?? [], true);
+  }
+
+  /**
+   * Once the user's answers have gone to Claude, marks the questions they answered resolved, with
+   * their answers (`all`: every open one, see DesignQuestionStore.record), so the Questions tab
+   * shows what they sent. The design's time moves on so the browser fetches them again. It isn't a
+   * change AgentK made in its turn. A file that can't be written is logged: the answers went.
+   */
+  private recordAnswers(id: string, answers: DesignAnswerInput[], all: boolean): void {
+    const row = sessionRow(this.db, id);
+    if (!row) return;
+    try {
+      if (!this.core.questions.record(row, answers, all)) return;
+    } catch (e) {
+      this.warn(id, `Recording the user's answers in the design's questions (${this.sessions.questionsFile(row)})`, e);
+      return;
+    }
+    run(this.db, 'UPDATE designs SET updated_at = ? WHERE session_id = ?', Date.now(), id);
+    this.core.changed();
   }
 
   /** True while an approval waits for the session's turn to end. */
@@ -439,6 +459,10 @@ export class Lifecycle {
       throw new HttpError(502, `Couldn't send your answers to Claude: ${errMsg(e)}. Try again.`);
     }
     this.sessions.event(row.id, 'design', `Sent ${answers.count} to AgentK`);
+    // Mid-turn, AgentK may have changed the questions already: read them first, so that counts as
+    // its change and the answers go on top of it.
+    this.collectQuestions(row);
+    this.recordAnswers(row.id, answers.answers, false);
   }
 
   designApproved(id: string, by: 'you' | 'auto'): void {

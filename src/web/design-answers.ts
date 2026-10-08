@@ -154,6 +154,35 @@ export function draftFor(q: DesignQuestion, d: Draft | undefined): Draft {
 }
 
 /**
+ * A question's answer as shown, `answerable` or not (past Design, the session archived): there,
+ * a question with no answer from this browser shows nothing picked, never the recommendation,
+ * which would look like the user's answer.
+ */
+export function shownDraft(q: DesignQuestion, d: Draft | undefined, answerable: boolean): Draft {
+  return answerable || d || !q.options.length ? draftFor(q, d) : { choice: null, label: null, custom: false, text: '' };
+}
+
+/**
+ * The drafts without the answers to questions that are no longer open (AgentK Local resolved
+ * them as they were sent, or AgentK did), or null when there are none to drop.
+ */
+export function pruneDrafts(questions: DesignQuestion[], drafts: Drafts): Drafts | null {
+  const open = new Set(questions.filter((q) => q.status === 'open').map((q) => q.id));
+  const ids = Object.keys(drafts.answers);
+  if (ids.every((id) => open.has(id))) return null;
+  return { ...drafts, answers: Object.fromEntries(ids.filter((id) => open.has(id)).map((id) => [id, drafts.answers[id]])) };
+}
+
+/**
+ * After answers went to AgentK to revise the design: the feedback is forgotten, and the answers
+ * are kept until their questions are no longer open (`pruneDrafts`), so they show until the
+ * questions come back resolved, and stay for questions that aren't (a markdown design's).
+ */
+export function revisionSent(sessionId: string): void {
+  saveDrafts(sessionId, { answers: loadDrafts(sessionId).answers, feedback: '' });
+}
+
+/**
  * The request for the open questions: the option picked (with any note) or the custom answer.
  * A question with nothing picked, or a custom answer left empty, is left out (unanswered).
  */
