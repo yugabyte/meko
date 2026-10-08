@@ -1991,6 +1991,7 @@ impl Timeline {
                     backpressure_bytes: pw_cfg.backpressure_bytes,
                     ingest_parallelism: pw_cfg.ingest_parallelism,
                     ingest_parallelism_min_batch: pw_cfg.ingest_parallelism_min_batch,
+                    release_backpressure_per_chunk: pw_cfg.release_backpressure_per_chunk,
                 },
                 pw_cfg.read_cache_bytes,
                 pw_cfg.meta_cache_entries,

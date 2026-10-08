@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use hashlink::LruCache;
@@ -66,6 +66,8 @@ pub struct FlushPolicy {
     /// Minimum batch size (entries) before parallel apply kicks in. See
     /// `YbPageWriterConfig::ingest_parallelism_min_batch`.
     pub ingest_parallelism_min_batch: usize,
+    /// See `YbPageWriterConfig::release_backpressure_per_chunk`.
+    pub release_backpressure_per_chunk: bool,
 }
 
 impl Default for FlushPolicy {
@@ -76,6 +78,7 @@ impl Default for FlushPolicy {
             backpressure_bytes: 25 * 1024 * 1024,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
+            release_backpressure_per_chunk: true,
         }
     }
 }
@@ -351,12 +354,19 @@ pub struct PageWriter {
     /// two flushes overlap, the second's count was computed against a
     /// buffer the first already drained, so its `drain` removes fresh
     /// rows that were never written to YB — a silent SLRU/meta loss.
-    /// (Rel rows are immune: they drain by entry identity via
-    /// `mark_flushed`, not by count.) Holding this across the entire
+    /// The rel FIFO drains the same way: `mark_flushed` drops the front
+    /// entries its snapshot claimed, by count, and `FlushClaim` hands
+    /// every claim back on failure. Holding this across the entire
     /// flush makes snapshot+drain atomic with respect to other
     /// flushes. `put()` never takes it, so ingest is not serialized
     /// against flush.
     flush_serialize: tokio::sync::Mutex<()>,
+    /// Rel bytes of the in-flight flush whose chunk has landed in YB; they
+    /// still count in `pages.unflushed_bytes()` until the flush marks them
+    /// (a row an image promoted mid-flush already left it, so the discount
+    /// can run ahead by that row until the mark). `await_backpressure`
+    /// discounts them when `policy.release_backpressure_per_chunk` is set.
+    landed_unmarked_bytes: AtomicUsize,
     /// In-process LRU cache for `amp_storage.meta` point reads, keyed by
     /// raw key bytes. `None` when disabled.
     ///
@@ -380,6 +390,9 @@ pub struct PageWriter {
     meta_cache: Option<PlMutex<LruCache<Bytes, MetaRow>>>,
     #[cfg(test)]
     scan_pause: PlMutex<Option<Arc<ScanPause>>>,
+    /// Test hook: the next flush fails once its rel rows have landed.
+    #[cfg(test)]
+    fail_write_after_rel: std::sync::atomic::AtomicBool,
 }
 
 /// Test hook: holds a multi-block scan between its cache read and its YB read.
@@ -388,6 +401,49 @@ pub struct PageWriter {
 struct ScanPause {
     reached: tokio::sync::Notify,
     resume: tokio::sync::Notify,
+}
+
+/// A flush's claim on the unflushed rows, from its snapshot until its mark.
+/// Settled unmarked — the write failed, or the `flush()` future was dropped
+/// mid-way — it hands the claimed rows back for the next flush and stops
+/// discounting their landed bytes. It is dropped before `flush_serialize`'s
+/// guard, so no other snapshot can interleave.
+struct FlushClaim<'a> {
+    writer: &'a PageWriter,
+    /// Rel bytes of this flush whose chunk has landed.
+    landed: AtomicUsize,
+    settled: bool,
+}
+
+impl FlushClaim<'_> {
+    /// `marked`: the rows were marked durable, which already took them out of
+    /// `unflushed_bytes`. Otherwise they go back to the unclaimed FIFO.
+    fn settle(&mut self, marked: bool) {
+        if self.settled {
+            return;
+        }
+        self.settled = true;
+        let w = self.writer;
+        if !marked {
+            w.pages.release_claims();
+        }
+        let landed = self.landed.load(Ordering::Relaxed);
+        let _ = w
+            .landed_unmarked_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(landed))
+            });
+        if !marked {
+            // The released rows count against backpressure again.
+            w.flush_completed.notify_waiters();
+        }
+    }
+}
+
+impl Drop for FlushClaim<'_> {
+    fn drop(&mut self) {
+        self.settle(false);
+    }
 }
 
 /// Non-rel flush buffers, kept under a small `parking_lot::Mutex`.
@@ -465,10 +521,13 @@ impl PageWriter {
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
             flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
             flush_serialize: tokio::sync::Mutex::new(()),
+            landed_unmarked_bytes: AtomicUsize::new(0),
             meta_cache: (meta_cache_entries > 0)
                 .then(|| PlMutex::new(LruCache::new(meta_cache_entries))),
             #[cfg(test)]
             scan_pause: PlMutex::new(None),
+            #[cfg(test)]
+            fail_write_after_rel: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -824,8 +883,18 @@ impl PageWriter {
                 tokio::pin!(notified);
                 notified.as_mut().enable();
 
-                let pending = self.pages.unflushed_bytes() + self.aux.lock().bytes_in_aux_buffers;
-                if pending < self.policy.backpressure_bytes {
+                // Rows whose chunk already landed in YB don't count: they
+                // only wait for their flush to mark them (zero unless
+                // `release_backpressure_per_chunk`). They still hold memory,
+                // and a flush that fails after landing them hands them back to
+                // be written again, so each failed retry could admit another
+                // cap's worth: the undiscounted total stops ingest at twice
+                // the cap, which a flush that succeeds never reaches.
+                let cap = self.policy.backpressure_bytes;
+                let held = self.pages.unflushed_bytes() + self.aux.lock().bytes_in_aux_buffers;
+                let pending =
+                    held.saturating_sub(self.landed_unmarked_bytes.load(Ordering::Relaxed));
+                if pending < cap && held < cap.saturating_mul(2) {
                     break;
                 }
                 if !waited {
@@ -1663,15 +1732,40 @@ impl PageWriter {
             // wind down — the residue would only get re-examined on
             // a flush that has rows, which never comes once compute
             // is idle.
+            //
+            // The snapshot may still have claimed slots an image already
+            // promoted; marking it drains them.
+            self.pages.mark_flushed(&rel_snapshot);
             let to_dispatch = self.collect_cold_residue_jobs();
             self.dispatch_materialize_jobs(to_dispatch).await;
             return Ok(());
         }
+        let mut claim = FlushClaim {
+            writer: self,
+            landed: AtomicUsize::new(0),
+            settled: false,
+        };
 
         // INSERT to YB outside any lock so concurrent puts and reads
-        // aren't blocked by the round-trip.
+        // aren't blocked by the round-trip. With
+        // `release_backpressure_per_chunk`, each landed chunk stops counting
+        // against `backpressure_bytes` now rather than at the mark.
+        let release_per_chunk = self.policy.release_backpressure_per_chunk;
+        let landed = |chunk: &[Arc<PageRow>]| {
+            if !release_per_chunk {
+                return;
+            }
+            let bytes: usize = chunk
+                .iter()
+                .map(|r| crate::unified_pages::row_size(r))
+                .sum();
+            claim.landed.fetch_add(bytes, Ordering::Relaxed);
+            self.landed_unmarked_bytes
+                .fetch_add(bytes, Ordering::Relaxed);
+            self.flush_completed.notify_waiters();
+        };
         let res = self
-            .try_write_rows(&rel_rows, &slru_rows, &meta_rows, &pending_gc_rows)
+            .try_write_rows(&rel_rows, &slru_rows, &meta_rows, &pending_gc_rows, &landed)
             .await;
 
         if res.is_ok() {
@@ -1693,11 +1787,13 @@ impl PageWriter {
             // lsn X while missing a concurrently-put row at lsn < X,
             // so max(snapshot) is not a durability frontier.
             // Promote rel rows in-place: flip durable on the exact
-            // `Arc<PageEntry>`s we captured in the snapshot. No
-            // by-(key, lsn) lookup, so a materialiser race that
-            // overwrote a same-LSN slot can't make us over-pop the
-            // FIFO and steal a fresh row from the next batch.
+            // `Arc<PageEntry>`s we captured in the snapshot, so a slot a
+            // materialiser image overwrote at the same LSN is never
+            // confused with a fresh row. The FIFO drains the front
+            // entries this snapshot claimed, which `flush_serialize`
+            // keeps exact.
             self.pages.mark_flushed(&rel_snapshot);
+            claim.settle(true);
             self.pages.evict_to_capacity();
             // Advance the materialiser's safe-to-read-from-YB watermark
             // to the ingest frontier. Until this point, YB contained a
@@ -1945,6 +2041,9 @@ impl PageWriter {
         // On error, leave buffers untouched — next periodic flush retries.
         // With `yb_enable_upsert_mode=true` (set per-connection in
         // YsqlClient), partial-chunk-success retries don't PK-conflict.
+        if res.is_err() {
+            claim.settle(false);
+        }
         res
     }
 
@@ -1954,13 +2053,21 @@ impl PageWriter {
         slru_rows: &[SlruPageRow],
         meta_rows: &[MetaRow],
         pending_gc_rows: &[PendingGcRow],
+        rel_landed: &(dyn Fn(&[Arc<PageRow>]) + Send + Sync),
     ) -> Result<()> {
         // All flush writes go via the internal conn. Compute getPage
         // never queues behind a 12 MiB INSERT.
         if !rel_rows.is_empty() {
             self.hot_path_page_store
-                .put_pages(self.branch_id, rel_rows)
+                .put_pages_reporting(self.branch_id, rel_rows, rel_landed)
                 .await?;
+        }
+        #[cfg(test)]
+        if self
+            .fail_write_after_rel
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            anyhow::bail!("injected write failure after the rel rows landed");
         }
         if !slru_rows.is_empty() {
             self.hot_path_page_store
@@ -3236,6 +3343,200 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// Two concurrent `flush()` calls with a put between them: each drains
+    /// only the SLRU/meta rows it wrote, so none is dropped. Multi-threaded,
+    /// so the spawned flush runs alongside the second put.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_flushes_lose_no_aux_rows() {
+        let (store, schema) = make_store("concurrent_aux").await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        let w = Arc::new(w);
+        let meta_key = |n: u32| Key {
+            field1: 0x60,
+            field2: n,
+            field3: 0,
+            field4: 0,
+            field5: 0,
+            field6: 0,
+        };
+        let slru_key = |blk: u32| {
+            pageserver_api::key::slru_block_to_key(pageserver_api::reltag::SlruKind::Clog, 7, blk)
+        };
+        w.put(&[
+            (k(1), Lsn(10), image()),
+            (slru_key(1), Lsn(10), image()),
+            (meta_key(1), Lsn(10), image()),
+        ])
+        .await
+        .unwrap();
+        let first = {
+            let w = Arc::clone(&w);
+            tokio::spawn(async move { w.flush().await })
+        };
+        w.put(&[
+            (k(2), Lsn(20), image()),
+            (slru_key(2), Lsn(20), image()),
+            (meta_key(2), Lsn(20), image()),
+        ])
+        .await
+        .unwrap();
+        let second = w.flush();
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap().unwrap();
+        second.unwrap();
+
+        let stats = w.stats().await;
+        assert_eq!(stats.buffered_rows, 0);
+        assert_eq!(stats.buffered_slru_rows, 0);
+        assert_eq!(stats.buffered_meta_rows, 0);
+        for n in [1, 2] {
+            let mut kb = vec![0u8; pageserver_api::key::KEY_SIZE];
+            meta_key(n).write_to_byte_slice(&mut kb);
+            let got = store.read_meta(t, &kb, Lsn(100)).await.unwrap();
+            assert!(got.is_some(), "meta row {n} reached YB");
+        }
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A `flush()` dropped mid-way (a caller's timeout) must hand its claimed
+    /// rows back: the next flush completes and writes everything.
+    #[tokio::test]
+    async fn cancelled_flush_does_not_strand_its_rows() {
+        let (store, schema) = make_store("cancelled_flush").await;
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
+        // Cut flushes short at a spread of points: waiting for the lock,
+        // during the write, after the mark.
+        for (i, micros) in [1u64, 50, 500, 5_000, 50_000].into_iter().enumerate() {
+            let lsn = Lsn(10 * (i as u64 + 1));
+            w.put(&[(k(i as u32 + 1), lsn, image())]).await.unwrap();
+            let _ = tokio::time::timeout(Duration::from_micros(micros), w.flush()).await;
+        }
+        tokio::time::timeout(Duration::from_secs(60), w.flush())
+            .await
+            .expect("flush after a cancelled one hung")
+            .unwrap();
+        assert_eq!(
+            w.stats().await.buffered_rows,
+            0,
+            "every claimed row was rewritten"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A flush whose write fails after its rel chunks landed hands every row
+    /// back, counted against backpressure again, and the next flush writes
+    /// the rel, SLRU and meta rows.
+    #[tokio::test]
+    async fn failed_flush_hands_its_rows_back() {
+        let (store, schema) = make_store("failed_flush").await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        let meta_key = Key {
+            field1: 0x60,
+            field2: 1,
+            field3: 0,
+            field4: 0,
+            field5: 0,
+            field6: 0,
+        };
+        let slru_key =
+            pageserver_api::key::slru_block_to_key(pageserver_api::reltag::SlruKind::Clog, 7, 1);
+        w.put(&[
+            (k(1), Lsn(10), image()),
+            (k(2), Lsn(10), image()),
+            (slru_key, Lsn(10), image()),
+            (meta_key, Lsn(10), image()),
+        ])
+        .await
+        .unwrap();
+        let unflushed = w.pages.unflushed_bytes();
+        let rel_key = |n: u32| {
+            let mut kb = vec![0u8; pageserver_api::key::KEY_SIZE];
+            k(n).write_to_byte_slice(&mut kb);
+            kb
+        };
+
+        w.fail_write_after_rel.store(true, Ordering::Relaxed);
+        w.flush().await.expect_err("injected write failure");
+        assert!(
+            !store
+                .read_chain(t, &rel_key(1), Lsn(100))
+                .await
+                .unwrap()
+                .is_empty(),
+            "the rel rows landed before the failure"
+        );
+        let stats = w.stats().await;
+        assert_eq!(stats.buffered_rows, 2, "rel rows handed back");
+        assert_eq!(stats.buffered_slru_rows, 1);
+        assert_eq!(stats.buffered_meta_rows, 1);
+        assert_eq!(w.pages.unflushed_bytes(), unflushed);
+        assert_eq!(
+            w.landed_unmarked_bytes.load(Ordering::Relaxed),
+            0,
+            "the landed rel rows count against backpressure again"
+        );
+
+        w.flush().await.unwrap();
+        let stats = w.stats().await;
+        assert_eq!(stats.buffered_rows, 0);
+        assert_eq!(stats.buffered_slru_rows, 0);
+        assert_eq!(stats.buffered_meta_rows, 0);
+        for n in [1, 2] {
+            let got = store.read_chain(t, &rel_key(n), Lsn(100)).await.unwrap();
+            assert_eq!(got.len(), 1, "rel row {n} in YB");
+        }
+        let mut kb = vec![0u8; pageserver_api::key::KEY_SIZE];
+        meta_key.write_to_byte_slice(&mut kb);
+        assert!(store.read_meta(t, &kb, Lsn(100)).await.unwrap().is_some());
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Landed rows stop counting against `backpressure_bytes`, but `put`
+    /// still blocks once the buffer holds twice the cap, however much of it
+    /// has landed: a run of failing flushes can't grow it without bound.
+    #[tokio::test]
+    async fn backpressure_stops_at_twice_the_cap() {
+        let (store, schema) = make_store("bp_ceiling").await;
+        let cap = 1000;
+        let policy = FlushPolicy {
+            backpressure_bytes: cap,
+            ..FlushPolicy::default()
+        };
+        let (w, _t) = writer(store.clone(), policy);
+        // `Err` when the put is still blocked in backpressure.
+        let put = |n: u32| {
+            let w = &w;
+            async move {
+                let rows = [(k(n), Lsn(10), image())];
+                tokio::time::timeout(Duration::from_millis(500), w.put(&rows))
+                    .await
+                    .map(|r| r.unwrap())
+            }
+        };
+
+        let mut n = 0;
+        while w.pages.unflushed_bytes() < cap {
+            n += 1;
+            put(n).await.expect("below the cap");
+        }
+        n += 1;
+        assert!(put(n).await.is_err(), "blocks at the cap");
+
+        // As if a flush had landed every buffered row and not yet marked them.
+        w.landed_unmarked_bytes
+            .store(w.pages.unflushed_bytes(), Ordering::Relaxed);
+        while w.pages.unflushed_bytes() < 2 * cap {
+            put(n).await.expect("landed rows don't count");
+            n += 1;
+        }
+        assert!(put(n).await.is_err(), "blocks at twice the cap");
+
+        w.landed_unmarked_bytes.store(0, Ordering::Relaxed);
+        w.flush().await.unwrap();
+        put(n).await.expect("the flush drained the buffer");
+        drop_schema(&store, &schema).await;
+    }
+
     #[tokio::test]
     async fn flush_emits_a_single_insert_round_trip() {
         let (store, schema) = make_store("flush_one_rt").await;
@@ -3264,6 +3565,7 @@ mod tests {
             backpressure_bytes: 0,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
+            ..FlushPolicy::default()
         };
         let (w, _t) = writer(store.clone(), policy);
         assert!(!w.should_flush().await);
@@ -3283,6 +3585,7 @@ mod tests {
             backpressure_bytes: 0,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
+            ..FlushPolicy::default()
         };
         let (w, _t) = writer(store.clone(), policy);
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -3402,6 +3705,7 @@ mod tests {
             backpressure_bytes: 0,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
+            ..FlushPolicy::default()
         };
         let (w, _t) = writer(store.clone(), policy);
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -3485,6 +3789,7 @@ mod tests {
             backpressure_bytes: 0,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
+            ..FlushPolicy::default()
         };
         let w = Arc::new(PageWriter::new(
             t,
@@ -3536,6 +3841,7 @@ mod tests {
             backpressure_bytes: 0,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
+            ..FlushPolicy::default()
         };
         let w = Arc::new(PageWriter::new(
             t,

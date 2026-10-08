@@ -38,7 +38,7 @@
 //! watermark. Reads check anchor presence; if the key is in the
 //! cache, every row for it that we ever cached is here too.
 //!
-//! Keys with `unflushed_count > 0` are **pinned**: they hold rows
+//! Keys with any non-durable row are **pinned**: they hold rows
 //! that haven't been INSERTed to YB yet and are the only copy that
 //! exists, so dropping them would lose accepted WAL. Eviction skips
 //! pinned keys (and on skip moves them to the back so the next
@@ -47,9 +47,11 @@
 //! ## Flush ordering
 //!
 //! Unflushed rows are visited in put-order so the YB flush is
-//! monotonic in LSN. We track this with a small auxiliary FIFO of
-//! `(key, lsn)` pairs (`unflushed_fifo`), kept in sync with
-//! `KeyState::unflushed_count` and the `PageEntry::durable` bits.
+//! monotonic in LSN. We track this with a FIFO of the unflushed
+//! `Arc<PageEntry>`s themselves (`unflushed_fifo`), so a flush snapshots
+//! and marks its rows without a map lookup or key lock per row. A
+//! snapshot *claims* a prefix of the FIFO; claims retire front-first, in
+//! the order they were taken ([`UnifiedPages::mark_flushed`]).
 //!
 //! ## Lookup
 //! - [`UnifiedPages::lookup_chain`] returns rows for `key` at `lsn ≤
@@ -69,7 +71,7 @@
 //! materialised image supersedes, under the same hold of the key's mutex
 //! that inserts the image.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -130,9 +132,6 @@ impl PageEntry {
 /// take `Entry::value().lock()` to read or mutate this struct.
 struct KeyState {
     chain: BTreeMap<Lsn, Arc<PageEntry>>,
-    /// Count of `PageEntry`s in `chain` with `durable == false`.
-    /// When > 0 the key is pinned and `evict_to_capacity` skips it.
-    unflushed_count: u32,
     /// Sum of `row_size(entry.row)` for every entry in `chain`.
     /// Tracked so eviction can subtract the right amount from
     /// `total_bytes` in one shot.
@@ -143,9 +142,40 @@ impl KeyState {
     fn new() -> Self {
         Self {
             chain: BTreeMap::new(),
-            unflushed_count: 0,
             bytes: 0,
         }
+    }
+
+    /// A key with any non-durable row holds the only copy of it, so
+    /// `evict_to_capacity` must skip it. Read from the `durable` bits rather
+    /// than a per-key count, so a flush can promote rows without taking this
+    /// key's lock. Unflushed rows are the newest, hence the reverse walk.
+    fn pinned(&self) -> bool {
+        self.chain.values().rev().any(|e| !e.is_durable())
+    }
+}
+
+/// The flush work list: unflushed entries in put order.
+#[derive(Default)]
+struct UnflushedFifo {
+    entries: VecDeque<Arc<PageEntry>>,
+    /// How many front entries in-flight snapshots have claimed.
+    claimed: usize,
+}
+
+/// One flush's claim on the FIFO, from [`UnifiedPages::snapshot_unflushed`].
+/// Derefs to the still-unflushed entries to write. `claimed` also counts the
+/// slots skipped because an image had already promoted them, so
+/// [`UnifiedPages::mark_flushed`] drains exactly what was claimed.
+pub(crate) struct FlushSnapshot {
+    entries: Vec<Arc<PageEntry>>,
+    claimed: usize,
+}
+
+impl std::ops::Deref for FlushSnapshot {
+    type Target = [Arc<PageEntry>];
+    fn deref(&self) -> &Self::Target {
+        &self.entries
     }
 }
 
@@ -161,12 +191,15 @@ pub struct UnifiedPages {
     /// `push*` / `evict_to_capacity` / `install_image_if_extends` touch this;
     /// reads do not. Holds are O(1).
     lru: Mutex<LinkedHashMap<Key, ()>>,
-    /// Insertion-ordered list of (key, lsn) pairs for unflushed
-    /// entries. Drives `snapshot_unflushed` + `mark_flushed`
-    /// so flushes hit YB in monotonic put-order.
-    unflushed_fifo: Mutex<VecDeque<(Key, Lsn)>>,
+    /// Unflushed entries in put order. Drives `snapshot_unflushed` +
+    /// `mark_flushed` so flushes hit YB in monotonic put-order. A slot an
+    /// image promoted stays here until a flush drains it; `unflushed_rows`
+    /// is the count that excludes it.
+    unflushed_fifo: Mutex<UnflushedFifo>,
     total_bytes: AtomicUsize,
     unflushed_bytes: AtomicUsize,
+    /// Non-durable rows: +1 per fresh unflushed push, −1 per promotion.
+    unflushed_rows: AtomicUsize,
     capacity_bytes: usize,
 }
 
@@ -175,9 +208,10 @@ impl UnifiedPages {
         Self {
             by_key: SkipMap::new(),
             lru: Mutex::new(LinkedHashMap::new()),
-            unflushed_fifo: Mutex::new(VecDeque::new()),
+            unflushed_fifo: Mutex::new(UnflushedFifo::default()),
             total_bytes: AtomicUsize::new(0),
             unflushed_bytes: AtomicUsize::new(0),
+            unflushed_rows: AtomicUsize::new(0),
             capacity_bytes: capacity_bytes.max(1),
         }
     }
@@ -191,7 +225,13 @@ impl UnifiedPages {
     }
 
     pub fn unflushed_count(&self) -> usize {
-        self.unflushed_fifo.lock().len()
+        self.unflushed_rows.load(Ordering::Relaxed)
+    }
+
+    /// FIFO slots, promoted ones included.
+    #[cfg(test)]
+    fn fifo_len(&self) -> usize {
+        self.unflushed_fifo.lock().entries.len()
     }
 
     /// Number of distinct keys tracked. Drives the
@@ -214,8 +254,8 @@ impl UnifiedPages {
     pub fn push(&self, row: PageRow) {
         let key = row.key;
         let lsn = row.lsn;
-        if self.insert_entry(key, lsn, row, false) {
-            self.unflushed_fifo.lock().push_back((key, lsn));
+        if let Some(entry) = self.insert_entry(key, lsn, row, false) {
+            self.unflushed_fifo.lock().entries.push_back(entry);
         }
     }
 
@@ -236,87 +276,60 @@ impl UnifiedPages {
         self.insert_arc_entry(key, lsn, row, true);
     }
 
-    /// Mark each entry in the snapshot durable. The snapshot holds an
-    /// `Arc<PageEntry>` per row, so we flip the bit on the very same
-    /// entry the caller flushed to YB.
-    /// If the cache slot was concurrently overwritten
-    /// (materialiser raced an image into the same LSN) the old entry's
-    /// `durable` bit was already flipped to `true` by `insert_entry`;
-    /// our CAS observes `Err(true)` and we skip without touching the
-    /// counters (insert_entry already adjusted them).
-    pub(crate) fn mark_flushed(&self, snapshot: &[Arc<PageEntry>]) {
-        // The (key, lsn) pairs we promote to durable here, so we can drop
-        // their FIFO refs in one front-bounded pass at the end (below)
-        // instead of a full-FIFO scan per flush.
-        let mut promoted: HashSet<(Key, Lsn)> = HashSet::new();
-
-        for entry in snapshot {
+    /// Mark a written snapshot durable and drain its claim from the FIFO.
+    /// The bit is flipped on the very `Arc<PageEntry>` the caller wrote, so a
+    /// slot an image overwrote meanwhile is never confused with a fresh row
+    /// at the same `(key, lsn)`.
+    ///
+    /// Claims must retire in the order they were taken: this one is the
+    /// FIFO's front `claimed` entries, since only pushes (at the back) touch
+    /// the FIFO between snapshot and mark.
+    ///
+    /// `try_promote` is the single owner of each entry's subtract: it
+    /// CAS-claims `durable` false→true, and the overwrite paths
+    /// (`insert_arc_entry`, `install_image_if_extends`) claim the same CAS
+    /// before removing an overwritten slot's bytes, so the accounting is
+    /// exactly balanced. The subtract still saturates: an underflow would wrap
+    /// `unflushed_bytes` to ~2^64 and pin `PageWriter::put` backpressure
+    /// forever (#142).
+    pub(crate) fn mark_flushed(&self, snapshot: &FlushSnapshot) {
+        let mut bytes = 0usize;
+        let mut rows = 0usize;
+        for entry in &snapshot.entries {
             if !entry.try_promote() {
-                continue; // insert_entry already claimed this entry.
+                continue; // an image overwrite already promoted it.
             }
             pageserver_api::write_trace::trace_stage("durable", &entry.row.key, entry.row.lsn);
-            let size = row_size(&entry.row);
-            // `try_promote` above is the single owner of this entry's
-            // subtract: it CAS-claims `durable` false→true, and the overwrite
-            // paths (`insert_arc_entry`, `install_image_anchor`) claim the same
-            // CAS before removing an overwritten slot's bytes — so the byte
-            // accounting is now exactly balanced (no double subtract).
-            // The subtract stays saturating purely as defensive depth: a stray
-            // underflow here wraps `usize` to ~2^64, which pins
-            // `PageWriter::put` backpressure forever and deadlocks ingest →
-            // the recovering compute's basebackup `wait_lsn` never completes
-            // (#142). The counter is only a flush/backpressure heuristic
-            // (durability rides the `unflushed_fifo` + `durable` bits), so
-            // clamping at 0 is always safe; `unflushed_count` below saturates
-            // for the same reason.
-            let _ = self
-                .unflushed_bytes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                    Some(v.saturating_sub(size))
-                });
-            if let Some(node) = self.by_key.get(&entry.row.key) {
-                let mut ks = node.value().lock();
-                ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
-            }
-            promoted.insert((entry.row.key, entry.row.lsn));
+            bytes += row_size(&entry.row);
+            rows += 1;
         }
+        let _ = self
+            .unflushed_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(bytes))
+            });
+        let _ = self
+            .unflushed_rows
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(rows))
+            });
+        let mut fifo = self.unflushed_fifo.lock();
+        let n = snapshot.claimed.min(fifo.claimed);
+        fifo.entries.drain(..n);
+        fifo.claimed -= n;
+    }
 
-        if !promoted.is_empty() {
-            // The promoted pairs were snapshotted from the FRONT of the FIFO
-            // (`snapshot_unflushed`) and flush is serialized, so they live in
-            // the FIFO's front region: anything pushed since is appended
-            // behind them, and any slot overwritten meanwhile had its FIFO ref
-            // dropped on the overwrite path (and fails `try_promote` above, so
-            // it is not in `promoted`). Walk from the front, dropping promoted
-            // pairs and preserving the rare non-promoted ones (a #57 anomaly),
-            // and stop as soon as every promoted pair is gone. That makes this
-            // O(flush batch) rather than the old O(fifo len) `retain` full
-            // scan — under a large backlog that scan ran once per flush, i.e.
-            // O(n²), pegging one core in `retain` while getpage/WAL-apply
-            // queued behind the flusher.
-            let mut fifo = self.unflushed_fifo.lock();
-            let mut keep_front: Vec<(Key, Lsn)> = Vec::new();
-            while !promoted.is_empty() {
-                match fifo.pop_front() {
-                    None => break, // invariant slip: phantom promoted pair — safe, just stop.
-                    Some(pair) => {
-                        if !promoted.remove(&pair) {
-                            keep_front.push(pair);
-                        }
-                    }
-                }
-            }
-            // Restore the preserved front entries in their original order.
-            for pair in keep_front.into_iter().rev() {
-                fifo.push_front(pair);
-            }
-        }
+    /// Return every claimed entry to the unclaimed part of the FIFO, so the
+    /// next snapshot takes them again. Only once no snapshot is in flight:
+    /// a flush failed, and the rows it claimed are not durable.
+    pub(crate) fn release_claims(&self) {
+        self.unflushed_fifo.lock().claimed = 0;
     }
 
     /// Drop whole keys from the front of the LRU until `total_bytes
     /// <= capacity_bytes`. Bounded by a 2 ms wall-clock budget so a
     /// big cap overshoot doesn't starve the writer lock. Pinned keys
-    /// (`unflushed_count > 0`) are moved to the back so subsequent
+    /// (any non-durable row) are moved to the back so subsequent
     /// calls aren't blocked by them.
     pub fn evict_to_capacity(&self) {
         const TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
@@ -342,15 +355,15 @@ impl UnifiedPages {
 
             // Check pinned + remove if evictable, holding the key's
             // own mutex across the decision so a concurrent `push` onto
-            // this node either lands before the removal (bumping
-            // `unflushed_count`, which pins it) or retries onto a fresh
+            // this node either lands before the removal (adding a
+            // non-durable row, which pins it) or retries onto a fresh
             // node after seeing `is_removed`. Removing the node *under*
             // its mutex is the rule the whole map relies on.
             let removed = match self.by_key.get(&candidate) {
                 None => Some(0),
                 Some(node) => {
                     let ks = node.value().lock();
-                    if ks.unflushed_count > 0 {
+                    if ks.pinned() {
                         // Pinned — leave in the map; we'll rotate
                         // the LRU below.
                         drop(ks);
@@ -500,7 +513,6 @@ impl UnifiedPages {
                     total_sub += prev;
                     if overwrote_unflushed {
                         unflushed_sub = prev;
-                        ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
                     }
                     o.insert(PageEntry::from_arc_row(image, true));
                 }
@@ -519,6 +531,9 @@ impl UnifiedPages {
             self.unflushed_bytes
                 .fetch_sub(unflushed_sub, Ordering::Relaxed);
         }
+        if overwrote_unflushed {
+            self.unflushed_rows.fetch_sub(1, Ordering::Relaxed);
+        }
 
         // Bump the (present) key to the back of the LRU — most recently
         // used. Lock order: node mutex (released above) → LRU, never
@@ -530,14 +545,8 @@ impl UnifiedPages {
             }
         }
 
-        // Drop the now-stale FIFO entry the overwritten re-push left behind
-        // (the slot is durable now), mirroring `insert_arc_entry`.
-        if overwrote_unflushed {
-            let mut fifo = self.unflushed_fifo.lock();
-            if let Some(pos) = fifo.iter().position(|(k, l)| *l == lsn && k == &key) {
-                fifo.remove(pos);
-            }
-        }
+        // The overwritten slot stays in the FIFO, promoted: the next
+        // snapshot skips it and its mark drains it.
         true
     }
 
@@ -700,84 +709,91 @@ impl UnifiedPages {
         out
     }
 
-    /// Take a snapshot of up to `max` (or all) unflushed entries in
-    /// insertion order. Caller (`flush`) uses this to drive the YB
-    /// INSERT without holding any per-shard or per-key lock for the
-    /// duration of the round-trip. Each entry is returned as an
-    /// `Arc<PageEntry>` shared with the cache slot, so the matching
-    /// `mark_flushed` call flips `durable` on the exact entry the
-    /// caller wrote — no `(key, lsn)` lookup, no risk of the FIFO
-    /// pointing at a stale slot.
-    pub(crate) fn snapshot_unflushed(&self, max: Option<usize>) -> Vec<Arc<PageEntry>> {
-        // Clone the FIFO order so we can release the lock before
-        // walking it. The FIFO is small (one entry per unflushed
-        // row), and snapshot is called once per flush — cheap.
-        let pairs: Vec<(Key, Lsn)> = {
-            let fifo = self.unflushed_fifo.lock();
-            let cap = max.unwrap_or(fifo.len()).min(fifo.len());
-            fifo.iter().take(cap).cloned().collect()
+    /// Claim up to `max` (or all) of the not-yet-claimed unflushed entries,
+    /// in insertion order, for one flush. The caller (`flush`) drives the YB
+    /// INSERT from them without holding any per-shard or per-key lock, and
+    /// hands the snapshot back to `mark_flushed`, which flips `durable` on
+    /// the exact entries written. The FIFO holds the entries themselves, so
+    /// this costs one refcount bump per row: no map lookup, no key lock.
+    /// Slots an image already promoted are claimed but not returned.
+    pub(crate) fn snapshot_unflushed(&self, max: Option<usize>) -> FlushSnapshot {
+        let claimed: Vec<Arc<PageEntry>> = {
+            let mut fifo = self.unflushed_fifo.lock();
+            let start = fifo.claimed;
+            let end = max.map_or(fifo.entries.len(), |m| {
+                start.saturating_add(m).min(fifo.entries.len())
+            });
+            fifo.claimed = end;
+            fifo.entries.range(start..end).cloned().collect()
         };
-        let mut out = Vec::with_capacity(pairs.len());
-        for (key, lsn) in &pairs {
-            // #57 probe: every FIFO pair MUST resolve to a live,
-            // non-durable slot. `flush_serialize` means no concurrent
-            // flush/`mark_flushed`, and an unflushed entry pins its key
-            // against eviction/trim — so a missing slot, a missing key,
-            // or an already-durable slot means an unflushed row is about
-            // to be DROPPED from this flush (it won't be written, but its
-            // record advanced `ingest_frontier`) → durable write loss.
-            let anomaly: Option<&'static str> = match self.by_key.get(key) {
-                None => Some("key-gone"),
-                Some(node) => match node.value().lock().chain.get(lsn) {
-                    None => Some("slot-gone"),
-                    Some(entry) if entry.is_durable() => Some("already-durable"),
-                    Some(entry) => {
-                        out.push(Arc::clone(entry));
-                        None
-                    }
-                },
-            };
-            // Diagnostics only — debug builds (integration). Zero release cost;
-            // the functional skip above is identical in both profiles.
-            if cfg!(debug_assertions)
-                && let Some(why) = anomaly
-            {
-                crate::metrics::CORRECTNESS_ERRORS
-                    .with_label_values(&["snapshot_fifo_orphan"])
-                    .inc();
-                let mut kb = [0u8; KEY_SIZE];
-                key.write_to_byte_slice(&mut kb);
-                let prefix: String = kb.iter().map(|b| format!("{b:02x}")).collect();
-                tracing::error!(
-                    key = %prefix,
-                    %lsn,
-                    why,
-                    "snapshot_unflushed: FIFO entry has no flushable unflushed slot \
-                     — pending write will be dropped from this flush (#57)"
-                );
+        let n = claimed.len();
+        let entries: Vec<Arc<PageEntry>> =
+            claimed.into_iter().filter(|e| !e.is_durable()).collect();
+        // #57 probe, debug builds (integration) only: an unflushed entry must
+        // still be its key's live slot. A missing one means something dropped
+        // a row nobody has written yet. It is still written here (the entry is
+        // in hand), so this reports the anomaly rather than a loss.
+        if cfg!(debug_assertions) {
+            for entry in &entries {
+                let (key, lsn) = (&entry.row.key, entry.row.lsn);
+                let why = match self.by_key.get(key) {
+                    None => Some("key-gone"),
+                    Some(node) => match node.value().lock().chain.get(&lsn) {
+                        Some(live) if Arc::ptr_eq(live, entry) => None,
+                        _ => Some("slot-gone"),
+                    },
+                };
+                if let Some(why) = why {
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["snapshot_fifo_orphan"])
+                        .inc();
+                    let mut kb = [0u8; KEY_SIZE];
+                    key.write_to_byte_slice(&mut kb);
+                    let prefix: String = kb.iter().map(|b| format!("{b:02x}")).collect();
+                    tracing::error!(
+                        key = %prefix,
+                        %lsn,
+                        why,
+                        "snapshot_unflushed: an unflushed FIFO entry is no longer \
+                         its key's live slot (#57)"
+                    );
+                }
             }
         }
-        out
+        FlushSnapshot {
+            entries,
+            claimed: n,
+        }
     }
 
-    /// Insert or overwrite a `PageEntry` for `(key, lsn)`. Returns
-    /// `Some(prev_was_unflushed)` if this overwrote an existing
-    /// entry, `None` if it's fresh. Adjusts `total_bytes`,
-    /// `unflushed_bytes`, and per-key `bytes` / `unflushed_count`.
+    /// Insert or overwrite a `PageEntry` for `(key, lsn)`. Adjusts
+    /// `total_bytes`, `unflushed_bytes`, `unflushed_rows` and per-key `bytes`.
     /// The key is promoted to the back of the LRU on every call —
     /// new keys land at the back via `insert`, existing keys are
     /// moved with `to_back`.
     ///
     /// LRU and the per-key mutex are never held at the same time, so
     /// there is no lock-order edge between them to deadlock on.
-    /// Returns `true` iff a brand-new **unflushed** entry was added, so
-    /// the caller (`push`) knows to record it in `unflushed_fifo`.
-    /// Durable inserts and idempotent re-pushes return `false`.
-    fn insert_entry(&self, key: Key, lsn: Lsn, row: PageRow, durable: bool) -> bool {
+    /// Returns the entry iff a brand-new **unflushed** one was added, for the
+    /// caller (`push`) to append to `unflushed_fifo`. Durable inserts and
+    /// idempotent re-pushes return `None`.
+    fn insert_entry(
+        &self,
+        key: Key,
+        lsn: Lsn,
+        row: PageRow,
+        durable: bool,
+    ) -> Option<Arc<PageEntry>> {
         self.insert_arc_entry(key, lsn, Arc::new(row), durable)
     }
 
-    fn insert_arc_entry(&self, key: Key, lsn: Lsn, row: Arc<PageRow>, durable: bool) -> bool {
+    fn insert_arc_entry(
+        &self,
+        key: Key,
+        lsn: Lsn,
+        row: Arc<PageRow>,
+        durable: bool,
+    ) -> Option<Arc<PageEntry>> {
         use std::collections::btree_map::Entry;
 
         let size = row_size(&row);
@@ -786,10 +802,10 @@ impl UnifiedPages {
         // that lands on a live node.
         let mut row = Some(row);
 
-        // Set when a durable image overwrites a still-unflushed slot. Acted
-        // on after the per-key mutex drops so the FIFO lock never nests under
-        // it (lock order: per-key mutex → FIFO).
+        // Set when a durable image overwrites a still-unflushed slot.
         let mut overwrote_unflushed = false;
+        // The fresh unflushed entry, for `push` to append to the FIFO.
+        let mut fresh: Option<Arc<PageEntry>> = None;
         let added_unflushed = loop {
             // Step 1: ensure the key is at the back of the LRU.
             {
@@ -868,7 +884,7 @@ impl UnifiedPages {
                                 new_row.will_init,
                                 new_row.payload.len(),
                             );
-                            return false;
+                            return None;
                         }
                         let prev_size = row_size(&o.get().row);
                         // push_durable (materialiser image). The slot is
@@ -884,8 +900,7 @@ impl UnifiedPages {
                         // unflushed slot is a deterministic re-push of an
                         // already-durable record and overwriting it loses
                         // nothing. Record it so we reverse the unflushed
-                        // accounting (count + bytes below, FIFO entry after
-                        // the guard drops).
+                        // count and bytes below; the FIFO slot stays.
                         // Claim the overwritten slot's promotion with the SAME
                         // CAS mark_flushed uses, not a bare is_durable() read: a
                         // flush snapshot may still hold this exact
@@ -900,49 +915,39 @@ impl UnifiedPages {
                         (false, size, prev_size)
                     }
                     Entry::Vacant(v) => {
-                        v.insert(PageEntry::from_arc_row(row.take().unwrap(), durable));
+                        let entry = PageEntry::from_arc_row(row.take().unwrap(), durable);
+                        if !durable {
+                            fresh = Some(Arc::clone(&entry));
+                        }
+                        v.insert(entry);
                         (!durable, size, 0)
                     }
                 };
 
             ks.bytes = ks.bytes + add_bytes - sub_bytes;
-            if added_unflushed {
-                ks.unflushed_count += 1;
-            } else if overwrote_unflushed {
-                // The overwritten slot was pinned as unflushed; it's durable
-                // now, so drop the pin.
-                ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
-            }
             self.total_bytes.fetch_add(add_bytes, Ordering::Relaxed);
             if sub_bytes > 0 {
                 self.total_bytes.fetch_sub(sub_bytes, Ordering::Relaxed);
             }
             if added_unflushed {
                 self.unflushed_bytes.fetch_add(add_bytes, Ordering::Relaxed);
+                self.unflushed_rows.fetch_add(1, Ordering::Relaxed);
             } else if overwrote_unflushed {
                 // Its bytes (== sub_bytes) were in unflushed_bytes; the image
-                // is durable, so remove them.
+                // is durable, so remove them. Its FIFO slot stays, promoted:
+                // the next snapshot skips it and its mark drains it.
                 self.unflushed_bytes.fetch_sub(sub_bytes, Ordering::Relaxed);
+                self.unflushed_rows.fetch_sub(1, Ordering::Relaxed);
             }
             break added_unflushed;
         };
 
-        if overwrote_unflushed {
-            // Drop the now-stale FIFO entry the re-push left behind. The slot
-            // is durable now, so without this `snapshot_unflushed` would
-            // re-probe and skip it on every future flush — a slow FIFO leak.
-            // The shard guard is released above, so taking the FIFO lock here
-            // respects the shard → FIFO lock order.
-            let mut fifo = self.unflushed_fifo.lock();
-            if let Some(pos) = fifo.iter().position(|(k, l)| *l == lsn && k == &key) {
-                fifo.remove(pos);
-            }
-        }
-        added_unflushed
+        if added_unflushed { fresh } else { None }
     }
 }
 
-fn row_size(r: &PageRow) -> usize {
+/// The bytes a row counts for in `unflushed_bytes` / `total_bytes`.
+pub(crate) fn row_size(r: &PageRow) -> usize {
     r.payload.len() + KEY_SIZE + 16
 }
 
@@ -1049,6 +1054,77 @@ mod tests {
     fn flush_first_n(u: &UnifiedPages, n: usize) {
         let snap = u.snapshot_unflushed(Some(n));
         u.mark_flushed(&snap);
+    }
+
+    fn lsns(snap: &FlushSnapshot) -> Vec<u64> {
+        snap.iter().map(|e| e.row.lsn.0).collect()
+    }
+
+    /// Two flushes in flight: the second snapshot claims only what the first
+    /// didn't, and marking them front-first drains exactly their rows.
+    #[test]
+    fn claims_retire_front_first_across_two_snapshots() {
+        let u = UnifiedPages::new(1 << 20);
+        for i in 1..=3u64 {
+            u.push(mk(b"k", i, false, b"x"));
+        }
+        let a = u.snapshot_unflushed(None);
+        for i in 4..=5u64 {
+            u.push(mk(b"k", i, false, b"x"));
+        }
+        let b = u.snapshot_unflushed(None);
+        assert_eq!(lsns(&a), vec![1, 2, 3]);
+        assert_eq!(lsns(&b), vec![4, 5], "b claims only what a didn't");
+        assert!(
+            u.snapshot_unflushed(None).is_empty(),
+            "nothing left unclaimed"
+        );
+
+        u.mark_flushed(&a);
+        assert_eq!(u.unflushed_count(), 2);
+        u.push(mk(b"k", 6, false, b"x"));
+        u.mark_flushed(&b);
+        assert_eq!(u.unflushed_count(), 1);
+        assert_eq!(
+            lsns(&u.snapshot_unflushed(None)),
+            vec![6],
+            "6 was never claimed"
+        );
+    }
+
+    /// A failed flush's claim goes back, and the next snapshot takes it again.
+    #[test]
+    fn released_claims_are_snapshotted_again() {
+        let u = UnifiedPages::new(1 << 20);
+        for i in 1..=3u64 {
+            u.push(mk(b"k", i, false, b"x"));
+        }
+        let failed = u.snapshot_unflushed(None);
+        assert_eq!(lsns(&failed), vec![1, 2, 3]);
+        u.release_claims();
+        let retry = u.snapshot_unflushed(None);
+        assert_eq!(lsns(&retry), vec![1, 2, 3]);
+        u.mark_flushed(&retry);
+        assert_eq!(u.unflushed_count(), 0);
+        assert_eq!(u.unflushed_bytes(), 0);
+    }
+
+    /// A slot an image promoted stays in the FIFO: the next snapshot claims it
+    /// without returning it, and that snapshot's mark drains it.
+    #[test]
+    fn image_promoted_slot_is_claimed_and_drained_but_not_written() {
+        let u = UnifiedPages::new(1 << 20);
+        u.push(mk(b"k", 10, false, b"delta"));
+        u.push_durable(mk(b"k", 10, true, b"image"));
+        assert_eq!(u.unflushed_count(), 0);
+        u.push(mk(b"k", 20, false, b"delta"));
+        let snap = u.snapshot_unflushed(None);
+        assert_eq!(lsns(&snap), vec![20], "the promoted slot is not rewritten");
+        u.mark_flushed(&snap);
+        assert!(
+            u.snapshot_unflushed(None).is_empty(),
+            "both slots drained, the promoted one included"
+        );
     }
 
     #[test]
@@ -1220,6 +1296,8 @@ mod tests {
             vec![Lsn(4), Lsn(5)],
             "the two newest remain, in FIFO order"
         );
+        // That snapshot claimed them; nothing flushed it, so hand it back.
+        u.release_claims();
 
         flush_first_n(&u, 2);
         assert_eq!(u.unflushed_count(), 0, "FIFO fully drained");
@@ -1376,21 +1454,23 @@ mod tests {
 
         u.push_durable(mk(b"k", 10, true, b"image-replacement"));
 
-        // Pin count, unflushed byte tally, and the stale FIFO entry are
-        // all reversed — the slot is durable now, not pending.
-        assert_eq!(u.unflushed_count(), 0, "stale FIFO entry dropped");
+        // The unflushed count and bytes are reversed — the slot is durable
+        // now, not pending — but its FIFO slot stays, promoted.
+        assert_eq!(u.unflushed_count(), 0, "unflushed row count reversed");
         assert_eq!(u.unflushed_bytes(), 0, "unflushed byte tally reversed");
+        assert_eq!(u.fifo_len(), 1, "the promoted slot stays in the FIFO");
 
         // The slot holds the durable image, and a flush finds nothing to
         // snapshot (no phantom pending row left behind).
         let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1, "durable image present at (k, 10)");
         assert!(chain[0].is_image, "slot replaced by the materialiser image");
-        assert_eq!(
-            u.snapshot_unflushed(None).len(),
-            0,
-            "nothing left to flush after the overwrite"
-        );
+        // The next snapshot claims the slot without writing it, and its
+        // mark drains it.
+        let snap = u.snapshot_unflushed(None);
+        assert_eq!(snap.len(), 0, "nothing left to flush after the overwrite");
+        u.mark_flushed(&snap);
+        assert_eq!(u.fifo_len(), 0, "the mark drained the promoted slot");
     }
 
     /// Regression (#142): a flush snapshot held across a `push_durable`

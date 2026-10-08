@@ -138,7 +138,7 @@ per-branch variants add `branch_id`.
 | `durable_walk_unflushed_row` | The durable-chain walk saw a not-yet-flushed row at or below the target LSN. Benign during attach replay; a sustained rate outside attach means a flush-horizon violation. |
 | `pagewriter_flush` | `PageWriter::flush` returned an error on a periodic or shutdown tick; rows may not have reached YB. |
 | `write_path_roundtrip` | A WAL record failed to deserialise its own freshly-serialised bytes (round-trip self-check on the write path). |
-| `snapshot_fifo_orphan` | Debug-build diagnostic only: the snapshot FIFO referenced a slot that is gone or already durable. |
+| `snapshot_fifo_orphan` | Debug-build diagnostic only: an unflushed entry the snapshot claimed is no longer its key's live slot. The row is still written, so this reports an anomaly, not a loss. |
 | `walreceiver_worker_panic` | A walreceiver worker task ended via a panic. |
 
 ## Garbage collection

@@ -622,9 +622,12 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
 6. **Flush** (`PageWriter::flush`, serialised end-to-end by
    `flush_serialize` so the aux snapshot and its count-based drain see
    the same buffer): capture the ingest frontier, snapshot the
-   unflushed prefix of `UnifiedPages` (an `Arc` bump per row, no data
-   copy — rows stay visible to concurrent reads during the YB round
-   trip) plus the SLRU/meta buffers, then dispatch chunked writes
+   unflushed rows of `UnifiedPages` plus the SLRU/meta buffers, then
+   dispatch chunked writes. `UnifiedPages` keeps its unflushed rows in
+   a FIFO of the `Arc<PageEntry>`s themselves, so the snapshot *claims*
+   them for a refcount bump per row: no map lookup or key lock, and no
+   data copy (rows stay visible to concurrent reads during the YB round
+   trip). The writes go
    against `amp_storage.pages` / `slru_pages` / `meta` on the
    hot-path store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`)
    and 2000 for meta (`META_ROWS_PER_INSERT`), up to N in flight with
@@ -638,7 +641,8 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    success cannot PK-conflict.
 7. On success, `mark_flushed` flips the snapshot's rows from unflushed
    → durable in place (the rows do NOT move; they stay cached for
-   reads), `evict_to_capacity` sheds cold keys if `total_bytes` exceeds
+   reads) and drains the claim from the front of the FIFO.
+   `evict_to_capacity` sheds cold keys if `total_bytes` exceeds
    `read_cache_bytes`, `flush_horizon_lsn` advances to the ingest
    frontier, the materialiser trigger runs (next section), and the
    durable `consistent_lsn` UPDATE fires if it moved and the
@@ -658,8 +662,9 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    For meta, on an LSN tie the durable YB row wins, because a
    walreceiver reconnect can re-push a stale same-LSN payload into aux.
 
-On flush error the buffers are left untouched and the next periodic
-flush retries.
+On flush error the buffers are left untouched and the claim is
+released, so the next periodic flush retries the same rows. A flush
+whose caller drops it mid-way releases its claim the same way.
 
 ### Flusher task and flush triggers
 
@@ -684,7 +689,16 @@ keeping heap usage bounded:
 
 - **Flush-side.** If `unflushed_bytes + bytes_in_aux_buffers` exceeds
   `backpressure_bytes` (default 25 MiB), `put` awaits a `Notify` pulsed
-  at the end of every successful flush. The 12 MiB size trigger fires
+  at the end of every successful flush. With
+  `release_backpressure_per_chunk` (default on), rows stop counting as
+  soon as their 500-row chunk lands in YB, and each landed chunk pulses
+  the notify, so ingest resumes while a large flush is still writing
+  rather than after it is marked. The landed rows stay in RAM until the
+  mark, so RSS can exceed the cap by up to one flush. A flush that fails
+  after its chunks landed hands every row back to be written again, so
+  `put` also blocks once the undiscounted total reaches twice the cap:
+  without that, each failed retry would admit another cap's worth. A
+  flush that succeeds never reaches it. The 12 MiB size trigger fires
   well before the cap, so this path only engages when YB INSERTs slow
   down (CPU contention, network spikes, tablet split). Pre-flush rows
   are pinned in `UnifiedPages` until durable, so without the cap the
@@ -1256,6 +1270,7 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `meta_cache_entries` | 16384 | In-process LRU for `amp_storage.meta` point reads; `0` disables |
 | `ingest_parallelism` | 4 | Workers for `put_serialized` batch apply; `1` = serial. Same key always lands on one worker |
 | `ingest_parallelism_min_batch` | 256 | Minimum batch size before the parallel apply engages; `1` forces it (tests) |
+| `release_backpressure_per_chunk` | true | Release a flush's rows from `backpressure_bytes` as each chunk lands, not when the flush is marked |
 
 Other relevant settings: `yb_payload_compression` (`none` | `lz4`,
 default `lz4` — the codec for the `BYTEA` payload columns; write-side

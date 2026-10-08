@@ -383,7 +383,10 @@ reads take the latest row at `lsn ≤ target_lsn` (full overwrite semantics).
 
 **Write backpressure:** `PageWriter::put` blocks in `await_backpressure`
 while `unflushed_bytes + bytes_in_aux_buffers ≥ policy.backpressure_bytes`
-(default 25 MiB; 0 disables); `flush` wakes waiters via `flush_completed`.
+(default 25 MiB; 0 disables), not counting rows whose chunk has already
+landed when `release_backpressure_per_chunk` is set (and in any case
+once the undiscounted total reaches twice the cap); `flush` wakes
+waiters via `flush_completed`, after each landed chunk and at the end.
 This bounds the `applied_lsn − consistent_lsn` gap in bytes.
 
 ---
@@ -478,7 +481,7 @@ SK stream → walingest.ingest_record (sets modification.lsn)
 
 PageWriter::flush (periodic FlushTask / size trigger)
          → capture ingest frontier (max record_lsn_history key)
-         → snapshot_unflushed + aux buffers
+         → snapshot_unflushed (claim the unflushed rows) + aux buffers
          → try_write_rows → YB INSERT into pages/slru/meta
          → mark_flushed(snapshot); flush_horizon_lsn := frontier
          → consistent_lsn_observed.fetch_max(frontier)

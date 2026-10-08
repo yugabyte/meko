@@ -1595,6 +1595,19 @@ impl PageStore {
     // ------------------- pages ---------------------------------------------
 
     pub async fn put_pages(&self, branch_id: BranchId, rows: &[Arc<PageRow>]) -> Result<()> {
+        self.put_pages_reporting(branch_id, rows, &|_| {}).await
+    }
+
+    /// [`Self::put_pages`], calling `landed` with each chunk's rows as that
+    /// chunk lands, so the page writer can release backpressure before the
+    /// whole flush is in. A chunk is reported once, after the write that made
+    /// it durable; a failed call may have reported some chunks.
+    pub async fn put_pages_reporting(
+        &self,
+        branch_id: BranchId,
+        rows: &[Arc<PageRow>],
+        landed: &(dyn Fn(&[Arc<PageRow>]) + Send + Sync),
+    ) -> Result<()> {
         let mut tally = PayloadTally::new("pages");
         let branch_b = branch_id.to_bytes();
         self.upsert_batched(
@@ -1612,6 +1625,7 @@ impl PageStore {
                 for row in chunk {
                     pageserver_api::write_trace::trace_stage("put_pages_ok", &row.key, row.lsn);
                 }
+                landed(chunk);
             },
         )
         .await?;

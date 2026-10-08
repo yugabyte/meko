@@ -337,6 +337,8 @@ pub struct YbPageWriterConfigToml {
     pub ingest_parallelism: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingest_parallelism_min_batch: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_backpressure_per_chunk: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -473,6 +475,14 @@ pub struct YbPageWriterConfig {
     /// serially. Not scaled by `scale_factor`. Default 256. (Set to 1 to
     /// force the parallel path on every batch — used by tests / integration.)
     pub ingest_parallelism_min_batch: usize,
+
+    /// Count a flush's rows against `backpressure_bytes` only until the chunk
+    /// holding them is written, rather than until the whole flush is marked
+    /// durable, so ingest resumes while a large flush is still writing. The
+    /// written rows stay in memory until the mark, so the buffer can hold up
+    /// to one flush beyond `backpressure_bytes`, and never more than twice it
+    /// (a hard ceiling for flushes that keep failing). Default true.
+    pub release_backpressure_per_chunk: bool,
 }
 
 impl YbPageWriterConfig {
@@ -493,6 +503,7 @@ impl YbPageWriterConfig {
             meta_cache_entries: 16384,
             ingest_parallelism: 4,
             ingest_parallelism_min_batch: 256,
+            release_backpressure_per_chunk: true,
         }
     }
 }
@@ -541,6 +552,9 @@ impl YbPageWriterConfigToml {
             ingest_parallelism_min_batch: self
                 .ingest_parallelism_min_batch
                 .unwrap_or(base.ingest_parallelism_min_batch),
+            release_backpressure_per_chunk: self
+                .release_backpressure_per_chunk
+                .unwrap_or(base.release_backpressure_per_chunk),
         }
     }
 }
