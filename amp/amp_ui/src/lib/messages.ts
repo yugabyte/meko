@@ -113,6 +113,15 @@ export const dataBranchingMessages = {
   deleteClusterSuccess: (name: string) => `Cluster "${name}" deleted`,
   deleteClusterError: "Failed to delete cluster",
 
+  // documentdb connection string, by how the gateway's certificate is verified
+  documentdbCheckingTrust: "Checking the gateway's certificate…",
+  documentdbCaHint: (file: string) =>
+    `Download the CA and save it as ${file} where the client runs.`,
+  documentdbUnverified:
+    "Certificate can't be verified: the gateway self-signs, because compute TLS is off or this endpoint hasn't been re-rendered since it was turned on. Traffic is encrypted, but the client can't confirm it reached this endpoint.",
+  documentdbTrustUnknown:
+    "Couldn't check the gateway's certificate, so this string skips verification. Traffic is still encrypted; reload to get a string that verifies, if the gateway's certificate allows it.",
+
   // Misc
   clipboardError: "Couldn't copy to clipboard",
 } as const;

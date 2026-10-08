@@ -865,6 +865,14 @@ type Endpoint struct {
 	// deployed with it. The port is the gateway's own default (10260), not
 	// MongoDB's conventional 27017, so a client has to be pointed at it.
 	// Same host as `address`; absent when the endpoint is not yet deployed.
+	//
+	// The gateway always speaks TLS, so the endpoint's `/ca` answer
+	// decides the connection string. `documentdb_verifiable` and
+	// `required`: `mongodb://<documentdb_address>/?tls=true&tlsCAFile=<ca.crt>`,
+	// with `ca_crt` saved to that file. `documentdb_verifiable` alone:
+	// `mongodb://<documentdb_address>/?tls=true`. Not
+	// `documentdb_verifiable`: the gateway self-signs, so the traffic is
+	// encrypted but the client cannot verify the server.
 	DocumentdbAddress *string `json:"documentdb_address,omitempty"`
 
 	// ExtendedConfig The `extended_config` this endpoint was created with, verbatim, or
@@ -984,6 +992,15 @@ type EndpointRole string
 type EndpointCaBundle struct {
 	// CaCrt The CA bundle, PEM encoded. Empty when `required` is false.
 	CaCrt *string `json:"ca_crt,omitempty"`
+
+	// DocumentdbVerifiable Present only when the endpoint reports a `documentdb_address`.
+	// Whether its documentdb gateway serves the compute's certificate, so
+	// a client can verify it the way it verifies Postgres (trusting
+	// `ca_crt` when `required`). Read from what the endpoint's pod was
+	// last rendered with, not from the current flag: false when the pod
+	// was rendered with compute TLS off, or predates the gateway serving
+	// the certificate. Either way the gateway self-signs.
+	DocumentdbVerifiable *bool `json:"documentdb_verifiable,omitempty"`
 
 	// Required Whether a client must pass `sslrootcert` at all. False means the
 	// certificate is publicly trusted, or the endpoint offers no TLS —

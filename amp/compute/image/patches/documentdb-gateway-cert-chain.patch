@@ -1,0 +1,63 @@
+diff --git a/pg_documentdb_gw/documentdb_gateway_core/src/service/docdb_openssl.rs b/pg_documentdb_gw/documentdb_gateway_core/src/service/docdb_openssl.rs
+--- a/pg_documentdb_gw/documentdb_gateway_core/src/service/docdb_openssl.rs
++++ b/pg_documentdb_gw/documentdb_gateway_core/src/service/docdb_openssl.rs
+@@ -175,6 +175,10 @@ pub fn create_tls_acceptor(
+ 
+     ssl_acceptor.set_private_key(cert_bundle.private_key())?;
+     ssl_acceptor.set_certificate(&cert_bundle.certificate())?;
++    // amp: send the intermediates too; set_certificate alone serves the leaf.
++    for intermediate in cert_bundle.chain() {
++        ssl_acceptor.add_extra_chain_cert(intermediate.clone())?;
++    }
+ 
+     for ca_cert in cert_bundle.ca_chain() {
+         ssl_acceptor.cert_store_mut().add_cert(ca_cert.clone())?;
+diff --git a/pg_documentdb_gw/documentdb_gateway_core/src/service/tls.rs b/pg_documentdb_gw/documentdb_gateway_core/src/service/tls.rs
+--- a/pg_documentdb_gw/documentdb_gateway_core/src/service/tls.rs
++++ b/pg_documentdb_gw/documentdb_gateway_core/src/service/tls.rs
+@@ -168,6 +168,9 @@ impl CertificateStorePaths {
+ #[derive(Debug)]
+ pub struct CertificateBundle {
+     certificate: X509,
++    /// amp: intermediates that followed the leaf in the certificate file, served
++    /// with it so a client that trusts only the root can build the chain.
++    chain: Vec<X509>,
+     private_key: PKey<Private>,
+     ca_chain: Vec<X509>,
+ }
+@@ -194,7 +197,14 @@ impl CertificateBundle {
+     /// * CA chain file is specified but cannot be read or parsed
+     pub async fn from_cert_store(certificate_store: &CertificateStorePaths) -> Result<Self> {
+         let cert_bytes = tokio::fs::read(&certificate_store.certificate).await?;
+-        let certificate = X509::from_pem(&cert_bytes)?;
++        let mut chain = X509::stack_from_pem(&cert_bytes)?;
++        if chain.is_empty() {
++            return Err(DocumentDBError::internal_error(format!(
++                "No PEM certificate in {}.",
++                certificate_store.certificate
++            )));
++        }
++        let certificate = chain.remove(0);
+ 
+         let pkey_bytes = tokio::fs::read(&certificate_store.private_key).await?;
+         let pkey = PKey::private_key_from_pem(&pkey_bytes)?;
+@@ -208,6 +218,7 @@ impl CertificateBundle {
+ 
+         Ok(Self {
+             certificate,
++            chain,
+             private_key: pkey,
+             ca_chain,
+         })
+@@ -221,6 +232,11 @@ impl CertificateBundle {
+         self.certificate.clone()
+     }
+ 
++    /// Returns the intermediates to send after the server certificate.
++    pub fn chain(&self) -> &[X509] {
++        &self.chain
++    }
++
+     /// Returns a reference to the private key.
+     pub fn private_key(&self) -> &PKeyRef<Private> {
+         self.private_key.as_ref()

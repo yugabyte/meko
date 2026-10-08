@@ -1,6 +1,6 @@
 // One provisioned compute instance under a branch: address, role, resource tag,
-// in-place resize panel, settings, unprovision confirm, and a copyable psql
-// connect string.
+// in-place resize panel, settings, unprovision confirm, and copyable psql and
+// documentdb connect strings.
 
 import { useState } from "react";
 import {
@@ -30,9 +30,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useDeleteEndpoint, useResizeEndpoint } from "@/hooks/useEndpoints";
 import { SettingsDialog } from "./SettingsDialog";
+import { DocumentdbConnect } from "./DocumentdbConnect";
 import type { Endpoint } from "@/lib/api/types";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
 import { isValidMemory } from "@/lib/compute";
+import { downloadCaFile } from "@/lib/endpointTls";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeResourceTag } from "@/components/ResourceTag";
 
@@ -47,20 +49,12 @@ export function ComputeInstance({
   poolId: string;
   isDefaultBranch: boolean;
 }) {
-  // Which connect string was last copied, so the two buttons report
-  // independently rather than both flipping to "Copied".
-  const [copied, setCopied] = useState<"" | "psql" | "documentdb">("");
+  const [copied, setCopied] = useState(false);
   const [caBusy, setCaBusy] = useState(false);
   const connStr = ep.address
     ? `postgresql://cloud_admin@${ep.address}/postgres`
     : "";
   const psql = connStr ? `psql "${connStr}"` : "";
-  // The gateway self-signs on first start, so the URI has to say the client will
-  // accept that — a bare mongodb:// fails the handshake with nothing obvious to
-  // point at.
-  const documentdbURI = ep.documentdb_address
-    ? `mongodb://${ep.documentdb_address}/?tls=true&tlsAllowInvalidCertificates=true`
-    : "";
 
   // Per-endpoint in-place resize: pre-fill with the current reservation. The
   // controller persists the new size, updates the Deployment, and resizes the
@@ -88,14 +82,7 @@ export function ComputeInstance({
         });
         return;
       }
-      const url = URL.createObjectURL(
-        new Blob([bundle.ca_crt], { type: "application/x-pem-file" }),
-      );
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${ep.id}-ca.crt`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadCaFile(ep.id, bundle.ca_crt);
       toast.success("CA downloaded", {
         description: bundle.verify_name
           ? `Pass it as sslrootcert and connect to ${bundle.verify_name}.`
@@ -186,14 +173,13 @@ export function ComputeInstance({
     );
   }
 
-  function copy(what: "psql" | "documentdb") {
-    const text = what === "psql" ? psql : documentdbURI;
-    if (!text || !navigator.clipboard) return;
+  function copy() {
+    if (!psql || !navigator.clipboard) return;
     navigator.clipboard
-      .writeText(text)
+      .writeText(psql)
       .then(() => {
-        setCopied(what);
-        setTimeout(() => setCopied(""), 1500);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
       })
       .catch((err) => {
         toast.error(msg.clipboardError);
@@ -315,15 +301,15 @@ export function ComputeInstance({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => copy("psql")}
+            onClick={copy}
             className="h-7 shrink-0 gap-1"
           >
-            {copied === "psql" ? (
+            {copied ? (
               <Check className="h-3.5 w-3.5" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
-            {copied === "psql" ? "Copied" : "Copy"}
+            {copied ? "Copied" : "Copy"}
           </Button>
           <Button
             variant="outline"
@@ -339,24 +325,7 @@ export function ComputeInstance({
         </div>
       )}
       {ep.documentdb_address && (
-        <div className="mt-2 flex items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
-            {documentdbURI}
-          </code>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => copy("documentdb")}
-            className="h-7 shrink-0 gap-1"
-          >
-            {copied === "documentdb" ? (
-              <Check className="h-3.5 w-3.5" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-            {copied === "documentdb" ? "Copied" : "Copy"}
-          </Button>
-        </div>
+        <DocumentdbConnect ep={ep} poolId={poolId} address={ep.documentdb_address} />
       )}
 
       <AlertDialog

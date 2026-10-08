@@ -1263,51 +1263,151 @@ func (k *KubernetesDeployer) renderClientAddress(ctx context.Context, release st
 	})
 }
 
-// EndpointCABundle returns the PEM a client needs as `sslrootcert` to verify
-// this endpoint's server certificate, or "" when it needs none.
+// ServesComputeTLS reports whether endpoints are deployed with a server
+// certificate, in either issuance mode. Without one, Postgres offers no TLS and
+// the documentdb gateway self-signs.
+func (k *KubernetesDeployer) ServesComputeTLS() bool {
+	return k.cfg.ComputeTLSMode != "" && k.cfg.ComputeTLSMode != "disable"
+}
+
+// ServerCert is what a client needs to verify an endpoint.
+type ServerCert struct {
+	// CA is the PEM a client must trust, or "" when the certificate chains to a
+	// public root or the pod serves none.
+	CA string
+	// GatewayServes is whether the pod's documentdb gateway serves the compute's
+	// certificate. False when it self-signs, and when there is no gateway.
+	GatewayServes bool
+}
+
+// EndpointServerCert reports how a client verifies this endpoint's server
+// certificate.
 //
-// Read from the endpoint's own certificate Secret rather than from a
+// The flag says what the NEXT render will do; the pod runs whatever it was last
+// rendered with, and nothing re-renders on a controller upgrade, a rollback, or
+// a switch between issuance modes. So the answer comes from the endpoint's
+// Deployment alone: no `compute-tls` volume means nothing serves a certificate,
+// the volume's `secretName` is the Secret the pod actually mounts, and a
+// gateway from before it served one still self-signs.
+//
+// Whether the certificate names the address is deliberately not checked. A
+// certificate that does not is a misconfiguration, and a client that verifies
+// and fails surfaces it; handing that client a string that skips verification
+// would hide it.
+//
+// The CA is read from the endpoint's own certificate Secret rather than from a
 // deployment-wide bundle, because that Secret is what actually signed what the
 // compute presents: cert-manager writes the issuing CA into the leaf's `ca.crt`
 // for a `ca` issuer, so a customer's own CA is reported as faithfully as the
 // per-cluster root. It is the same file the supervisor reads for
 // `compute_ca_not_after_seconds`.
 //
-// "" is a real answer, not a failure. An ACME issuer writes no `ca.crt`, and a
-// client verifying a publicly-trusted certificate needs nothing — handing it a
-// bundle to install would be worse than handing it nothing. Compute TLS being
-// off reads the same way.
-func (k *KubernetesDeployer) EndpointCABundle(ctx context.Context, id string) (string, error) {
-	if k.cfg.ComputeTLSMode == "" || k.cfg.ComputeTLSMode == "disable" {
-		return "", nil
-	}
-	secret := k.cfg.ComputeTLSSecret
-	if computeTLSChartMode(k.cfg.ComputeTLSMode) == computeTLSChartModeIssue {
-		secret = id + "-compute-tls"
-	}
-	if secret == "" {
-		return "", nil
-	}
-	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", k.cfg.Namespace, secret)
+// An empty CA is a real answer, not a failure. An ACME issuer writes no
+// `ca.crt`, and a client verifying a publicly-trusted certificate needs
+// nothing — handing it a bundle to install would be worse than handing it
+// nothing.
+func (k *KubernetesDeployer) EndpointServerCert(ctx context.Context, id string) (ServerCert, error) {
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", k.cfg.Namespace, id)
 	body, err := k.k8sAPIGetErr(ctx, path)
+	switch {
+	case errors.Is(err, errK8sNotFound):
+		return ServerCert{}, nil
+	case err != nil:
+		return ServerCert{}, fmt.Errorf("read endpoint deployment %s: %w", id, err)
+	}
+	rendered, err := renderedComputeTLS(body)
 	if err != nil {
-		return "", fmt.Errorf("read certificate secret %s: %w", secret, err)
+		return ServerCert{}, fmt.Errorf("parse endpoint deployment %s: %w", id, err)
+	}
+	secret := rendered.secret
+	if secret == "" {
+		return ServerCert{}, nil
+	}
+	path = fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", k.cfg.Namespace, secret)
+	body, err = k.k8sAPIGetErr(ctx, path)
+	switch {
+	// The pod mounts a Secret that is not there, so it is stuck mounting and
+	// serves nothing.
+	case errors.Is(err, errK8sNotFound):
+		return ServerCert{}, nil
+	case err != nil:
+		return ServerCert{}, fmt.Errorf("read certificate secret %s: %w", secret, err)
 	}
 	var out struct {
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("parse certificate secret %s: %w", secret, err)
+		return ServerCert{}, fmt.Errorf("parse certificate secret %s: %w", secret, err)
 	}
-	raw, ok := out.Data["ca.crt"]
-	if !ok || raw == "" {
-		return "", nil
+	sc := ServerCert{GatewayServes: rendered.gatewayServes}
+	if raw := out.Data["ca.crt"]; raw != "" {
+		ca, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return ServerCert{}, fmt.Errorf("decode ca.crt in %s: %w", secret, err)
+		}
+		sc.CA = string(ca)
 	}
-	pem, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return "", fmt.Errorf("decode ca.crt in %s: %w", secret, err)
+	return sc, nil
+}
+
+// renderedTLS is what an endpoint's Deployment was rendered with, as far as its
+// server certificate goes.
+type renderedTLS struct {
+	// secret is the compute-tls volume's Secret, which Postgres serves; "" when
+	// the pod has no such volume.
+	secret string
+	// gatewayServes: the pod has a documentdb gateway, and it serves the
+	// mounted certificate rather than self-signing.
+	gatewayServes bool
+}
+
+// renderedComputeTLS reads renderedTLS from a Deployment's JSON. The names are
+// the endpoint chart's: the `compute-tls` volume (and its `secretName`) and, in
+// the gateway container,
+// DOCUMENTDB_TLS_CERT_FILE, which a chart from before the gateway served the
+// certificate never sets.
+func renderedComputeTLS(deploymentJSON []byte) (renderedTLS, error) {
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Volumes []struct {
+						Name   string `json:"name"`
+						Secret struct {
+							SecretName string `json:"secretName"`
+						} `json:"secret"`
+					} `json:"volumes"`
+					Containers []struct {
+						Name string `json:"name"`
+						Env  []struct {
+							Name string `json:"name"`
+						} `json:"env"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
 	}
-	return string(pem), nil
+	if err := json.Unmarshal(deploymentJSON, &d); err != nil {
+		return renderedTLS{}, err
+	}
+	pod := d.Spec.Template.Spec
+	var r renderedTLS
+	for _, v := range pod.Volumes {
+		if v.Name == "compute-tls" {
+			r.secret = v.Secret.SecretName
+		}
+	}
+	for _, c := range pod.Containers {
+		if c.Name != "documentdb-gateway" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "DOCUMENTDB_TLS_CERT_FILE" {
+				r.gatewayServes = true
+			}
+		}
+	}
+	return r, nil
 }
 
 // addComputeTLSAddress records one client-facing address in the compute
@@ -1902,7 +2002,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	// above: which certificate the pod PRESENTS to clients has nothing to do
 	// with which one it presents to YugabyteDB, and in the Let's Encrypt case
 	// they come from different issuers.
-	if k.cfg.ComputeTLSMode != "" && k.cfg.ComputeTLSMode != "disable" {
+	if k.ServesComputeTLS() {
 		v.ComputeTLS = &computeTlsValues{
 			Enabled: true,
 			Mode:    computeTLSChartMode(k.cfg.ComputeTLSMode),

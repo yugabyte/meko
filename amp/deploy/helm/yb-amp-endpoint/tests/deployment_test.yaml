@@ -674,6 +674,81 @@ tests:
           path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].securityContext.runAsNonRoot
           value: true
 
+  - it: self-signs the gateway certificate when computeTls is off
+    template: templates/deployment.yaml
+    set:
+      documentdbGateway.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].env
+          content:
+            name: DOCUMENTDB_TLS_AUTO_GENERATE
+            value: "true"
+      - notContains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].env
+          content:
+            name: DOCUMENTDB_TLS_CERT_FILE
+          any: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: documentdb-gateway-tls
+            emptyDir: {}
+
+  # The gateway serves the compute's certificate from the endpoint container's
+  # mount path. AUTO_GENERATE must be an explicit "false": the image sets it
+  # true, and upstream refuses true alongside a cert file.
+  - it: serves the compute's certificate from the gateway when computeTls is on
+    template: templates/deployment.yaml
+    set:
+      documentdbGateway.enabled: true
+      computeTls.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].env
+          content:
+            name: DOCUMENTDB_TLS_CERT_FILE
+            value: /etc/amp/tls/compute/tls.crt
+      - contains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].env
+          content:
+            name: DOCUMENTDB_TLS_KEY_FILE
+            value: /etc/amp/tls/compute/tls.key
+      - contains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].env
+          content:
+            name: DOCUMENTDB_TLS_AUTO_GENERATE
+            value: "false"
+      - notContains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].env
+          content:
+            name: DOCUMENTDB_TLS_STATE_DIR
+          any: true
+      # A directory mount, no subPath: a subPath file never sees a renewal.
+      - contains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].volumeMounts
+          content:
+            name: compute-tls
+            mountPath: /etc/amp/tls/compute
+            readOnly: true
+      - notContains:
+          path: spec.template.spec.containers[?(@.name=="documentdb-gateway")].volumeMounts
+          content:
+            name: documentdb-gateway-tls
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: documentdb-gateway-tls
+          any: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: compute-tls
+            secret:
+              secretName: RELEASE-NAME-yb-amp-endpoint-compute-tls
+              defaultMode: 0440
+
   - it: renders no gateway sidecar without documentdb
     template: templates/deployment.yaml
     set:

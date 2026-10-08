@@ -370,6 +370,93 @@ func TestKubernetesValuesComputeTLS(t *testing.T) {
 	}
 }
 
+// ServesComputeTLS decides whether values render computeTls, and the chart
+// serves the compute's certificate from both Postgres and the documentdb
+// gateway exactly when it is rendered. The two must never disagree.
+func TestServesComputeTLSMatchesTheRenderedBlock(t *testing.T) {
+	for _, mode := range []string{"", "disable", "issue", "existing-secret"} {
+		cfg := testKubernetesConfig()
+		cfg.ComputeTLSMode = mode
+		k := NewKubernetesDeployer(cfg, nil)
+		rendered := k.values(testEndpointSpec(), "yb-ep-rel").ComputeTLS != nil
+		if got := k.ServesComputeTLS(); got != rendered {
+			t.Errorf("mode %q: ServesComputeTLS = %v, computeTls rendered = %v", mode, got, rendered)
+		}
+	}
+}
+
+// The flag says what the next render does; `/ca` has to follow what the pod was
+// last rendered with, and nothing re-renders on a controller upgrade, a rollback
+// or a mode switch. A documentdb endpoint rendered before the gateway served the
+// certificate mounts compute-tls for Postgres while its gateway still
+// self-signs; one rendered under `issue` keeps its own Secret after the fleet
+// moves to `existing-secret`.
+func TestRenderedComputeTLS(t *testing.T) {
+	// volumes maps each volume to its Secret, "" for a non-Secret volume, in the
+	// shape the endpoint chart renders.
+	deployment := func(volumes map[string]string, containers map[string][]string) []byte {
+		var vs, cs []map[string]any
+		for name, secret := range volumes {
+			v := map[string]any{"name": name}
+			if secret != "" {
+				v["secret"] = map[string]any{"secretName": secret, "defaultMode": 288}
+			} else {
+				v["emptyDir"] = map[string]any{}
+			}
+			vs = append(vs, v)
+		}
+		for name, env := range containers {
+			var es []map[string]any
+			for _, e := range env {
+				es = append(es, map[string]any{"name": e, "value": "x"})
+			}
+			cs = append(cs, map[string]any{"name": name, "env": es})
+		}
+		b, err := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{
+			"spec": map[string]any{"volumes": vs, "containers": cs}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	const own = "yb-ep-1-compute-tls"
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want renderedTLS
+	}{
+		{"rendered with compute TLS off",
+			deployment(map[string]string{"run": ""}, map[string][]string{"endpoint": nil}),
+			renderedTLS{}},
+		{"no gateway",
+			deployment(map[string]string{"run": "", "compute-tls": own}, map[string][]string{"endpoint": nil}),
+			renderedTLS{secret: own}},
+		{"a shared wildcard",
+			deployment(map[string]string{"run": "", "compute-tls": "amp-endpoints-wildcard-tls"}, map[string][]string{"endpoint": nil}),
+			renderedTLS{secret: "amp-endpoints-wildcard-tls"}},
+		{"gateway from before it served the certificate",
+			deployment(map[string]string{"run": "", "compute-tls": own, "documentdb-gateway-tls": ""}, map[string][]string{
+				"endpoint":           nil,
+				"documentdb-gateway": {"DOCUMENTDB_TLS_AUTO_GENERATE", "DOCUMENTDB_TLS_STATE_DIR"},
+			}),
+			renderedTLS{secret: own}},
+		{"gateway serving the certificate",
+			deployment(map[string]string{"run": "", "compute-tls": own}, map[string][]string{
+				"endpoint":           nil,
+				"documentdb-gateway": {"DOCUMENTDB_TLS_CERT_FILE", "DOCUMENTDB_TLS_KEY_FILE"},
+			}),
+			renderedTLS{secret: own, gatewayServes: true}},
+	} {
+		got, err := renderedComputeTLS(tc.body)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestKubernetesValuesNoPullSecret(t *testing.T) {
 	cfg := testKubernetesConfig() // PullSecret left empty
 	k := NewKubernetesDeployer(cfg, nil)

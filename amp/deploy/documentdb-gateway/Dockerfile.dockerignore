@@ -1,6 +1,7 @@
 # The build context is amp/, for the two files the source download is verified
-# with; everything else stays out, as it did when the context was this
-# directory alone.
+# with and the patch applied to it; everything else stays out, as it did when
+# the context was this directory alone.
 *
 !downloads_checksum.txt
 !scripts/safe_curl.sh
+!compute/image/patches/documentdb-gateway-cert-chain.patch

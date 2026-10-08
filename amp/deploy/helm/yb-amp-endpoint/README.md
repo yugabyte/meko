@@ -28,7 +28,11 @@ The chart renders:
   `documentdb-gateway` sidecar on any endpoint whose branch mounts `documentdb`
   (`documentdbGateway.enabled` overrides that either way). The gateway also adds
   a `documentdb` port to the Service and a Secret holding its backend URL, which
-  names the `documentdb` database compute_ctl creates the extension in. PGDATA is
+  names the `documentdb` database compute_ctl creates the extension in. It serves
+  the compute's certificate when `computeTls.enabled`, so with a private CA that
+  names the Service a client connects with
+  `mongodb://<service-dns>:10260/?tls=true&tlsCAFile=<ca.crt>`. Otherwise it
+  self-signs, and only `tlsAllowInvalidCertificates=true` connects. PGDATA is
   ephemeral and durable state lives in YugabyteDB, so `/data` is an `emptyDir`
   scratch volume by default; when `persistence.storageClass` is set it is a
   PersistentVolumeClaim instead. The Deployment always uses the `Recreate`
@@ -101,7 +105,7 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `tls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer of the certificate |
 | `tls.caBundleConfigMap` | `amp-ca-bundle` | ConfigMap (key `ca.crt`) holding the trusted roots |
 | `tls.certificate.duration` / `.renewBefore` | `720h` / `240h` | certificate lifetime and renewal lead |
-| `computeTls.enabled` | `false` | give the compute's Postgres listener a **server** certificate, so a client can connect with `sslmode=verify-full`. The opposite direction from `tls` above and independent of it; TLS stays optional on the wire (pg_hba is still `md5`, not `hostssl`) |
+| `computeTls.enabled` | `false` | give the compute's Postgres listener a **server** certificate, so a client can connect with `sslmode=verify-full`. The documentdb gateway serves the same one on its port. The opposite direction from `tls` above and independent of it; TLS stays optional on the wire (pg_hba is still `md5`, not `hostssl`) |
 | `computeTls.mode` | `issue` | `issue` = one cert-manager `Certificate` for this endpoint from `computeTls.issuerRef` (a private CA); `existingSecret` = mount `computeTls.existingSecret`, one wildcard the fleet shares (Let's Encrypt, where a per-endpoint order spends the 50-new-certificates-per-registered-domain weekly limit on 50 endpoint **creates**; renewals are exempt, so it caps create rate, not fleet size) |
 | `computeTls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer for `mode: issue` |
 | `computeTls.existingSecret` | _(empty)_ | the `tls.crt` + `tls.key` Secret to mount for `mode: existingSecret`; must already exist in the namespace |

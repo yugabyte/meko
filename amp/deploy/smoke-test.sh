@@ -56,7 +56,9 @@
 # extension in its own documentdb database. A MongoDB driver then logs in as the
 # default user with the createEndpoint password (SCRAM-SHA-256). It writes,
 # queries, aggregates and deletes over the wire protocol, and SQL reads back
-# the same documents. A wrong password is refused.
+# the same documents. A wrong password is refused. Under COMPUTE_TLS=issue the
+# driver verifies the gateway against the endpoint's CA from GET .../ca, and a
+# client without that CA is refused; otherwise it cannot verify the gateway.
 # Requires the cluster's ImageVolume feature gate and images pushed by
 # deploy/extensions/build.sh, plus docker on this host for the client.
 #
@@ -82,6 +84,10 @@ PF_PORT="${PF_PORT:-18080}"
 # using pymongo from upstream documentdb's own functional-test image, pinned by
 # digest as upstream pins it (documentdb-local/functional-tests/config/image.yml).
 GW_PF_PORT="${GW_PF_PORT:-18260}"
+# Compute TLS as up-gke.sh deployed it. Under `issue` the documentdb check
+# verifies the gateway's certificate against the endpoint's CA.
+COMPUTE_TLS="${COMPUTE_TLS:-disable}"
+COMPUTE_TLS_SERVICE_DNS="${COMPUTE_TLS_SERVICE_DNS:-1}"
 DOCUMENTDB_CLIENT_IMAGE="${DOCUMENTDB_CLIENT_IMAGE:-ghcr.io/documentdb/functional-tests@sha256:79ed3d433bc2664655a31064a66eee3bef3cc2a8b4eabfaab3e3ef62d44ce3ba}"
 # Path to psql INSIDE the endpoint pod (PG v18 install; not needed on the host).
 PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
@@ -979,15 +985,42 @@ SQL
   GW_PF_PID=$!
   for ((i=0; i<30; i++)); do (exec 3<>"/dev/tcp/127.0.0.1/$GW_PF_PORT") 2>/dev/null && break; sleep 1; done
 
-  # The gateway self-signs its certificate, so a client cannot verify it yet
-  # (https://github.com/yugabyte/meko/issues/1509): TLS on, verification off.
+  # How the driver verifies the gateway. Under `issue` the gateway serves the
+  # compute's certificate, whose SANs name the endpoint's Service, so the driver
+  # dials that name, pinned to the port-forward, and trusts only the CA the API
+  # hands out. With compute TLS off the gateway self-signs and the API says so.
+  ca=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints/$DEP/ca")
+  GW_HOST=127.0.0.1
+  GW_TLS="tls=true&tlsAllowInvalidCertificates=true"
+  GW_DOCKER_ARGS=()
+  GW_CA_FILE=""
+  if [ "$COMPUTE_TLS" = issue ]; then
+    [ "$(jq -r '.required and .documentdb_verifiable and ((.ca_crt // "") | length > 0)' <<<"$ca")" = true ] \
+      && ok "GET .../ca: the gateway serves the compute's certificate, and here is its CA" \
+      || bad "GET .../ca under COMPUTE_TLS=issue (got: $ca)"
+    # The certificate names the Service only when the Service DNS is included,
+    # and the address is that name only on a plain ClusterIP Service.
+    if [ "$COMPUTE_TLS_SERVICE_DNS" = 1 ] && [ -n "$(want_endpoint_addr "$DEP")" ]; then
+      GW_CA_FILE=$(mktemp)
+      jq -r '.ca_crt' <<<"$ca" >"$GW_CA_FILE"
+      chmod 0644 "$GW_CA_FILE"   # a public certificate; the client image is not root
+      GW_HOST="yb-ep-$DEP.$NS.svc.cluster.local"
+      GW_TLS="tls=true&tlsCAFile=/tmp/ca.crt"
+      GW_DOCKER_ARGS=(--add-host "$GW_HOST:127.0.0.1" -v "$GW_CA_FILE:/tmp/ca.crt:ro")
+    fi
+  elif [ "$COMPUTE_TLS" = disable ]; then
+    [ "$(jq -r '.documentdb_verifiable' <<<"$ca")" = false ] \
+      && ok "GET .../ca says the self-signed gateway cannot be verified" \
+      || bad "GET .../ca with compute TLS off (got: $ca)"
+  fi
   gw_uri() {
-    printf 'mongodb://cloud_admin:%s@127.0.0.1:%s/?tls=true&tlsAllowInvalidCertificates=true&directConnection=true&authMechanism=SCRAM-SHA-256&serverSelectionTimeoutMS=30000' \
-      "$1" "$GW_PF_PORT"
+    printf 'mongodb://cloud_admin:%s@%s:%s/?%s&directConnection=true&authMechanism=SCRAM-SHA-256&serverSelectionTimeoutMS=30000' \
+      "$1" "$GW_HOST" "$GW_PF_PORT" "${2:-$GW_TLS}"
   }
   # pymongo from the pinned client image; the Python arrives on stdin.
   pymongo_run() {
-    docker run --rm -i --network host -e URI="$1" --entrypoint python3 "$DOCUMENTDB_CLIENT_IMAGE" - 2>&1
+    docker run --rm -i --network host ${GW_DOCKER_ARGS[@]+"${GW_DOCKER_ARGS[@]}"} \
+      -e URI="$1" --entrypoint python3 "$DOCUMENTDB_CLIENT_IMAGE" - 2>&1
   }
 
   # Every step goes client -> gateway -> documentdb on the compute (over the
@@ -1042,6 +1075,25 @@ except OperationFailure as e:
 PY
 )
   echo "$out" | grep -q '^AUTH:refused' && ok "wrong password refused ($(echo "$out" | grep '^AUTH:' | tail -1))" || bad "wrong password not refused (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  # The round trip above ran with verification on. Without the CA the same name
+  # must fail the handshake, or the driver was not verifying anything.
+  if [ -n "$GW_CA_FILE" ]; then
+    out=$(pymongo_run "$(gw_uri "$EP_PASSWORD" "tls=true")" <<'PY'
+import os, pymongo
+from pymongo.errors import ServerSelectionTimeoutError
+try:
+    pymongo.MongoClient(os.environ["URI"], serverSelectionTimeoutMS=5000).admin.command("ping")
+    print("VERIFY:accepted")
+except ServerSelectionTimeoutError as e:
+    print("VERIFY:refused verify_failed=%s" % ("CERTIFICATE_VERIFY_FAILED" in str(e)))
+PY
+)
+    echo "$out" | grep -q '^VERIFY:refused verify_failed=True$' \
+      && ok "gateway certificate is CA-signed: verified with the endpoint's CA, refused without it" \
+      || bad "gateway accepted a client without the CA, or failed for another reason (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+    rm -f "$GW_CA_FILE"
+  fi
 
   kill "$GW_PF_PID" 2>/dev/null; GW_PF_PID=""
   IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$DPROJ")

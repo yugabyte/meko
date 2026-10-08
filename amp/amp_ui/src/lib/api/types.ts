@@ -144,7 +144,9 @@ export type Endpoint = {
   /** MongoDB wire-protocol address (host:port) for this endpoint's documentdb
    *  gateway. Present only when the branch has the documentdb extension — the
    *  gateway is a sidecar deployed with the compute. The port is the gateway's
-   *  own default (10260), not MongoDB's 27017. */
+   *  own default (10260), not MongoDB's 27017. It serves the compute's
+   *  certificate, so the endpoint's CA bundle decides how a client verifies it
+   *  (lib/endpointTls.ts). */
   documentdb_address?: string;
   /** This endpoint's own stored settings. `pg_settings` merge over the
    *  branch's and win on a shared key; the daemon ones are its alone. */
@@ -200,6 +202,10 @@ export type BranchList = { branches: Branch[]; count: number; total: number };
  *  off. Show that rather than an empty download. */
 export type EndpointCaBundle = {
   required: boolean;
+  /** Present only on an endpoint with a documentdb_address: whether its gateway
+   *  serves the compute's certificate (false: it self-signs). Absent from a
+   *  controller that predates it. */
+  documentdb_verifiable?: boolean;
   /** PEM. Empty when `required` is false. */
   ca_crt?: string;
   /** The name to connect to for sslmode=verify-full — the certificate covers

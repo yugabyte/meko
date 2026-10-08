@@ -3,7 +3,7 @@
 **Status:** Implemented; not on by default. Closes the per-endpoint-certificate gap
 [`ac-ingress.md`](ac-ingress.md) opened.
 The operator side is [`runbooks/tls.md`](../../runbooks/tls.md#server-tls-on-the-computes-listener).
-**Last updated:** 2026-09-21
+**Last updated:** 2026-09-29
 
 A compute's Postgres listener can present a certificate that matches the name a
 client was handed, so `sslmode=verify-full` succeeds. Two issuers are supported —
@@ -48,7 +48,8 @@ Three pieces, one per layer:
 - **The endpoint chart** renders the `Certificate` (or mounts a shared Secret) and
   puts `COMPUTE_SSL_CERT_FILE` / `COMPUTE_SSL_KEY_FILE` in the ConfigMap.
 - **The supervisor** turns those two paths into the three GUCs, and reloads
-  Postgres when the files change.
+  Postgres when the files change. On a documentdb endpoint the gateway sidecar
+  serves the same two files ([below](#the-documentdb-gateway-serves-the-same-certificate)).
 - **The controller** decides, fleet-wide, which issuance shape every endpoint
   gets (`--deploy-compute-tls-*`). Per-endpoint is deliberately not a knob: a
   client's ability to verify an address is a property of the deployment, and an
@@ -374,10 +375,72 @@ drifts from `--ingress-zone-*` leaves every endpoint offering TLS that no client
 can verify, with every render, rollout and probe still green. The log line is what
 makes that findable.
 
+### The documentdb gateway serves the same certificate
+
+`documentdb_address` is the endpoint's own host on port 10260, and a certificate
+name carries no port, so whatever names the compute's host names the gateway's.
+With `computeTls.enabled` the chart mounts the same `compute-tls` volume into the
+`documentdb-gateway` sidecar, at the same path, and points
+`DOCUMENTDB_TLS_CERT_FILE` / `DOCUMENTDB_TLS_KEY_FILE` at it. Without it the
+gateway self-signs into an emptyDir and no client can verify it.
+
+The address is reported only for a `cluster_ip` endpoint
+([`ac-apis.md`](ac-apis.md)), so its host is always the Service's in-cluster
+name. Under `issue` with `includeServiceDns` (the default for a private CA)
+that name is in the SANs and the gateway verifies. A public wildcard can never
+name it, so under `existingSecret` with Let's Encrypt a client verifying the
+gateway fails on the hostname. That is left to fail rather than papered over:
+see below.
+
+- **`DOCUMENTDB_TLS_AUTO_GENERATE=false`, explicitly.** The image sets it `true`,
+  and upstream refuses `true` alongside a cert file. `false` also makes a missing
+  or unreadable file fatal at start, so a gateway under `computeTls` cannot fall
+  back to a self-signed certificate.
+- **The key is read through the `fsGroup` too.** The gateway runs as uid 10001,
+  not the compute's user. Without the group it fails at start with `Permission
+  denied`, which the render guard above already rules out.
+- **Renewal needs nothing from us.** The gateway polls both files' mtime every
+  60s and swaps its acceptor when either moves. Open connections keep theirs.
+  `metadata()` follows the `tls.crt → ..data/tls.crt` symlink, and the kubelet
+  writes a renewal into a fresh `..data` directory, so the mtime always moves.
+  Nothing confirms it on the wire the way the supervisor does for Postgres.
+- **It serves the chain.** Upstream parses only the first certificate in the file
+  and serves the leaf alone, so a leaf issued through an intermediate (a
+  customer's CA, any public CA) fails at a client that trusts only the root.
+  [`documentdb-gateway-cert-chain.patch`](../../compute/image/patches/documentdb-gateway-cert-chain.patch)
+  makes it send every certificate after the leaf too, as Postgres does with
+  `ssl_cert_file`. Under `issue` against `amp-ca` the root signs the leaf
+  directly, and the patch changes nothing.
+
+The client's string follows from the endpoint's `/ca` answer, which is what the
+UI builds it from. `documentdb_verifiable`, present wherever `documentdb_address`
+is, says whether the gateway serves the compute's certificate at all. It is read
+from the endpoint's Deployment, not the flag, because the flag says what the
+next render does and the pod runs what the last one did: a documentdb endpoint
+rendered before this change mounts `compute-tls` for Postgres while its gateway
+still self-signs, and nothing re-renders it on a controller upgrade. The CA
+comes from the Secret that Deployment's `compute-tls` volume names, for the
+same reason: after a rollback or a switch between `issue` and
+`existingSecret`, the pod serves what it mounted until it is re-rendered.
+`documentdb_verifiable` and `required` give
+`mongodb://<documentdb_address>/?tls=true&tlsCAFile=<ca.crt>`, the first alone
+`?tls=true`. Without it the gateway self-signs: only
+`tlsAllowInvalidCertificates=true` connects, and the UI says the server is
+unverified rather than offering that as the way in.
+
+Whether the certificate names the host is deliberately not checked. A
+deployment that serves a CA-signed certificate means clients to verify it; one
+that does not name the address is a misconfiguration, and a client that
+verifies and fails surfaces it where handing out an unverifying string would
+hide it.
+
 ## Enabling it on an existing fleet
 
 The certificate is part of the endpoint's rendered release, so existing endpoints
-do not have one until they are re-rendered. That is the fleet roll that already
+do not have one until they are re-rendered. The same holds for a controller
+upgrade that changes what is rendered: documentdb endpoints rendered before the
+gateway served the certificate keep self-signing on 10260, and `/ca` reports
+`documentdb_verifiable: false`, until they are re-rendered. That is the fleet roll that already
 exists for the YB-lane transition: `plan_endpoint_rerenders`
 ([`ac-tasks.md`](ac-tasks.md)). Nothing is filtered, and a re-render of a
 converged endpoint is a no-op Helm upgrade.
@@ -389,11 +452,9 @@ converged endpoint is a no-op Helm upgrade.
   endpoint whose LB outran `lbAddressPollTimeout` has neither the address nor
   the SAN until something redeploys it — #1380, which it inherits rather than
   extends. See above.
-- **No per-endpoint switch, and no advertisement of one.** `Endpoint.address` is a
-  `host:port`; a client learns whether it can `verify-full` from the deployment,
-  not from the API. Adding a field means an OpenAPI change and the
-  [`ycp` spec copy](../../../ycp/internal/ampclient/) alongside it, for something
-  a fleet-wide flag already answers.
+- **No per-endpoint switch.** `Endpoint.address` is a `host:port`. A client
+  learns what to trust from the endpoint's `/ca` answer, which reads the
+  endpoint's rendered Deployment and Secret.
 - **No client-certificate authentication.** `ssl_ca_file` is unset and pg_hba
   still uses a `host` rule with password auth, so this authenticates the
   *server* to the client and not the

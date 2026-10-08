@@ -2,11 +2,12 @@
 // core resource hooks in lib/api/queries.ts; they reuse the centralised query
 // keys (`qk`) and resource calls from there.
 
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/api/queries";
 import {
   createEndpoint,
   deleteEndpoint,
+  getEndpointCaBundle,
   listEndpoints,
   resizeEndpoint,
   updateEndpointSettings,
@@ -42,6 +43,22 @@ export function useBranchEndpoints(
       });
       return { byBranch, isLoading: results.some((r) => r.isLoading) };
     },
+  });
+}
+
+/** How a client verifies this endpoint. `enabled` keeps it off the endpoints
+ *  that do not need it up front: only a documentdb connection string depends
+ *  on it before anybody asks for the CA. */
+export function useEndpointCaBundle(
+  poolId: string,
+  ep: Pick<Endpoint, "id" | "cluster_id" | "branch_id">,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: qk.endpointCaBundle(poolId, ep.cluster_id, ep.branch_id, ep.id),
+    queryFn: () => getEndpointCaBundle(poolId, ep.cluster_id, ep.branch_id, ep.id),
+    enabled,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

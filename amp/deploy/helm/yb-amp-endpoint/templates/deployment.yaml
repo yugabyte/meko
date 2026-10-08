@@ -299,12 +299,29 @@ spec:
               value: /etc/documentdb/pg-url
             - name: DOCUMENTDB_LOG_LEVEL
               value: {{ .Values.documentdbGateway.logLevel | quote }}
+            {{- if .Values.computeTls.enabled }}
+            # The compute's own certificate. Its SANs name the endpoint's host,
+            # which is the gateway's host too: a certificate name carries no
+            # port. The gateway re-reads both files within a minute of their
+            # mtime moving, so a renewal needs no restart.
+            #
+            # AUTO_GENERATE=false overrides the image's `true`, which upstream
+            # refuses alongside a cert file. It also makes a missing file fatal
+            # at start rather than a quiet fall back to self-signing.
+            - name: DOCUMENTDB_TLS_CERT_FILE
+              value: /etc/amp/tls/compute/tls.crt
+            - name: DOCUMENTDB_TLS_KEY_FILE
+              value: /etc/amp/tls/compute/tls.key
+            - name: DOCUMENTDB_TLS_AUTO_GENERATE
+              value: "false"
+            {{- else }}
             # Self-signed on first start into an emptyDir: MongoDB drivers expect
-            # TLS, and the cert is per-pod and disposable.
+            # TLS, and without computeTls there is no certificate to serve.
             - name: DOCUMENTDB_TLS_AUTO_GENERATE
               value: "true"
             - name: DOCUMENTDB_TLS_STATE_DIR
               value: /var/lib/documentdb/tls
+            {{- end }}
           ports:
             - name: documentdb
               containerPort: {{ .Values.documentdbGateway.port }}
@@ -345,8 +362,17 @@ spec:
             - name: documentdb-gateway-conf
               mountPath: /etc/documentdb
               readOnly: true
+            {{- if .Values.computeTls.enabled }}
+            # The endpoint container's volume, whole-directory for the same
+            # reason. The gateway's uid reads the 0440 key through the pod's
+            # fsGroup, as Postgres does.
+            - name: compute-tls
+              mountPath: /etc/amp/tls/compute
+              readOnly: true
+            {{- else }}
             - name: documentdb-gateway-tls
               mountPath: /var/lib/documentdb/tls
+            {{- end }}
           {{- with .Values.documentdbGateway.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -361,8 +387,10 @@ spec:
         - name: documentdb-gateway-conf
           secret:
             secretName: {{ include "yb-amp-endpoint.fullname" . }}-documentdb-gateway
+        {{- if not .Values.computeTls.enabled }}
         - name: documentdb-gateway-tls
           emptyDir: {}
+        {{- end }}
         {{- end }}
         - name: run
         {{- if .Values.persistence.storageClass }}

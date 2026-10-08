@@ -51,6 +51,8 @@ export const qk = {
   branches: (poolId: string, clusterId: string) => ["branches", poolId, clusterId] as const,
   endpoints: (poolId: string, clusterId: string, branchId: string) =>
     ["endpoints", poolId, clusterId, branchId] as const,
+  endpointCaBundle: (poolId: string, clusterId: string, branchId: string, endpointId: string) =>
+    ["endpoint-ca", poolId, clusterId, branchId, endpointId] as const,
   tasks: (params: TaskListParams) => ["tasks", params] as const,
   extensions: ["extensions"] as const,
 };

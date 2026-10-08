@@ -304,9 +304,34 @@ Service name and any published name. If the address is missing, the second pass
 did not run — look for `endpoint certificate does not cover its client address`
 in the controller log, and re-render the endpoint to retry it.
 
+**The documentdb gateway** on a documentdb endpoint serves the same certificate
+on port 10260. It is published only on a `cluster_ip` endpoint's Service, so a
+MongoDB client dials the in-cluster name, which the certificate names under
+`mode: issue` with the Service DNS included (the default):
+
+```bash
+mongosh "mongodb://cloud_admin@yb-ep-<id>.<ns>.svc.cluster.local:10260/?tls=true&tlsCAFile=amp-ca.crt"
+```
+
+A Let's Encrypt wildcard cannot name that host, so under `existing-secret` a
+verifying client fails on the hostname, and the UI still hands out the verifying
+string so that it does. With compute TLS off the gateway self-signs, and the
+only string that connects is `tls=true&tlsAllowInvalidCertificates=true`:
+encrypted, with the server unverified. `GET …/endpoints/<id>/ca` reports which
+(`documentdb_verifiable`).
+
 **Existing endpoints** are re-rendered by the same fleet roll step 5 above uses —
 `curl -X POST <controller>/api/v1/endpoint-rerenders`. Until then they keep
-serving plaintext-only, which is what they did before.
+serving plaintext-only, and their gateways keep self-signing, which is what they
+did before.
+
+**Upgrading a controller that already has compute TLS on** to one whose chart has
+the gateway serve the certificate needs the same roll. Nothing re-renders on a
+controller upgrade, so each documentdb endpoint's gateway keeps self-signing
+until its endpoint is re-rendered; `/ca` reports `documentdb_verifiable: false` meanwhile,
+and the UI keeps offering the unverified string with its warning. The re-render
+recreates the pod (the gateway's env and mounts change), so roll it when a
+restart per documentdb endpoint is acceptable.
 
 ### Rehearsing it without a cluster
 
@@ -368,7 +393,18 @@ kubectl -n "${NS}" logs deploy/yb-ep-<id> | grep 'server certificate covers'
 # but no curl binary, so exec'ing curl is executable-not-found.)
 kubectl -n "${NS}" port-forward deploy/yb-ep-<id> 9899:9899 &
 curl -s localhost:9899/metrics | grep compute_cert_reload_pending
+
+# The documentdb gateway serves the same leaf, with its chain. It re-reads the
+# pair within 60s of a renewal and logs it; RESTARTS on the sidecar should not move.
+kubectl -n "${NS}" port-forward svc/yb-ep-<id> 10260:10260 &
+openssl s_client -connect 127.0.0.1:10260 -CAfile amp-ca.crt -showcerts </dev/null \
+  | grep -E '^ *[0-9] s:|Verify return code'
+kubectl -n "${NS}" logs deploy/yb-ep-<id> -c documentdb-gateway | grep 'TLS certificates reloaded'
 ```
+
+A gateway in `CrashLoopBackOff` right after enabling compute TLS, with `Failed to
+create TLS provider` in its log, could not read the mount; `No such file` is a
+Secret with no `tls.crt` or `tls.key` key. It never falls back to self-signing.
 
 A certificate stuck `Ready=False` in ACME mode is almost always the DNS-01 solver:
 `kubectl describe certificaterequest` then `kubectl -n cert-manager logs deploy/cert-manager`.
@@ -379,5 +415,7 @@ outside, the same way external-dns does (`ac-ingress.md`).
 (or unset) brings the compute back with `ssl` off, and only `sslmode=prefer`
 survives that: `require`, `verify-ca` and `verify-full` all fail closed once the
 server stops offering TLS. Those are exactly the modes this feature exists to
-make possible, so assume clients are pinned. Drop the pin everywhere it is set,
-confirm, and only then `computeTlsMode=disable` and a re-render.
+make possible, so assume clients are pinned. A documentdb client with `tlsCAFile`
+or a bare `tls=true` fails the same way once the gateway self-signs again. Drop
+the pin everywhere it is set, confirm, and only then `computeTlsMode=disable` and
+a re-render.

@@ -72,7 +72,8 @@ tls:
 # Enabling this turns `ssl = on` in the compute, so a client may connect with
 # `sslmode=verify-full` against a name in `dnsNames`. TLS stays OPTIONAL on the
 # wire — pg_hba still accepts plaintext — so turning this on breaks no existing
-# client.
+# client. The documentdb gateway, when rendered, serves the same certificate
+# instead of self-signing one.
 #
 # Two issuance shapes, because the two issuer families have opposite costs:
 #   mode: issue            one cert-manager Certificate per endpoint, from

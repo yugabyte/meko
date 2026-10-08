@@ -1166,13 +1166,13 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 	return GetEndpoint200JSONResponse(out), nil
 }
 
-// caBundleSource is the deployer's optional ability to report the CA behind an
-// endpoint's server certificate. Optional rather than part of Deployer: it is a
-// Kubernetes/cert-manager notion, and the docker deployer has nothing to answer
-// with. A deployer that cannot answer reports "none required", which is the
-// truth for it.
-type caBundleSource interface {
-	EndpointCABundle(ctx context.Context, id string) (string, error)
+// serverCertSource is the deployer's optional ability to report how a client
+// verifies an endpoint's server certificate. Optional rather than part of
+// Deployer: it is a Kubernetes/cert-manager notion, and the docker deployer has
+// nothing to answer with. A deployer that cannot answer reports no certificate
+// and a self-signing gateway, which is the truth for it.
+type serverCertSource interface {
+	EndpointServerCert(ctx context.Context, id string) (deploy.ServerCert, error)
 }
 
 // GetEndpointCaBundle returns what a client needs to verify this endpoint, so a
@@ -1180,7 +1180,9 @@ type caBundleSource interface {
 //
 // An empty bundle is a 200, not a 404: "you need no CA" is the correct answer
 // for a publicly-trusted certificate and for an endpoint with TLS off, and a
-// 404 would read as "something is missing" for both.
+// 404 would read as "something is missing" for both. `documentdb_verifiable`,
+// reported wherever documentdb_address is, decides the documentdb connection
+// string.
 func (c *Controllers) GetEndpointCaBundle(ctx context.Context, request GetEndpointCaBundleRequestObject) (GetEndpointCaBundleResponseObject, error) {
 	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId)
 	switch {
@@ -1196,18 +1198,22 @@ func (c *Controllers) GetEndpointCaBundle(ctx context.Context, request GetEndpoi
 	if h, _, splitErr := net.SplitHostPort(verifyName); splitErr == nil {
 		verifyName = h
 	}
-	src, ok := c.prov.Deployer.(caBundleSource)
-	if !ok {
-		return GetEndpointCaBundle200JSONResponse{Required: false, VerifyName: &verifyName}, nil
+	var sc deploy.ServerCert
+	if src, ok := c.prov.Deployer.(serverCertSource); ok {
+		if sc, err = src.EndpointServerCert(ctx, deploy.EndpointName(ep.ID)); err != nil {
+			return nil, fmt.Errorf("endpoint server certificate: %w", err)
+		}
 	}
-	pem, err := src.EndpointCABundle(ctx, deploy.EndpointName(ep.ID))
-	if err != nil {
-		return nil, fmt.Errorf("endpoint ca bundle: %w", err)
+	out := GetEndpointCaBundle200JSONResponse{Required: sc.CA != "", VerifyName: &verifyName}
+	if sc.CA != "" {
+		out.CaCrt = &sc.CA
 	}
-	if pem == "" {
-		return GetEndpointCaBundle200JSONResponse{Required: false, VerifyName: &verifyName}, nil
+	// Exactly where documentdb_address is reported (endpointToAPI).
+	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
+	if ep.Address != "" && c.documentDBGatewayReachable(branchExts, ep) {
+		out.DocumentdbVerifiable = &sc.GatewayServes
 	}
-	return GetEndpointCaBundle200JSONResponse{Required: true, CaCrt: &pem, VerifyName: &verifyName}, nil
+	return out, nil
 }
 
 func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error) {

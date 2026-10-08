@@ -11,8 +11,8 @@
 # the documentdb row in deploy/extensions/extensions.yaml; both fetch the same
 # tarball, pinned once in downloads_checksum.txt.
 #
-# The context is amp/, for that manifest and scripts/safe_curl.sh, and
-# Dockerfile.dockerignore beside this file admits nothing else:
+# The context is amp/, for that manifest, scripts/safe_curl.sh and the patch
+# below, and Dockerfile.dockerignore beside this file admits nothing else:
 #
 #   docker build -t <repo>/amp-documentdb-gateway:<tag> -f deploy/documentdb-gateway/Dockerfile .
 #
@@ -21,6 +21,8 @@
 #   DOCUMENTDB_PG_URL_FILE       file holding the PostgreSQL connection URL
 #   DOCUMENTDB_TLS_AUTO_GENERATE true to self-sign on first start
 #   DOCUMENTDB_TLS_STATE_DIR     where the generated cert is persisted
+#   DOCUMENTDB_TLS_CERT_FILE     PEM certificate chain to serve instead, re-read
+#   DOCUMENTDB_TLS_KEY_FILE      within a minute of either file's mtime moving
 #   DOCUMENTDB_LOG_LEVEL         tracing filter (info, debug, …)
 #
 # `documentdb-gateway check` probes the backend and verifies the extension is
@@ -36,18 +38,24 @@ WORKDIR /src
 # Pinned to the extension's release. A checksum mismatch fails the build rather
 # than shipping an unverified tree; the manifest and its checker are
 # bind-mounted, not copied in.
+#
+# The patch makes the gateway serve every certificate in its cert file, not just
+# the leaf, as Postgres does: a leaf issued through an intermediate fails at a
+# client that trusts only the root.
 ARG DOCUMENTDB_VERSION=0.116-0
 RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
     --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
+    --mount=type=bind,source=compute/image/patches/documentdb-gateway-cert-chain.patch,target=/patches/documentdb-gateway-cert-chain.patch \
     set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl pkg-config libssl-dev; \
+    apt-get install -y --no-install-recommends ca-certificates curl pkg-config libssl-dev patch; \
     rm -rf /var/lib/apt/lists/*; \
     sh /safe_curl/scripts/safe_curl.sh fetch \
       "https://github.com/documentdb/documentdb/archive/refs/tags/v${DOCUMENTDB_VERSION}.tar.gz" src.tgz; \
     mkdir -p documentdb; \
     tar -xzf src.tgz --strip-components=1 -C documentdb; \
-    rm src.tgz
+    rm src.tgz; \
+    patch --batch --fuzz=0 -p1 -d documentdb < /patches/documentdb-gateway-cert-chain.patch
 
 # Only the gateway workspace is built; the extension half of the tree is built
 # separately into its ImageVolume (deploy/extensions).
