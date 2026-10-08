@@ -169,8 +169,8 @@ can correct — it means reissuing addresses customers already hold.
 | Flag | Effect |
 |---|---|
 | `--deploy-ingress-enabled` | The opt-in. Off = the `ingress_*` modes are refused. |
-| `--deploy-ingress-zone-internal` | DNS zone for internal endpoint names. Optional: empty = names unpublished, addresses are `shard:port`. |
-| `--deploy-ingress-zone-external` | DNS zone for external endpoint names. Must differ from the internal zone, so an internal name can never reach a public one. |
+| `--deploy-ingress-zone-internal` | DNS zone for internal endpoint names, `nlb_internal` included. Optional: empty = names unpublished, addresses are `shard:port`. |
+| `--deploy-ingress-zone-external` | DNS zone for external endpoint names, `nlb_external` included. Must differ from the internal zone, so an internal name can never reach a public one. |
 | `--deploy-ingress-port-range` | Range each shard provisions in full; its width is how many endpoints a shard holds. |
 | `--deploy-ingress-headroom` | Free ports kept per family before another shard is built. Measured across the family's ready shards, so it may exceed one shard's width; refused only if above what `--deploy-ingress-max-shards` shards can hold. |
 | `--deploy-ingress-max-shards` | Ceiling on what the control plane may build unattended. |
@@ -213,6 +213,9 @@ can correct — it means reissuing addresses customers already hold.
   objects each endpoint release renders. It needs its **CRD source** enabled
   (`--source=crd`) or those objects are inert, and `policy=sync` rather than
   `upsert-only` or retiring an endpoint leaks its name forever.
+  `amp/deploy/external-dns/install.sh` installs one per zone with exactly that.
+  The same instances publish the `nlb_*` modes' names, which use these zones too
+  (`ac-k8s-deploy.md` §Published names).
 - **A DNS zone per family**, *when names are published at all*, so external-dns
   can be pinned per zone with `--zone-id-filter` and an internal endpoint's name
   can never be published to a public zone. A deployment with no zone publishes

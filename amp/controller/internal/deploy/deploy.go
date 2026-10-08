@@ -103,6 +103,10 @@ type EndpointSpec struct {
 	// modes only. Allocated before the deploy rather than discovered after it,
 	// which is what lets the address be known up front instead of waited for.
 	Ingress IngressSlot
+	// DNSName is an nlb_* endpoint's published name, as stored on its record —
+	// see DedicatedLBDNSName. Empty, or unqualified, publishes nothing and leaves
+	// the load balancer's own address as the client address.
+	DNSName string
 	// PasswordVerifier is the password for the compute's default user, as `pg_authid`
 	// stores it (see core.SCRAMPasswordVerifier). Set on the create path only: the
 	// plaintext is never persisted and the verifier is never read back, so a
@@ -175,6 +179,22 @@ func EntryPointName(port int) string { return fmt.Sprintf("pg-%d", port) }
 // is a migration rather than a config change. Said here because the alternative
 // is discovering it the first time somebody sets a zone.
 func PublishableDNSName(name string) bool { return strings.Contains(name, ".") }
+
+// DedicatedLBDNSName is the name published for an nlb_* endpoint, or "" where
+// its family has no zone. Minted once at create and stored on the endpoint's
+// record, so a zone set later does not rename an endpoint clients already hold.
+//
+// The full release name rather than the ingress path's short `ep-xxxxxxxx`: the
+// short form needs the allocation table's unique index to stay unique, and this
+// one is unique by construction. Being the release name also tells an operator
+// which Service a record belongs to, and it can never equal an ingress name,
+// which shares the zone.
+func DedicatedLBDNSName(endpointID uuid.UUID, zone string) string {
+	if zone == "" {
+		return ""
+	}
+	return EndpointName(endpointID) + "." + zone
+}
 
 // Client reachability modes for EndpointSpec.Connectivity. These strings are
 // also the chart's `service.connectivity` values and the API's enum, so one
@@ -342,6 +362,7 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 			ShardHost:  e.IngressShardHost,
 			RecordType: e.IngressRecordType,
 		},
+		DNSName:             e.DNSName,
 		Extensions:          mounts,
 		Labels:              e.Labels,
 		Identity:            IdentityLabels(e),

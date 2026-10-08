@@ -915,6 +915,107 @@ func TestKubernetesValuesConnectivity(t *testing.T) {
 	}
 }
 
+// An nlb_* endpoint's stored name reaches the chart with no target: the load
+// balancer has no address at render time, so the record waits for the second pass.
+// An unqualified name, or any other mode, renders no dns block at all.
+func TestKubernetesValuesDNSName(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	for _, tc := range []struct {
+		mode, name string
+		want       *dnsValues
+	}{
+		{ConnectivityNLBExternal, "yb-ep-1.db.example.com", &dnsValues{Name: "yb-ep-1.db.example.com"}},
+		{ConnectivityNLBInternal, "yb-ep-1.int.example.com", &dnsValues{Name: "yb-ep-1.int.example.com"}},
+		{ConnectivityNLBExternal, "", nil},
+		{ConnectivityNLBExternal, "yb-ep-1", nil},
+		{ConnectivityClusterIP, "yb-ep-1.db.example.com", nil},
+	} {
+		spec := testEndpointSpec()
+		spec.Connectivity = tc.mode
+		spec.DNSName = tc.name
+		got := k.values(spec, "yb-ep-rel").Service.DNS
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("%s %q: Service.DNS = %+v, want %+v", tc.mode, tc.name, got, tc.want)
+		}
+	}
+}
+
+// The record follows what the cloud gave the load balancer, and the client is
+// handed the name on the load balancer's port.
+func TestPublishLBName(t *testing.T) {
+	for _, tc := range []struct {
+		lb, wantAddr, wantTarget, wantType string
+	}{
+		{"k8s-a.elb.us-west-2.amazonaws.com:5433", "yb-ep-1.db.example.com:5433", "k8s-a.elb.us-west-2.amazonaws.com", "CNAME"},
+		{"34.82.143.2:5433", "yb-ep-1.db.example.com:5433", "34.82.143.2", "A"},
+	} {
+		d := &dnsValues{Name: "yb-ep-1.db.example.com"}
+		if got := publishLBName(d, tc.lb); got != tc.wantAddr {
+			t.Errorf("publishLBName(%q) = %q, want %q", tc.lb, got, tc.wantAddr)
+		}
+		if d.Target != tc.wantTarget || d.RecordType != tc.wantType {
+			t.Errorf("publishLBName(%q) record = %s %s, want %s %s", tc.lb, d.RecordType, d.Target, tc.wantType, tc.wantTarget)
+		}
+	}
+	// No name to publish: the load balancer's own address, as before.
+	if got := publishLBName(nil, "34.82.143.2:5433"); got != "34.82.143.2:5433" {
+		t.Errorf("publishLBName(nil) = %q, want the load balancer's address", got)
+	}
+}
+
+// A redeploy carries the live target into its first render, or a read failure
+// would have helm delete the record and external-dns withdraw the name.
+func TestPreRenderDNSTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name, ip, hostname string
+		err                error
+		wantErr            bool
+		wantTarget, wantRT string
+	}{
+		{name: "address", ip: "34.82.143.2", wantTarget: "34.82.143.2", wantRT: "A"},
+		{name: "hostname", hostname: "k8s-a.elb.amazonaws.com", wantTarget: "k8s-a.elb.amazonaws.com", wantRT: "CNAME"},
+		// The same preference as serviceLBAddress, so the second pass does not flip it.
+		{name: "both", ip: "34.82.143.2", hostname: "k8s-a.elb.amazonaws.com", wantTarget: "34.82.143.2", wantRT: "A"},
+		{name: "not addressed yet"},
+		{name: "create: no Service", err: fmt.Errorf("read: %w", errK8sNotFound)},
+		{name: "not in cluster", err: errNotInCluster},
+		{name: "transient error", err: errors.New("GET: 503"), wantErr: true},
+	} {
+		d := &dnsValues{Name: "yb-ep-1.db.example.com"}
+		err := preRenderDNSTarget(d, tc.ip, tc.hostname, tc.err)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: err = %v, want error %v", tc.name, err, tc.wantErr)
+		}
+		if d.Target != tc.wantTarget || d.RecordType != tc.wantRT {
+			t.Errorf("%s: record = %q %q, want %q %q", tc.name, d.RecordType, d.Target, tc.wantRT, tc.wantTarget)
+		}
+	}
+}
+
+// A name whose record failed to publish resolves to nothing; the load balancer's
+// own address is what works.
+func TestAddressAfterFailedSecondPass(t *testing.T) {
+	const name, lb = "yb-ep-1.db.example.com:5433", "34.82.143.2:5433"
+	if got := addressAfterFailedSecondPass(name, lb, true); got != lb {
+		t.Errorf("record not published: address = %q, want the load balancer's %q", got, lb)
+	}
+	// Only the certificate pass failed: the record was already live.
+	if got := addressAfterFailedSecondPass(name, lb, false); got != name {
+		t.Errorf("record unchanged: address = %q, want the name %q", got, name)
+	}
+}
+
+// Unique by construction, and never equal to an ingress name in the same zone.
+func TestDedicatedLBDNSName(t *testing.T) {
+	id := uuid.MustParse("3f9a2c41-0000-4000-8000-000000000001")
+	if got, want := DedicatedLBDNSName(id, "db.example.com"), "yb-ep-3f9a2c41-0000-4000-8000-000000000001.db.example.com"; got != want {
+		t.Errorf("DedicatedLBDNSName = %q, want %q", got, want)
+	}
+	if got := DedicatedLBDNSName(id, ""); got != "" {
+		t.Errorf("DedicatedLBDNSName with no zone = %q, want empty", got)
+	}
+}
+
 // The default endpoint sends no connectivity, and the chart's gate must then be
 // false — an empty string, not "cluster_ip" — so nothing renders the LB Service.
 func TestKubernetesValuesConnectivityDefaultsEmpty(t *testing.T) {
@@ -1255,21 +1356,24 @@ func TestComputeTLSCoversWhatTheChartAlreadyDerives(t *testing.T) {
 		name string
 		v    *computeTlsValues
 		host string
+		pub  string
 		want bool
 	}{
-		{"off entirely", nil, "10.1.2.3", true},
-		{"the Service DNS the chart adds", &computeTlsValues{IncludeServiceDns: true}, svc, true},
+		{"off entirely", nil, "10.1.2.3", "", true},
+		{"the Service DNS the chart adds", &computeTlsValues{IncludeServiceDns: true}, svc, "", true},
 		{"the Service DNS when the chart was told not to add it",
-			&computeTlsValues{IncludeServiceDns: false}, svc, false},
+			&computeTlsValues{IncludeServiceDns: false}, svc, "", false},
 		{"an address already recorded",
-			&computeTlsValues{IpAddresses: []string{"10.1.2.3"}}, "10.1.2.3:55433", true},
+			&computeTlsValues{IpAddresses: []string{"10.1.2.3"}}, "10.1.2.3:55433", "", true},
 		{"a name already recorded",
-			&computeTlsValues{DnsNames: []string{"lb.example.com"}}, "lb.example.com", true},
-		{"a load balancer nobody has covered", &computeTlsValues{IncludeServiceDns: true}, "34.55.1.9:55433", false},
+			&computeTlsValues{DnsNames: []string{"lb.example.com"}}, "lb.example.com", "", true},
+		{"a load balancer nobody has covered", &computeTlsValues{IncludeServiceDns: true}, "34.55.1.9:55433", "", false},
+		{"the published name the chart adds", &computeTlsValues{},
+			"yb-ep-1.db.example.com:55433", "yb-ep-1.db.example.com", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := computeTLSCovers(c.v, c.host, svc); got != c.want {
+			if got := computeTLSCovers(c.v, c.host, svc, c.pub); got != c.want {
 				t.Errorf("computeTLSCovers(%q) = %v, want %v", c.host, got, c.want)
 			}
 		})

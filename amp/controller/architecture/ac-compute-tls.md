@@ -58,8 +58,9 @@ Three pieces, one per layer:
 ### The chart derives the names, and is the only thing that could
 
 The certificate must cover the name the client holds, which is the endpoint's
-in-cluster Service DNS and — for an `ingress_*` endpoint — the published
-`service.ingress.dnsName` the controller allocated. Both are already in the
+in-cluster Service DNS and, where it has one, the endpoint's published name:
+`service.ingress.dnsName` for an `ingress_*` endpoint, `service.dns.name` for an
+`nlb_*` one. Both are already in the
 release's values, so the chart computes the SAN list itself rather than being
 handed it. A second source for the name a client is given is a second thing to
 keep in step, and the failure mode of drift is a certificate nobody can verify.
@@ -78,7 +79,8 @@ serve a certificate covering nothing a client dials:
 |---|---|---|
 | `ingress_*` **with** a DNS zone | the slot's `DNSName` | the chart, at render time |
 | `ingress_*` **without** a zone | the shard's own `ShardHost` | the controller, at render time — the slot is allocated *before* the deploy, so the address is already known |
-| `nlb_external` / `nlb_internal` | the load balancer's address | the controller, in a **second pass** — see below |
+| `nlb_*` **with** a DNS zone | its published name | the chart, at render time |
+| `nlb_*` **without** a zone | the load balancer's address | the controller, in a **second pass** — see below |
 | (any, in-cluster) | the Service DNS | the chart, when `includeServiceDns` |
 
 An address goes in as an **IP SAN** (`ipAddresses`) when it parses as one and a
@@ -93,7 +95,9 @@ remove. `addComputeTLSAddress` is the one place that decides.
 A LoadBalancer's address is assigned by the cloud *after* the Service exists, so
 at render time there is nothing to put in the certificate. `CreateEndpoint`
 already waits for that address — it is what the endpoint reports to clients — and
-`coverComputeTLSAddress` then re-renders the release with it.
+`renderClientAddress` then re-renders the release with it. The same pass points
+an `nlb_*` endpoint's DNS record at that address (`ac-k8s-deploy.md` §Published
+names).
 
 Re-rendered through helm rather than patched onto the `Certificate`, because helm
 owns that object: a direct patch survives exactly until the next redeploy. The

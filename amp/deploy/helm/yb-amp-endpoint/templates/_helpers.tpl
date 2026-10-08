@@ -153,6 +153,11 @@ name a client was handed is a certificate that fails verify-full.
 {{- $names = append $names . -}}
 {{- end -}}
 {{- end -}}
+{{- with (.Values.service.dns | default dict).name -}}
+{{- if contains "." . -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- end -}}
 {{- range .Values.computeTls.dnsNames -}}
 {{- $names = append $names . -}}
 {{- end -}}

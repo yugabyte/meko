@@ -528,7 +528,7 @@ endpoint:
 | `connectivity.mode` | What the endpoint gets |
 |---|---|
 | `cluster_ip` (default) | the ClusterIP Service only — in-cluster, plus the tailnet when tailnet-exposed |
-| `nlb_internal` | additionally a Postgres-only Service behind a VPC-routable AWS NLB |
+| `nlb_internal` | additionally a Postgres-only Service behind a VPC-routable load balancer of its own, and a published name where there is a zone (§Published names) |
 | `nlb_external` | the same, internet-facing |
 | `ingress_internal` | a port on a **shared** VPC-routable load balancer instead of one of its own ([`ac-ingress.md`](ac-ingress.md)) |
 | `ingress_external` | the same, internet-facing |
@@ -604,6 +604,49 @@ A redeploy re-renders the release from `core.EndpointDeploy` alone, so that reco
 carries `Connectivity`/`AllowedCIDRs`: without them `service.connectivity` renders
 empty, helm prunes the `-lb` Service, and the load balancer is deleted out from
 under every client holding its address.
+
+### Published names
+
+A load balancer's own address is a bare IP on GCP and Azure and an ELB hostname
+on AWS, and either dies with the load balancer. So where the deployment has a DNS
+zone for the endpoint's exposure, an `nlb_*` endpoint is given a name in it,
+`yb-ep-<id>.<zone>`, and `Endpoint.address` reports `<name>:<port>`. The zones are
+the shared ingress's (`--deploy-ingress-zone-internal` for `nlb_internal`,
+`-external` for `nlb_external`) and work with the ingress itself off. One
+external-dns per zone publishes both modes' records.
+
+- **The name is decided once.** `create_endpoint` mints it into the endpoint's
+  `config.dns_name` and every deploy reads it from there. A zone set later
+  therefore names no existing endpoint, and a zone changed later renames none,
+  for the same reason as on the ingress path (`ac-ingress.md` §Config).
+- **The full release name, not the ingress path's short `ep-xxxxxxxx`.** The
+  short form stays unique only through the allocation table's index. This one is
+  unique by construction, can never equal an ingress name in the same zone, and
+  tells an operator which Service a record belongs to.
+- **The record is a `DNSEndpoint` in the endpoint's release**, beside the `-lb`
+  Service, so `helm uninstall` withdraws it. Its target is the load balancer's
+  address, which the cloud assigns after the Service exists. A create therefore
+  renders it on the second pass, together with the certificate SAN. A redeploy
+  reads the target before rendering instead: rendering without it would have
+  helm delete the live record, and external-dns withdraw the name, until the
+  second pass. If that read fails the redeploy fails, rather than withdraw a
+  live name over a transient error.
+- **The name is in the certificate from the first render.** The chart adds
+  `service.dns.name` to the SANs itself, so no reissue waits on the load
+  balancer.
+- **No record, no name.** If the load balancer has no address in time, the
+  fallback above applies unchanged. If the second pass fails to publish the
+  record, the endpoint reports the load balancer's own address. Either way the
+  next redeploy publishes the name.
+- **Rolling the controller back withdraws the names.** An older controller
+  ignores `config.dns_name`, so its next redeploy of an endpoint renders no
+  record. external-dns then deletes the name, and the address reverts to the
+  load balancer's. Clients holding the name lose it, so a deployment that may
+  roll back past this release should leave the zones unset.
+
+external-dns: `amp/deploy/external-dns/install.sh`, once per zone. Credentials to
+write the zone are the zone owner's to grant (on BYOC, the customer's) and are not
+scripted.
 
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
 `--deploy-external-host`.

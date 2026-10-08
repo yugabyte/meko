@@ -288,6 +288,10 @@ type EndpointDeploy struct {
 	IngressDNSName    string
 	IngressShardHost  string
 	IngressRecordType string
+	// DNSName is an nlb_* endpoint's published name (config.dns_name), minted at
+	// create. Carried for the same reason as the slot above: a redeploy that
+	// dropped it would withdraw the endpoint's DNS record.
+	DNSName string
 	// Labels are the endpoint's EFFECTIVE tags — its cluster's merged with its
 	// own, its own winning — rendered onto every object of its release. Carried
 	// here because a redeploy renders from this record alone, and a dropped label

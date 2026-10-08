@@ -2783,9 +2783,10 @@ components:
         `202` and an endpoint row: nothing on the request path knows the cloud,
         so it is the deploy task that fails.
 
-        `Endpoint.address` reports the load-balancer address for these modes, and
-        for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
-        address, so a pod replacement leaves both correct.
+        `Endpoint.address` reports, for these modes, the endpoint's own DNS name
+        where the deployment has a zone for that exposure, and otherwise the
+        load-balancer address; for `cluster_ip`, the endpoint's in-cluster Service
+        DNS. None is a pod address, so a pod replacement leaves all of them correct.
       properties:
         mode:
           type: string

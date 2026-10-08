@@ -105,7 +105,7 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `computeTls.mode` | `issue` | `issue` = one cert-manager `Certificate` for this endpoint from `computeTls.issuerRef` (a private CA); `existingSecret` = mount `computeTls.existingSecret`, one wildcard the fleet shares (Let's Encrypt, where a per-endpoint order spends the 50-new-certificates-per-registered-domain weekly limit on 50 endpoint **creates**; renewals are exempt, so it caps create rate, not fleet size) |
 | `computeTls.issuerRef.kind` / `.name` / `.group` | `ClusterIssuer` / `amp-ca` / `cert-manager.io` | issuer for `mode: issue` |
 | `computeTls.existingSecret` | _(empty)_ | the `tls.crt` + `tls.key` Secret to mount for `mode: existingSecret`; must already exist in the namespace |
-| `computeTls.dnsNames` | `[]` | extra names, on top of the compute Service's DNS name and `service.ingress.dnsName` — both of which the chart adds itself |
+| `computeTls.dnsNames` | `[]` | extra names, on top of the compute Service's DNS name and the published name (`service.ingress.dnsName` or `service.dns.name`) — which the chart adds itself |
 | `computeTls.includeServiceDns` | `true` | cover the in-cluster Service name. Turn **off** for an ACME issuer: no public CA can validate `.svc.cluster.local` and one unvalidatable name fails the whole order |
 | `computeTls.certificate.duration` / `.renewBefore` | `2160h` / `720h` | lifetime and renewal lead. Leave the duration **empty** for ACME, which fixes it at 90 days and only warns that a request was ignored |
 | `yugabyte.password` | _(empty)_ | inline password → chart-managed Secret |
@@ -122,6 +122,7 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `service.cloud` | _(set by the controller)_ | whose LB annotations to render: `aws`, `gcp`, `azure`. The controller passes what it detected from node provider IDs, or its `--deploy-cloud` override; required for `nlb_internal` |
 | `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted. On the `ingress_*` modes it renders a `MiddlewareTCP` instead, since a shared load balancer cannot carry a per-endpoint allowlist — the API refuses it there for now |
 | `service.ingress` | _(set by the controller)_ | the allocated shard slot: `shard`, `entryPoint`, `port`, `dnsName`, `shardHost`, `recordType`. Required for the `ingress_*` modes and rendered by nothing else |
+| `service.dns` | _(set by the controller)_ | the `nlb_*` endpoint's published name: `name`, `target`, `recordType`. The `name` goes in the certificate. A `DNSEndpoint` for it is rendered only once `target` is set |
 | `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
 | `metrics.postgresExporter.image.tag` | `v0.17.1` | exporter image tag |
 | `metrics.postgresExporter.extraArgs` | `[]` | extra exporter flags, beyond the `--no-collector.database` / `--collector.stat_statements` the template sets |

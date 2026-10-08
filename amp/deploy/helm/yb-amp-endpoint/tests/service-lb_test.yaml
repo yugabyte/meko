@@ -217,3 +217,79 @@ tests:
       - equal:
           path: spec.loadBalancerSourceRanges
           value: ["10.1.0.0/16"]
+
+  # The published name. Rendered only once the controller knows what it points at:
+  # the cloud assigns the load balancer's address after the Service exists.
+  - it: publishes the endpoint's name as a CNAME to the load balancer's hostname
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+      service.dns:
+        name: yb-ep-abc.external.example
+        target: k8s-abc.elb.us-west-2.amazonaws.com
+        recordType: CNAME
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: DNSEndpoint
+      - equal:
+          path: spec.endpoints[0].dnsName
+          value: yb-ep-abc.external.example
+      - equal:
+          path: spec.endpoints[0].recordType
+          value: CNAME
+      - equal:
+          path: spec.endpoints[0].targets[0]
+          value: k8s-abc.elb.us-west-2.amazonaws.com
+      - equal:
+          path: spec.endpoints[0].recordTTL
+          value: 60
+
+  - it: publishes an A record where the cloud gave the load balancer an address
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: gcp
+      service.dns:
+        name: yb-ep-abc.internal.example
+        target: 10.0.5.20
+        recordType: A
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.endpoints[0].recordType
+          value: A
+      - equal:
+          path: spec.endpoints[0].targets[0]
+          value: 10.0.5.20
+
+  # The create's first render: the name is known, the address is not yet.
+  - it: renders no record before the load balancer has an address
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+      service.dns:
+        name: yb-ep-abc.external.example
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders no record for an unqualified name
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+      service.dns:
+        name: yb-ep-abc
+        target: k8s-abc.elb.us-west-2.amazonaws.com
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders no record for a mode with no load balancer
+    set:
+      service.connectivity: cluster_ip
+      service.dns:
+        name: yb-ep-abc.external.example
+        target: k8s-abc.elb.us-west-2.amazonaws.com
+    asserts:
+      - hasDocuments:
+          count: 0

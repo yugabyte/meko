@@ -81,4 +81,32 @@ spec:
       port: {{ .Values.endpoint.computePort }}
       targetPort: pg-compute
       protocol: TCP
+{{- with .Values.service.dns }}
+{{- if and .name .target (contains "." .name) }}
+---
+{{- /*
+The endpoint's own name, pointing at the load balancer above. A load balancer's
+own address is a bare IP off AWS and an ELB hostname on it, and either one dies
+with the load balancer; the name outlives it and is what goes in the certificate.
+
+Rendered only once the controller knows the target: the cloud assigns it after the
+Service exists, so a create renders this on its second pass. Same shape as the
+ingress_* record in ingressroute.yaml, and in the same release for the same
+reason — `helm uninstall` withdraws it with the endpoint.
+*/}}
+apiVersion: externaldns.k8s.io/v1alpha1
+kind: DNSEndpoint
+metadata:
+  name: {{ include "yb-amp-endpoint.fullname" $ }}-lb
+  labels:
+    {{- include "yb-amp-endpoint.labels" $ | nindent 4 }}
+spec:
+  endpoints:
+    - dnsName: {{ .name }}
+      recordType: {{ .recordType | default "CNAME" }}
+      targets:
+        - {{ .target }}
+      recordTTL: 60
+{{- end }}
+{{- end }}
 {{- end }}

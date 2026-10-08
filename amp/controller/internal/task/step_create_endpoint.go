@@ -94,6 +94,7 @@ type createEndpointStep struct {
 	state      StateStore
 	deployer   deploy.Deployer
 	ingress    IngressAllocator
+	dnsZones   ingress.Zones
 	yb         deploy.YBConn
 	scURL      string
 	extensions *extensions.Service
@@ -104,6 +105,7 @@ func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
 	return &createEndpointStep{
 		CreateEndpointArgs: args,
 		ingress:            deps.Ingress,
+		dnsZones:           deps.DNSZones,
 		state:              deps.State,
 		deployer:           deps.Deployer,
 		yb:                 deps.EndpointYB,
@@ -153,7 +155,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	// Record the endpoint row first: it claims the single-writer slot (a second
 	// writer is rejected here) and gives the deploy a stable id, before any
 	// compute is spent. config is the spec stored for (re)creation.
-	config, err := endpointConfig(s.CreateEndpointArgs, extensionNames(spec.Extensions))
+	config, err := endpointConfig(s.CreateEndpointArgs, extensionNames(spec.Extensions), s.dnsName())
 	if err != nil {
 		return Fail(err)
 	}
@@ -188,6 +190,10 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	spec.Labels = rec.Labels
 	spec.Identity = deploy.IdentityLabels(rec)
 	spec.IdentityAnnotations = deploy.IdentityAnnotations(rec)
+	// Read back rather than minted again: on a replay the record already exists
+	// and the insert above wrote nothing, so the stored name is the one clients
+	// may already hold, whatever the zones say now.
+	spec.DNSName = rec.DNSName
 
 	if deploy.IsIngress(s.Connectivity) {
 		slot, err := s.ingressSlot(ctx)
@@ -297,7 +303,20 @@ func orEmptyAnyMap(m map[string]any) map[string]any {
 	return m
 }
 
-func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error) {
+// dnsName is the name to publish for an nlb_* endpoint, or "" for any other
+// mode or where its family has no zone.
+func (s *createEndpointStep) dnsName() string {
+	if !deploy.IsDedicatedLB(s.Connectivity) {
+		return ""
+	}
+	family := ingress.FamilyInternal
+	if s.Connectivity == deploy.ConnectivityNLBExternal {
+		family = ingress.FamilyExternal
+	}
+	return deploy.DedicatedLBDNSName(s.EndpointID, s.dnsZones.For(family))
+}
+
+func endpointConfig(args CreateEndpointArgs, extensions []string, dnsName string) ([]byte, error) {
 	cfg := map[string]any{
 		"cluster_id": args.ClusterID,
 		"branch_id":  args.BranchID,
@@ -316,6 +335,9 @@ func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error
 	}
 	if len(extensions) > 0 {
 		cfg["extensions"] = extensions
+	}
+	if dnsName != "" {
+		cfg["dns_name"] = dnsName
 	}
 	if len(args.Extended) > 0 {
 		cfg["extended"] = args.Extended

@@ -36,9 +36,11 @@ rbac:
   nodeRead: true
   # -- Grant the controller the two third-party CRDs the shared-ingress modes
   # write: Traefik's IngressRouteTCP/MiddlewareTCP (an endpoint's route and its
-  # allowlist) and external-dns's DNSEndpoint (its published name). Both travel
-  # in the endpoint's own Helm release, so without these an `ingress_*` create
-  # is rejected by the API server mid-install.
+  # allowlist) and external-dns's DNSEndpoint (its published name, which the
+  # `nlb_*` modes write too). Both travel in the endpoint's own Helm release, so
+  # without these an `ingress_*` create is rejected by the API server
+  # mid-install, and an `nlb_*` endpoint with a DNS zone is left with no record
+  # and reports its load balancer's address instead.
   #
   # Default ON but harmless when unused: an RBAC rule naming a CRD that is not
   # installed is simply inert, whereas discovering the grant is missing costs a
@@ -206,13 +208,14 @@ controller:
       # the ingress_* connectivity modes are refused.
       enabled: false
       # -- DNS zone INTERNAL endpoint names are published under, e.g.
-      # internal.byoc.example.com. OPTIONAL and separate from `enabled`: with no
+      # internal.byoc.example.com — for `nlb_internal` endpoints as well, whether
+      # or not `enabled` is set. OPTIONAL and separate from `enabled`: with no
       # zone the names are allocated but not published, and an endpoint's address
       # is its shard's host:port. That is what a cluster with no external-dns
       # (kind, CI) gets, and it routes identically.
       zoneInternal: ""
       # -- DNS zone EXTERNAL endpoint names are published under, e.g.
-      # external.byoc.example.com. Kept separate from the internal zone so
+      # external.byoc.example.com, `nlb_external` included. Kept separate from the internal zone so
       # external-dns can be pinned to each with --zone-id-filter, and an internal
       # endpoint's name can never be published to a public zone. The allocator
       # stores the name it mints, so pointing both at one zone is not something a

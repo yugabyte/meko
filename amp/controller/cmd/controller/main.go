@@ -418,6 +418,9 @@ func runServe(args []string) error {
 		VoyagerMigrations:         prov.VoyagerMigrations,
 		VoyagerMigrationEndpoints: migrationEndpointLookup{backend: backend},
 		VoyagerRunner:             prov.VoyagerRunner,
+		// The nlb_* modes publish names in the same zones as the ingress_* ones,
+		// whether or not the shared ingress is on.
+		DNSZones: ingressZones,
 	}
 	// Typed nil in an interface is not nil, so only assign when there is one —
 	// otherwise the steps' `if s.ingress != nil` guard would pass and dereference.

@@ -106,7 +106,8 @@ computeTls:
   existingSecret: ""
   # -- Names to put in the certificate, beyond the two the chart adds itself:
   # the compute Service's in-cluster DNS name (unless includeServiceDns is false)
-  # and service.ingress.dnsName when the endpoint holds a published ingress slot.
+  # and service.ingress.dnsName / service.dns.name when the endpoint has a
+  # published name.
   # The controller adds the endpoint's own client-facing address here when that
   # address is a NAME it only learns after the Service exists — an nlb_* load
   # balancer with a hostname, or an ingress shard reached by its hostname.
@@ -465,6 +466,14 @@ service:
   #   shardHost   where that name points: the shard load balancer's address
   #   recordType  CNAME where the cloud gave a hostname, A where it gave an address
   ingress: {}
+  # -- The published name for the `nlb_*` modes only, set by the controller.
+  # The name goes in the certificate as soon as it is set. The DNSEndpoint
+  # pointing it at the load balancer is rendered only once `target` is known,
+  # because the cloud assigns that address after the Service exists.
+  #   name        this endpoint's own published name
+  #   target      the load balancer's hostname or address
+  #   recordType  CNAME for a hostname, A for an address
+  dns: {}
   # -- CIDRs allowed to reach the load balancer (`loadBalancerSourceRanges`).
   # Portable: a core Service field, honoured on every cloud.
   # Empty means no restriction, which for `nlb_external` puts Postgres on the

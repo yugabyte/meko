@@ -29,7 +29,8 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 		Connectivity: ConnectivityNLBInternal, AllowedCIDRs: []string{"10.0.0.0/16"},
 		IngressShard: "pgin-0", IngressPort: 20007, IngressDNSName: "ep-abc.pg.example",
 		IngressShardHost: "lb-0.example", IngressRecordType: "CNAME",
-		Labels: map[string]string{"team": "web"},
+		DNSName: "yb-ep-1.db.example.com",
+		Labels:  map[string]string{"team": "web"},
 	}, yb, "http://sc:50051", mounts)
 
 	if spec.Name != EndpointName(epID) {

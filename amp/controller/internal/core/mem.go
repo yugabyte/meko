@@ -34,7 +34,11 @@ type MemBackend struct {
 	// Postgres: it lives in the endpoint's `config` blob and surfaces only on the
 	// deploy projection, never on Endpoint.
 	endpointExts map[uuid.UUID][]string
-	writers      map[branchKey]struct{} // at most one read_write endpoint per branch
+	// endpointDNS is each nlb_* endpoint's published name, kept beside the
+	// endpoint for the same reason: config.dns_name in Postgres, surfaced only on
+	// the deploy projection.
+	endpointDNS map[uuid.UUID]string
+	writers     map[branchKey]struct{} // at most one read_write endpoint per branch
 	// extensions an operator registered (the extensions.Store half); keyed by
 	// name, which is the identity in the schema too.
 	extensions   map[string]extensions.Extension
@@ -79,6 +83,7 @@ func NewMemBackend() *MemBackend {
 		branchNames:  make(map[branchNameKey]struct{}),
 		endpoints:    make(map[uuid.UUID]Endpoint),
 		endpointExts: make(map[uuid.UUID][]string),
+		endpointDNS:  make(map[uuid.UUID]string),
 		writers:      make(map[branchKey]struct{}),
 		now:          time.Now,
 	}
@@ -639,6 +644,7 @@ func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) End
 		Connectivity:    e.Connectivity,
 		AllowedCIDRs:    e.AllowedCIDRs,
 		Extensions:      m.endpointExts[id],
+		DNSName:         m.endpointDNS[id],
 		Labels:          MergeTags(m.clusters[clusterID].Tags, e.Tags),
 	}
 }
@@ -799,9 +805,13 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		Memory       string   `json:"memory"`
 		Connectivity string   `json:"connectivity"`
 		AllowedCIDRs []string `json:"allowed_cidrs"`
+		DNSName      string   `json:"dns_name"`
 	}
 	if len(config) > 0 {
 		_ = json.Unmarshal(config, &cfg)
+	}
+	if cfg.DNSName != "" {
+		m.endpointDNS[endpointID] = cfg.DNSName
 	}
 	var settings map[string]string
 	if len(pgSettings) > 0 {

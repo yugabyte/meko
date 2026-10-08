@@ -121,6 +121,23 @@ tests:
           path: spec.dnsNames
           content: ep-3f9a2c41.db.example.com
 
+  # Covered from the first render, before the record exists: the name is minted
+  # up front, so the certificate need not wait for the load balancer.
+  - it: covers an nlb_* endpoint's published name
+    set:
+      computeTls.enabled: true
+      service.connectivity: nlb_external
+      service.cloud: aws
+      service.dns:
+        name: yb-ep-abc.db.example.com
+    release:
+      name: yb-ep-abc
+      namespace: amp
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: yb-ep-abc.db.example.com
+
   # An unqualified name is what a deployment with no DNS zone allocates. It is
   # not a name any client can reach, and no issuer will sign it.
   - it: leaves an unpublished ingress name out of the certificate

@@ -313,6 +313,15 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	if IsDedicatedLB(spec.Connectivity) {
 		vals.Service.Cloud = k.detectCloud(ctx)
 	}
+	// On a redeploy the record is already published. Rendering without its
+	// target would have helm delete it, and external-dns withdraw the name, until
+	// the second pass below put it back — so the target is read first.
+	if d := vals.Service.DNS; d != nil {
+		ip, hostname, err := k.loadBalancerIngress(ctx, release+"-lb")
+		if err := preRenderDNSTarget(d, ip, hostname, err); err != nil {
+			return Endpoint{}, fmt.Errorf("read load balancer of %s before redeploying its DNS record: %w", release, err)
+		}
+	}
 	if err := k.applyDiskSizing(&vals); err != nil {
 		return Endpoint{}, err
 	}
@@ -378,61 +387,66 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 			"connectivity", spec.Connectivity, "shard", spec.Ingress.Shard)
 		return Endpoint{ID: release, Address: addr, TailnetAddress: k.tailnetAddress(release), Version: vals.Image.Tag}, nil
 	}
+	var addr, lb string
+	dnsTarget := ""
+	if d := vals.Service.DNS; d != nil {
+		dnsTarget = d.Target
+	}
 	if IsDedicatedLB(spec.Connectivity) {
-		if lb := k.serviceLBAddress(ctx, release+"-lb"); lb != "" {
-			if err := k.verifyReady(ctx, release); err != nil {
-				return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
-			}
-			k.logger.Info("endpoint ready", "endpoint", release, "address", lb, "connectivity", spec.Connectivity)
-			// Version, as on every other return: the steps persist the endpoint's
-			// version only when the deployer reports one, and a NULL version makes
-			// the next redeploy silently move it to the deployer default.
-			return Endpoint{ID: release, Address: lb, TailnetAddress: k.tailnetAddress(release), Version: vals.Image.Tag}, nil
+		if lb = k.serviceLBAddress(ctx, release+"-lb"); lb != "" {
+			addr = publishLBName(vals.Service.DNS, lb)
+		} else {
+			// Provisioning a cloud load balancer routinely outruns
+			// lbAddressPollTimeout. Fall through rather than fail the create: the
+			// endpoint is up and serving on the Service-type address, and no DNS
+			// record is published, since there is nothing yet for it to point at.
+			//
+			// Nothing re-polls on its own. The recorded address stays the fallback —
+			// the Service DNS, which serves in-cluster clients but not the ones this
+			// mode exists for — until the endpoint's next controller-driven redeploy
+			// re-runs this resolution (#1380). See "Endpoint stuck on the in-cluster
+			// address after an nlb_* create" in amp/runbooks/controller_runbook.md.
+			k.logger.Warn("endpoint load balancer not ready in time; falling back to the Service-type address",
+				"endpoint", release, "connectivity", spec.Connectivity)
 		}
-		// Provisioning a cloud load balancer routinely outruns
-		// lbAddressPollTimeout. Fall through rather than fail the create: the
-		// endpoint is up and serving on the Service-type address.
-		//
-		// Nothing re-polls on its own. The recorded address stays the fallback —
-		// the Service DNS, which serves in-cluster clients but not the ones this
-		// mode exists for — until the endpoint's next controller-driven redeploy
-		// re-runs this resolution (#1380). See "Endpoint stuck on the in-cluster
-		// address after an nlb_* create" in amp/runbooks/controller_runbook.md.
-		k.logger.Warn("endpoint load balancer not ready in time; falling back to the Service-type address",
-			"endpoint", release, "connectivity", spec.Connectivity)
 	}
-	// Only the *client* address. The controller reaches the endpoint's
-	// pageserver/safekeeper by the stable Service DNS (CONTROLLER_REACHABLE_HOST
-	// set in the chart), so a pod reschedule re-registers the same address (no
-	// 409, #121).
-	external := ""
-	switch k.cfg.ServiceType {
-	case serviceTypeLoadBalancer:
-		external = k.serviceLBAddress(ctx, release)
-	case serviceTypeNodePort:
-		external = k.nodePortClientAddress(ctx, release)
+	if addr == "" {
+		// Only the *client* address. The controller reaches the endpoint's
+		// pageserver/safekeeper by the stable Service DNS (CONTROLLER_REACHABLE_HOST
+		// set in the chart), so a pod reschedule re-registers the same address (no
+		// 409, #121).
+		external := ""
+		switch k.cfg.ServiceType {
+		case serviceTypeLoadBalancer:
+			external = k.serviceLBAddress(ctx, release)
+		case serviceTypeNodePort:
+			external = k.nodePortClientAddress(ctx, release)
+		}
+		addr = clientAddress(k.cfg.ServiceType, k.address(release), external)
 	}
-	addr := clientAddress(k.cfg.ServiceType, k.address(release), external)
-	// SECOND PASS. The certificate rendered above could not cover this address:
-	// a LoadBalancer's is assigned by the cloud after the Service exists, so at
-	// render time there was nothing to put in the SANs. Now there is.
+	// SECOND PASS. The release rendered above could not know this address: a
+	// LoadBalancer's is assigned by the cloud after the Service exists, so at
+	// render time there was nothing to put in the certificate's SANs or in an
+	// nlb_* endpoint's DNS record. Now there is.
 	//
-	// Re-rendered through helm rather than patched onto the Certificate,
-	// because helm owns that object — a direct patch survives exactly until the
-	// next redeploy, which is the kind of fix that works in a demo and not in a
-	// fleet. The values are the durable record.
+	// Re-rendered through helm rather than patched onto the objects, because
+	// helm owns them — a direct patch survives exactly until the next redeploy,
+	// which is the kind of fix that works in a demo and not in a fleet. The
+	// values are the durable record.
 	//
 	// Costs a reissue and a reload, not a restart: only the Certificate's spec
 	// moves, so cert-manager reissues, the kubelet propagates, and the
 	// supervisor's watcher picks the new pair up and confirms it on the wire
 	// (compute/architecture/single-container-endpoint.md).
-	if err := k.coverComputeTLSAddress(ctx, release, &vals, addr); err != nil {
+	dnsChanged := vals.Service.DNS != nil && vals.Service.DNS.Target != dnsTarget
+	if err := k.renderClientAddress(ctx, release, &vals, addr, dnsChanged); err != nil {
 		// Not fatal. The endpoint is up and serving; what it lacks is a
-		// certificate a client can verify by this address, which is worth a
-		// loud line and a retry on the next redeploy rather than tearing down
-		// a working create.
-		k.logger.Warn("endpoint certificate does not cover its client address; verify-full will fail against it",
+		// certificate a client can verify by this address, or its published
+		// name, which is worth a loud line and a retry on the next redeploy
+		// rather than tearing down a working create.
+		k.logger.Warn("endpoint certificate or DNS record does not cover its client address",
 			"endpoint", release, "address", addr, "error", err)
+		addr = addressAfterFailedSecondPass(addr, lb, dnsChanged)
 	}
 	// helm --wait covers the pod, not the Service in front of it: it has no
 	// endpoint check, so a release is "ready" before the pod is a backend the
@@ -564,6 +578,9 @@ func (k *KubernetesDeployer) tailnetAddress(release string) string {
 // errNotInCluster is returned when there is no in-cluster API to talk to.
 var errNotInCluster = errors.New("not running in-cluster")
 
+// errK8sNotFound is a 404 from the Kubernetes API: the object does not exist.
+var errK8sNotFound = errors.New("not found")
+
 // k8sAPIGet does an authenticated GET against the in-cluster Kubernetes API and
 // returns the response body, or (nil, false) when not running in-cluster or on
 // any error (callers fall back to a static address).
@@ -614,6 +631,9 @@ func (k *KubernetesDeployer) k8sAPIGetErr(ctx context.Context, path string) ([]b
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("GET %s: %s: %w", path, resp.Status, errK8sNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", path, resp.Status)
 	}
@@ -730,10 +750,27 @@ func (k *KubernetesDeployer) ShardPorts(ctx context.Context, release string) ([]
 // Returned as plain values rather than a shared type so this package keeps
 // satisfying ingress.AddressLookup structurally, without importing it.
 func (k *KubernetesDeployer) ShardAddress(ctx context.Context, release string) (host string, isHostname, addressed bool, err error) {
-	path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s", k.cfg.Namespace, release)
+	ip, hostname, err := k.loadBalancerIngress(ctx, release)
+	switch {
+	case err != nil:
+		return "", false, false, fmt.Errorf("shard %s: %w", release, err)
+	case hostname != "":
+		return hostname, true, true, nil
+	case ip != "":
+		return ip, false, true, nil
+	}
+	return "", false, false, nil
+}
+
+// loadBalancerIngress reads, once, what the cloud has assigned a LoadBalancer
+// Service: both empty until it has. A missing Service is an error wrapping
+// errK8sNotFound. The caller picks between the two, because the shard path and
+// the nlb_* path prefer them in opposite orders.
+func (k *KubernetesDeployer) loadBalancerIngress(ctx context.Context, service string) (ip, hostname string, err error) {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s", k.cfg.Namespace, service)
 	body, err := k.k8sAPIGetErr(ctx, path)
 	if err != nil {
-		return "", false, false, fmt.Errorf("read shard service %s: %w", release, err)
+		return "", "", fmt.Errorf("read service %s: %w", service, err)
 	}
 	var out struct {
 		Status struct {
@@ -746,19 +783,13 @@ func (k *KubernetesDeployer) ShardAddress(ctx context.Context, release string) (
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", false, false, fmt.Errorf("parse shard service %s: %w", release, err)
+		return "", "", fmt.Errorf("parse service %s: %w", service, err)
 	}
 	if len(out.Status.LoadBalancer.Ingress) == 0 {
-		return "", false, false, nil
+		return "", "", nil
 	}
 	ing := out.Status.LoadBalancer.Ingress[0]
-	switch {
-	case ing.Hostname != "":
-		return ing.Hostname, true, true, nil
-	case ing.IP != "":
-		return ing.IP, false, true, nil
-	}
-	return "", false, false, nil
+	return ing.IP, ing.Hostname, nil
 }
 
 // serviceLBAddress returns "<externalIP>:<computePort>" once the endpoint's
@@ -1193,30 +1224,36 @@ func (k *KubernetesDeployer) EndpointSupervisorURL(id string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, supervisorHTTPPort)
 }
 
-// coverComputeTLSAddress re-renders the endpoint so its certificate covers the
-// address clients were actually given.
+// renderClientAddress re-renders the endpoint so its certificate covers the
+// address clients were actually given, and so an nlb_* endpoint's DNS record
+// points at its load balancer.
 //
-// A no-op in every case but the one it exists for: compute TLS off, an address
-// the chart already derives (the Service DNS, or an ingress slot's published
-// name), or a repeat of one already in the values all return without touching
-// helm. So an ordinary ClusterIP or ingress_*-with-DNS create pays nothing.
+// A no-op in every case but the ones it exists for: compute TLS off, an address
+// the chart already derives (the Service DNS, or a published name), or a repeat
+// of one already in the values all skip helm unless the record changed. So an
+// ordinary ClusterIP or ingress_*-with-DNS create pays nothing.
 //
 // No --wait: the pod is already up and this changes nothing about it. Waiting
 // would only hold the create open while cert-manager works, and the endpoint is
 // serving throughout on the certificate it already has.
-func (k *KubernetesDeployer) coverComputeTLSAddress(ctx context.Context, release string, vals *chartValues, addr string) error {
-	if vals.ComputeTLS == nil || vals.ComputeTLS.Mode != computeTLSChartModeIssue {
-		// existing-secret mounts a Secret this chart did not create, whose SANs
-		// are the issuer's business and not reachable from here.
+func (k *KubernetesDeployer) renderClientAddress(ctx context.Context, release string, vals *chartValues, addr string, dnsChanged bool) error {
+	// existing-secret mounts a Secret this chart did not create, whose SANs are
+	// the issuer's business and not reachable from here.
+	extendTLS := vals.ComputeTLS != nil && vals.ComputeTLS.Mode == computeTLSChartModeIssue &&
+		!computeTLSCovers(vals.ComputeTLS, addr, k.address(release), vals.Service.publishedName())
+	if !extendTLS && !dnsChanged {
 		return nil
 	}
-	if computeTLSCovers(vals.ComputeTLS, addr, k.address(release)) {
-		return nil
+	if extendTLS {
+		addComputeTLSAddress(vals.ComputeTLS, addr)
+		k.logger.Info("extending the endpoint certificate to its client address",
+			"endpoint", release, "address", addr,
+			"dns_names", vals.ComputeTLS.DnsNames, "ip_addresses", vals.ComputeTLS.IpAddresses)
 	}
-	addComputeTLSAddress(vals.ComputeTLS, addr)
-	k.logger.Info("extending the endpoint certificate to its client address",
-		"endpoint", release, "address", addr,
-		"dns_names", vals.ComputeTLS.DnsNames, "ip_addresses", vals.ComputeTLS.IpAddresses)
+	if dnsChanged {
+		k.logger.Info("publishing the endpoint's DNS record",
+			"endpoint", release, "name", vals.Service.DNS.Name, "target", vals.Service.DNS.Target)
+	}
 	return k.helm.UpgradeInstall(ctx, helm.Release{
 		Name:      release,
 		Chart:     k.cfg.ChartPath,
@@ -1306,7 +1343,7 @@ func addComputeTLSAddress(v *computeTlsValues, host string) {
 // computeTLSCovers reports whether the rendered values already carry host, so
 // the second pass can skip a redundant helm upgrade — and with it a certificate
 // reissue and the reload that follows.
-func computeTLSCovers(v *computeTlsValues, host, serviceDNS string) bool {
+func computeTLSCovers(v *computeTlsValues, host, serviceDNS, publishedName string) bool {
 	if v == nil {
 		return true // compute TLS is off; nothing to cover.
 	}
@@ -1319,8 +1356,12 @@ func computeTLSCovers(v *computeTlsValues, host, serviceDNS string) bool {
 	if h, _, err := net.SplitHostPort(serviceDNS); err == nil {
 		serviceDNS = h
 	}
-	// The chart adds the Service DNS itself when includeServiceDns is on.
+	// The chart adds the Service DNS itself when includeServiceDns is on, and a
+	// published name always.
 	if v.IncludeServiceDns && host == serviceDNS {
+		return true
+	}
+	if publishedName != "" && host == publishedName {
 		return true
 	}
 	return slices.Contains(v.IpAddresses, host) || slices.Contains(v.DnsNames, host)
@@ -1517,6 +1558,96 @@ type serviceValues struct {
 	// endpoint's route, its per-endpoint allowlist middleware and its DNS record
 	// from it. Omitted entirely for every other mode.
 	Ingress *ingressValues `json:"ingress,omitempty"`
+	// DNS is an nlb_* endpoint's published name and, once its load balancer has
+	// an address, the record's target. Omitted for every other mode and where
+	// there is no name to publish.
+	DNS *dnsValues `json:"dns,omitempty"`
+}
+
+// publishedName is the name the chart puts in the certificate itself, or "".
+func (v serviceValues) publishedName() string {
+	switch {
+	case v.DNS != nil:
+		return v.DNS.Name
+	case v.Ingress != nil:
+		return v.Ingress.DNSName
+	}
+	return ""
+}
+
+// dnsValues is what the chart needs to publish an nlb_* endpoint's name.
+type dnsValues struct {
+	Name       string `json:"name"`
+	Target     string `json:"target,omitempty"`
+	RecordType string `json:"recordType,omitempty"`
+}
+
+// setTarget points the record at a load balancer: a CNAME to a hostname (AWS),
+// an A to an address (GCP, Azure).
+func (d *dnsValues) setTarget(host string, isHostname bool) {
+	d.Target = host
+	d.RecordType = "A"
+	if isHostname {
+		d.RecordType = "CNAME"
+	}
+}
+
+// publishLBName returns the client address for an nlb_* endpoint whose load
+// balancer answers at lb ("host:port"): its published name where it has one,
+// with the record pointed at lb's host, else lb itself.
+func publishLBName(d *dnsValues, lb string) string {
+	if d == nil {
+		return lb
+	}
+	host, port, err := net.SplitHostPort(lb)
+	if err != nil {
+		return lb
+	}
+	d.setTarget(host, net.ParseIP(host) == nil)
+	return net.JoinHostPort(d.Name, port)
+}
+
+// preRenderDNSTarget fills in a redeploy's record target from what the load
+// balancer already has, before the release is rendered, so the render does not
+// withdraw a live record. IP first, as serviceLBAddress prefers it: the second
+// pass re-derives the target from that, and two preferences would flip the
+// record between A and CNAME on every redeploy of a Service that reports both.
+//
+// A missing Service (a create) or no in-cluster API leaves the target empty.
+// Any other read error is returned: rendering without the target would withdraw
+// a live name over a transient error.
+func preRenderDNSTarget(d *dnsValues, ip, hostname string, err error) error {
+	switch {
+	case errors.Is(err, errK8sNotFound), errors.Is(err, errNotInCluster):
+		return nil
+	case err != nil:
+		return err
+	case ip != "":
+		d.setTarget(ip, false)
+	case hostname != "":
+		d.setTarget(hostname, true)
+	}
+	return nil
+}
+
+// addressAfterFailedSecondPass is the client address to report when the second
+// pass failed. If that pass was to publish the record, the name has nothing
+// behind it, so the load balancer's own address is the one that works.
+func addressAfterFailedSecondPass(addr, lb string, dnsChanged bool) string {
+	if dnsChanged && lb != "" {
+		return lb
+	}
+	return addr
+}
+
+// dnsValuesFor renders an nlb_* endpoint's published name, or nil where there
+// is none. The target is filled in by CreateEndpoint once the load balancer has
+// an address.
+func dnsValuesFor(spec EndpointSpec) *dnsValues {
+	if !IsDedicatedLB(spec.Connectivity) || !PublishableDNSName(spec.DNSName) {
+		return nil
+	}
+	return &dnsValues{Name: spec.DNSName}
 }
 
 // ingressValues is what the chart needs to publish one endpoint on a shard.
@@ -1728,6 +1859,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Connectivity: spec.Connectivity,
 			AllowedCidrs: spec.AllowedCIDRs,
 			Ingress:      ingressValuesFor(spec),
+			DNS:          dnsValuesFor(spec),
 		},
 		StartupProbe: startupProbeBudget(k.cfg.Timeout),
 		// Headroom over the startup budget: the rollout must not be declared

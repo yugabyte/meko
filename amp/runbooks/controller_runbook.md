@@ -820,10 +820,44 @@ re-read it:
 UPDATE amp_registry.endpoints SET address = '<lb-hostname>:55433' WHERE id = '<ep>';
 ```
 
+Where the deployment has a zone for the mode, the address to write is the
+endpoint's published name, and the re-render is what publishes its DNS record —
+the create published none, having no load balancer address to point it at:
+
+```sql
+SELECT config->>'dns_name' FROM amp_registry.endpoints WHERE id = '<ep>';
+```
+
 **Prevention.** Callers that resolve the endpoint through the API on each connect
 pick up the corrected value with no further action. Making the address converge
 without an operator is
 [#1380](https://github.com/yugabyte/meko/issues/1380).
+
+
+## `nlb_*` endpoint's name does not resolve
+
+**Symptom.** The endpoint reports `yb-ep-<id>.<zone>:<port>` as its `address`, the
+load balancer answers on its own address, and the name does not resolve.
+
+**Check** the record was rendered, then that something publishes it:
+
+```sh
+kubectl -n "$NS" get dnsendpoint "yb-ep-$EP-lb" -o jsonpath='{.spec.endpoints[0]}{"\n"}'
+kubectl -n "$NS" logs deploy/external-dns-external --tail=50   # or -internal
+```
+
+- **No DNSEndpoint:** the load balancer had no address within the create's poll,
+  so nothing was published. Re-render the endpoint, as in "Endpoint stuck on the
+  in-cluster address after an `nlb_*` create" above.
+- **No external-dns, or it logs access errors:** install one per zone with
+  `amp/deploy/external-dns/install.sh`, with credentials to write the zone. On
+  BYOC that grant is the customer's.
+- **external-dns runs but ignores the record:** it is not on the `crd` source, or
+  its domain or zone-id filter is for the other family's zone.
+
+An endpoint created before its zone was configured has no name, and setting the
+zone does not give it one: the name is decided at create
+(`controller/architecture/ac-k8s-deploy.md` §Published names).
 
 
 ## An endpoint's `address` is a pod IP

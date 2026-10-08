@@ -88,7 +88,9 @@
 #                           without which per-endpoint allowlists see the LB
 #   INGRESS_ALLOWED_CIDRS   "cidr,cidr" coarse gate on the shard's LB
 # With either zone set it also needs external-dns with its CRD source on, or the
-# DNS records each endpoint renders are inert. With no zone none are rendered —
+# DNS records each endpoint renders are inert: deploy/external-dns/install.sh,
+# once per zone. The zones name nlb_* endpoints too; to publish only those, set a
+# zone with INGRESS_ENABLED=false. With no zone none are rendered —
 # on a create or a redeploy, because publishability is decided from the stored
 # name's own shape rather than by the caller. See
 # controller/architecture/ac-ingress.md.

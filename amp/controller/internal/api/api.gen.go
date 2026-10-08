@@ -619,9 +619,10 @@ type CreateEndpointRequest struct {
 	// `202` and an endpoint row: nothing on the request path knows the cloud,
 	// so it is the deploy task that fails.
 	//
-	// `Endpoint.address` reports the load-balancer address for these modes, and
-	// for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
-	// address, so a pod replacement leaves both correct.
+	// `Endpoint.address` reports, for these modes, the endpoint's own DNS name
+	// where the deployment has a zone for that exposure, and otherwise the
+	// load-balancer address; for `cluster_ip`, the endpoint's in-cluster Service
+	// DNS. None is a pod address, so a pod replacement leaves all of them correct.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
 
 	// DiskType Backing disk for the endpoint's data volume. `network` (the default)
@@ -851,9 +852,10 @@ type Endpoint struct {
 	// `202` and an endpoint row: nothing on the request path knows the cloud,
 	// so it is the deploy task that fails.
 	//
-	// `Endpoint.address` reports the load-balancer address for these modes, and
-	// for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
-	// address, so a pod replacement leaves both correct.
+	// `Endpoint.address` reports, for these modes, the endpoint's own DNS name
+	// where the deployment has a zone for that exposure, and otherwise the
+	// load-balancer address; for `cluster_ip`, the endpoint's in-cluster Service
+	// DNS. None is a pod address, so a pod replacement leaves all of them correct.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
 	CreatedAt    time.Time             `json:"created_at"`
 
@@ -1014,9 +1016,10 @@ type EndpointCaBundle struct {
 // `202` and an endpoint row: nothing on the request path knows the cloud,
 // so it is the deploy task that fails.
 //
-// `Endpoint.address` reports the load-balancer address for these modes, and
-// for `cluster_ip` the endpoint's in-cluster Service DNS. Neither is a pod
-// address, so a pod replacement leaves both correct.
+// `Endpoint.address` reports, for these modes, the endpoint's own DNS name
+// where the deployment has a zone for that exposure, and otherwise the
+// load-balancer address; for `cluster_ip`, the endpoint's in-cluster Service
+// DNS. None is a pod address, so a pod replacement leaves all of them correct.
 type EndpointConnectivity struct {
 	// AllowedCidrs Sources allowed to reach the load balancer, as CIDRs
 	// (`loadBalancerSourceRanges`), e.g. `["10.0.0.0/16"]`. Each entry must

@@ -301,6 +301,10 @@ type Deps struct {
 	// deploying an endpoint that answers nowhere, and the retire paths skip the
 	// release rather than failing a teardown over a slot they cannot reach.
 	Ingress IngressAllocator
+	// DNSZones are the zones endpoint names are published under, one per family.
+	// The ingress allocator holds its own copy; this one is for the nlb_* modes,
+	// whose name create_endpoint mints. Empty publishes nothing.
+	DNSZones ingress.Zones
 	// Extensions is the externalized-extension catalog the create_endpoint step
 	// resolves a branch's extension set against (names -> pinned images). Nil
 	// disables externalized extensions (the endpoint ships only image-baked ones),
