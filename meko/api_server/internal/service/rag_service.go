@@ -112,19 +112,21 @@ func (s *RagService) InsertDocument(
 	return s.repo.InsertDocument(sourceID, documentName, documentURI, checksum, documentType, documentDetails)
 }
 
-func (s *RagService) BuildIndex() error {
-	if err := s.repo.BuildIndex(); err != nil {
+// BuildSource enqueues preprocessing for every document of the source that is
+// not already processing or done, including QUEUED and FAILED ones.
+func (s *RagService) BuildSource(sourceID string) error {
+	if err := s.repo.QueueSourceDocuments(sourceID); err != nil {
 		return err
 	}
-	slog.Info("index build triggered", "index_name", s.FullIndexName())
+	slog.Info("source build triggered", "index_name", s.FullIndexName(), "source_id", sourceID)
 	return nil
 }
 
-// WaitAndBuild polls until the source is ready, then triggers build_index.
+// WaitAndBuild polls until the source is ready, then enqueues its documents.
 // Runs synchronously — callers should invoke via goroutine if needed.
 //
 // Returns true only when the source actually reached SourceStatusCompleted
-// (regardless of whether the subsequent BuildIndex call itself succeeded).
+// (regardless of whether queuing its documents then succeeded).
 // A false return (status-check error, SourceStatusFailed, or the 5-minute
 // timeout while still QUEUED/InProgress) means dist_rag's CREATE_SOURCE
 // worker may still be running in the background — the caller must not
@@ -143,10 +145,10 @@ func (s *RagService) WaitAndBuild(sourceID string) bool {
 		}
 		switch status {
 		case SourceStatusCompleted:
-			slog.Info("WaitAndBuild: source ready, triggering build_index",
+			slog.Info("WaitAndBuild: source ready, queuing its documents",
 				"source_id", sourceID)
-			if err := s.BuildIndex(); err != nil {
-				slog.Error("WaitAndBuild: build_index failed",
+			if err := s.BuildSource(sourceID); err != nil {
+				slog.Error("WaitAndBuild: queuing documents failed",
 					"source_id", sourceID, "error", err)
 			}
 			return true

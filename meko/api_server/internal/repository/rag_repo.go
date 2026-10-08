@@ -198,20 +198,24 @@ func (r *RagRepo) InsertDocument(
 	return nil
 }
 
-// BuildIndex enqueues a build for this repo's vector index. dist_rag.build_index
-// requires exactly one of r_index_id / r_index_name; we resolve to the id first
-// so callers don't depend on dist_rag still uniquely identifying by index_name
-// alone (today it does, but it's a per-extension-version contract).
-func (r *RagRepo) BuildIndex() error {
+// QueueSourceDocuments enqueues preprocessing for one source's documents that
+// are not already processing or done. dist_rag.build_index does the same for
+// every source mapped to the index, which on an upload re-queues every pending
+// document in the deployment.
+//
+// Documents that already have a QUEUED task are queued again, so uploading K
+// files into one source before the workers drain it still adds about K²/2
+// tasks for that source. The duplicate is bounded to the source, not removed.
+func (r *RagRepo) QueueSourceDocuments(sourceID string) error {
 	indexID, err := r.LookupIndexID()
 	if err != nil {
-		return fmt.Errorf("build_index(%s): %w", r.FullName(), err)
+		return fmt.Errorf("queue source %s: %w", sourceID, err)
 	}
 	if _, err := r.db.Exec(
-		`SELECT dist_rag.build_index(r_index_id := $1::UUID)`,
-		indexID,
+		`SELECT dist_rag._queue_source_documents(r_source_id := $1::UUID, r_index_id := $2::UUID)`,
+		sourceID, indexID,
 	); err != nil {
-		return fmt.Errorf("build_index(%s, id=%s): %w", r.FullName(), indexID, err)
+		return fmt.Errorf("_queue_source_documents(%s, source=%s): %w", r.FullName(), sourceID, err)
 	}
 	return nil
 }

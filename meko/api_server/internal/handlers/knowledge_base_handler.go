@@ -742,7 +742,7 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 // resolveOrCreateSource returns the dist_rag source_id bound to a datapack's
 // knowledge base, creating and indexing a new source when none exists.
 // isNewSource is true only when the source was created in this call, which
-// lets callers pick WaitAndBuild (new) over BuildIndex (already discoverable).
+// lets callers pick WaitAndBuild (new) over BuildSource (already discoverable).
 func (h *KnowledgeBaseHandler) resolveOrCreateSource(
 	dp *models.Datapack, sourceURI string,
 ) (sourceID string, isNewSource bool, err error) {
@@ -830,8 +830,8 @@ type rejectedDocument struct {
 //     (datapack_id, rag_source_id) so subsequent lookups can map
 //     this datapack back to its dist_rag source.
 //
-//  6. Trigger build_index (asynchronously for newly-created sources,
-//     synchronously when only new documents were added).
+//  6. Queue the source's documents (asynchronously for newly-created
+//     sources, synchronously otherwise).
 //
 //     @Summary	Create or refresh a knowledge base from uploaded files
 //     @Tags		knowledge-bases
@@ -1024,22 +1024,29 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		)
 		go h.waitBuildAndPopulateDetails(dp.ID, s3Prefix, sourceID, uploaderUserID)
 	case newDocs > 0:
-		slog.Info("CreateKB: source path already exists and new docs were added, triggering BuildIndex",
+		slog.Info("CreateKB: source path already exists and new docs were added, queuing the source's documents",
 			"datapack_id", dp.ID,
 			"source_id", sourceID,
 			"new_docs", newDocs,
 		)
-		if err := h.ragSvc.BuildIndex(); err != nil {
-			slog.Error("failed to build index",
-				"datapack_id", dp.ID, "error", err)
+		if err := h.ragSvc.BuildSource(sourceID); err != nil {
+			slog.Error("CreateKB: failed to queue the source's documents",
+				"datapack_id", dp.ID, "source_id", sourceID, "error", err)
 			return apiError(c, http.StatusInternalServerError,
 				"RAG_ERROR", "failed to build index")
 		}
 	default:
-		slog.Info("CreateKB: no new docs for existing source, skipping BuildIndex",
+		// Re-queue the source's unfinished documents: this is how a document
+		// left unqueued (a timed-out WaitAndBuild, a pod restart, a failed
+		// queue call) gets indexed. The queue skips PROCESSING/COMPLETED rows.
+		slog.Info("CreateKB: no new docs for existing source, re-queuing unfinished documents",
 			"datapack_id", dp.ID,
 			"source_id", sourceID,
 		)
+		if err := h.ragSvc.BuildSource(sourceID); err != nil {
+			slog.Error("CreateKB: failed to re-queue unfinished documents",
+				"datapack_id", dp.ID, "source_id", sourceID, "error", err)
+		}
 	}
 
 	slog.Info("knowledge base created",
@@ -1583,10 +1590,11 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	// the presigned flow. If the same content already exists we don't re-upload
 	// or re-charge storage: report whether it is already processed or still
 	// being processed. An S3 object that was never registered in dist_rag
-	// (orphan), or one whose pipeline run FAILED, falls through and gets
+	// (orphan), one whose pipeline run FAILED, or one still NOT_STARTED (its
+	// queue call may have been missed) falls through and gets
 	// re-registered/re-indexed below, reusing its key — InsertDocument is an
-	// upsert and the pipeline only skips PROCESSING/COMPLETED rows, so FAILED
-	// is retried rather than reported as still-processing.
+	// upsert and the pipeline only skips PROCESSING/COMPLETED rows, so these
+	// are retried rather than reported as still-processing.
 	existingKey, err := h.s3Svc.ExistingUploadKeyByHash(ctx, dp.UserID, dp.ID, contentHashHex)
 	if err != nil {
 		slog.Error("UploadFile: dedup check failed",
@@ -1595,7 +1603,8 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 			"S3_ERROR", "failed to check existing upload")
 	}
 	if existingKey != "" {
-		if detail, found := h.documentDetail(dp, existingKey); found && detail.DocumentStatus != "FAILED" {
+		if detail, found := h.documentDetail(dp, existingKey); found &&
+			detail.DocumentStatus != "FAILED" && detail.DocumentStatus != "NOT_STARTED" {
 			status, message := "already_uploaded",
 				"This file was already uploaded and is being processed."
 			if detail.DocumentStatus == "COMPLETED" {
@@ -1678,9 +1687,9 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 
 	if isNewSource {
 		go h.ragSvc.WaitAndBuild(sourceID)
-	} else if err := h.ragSvc.BuildIndex(); err != nil {
-		slog.Error("UploadFile: failed to trigger build_index",
-			"datapack_id", dp.ID, "error", err)
+	} else if err := h.ragSvc.BuildSource(sourceID); err != nil {
+		slog.Error("UploadFile: failed to queue the source's documents",
+			"datapack_id", dp.ID, "source_id", sourceID, "error", err)
 		return apiError(c, http.StatusInternalServerError,
 			"RAG_ERROR", "failed to build index")
 	}
