@@ -3214,9 +3214,10 @@ async fn read_chains_at_lsn(
             }
         } else if range.start.is_slru_block_key() {
             // SLRU range — always stays within one (kind, segno).
-            let (kind, segno, blk_lo) = range.start.to_slru_block().map_err(|e| {
-                GetVectoredError::Other(anyhow!("SLRU range start decode: {e:#}"))
-            })?;
+            let (kind, segno, blk_lo) = range
+                .start
+                .to_slru_block()
+                .map_err(|e| GetVectoredError::Other(anyhow!("SLRU range start decode: {e:#}")))?;
             let blk_hi = range.end.field6;
             let scan = page_writer
                 .scan_slru_range(
@@ -3227,9 +3228,7 @@ async fn read_chains_at_lsn(
                     crate::page_store::SlruScan::ToAnchor,
                 )
                 .await
-                .map_err(|e| {
-                    GetVectoredError::Other(anyhow!("SLRU scan_range failed: {e:#}"))
-                })?;
+                .map_err(|e| GetVectoredError::Other(anyhow!("SLRU scan_range failed: {e:#}")))?;
             for (blknum, chain) in scan {
                 let key = pageserver_api::key::slru_block_to_key(kind, segno, blknum);
                 let converted: Chain = chain
@@ -3251,9 +3250,7 @@ async fn read_chains_at_lsn(
             let scan = page_writer
                 .scan_meta_range(range.clone(), lsn)
                 .await
-                .map_err(|e| {
-                    GetVectoredError::Other(anyhow!("meta scan_range failed: {e:#}"))
-                })?;
+                .map_err(|e| GetVectoredError::Other(anyhow!("meta scan_range failed: {e:#}")))?;
             for (_key_bytes, row) in scan {
                 if row.key.len() == pageserver_api::key::KEY_SIZE {
                     let k = Key::from_slice(&row.key);
@@ -3278,9 +3275,7 @@ async fn read_chains_at_lsn(
                 .scan_scattered_set(&keys, lsn)
                 .await
                 .map_err(|e| {
-                    GetVectoredError::Other(anyhow!(
-                        "PageStore scan_scattered_set failed: {e:#}"
-                    ))
+                    GetVectoredError::Other(anyhow!("PageStore scan_scattered_set failed: {e:#}"))
                 })?;
             for (key, chain) in scan {
                 chains_by_key.entry(key).or_default().extend(chain);
@@ -3289,12 +3284,9 @@ async fn read_chains_at_lsn(
             let k = keys[0];
             let mut e = k;
             e.field6 = k.field6.wrapping_add(1);
-            let scan = page_writer
-                .scan_range(k..e, lsn)
-                .await
-                .map_err(|e| {
-                    GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
-                })?;
+            let scan = page_writer.scan_range(k..e, lsn).await.map_err(|e| {
+                GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+            })?;
             for (key, chain) in scan {
                 chains_by_key.entry(key).or_default().extend(chain);
             }

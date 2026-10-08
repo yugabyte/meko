@@ -4183,7 +4183,12 @@ impl<T: Send + 'static> InflightBatches<T> {
     /// The oldest batch's result, once it has finished. A batch's panic re-panics here, in the
     /// connection task, as it did before batches were spawned.
     async fn next(&mut self) -> Option<T> {
-        Some(self.batches.next().await?.expect("getpage batch task panicked"))
+        Some(
+            self.batches
+                .next()
+                .await?
+                .expect("getpage batch task panicked"),
+        )
     }
 }
 
@@ -4427,5 +4432,4 @@ mod tests {
         );
         assert!(crate::metrics::PAGE_SERVICE_BATCH_TASKS_ABORTED.get() > aborted_before);
     }
-
 }

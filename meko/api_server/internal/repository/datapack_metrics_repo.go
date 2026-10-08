@@ -153,8 +153,8 @@ func (r *DatapackMetricsRepo) fetchDailyActivity(ctx context.Context, datapackID
 
 	// Accumulate per-day across search_type rows, then emit in order.
 	type dayBucket struct {
-		index  int
-		point  models.DailyActivityPoint
+		index int
+		point models.DailyActivityPoint
 	}
 	byDate := make(map[string]*dayBucket)
 	var dateOrder []string

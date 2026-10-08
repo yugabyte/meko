@@ -27,15 +27,15 @@ func NewMarketplaceRepo(db *sql.DB) *MarketplaceRepo {
 // perpetual entitlements (rare on SaaS Contracts, so treat nil as
 // "no known expiry" not "expired").
 type MarketplaceEntitlement struct {
-	UserID          string
-	AWSCustomerID   string
-	AWSAccountID    string
-	ProductCode     string
-	PlanID          string
-	Status          string
-	ExpiresAt       *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	UserID        string
+	AWSCustomerID string
+	AWSAccountID  string
+	ProductCode   string
+	PlanID        string
+	Status        string
+	ExpiresAt     *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Upsert writes the entitlement, keyed on user_id. Called at register

@@ -1015,7 +1015,11 @@ mod tests {
         let img140 = mk(b"k", 140, true, b"img140");
         let img140_size = row_size(&img140);
         assert!(u.install_image_if_extends(Arc::new(img140)));
-        let lsns: Vec<u64> = u.lookup_chain(&tkey(b"k"), Lsn(1000)).iter().map(|r| r.lsn.0).collect();
+        let lsns: Vec<u64> = u
+            .lookup_chain(&tkey(b"k"), Lsn(1000))
+            .iter()
+            .map(|r| r.lsn.0)
+            .collect();
         assert_eq!(lsns, vec![140]);
         assert_eq!(u.total_bytes(), img140_size);
     }

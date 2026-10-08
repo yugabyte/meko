@@ -2334,14 +2334,7 @@ impl PageWriter {
         self.pause_between_cache_and_yb().await;
         let mut out = self
             .compute_page_store
-            .scan_slru_range_lineage(
-                &self.lineage,
-                kind,
-                segno,
-                blknum_range,
-                target_lsn,
-                mode,
-            )
+            .scan_slru_range_lineage(&self.lineage, kind, segno, blknum_range, target_lsn, mode)
             .await?;
         for row in buffered {
             out.entry(row.blknum).or_default().push(row);

@@ -20,7 +20,7 @@ name: Meko CI
 #                     pytest. All upstream (LLM / MCP) calls are mocked — no creds.
 #   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
 #                     (vitest), and the production build.
-#   meko_ycp        — ycp (the BYOC agent + dpmcp): gofmt, `go build`, `go vet`,
+#   meko_ycp        — ycp (the BYOC agent + dpmcp): `go build`, `go vet`,
 #                     `go test ./...`, and a check that the client generated from
 #                     the amp spec vendored at ycp/internal/ampclient/ is current
 #                     (the spec copy itself is guarded by a unit test). Also fires
@@ -399,17 +399,6 @@ jobs:
           go-version-file: ycp/go.mod
           cache-dependency-path: ycp/go.sum
 
-      # Blocking from the start: this module is formatted and vet-clean as of the
-      # commit that added this job, so there is no baseline to grandfather in.
-      - name: Format (gofmt)
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt needed on:"; echo "$unformatted"
-            gofmt -d .
-            exit 1
-          fi
-
       # The spec copy itself is guarded by a unit test (spec_vendor_test.go), so
       # this step is here for the other half: that ampclient.gen.go was actually
       # regenerated from it. Regenerates into a scratch tree, so it reports drift
@@ -442,17 +431,6 @@ jobs:
         with:
           go-version-file: foundation/go.mod
           cache-dependency-path: foundation/go.sum
-
-      # Blocking from the start: this module is formatted and vet-clean as of the
-      # commit that added this job, so there is no baseline to grandfather in.
-      - name: Format (gofmt)
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt needed on:"; echo "$unformatted"
-            gofmt -d .
-            exit 1
-          fi
 
       - name: Build
         run: go build ./...

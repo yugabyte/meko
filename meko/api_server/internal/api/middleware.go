@@ -112,7 +112,7 @@ func PerPATRateLimiter(perMin, burst int) echo.MiddlewareFunc {
 				return c.JSON(http.StatusTooManyRequests, map[string]any{
 					"data": nil,
 					"error": map[string]any{
-						"code":    "PAT_RATE_LIMITED",
+						"code": "PAT_RATE_LIMITED",
 						"message": "too many requests for this token; retry after " +
 							strconv.Itoa(60) + "s",
 					},

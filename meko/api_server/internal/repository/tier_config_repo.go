@@ -14,7 +14,7 @@ type TierConfig struct {
 	MCPImage    string
 	RAGImage    string
 	MCPReplicas int32
-	RAGReplicas   int32
+	RAGReplicas int32
 }
 
 // TierConfigRepo encapsulates database operations for the tier_config

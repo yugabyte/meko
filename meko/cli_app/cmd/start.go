@@ -16,7 +16,7 @@ import (
 	"cli_app/internal/db"
 	"cli_app/internal/logger"
 	"cli_app/internal/ui"
-)	
+)
 
 var inferenceNode bool
 var hostAddress string

@@ -20,9 +20,9 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "meko",
-	Short: "CLI tool for meko AI Platform",
-	Long: `meko CLI - Manage your datapacks and knowledge bases on Meko Platform.`,
+	Use:     "meko",
+	Short:   "CLI tool for meko AI Platform",
+	Long:    `meko CLI - Manage your datapacks and knowledge bases on Meko Platform.`,
 	Version: version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()

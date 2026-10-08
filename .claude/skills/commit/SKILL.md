@@ -13,10 +13,9 @@ description: >-
   restate the code, doc and runbook paragraphs that say the same thing twice —
   because reviewers spend their review budget deleting it. Also, run the formatter
   and linter for every language the commit touches before committing — including
-  `cargo fmt` and `cargo clippy` for Rust,
-  which nothing else enforces. Use for `git commit`, `git add`-then-commit,
-  `/commit-commands:commit`, `/commit-commands:commit-push-pr`, or any flow that
-  ends in a commit.
+  `cargo fmt` and `cargo clippy` for Rust, which CI fails on but nothing runs
+  for you. Use for `git commit`, `git add`-then-commit, `/commit-commands:commit`,
+  `/commit-commands:commit-push-pr`, or any flow that ends in a commit.
 ---
 
 # commit
@@ -279,9 +278,10 @@ Line limit 120 for Go.
 
 ### Rust (`amp/**` — `*.rs`, `Cargo.toml`, build scripts)
 
-**Nothing runs this for you, and CI does not check formatting.** `cargo build`
-only compiles, and the `pre-commit.py` hook (`cargo fmt`) is opt-in via
-`make setup-pre-commit-hook` — so if you skip this, unformatted code ships.
+**Nothing runs this for you.** CI's `Format` check fails on any `cargo fmt`
+diff and the `Amp Compute` job on any clippy warning, but `cargo build` only
+compiles, and the `pre-commit.py` hook (`cargo fmt`) is opt-in via
+`make setup-pre-commit-hook` — so if you skip this, you find out from a red PR.
 
 ```
 (cd amp && cargo fmt --all -- --check)    # is anything mis-formatted?

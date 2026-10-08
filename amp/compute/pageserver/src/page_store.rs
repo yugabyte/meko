@@ -797,7 +797,8 @@ impl RowCells for yb_thin_client::Row {
 
 /// Cell `i` of `row`; a row with fewer cells than the read targeted is an error, not a panic.
 fn row_cell(row: &yb_thin_client::Row, i: usize) -> Result<&yb_thin_client::Value> {
-    row.get(i).with_context(|| format!("row has {} cells, no cell {i}", row.len()))
+    row.get(i)
+        .with_context(|| format!("row has {} cells, no cell {i}", row.len()))
 }
 
 /// Columns every chain read fetches, set by [`page_chain_read`] and [`slru_segment_read`]; rows
@@ -897,16 +898,21 @@ async fn fetch_chain_rows_thin(
     read: yb_thin_client::RangeRead,
 ) -> Result<Vec<yb_thin_client::Row>> {
     client
-        .read_scan(table, &read, Vec::new, |chain, rows| -> anyhow::Result<bool> {
-            for row in rows {
-                let anchor = row.cell_bool(CHAIN_WILL_INIT)?;
-                chain.push(row);
-                if anchor {
-                    return Ok(true);
+        .read_scan(
+            table,
+            &read,
+            Vec::new,
+            |chain, rows| -> anyhow::Result<bool> {
+                for row in rows {
+                    let anchor = row.cell_bool(CHAIN_WILL_INIT)?;
+                    chain.push(row);
+                    if anchor {
+                        return Ok(true);
+                    }
                 }
-            }
-            Ok(false)
-        })
+                Ok(false)
+            },
+        )
         .await
 }
 

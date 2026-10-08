@@ -17,9 +17,9 @@ func NewYBARepo(db *sql.DB) *YBARepo {
 
 // UniverseAssignment holds the universe selected for a new datapack.
 type UniverseAssignment struct {
-	UniverseID string
-	Hostname   string
-	Port       int
+	UniverseID   string
+	Hostname     string
+	Port         int
 	AdminConnStr string
 }
 

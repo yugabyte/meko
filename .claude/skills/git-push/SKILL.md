@@ -57,7 +57,7 @@ gofmt -l meko/api_server meko/cli_app meko/meko-provisioner meko/docs
 # Python — if meko/inference_gateway/ changed (no formatter configured; run its tests)
 (cd meko/inference_gateway && pytest)
 
-# Rust + Go — if amp/ changed. CI does NOT check amp formatting, so this is the only gate.
+# Rust + Go — if amp/ changed. CI's `Format` check runs both repo-wide; this catches it first.
 (cd amp && cargo fmt --all -- --check)
 (cd amp && gofmt -l controller test/functional)   # `make fmt` does NOT cover Go
 ```

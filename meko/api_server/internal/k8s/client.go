@@ -23,16 +23,16 @@ var mekoUserAccountGVR = schema.GroupVersionResource{
 // MekoUserAccountParams holds the fields needed to create a
 // MekoUserAccount custom resource.
 type MekoUserAccountParams struct {
-	AccountID      string
-	Namespace      string
-	AccountTier    string
-	MCPImage       string
-	RAGImage       string
-	YugabyteDBHost string
-	YugabyteDBPort int32
-	YugabyteDBUser string
-	YugabyteDBPass string
-	YugabyteDBName string
+	AccountID         string
+	Namespace         string
+	AccountTier       string
+	MCPImage          string
+	RAGImage          string
+	YugabyteDBHost    string
+	YugabyteDBPort    int32
+	YugabyteDBUser    string
+	YugabyteDBPass    string
+	YugabyteDBName    string
 	MCPReplicas       int32
 	RAGReplicas       int32
 	LangfuseSecretKey string

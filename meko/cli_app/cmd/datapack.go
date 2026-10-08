@@ -200,11 +200,11 @@ func withSpinner(message string, fn func() (json.RawMessage, error)) (json.RawMe
 // createResponse mirrors the API server's CreateResponse for proper
 // JSON unmarshalling of nested objects.
 type createResponse struct {
-	DatapackID string    `json:"datapack_id"`
-	AgentID    string    `json:"agent_id"`
-	Name       string    `json:"name"`
-	MCPServer  mcpInfo   `json:"mcp_server"`
-	DBAccess   dbAccess  `json:"db_access"`
+	DatapackID string   `json:"datapack_id"`
+	AgentID    string   `json:"agent_id"`
+	Name       string   `json:"name"`
+	MCPServer  mcpInfo  `json:"mcp_server"`
+	DBAccess   dbAccess `json:"db_access"`
 }
 
 type mcpInfo struct {

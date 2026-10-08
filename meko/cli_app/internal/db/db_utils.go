@@ -97,7 +97,6 @@ func RunMigrations(db *sql.DB) ([]string, error) {
 	return details, nil
 }
 
-
 // EmbeddingDims returns the vector dimension for a given embedding model name.
 // Defaults to 1536 for unrecognized models.
 func EmbeddingDims(embedModel string) int {

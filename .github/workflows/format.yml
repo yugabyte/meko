@@ -1,0 +1,56 @@
+name: Format
+
+# The repo's one formatting gate: gofmt on every tracked .go file (amp, meko,
+# foundation, ycp) and `cargo fmt --check` on the amp Rust workspace (the only
+# Rust in the repo). Each check only reads source, so neither needs a build, and
+# the job finishes in about a minute.
+#
+# A required check of the `main-branch` ruleset, by its job name: keep the
+# name, and never add a `paths:` filter — a workflow that doesn't run never
+# reports, and a required check then waits forever.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # gofmt's output is pinned by the Go release, so pin it to a module's
+      # go.mod rather than float with `stable`.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: meko/api_server/go.mod
+          cache: false
+
+      - name: Go (gofmt)
+        run: |
+          unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            echo "$unformatted" | xargs gofmt -d
+            exit 1
+          fi
+
+      - name: Install pinned Rust toolchain
+        working-directory: amp
+        # Reads rust-toolchain.toml (channel + rustfmt component).
+        run: rustup toolchain install
+
+      - name: Rust (cargo fmt --check)
+        working-directory: amp
+        run: cargo fmt --all -- --check

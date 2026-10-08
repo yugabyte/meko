@@ -429,9 +429,9 @@ func TestSharing_InviteAction_BadAction(t *testing.T) {
 	defer db.Close()
 
 	body := map[string]string{
-		"invite_id":        "d290f1ee-6c54-4b01-90e6-d701748f0851",
+		"invite_id":         "d290f1ee-6c54-4b01-90e6-d701748f0851",
 		"recipient_user_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-		"user_action":      "maybe",
+		"user_action":       "maybe",
 	}
 	b, _ := json.Marshal(body)
 
@@ -456,9 +456,9 @@ func TestSharing_InviteAction_NotFound(t *testing.T) {
 	defer db.Close()
 
 	body := map[string]string{
-		"invite_id":        "00000000-0000-0000-0000-000000000000",
+		"invite_id":         "00000000-0000-0000-0000-000000000000",
 		"recipient_user_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-		"user_action":      "accept",
+		"user_action":       "accept",
 	}
 	b, _ := json.Marshal(body)
 

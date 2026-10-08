@@ -49,21 +49,21 @@ type Universe struct {
 	Name              string
 	Provider          string
 	SoftwareVersion   string
-	InstanceType      string  // cloud providers; empty for kubernetes
+	InstanceType      string // cloud providers; empty for kubernetes
 	ReplicationFactor int
-	NumNodes          int     // logical node count (userIntent.numNodes)
-	TotalNodes        int     // node/pod entries in nodeDetailsSet
-	LiveNodes         int     // entries in the "Live" state
+	NumNodes          int // logical node count (userIntent.numNodes)
+	TotalNodes        int // node/pod entries in nodeDetailsSet
+	LiveNodes         int // entries in the "Live" state
 	Region            string
 	VolumeSizeGB      int
 	NumVolumes        int
 	// Per-process resource specs (Kubernetes). Zero for cloud VM providers,
 	// which describe capacity via InstanceType instead.
-	TServerCores      float64
-	TServerMemoryGiB  float64
-	MasterCores       float64
-	MasterMemoryGiB   float64
-	NodePrefix        string
+	TServerCores     float64
+	TServerMemoryGiB float64
+	MasterCores      float64
+	MasterMemoryGiB  float64
+	NodePrefix       string
 }
 
 // GetUniverse fetches a universe's configuration:
