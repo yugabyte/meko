@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesignAnswerInput, DesignQuestion, Session } from '../../src/shared/types.js';
 import { designAnswers } from '../../src/server/answers.js';
 import {
-  ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
+  ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answeredQuestion, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
 } from '../../src/server/design.js';
 import { DEFAULT_PROMPTS, designQuestionsLine, render } from '../../src/server/prompts.js';
-import { defaultDraft, draftFor, draftsBlocker, parseDrafts, toRequest, type Draft } from '../../src/web/design-answers.js';
+import { defaultDraft, draftFor, draftsBlocker, parseDrafts, pruneDrafts, shownDraft, toRequest, type Draft } from '../../src/web/design-answers.js';
 import { approveLabel } from '../../src/web/util.js';
 
 const question = (over: Partial<DesignQuestion>): DesignQuestion => ({
@@ -146,6 +146,17 @@ describe('formatting answers for Claude', () => {
     expect(formatAnswers([], '', [questions[0]])).toBe('### Q1 (id: store): Where?\nNo answer: go with your recommendation.');
   });
 
+  it('resolves a question with the answer as its decision, or leaves it to AgentK', () => {
+    const q = question({ id: 'store', options: opts('Datapack', 'Repo'), recommended: 1 });
+    const done = (a?: Partial<DesignAnswerInput>) => answeredQuestion(q, a && answer({ questionId: 'store', ...a }));
+    expect(done({ choice: 0, label: 'Datapack' })).toEqual({ ...q, status: 'resolved', decision: 'Datapack' });
+    expect(done({ choice: 0, label: 'Datapack', text: ' Keep it small ' }).decision).toBe('Datapack — Keep it small');
+    expect(done({ text: 'Neither: a new table' }).decision).toBe('Neither: a new table');
+    expect(done().decision).toBe('Left to AgentK: Repo');
+    expect(answeredQuestion(question({}), undefined)).toMatchObject({ status: 'resolved', decision: 'Left to AgentK' });
+    expect(done({ text: 'x'.repeat(ANSWER_MAX) }).decision!.length).toBeLessThan(ANSWER_MAX);
+  });
+
   it('counts answers and feedback for the first line', () => {
     expect(answersCount([answer({})], '')).toBe('1 answer to an open question');
     expect(answersCount([answer({}), answer({ questionId: 'b' })], ' ')).toBe('2 answers to open questions');
@@ -215,7 +226,7 @@ describe('the design prompts', () => {
     expect(line).toMatch(/keep each question's id/);
     const sent = render(DEFAULT_PROMPTS['design-answers'], { count: '1 answer to an open question', answers: '### Q1', questionsFile: '/d/q.json' });
     expect(sent).toContain('The user sent 1 answer to an open question on your design');
-    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), mark each answered question "resolved"');
+    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), mark each answered question "resolved" with its "decision" (AgentK Local may have marked some already');
     expect(sent).toMatch(/Don't change anything in the repo/);
     expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
   });
@@ -252,6 +263,24 @@ describe('answers in the browser', () => {
     expect(draftFor({ ...store, options: opts('Other', 'Repo') }, draft({ choice: 0, label: 'Datapack', text: 'n' })))
       .toEqual({ choice: 1, label: 'Repo', custom: false, text: 'n' });
     expect(draftFor(store, draft({ custom: true, choice: 0, label: 'Datapack', text: 'mine' }))).toEqual(draft({ custom: true, text: 'mine' }));
+  });
+
+  it('picks nothing for an unanswered question once it can no longer be answered', () => {
+    expect(shownDraft(store, undefined, true)).toEqual(defaultDraft(store));
+    expect(shownDraft(store, undefined, false)).toEqual(draft({}));
+    expect(shownDraft(store, draft({ choice: 0, label: 'Datapack' }), false)).toMatchObject({ choice: 0, label: 'Datapack' });
+    expect(shownDraft(free, undefined, false)).toEqual(draft({ custom: true }));
+    // An option that's gone falls back to nothing picked, not to the recommendation.
+    expect(shownDraft(store, draft({ choice: 0, label: 'Gone', text: 'n' }), false)).toEqual(draft({ text: 'n' }));
+    expect(shownDraft(store, draft({ custom: true, text: 'Mine' }), false)).toEqual(draft({ custom: true, text: 'Mine' }));
+  });
+
+  it('drops the answers to questions that are no longer open', () => {
+    const answers = { store: draft({ choice: 0, label: 'Datapack' }), pick: draft({ choice: 1, label: 'B' }) };
+    expect(pruneDrafts([store, pick], { answers, feedback: 'f' })).toBeNull();
+    expect(pruneDrafts([{ ...store, status: 'resolved' }, pick], { answers, feedback: 'f', approved: true }))
+      .toEqual({ answers: { pick: answers.pick }, feedback: 'f', approved: true });
+    expect(pruneDrafts([pick], { answers, feedback: '' })).toEqual({ answers: { pick: answers.pick }, feedback: '' });
   });
 
   it('builds the request, leaving out questions with no answer', () => {
@@ -337,6 +366,14 @@ describe('answers in the browser', () => {
       m.saveDrafts('s1', { answers: {}, feedback: 'Again.' });
       m.approvalSent(s({ stage: 'code' }));
       expect(m.loadDrafts('s1')).toEqual({ answers: {}, feedback: '' });
+    });
+
+    it('keeps the answers sent to revise the design, forgetting the feedback', async () => {
+      const m = await fresh();
+      const a = { choice: 0, label: 'A', custom: false, text: '' };
+      m.saveDrafts('s1', { answers: { pick: a }, feedback: 'Shorter.' });
+      m.revisionSent('s1');
+      expect(m.loadDrafts('s1')).toEqual({ answers: { pick: a }, feedback: '' });
     });
   });
 

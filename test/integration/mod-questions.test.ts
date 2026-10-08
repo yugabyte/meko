@@ -166,7 +166,10 @@ describe("Claude's questions and the design through AgentK's mod (real tmux + gi
     await env.core.sessions.action(id, 'approve-design');
     expect(get(id).approvalQueued).toBe(true);
     await waitFor(() => get(id).stage, (st) => st === 'code', 10000, 'the approval');
-    expect(get(id).designUpdatedAt).toBe(at);
+    expect(events(id, 'design')).not.toContain('Queued approval dropped: AgentK changed the design during its turn');
+    // Sent, the approval leaves the question to AgentK: the design's time moves on for that only.
+    expect(env.core.questions.get(row(id)).questions[0]).toMatchObject({ id: 'store', status: 'resolved', decision: 'Left to AgentK: Datapack' });
+    expect(get(id).designUpdatedAt).toBeGreaterThanOrEqual(at!);
   }, 60_000);
 
   it('drops a queued approval when Claude dies without a word', async () => {

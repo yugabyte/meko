@@ -1,9 +1,9 @@
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { DesignAnswerInput, DesignQuestion } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get } from './db.js';
-import { ANSWER_MAX, ANSWERS_PROMPT_MAX, answersCount, formatAnswers, questionsFileText, questionsFromMarkdown, readDesignQuestions } from './design.js';
+import { ANSWER_MAX, ANSWERS_PROMPT_MAX, answeredQuestion, answersCount, formatAnswers, questionsFileText, questionsFromMarkdown, readDesignQuestions } from './design.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
 import type { SessionRow } from './store.js';
@@ -21,6 +21,15 @@ export interface DesignQuestionSet {
 
 interface Entry extends DesignQuestionSet {
   json: string;
+}
+
+/**
+ * What an approval did beyond the user's answers: the questions it left to AgentK, and whether it
+ * made the questions file (for a markdown design's).
+ */
+interface ApprovalNote {
+  left: string[];
+  created: boolean;
 }
 
 function entry(questions: DesignQuestion[], source: DesignQuestionSet['source']): Entry {
@@ -84,11 +93,7 @@ export class DesignQuestionStore {
     // What was kept, read before the file is replaced.
     if (hasDesign) this.get(row);
     const prev = this.cache.get(row.id);
-    const file = this.core.sessions.questionsFile(row);
-    mkdirSync(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, questionsFileText(questions));
-    renameSync(tmp, file);
+    this.write(row, questions);
     if (!hasDesign) {
       this.cache.delete(row.id);
       return true;
@@ -98,6 +103,75 @@ export class DesignQuestionStore {
     return !prev || prev.json !== next.json || prev.source !== next.source;
   }
 
+  /**
+   * The user's answers, as they go to Claude: each question answered is resolved, with the answer
+   * as its decision, and with `all` (an approval) so is every other open one, left to AgentK.
+   * Written to the questions file and kept, so the user sees what they sent in any browser, and
+   * the next turn end doesn't count it as AgentK's change. Built from the file as it is now, so a
+   * change AgentK made since is kept; an answer to a question that changed since it was checked
+   * (against `asked`) is left out. Questions from a markdown design are written only with `all`:
+   * until then AgentK revises its "Open questions" list, which a questions file would hide. What an
+   * approval did beyond the user's answers is noted beside the file, for `reopen`. True when
+   * anything changed. Throws when the file can't be read (it's left for AgentK to fix) or written.
+   */
+  record(row: SessionRow, answers: DesignAnswerInput[], asked: DesignQuestion[], all: boolean): boolean {
+    const cur = this.read(row);
+    if (cur.source === null || (cur.source === 'markdown' && !all)) return false;
+    const was = new Map(asked.map((q) => [q.id, JSON.stringify(q)]));
+    const byId = new Map(answers.map((a) => [a.questionId, a]));
+    const left: string[] = [];
+    const next = cur.questions.map((q) => {
+      if (q.status !== 'open') return q;
+      const a = byId.get(q.id);
+      if (a) return was.get(q.id) === JSON.stringify(q) ? answeredQuestion(q, a) : q;
+      if (!all) return q;
+      left.push(q.id);
+      return answeredQuestion(q, undefined);
+    });
+    const e = entry(next, 'file');
+    const prev = this.cache.get(row.id);
+    if (e.json === cur.json && cur.source === 'file') {
+      this.cache.set(row.id, cur);
+      return !!prev && prev.json !== cur.json;
+    }
+    this.write(row, next);
+    this.cache.set(row.id, e);
+    if (all && (left.length || cur.source !== 'file')) {
+      const note: ApprovalNote = { left, created: cur.source !== 'file' };
+      writeFileSync(this.notePath(row), `${JSON.stringify(note)}\n`);
+    }
+    return true;
+  }
+
+  /**
+   * Back in Design after an approval: undoes what the approval did beyond the user's answers.
+   * The questions it left to AgentK are open again, and a questions file it made for a markdown
+   * design is removed, so the design's own list shows again. True when anything was undone. Throws
+   * when the files can't be read or written.
+   */
+  reopen(row: SessionRow): boolean {
+    const notePath = this.notePath(row);
+    let note: ApprovalNote;
+    try {
+      note = JSON.parse(readFileSync(notePath, 'utf8')) as ApprovalNote;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      rmSync(notePath, { force: true });
+      throw e;
+    }
+    rmSync(notePath, { force: true });
+    this.cache.delete(row.id);
+    if (note.created) {
+      rmSync(this.core.sessions.questionsFile(row), { force: true });
+      return true;
+    }
+    const left = new Set(Array.isArray(note.left) ? note.left : []);
+    const cur = this.read(row);
+    if (cur.source !== 'file' || !cur.questions.some((q) => left.has(q.id) && q.status === 'resolved')) return false;
+    this.write(row, cur.questions.map((q) => (left.has(q.id) && q.status === 'resolved' ? { ...q, status: 'open', decision: null } : q)));
+    return true;
+  }
+
   /** Loads the questions of every running session in Design. */
   preload(): void {
     for (const row of all<SessionRow>(this.core.db, `SELECT * FROM sessions WHERE desired = 'running' AND stage = 'design'`)) this.get(row);
@@ -105,6 +179,20 @@ export class DesignQuestionStore {
 
   forget(id: string): void {
     this.cache.delete(id);
+  }
+
+  /** Beside the questions file: what an approval did beyond the user's answers (`record`, `reopen`). */
+  private notePath(row: SessionRow): string {
+    return join(dirname(this.core.sessions.questionsFile(row)), 'questions-approval.json');
+  }
+
+  /** Replaces a session's questions file. */
+  private write(row: SessionRow, questions: DesignQuestion[]): void {
+    const file = this.core.sessions.questionsFile(row);
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, questionsFileText(questions));
+    renameSync(tmp, file);
   }
 
   private read(row: SessionRow, skipFile = false): Entry {
@@ -120,6 +208,16 @@ export class DesignQuestionStore {
 /** Refused: the browser's answers are to questions AgentK has changed since. */
 const STALE = 'AgentK changed its questions since you answered. Review them and try again.';
 
+/** The user's answers to the design's open questions, checked: formatted for Claude, and as sent. */
+export interface CheckedAnswers {
+  text: string;
+  /** For the prompt's first line: "2 answers to open questions and other feedback". */
+  count: string;
+  answers: DesignAnswerInput[];
+  /** The questions they were checked against. */
+  questions: DesignQuestion[];
+}
+
 /**
  * The user's answers to the design's open questions (and other feedback) from a request body,
  * checked against the current questions and formatted for Claude, with the count for the
@@ -127,7 +225,7 @@ const STALE = 'AgentK changed its questions since you answered. Review them and 
  * answers too long for one prompt, and a 409 for an answer to a question that's no longer open
  * or whose options changed.
  */
-export function designAnswers(body: unknown, questions: DesignQuestion[]): { text: string; count: string } | null {
+export function designAnswers(body: unknown, questions: DesignQuestion[]): CheckedAnswers | null {
   if (body === undefined || body === null) return null;
   if (typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'Answers must be {answers, feedback}.');
   const b = body as Record<string, unknown>;
@@ -175,5 +273,5 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): { tex
   if (text.length > ANSWERS_PROMPT_MAX) {
     throw new HttpError(400, `Your answers come to ${text.length.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to AgentK at once. Shorten some.`);
   }
-  return { text, count: answersCount(answers, feedback) };
+  return { text, count: answersCount(answers, feedback), answers, questions };
 }

@@ -295,3 +295,20 @@ export function formatAnswers(answers: DesignAnswerInput[], feedback: string, qu
   if (feedback.trim()) out.push(`### Other feedback\n${feedback.trim()}`);
   return out.join('\n\n');
 }
+
+/**
+ * A question resolved by the user's answer (`a`), as the questions file keeps it: the option
+ * picked (with any note) or the custom answer as its decision. Without an answer it's left to
+ * AgentK, on its recommendation when it has one.
+ */
+export function answeredQuestion(q: DesignQuestion, a: DesignAnswerInput | undefined): DesignQuestion {
+  let decision: string;
+  if (!a) {
+    const rec = q.recommended !== null ? q.options[q.recommended] : undefined;
+    decision = rec ? `Left to AgentK: ${rec.label}` : 'Left to AgentK';
+  } else {
+    const text = a.text.trim();
+    decision = a.label === null ? text : text ? `${a.label} — ${text}` : a.label;
+  }
+  return { ...q, status: 'resolved', decision: clip(decision, DECISION_CHARS) };
+}

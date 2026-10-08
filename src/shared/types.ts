@@ -1121,7 +1121,9 @@ export interface DesignQuestion {
 
 /**
  * The user's answer to one of the design's open questions. Answers aren't stored on the server:
- * the browser keeps them until they go to AgentK with an approval or a request to revise.
+ * the browser keeps them until an approval goes to AgentK, and after a request to revise until
+ * their questions are no longer open. Once sent, the server resolves the question with the answer
+ * as its decision, in the questions file (a markdown design's questions only with an approval).
  */
 export interface DesignAnswerInput {
   questionId: string;
@@ -1462,14 +1464,16 @@ export type TermServerMessage =
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
 //        when AgentK's questions changed since, in plan mode, or while Claude holds answers sent during a turn
 //        (Session.promptsHeld). Mid-turn (Session.midTurn), with the mod live, the approval is queued for the turn's
-//        end (Session.approvalQueued) and dropped if the turn changes the design; without the mod that's a 409.
+//        end (Session.approvalQueued) and dropped if the turn changes the design; without the mod that's a 409. Once
+//        sent, every open question is resolved, with its answer or left to AgentK (reopened on a move back to Design).
 //        cancel-approval withdraws it: 409 when none is queued)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)
 // GET    /api/sessions/:id/design              → DesignDoc
-// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design;
-//        409 outside Design, while AgentK works or Claude waits on something else (mid-turn with the mod live they're
+// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
+//        and resolves the questions answered with their answers in questions.json, unless the questions come from a
+//        markdown design's list; 409 outside Design, while AgentK works or Claude waits on something else (mid-turn with the mod live they're
 //        sent anyway, and Claude takes them when the turn ends), while an approval is queued, or when AgentK's questions
 //        changed since; 400 for a bad answer or answers too long for one prompt; 502 when sending failed)
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
