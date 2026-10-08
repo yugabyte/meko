@@ -28,6 +28,13 @@ type LangfuseProjectKeys struct {
 	SecretKey   string `json:"secret_key"`
 }
 
+// LangfuseDatapackProvisioningInfo identifies the datapack and owner used
+// when provisioning a Langfuse project.
+type LangfuseDatapackProvisioningInfo struct {
+	Name        string
+	OwnerUserID string
+}
+
 // LangfuseOrgMapping is one row of meko_system.langfuse_org_mapping.
 type LangfuseOrgMapping struct {
 	OrgID     string
@@ -499,20 +506,36 @@ func (r *LangfuseRepo) GetProjectMapping(datapackID string) (*LangfuseProjectKey
 	return &p, nil
 }
 
-// GetDatapackNameByID returns datapacks.datapack_name for the given datapack_id.
-func (r *LangfuseRepo) GetDatapackNameByID(datapackID string) (string, error) {
-	var name string
+// GetDatapackProvisioningInfo returns the datapack name and owner needed
+// for Langfuse provisioning, or nil if the datapack does not exist.
+func (r *LangfuseRepo) GetDatapackProvisioningInfo(
+	datapackID string,
+) (*LangfuseDatapackProvisioningInfo, error) {
+	var info LangfuseDatapackProvisioningInfo
 	err := r.systemDB.QueryRow(
-		`SELECT datapack_name FROM meko_system.datapacks WHERE datapack_id = $1`,
+		`SELECT datapack_name, user_id
+		 FROM meko_system.datapacks
+		 WHERE datapack_id = $1`,
 		datapackID,
-	).Scan(&name)
+	).Scan(&info.Name, &info.OwnerUserID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch datapack name: %w", err)
+		return nil, fmt.Errorf("failed to fetch datapack provisioning info: %w", err)
 	}
-	return strings.TrimSpace(name), nil
+	info.Name = strings.TrimSpace(info.Name)
+	info.OwnerUserID = strings.TrimSpace(info.OwnerUserID)
+	return &info, nil
+}
+
+// GetDatapackNameByID returns datapacks.datapack_name for the given datapack_id.
+func (r *LangfuseRepo) GetDatapackNameByID(datapackID string) (string, error) {
+	info, err := r.GetDatapackProvisioningInfo(datapackID)
+	if err != nil || info == nil {
+		return "", err
+	}
+	return info.Name, nil
 }
 
 // ListAcceptedShareMembershipsForRecipient returns accepted datapack shares

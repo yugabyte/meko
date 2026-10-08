@@ -2,9 +2,44 @@ package repository
 
 import (
 	"reflect"
+	"regexp"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestGetDatapackProvisioningInfo(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		`SELECT datapack_name, user_id
+		 FROM meko_system.datapacks
+		 WHERE datapack_id = $1`,
+	)).
+		WithArgs("datapack-1").
+		WillReturnRows(sqlmock.NewRows([]string{"datapack_name", "user_id"}).
+			AddRow("  my-pack  ", "  owner-1  "))
+
+	repo := NewLangfuseRepo(db, nil, nil)
+	got, err := repo.GetDatapackProvisioningInfo("datapack-1")
+	if err != nil {
+		t.Fatalf("GetDatapackProvisioningInfo: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetDatapackProvisioningInfo returned nil")
+	}
+	if got.Name != "my-pack" || got.OwnerUserID != "owner-1" {
+		t.Fatalf("GetDatapackProvisioningInfo = %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestChildSubTimingClass(t *testing.T) {
 	cases := []struct {
