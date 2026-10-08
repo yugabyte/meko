@@ -33,26 +33,26 @@ def init_session_state():
     """Initialize Streamlit session state variables."""
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    
+
     if "agent" not in st.session_state:
         st.session_state.agent = None
-    
+
     if "memory" not in st.session_state:
         st.session_state.memory = None
-    
+
     if "user_id" not in st.session_state:
         st.session_state.user_id = None
-    
+
     if "started" not in st.session_state:
         st.session_state.started = False
-    
+
     # For agent creation workflow
     if "pending_agent_creation" not in st.session_state:
         st.session_state.pending_agent_creation = None
-    
+
     if "show_dialog" not in st.session_state:
         st.session_state.show_dialog = False
-    
+
     # For pending response generation
     if "pending_response" not in st.session_state:
         st.session_state.pending_response = None
@@ -65,7 +65,7 @@ def initialize_agent():
         st.session_state.memory = build_mem0_memory()
         st.session_state.agent = ChatbotAgent(memory=st.session_state.memory)
         st.session_state.started = True
-        
+
         # Ensure agents table exists
         try:
             ensure_agents_table()
@@ -76,13 +76,15 @@ def initialize_agent():
 def render_landing_page():
     """Render the landing page with title, user input, and start button."""
     st.title(" meko ")
-    st.caption("Agentic data platform with conversational memory, accelerated TTFT inference, and knowledge base management.")
-    
+    st.caption(
+        "Agentic data platform with conversational memory, accelerated TTFT inference, and knowledge base management."
+    )
+
     st.divider()
-    
+
     # Center the form
     col1, col2, col3 = st.columns([1, 2, 1])
-    
+
     with col2:
         # User name input
         user_name = st.text_input(
@@ -98,7 +100,7 @@ def render_landing_page():
             key="password_input",
             type="password",
         )
-        
+
         # Start button
         if st.button("Login", use_container_width=True, type="primary"):
             if user_name.strip():
@@ -107,7 +109,7 @@ def render_landing_page():
                 st.rerun()
             else:
                 st.error("Please enter your credentials to continue.")
-    
+
     st.divider()
     st.caption("Powered by meko")
 
@@ -116,28 +118,36 @@ def render_landing_page():
 def show_create_agent_dialog():
     """Modal dialog for creating a new agent. Closes after submit."""
     st.write("Configure your new agent:")
-    
+
     # Agent name input
     agent_name = st.text_input(
         "Agent Name",
         placeholder="Enter agent name...",
         key="dialog_agent_name",
     )
-    
+
     # LLM provider selection
     model_provider = st.selectbox(
         "Select LLM Provider",
-        options=["GPT-4o", "LLama-3.1-8B-Instruct", "DeepSeek-R1", "Qwen-2.5-32B", "Mistral-7B-Instruct", "Gemma-2-9b", "Any Hugging Face Model"],
+        options=[
+            "GPT-4o",
+            "LLama-3.1-8B-Instruct",
+            "DeepSeek-R1",
+            "Qwen-2.5-32B",
+            "Mistral-7B-Instruct",
+            "Gemma-2-9b",
+            "Any Hugging Face Model",
+        ],
         index=0,
         key="dialog_model_provider",
     )
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         if st.button("Cancel", use_container_width=True):
             st.rerun()  # Close dialog
-    
+
     with col2:
         if st.button("Create Agent", use_container_width=True, type="primary"):
             if not agent_name.strip():
@@ -161,7 +171,7 @@ def stream_text(text: str, delay: float = 0.03):
 def handle_pending_agent_creation():
     """
     Handle pending agent creation with progressive message display.
-    
+
     Workflow:
     1. Show user message progressively
     2. After complete, trigger agent creation
@@ -169,78 +179,82 @@ def handle_pending_agent_creation():
     """
     if not st.session_state.pending_agent_creation:
         return False
-    
+
     agent_info = st.session_state.pending_agent_creation
     st.session_state.pending_agent_creation = None  # Clear immediately
-    
+
     # Build the agent acknowledgment message
-    agent_message = f"Creating {agent_info['name']} agent using {agent_info['provider']} model and embedder..."
-    
+    agent_message = (
+        f"Creating {agent_info['name']} agent using {agent_info['provider']} model and embedder..."
+    )
+
     # Step 1: Display agent message progressively
     with st.chat_message("assistant"):
         st.write_stream(stream_text(agent_message, delay=0.02))
-    
+
     # Add to message history
     st.session_state.messages.append({"role": "assistant", "content": agent_message})
-    
+
     # Step 2: Create the agent
     with st.chat_message("assistant"):
         with st.spinner("Creating agent..."):
             result = create_agent(agent_info["name"], agent_info["provider"])
-        
+
         # Step 3: Show response
         if result.get("success"):
             # Build the connection string
-            connection_string = f"postgresql://127.0.0.1:5433/{result['db_name']}?user=yugabyte&password="
-            
+            connection_string = (
+                f"postgresql://127.0.0.1:5433/{result['db_name']}?user=yugabyte&password="
+            )
+
             # Create structured config
             agent_config = {
                 "knowledge_base_connection_string": connection_string,
-                "mem0_config": result['mem0_config']
+                "mem0_config": result["mem0_config"],
             }
-            
-            response = f"""Agent **{result['name']}** created successfully!
+
+            response = f"""Agent **{result["name"]}** created successfully!
 
 **Connecting to the Agent:** 
-- **URL to connect:** `https://localhost:8501/agent/{result['agent_id']}`
+- **URL to connect:** `https://localhost:8501/agent/{result["agent_id"]}`
 
 **Agent Details:**
-- **ID:** `{result['agent_id']}`
-- **Database:** `{result['db_name']}`
-- **Graph:** `{result['graph_name']}`
-- **Model Provider:** `{result['model_provider']}`
+- **ID:** `{result["agent_id"]}`
+- **Database:** `{result["db_name"]}`
+- **Graph:** `{result["graph_name"]}`
+- **Model Provider:** `{result["model_provider"]}`
 
 """
-            
+
             st.markdown(response)
-            
+
             # Display configuration in collapsed expander
             with st.expander("📋 Agent Configuration Details", expanded=False):
                 st.json(agent_config, expanded=1)
         else:
             response = f"""Failed to create agent.
 
-**Error:** {result.get('error', 'Unknown error')}
+**Error:** {result.get("error", "Unknown error")}
 
 Please check the logs for more details."""
             st.markdown(response)
-    
+
     # Add to message history
     st.session_state.messages.append({"role": "assistant", "content": response})
-    
+
     # Display follow-up actionable prompt
     follow_up_message = "Do you want to add a Knowledge Base to the agent? If yes, please provide the URL of the documents."
     with st.chat_message("assistant"):
         st.markdown(follow_up_message)
     st.session_state.messages.append({"role": "assistant", "content": follow_up_message})
-    
+
     return True  # Indicate that we handled a creation
 
 
 def handle_pending_response():
     """
     Handle pending response generation with thinking indicator.
-    
+
     Workflow:
     1. User message is already in chat history
     2. Show thinking indicator
@@ -248,37 +262,40 @@ def handle_pending_response():
     """
     if not st.session_state.pending_response:
         return False
-    
+
     response_info = st.session_state.pending_response
     st.session_state.pending_response = None  # Clear immediately
-    
+
     # Generate response with spinner
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             response = st.session_state.agent.respond(
-                user_input=response_info["prompt"],
-                user_id=st.session_state.user_id
+                user_input=response_info["prompt"], user_id=st.session_state.user_id
             )
-        
+
         # Display response
         st.markdown(response)
-        
+
         # Display image if present
         if "image_path" in response_info:
-            st.image(response_info["image_path"], caption="Architecture Diagram", use_container_width=True)
-    
+            st.image(
+                response_info["image_path"],
+                caption="Architecture Diagram",
+                use_container_width=True,
+            )
+
     # Build assistant message
     agent_message = {
-        "role": "assistant", 
+        "role": "assistant",
         "content": response,
     }
-    
+
     # Add image if present
     if "image_path" in response_info:
         agent_message["image_path"] = response_info["image_path"]
-    
+
     st.session_state.messages.append(agent_message)
-    
+
     return True  # Indicate that we handled a response
 
 
@@ -286,20 +303,25 @@ def render_sidebar():
     """Render the sidebar with action buttons."""
     with st.sidebar:
         st.header(" Agent Details ")
-        
+
         st.write(f"**Logged in as user:** {st.session_state.user_id}")
         st.write(f"**Current Agent:** System Agent")
-        
+
         st.divider()
 
         # Quick actions
         st.markdown("##### Quick Prompts")
-        
-        if st.button("💬 Create a new agent", use_container_width=True, type="secondary", key="create_agent_prompt_btn"):
+
+        if st.button(
+            "💬 Create a new agent",
+            use_container_width=True,
+            type="secondary",
+            key="create_agent_prompt_btn",
+        ):
             # Add the prompt to chat history as if user typed it
             prompt_text = "create a new agent"
             st.session_state.messages.append({"role": "user", "content": prompt_text})
-            
+
             # Show the dialog
             st.session_state.show_dialog = True
             st.rerun()
@@ -307,59 +329,60 @@ def render_sidebar():
         if st.button("💬 List all agents", use_container_width=True):
             prompt = "List all agents"
             st.session_state.messages.append({"role": "user", "content": prompt})
-            
+
             # Fetch and display agents
             agents = list_agents()
-            
+
             if agents:
                 response = "**Available Agents:**\n\n"
                 for agent in agents:
-                    metadata = agent.get('metadata', {})
-                    provider = metadata.get('model_provider', 'unknown') if metadata else 'unknown'
+                    metadata = agent.get("metadata", {})
+                    provider = metadata.get("model_provider", "unknown") if metadata else "unknown"
                     response += f"- **{agent['name']}** (ID: `{agent['id'][:8]}...`)\n"
                     response += f"  - Database: `{agent['db']}`\n"
                     response += f"  - Provider: `{provider}`\n\n"
             else:
                 response = "No agents found. Create one using the 'Create a new Agent' button."
-            
+
             st.session_state.messages.append({"role": "assistant", "content": response})
             st.rerun()
 
-        if st.button("💬 Describe an Agent", use_container_width=True):    
+        if st.button("💬 Describe an Agent", use_container_width=True):
             print("Describing an Agent...")
 
-        if st.button("💬 What are the key architectural components of meko?", use_container_width=True):
+        if st.button(
+            "💬 What are the key architectural components of meko?", use_container_width=True
+        ):
             prompt = "What are the key architectural components of meko?"
-            
+
             # Add user message
             user_message = {
-                "role": "user", 
+                "role": "user",
                 "content": prompt,
             }
             st.session_state.messages.append(user_message)
-            
+
             # Set pending response with image
             architecture_image_path = "system_agent/ui/assets/yuga_ai_architecture.png"
             st.session_state.pending_response = {
                 "prompt": prompt,
-                "image_path": architecture_image_path
+                "image_path": architecture_image_path,
             }
             st.rerun()
-            
 
         # if st.button("💬 What are the key architectural components of meko?", use_container_width=True):
         #     # Trigger architecture analysis in the chat
         #     architecture_image_path = "system_agent/ui/assets/yuga_ai_architecture.png"
         #     prompt = "Please analyze and describe the Agent memory architecture shown in the image. Explain the key components, data flow, and how they interact."
-            
+
         #     # Add user message with image indicator
         #     user_message = {
-        #         "role": "user", 
+        #         "role": "user",
         #         "content": prompt,
         #         "image_path": architecture_image_path
         #     }
         #     st.session_state.messages.append(user_message)
-            
+
         #     # Generate response with image
         #     with st.spinner("Retrieving architecture details..."):
         #         response = st.session_state.agent.respond_with_image(
@@ -367,11 +390,10 @@ def render_sidebar():
         #             image_path=architecture_image_path,
         #             user_id=st.session_state.user_id
         #         )
-            
+
         #     # Add assistant response
         #     st.session_state.messages.append({"role": "assistant", "content": response})
         #     st.rerun()
-        
 
         st.divider()
 
@@ -379,7 +401,7 @@ def render_sidebar():
         if st.button("Clear Chat Display", use_container_width=True):
             st.session_state.messages = []
             st.rerun()
-        
+
         # Clear memories (backend)
         if st.button("Clear All Memories", use_container_width=True, type="secondary"):
             if st.session_state.memory:
@@ -388,7 +410,7 @@ def render_sidebar():
                     logger.info("Memories cleared for user: %s", st.session_state.user_id)
                 else:
                     st.error("Failed to clear memories")
-        
+
         st.divider()
         st.caption("Powered by meko")
 
@@ -399,7 +421,9 @@ def render_chat_messages():
         with st.chat_message(message["role"]):
             # Check if message has an attached image
             if "image_path" in message:
-                st.image(message["image_path"], caption="Architecture Diagram", use_container_width=True)
+                st.image(
+                    message["image_path"], caption="Architecture Diagram", use_container_width=True
+                )
             st.markdown(message["content"])
 
 
@@ -408,18 +432,18 @@ def handle_user_input():
     if prompt := st.chat_input("Create agents, manage memory, or query the platform..."):
         # Add user message to display
         st.session_state.messages.append({"role": "user", "content": prompt})
-        
+
         # Display user message immediately
         with st.chat_message("user"):
             st.markdown(prompt)
-        
+
         # Generate response (all logic in backend)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 # This calls the backend - memory retrieval, LLM call, etc.
                 response = st.session_state.agent.respond(prompt, user_id=st.session_state.user_id)
             st.markdown(response)
-        
+
         # Add assistant response to display
         st.session_state.messages.append({"role": "assistant", "content": response})
 
@@ -428,16 +452,18 @@ def render_chat_page():
     """Render the main chat interface."""
     # Render sidebar first
     render_sidebar()
-    
+
     # Header with icon
     col1, col2 = st.columns([0.08, 0.92])
     with col1:
         st.image("system_agent/ui/assets/yugabyte_icon.png", width="content")
     with col2:
         st.title("meko")
-    
-    st.caption("Agentic data platform with conversational memory, accelerated TTFT inference, and knowledge base management.")
-    
+
+    st.caption(
+        "Agentic data platform with conversational memory, accelerated TTFT inference, and knowledge base management."
+    )
+
     # Show agent creation dialog if triggered by chat prompt
     if st.session_state.show_dialog:
         st.session_state.show_dialog = False  # Reset flag
@@ -445,16 +471,16 @@ def render_chat_page():
 
     # Render existing messages first
     render_chat_messages()
-    
+
     # Handle pending agent creation (progressive message + creation)
     # This happens AFTER existing messages are rendered
     if handle_pending_agent_creation():
         pass  # Creation was handled, messages already displayed
-    
+
     # Handle pending response (show thinking indicator and generate response)
     if handle_pending_response():
         pass  # Response was handled, messages already displayed
-    
+
     # Handle new user input
     handle_user_input()
 
@@ -469,10 +495,10 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    
+
     # Initialize state
     init_session_state()
-    
+
     # Show landing page or chat based on state
     if not st.session_state.started:
         render_landing_page()

@@ -26,12 +26,8 @@ from playwright.async_api import async_playwright
 
 HERE = Path(__file__).resolve().parent
 IMG = HERE / "img"
-ARCHIFY = os.environ.get(
-    "ARCHIFY", str(Path.home() / ".claude/skills/archify/bin/archify.mjs")
-)
-EXCALIDRAW_UTILS = (
-    "https://unpkg.com/@excalidraw/utils@0.1.2/dist/excalidraw-utils.min.js"
-)
+ARCHIFY = os.environ.get("ARCHIFY", str(Path.home() / ".claude/skills/archify/bin/archify.mjs"))
+EXCALIDRAW_UTILS = "https://unpkg.com/@excalidraw/utils@0.1.2/dist/excalidraw-utils.min.js"
 
 
 def deliver(spec: Path) -> Path:
@@ -54,9 +50,7 @@ def deliver(spec: Path) -> Path:
         text=True,
     )
     if r.returncode != 0:
-        sys.exit(
-            f"{spec.name}: archify deliver failed\n{r.stdout[-2000:]}{r.stderr[-2000:]}"
-        )
+        sys.exit(f"{spec.name}: archify deliver failed\n{r.stdout[-2000:]}{r.stderr[-2000:]}")
     return out
 
 
@@ -68,9 +62,7 @@ async def main(only: set) -> None:
         if not only or s.name.split(".")[0] in only
     ]
     scenes = [
-        s
-        for s in sorted((HERE / "excalidraw").glob("*.excalidraw"))
-        if not only or s.stem in only
+        s for s in sorted((HERE / "excalidraw").glob("*.excalidraw")) if not only or s.stem in only
     ]
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -90,18 +82,14 @@ async def main(only: set) -> None:
                 " { visibility: visible !important; }"
             )
             png = IMG / f"{spec.name.split('.')[0]}.png"
-            await page.locator("svg[data-quality-profile]").first.screenshot(
-                path=str(png)
-            )
+            await page.locator("svg[data-quality-profile]").first.screenshot(path=str(png))
             print(f"archify    {spec.name} -> {png.relative_to(HERE)}")
         if scenes:
             await page.set_content(
                 f'<html><body style="margin:0"><script src="{EXCALIDRAW_UTILS}">'
                 "</script></body></html>"
             )
-            await page.wait_for_function(
-                "window.ExcalidrawUtils !== undefined", timeout=60000
-            )
+            await page.wait_for_function("window.ExcalidrawUtils !== undefined", timeout=60000)
         for scene in scenes:
             data = json.loads(scene.read_text())
             svg = await page.evaluate(
@@ -115,9 +103,7 @@ async def main(only: set) -> None:
                 f'<html><body style="margin:0;background:#fff">{svg}</body></html>'
             )
             await shot.evaluate("document.fonts.ready")
-            await shot.locator("svg").first.screenshot(
-                path=str(IMG / f"{scene.stem}.png")
-            )
+            await shot.locator("svg").first.screenshot(path=str(IMG / f"{scene.stem}.png"))
             await shot.close()
             print(f"excalidraw {scene.name} -> img/{scene.stem}.png")
         await browser.close()

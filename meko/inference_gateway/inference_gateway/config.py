@@ -122,14 +122,20 @@ DEFAULT_AGENT_CONFIRM_TOOLS: tuple[str, ...] = (
 # composes at both layers (a flag-off MCP deployment doesn't list these
 # tools at all; a flag-off gateway won't offer them even if listed).
 AMP_AGENT_READ_TOOLS: tuple[str, ...] = (
-    "amp_cluster_list", "amp_cluster_get",
-    "amp_branch_list", "amp_branch_get",
-    "amp_compute_list", "amp_compute_get",
+    "amp_cluster_list",
+    "amp_cluster_get",
+    "amp_branch_list",
+    "amp_branch_get",
+    "amp_compute_list",
+    "amp_compute_get",
 )
 AMP_AGENT_CONFIRM_TOOLS: tuple[str, ...] = (
-    "amp_cluster_create", "amp_cluster_delete",
-    "amp_branch_create", "amp_branch_delete",
-    "amp_compute_create", "amp_compute_delete",
+    "amp_cluster_create",
+    "amp_cluster_delete",
+    "amp_branch_create",
+    "amp_branch_delete",
+    "amp_compute_create",
+    "amp_compute_delete",
 )
 
 # Max tool-execution rounds per turn. Each round is one extra LLM call; the
@@ -142,7 +148,7 @@ DEFAULT_MAX_TOOL_ROUNDS = 3
 class AppConfig:
     """Immutable gateway configuration. Built once at startup."""
 
-    llm_provider: str            # "openai" | "bedrock"
+    llm_provider: str  # "openai" | "bedrock"
     llm_model: str
     mcp_endpoint: str
     aws_region: str

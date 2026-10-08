@@ -33,8 +33,14 @@ strict = true
 
 [tool.ruff]
 target-version = "py311"
+# Apply the excludes below to files named on the command line too, not only to
+# directory walks. ruff reads this from the config where it runs: this one
+# covers runs from amp/ (`make fmt`), the root ruff.toml runs from the root.
+force-exclude = true
 extend-exclude = [
     "compute/vendor/",
+    # A `cp` of the upstream amp-time repo; see its README.
+    "deploy/lru/amp-time/vendor/",
     "target/",
 ]
 line-length = 100 # this setting is rather guidance, it won't fail if it can't make the shorter

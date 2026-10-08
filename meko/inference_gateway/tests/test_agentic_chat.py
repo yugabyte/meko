@@ -102,9 +102,13 @@ async def test_no_tool_call_is_single_invoke() -> None:
     steps: list[ProcessingStep] = []
 
     result, results, _pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name=tools,
-        messages=[HumanMessage(content="hi")], steps=steps,
-        conversation_id="conv-1", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        messages=[HumanMessage(content="hi")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
     )
 
     assert result.content == "plain answer"
@@ -120,33 +124,47 @@ async def test_tool_call_executes_with_gateway_enforced_identity() -> None:
     overridden by the gateway (schema-permitting) — never trusted."""
     cfg = _make_cfg()
     tool = _agent_tool(
-        "memory_get_all", {"memories": [{"memory": "fact"}]},
+        "memory_get_all",
+        {"memories": [{"memory": "fact"}]},
         ("agent_id", "conversation_id", "datapack_id", "promoted"),
     )
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call(
-            "memory_get_all",
-            # Model tries to wander: wrong agent, foreign datapack.
-            {"promoted": False, "agent_id": "evil", "datapack_id": "someone-elses"},
-        )]),
-        AIMessage(content="you have 1 memory"),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "memory_get_all",
+                        # Model tries to wander: wrong agent, foreign datapack.
+                        {"promoted": False, "agent_id": "evil", "datapack_id": "someone-elses"},
+                    )
+                ],
+            ),
+            AIMessage(content="you have 1 memory"),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     result, results, _pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"memory_get_all": tool},
-        messages=[HumanMessage(content="list all my memories")], steps=steps,
-        conversation_id="conv-1", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"memory_get_all": tool},
+        messages=[HumanMessage(content="list all my memories")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
     )
 
     assert result.content == "you have 1 memory"
     assert len(results) == 2
-    tool.ainvoke.assert_awaited_once_with({
-        "promoted": False,
-        "agent_id": "agent",          # forced to cfg.agent_id
-        "conversation_id": "conv-1",  # forced to the turn's conversation
-        "datapack_id": "dp-1",        # forced to the turn's datapack
-    })
+    tool.ainvoke.assert_awaited_once_with(
+        {
+            "promoted": False,
+            "agent_id": "agent",  # forced to cfg.agent_id
+            "conversation_id": "conv-1",  # forced to the turn's conversation
+            "datapack_id": "dp-1",  # forced to the turn's datapack
+        }
+    )
     # One observability step for the tool call.
     assert [s.name for s in steps] == ["agent_tool:memory_get_all"]
     assert steps[0].status == "ok"
@@ -165,9 +183,13 @@ async def test_round_cap_forces_final_answer_without_tools() -> None:
     steps: list[ProcessingStep] = []
 
     result, results, _pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"datapack_list": tool},
-        messages=[HumanMessage(content="loop forever")], steps=steps,
-        conversation_id="conv-1", datapack_id=None,
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"datapack_list": tool},
+        messages=[HumanMessage(content="loop forever")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id=None,
     )
 
     assert result.content == "forced answer"
@@ -180,17 +202,22 @@ async def test_round_cap_forces_final_answer_without_tools() -> None:
 
 async def test_unknown_tool_returns_structured_error() -> None:
     cfg = _make_cfg()
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("datapack_delete", {"datapack_id": "x"})]),
-        AIMessage(content="cannot do that"),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(content="", tool_calls=[_tool_call("datapack_delete", {"datapack_id": "x"})]),
+            AIMessage(content="cannot do that"),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     result, _, _pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm,
+        cfg=cfg,
+        llm=llm,
         tools_by_name={"memory_get_all": _agent_tool("memory_get_all", {}, ("conversation_id",))},
-        messages=[HumanMessage(content="delete my datapack")], steps=steps,
-        conversation_id="conv-1", datapack_id="dp-1",
+        messages=[HumanMessage(content="delete my datapack")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
     )
 
     assert result.content == "cannot do that"
@@ -205,16 +232,22 @@ async def test_tool_exception_becomes_error_result_not_crash() -> None:
     cfg = _make_cfg()
     tool = _agent_tool("memory_get_all", {}, ("conversation_id",))
     tool.ainvoke = AsyncMock(side_effect=RuntimeError("mcp down"))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("memory_get_all", {})]),
-        AIMessage(content="sorry, could not fetch"),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(content="", tool_calls=[_tool_call("memory_get_all", {})]),
+            AIMessage(content="sorry, could not fetch"),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     result, _, _pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"memory_get_all": tool},
-        messages=[HumanMessage(content="list memories")], steps=steps,
-        conversation_id="conv-1", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"memory_get_all": tool},
+        messages=[HumanMessage(content="list memories")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
     )
 
     assert result.content == "sorry, could not fetch"
@@ -238,13 +271,16 @@ def _mock_tool(response: Any) -> MagicMock:
 async def test_run_chat_turn_agentic_end_to_end() -> None:
     cfg = _make_cfg(agent_tools=("memory_get_all",))
     agent_tool = _agent_tool(
-        "memory_get_all", {"memories": [{"memory": "user prefers hiking"}], "total": 1},
+        "memory_get_all",
+        {"memories": [{"memory": "user prefers hiking"}], "total": 1},
         ("agent_id", "conversation_id", "datapack_id"),
     )
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("memory_get_all", {})]),
-        AIMessage(content="You have 1 memory: user prefers hiking"),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(content="", tool_calls=[_tool_call("memory_get_all", {})]),
+            AIMessage(content="You have 1 memory: user prefers hiking"),
+        ]
+    )
     tools = {
         "conversation_create": _mock_tool({"conversation_id": "conv-uuid-1"}),
         "memory_search": _mock_tool({"results": []}),
@@ -257,20 +293,26 @@ async def test_run_chat_turn_agentic_end_to_end() -> None:
     router = _ScriptedAgentLLM([AIMessage(content="memory_get_all")])
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools,  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="show me all my memories", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="show me all my memories",
+        datapack_id="dp-1",
         summary_llm=router,  # type: ignore[arg-type]
     )
 
     assert out.assistant_text == "You have 1 memory: user prefers hiking"
     assert len(router.calls) == 1  # Phase 3 router consulted once
     # Identity was gateway-enforced on the agent tool call.
-    agent_tool.ainvoke.assert_awaited_once_with({
-        "agent_id": "agent",
-        "conversation_id": "conv-uuid-1",
-        "datapack_id": "dp-1",
-    })
+    agent_tool.ainvoke.assert_awaited_once_with(
+        {
+            "agent_id": "agent",
+            "conversation_id": "conv-uuid-1",
+            "datapack_id": "dp-1",
+        }
+    )
     # The agent tool call is visible in the observability timeline, and the
     # llm_invoke step notes the extra round.
     names = [s.name for s in out.processing_steps]
@@ -290,30 +332,43 @@ async def test_run_chat_turn_agentic_end_to_end() -> None:
 async def test_memory_add_auto_executes_verbatim() -> None:
     cfg = _make_cfg(agent_tools=("memory_add",))
     tool = _agent_tool(
-        "memory_add", {"results": [{"id": "mem-1"}]},
+        "memory_add",
+        {"results": [{"id": "mem-1"}]},
         ("text", "agent_id", "conversation_id", "datapack_id"),
     )
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call(
-            "memory_add", {"text": "deploy scripts run from repo root only"})]),
-        AIMessage(content="Saved."),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call("memory_add", {"text": "deploy scripts run from repo root only"})
+                ],
+            ),
+            AIMessage(content="Saved."),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     result, _, pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"memory_add": tool},
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"memory_add": tool},
         messages=[HumanMessage(content="remember this: deploy scripts run from repo root only")],
-        steps=steps, conversation_id="conv-1", datapack_id="dp-1",
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
     )
 
     assert result.content == "Saved."
     assert pending is None  # memory_add is auto-tier, not confirm-tier
-    tool.ainvoke.assert_awaited_once_with({
-        "text": "deploy scripts run from repo root only",
-        "agent_id": "agent",
-        "conversation_id": "conv-1",
-        "datapack_id": "dp-1",
-    })
+    tool.ainvoke.assert_awaited_once_with(
+        {
+            "text": "deploy scripts run from repo root only",
+            "agent_id": "agent",
+            "conversation_id": "conv-1",
+            "datapack_id": "dp-1",
+        }
+    )
     assert steps[0].name == "agent_tool:memory_add"
     assert steps[0].status == "ok"
 
@@ -325,19 +380,27 @@ async def test_memory_add_auto_executes_verbatim() -> None:
 
 async def test_confirm_tool_proposes_pending_action_without_executing() -> None:
     cfg = _make_cfg(agent_tools=(), agent_confirm_tools=("datapack_create",))
-    tool = _agent_tool("datapack_create", {"datapack_id": "new"},
-                       ("name", "conversation_id", "datapack_id"))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call(
-            "datapack_create", {"name": "analytics"})]),
-        AIMessage(content="I've prepared the datapack creation — please confirm."),
-    ])
+    tool = _agent_tool(
+        "datapack_create", {"datapack_id": "new"}, ("name", "conversation_id", "datapack_id")
+    )
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="", tool_calls=[_tool_call("datapack_create", {"name": "analytics"})]
+            ),
+            AIMessage(content="I've prepared the datapack creation — please confirm."),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     result, results, pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"datapack_create": tool},
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"datapack_create": tool},
         messages=[HumanMessage(content="create a datapack called analytics")],
-        steps=steps, conversation_id="conv-1", datapack_id="dp-1",
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
         routed_tool="datapack_create",
     )
 
@@ -363,19 +426,28 @@ async def test_confirm_tool_proposes_pending_action_without_executing() -> None:
 async def test_second_confirm_call_in_one_turn_is_rejected() -> None:
     cfg = _make_cfg(agent_tools=(), agent_confirm_tools=("datapack_create",))
     tool = _agent_tool("datapack_create", {}, ("name", "conversation_id"))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[
-            _tool_call("datapack_create", {"name": "one"}, call_id="c1"),
-            _tool_call("datapack_create", {"name": "two"}, call_id="c2"),
-        ]),
-        AIMessage(content="one action at a time"),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call("datapack_create", {"name": "one"}, call_id="c1"),
+                    _tool_call("datapack_create", {"name": "two"}, call_id="c2"),
+                ],
+            ),
+            AIMessage(content="one action at a time"),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     _, _, pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"datapack_create": tool},
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"datapack_create": tool},
         messages=[HumanMessage(content="create two datapacks")],
-        steps=steps, conversation_id="conv-1", datapack_id=None,
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id=None,
         routed_tool="datapack_create",
     )
 
@@ -389,10 +461,14 @@ async def test_second_confirm_call_in_one_turn_is_rejected() -> None:
 async def test_run_chat_turn_stores_pending_action() -> None:
     cfg = _make_cfg(agent_tools=(), agent_confirm_tools=("datapack_create",))
     create_tool = _agent_tool("datapack_create", {}, ("name", "conversation_id"))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("datapack_create", {"name": "analytics"})]),
-        AIMessage(content="Please confirm the datapack creation."),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="", tool_calls=[_tool_call("datapack_create", {"name": "analytics"})]
+            ),
+            AIMessage(content="Please confirm the datapack creation."),
+        ]
+    )
     tools = {
         "conversation_create": _mock_tool({"conversation_id": "conv-uuid-1"}),
         "memory_search": _mock_tool({"results": []}),
@@ -403,9 +479,13 @@ async def test_run_chat_turn_stores_pending_action() -> None:
     store = InMemorySessionStore(max_messages_per_session=10)
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools,  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="create a datapack called analytics", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="create a datapack called analytics",
+        datapack_id="dp-1",
         summary_llm=_ScriptedAgentLLM([AIMessage(content="datapack_create")]),  # type: ignore[arg-type]
     )
 
@@ -423,7 +503,7 @@ async def test_pending_action_pop_rejects_stale_id() -> None:
     store = InMemorySessionStore()
     await store.set_pending_action("s1", {"action_id": "a1", "tool_name": "x", "args": {}})
     await store.set_pending_action("s1", {"action_id": "a2", "tool_name": "y", "args": {}})
-    assert await store.pop_pending_action("s1", "a1") is None      # replaced
+    assert await store.pop_pending_action("s1", "a1") is None  # replaced
     assert await store.pop_pending_action("missing", "a2") is None  # no session
     claimed = await store.pop_pending_action("s1", "a2")
     assert claimed is not None and claimed["tool_name"] == "y"
@@ -457,10 +537,16 @@ def test_confirm_action_executes_frozen_args(monkeypatch) -> None:
 
     cfg = _make_cfg()
     store = InMemorySessionStore()
-    asyncio.run(store.set_pending_action("s1", {
-        "action_id": "a1", "tool_name": "datapack_create",
-        "args": {"name": "analytics", "conversation_id": "conv-1"},
-    }))
+    asyncio.run(
+        store.set_pending_action(
+            "s1",
+            {
+                "action_id": "a1",
+                "tool_name": "datapack_create",
+                "args": {"name": "analytics", "conversation_id": "conv-1"},
+            },
+        )
+    )
     tool = _mock_tool({"datapack_id": "dp-new", "datapack_name": "analytics"})
     addmsg = _mock_tool({"status": "accepted"})
 
@@ -471,9 +557,14 @@ def test_confirm_action_executes_frozen_args(monkeypatch) -> None:
     monkeypatch.setattr(chat_routes, "build_mcp_tools", fake_build)
 
     client = TestClient(_make_confirm_app(cfg, store))
-    resp = client.post("/chat/confirm-action", json={
-        "session_id": "s1", "action_id": "a1", "user_token": "tok",
-    })
+    resp = client.post(
+        "/chat/confirm-action",
+        json={
+            "session_id": "s1",
+            "action_id": "a1",
+            "user_token": "tok",
+        },
+    )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -483,9 +574,14 @@ def test_confirm_action_executes_frozen_args(monkeypatch) -> None:
     addmsg.ainvoke.assert_awaited_once()  # action recorded as a turn
 
     # Second confirm of the same action: already claimed -> 404.
-    resp2 = client.post("/chat/confirm-action", json={
-        "session_id": "s1", "action_id": "a1", "user_token": "tok",
-    })
+    resp2 = client.post(
+        "/chat/confirm-action",
+        json={
+            "session_id": "s1",
+            "action_id": "a1",
+            "user_token": "tok",
+        },
+    )
     assert resp2.status_code == 404
 
 
@@ -498,16 +594,29 @@ def test_confirm_action_cancel_discards_without_executing(monkeypatch) -> None:
 
     cfg = _make_cfg()
     store = InMemorySessionStore()
-    asyncio.run(store.set_pending_action("s1", {
-        "action_id": "a1", "tool_name": "datapack_create", "args": {},
-    }))
+    asyncio.run(
+        store.set_pending_action(
+            "s1",
+            {
+                "action_id": "a1",
+                "tool_name": "datapack_create",
+                "args": {},
+            },
+        )
+    )
     fake_build = AsyncMock()
     monkeypatch.setattr(chat_routes, "build_mcp_tools", fake_build)
 
     client = TestClient(_make_confirm_app(cfg, store))
-    resp = client.post("/chat/confirm-action", json={
-        "session_id": "s1", "action_id": "a1", "user_token": "tok", "approve": False,
-    })
+    resp = client.post(
+        "/chat/confirm-action",
+        json={
+            "session_id": "s1",
+            "action_id": "a1",
+            "user_token": "tok",
+            "approve": False,
+        },
+    )
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
@@ -521,7 +630,9 @@ def test_default_confirm_tier_scope() -> None:
     from inference_gateway.config import DEFAULT_AGENT_CONFIRM_TOOLS, DEFAULT_AGENT_TOOLS
 
     assert set(DEFAULT_AGENT_CONFIRM_TOOLS) == {
-        "memory_delete_by_id", "memory_promote", "datapack_update",
+        "memory_delete_by_id",
+        "memory_promote",
+        "datapack_update",
     }
     for banned in ("datapack_create", "memory_update", "memory_delete_all", "datapack_delete"):
         assert banned not in DEFAULT_AGENT_CONFIRM_TOOLS
@@ -532,21 +643,33 @@ async def test_confirm_action_pinned_to_chat_datapack() -> None:
     """The model cannot aim a confirm-tier action at another datapack — the
     proposal freezes datapack_id to the one this chat is scoped to."""
     cfg = _make_cfg(agent_tools=(), agent_confirm_tools=("memory_promote",))
-    tool = _agent_tool("memory_promote", {},
-                       ("memory_ids", "agent_id", "conversation_id", "datapack_id"))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call(
-            "memory_promote",
-            {"memory_ids": ["mem-1"], "datapack_id": "someone-elses-datapack"},
-        )]),
-        AIMessage(content="please confirm the promotion"),
-    ])
+    tool = _agent_tool(
+        "memory_promote", {}, ("memory_ids", "agent_id", "conversation_id", "datapack_id")
+    )
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "memory_promote",
+                        {"memory_ids": ["mem-1"], "datapack_id": "someone-elses-datapack"},
+                    )
+                ],
+            ),
+            AIMessage(content="please confirm the promotion"),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     _, _, pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"memory_promote": tool},
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"memory_promote": tool},
         messages=[HumanMessage(content="promote mem-1 to the team KB")],
-        steps=steps, conversation_id="conv-1", datapack_id="dp-chatting",
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-chatting",
         routed_tool="memory_promote",
     )
 
@@ -567,7 +690,7 @@ def test_show_pg_amp_extends_both_tiers(monkeypatch) -> None:
     cfg, _ = parse_args([])
     # Names must match the MCP server's registration (amp_ prefix) or the
     # allowlist resolves nothing at bind time.
-    assert "amp_cluster_list" in cfg.agent_tools           # AMP reads auto-execute
+    assert "amp_cluster_list" in cfg.agent_tools  # AMP reads auto-execute
     assert "amp_cluster_create" in cfg.agent_confirm_tools  # AMP writes need confirm
     assert "amp_cluster_create" not in cfg.agent_tools
 
@@ -589,14 +712,18 @@ async def test_run_chat_turn_flag_off_never_binds_tools() -> None:
     store = InMemorySessionStore(max_messages_per_session=10)
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools,  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="hello there, how are you today?", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="hello there, how are you today?",
+        datapack_id="dp-1",
     )
 
     assert out.assistant_text == "plain"
-    assert llm.bound_tool_names is None          # bind_tools never called
-    assert len(llm.calls) == 1                   # single LLM call, as today
+    assert llm.bound_tool_names is None  # bind_tools never called
+    assert len(llm.calls) == 1  # single LLM call, as today
     assert "confirmation card" not in llm.calls[0][0].content  # no guidance block
 
 
@@ -621,14 +748,17 @@ async def test_router_action_intent_skips_conversation_cache() -> None:
     call (whose conversation tier can end the turn with a cached summary) is
     replaced by the grounded legacy retrieval with conversation skipped."""
     cfg = _make_cfg(
-        agent_tools=(), agent_confirm_tools=("amp_cluster_create",),
+        agent_tools=(),
+        agent_confirm_tools=("amp_cluster_create",),
         contextual_prominence_search_enabled=True,
     )
     cps_tool = _mock_tool({"results": []})
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("amp_cluster_create", {"name": "pg1"})]),
-        AIMessage(content="Please confirm the cluster creation."),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(content="", tool_calls=[_tool_call("amp_cluster_create", {"name": "pg1"})]),
+            AIMessage(content="Please confirm the cluster creation."),
+        ]
+    )
     router = _ScriptedAgentLLM([AIMessage(content="amp_cluster_create")])
     tools = _run_turn_tools(
         context_search=cps_tool,
@@ -637,14 +767,18 @@ async def test_router_action_intent_skips_conversation_cache() -> None:
     store = InMemorySessionStore(max_messages_per_session=10)
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools,  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="can you spin up an AMP cluster named pg1", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="can you spin up an AMP cluster named pg1",
+        datapack_id="dp-1",
         summary_llm=router,  # type: ignore[arg-type]
     )
 
-    cps_tool.ainvoke.assert_not_awaited()        # cache can't short-circuit
-    assert out.pending_action is not None        # the loop ran and proposed
+    cps_tool.ainvoke.assert_not_awaited()  # cache can't short-circuit
+    assert out.pending_action is not None  # the loop ran and proposed
     route_steps = [s for s in out.processing_steps if s.name == "tool_route"]
     assert route_steps and route_steps[0].detail.startswith("amp_cluster_create")
     # The route-forced retrieval is NOT a user cache rejection: the persisted
@@ -662,10 +796,13 @@ async def test_router_chatter_and_unknown_tool_default_to_cps() -> None:
         store = InMemorySessionStore(max_messages_per_session=10)
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm,
+            cfg=cfg,
+            llm=llm,
             tools_by_name=_run_turn_tools(context_search=cps_tool),  # type: ignore[arg-type]
-            session_store=store, session_id="s1",
-            user_message="tell me about my project preferences", datapack_id="dp-1",
+            session_store=store,
+            session_id="s1",
+            user_message="tell me about my project preferences",
+            datapack_id="dp-1",
             summary_llm=router,  # type: ignore[arg-type]
         )
 
@@ -683,14 +820,17 @@ async def test_router_not_consulted_when_flag_off() -> None:
     store = InMemorySessionStore(max_messages_per_session=10)
 
     out = await run_chat_turn(
-        cfg=cfg, llm=_ScriptedAgentLLM([AIMessage(content="plain")]),
+        cfg=cfg,
+        llm=_ScriptedAgentLLM([AIMessage(content="plain")]),
         tools_by_name=_run_turn_tools(),  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="hello there, how are you today?", datapack_id="dp-1",
+        session_store=store,
+        session_id="s1",
+        user_message="hello there, how are you today?",
+        datapack_id="dp-1",
         summary_llm=router,  # type: ignore[arg-type]
     )
 
-    assert router.calls == []                    # flag off ⇒ no router call
+    assert router.calls == []  # flag off ⇒ no router call
     assert all(s.name != "tool_route" for s in out.processing_steps)
     assert out.assistant_text == "plain"
 
@@ -699,26 +839,44 @@ def test_scoped_tool_names_per_route() -> None:
     """Router-scoped binding: only the routed family's schemas ride the call."""
     cfg = _make_cfg(
         agent_tools=(
-            "memory_get_all", "memory_search", "knowledgebase_search",
-            "amp_cluster_list", "amp_branch_list",
+            "memory_get_all",
+            "memory_search",
+            "knowledgebase_search",
+            "amp_cluster_list",
+            "amp_branch_list",
         ),
         agent_confirm_tools=("memory_promote", "amp_cluster_create"),
     )
     # cps/default: Meko auto tier only — no AMP, no confirm schemas.
     assert _scoped_tool_names(cfg, None) == (
-        "memory_get_all", "memory_search", "knowledgebase_search")
+        "memory_get_all",
+        "memory_search",
+        "knowledgebase_search",
+    )
     # AMP route: the whole AMP family (reads + confirms) + the search reads.
     assert _scoped_tool_names(cfg, "amp_cluster_create") == (
-        "amp_cluster_list", "amp_branch_list", "amp_cluster_create",
-        "memory_search", "knowledgebase_search")
+        "amp_cluster_list",
+        "amp_branch_list",
+        "amp_cluster_create",
+        "memory_search",
+        "knowledgebase_search",
+    )
     assert _scoped_tool_names(cfg, "amp_branch_list") == _scoped_tool_names(
-        cfg, "amp_cluster_create")
+        cfg, "amp_cluster_create"
+    )
     # Meko confirm route: auto tier + exactly the routed tool.
     assert _scoped_tool_names(cfg, "memory_promote") == (
-        "memory_get_all", "memory_search", "knowledgebase_search", "memory_promote")
+        "memory_get_all",
+        "memory_search",
+        "knowledgebase_search",
+        "memory_promote",
+    )
     # Routed auto tool is already in the tier — no duplicate.
     assert _scoped_tool_names(cfg, "memory_get_all") == (
-        "memory_get_all", "memory_search", "knowledgebase_search")
+        "memory_get_all",
+        "memory_search",
+        "knowledgebase_search",
+    )
 
 
 async def test_scoped_binding_excludes_unrouted_confirm_schema() -> None:
@@ -729,21 +887,30 @@ async def test_scoped_binding_excludes_unrouted_confirm_schema() -> None:
         agent_confirm_tools=("memory_promote",),
     )
     promote = _agent_tool("memory_promote", {}, ("memory_ids",))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("memory_promote", {"memory_ids": ["m1"]})]),
-        AIMessage(content="I can promote that once you ask explicitly."),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="", tool_calls=[_tool_call("memory_promote", {"memory_ids": ["m1"]})]
+            ),
+            AIMessage(content="I can promote that once you ask explicitly."),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     _, _, pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm,
-        tools_by_name={"memory_get_all": _agent_tool("memory_get_all", {}, ()),
-                       "memory_promote": promote},
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={
+            "memory_get_all": _agent_tool("memory_get_all", {}, ()),
+            "memory_promote": promote,
+        },
         messages=[HumanMessage(content="tell me about memory m1")],
-        steps=steps, conversation_id="conv-1", datapack_id="dp-1",
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
     )
 
-    assert llm.bound_tool_names == ["memory_get_all"]   # schema never sent
+    assert llm.bound_tool_names == ["memory_get_all"]  # schema never sent
     promote.ainvoke.assert_not_awaited()
     assert pending is None
     assert steps[0].status == "error" and "not in allowlist" in steps[0].detail
@@ -759,31 +926,40 @@ async def test_amp_not_registered_read_check_blocks_proposal() -> None:
     )
     list_tool = _agent_tool(
         "amp_cluster_list",
-        {"error": "AMP_NOT_REGISTERED",
-         "detail": "AMP is not registered; an admin must register the AMP controller first"},
+        {
+            "error": "AMP_NOT_REGISTERED",
+            "detail": "AMP is not registered; an admin must register the AMP controller first",
+        },
         ("conversation_id", "datapack_id"),
     )
     create_tool = _agent_tool("amp_cluster_create", {}, ("name",))
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("amp_cluster_list", {})]),
-        AIMessage(content=(
-            "Your deployment is not registered to the AMP service — an admin "
-            "must register the AMP controller in the Meko Admin console first."
-        )),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(content="", tool_calls=[_tool_call("amp_cluster_list", {})]),
+            AIMessage(
+                content=(
+                    "Your deployment is not registered to the AMP service — an admin "
+                    "must register the AMP controller in the Meko Admin console first."
+                )
+            ),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     result, _, pending = await _agentic_llm_invoke(
-        cfg=cfg, llm=llm,
+        cfg=cfg,
+        llm=llm,
         tools_by_name={"amp_cluster_list": list_tool, "amp_cluster_create": create_tool},
         messages=[HumanMessage(content="spin up an AMP cluster")],
-        steps=steps, conversation_id="conv-1", datapack_id="dp-1",
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
         routed_tool="amp_cluster_create",
     )
 
-    assert pending is None                       # no Allow/Deny card
-    create_tool.ainvoke.assert_not_awaited()     # nothing attempted the create
-    list_tool.ainvoke.assert_awaited_once()      # the read check ran
+    assert pending is None  # no Allow/Deny card
+    create_tool.ainvoke.assert_not_awaited()  # nothing attempted the create
+    list_tool.ainvoke.assert_awaited_once()  # the read check ran
     assert "not registered" in result.content
     # The error reached the model as the read tool's result.
     tool_msgs = [m for m in llm.calls[1] if isinstance(m, ToolMessage)]
@@ -800,26 +976,35 @@ async def test_token_tracking_counts_only_tool_result_rounds() -> None:
         memory_get_all=_agent_tool("memory_get_all", {"memories": []}, ()),
         track_token_usage=track,
     )
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call("memory_get_all", {})],
-                  usage_metadata={"input_tokens": 3000, "output_tokens": 50,
-                                  "total_tokens": 3050}),
-        AIMessage(content="you have no memories",
-                  usage_metadata={"input_tokens": 3200, "output_tokens": 100,
-                                  "total_tokens": 3300}),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[_tool_call("memory_get_all", {})],
+                usage_metadata={"input_tokens": 3000, "output_tokens": 50, "total_tokens": 3050},
+            ),
+            AIMessage(
+                content="you have no memories",
+                usage_metadata={"input_tokens": 3200, "output_tokens": 100, "total_tokens": 3300},
+            ),
+        ]
+    )
     store = InMemorySessionStore(max_messages_per_session=10)
 
     await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools,  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="list all my memories", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="list all my memories",
+        datapack_id="dp-1",
         summary_llm=_ScriptedAgentLLM([AIMessage(content="memory_get_all")]),  # type: ignore[arg-type]
     )
 
     args = track.ainvoke.await_args.args[0]
     assert args["name"] == "LLM Response"
-    assert args["input_tokens"] == 3200      # round 1's 3000 excluded
+    assert args["input_tokens"] == 3200  # round 1's 3000 excluded
     assert args["output_tokens"] == 100
     assert args["total_tokens"] == 3300
 
@@ -830,27 +1015,38 @@ async def test_unscoped_turn_strips_model_datapack_id() -> None:
     active datapack) — never passed through."""
     cfg = _make_cfg()
     tool = _agent_tool(
-        "memory_get_all", {"memories": []},
+        "memory_get_all",
+        {"memories": []},
         ("agent_id", "conversation_id", "datapack_id"),
     )
-    llm = _ScriptedAgentLLM([
-        AIMessage(content="", tool_calls=[_tool_call(
-            "memory_get_all", {"datapack_id": "model-chosen-datapack"})]),
-        AIMessage(content="done"),
-    ])
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[_tool_call("memory_get_all", {"datapack_id": "model-chosen-datapack"})],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
     steps: list[ProcessingStep] = []
 
     await _agentic_llm_invoke(
-        cfg=cfg, llm=llm, tools_by_name={"memory_get_all": tool},
-        messages=[HumanMessage(content="list memories")], steps=steps,
-        conversation_id="conv-1", datapack_id=None,
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"memory_get_all": tool},
+        messages=[HumanMessage(content="list memories")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id=None,
     )
 
-    tool.ainvoke.assert_awaited_once_with({
-        "agent_id": "agent",
-        "conversation_id": "conv-1",
-        # no datapack_id at all — the model's value did not survive
-    })
+    tool.ainvoke.assert_awaited_once_with(
+        {
+            "agent_id": "agent",
+            "conversation_id": "conv-1",
+            # no datapack_id at all — the model's value did not survive
+        }
+    )
 
 
 async def test_no_proposal_turn_clears_stored_pending_action() -> None:
@@ -858,15 +1054,18 @@ async def test_no_proposal_turn_clears_stored_pending_action() -> None:
     proposal — its action_id must no longer be claimable."""
     store = InMemorySessionStore(max_messages_per_session=10)
     await store.set_pending_action(
-        "s1", {"action_id": "old-1", "tool_name": "memory_promote", "args": {}})
+        "s1", {"action_id": "old-1", "tool_name": "memory_promote", "args": {}}
+    )
 
     cfg = _make_cfg()
     out = await run_chat_turn(
-        cfg=cfg, llm=_ScriptedAgentLLM([AIMessage(content="plain answer")]),
-        tools_by_name=_run_turn_tools(
-            memory_get_all=_agent_tool("memory_get_all", {}, ())),  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="just a question, no action", datapack_id="dp-1",
+        cfg=cfg,
+        llm=_ScriptedAgentLLM([AIMessage(content="plain answer")]),
+        tools_by_name=_run_turn_tools(memory_get_all=_agent_tool("memory_get_all", {}, ())),  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="just a question, no action",
+        datapack_id="dp-1",
         summary_llm=_ScriptedAgentLLM([AIMessage(content="cps")]),  # type: ignore[arg-type]
     )
 
@@ -880,26 +1079,45 @@ async def test_cache_hit_turn_clears_stored_pending_action() -> None:
     action_id must not stay claimable via /chat/confirm-action."""
     store = InMemorySessionStore(max_messages_per_session=10)
     await store.set_pending_action(
-        "s1", {"action_id": "old-1", "tool_name": "memory_promote", "args": {}})
+        "s1", {"action_id": "old-1", "tool_name": "memory_promote", "args": {}}
+    )
 
     cfg = _make_cfg(contextual_prominence_search_enabled=True)
-    ctx_tool = _mock_tool({"results": {
-        "conversation": {"hits": [{
-            "question": "prior q", "answer": "prior a",
-            "conversation_id": "c0", "message_id": "m0", "distance": 0.1,
-        }], "thread": []},
-        "memory": [], "knowledge_base": [],
-    }})
+    ctx_tool = _mock_tool(
+        {
+            "results": {
+                "conversation": {
+                    "hits": [
+                        {
+                            "question": "prior q",
+                            "answer": "prior a",
+                            "conversation_id": "c0",
+                            "message_id": "m0",
+                            "distance": 0.1,
+                        }
+                    ],
+                    "thread": [],
+                },
+                "memory": [],
+                "knowledge_base": [],
+            }
+        }
+    )
 
     out = await run_chat_turn(
-        cfg=cfg, llm=_ScriptedAgentLLM([]),  # cache path: main LLM never called
+        cfg=cfg,
+        llm=_ScriptedAgentLLM([]),  # cache path: main LLM never called
         tools_by_name=_run_turn_tools(context_search=ctx_tool),  # type: ignore[arg-type]
-        session_store=store, session_id="s1",
-        user_message="what did we conclude about the design?", datapack_id="dp-1",
-        summary_llm=_ScriptedAgentLLM([
-            AIMessage(content="cps"),                    # router verdict
-            AIMessage(content="prior answer summary"),   # cache summarizer
-        ]),  # type: ignore[arg-type]
+        session_store=store,
+        session_id="s1",
+        user_message="what did we conclude about the design?",
+        datapack_id="dp-1",
+        summary_llm=_ScriptedAgentLLM(
+            [
+                AIMessage(content="cps"),  # router verdict
+                AIMessage(content="prior answer summary"),  # cache summarizer
+            ]
+        ),  # type: ignore[arg-type]
     )
 
     assert out.assistant_text == "prior answer summary"

@@ -118,8 +118,10 @@ def main():
     if not added_provider:
         sys.exit(f"{spec_in}: no top-level 'YBUniverse:' key; cannot place the TelemetryProvider")
     if not added_telemetry:
-        sys.exit(f"{spec_in}: the YBUniverse entry has no '  spec:' line; "
-                 "cannot place the telemetry block")
+        sys.exit(
+            f"{spec_in}: the YBUniverse entry has no '  spec:' line; "
+            "cannot place the telemetry block"
+        )
 
     with open(spec_out, "w", encoding="utf-8") as f:
         f.writelines(out)

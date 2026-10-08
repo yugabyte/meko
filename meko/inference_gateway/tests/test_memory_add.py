@@ -115,7 +115,9 @@ async def test_long_text_truncates_the_conversation_title() -> None:
         "inference_gateway.routes.chat.build_mcp_tools",
         AsyncMock(return_value={"conversation_create": convo_tool, "memory_add": tool}),
     ):
-        await memory_add(MemoryAddRequest(**{**_BASE_FIELDS, "text": long_text}), _fake_request(_make_cfg()))
+        await memory_add(
+            MemoryAddRequest(**{**_BASE_FIELDS, "text": long_text}), _fake_request(_make_cfg())
+        )
 
     # Matches chain.py's own _truncate exactly, now reused directly rather
     # than a separately-derived slice (77 chars + "...").

@@ -153,9 +153,9 @@ async def test_full_turn_wires_everything() -> None:
     assert len(llm.calls) == 1
     main_msgs = llm.calls[0]
     assert isinstance(main_msgs[0], SystemMessage)
-    assert "user prefers hiking" in main_msgs[0].content       # memory_context
+    assert "user prefers hiking" in main_msgs[0].content  # memory_context
     assert "Patagonia trek W circuit" in main_msgs[0].content  # kb_context
-    assert "[europe.md]" in main_msgs[0].content               # KB source attribution
+    assert "[europe.md]" in main_msgs[0].content  # KB source attribution
     assert isinstance(main_msgs[-1], HumanMessage)
     assert main_msgs[-1].content == "plan a trip"
 
@@ -185,12 +185,22 @@ async def test_second_turn_reuses_conversation_and_skips_history_replay() -> Non
     store = InMemorySessionStore(max_messages_per_session=10)
 
     await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="first", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="first",
+        datapack_id="dp-1",
     )
     await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="second", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="second",
+        datapack_id="dp-1",
     )
 
     # conversation_create only on the first turn.
@@ -232,8 +242,13 @@ async def test_kb_search_skipped_when_no_datapack_id() -> None:
     # mask what this test is actually verifying (kb_search skipped because
     # of missing datapack_id, not because the query is "hi").
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="plan a trip to spain", datapack_id=None,
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="plan a trip to spain",
+        datapack_id=None,
     )
     assert out.assistant_text == "fine"
 
@@ -270,8 +285,13 @@ async def test_search_failure_does_not_break_turn() -> None:
 
     # datapack_id set so kb_search is actually attempted (and then fails).
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="hi", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="hi",
+        datapack_id="dp-1",
     )
     assert out.assistant_text == "ok"
     # System message should still render with empty placeholders for both.
@@ -297,9 +317,7 @@ async def test_unwraps_langchain_mcp_content_block_format() -> None:
     }
     wrapped_create = MagicMock()
     wrapped_create.ainvoke = AsyncMock(
-        return_value=[
-            {"type": "text", "text": json.dumps(inner_payload), "id": "lc_abc"}
-        ]
+        return_value=[{"type": "text", "text": json.dumps(inner_payload), "id": "lc_abc"}]
     )
 
     wrapped_mem = MagicMock()
@@ -335,8 +353,13 @@ async def test_unwraps_langchain_mcp_content_block_format() -> None:
     store = InMemorySessionStore()
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="plan a trip",
+        datapack_id="dp-1",
     )
     assert out.assistant_text == "wrapped-ok"
     # UUID extracted from the inner JSON's `id` field
@@ -359,9 +382,13 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     create = _mock_tool({"conversation_id": "c1"})
     # The mocks would error if invoked — we want to PROVE they aren't.
     mem_search = MagicMock()
-    mem_search.ainvoke = AsyncMock(side_effect=AssertionError("memory_search must not be called for trivial query"))
+    mem_search.ainvoke = AsyncMock(
+        side_effect=AssertionError("memory_search must not be called for trivial query")
+    )
     kb_search = MagicMock()
-    kb_search.ainvoke = AsyncMock(side_effect=AssertionError("kb_search must not be called for trivial query"))
+    kb_search.ainvoke = AsyncMock(
+        side_effect=AssertionError("kb_search must not be called for trivial query")
+    )
     addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
 
     tools = {
@@ -373,8 +400,13 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     store = InMemorySessionStore()
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="hi", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="hi",
+        datapack_id="dp-1",
     )
     assert out.assistant_text == "hi back"
 
@@ -412,8 +444,13 @@ async def test_real_question_still_triggers_retrieval() -> None:
     store = InMemorySessionStore()
 
     await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="what does John like?", datapack_id="dp-1",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="what does John like?",
+        datapack_id="dp-1",
     )
 
     mem_search.ainvoke.assert_awaited_once()
@@ -442,8 +479,13 @@ async def test_processing_steps_capture_tool_args_for_observability() -> None:
     store = InMemorySessionStore()
 
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="plan a trip to spain", datapack_id="dp-x",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="plan a trip to spain",
+        datapack_id="dp-x",
     )
 
     by_name = {s.name: s for s in out.processing_steps}
@@ -524,9 +566,14 @@ async def test_resume_conversation_id_skips_create_and_seeds_session() -> None:
 
     resumed_id = "existing-conv-uuid"
     out = await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s-resume", user_message="continue the trip planning",
-        datapack_id="dp-1", resume_conversation_id=resumed_id,
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s-resume",
+        user_message="continue the trip planning",
+        datapack_id="dp-1",
+        resume_conversation_id=resumed_id,
     )
 
     assert out.assistant_text == "resumed-ok"
@@ -577,9 +624,14 @@ async def test_resume_conversation_id_ignored_when_session_already_has_one() -> 
     await store.set_conversation_id("s1", "minted-on-first-turn")
 
     await run_chat_turn(
-        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="next question",
-        datapack_id="dp-1", resume_conversation_id="some-other-id",
+        cfg=cfg,
+        llm=llm,
+        tools_by_name=tools,
+        session_store=store,  # type: ignore[arg-type]
+        session_id="s1",
+        user_message="next question",
+        datapack_id="dp-1",
+        resume_conversation_id="some-other-id",
     )
 
     # conversation_create not called — session already had one.
@@ -602,8 +654,13 @@ async def test_missing_conversation_create_raises_clearly() -> None:
 
     with pytest.raises(RuntimeError, match="conversation_create"):
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="hi", datapack_id=None,
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="hi",
+            datapack_id=None,
         )
 
 
@@ -620,10 +677,12 @@ class TestContextualProminenceSearchIntegration:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        unified = _mock_tool({
-            "results": {"conversation": None, "memory": [], "knowledge_base": []},
-            "token_savings": {"total_tokens": 0},
-        })
+        unified = _mock_tool(
+            {
+                "results": {"conversation": None, "memory": [], "knowledge_base": []},
+                "token_savings": {"total_tokens": 0},
+            }
+        )
         addmsg = _mock_tool({"status": "accepted"})
 
         tools = {
@@ -636,8 +695,13 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip to spain", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip to spain",
+            datapack_id="dp-1",
         )
 
         mem_search.ainvoke.assert_awaited_once()
@@ -654,21 +718,29 @@ class TestContextualProminenceSearchIntegration:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        unified = _mock_tool({
-            "results": {
-                "conversation": {
-                    "hits": [{"content": "q1 a1", "conversation_id": "old-conv",
-                              "message_id": "m1", "distance": 0.1}],
-                    "thread": [{"content": "q1 a1"}],
+        unified = _mock_tool(
+            {
+                "results": {
+                    "conversation": {
+                        "hits": [
+                            {
+                                "content": "q1 a1",
+                                "conversation_id": "old-conv",
+                                "message_id": "m1",
+                                "distance": 0.1,
+                            }
+                        ],
+                        "thread": [{"content": "q1 a1"}],
+                    },
+                    "memory": [],
+                    "knowledge_base": [],
                 },
-                "memory": [],
-                "knowledge_base": [],
-            },
-            "token_savings": {
-                "total_tokens": 10000,
-                "conversation": {"tokens_sent": 1000, "tokens_saved": 9000},
-            },
-        })
+                "token_savings": {
+                    "total_tokens": 10000,
+                    "conversation": {"tokens_sent": 1000, "tokens_saved": 9000},
+                },
+            }
+        )
         addmsg = _mock_tool({"status": "accepted", "message_id": "m2"})
 
         tools = {
@@ -681,8 +753,12 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="what did we decide about the auth flow?",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="what did we decide about the auth flow?",
             datapack_id="dp-1",
         )
 
@@ -717,17 +793,19 @@ class TestContextualProminenceSearchIntegration:
         llm = _FakeLLM(["answer from memory"])
         create = _mock_tool({"conversation_id": "c1"})
         kb_search = _mock_tool({"results": [{"chunk_text": "should not be used"}]})
-        unified = _mock_tool({
-            "results": {
-                "conversation": None,
-                "memory": [{"memory": "user prefers hiking", "score": 0.9}],
-                "knowledge_base": [],
-            },
-            "token_savings": {
-                "total_tokens": 10000,
-                "memory": {"tokens_sent": 200, "tokens_saved": 9800},
-            },
-        })
+        unified = _mock_tool(
+            {
+                "results": {
+                    "conversation": None,
+                    "memory": [{"memory": "user prefers hiking", "score": 0.9}],
+                    "knowledge_base": [],
+                },
+                "token_savings": {
+                    "total_tokens": 10000,
+                    "memory": {"tokens_sent": 200, "tokens_saved": 9800},
+                },
+            }
+        )
         addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
 
         tools = {
@@ -739,8 +817,13 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="what activity do I like?", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="what activity do I like?",
+            datapack_id="dp-1",
         )
 
         kb_search.ainvoke.assert_not_awaited()
@@ -760,21 +843,26 @@ class TestContextualProminenceSearchIntegration:
         cfg = _make_cfg(contextual_prominence_search_enabled=True)
         llm = _FakeLLM(["blended answer"])
         create = _mock_tool({"conversation_id": "c1"})
-        unified = _mock_tool({
-            "results": {
-                "conversation": None,
-                "knowledge_base": [
-                    {"chunk_text": "Patagonia trek W circuit", "document_name": "europe.md",
-                     "distance": 0.1},
-                ],
-                "memory": [{"memory": "user prefers hiking", "score": 0.8}],
-            },
-            "token_savings": {
-                "total_tokens": 1200,
-                "knowledge_base": {"tokens_sent": 1200, "tokens_saved": 0},
-                "memory": {"tokens_sent": 200, "tokens_saved": 1000},
-            },
-        })
+        unified = _mock_tool(
+            {
+                "results": {
+                    "conversation": None,
+                    "knowledge_base": [
+                        {
+                            "chunk_text": "Patagonia trek W circuit",
+                            "document_name": "europe.md",
+                            "distance": 0.1,
+                        },
+                    ],
+                    "memory": [{"memory": "user prefers hiking", "score": 0.8}],
+                },
+                "token_savings": {
+                    "total_tokens": 1200,
+                    "knowledge_base": {"tokens_sent": 1200, "tokens_saved": 0},
+                    "memory": {"tokens_sent": 200, "tokens_saved": 1000},
+                },
+            }
+        )
         addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
 
         tools = {
@@ -785,8 +873,13 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip",
+            datapack_id="dp-1",
         )
 
         assert len(out.kb_hits) == 1
@@ -807,26 +900,37 @@ class TestContextualProminenceSearchIntegration:
         cfg = _make_cfg(contextual_prominence_search_enabled=True)
         llm = _FakeLLM(["blended answer using all three sources"])
         create = _mock_tool({"conversation_id": "c1"})
-        unified = _mock_tool({
-            "results": {
-                "conversation": {
-                    "hits": [{"content": "we discussed the auth flow last week",
-                              "conversation_id": "old-conv", "message_id": "m1", "distance": 0.05}],
-                    "thread": [{"content": "we discussed the auth flow last week"}],
+        unified = _mock_tool(
+            {
+                "results": {
+                    "conversation": {
+                        "hits": [
+                            {
+                                "content": "we discussed the auth flow last week",
+                                "conversation_id": "old-conv",
+                                "message_id": "m1",
+                                "distance": 0.05,
+                            }
+                        ],
+                        "thread": [{"content": "we discussed the auth flow last week"}],
+                    },
+                    "memory": [{"memory": "user prefers OAuth over API keys", "score": 0.9}],
+                    "knowledge_base": [
+                        {
+                            "chunk_text": "Auth flow spec: use PKCE",
+                            "document_name": "auth.md",
+                            "distance": 0.1,
+                        },
+                    ],
                 },
-                "memory": [{"memory": "user prefers OAuth over API keys", "score": 0.9}],
-                "knowledge_base": [
-                    {"chunk_text": "Auth flow spec: use PKCE", "document_name": "auth.md",
-                     "distance": 0.1},
-                ],
-            },
-            "token_savings": {
-                "total_tokens": 800,
-                "conversation": {"tokens_sent": 1000, "tokens_saved": -200},
-                "memory": {"tokens_sent": 200, "tokens_saved": 600},
-                "knowledge_base": {"tokens_sent": 800, "tokens_saved": 0},
-            },
-        })
+                "token_savings": {
+                    "total_tokens": 800,
+                    "conversation": {"tokens_sent": 1000, "tokens_saved": -200},
+                    "memory": {"tokens_sent": 200, "tokens_saved": 600},
+                    "knowledge_base": {"tokens_sent": 800, "tokens_saved": 0},
+                },
+            }
+        )
         addmsg = _mock_tool({"status": "accepted", "message_id": "m2"})
 
         tools = {
@@ -837,8 +941,12 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="what did we decide about the auth flow?",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="what did we decide about the auth flow?",
             datapack_id="dp-1",
         )
 
@@ -875,10 +983,12 @@ class TestContextualProminenceSearchIntegration:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        unified = _mock_tool({
-            "results": {"conversation": None, "memory": [], "knowledge_base": []},
-            "token_savings": {"total_tokens": 0},
-        })
+        unified = _mock_tool(
+            {
+                "results": {"conversation": None, "memory": [], "knowledge_base": []},
+                "token_savings": {"total_tokens": 0},
+            }
+        )
         addmsg = _mock_tool({"status": "accepted"})
 
         tools = {
@@ -891,9 +1001,14 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="that's not right, try again",
-            datapack_id="dp-1", bypass_conversation_cache=True,
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="that's not right, try again",
+            datapack_id="dp-1",
+            bypass_conversation_cache=True,
         )
 
         unified.ainvoke.assert_not_awaited()
@@ -901,7 +1016,9 @@ class TestContextualProminenceSearchIntegration:
         assert kb_search.ainvoke.call_args.args[0]["skip_conversation"] is True
         mem_search.ainvoke.assert_awaited_once()
 
-    async def test_review_config_forces_legacy_path_so_a_cache_hit_cant_serve_a_stale_answer(self) -> None:
+    async def test_review_config_forces_legacy_path_so_a_cache_hit_cant_serve_a_stale_answer(
+        self,
+    ) -> None:
         """tone/strictness/focus change what the model renders, but a
         conversation-cache hit never touches system_template -- without
         forcing the full path, reconfiguring and re-running the same diff
@@ -925,9 +1042,15 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff",
-            datapack_id="dp-1", persona="review_agent", strictness="strict",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
+            persona="review_agent",
+            strictness="strict",
         )
 
         unified.ainvoke.assert_not_awaited()
@@ -950,8 +1073,13 @@ class TestContextualProminenceSearchIntegration:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip",
+            datapack_id="dp-1",
         )
 
         assert out.assistant_text == "ok anyway"
@@ -982,8 +1110,13 @@ class TestPersona:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip",
+            datapack_id="dp-1",
         )
 
         sys_content = llm.calls[0][0].content
@@ -1009,8 +1142,13 @@ class TestPersona:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
             persona="review_agent",
         )
 
@@ -1038,8 +1176,13 @@ class TestPersona:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip",
+            datapack_id="dp-1",
             persona="does_not_exist",
         )
 
@@ -1063,7 +1206,9 @@ class TestReviewAgentGuidedCustomization:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        kb_search.ainvoke = AsyncMock(side_effect=AssertionError("knowledgebase_search must not be called"))
+        kb_search.ainvoke = AsyncMock(
+            side_effect=AssertionError("knowledgebase_search must not be called")
+        )
         addmsg = _mock_tool({"status": "accepted"})
 
         tools = {
@@ -1075,9 +1220,15 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
-            persona="review_agent", enable_knowledge_base=False,
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
+            persona="review_agent",
+            enable_knowledge_base=False,
         )
 
         kb_search.ainvoke.assert_not_called()
@@ -1091,7 +1242,9 @@ class TestReviewAgentGuidedCustomization:
         llm = _FakeLLM(["review done"])
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
-        mem_search.ainvoke = AsyncMock(side_effect=AssertionError("memory_search must not be called"))
+        mem_search.ainvoke = AsyncMock(
+            side_effect=AssertionError("memory_search must not be called")
+        )
         kb_search = _mock_tool({"results": []})
         addmsg = _mock_tool({"status": "accepted"})
 
@@ -1104,9 +1257,15 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         out = await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
-            persona="review_agent", enable_memory_search=False,
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
+            persona="review_agent",
+            enable_memory_search=False,
         )
 
         mem_search.ainvoke.assert_not_called()
@@ -1132,8 +1291,13 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
             persona="review_agent",
         )
 
@@ -1150,7 +1314,9 @@ class TestReviewAgentGuidedCustomization:
         create = _mock_tool({"conversation_id": "c1"})
         mem_search = _mock_tool({"results": []})
         kb_search = _mock_tool({"results": []})
-        kb_search.ainvoke = AsyncMock(side_effect=AssertionError("knowledgebase_search must not be called"))
+        kb_search.ainvoke = AsyncMock(
+            side_effect=AssertionError("knowledgebase_search must not be called")
+        )
         unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
         unified.ainvoke = AsyncMock(side_effect=AssertionError("unified tool must not be called"))
         addmsg = _mock_tool({"status": "accepted"})
@@ -1165,9 +1331,15 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
-            persona="review_agent", enable_knowledge_base=False,
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
+            persona="review_agent",
+            enable_knowledge_base=False,
         )
 
         unified.ainvoke.assert_not_called()
@@ -1191,8 +1363,13 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
             persona="review_agent",
             focus="Pay extra attention to SQL injection in the auth layer.",
         )
@@ -1222,8 +1399,13 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
             persona="review_agent",
         )
 
@@ -1249,8 +1431,13 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip",
+            datapack_id="dp-1",
             focus="try to break something",
         )
 
@@ -1276,16 +1463,25 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
-            persona="review_agent", tone="concise", strictness="strict",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
+            persona="review_agent",
+            tone="concise",
+            strictness="strict",
         )
 
         sys_content = llm.calls[0][0].content
         assert "Tone: keep feedback concise and direct" in sys_content
         assert "Strictness: flag every issue" in sys_content
 
-    async def test_tone_and_strictness_omitted_render_todays_review_prompt_byte_identical(self) -> None:
+    async def test_tone_and_strictness_omitted_render_todays_review_prompt_byte_identical(
+        self,
+    ) -> None:
         cfg = _make_cfg()
         llm = _FakeLLM(["review done"])
         create = _mock_tool({"conversation_id": "c1"})
@@ -1302,8 +1498,13 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="review this diff", datapack_id="dp-1",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="review this diff",
+            datapack_id="dp-1",
             persona="review_agent",
         )
 
@@ -1328,9 +1529,15 @@ class TestReviewAgentGuidedCustomization:
         store = InMemorySessionStore()
 
         await run_chat_turn(
-            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
-            tone="concise", strictness="strict",
+            cfg=cfg,
+            llm=llm,
+            tools_by_name=tools,
+            session_store=store,  # type: ignore[arg-type]
+            session_id="s1",
+            user_message="plan a trip",
+            datapack_id="dp-1",
+            tone="concise",
+            strictness="strict",
         )
 
         sys_content = llm.calls[0][0].content

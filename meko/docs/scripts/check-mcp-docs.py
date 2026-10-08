@@ -93,20 +93,13 @@ def main() -> int:
         path: Path = guide["path"]
         if not path.is_file():
             errors.append(
-                f"tools {matching} are documented but missing guide "
-                f"{path.relative_to(DOCS_ROOT)}"
+                f"tools {matching} are documented but missing guide {path.relative_to(DOCS_ROOT)}"
             )
             continue
         if guide["href"] not in guides_index:
-            errors.append(
-                f"guides/_index.md must link {guide['href']} "
-                f"(required by {matching})"
-            )
+            errors.append(f"guides/_index.md must link {guide['href']} (required by {matching})")
         if guide["llms"] not in llms:
-            errors.append(
-                f"static/llms.txt must link {guide['llms']} "
-                f"(required by {matching})"
-            )
+            errors.append(f"static/llms.txt must link {guide['llms']} (required by {matching})")
 
     if errors:
         print("MCP docs check failed:", file=sys.stderr)

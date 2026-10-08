@@ -51,14 +51,14 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         "--llm-model",
         default=os.getenv("INFERENCE_LLM_MODEL"),
         help="Provider-specific model id. Defaults to gpt-4o-mini (openai) "
-             "or us.amazon.nova-2-lite-v1:0 (bedrock).",
+        "or us.amazon.nova-2-lite-v1:0 (bedrock).",
     )
     p.add_argument(
         "--conv-summary-model",
         default=os.getenv("INFERENCE_CONV_SUMMARY_MODEL"),
         help="Small/cheap model used to summarize conversation-history hits on a "
-             "cache hit. Defaults to us.amazon.nova-lite-v1:0 (bedrock) or "
-             "gpt-4o-mini (openai). Set to the main model to disable the SLM split.",
+        "cache hit. Defaults to us.amazon.nova-lite-v1:0 (bedrock) or "
+        "gpt-4o-mini (openai). Set to the main model to disable the SLM split.",
     )
     p.add_argument(
         "--aws-region",
@@ -80,7 +80,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         dest="cors_origins",
         default=None,
         help="CORS allow-origin, repeatable. Falls back to "
-             "INFERENCE_CORS_ORIGINS (comma-separated) or built-in defaults.",
+        "INFERENCE_CORS_ORIGINS (comma-separated) or built-in defaults.",
     )
     p.add_argument(
         "--agent-id",
@@ -117,47 +117,46 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         default=os.getenv("MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH", "").strip().lower()
         in ("1", "true", "yes"),
         help="Route retrieval through the MCP server's unified contextual_prominence_search "
-             "tool instead of separate knowledgebase_search + memory_search calls. Shares "
-             "the MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH env var with the MCP server.",
+        "tool instead of separate knowledgebase_search + memory_search calls. Shares "
+        "the MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH env var with the MCP server.",
     )
     p.add_argument(
         "--agentic-chat",
         action=argparse.BooleanOptionalAction,
-        default=os.getenv("MEKO_AGENTIC_CHAT", "").strip().lower()
-        in ("1", "true", "yes"),
+        default=os.getenv("MEKO_AGENTIC_CHAT", "").strip().lower() in ("1", "true", "yes"),
         help="Agentic chat (MEKO-407, Phase 0): bind a curated set of read-only Meko "
-             "MCP tools onto the main LLM call so tool-shaped intents ('list all my "
-             "memories') are answered by calling the right tool. Retrieval is unchanged; "
-             "plain Q&A costs the same as today. Default off.",
+        "MCP tools onto the main LLM call so tool-shaped intents ('list all my "
+        "memories') are answered by calling the right tool. Retrieval is unchanged; "
+        "plain Q&A costs the same as today. Default off.",
     )
     p.add_argument(
         "--agent-tools",
         default=os.getenv("INFERENCE_AGENT_TOOLS", ""),
         help="Comma-separated override of the auto-executed tool allowlist bound in "
-             "agentic-chat mode. Empty -> the built-in DEFAULT_AGENT_TOOLS.",
+        "agentic-chat mode. Empty -> the built-in DEFAULT_AGENT_TOOLS.",
     )
     p.add_argument(
         "--agent-confirm-tools",
         default=os.getenv("INFERENCE_AGENT_CONFIRM_TOOLS", ""),
         help="Comma-separated override of the confirm-tier tools (proposed by the "
-             "model, executed only after the user approves via /chat/confirm-action). "
-             "Empty -> the built-in DEFAULT_AGENT_CONFIRM_TOOLS.",
+        "model, executed only after the user approves via /chat/confirm-action). "
+        "Empty -> the built-in DEFAULT_AGENT_CONFIRM_TOOLS.",
     )
     p.add_argument(
         "--show-pg-amp",
         action=argparse.BooleanOptionalAction,
         default=os.getenv("SHOW_PG_AMP", "").strip().lower() in ("1", "true", "yes"),
         help="Append the AMP (Postgres databases) tool sets to the agentic-chat "
-             "tiers (reads auto-execute, create/delete require confirmation). "
-             "Shares the SHOW_PG_AMP env var with meko-ui, api-server, and the "
-             "MCP server's own AMP tool registration.",
+        "tiers (reads auto-execute, create/delete require confirmation). "
+        "Shares the SHOW_PG_AMP env var with meko-ui, api-server, and the "
+        "MCP server's own AMP tool registration.",
     )
     p.add_argument(
         "--max-tool-rounds",
         type=int,
         default=int(os.getenv("INFERENCE_MAX_TOOL_ROUNDS", str(DEFAULT_MAX_TOOL_ROUNDS))),
         help="Max tool-execution rounds per turn in agentic-chat mode (each round "
-             "is one extra LLM call).",
+        "is one extra LLM call).",
     )
     args = p.parse_args(argv)
 
@@ -170,16 +169,15 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
     # Default the conversation-summary model to a cheap one per provider.
     if not args.conv_summary_model:
         args.conv_summary_model = (
-            DEFAULT_OPENAI_MODEL if args.llm_provider == "openai"
+            DEFAULT_OPENAI_MODEL
+            if args.llm_provider == "openai"
             else DEFAULT_CONV_SUMMARY_BEDROCK_MODEL
         )
 
     if args.cors_origins is None:
         env_origins = os.getenv("INFERENCE_CORS_ORIGINS", "").strip()
         if env_origins:
-            origins: tuple[str, ...] = tuple(
-                o.strip() for o in env_origins.split(",") if o.strip()
-            )
+            origins: tuple[str, ...] = tuple(o.strip() for o in env_origins.split(",") if o.strip())
         else:
             origins = DEFAULT_CORS_ORIGINS
     else:
@@ -199,9 +197,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
     # the confirm tier. The MCP server only lists them when its own
     # SHOW_PG_AMP is set, so the gate composes at both layers.
     if args.show_pg_amp:
-        agent_tools = agent_tools + tuple(
-            t for t in AMP_AGENT_READ_TOOLS if t not in agent_tools
-        )
+        agent_tools = agent_tools + tuple(t for t in AMP_AGENT_READ_TOOLS if t not in agent_tools)
         agent_confirm_tools = agent_confirm_tools + tuple(
             t for t in AMP_AGENT_CONFIRM_TOOLS if t not in agent_confirm_tools
         )

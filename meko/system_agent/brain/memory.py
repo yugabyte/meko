@@ -53,7 +53,7 @@ def build_mem0_memory() -> Memory:
                 "password": settings.graph_password,
                 "graph_name": settings.graph_name,
             },
-            "threshold": 0.7  # Similarity threshold for node matching (0.0 to 1.0)
+            "threshold": 0.7,  # Similarity threshold for node matching (0.0 to 1.0)
         },
     }
     logger.info("Building mem0 Memory instance with pgvector + Apache AGE")
@@ -84,17 +84,19 @@ def add_memory(
         logger.error("Failed to add memory | user_id=%s | error=%s", user_id, str(e))
 
 
-def search_memories(memory: Memory, query: str, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+def search_memories(
+    memory: Memory, query: str, user_id: str, limit: int = 5
+) -> List[Dict[str, Any]]:
     """
     Search for relevant memories.
-    
+
     Returns:
         List of memory dicts, each containing 'memory' key with the text content.
     """
     try:
         raw_results = memory.search(query, user_id=user_id, limit=limit)
         logger.debug("Raw search results: %s", raw_results)
-        
+
         # Handle the dict format: {'results': [...], 'relations': [...]}
         if isinstance(raw_results, dict):
             memory_list = raw_results.get("results", [])
@@ -115,14 +117,19 @@ def search_memories(memory: Memory, query: str, user_id: str, limit: int = 5) ->
                 query[:50] + "..." if len(query) > 50 else query,
                 len(memory_list),
             )
-        
+
         # Log each retrieved memory
         if memory_list:
             for i, item in enumerate(memory_list):
                 memory_text = _extract_memory_text(item)
                 score = item.get("score", "N/A") if isinstance(item, dict) else "N/A"
-                logger.info("  RETRIEVED [%d] (score=%.3f) | %s", i + 1, score if isinstance(score, float) else 0, memory_text)
-        
+                logger.info(
+                    "  RETRIEVED [%d] (score=%.3f) | %s",
+                    i + 1,
+                    score if isinstance(score, float) else 0,
+                    memory_text,
+                )
+
         return memory_list
     except Exception as e:
         logger.error("Memory search failed | user_id=%s | error=%s", user_id, str(e))
@@ -133,13 +140,13 @@ def get_all_memories(memory: Memory, user_id: str) -> List[Dict[str, Any]]:
     """Get all memories for a user."""
     try:
         raw_results = memory.get_all(user_id=user_id)
-        
+
         # Handle dict format if applicable
         if isinstance(raw_results, dict):
             memory_list = raw_results.get("results", raw_results.get("memories", []))
         else:
             memory_list = raw_results if raw_results else []
-        
+
         logger.info("MEMORY GET_ALL | user_id=%s | total_count=%d", user_id, len(memory_list))
         return memory_list
     except Exception as e:
@@ -181,11 +188,11 @@ def _extract_memory_text(item: Any) -> str:
 def format_memory_items(items: Iterable[Any], include_score: bool = True) -> str:
     """
     Format memory items for LLM context injection.
-    
+
     Args:
         items: List of memory items from mem0
         include_score: Whether to include relevance score (default True)
-    
+
     Returns:
         Formatted string with memories and optional scores
     """
@@ -200,8 +207,8 @@ def format_memory_items(items: Iterable[Any], include_score: bool = True) -> str
                 formatted.append(f"{memory_text} (relevance: {score_pct:.1f}%)")
             else:
                 formatted.append(memory_text)
-    
+
     if not formatted:
         return ""
-    
+
     return "\n".join(f"- {entry}" for entry in formatted)

@@ -52,7 +52,9 @@ def build() -> str:
         name = ext["name"]
         description = ext.get("description")
         if not description:
-            sys.exit(f"{name}: manifest entry has no `description:` — add one, the picker renders it.")
+            sys.exit(
+                f"{name}: manifest entry has no `description:` — add one, the picker renders it."
+            )
         entry = {"name": name, "version": str(ext["version"]), "description": description}
         # preload => shared_preload_libraries => enabling it restarts the postmaster.
         if ext.get("preload"):

@@ -89,13 +89,14 @@ def make_pg_dirs(build_type):
     """
     res = subprocess.run(
         ["make", "-s", "print-pg-dirs", f"BUILD_TYPE={build_type}"],
-        cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
     )
     # Keyed, not positional: a mixed-up pair here would have wipe_pg_trees delete
     # the wrong tree. KeyError is the right outcome if make stops printing one.
-    dirs = dict(
-        line.split("=", 1) for line in res.stdout.splitlines() if "=" in line
-    )
+    dirs = dict(line.split("=", 1) for line in res.stdout.splitlines() if "=" in line)
     return Path(dirs["POSTGRES_INSTALL_DIR"]), Path(dirs["BUILD_DIR"])
 
 
@@ -174,9 +175,7 @@ def run(cmd, *, env=None):
 
 def git_out(*args):
     """Return stripped stdout of a git command, or None if it fails."""
-    res = subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, text=True
-    )
+    res = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
     return res.stdout.strip() if res.returncode == 0 else None
 
 
@@ -213,10 +212,7 @@ def worktree_pg_makefiles_hash():
 
 def built_pg_makefiles_hash(pg):
     """The makefiles hash this install was last built from, or None."""
-    return (
-        pg.makefiles_stamp.read_text().strip()
-        if pg.makefiles_stamp.is_file() else None
-    )
+    return pg.makefiles_stamp.read_text().strip() if pg.makefiles_stamp.is_file() else None
 
 
 def pg_makefiles_changed(pg):
@@ -254,8 +250,10 @@ def pg_install_matches_commit(pg):
     have = git_out("-C", PG_SUBMODULE, "rev-parse", "HEAD")
     built = built_pg_commit(pg)
     if built != have:
-        say(f"{pg} was built from {(built or 'unknown')[:12]} but the "
-            f"submodule is at {(have or 'unknown')[:12]} — rebuilding PostgreSQL")
+        say(
+            f"{pg} was built from {(built or 'unknown')[:12]} but the "
+            f"submodule is at {(have or 'unknown')[:12]} — rebuilding PostgreSQL"
+        )
         return False
     return True
 
@@ -297,9 +295,7 @@ def installed_pg_build_type(pg):
     pg_config = pg.install / "bin" / "pg_config"
     if not pg_config.is_file():
         return None
-    res = subprocess.run(
-        [str(pg_config), "--configure"], capture_output=True, text=True
-    )
+    res = subprocess.run([str(pg_config), "--configure"], capture_output=True, text=True)
     if res.returncode != 0:
         return None
     return "debug" if "--enable-cassert" in res.stdout else "release"
@@ -324,9 +320,7 @@ def stage_and_package(target_dir, pg):
     sha = git_out("rev-parse", "--short", "HEAD")
     date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     bundle = Path(os.environ.get("BUNDLE_DIR", "/tmp/yb-amp-bundle"))
-    tarball = Path(
-        os.environ.get("TARBALL", f"/tmp/yb-amp-bundle-{date}-{sha}.tar.gz")
-    )
+    tarball = Path(os.environ.get("TARBALL", f"/tmp/yb-amp-bundle-{date}-{sha}.tar.gz"))
 
     say(f"Staging bundle at {bundle}")
     # Single staging dir, reused across builds — wiped each run so the dev box
@@ -417,13 +411,14 @@ def main():
         "--pg-only",
         action="store_true",
         help="only (re)build PostgreSQL when the submodule commit drifted; skip "
-             "the Rust workspace + extension build (used by run.sh)",
+        "the Rust workspace + extension build (used by run.sh)",
     )
     args = ap.parse_args()
 
     if args.release_tar and (args.headers or args.pg_only):
-        ap.error("--release-tar packages a full build; "
-                 "it cannot be combined with --headers / --pg-only")
+        ap.error(
+            "--release-tar packages a full build; it cannot be combined with --headers / --pg-only"
+        )
 
     build_type = "release" if (args.release or args.release_tar) else "debug"
     if args.headers:
@@ -468,8 +463,7 @@ def main():
         # and every contrib .so out from under it.
         say(f"Installing PostgreSQL server headers ({pg})...")
         run(["make", pg_make, headers_target], env=make_env(cached=False))
-        say(f"Headers installed under {pg.install}/include/. "
-            "`cargo check` will work now.")
+        say(f"Headers installed under {pg.install}/include/. `cargo check` will work now.")
         return
 
     # Below the --headers return, which does none of this work.
@@ -531,10 +525,28 @@ def main():
     # yb_amp_local and controller are Go binaries (controller/), no longer cargo
     # crates. Build both into the cargo target dir so the DAEMON_BINS copy (and
     # yb_amp_local's next-to-itself controller lookup) resolve them.
-    run(["go", "build", "-C", "controller", "-o", str(target_dir / "yb_amp_local"),
-         "./local/cmd/yb_amp_local"])
-    run(["go", "build", "-C", "controller", "-o", str(target_dir / "controller"),
-         "./cmd/controller"])
+    run(
+        [
+            "go",
+            "build",
+            "-C",
+            "controller",
+            "-o",
+            str(target_dir / "yb_amp_local"),
+            "./local/cmd/yb_amp_local",
+        ]
+    )
+    run(
+        [
+            "go",
+            "build",
+            "-C",
+            "controller",
+            "-o",
+            str(target_dir / "controller"),
+            "./cmd/controller",
+        ]
+    )
 
     # `yb_amp.so` + walredo/utils extensions are loaded by the compute postgres;
     # their wire protocol must match these binaries, and they link the Rust

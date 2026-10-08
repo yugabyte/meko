@@ -35,7 +35,9 @@ def build_llm(
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
-            model=model_id, temperature=0, max_tokens=mt,
+            model=model_id,
+            temperature=0,
+            max_tokens=mt,
             callbacks=[LLMMetricsCallback(model_id)],
         )
 
@@ -53,9 +55,7 @@ def build_llm(
             callbacks=[LLMMetricsCallback(model_id)],
         )
 
-    raise ValueError(
-        f"Unknown LLM provider: {cfg.llm_provider!r}. Supported: openai, bedrock."
-    )
+    raise ValueError(f"Unknown LLM provider: {cfg.llm_provider!r}. Supported: openai, bedrock.")
 
 
 def build_summary_llm(cfg: AppConfig) -> BaseChatModel:

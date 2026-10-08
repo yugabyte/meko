@@ -269,12 +269,17 @@ Line limit 120 for Go.
 (cd meko/meko_admin && npm run check)
 ```
 
-### Python (`system_agent`, `inference_gateway`)
+### Python (any `*.py`; `system_agent`, `inference_gateway`)
 
 ```
+ruff format <the .py files you changed>              # ruff 0.11.2, the version CI's Format check pins
 (cd meko/system_agent && mypy . && pycodestyle .)    # max-line-length 100 (tox.ini)
-(cd meko/inference_gateway && pytest)                # no formatter configured
+(cd meko/inference_gateway && pytest)
 ```
+
+Run `ruff format` from anywhere: it picks `amp/pyproject.toml` for files under
+`amp/` and the root `ruff.toml` for everything else. Both set `force-exclude`,
+so a vendored file you name (`amp/deploy/lru/amp-time/vendor/`) is left alone.
 
 ### Rust (`amp/**` — `*.rs`, `Cargo.toml`, build scripts)
 

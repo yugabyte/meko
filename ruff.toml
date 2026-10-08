@@ -1,0 +1,7 @@
+# Python outside amp/ (amp/pyproject.toml configures its own). Matches the
+# 100-column limit in .editorconfig and meko/tox.ini.
+line-length = 100
+# ruff reads this from the config where it runs, not per file: with it here,
+# `ruff format <files>` from the repo root honours amp/pyproject.toml's
+# excludes (the vendored amp-time copy) for files named explicitly.
+force-exclude = true

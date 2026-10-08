@@ -163,7 +163,8 @@ helm lint . -f values-gcp.yaml -f values-dev.yaml -f values-ycp.yaml  # YCP cont
 (cd api_server       && golangci-lint run ./...)
 (cd meko-provisioner && GOTOOLCHAIN=go1.25.8 make lint)
 
-# Python (system_agent)
+# Python — formatting for all of meko/, then system_agent's type and style checks
+ruff format --check .
 (cd system_agent && mypy . && pycodestyle .)
 ```
 

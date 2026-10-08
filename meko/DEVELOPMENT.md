@@ -8,11 +8,14 @@
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 ```
 
-### Python Linters
+### Python Linters and Formatter
 
 ```bash
-pip install mypy pycodestyle
+pip install mypy pycodestyle ruff==0.11.2
 ```
+
+Pin ruff to the version CI's `Format` check uses: its output changes between
+releases.
 
 ## Linter Configuration
 
@@ -21,6 +24,7 @@ pip install mypy pycodestyle
 | golangci-lint | `.golangci.yml` | Go code (`cli_app/`) |
 | mypy | `mypy.ini` | Python type checking (`system_agent/`) |
 | pycodestyle | `tox.ini` | Python style checking (`system_agent/`) |
+| ruff format | `ruff.toml` (repo root) | Python formatting (all Python outside `amp/`) |
 | EditorConfig | `.editorconfig` | Editor formatting (all files) |
 
 ### Key Style Rules
@@ -45,6 +49,7 @@ cd cli_app && golangci-lint run ./...
 ### Python
 
 ```bash
+ruff format .
 cd system_agent && mypy .
 cd system_agent && pycodestyle .
 ```
@@ -53,6 +58,7 @@ cd system_agent && pycodestyle .
 
 ```bash
 (cd cli_app && golangci-lint run ./...) && \
+ruff format --check . && \
 (cd system_agent && mypy . && pycodestyle .)
 ```
 
@@ -67,6 +73,9 @@ set -e
 
 echo "Running Go linter..."
 (cd cli_app && golangci-lint run ./...)
+
+echo "Checking Python formatting..."
+ruff format --check .
 
 echo "Running Python type checker..."
 (cd system_agent && mypy .)

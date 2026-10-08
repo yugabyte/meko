@@ -1,9 +1,10 @@
 name: Format
 
 # The repo's one formatting gate: gofmt on every tracked .go file (amp, meko,
-# foundation, ycp) and `cargo fmt --check` on the amp Rust workspace (the only
-# Rust in the repo). Each check only reads source, so neither needs a build, and
-# the job finishes in about a minute.
+# foundation, ycp), `cargo fmt --check` on the amp Rust workspace (the only Rust
+# in the repo) and `ruff format --check` on every tracked .py file. Each check
+# only reads source, so none needs a build, and the job finishes in about a
+# minute.
 #
 # A required check of the `main-branch` ruleset, by its job name: keep the
 # name, and never add a `paths:` filter — a workflow that doesn't run never
@@ -54,3 +55,12 @@ jobs:
       - name: Rust (cargo fmt --check)
         working-directory: amp
         run: cargo fmt --all -- --check
+
+      - uses: astral-sh/setup-uv@v7
+
+      # ruff's output changes between releases: keep this pin in step with
+      # amp/poetry.lock. amp/ uses amp/pyproject.toml and the rest of the repo
+      # uses ruff.toml; --force-exclude applies their excludes (vendored code)
+      # to the explicit file list.
+      - name: Python (ruff format --check)
+        run: git ls-files -z '*.py' | xargs -0 uvx ruff@0.11.2 format --check --force-exclude

@@ -42,7 +42,7 @@ def parse(path):
 def main(paths):
     runs = [parse(p) for p in paths]
     keys = sorted(set().union(*runs))
-    headers = [f"r{i+1}" for i in range(len(runs))]
+    headers = [f"r{i + 1}" for i in range(len(runs))]
     w = max(9, max(len(h) for h in headers))
     print(f"{'metric':40s} " + " ".join(f"{h:>{w}s}" for h in headers) + f" {'best':>{w}s}")
     for k in keys:

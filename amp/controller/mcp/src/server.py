@@ -104,9 +104,7 @@ def parse_config(argv: list[str] | None = None) -> ServerConfig:
     parser.add_argument(
         "--request-timeout",
         type=float,
-        default=float(
-            os.environ.get("AMP_MCP_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
-        ),
+        default=float(os.environ.get("AMP_MCP_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)),
         help="httpx request timeout in seconds (env: AMP_MCP_REQUEST_TIMEOUT)",
     )
     parser.add_argument(

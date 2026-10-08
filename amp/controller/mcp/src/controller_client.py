@@ -45,16 +45,13 @@ class ControllerClient:
         transport: Optional[httpx.BaseTransport] = None,
     ) -> None:
         url = (
-            controller_url
-            or os.environ.get("AMP_CONTROLLER_URL", DEFAULT_CONTROLLER_URL)
+            controller_url or os.environ.get("AMP_CONTROLLER_URL", DEFAULT_CONTROLLER_URL)
         ).rstrip("/")
         self._base_url = f"{url}/api/v1"
 
         timeout = request_timeout
         if timeout is None:
-            timeout = float(
-                os.environ.get("AMP_MCP_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
-            )
+            timeout = float(os.environ.get("AMP_MCP_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT))
 
         self._client = httpx.Client(
             base_url=self._base_url,
@@ -73,9 +70,7 @@ class ControllerClient:
     @property
     def client(self) -> httpx.Client:
         if self._client is None:
-            raise RuntimeError(
-                "ControllerClient not initialized. Call initialize() first."
-            )
+            raise RuntimeError("ControllerClient not initialized. Call initialize() first.")
         return self._client
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
@@ -141,20 +136,14 @@ class ControllerClient:
             json={"name": name, "owner_user_id": owner_user_id},
         )
 
-    def list_storage_pools(
-        self, limit: Optional[int] = None, offset: Optional[int] = None
-    ) -> dict:
-        return self._request(
-            "GET", "/storage-pools", params=self._page_params(limit, offset)
-        )
+    def list_storage_pools(self, limit: Optional[int] = None, offset: Optional[int] = None) -> dict:
+        return self._request("GET", "/storage-pools", params=self._page_params(limit, offset))
 
     def get_storage_pool(self, pool_id: str) -> dict:
         return self._request("GET", f"/storage-pools/{pool_id}")
 
     def rename_storage_pool(self, pool_id: str, name: str) -> dict:
-        return self._request(
-            "PATCH", f"/storage-pools/{pool_id}", json={"name": name}
-        )
+        return self._request("PATCH", f"/storage-pools/{pool_id}", json={"name": name})
 
     def delete_storage_pool(self, pool_id: str) -> dict:
         return self._request("DELETE", f"/storage-pools/{pool_id}")
@@ -179,17 +168,14 @@ class ControllerClient:
             body["extensions"] = extensions
         if tags:
             body["tags"] = tags
-        return self._request(
-            "POST", f"/storage-pools/{pool_id}/clusters", json=body
-        )
+        return self._request("POST", f"/storage-pools/{pool_id}/clusters", json=body)
 
     def add_branch_extensions(
         self, pool_id: str, cluster_id: str, branch_id: str, extensions: list[str]
     ) -> dict:
         return self._request(
             "POST",
-            f"/storage-pools/{pool_id}/clusters/{cluster_id}"
-            f"/branches/{branch_id}/extensions",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/extensions",
             json={"extensions": extensions},
         )
 
@@ -203,14 +189,10 @@ class ControllerClient:
         )
 
     def get_cluster(self, pool_id: str, cluster_id: str) -> dict:
-        return self._request(
-            "GET", f"/storage-pools/{pool_id}/clusters/{cluster_id}"
-        )
+        return self._request("GET", f"/storage-pools/{pool_id}/clusters/{cluster_id}")
 
     def delete_cluster(self, pool_id: str, cluster_id: str) -> dict:
-        return self._request(
-            "DELETE", f"/storage-pools/{pool_id}/clusters/{cluster_id}"
-        )
+        return self._request("DELETE", f"/storage-pools/{pool_id}/clusters/{cluster_id}")
 
     # ---- Branches ----
 
@@ -318,9 +300,7 @@ class ControllerClient:
             params=self._page_params(limit, offset),
         )
 
-    def get_endpoint(
-        self, pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str
-    ) -> dict:
+    def get_endpoint(self, pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str) -> dict:
         return self._request(
             "GET",
             f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints/{endpoint_id}",
@@ -473,12 +453,8 @@ class ControllerClient:
         database: str,
         schemas: list[str],
     ) -> dict:
-        source = self._migration_source(
-            db_type, host, port, username, password, database, schemas
-        )
-        return self._request(
-            "POST", "/migrations/connectivity-checks", json={"source": source}
-        )
+        source = self._migration_source(db_type, host, port, username, password, database, schemas)
+        return self._request("POST", "/migrations/connectivity-checks", json={"source": source})
 
     def create_migration(
         self,
@@ -491,34 +467,23 @@ class ControllerClient:
         database: str,
         schemas: list[str],
     ) -> dict:
-        source = self._migration_source(
-            db_type, host, port, username, password, database, schemas
-        )
+        source = self._migration_source(db_type, host, port, username, password, database, schemas)
         return self._with_migration_id(
-            self._request(
-                "POST", "/migrations", json={"name": name, "source": source}
-            )
+            self._request("POST", "/migrations", json={"name": name, "source": source})
         )
 
-    def list_migrations(
-        self, limit: Optional[int] = None, offset: Optional[int] = None
-    ) -> dict:
-        result = self._request(
-            "GET", "/migrations", params=self._page_params(limit, offset)
-        )
+    def list_migrations(self, limit: Optional[int] = None, offset: Optional[int] = None) -> dict:
+        result = self._request("GET", "/migrations", params=self._page_params(limit, offset))
         items = result.get("migrations")
         if isinstance(items, list):
             result = dict(result)
             result["migrations"] = [
-                self._with_migration_id(item) if isinstance(item, dict) else item
-                for item in items
+                self._with_migration_id(item) if isinstance(item, dict) else item for item in items
             ]
         return result
 
     def get_migration(self, migration_id: str) -> dict:
-        return self._with_migration_id(
-            self._request("GET", f"/migrations/{migration_id}")
-        )
+        return self._with_migration_id(self._request("GET", f"/migrations/{migration_id}"))
 
     def get_migration_assessment(self, migration_id: str) -> dict:
         return self._request("GET", f"/migrations/{migration_id}/assessment")
@@ -540,19 +505,13 @@ class ControllerClient:
             body["vcpu"] = vcpu
         if project_name is not None:
             body["project_name"] = project_name
-        return self._request(
-            "POST", f"/migrations/{migration_id}/provision-target", json=body
-        )
+        return self._request("POST", f"/migrations/{migration_id}/provision-target", json=body)
 
-    def start_migration(
-        self, migration_id: str, parallel_jobs: Optional[int] = None
-    ) -> dict:
+    def start_migration(self, migration_id: str, parallel_jobs: Optional[int] = None) -> dict:
         body: dict[str, Any] = {}
         if parallel_jobs is not None:
             body["parallel_jobs"] = parallel_jobs
-        return self._request(
-            "POST", f"/migrations/{migration_id}/migrate", json=body
-        )
+        return self._request("POST", f"/migrations/{migration_id}/migrate", json=body)
 
     def end_migration(self, migration_id: str) -> dict:
         return self._request("POST", f"/migrations/{migration_id}/end")

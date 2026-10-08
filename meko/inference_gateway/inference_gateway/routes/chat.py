@@ -67,6 +67,7 @@ class ProcessingStepOut(BaseModel):
     query: Optional[str] = None
     tool_args: Optional[Dict[str, Any]] = None
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -77,7 +78,9 @@ class ChatRequest(BaseModel):
 
     message: str = Field(..., min_length=1, description="User prompt.")
     user_token: str = Field(..., min_length=1, description="Bearer token forwarded to MCP.")
-    user_id: str = Field(..., min_length=1, description="Authenticated account id (echoed for telemetry).")
+    user_id: str = Field(
+        ..., min_length=1, description="Authenticated account id (echoed for telemetry)."
+    )
     session_id: Optional[str] = Field(
         default=None,
         description="Client-supplied session id. Generated if absent.",
@@ -320,7 +323,8 @@ async def confirm_action(req: ConfirmActionRequest, request: Request) -> Confirm
     tool = tools.get(action["tool_name"])
     if tool is None:
         raise HTTPException(
-            status_code=502, detail=f"{action['tool_name']} tool unavailable",
+            status_code=502,
+            detail=f"{action['tool_name']} tool unavailable",
         )
 
     try:
@@ -350,12 +354,14 @@ async def confirm_action(req: ConfirmActionRequest, request: Request) -> Confirm
     conversation_id = action["args"].get("conversation_id") or ""
     if addmsg is not None and conversation_id:
         try:
-            await addmsg.ainvoke({
-                "conversation_id": conversation_id,
-                "agent_id": cfg.agent_id,
-                "input": f"[User approved action: {action['tool_name']}]",
-                "output": json.dumps(payload, default=str)[:2000],
-            })
+            await addmsg.ainvoke(
+                {
+                    "conversation_id": conversation_id,
+                    "agent_id": cfg.agent_id,
+                    "input": f"[User approved action: {action['tool_name']}]",
+                    "output": json.dumps(payload, default=str)[:2000],
+                }
+            )
         except Exception:  # noqa: BLE001
             logger.warning("confirm-action: recording turn failed", exc_info=True)
 
@@ -381,7 +387,9 @@ class IndexConversationResponse(BaseModel):
 
 
 @router.post("/index-conversation", response_model=IndexConversationResponse)
-async def index_conversation(req: IndexConversationRequest, request: Request) -> IndexConversationResponse:
+async def index_conversation(
+    req: IndexConversationRequest, request: Request
+) -> IndexConversationResponse:
     """Embed a past conversation's turns into the cache via the MCP
     conversation_index_history tool (the gateway is the MCP client)."""
     cfg: AppConfig = request.app.state.config
@@ -421,7 +429,9 @@ async def index_conversation(req: IndexConversationRequest, request: Request) ->
     if err == "free_tier_limit_reached":
         raise HTTPException(
             status_code=429,
-            detail=str(payload.get("detail") or "Conversation embedding limit reached for your plan."),
+            detail=str(
+                payload.get("detail") or "Conversation embedding limit reached for your plan."
+            ),
         )
     if err:
         raise HTTPException(status_code=502, detail=str(payload.get("detail") or err))

@@ -4,8 +4,9 @@ description: >-
   Push the current branch to `origin` in this repo. On a first push, check the
   branch name matches `<username>/<kebab-topic>` (or `feature/<kebab-topic>`)
   and set the upstream. **Before pushing, verify the components you touched are
-  formatted (`gofmt -l`, `npm run check`, `pycodestyle`) and that no outgoing
-  commit is co-authored by or attributed to Claude or Cursor** (fix formatting
+  formatted (`gofmt -l`, `ruff format --check`, `npm run check`, `pycodestyle`)
+  and that no outgoing commit is co-authored by or attributed to Claude or
+  Cursor** (fix formatting
   and scrub any agent trailer first). **If a PR already exists for the branch,
   refresh its title and summary from the branch's landed commits after pushing**
   so the PR always reflects what's actually on it. Use for `git push`, "push my
@@ -51,10 +52,13 @@ gofmt -l meko/api_server meko/cli_app meko/meko-provisioner meko/docs
 (cd meko/meko_ui    && npm run check)      # tsc
 (cd meko/meko_admin && npm run check)      # tsc
 
+# Python — if any .py changed (ruff 0.11.2; CI's `Format` check runs the same, repo-wide)
+git diff --name-only -z --diff-filter=d origin/main..HEAD -- '*.py' | xargs -0r ruff format --check -q
+
 # Python — if meko/system_agent/ changed
 (cd meko/system_agent && mypy . && pycodestyle .)
 
-# Python — if meko/inference_gateway/ changed (no formatter configured; run its tests)
+# Python — if meko/inference_gateway/ changed (run its tests)
 (cd meko/inference_gateway && pytest)
 
 # Rust + Go — if amp/ changed. CI's `Format` check runs both repo-wide; this catches it first.
@@ -66,6 +70,7 @@ If they're silent, move on. Otherwise **do not push** — fix and re-check:
 
 ```
 gofmt -w <the files gofmt -l listed>
+ruff format <the .py files it listed>
 (cd amp && make fmt)              # cargo fmt + ruff, in place; does not touch Go
 git diff                          # review what it rewrote
 ```

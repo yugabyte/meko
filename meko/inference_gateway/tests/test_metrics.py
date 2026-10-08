@@ -58,8 +58,10 @@ def test_http_requests_are_labelled_by_route_template() -> None:
 def test_errors_and_unmatched_paths_keep_bounded_labels() -> None:
     forbidden = {"method": "GET", "route": "/forbidden", "status": "403"}
     unmatched = {"method": "GET", "route": UNMATCHED_ROUTE, "status": "404"}
-    before = (_sample("meko_gateway_http_requests_total", forbidden),
-              _sample("meko_gateway_http_requests_total", unmatched))
+    before = (
+        _sample("meko_gateway_http_requests_total", forbidden),
+        _sample("meko_gateway_http_requests_total", unmatched),
+    )
 
     client = TestClient(_app())
     client.get("/forbidden")
@@ -86,8 +88,10 @@ def test_unknown_methods_share_one_label() -> None:
 def test_llm_calls_are_counted_and_timed_from_the_model_callback() -> None:
     model = "fake-model"
     ok = {"model": model, "outcome": "ok"}
-    before = (_sample("meko_gateway_llm_requests_total", ok),
-              _sample("meko_gateway_llm_request_duration_seconds_count", {"model": model}))
+    before = (
+        _sample("meko_gateway_llm_requests_total", ok),
+        _sample("meko_gateway_llm_request_duration_seconds_count", {"model": model}),
+    )
 
     llm = FakeListChatModel(responses=["hi"], callbacks=[LLMMetricsCallback(model)])
     llm.invoke("hello")

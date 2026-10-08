@@ -63,9 +63,7 @@ class Scene:
         return e
 
     def rect(self, x, y, w, h, stroke=INK, fill="transparent", **kw):
-        return self._base(
-            "rectangle", x, y, w, h, stroke, fill, round={"type": 3}, **kw
-        )
+        return self._base("rectangle", x, y, w, h, stroke, fill, round={"type": 3}, **kw)
 
     def text(self, x, y, s, size=20, color=INK, align="left", family=1):
         lines = s.split("\n")
@@ -289,9 +287,7 @@ def latency_vs_scale():
         return y0 + h - (math.log10(sec) - lo) / (hi - lo) * h
 
     s.text(40, 20, "memory_search p50 vs datapacks in the deployment", 30)
-    s.text(
-        40, 64, "3-node RF3 universe, r5dn.8xlarge. Log scale on both axes.", 18, MUTED
-    )
+    s.text(40, 64, "3-node RF3 universe, r5dn.8xlarge. Log scale on both axes.", 18, MUTED)
     s.line([[x0, y0], [x0, y0 + h], [x0 + w, y0 + h]], INK, rough=0)
     for sec, label in (
         (0.001, "1 ms"),

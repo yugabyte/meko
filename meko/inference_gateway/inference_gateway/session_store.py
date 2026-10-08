@@ -100,7 +100,9 @@ class InMemorySessionStore:
             return state.last_was_cache_hit, state.last_cache_query
 
     async def set_pending_action(
-        self, session_id: str, action: Optional[Dict[str, Any]],
+        self,
+        session_id: str,
+        action: Optional[Dict[str, Any]],
     ) -> None:
         """Store the session's ONE pending confirm-tier action (replaces any
         previous unconfirmed proposal). None clears it — a turn that proposes

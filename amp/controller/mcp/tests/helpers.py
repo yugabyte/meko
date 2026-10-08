@@ -24,9 +24,7 @@ class RecordingHandler:
         key = f"{request.method} {request.url.path}"
         spec = self.routes.get(key)
         if spec is None:
-            return httpx.Response(
-                404, json={"error": {"code": "not_found", "message": "no route"}}
-            )
+            return httpx.Response(404, json={"error": {"code": "not_found", "message": "no route"}})
         if isinstance(spec, tuple):
             status, body = spec
             return httpx.Response(status, json=body)

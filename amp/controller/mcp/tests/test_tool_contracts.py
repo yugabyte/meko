@@ -63,80 +63,196 @@ def wire():
 # One row per tool — the full 33-tool surface.
 CASES = [
     ("get_user", {"user_id": "u1"}, "GET", "/api/v1/users/u1", {"id": "u1"}),
-    ("create_storage_pool", {"name": "n", "owner_user_id": "u9"}, "POST",
-     "/api/v1/storage-pools", (201, {"id": "p1", "name": "n"})),
-    ("list_storage_pools", {}, "GET", "/api/v1/storage-pools",
-     {"storage_pools": [], "total": 0, "count": 0}),
+    (
+        "create_storage_pool",
+        {"name": "n", "owner_user_id": "u9"},
+        "POST",
+        "/api/v1/storage-pools",
+        (201, {"id": "p1", "name": "n"}),
+    ),
+    (
+        "list_storage_pools",
+        {},
+        "GET",
+        "/api/v1/storage-pools",
+        {"storage_pools": [], "total": 0, "count": 0},
+    ),
     ("get_storage_pool", {"pool_id": "p1"}, "GET", P, {"id": "p1"}),
-    ("rename_storage_pool", {"pool_id": "p1", "name": "n2"}, "PATCH", P,
-     {"id": "p1", "name": "n2"}),
+    (
+        "rename_storage_pool",
+        {"pool_id": "p1", "name": "n2"},
+        "PATCH",
+        P,
+        {"id": "p1", "name": "n2"},
+    ),
     # Delete is synchronous and answers 204: no body, no Task to poll.
     ("delete_storage_pool", {"pool_id": "p1"}, "DELETE", P, (204, None)),
-    ("create_cluster", {"pool_id": "p1", "name": "db"}, "POST",
-     f"{P}/clusters", (202, TASK)),
-    ("list_clusters", {"pool_id": "p1"}, "GET", f"{P}/clusters",
-     {"clusters": [], "total": 0, "count": 0}),
-    ("get_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, "GET", PR,
-     {"id": "pr1"}),
-    ("delete_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, "DELETE", PR,
-     (202, TASK)),
-    ("create_branch", {"pool_id": "p1", "cluster_id": "pr1", "name": "f"},
-     "POST", f"{PR}/branches", (202, TASK)),
-    ("list_branches", {"pool_id": "p1", "cluster_id": "pr1"}, "GET",
-     f"{PR}/branches", {"branches": [], "total": 0, "count": 0}),
-    ("get_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
-     "GET", B, {"branch_id": "b1"}),
-    ("add_branch_extensions",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-      "extensions": ["pgvector"]}, "POST", f"{B}/extensions", (202, TASK)),
-    ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
-     "DELETE", B, (202, TASK)),
-    ("create_endpoint",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"}, "POST",
-     f"{B}/endpoints", (202, TASK)),
-    ("list_endpoints", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
-     "GET", f"{B}/endpoints", {"endpoints": [], "total": 0, "count": 0}),
-    ("get_endpoint",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-      "endpoint_id": "e1"}, "GET", E, {"id": "e1"}),
-    ("delete_endpoint",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-      "endpoint_id": "e1"}, "DELETE", E, (202, TASK)),
-    ("resize_endpoint",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-      "endpoint_id": "e1", "cpu": "4"}, "POST", f"{E}/resize", (202, TASK)),
+    ("create_cluster", {"pool_id": "p1", "name": "db"}, "POST", f"{P}/clusters", (202, TASK)),
+    (
+        "list_clusters",
+        {"pool_id": "p1"},
+        "GET",
+        f"{P}/clusters",
+        {"clusters": [], "total": 0, "count": 0},
+    ),
+    ("get_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, "GET", PR, {"id": "pr1"}),
+    ("delete_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, "DELETE", PR, (202, TASK)),
+    (
+        "create_branch",
+        {"pool_id": "p1", "cluster_id": "pr1", "name": "f"},
+        "POST",
+        f"{PR}/branches",
+        (202, TASK),
+    ),
+    (
+        "list_branches",
+        {"pool_id": "p1", "cluster_id": "pr1"},
+        "GET",
+        f"{PR}/branches",
+        {"branches": [], "total": 0, "count": 0},
+    ),
+    (
+        "get_branch",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
+        "GET",
+        B,
+        {"branch_id": "b1"},
+    ),
+    (
+        "add_branch_extensions",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "extensions": ["pgvector"]},
+        "POST",
+        f"{B}/extensions",
+        (202, TASK),
+    ),
+    (
+        "delete_branch",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
+        "DELETE",
+        B,
+        (202, TASK),
+    ),
+    (
+        "create_endpoint",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
+        "POST",
+        f"{B}/endpoints",
+        (202, TASK),
+    ),
+    (
+        "list_endpoints",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
+        "GET",
+        f"{B}/endpoints",
+        {"endpoints": [], "total": 0, "count": 0},
+    ),
+    (
+        "get_endpoint",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
+        "GET",
+        E,
+        {"id": "e1"},
+    ),
+    (
+        "delete_endpoint",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
+        "DELETE",
+        E,
+        (202, TASK),
+    ),
+    (
+        "resize_endpoint",
+        {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1", "cpu": "4"},
+        "POST",
+        f"{E}/resize",
+        (202, TASK),
+    ),
     # Settings are synchronous: a 200 with what was stored and what it could be
     # applied to, not a Task to poll.
-    ("update_branch_settings",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-      "pg_settings": {"work_mem": "64MB"}}, "PATCH", f"{B}/settings",
-     {"applied": True}),
-    ("update_endpoint_settings",
-     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-      "endpoint_id": "e1", "pg_settings": {"work_mem": "64MB"}},
-     "PATCH", f"{E}/settings", {"applied": True}),
-    ("list_tasks", {}, "GET", "/api/v1/tasks",
-     {"tasks": [], "total": 0, "count": 0}),
-    ("get_task", {"task_id": "t1"}, "GET", "/api/v1/tasks/t1",
-     {"id": "t1", "status": "succeeded"}),
-    ("test_source_connectivity", CONN_KWARGS, "POST",
-     "/api/v1/migrations/connectivity-checks", {"reachable": True}),
-    ("create_migration", CREATE_MIGRATION_KWARGS, "POST", "/api/v1/migrations",
-     (201, {"id": "m1", "state": "created"})),
-    ("list_migrations", {}, "GET", "/api/v1/migrations",
-     {"migrations": [], "total": 0, "count": 0}),
-    ("get_migration", {"migration_id": "m1"}, "GET", "/api/v1/migrations/m1",
-     {"id": "m1", "state": "assessed"}),
-    ("get_migration_assessment", {"migration_id": "m1"}, "GET",
-     "/api/v1/migrations/m1/assessment", {"complexity": "LOW"}),
-    ("start_migration_assessment", {"migration_id": "m1"}, "POST",
-     "/api/v1/migrations/m1/assess", (202, TASK)),
-    ("provision_migration_target", {"migration_id": "m1", "pool_id": "p1"},
-     "POST", "/api/v1/migrations/m1/provision-target", (202, TASK)),
-    ("start_migration", {"migration_id": "m1"}, "POST",
-     "/api/v1/migrations/m1/migrate", (202, TASK)),
-    ("end_migration", {"migration_id": "m1"}, "POST",
-     "/api/v1/migrations/m1/end", (202, TASK)),
+    (
+        "update_branch_settings",
+        {
+            "pool_id": "p1",
+            "cluster_id": "pr1",
+            "branch_id": "b1",
+            "pg_settings": {"work_mem": "64MB"},
+        },
+        "PATCH",
+        f"{B}/settings",
+        {"applied": True},
+    ),
+    (
+        "update_endpoint_settings",
+        {
+            "pool_id": "p1",
+            "cluster_id": "pr1",
+            "branch_id": "b1",
+            "endpoint_id": "e1",
+            "pg_settings": {"work_mem": "64MB"},
+        },
+        "PATCH",
+        f"{E}/settings",
+        {"applied": True},
+    ),
+    ("list_tasks", {}, "GET", "/api/v1/tasks", {"tasks": [], "total": 0, "count": 0}),
+    ("get_task", {"task_id": "t1"}, "GET", "/api/v1/tasks/t1", {"id": "t1", "status": "succeeded"}),
+    (
+        "test_source_connectivity",
+        CONN_KWARGS,
+        "POST",
+        "/api/v1/migrations/connectivity-checks",
+        {"reachable": True},
+    ),
+    (
+        "create_migration",
+        CREATE_MIGRATION_KWARGS,
+        "POST",
+        "/api/v1/migrations",
+        (201, {"id": "m1", "state": "created"}),
+    ),
+    (
+        "list_migrations",
+        {},
+        "GET",
+        "/api/v1/migrations",
+        {"migrations": [], "total": 0, "count": 0},
+    ),
+    (
+        "get_migration",
+        {"migration_id": "m1"},
+        "GET",
+        "/api/v1/migrations/m1",
+        {"id": "m1", "state": "assessed"},
+    ),
+    (
+        "get_migration_assessment",
+        {"migration_id": "m1"},
+        "GET",
+        "/api/v1/migrations/m1/assessment",
+        {"complexity": "LOW"},
+    ),
+    (
+        "start_migration_assessment",
+        {"migration_id": "m1"},
+        "POST",
+        "/api/v1/migrations/m1/assess",
+        (202, TASK),
+    ),
+    (
+        "provision_migration_target",
+        {"migration_id": "m1", "pool_id": "p1"},
+        "POST",
+        "/api/v1/migrations/m1/provision-target",
+        (202, TASK),
+    ),
+    (
+        "start_migration",
+        {"migration_id": "m1"},
+        "POST",
+        "/api/v1/migrations/m1/migrate",
+        (202, TASK),
+    ),
+    ("end_migration", {"migration_id": "m1"}, "POST", "/api/v1/migrations/m1/end", (202, TASK)),
 ]
 
 
@@ -154,6 +270,7 @@ def test_tool_hits_expected_method_and_path(wire, name, kwargs, method, path, sp
 
 
 # ---- Request bodies (writes) ----
+
 
 def test_create_storage_pool_body(wire):
     handler = wire({"POST /api/v1/storage-pools": (201, {"id": "p1"})})
@@ -189,9 +306,7 @@ def test_create_cluster_engine_and_extensions_compose(wire):
     """The controller unions the engine's bundle with `extensions`; the client
     sends both verbatim rather than resolving the bundle itself."""
     handler = wire({f"POST {P}/clusters": (202, TASK)})
-    tools.create_cluster(
-        pool_id="p1", name="db", engine="oracle", extensions=["pgvector"]
-    )
+    tools.create_cluster(pool_id="p1", name="db", engine="oracle", extensions=["pgvector"])
     assert handler.last_json() == {
         "name": "db",
         "engine": "oracle",
@@ -224,11 +339,16 @@ def test_create_branch_omits_optional_fields(wire):
 def test_create_branch_includes_optional_fields(wire):
     handler = wire({f"POST {PR}/branches": (202, TASK)})
     tools.create_branch(
-        pool_id="p1", cluster_id="pr1", name="f",
-        parent_branch_id="b0", fork_point_lsn="0/16ABCD0",
+        pool_id="p1",
+        cluster_id="pr1",
+        name="f",
+        parent_branch_id="b0",
+        fork_point_lsn="0/16ABCD0",
     )
     assert handler.last_json() == {
-        "name": "f", "parent_branch_id": "b0", "fork_point_lsn": "0/16ABCD0",
+        "name": "f",
+        "parent_branch_id": "b0",
+        "fork_point_lsn": "0/16ABCD0",
     }
 
 
@@ -236,8 +356,13 @@ def test_create_endpoint_nests_cpu_and_memory_under_resources(wire):
     # The controller expects a nested `resources` object, NOT flat cpu/memory.
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1",
-        role="read_only", disk_type="network", cpu="2", memory="4Gi",
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
+        role="read_only",
+        disk_type="network",
+        cpu="2",
+        memory="4Gi",
     )
     assert handler.last_json() == {
         "role": "read_only",
@@ -258,7 +383,10 @@ def test_create_endpoint_omits_empty_body_and_resources(wire):
 def test_create_endpoint_sends_the_password(wire):
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1", password="hunter2hunter2",
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
+        password="hunter2hunter2",
     )
     assert handler.last_json() == {"password": "hunter2hunter2"}
 
@@ -266,7 +394,10 @@ def test_create_endpoint_sends_the_password(wire):
 def test_create_endpoint_sends_tags(wire):
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1", tags={"acme.com/owner": "jdoe"},
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
+        tags={"acme.com/owner": "jdoe"},
     )
     assert handler.last_json() == {"tags": {"acme.com/owner": "jdoe"}}
 
@@ -281,7 +412,9 @@ def test_create_endpoint_sends_the_three_settings_maps(wire):
     # Each goes at the top level of the body, not nested under `resources`.
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1",
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
         pg_settings={"work_mem": "64MB"},
         pageserver_settings={"tenant_config.enable_gc": True},
         safekeeper_settings={"wal_cache_size_mib": 512},
@@ -298,7 +431,9 @@ def test_create_endpoint_passes_dotted_keys_through_verbatim(wire):
     # controller as a non-scalar value.
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1",
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
         pageserver_settings={
             "tenant_config.enable_gc": True,
             "tenant_config.pitr_interval": "7 days",
@@ -313,13 +448,18 @@ def test_create_endpoint_passes_dotted_keys_through_verbatim(wire):
 def test_create_endpoint_omits_empty_settings_maps(wire):
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1",
-        pg_settings={}, pageserver_settings={}, safekeeper_settings={},
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
+        pg_settings={},
+        pageserver_settings={},
+        safekeeper_settings={},
     )
     assert handler.last_json() == {}
 
 
 # ---- Query params (lists) ----
+
 
 def test_list_omits_pagination_when_unset(wire):
     handler = wire({"GET /api/v1/storage-pools": {"storage_pools": []}})
@@ -344,6 +484,7 @@ def test_list_tasks_sends_filters(wire):
 
 # ---- Sync vs. async contract ----
 
+
 def test_create_storage_pool_is_synchronous(wire):
     # Guards finding: pool create returns the object (201), NOT a Task. If this
     # is ever turned async, the returned shape changes and this fails.
@@ -357,25 +498,44 @@ def test_create_storage_pool_is_synchronous(wire):
     "name,kwargs,path,method",
     [
         ("create_cluster", {"pool_id": "p1", "name": "db"}, f"{P}/clusters", "POST"),
-        ("create_branch", {"pool_id": "p1", "cluster_id": "pr1", "name": "f"},
-         f"{PR}/branches", "POST"),
-        ("create_endpoint",
-         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
-         f"{B}/endpoints", "POST"),
-        ("add_branch_extensions",
-         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
-          "extensions": ["pgvector"]},
-         f"{B}/extensions", "POST"),
+        (
+            "create_branch",
+            {"pool_id": "p1", "cluster_id": "pr1", "name": "f"},
+            f"{PR}/branches",
+            "POST",
+        ),
+        (
+            "create_endpoint",
+            {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
+            f"{B}/endpoints",
+            "POST",
+        ),
+        (
+            "add_branch_extensions",
+            {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "extensions": ["pgvector"]},
+            f"{B}/extensions",
+            "POST",
+        ),
         ("delete_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, PR, "DELETE"),
-        ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
-         B, "DELETE"),
-        ("delete_endpoint",
-         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
-         E, "DELETE"),
-        ("resize_endpoint",
-         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1",
-          "cpu": "4"},
-         f"{E}/resize", "POST"),
+        ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"}, B, "DELETE"),
+        (
+            "delete_endpoint",
+            {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
+            E,
+            "DELETE",
+        ),
+        (
+            "resize_endpoint",
+            {
+                "pool_id": "p1",
+                "cluster_id": "pr1",
+                "branch_id": "b1",
+                "endpoint_id": "e1",
+                "cpu": "4",
+            },
+            f"{E}/resize",
+            "POST",
+        ),
     ],
 )
 def test_async_tools_return_task_body(wire, name, kwargs, path, method):
@@ -387,18 +547,21 @@ def test_async_tools_return_task_body(wire, name, kwargs, path, method):
 def test_resize_endpoint_nests_cpu_and_memory_under_resources(wire):
     handler = wire({f"POST {E}/resize": (202, TASK)})
     tools.resize_endpoint(
-        pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1",
-        cpu="4", memory="8Gi",
+        pool_id="p1",
+        cluster_id="pr1",
+        branch_id="b1",
+        endpoint_id="e1",
+        cpu="4",
+        memory="8Gi",
     )
     assert handler.last_json() == {"resources": {"cpu": "4", "memory": "8Gi"}}
 
 
 # ---- Migrations ----
 
+
 def test_test_source_connectivity_wraps_source_with_default_db_type(wire):
-    handler = wire(
-        {"POST /api/v1/migrations/connectivity-checks": {"reachable": True}}
-    )
+    handler = wire({"POST /api/v1/migrations/connectivity-checks": {"reachable": True}})
     tools.test_source_connectivity(**CONN_KWARGS)
     assert handler.last_json() == {"source": SOURCE_BODY}
 
@@ -410,21 +573,19 @@ def test_create_migration_sends_name_and_source(wire):
 
 
 def test_provision_migration_target_includes_optionals_when_set(wire):
-    handler = wire(
-        {"POST /api/v1/migrations/m1/provision-target": (202, TASK)}
-    )
+    handler = wire({"POST /api/v1/migrations/m1/provision-target": (202, TASK)})
     tools.provision_migration_target(
         migration_id="m1", pool_id="p1", vcpu=4, project_name="shop-target"
     )
     assert handler.last_json() == {
-        "pool_id": "p1", "vcpu": 4, "project_name": "shop-target",
+        "pool_id": "p1",
+        "vcpu": 4,
+        "project_name": "shop-target",
     }
 
 
 def test_provision_migration_target_omits_optionals(wire):
-    handler = wire(
-        {"POST /api/v1/migrations/m1/provision-target": (202, TASK)}
-    )
+    handler = wire({"POST /api/v1/migrations/m1/provision-target": (202, TASK)})
     tools.provision_migration_target(migration_id="m1", pool_id="p1")
     assert handler.last_json() == {"pool_id": "p1"}
 
@@ -453,14 +614,14 @@ def test_create_migration_is_synchronous(wire):
 @pytest.mark.parametrize(
     "name,kwargs,path",
     [
-        ("start_migration_assessment", {"migration_id": "m1"},
-         "/api/v1/migrations/m1/assess"),
-        ("provision_migration_target", {"migration_id": "m1", "pool_id": "p1"},
-         "/api/v1/migrations/m1/provision-target"),
-        ("start_migration", {"migration_id": "m1"},
-         "/api/v1/migrations/m1/migrate"),
-        ("end_migration", {"migration_id": "m1"},
-         "/api/v1/migrations/m1/end"),
+        ("start_migration_assessment", {"migration_id": "m1"}, "/api/v1/migrations/m1/assess"),
+        (
+            "provision_migration_target",
+            {"migration_id": "m1", "pool_id": "p1"},
+            "/api/v1/migrations/m1/provision-target",
+        ),
+        ("start_migration", {"migration_id": "m1"}, "/api/v1/migrations/m1/migrate"),
+        ("end_migration", {"migration_id": "m1"}, "/api/v1/migrations/m1/end"),
     ],
 )
 def test_migration_launchers_return_task_body(wire, name, kwargs, path):
@@ -470,6 +631,7 @@ def test_migration_launchers_return_task_body(wire, name, kwargs, path):
 
 
 # ---- Response pass-through (list envelopes) ----
+
 
 def test_list_returns_resource_named_envelope(wire):
     body = {"storage_pools": [{"id": "p1"}], "total": 1, "count": 1}

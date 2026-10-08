@@ -54,8 +54,10 @@ def main(allowlist_path, exclusions_path, engine, out_path):
     allowlist["tests"] = [t for t in tests if entry_id(t) not in reasons]
     with open(out_path, "w") as f:
         yaml.safe_dump(allowlist, f, sort_keys=False)
-    print(f"amp_gate: {len(allowlisted)} allowlisted, {len(reasons)} excluded on amp, "
-          f"{len(allowlisted) - len(reasons)} gated")
+    print(
+        f"amp_gate: {len(allowlisted)} allowlisted, {len(reasons)} excluded on amp, "
+        f"{len(allowlisted) - len(reasons)} gated"
+    )
 
 
 if __name__ == "__main__":

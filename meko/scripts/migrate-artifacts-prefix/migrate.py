@@ -51,6 +51,7 @@ AWS keys directly):
         --psql-opts="-h prod-db-host -p 5432 -U meko -d meko" \\
         --dry-run
 """
+
 import argparse
 import os
 import shlex
@@ -59,16 +60,23 @@ import sys
 
 
 def copy_object_mc(alias, bucket, old_key, new_key):
-    return subprocess.run(
-        ["mc", "cp", "--quiet", f"{alias}/{bucket}/{old_key}", f"{alias}/{bucket}/{new_key}"]
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["mc", "cp", "--quiet", f"{alias}/{bucket}/{old_key}", f"{alias}/{bucket}/{new_key}"]
+        ).returncode
+        == 0
+    )
 
 
 def object_exists_mc(alias, bucket, key):
-    return subprocess.run(
-        ["mc", "stat", "--quiet", f"{alias}/{bucket}/{key}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["mc", "stat", "--quiet", f"{alias}/{bucket}/{key}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
 
 
 def delete_object_mc(alias, bucket, key):
@@ -78,16 +86,30 @@ def delete_object_mc(alias, bucket, key):
 def copy_object_aws(bucket, old_key, new_key):
     # aws s3 cp between two s3:// URIs is a server-side copy -- no bytes
     # round-trip through this machine, same as mc cp within one bucket.
-    return subprocess.run(
-        ["aws", "s3", "cp", "--only-show-errors", f"s3://{bucket}/{old_key}", f"s3://{bucket}/{new_key}"]
-    ).returncode == 0
+    return (
+        subprocess.run(
+            [
+                "aws",
+                "s3",
+                "cp",
+                "--only-show-errors",
+                f"s3://{bucket}/{old_key}",
+                f"s3://{bucket}/{new_key}",
+            ]
+        ).returncode
+        == 0
+    )
 
 
 def object_exists_aws(bucket, key):
-    return subprocess.run(
-        ["aws", "s3api", "head-object", "--bucket", bucket, "--key", key],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["aws", "s3api", "head-object", "--bucket", bucket, "--key", key],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
 
 
 def delete_object_aws(bucket, key):
@@ -106,17 +128,22 @@ def psql(psql_opts, sql, variables=None):
 
 
 def rows_needing_migration(args):
-    output = psql(args.psql_opts, """
+    output = psql(
+        args.psql_opts,
+        """
         select id, s3_key from datapacks.artifacts
         where s3_key is not null and s3_key <> '' and s3_key not like 'artifacts/%'
-    """)
+    """,
+    )
     return [line.split("|", 1) for line in output.splitlines() if line.strip()]
 
 
 def update_s3_key(args, row_id, new_key):
-    psql(args.psql_opts,
-         "update datapacks.artifacts set s3_key = :'new_key' where id = :'id'::uuid",
-         {"id": row_id, "new_key": new_key})
+    psql(
+        args.psql_opts,
+        "update datapacks.artifacts set s3_key = :'new_key' where id = :'id'::uuid",
+        {"id": row_id, "new_key": new_key},
+    )
 
 
 def copy_only(args, copy_object, object_exists):
@@ -155,7 +182,10 @@ def update_only(args, object_exists):
         print(f"[{row_id}] {old_key} -> {new_key}")
 
         if not object_exists(new_key):
-            print("  no object at the new key yet, skipping (nothing to point the DB row at)", file=sys.stderr)
+            print(
+                "  no object at the new key yet, skipping (nothing to point the DB row at)",
+                file=sys.stderr,
+            )
             continue
         update_s3_key(args, row_id, new_key)
         updated += 1
@@ -164,7 +194,9 @@ def update_only(args, object_exists):
 
 
 def delete_only(args, object_exists, delete_object):
-    output = psql(args.psql_opts, "select id, s3_key from datapacks.artifacts where s3_key like 'artifacts/%'")
+    output = psql(
+        args.psql_opts, "select id, s3_key from datapacks.artifacts where s3_key like 'artifacts/%'"
+    )
     rows = [line.split("|", 1) for line in output.splitlines() if line.strip()]
     if not rows:
         print("nothing already migrated")
@@ -187,16 +219,23 @@ def delete_only(args, object_exists, delete_object):
 def report(args):
     # DB-only: size_bytes and s3_key already say everything needed, so this
     # doesn't touch S3.
-    output = psql(args.psql_opts, """
+    output = psql(
+        args.psql_opts,
+        """
         select id, filename, size_bytes, s3_key
         from datapacks.artifacts
         order by created_at
-    """)
+    """,
+    )
     rows = [line.split("|", 3) for line in output.splitlines() if line.strip()]
 
     in_s3 = [(row_id, filename, s3_key) for row_id, filename, _, s3_key in rows if s3_key]
     inline = [(row_id, filename) for row_id, filename, _, s3_key in rows if not s3_key]
-    empty = [(row_id, filename, s3_key) for row_id, filename, size_bytes, s3_key in rows if int(size_bytes) == 0]
+    empty = [
+        (row_id, filename, s3_key)
+        for row_id, filename, size_bytes, s3_key in rows
+        if int(size_bytes) == 0
+    ]
 
     print(f"=== all files ({len(rows)}) ===")
     for row_id, filename, size_bytes, s3_key in rows:
@@ -214,30 +253,50 @@ def report(args):
     for row_id, filename, s3_key in empty:
         print(f"[{row_id}] {filename}  ({s3_key or 'inline'})")
 
-    print(f"\ntotal: {len(rows)} files -- {len(in_s3)} in S3, {len(inline)} inline, {len(empty)} empty")
+    print(
+        f"\ntotal: {len(rows)} files -- {len(in_s3)} in S3, {len(inline)} inline, {len(empty)} empty"
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--backend", choices=["mc", "aws"], default=os.environ.get("BACKEND", "mc"))
     parser.add_argument("--mc-alias", default=os.environ.get("MC_ALIAS", "local"))
-    parser.add_argument("--bucket", default=os.environ.get("BUCKET"),
-                         help="artifacts bucket name (or set BUCKET)")
-    parser.add_argument("--psql-opts", default=os.environ.get("PSQL_OPTS"),
-                         help="psql connection flags, e.g. '-h 127.0.0.1 -p 5433 -U yugabyte -d yugabyte' (or set PSQL_OPTS)")
-    parser.add_argument("--dry-run", action="store_true", help="print the inventory and exit; changes nothing")
+    parser.add_argument(
+        "--bucket", default=os.environ.get("BUCKET"), help="artifacts bucket name (or set BUCKET)"
+    )
+    parser.add_argument(
+        "--psql-opts",
+        default=os.environ.get("PSQL_OPTS"),
+        help="psql connection flags, e.g. '-h 127.0.0.1 -p 5433 -U yugabyte -d yugabyte' (or set PSQL_OPTS)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print the inventory and exit; changes nothing"
+    )
     parser.add_argument("--count", action="store_true", help="same as --dry-run")
-    parser.add_argument("--copy-only", action="store_true", help="just copy old-key objects to their new key")
-    parser.add_argument("--update-only", action="store_true",
-                         help="just update the DB row for whatever object is already at the new key")
-    parser.add_argument("--delete-only", action="store_true",
-                         help="just remove lingering old-key copies for rows already migrated in the DB")
+    parser.add_argument(
+        "--copy-only", action="store_true", help="just copy old-key objects to their new key"
+    )
+    parser.add_argument(
+        "--update-only",
+        action="store_true",
+        help="just update the DB row for whatever object is already at the new key",
+    )
+    parser.add_argument(
+        "--delete-only",
+        action="store_true",
+        help="just remove lingering old-key copies for rows already migrated in the DB",
+    )
     args = parser.parse_args()
 
     flags = [args.dry_run, args.count, args.copy_only, args.update_only, args.delete_only]
     if sum(flags) != 1:
-        parser.error("pass exactly one of --dry-run, --count, --copy-only, --update-only, --delete-only "
-                      "-- never more than one, and never none")
+        parser.error(
+            "pass exactly one of --dry-run, --count, --copy-only, --update-only, --delete-only "
+            "-- never more than one, and never none"
+        )
     if not args.bucket:
         parser.error("--bucket (or BUCKET) is required")
     if not args.psql_opts:

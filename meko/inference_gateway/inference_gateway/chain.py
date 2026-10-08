@@ -128,7 +128,12 @@ async def _track_token_usage(
     # independent of Langfuse availability.
     logger.info(
         "token_usage name=%s message_id=%s input=%d output=%d total=%d model=%s",
-        name, message_id or "-", in_tok, out_tok, tot_tok, model or "-",
+        name,
+        message_id or "-",
+        in_tok,
+        out_tok,
+        tot_tok,
+        model or "-",
     )
     tool = tools_by_name.get("track_token_usage")
     if tool is None:
@@ -152,7 +157,10 @@ async def _track_token_usage(
         await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001 — best-effort
         logger.warning(
-            "track_token_usage(%s) failed: %s", name, _format_exc_chain(exc), exc_info=exc,
+            "track_token_usage(%s) failed: %s",
+            name,
+            _format_exc_chain(exc),
+            exc_info=exc,
         )
 
 
@@ -191,12 +199,12 @@ def _usage_from_langchain_result(result: Any) -> Tuple[int, int, int, Optional[s
     if not (input_tokens or output_tokens):
         logger.warning(
             "usage extract miss: response_metadata keys=%s usage_metadata=%s response_metadata=%s",
-            list(meta.keys()), usage_md, meta,
+            list(meta.keys()),
+            usage_md,
+            meta,
         )
 
     return input_tokens, output_tokens, total_tokens, model
-
-
 
 
 # Greetings / acknowledgements that don't need any retrieval grounding —
@@ -578,6 +586,7 @@ async def _summarize_conversation_hits(
     hit itself, per its own docstring)."""
     if not hits:
         return ""
+
     # Fallback answer when the SLM returns empty or errors: the CLOSEST matched
     # turn by distance — never blindly the oldest turn (which, in a multi-topic
     # conversation, is often unrelated to the question).
@@ -586,6 +595,7 @@ async def _summarize_conversation_hits(
         if scored:
             return min(scored, key=lambda h: h["distance"]).get("content", "")
         return hits[0].get("content", "")
+
     blocks = []
     # Cap so a long thread can't blow up the summary prompt; fewer is fine
     # (most threads are far shorter). Turns arrive oldest→newest.
@@ -601,7 +611,11 @@ async def _summarize_conversation_hits(
         in_tok, out_tok, tot_tok, model_id = _usage_from_langchain_result(result)
         logger.info(
             "token_usage name=Conversation Summary input=%d output=%d total=%d model=%s turns=%d",
-            in_tok, out_tok, tot_tok, model_id or "-", len(hits),
+            in_tok,
+            out_tok,
+            tot_tok,
+            model_id or "-",
+            len(hits),
         )
         text = _coerce_text(result.content).strip()
         if not text:
@@ -633,10 +647,14 @@ async def _classify_followup(model: BaseChatModel, prior_query: str, message: st
     one-word output). Defaults to `other` on any error so we never bypass the
     cache on a false positive."""
     try:
-        result = await model.ainvoke([
-            SystemMessage(content=_FOLLOWUP_CLASSIFY_SYSTEM),
-            HumanMessage(content=f"Prior question: {prior_query}\nUser's next message: {message}"),
-        ])
+        result = await model.ainvoke(
+            [
+                SystemMessage(content=_FOLLOWUP_CLASSIFY_SYSTEM),
+                HumanMessage(
+                    content=f"Prior question: {prior_query}\nUser's next message: {message}"
+                ),
+            ]
+        )
         label = _coerce_text(result.content).strip().lower()
         for v in ("dissatisfied", "refine", "other"):
             if v in label:
@@ -683,10 +701,12 @@ async def _route_tool_decision(
     routed: Optional[str] = None
     raw = ""
     try:
-        result = await model.ainvoke([
-            SystemMessage(content=_TOOL_ROUTE_SYSTEM.format(tools=", ".join(allowed))),
-            HumanMessage(content=user_message),
-        ])
+        result = await model.ainvoke(
+            [
+                SystemMessage(content=_TOOL_ROUTE_SYSTEM.format(tools=", ".join(allowed))),
+                HumanMessage(content=user_message),
+            ]
+        )
         raw = _coerce_text(result.content).strip().lower()
         # Scan rather than exact-match: small models often wrap the answer
         # in a sentence. Longest names first so amp_cluster_list can't be
@@ -708,13 +728,17 @@ async def _route_tool_decision(
     )
     logger.info(
         "tool route: %s (datapack=%s, %d tools offered, raw=%r)",
-        routed or "cps", datapack_id, len(allowed), raw[:200],
+        routed or "cps",
+        datapack_id,
+        len(allowed),
+        raw[:200],
     )
     return routed
 
 
-def _merge_agent_tool_args(tool, model_args: dict, *, agent_id: str,
-                           conversation_id: str, datapack_id: Optional[str]) -> dict:
+def _merge_agent_tool_args(
+    tool, model_args: dict, *, agent_id: str, conversation_id: str, datapack_id: Optional[str]
+) -> dict:
     """Merge the model-proposed tool arguments with server-enforced identity.
 
     `agent_id`, `conversation_id`, and `datapack_id` are ALWAYS set by the
@@ -765,12 +789,8 @@ def _scoped_tool_names(cfg: AppConfig, routed_tool: Optional[str]) -> Tuple[str,
     auto = tuple(cfg.agent_tools)
     meko_auto = tuple(t for t in auto if not t.startswith("amp_"))
     if routed_tool and routed_tool.startswith("amp_"):
-        amp_family = tuple(
-            t for t in (*auto, *cfg.agent_confirm_tools) if t.startswith("amp_")
-        )
-        searches = tuple(
-            t for t in ("memory_search", "knowledgebase_search") if t in auto
-        )
+        amp_family = tuple(t for t in (*auto, *cfg.agent_confirm_tools) if t.startswith("amp_"))
+        searches = tuple(t for t in ("memory_search", "knowledgebase_search") if t in auto)
         return amp_family + searches
     if routed_tool and routed_tool in cfg.agent_confirm_tools:
         return meko_auto + (routed_tool,)
@@ -814,8 +834,10 @@ async def _agentic_llm_invoke(
     llm_with_tools = llm.bind_tools(toolset)
     logger.info(
         "agentic chat: bound %d/%d tool schemas (route=%s, datapack=%s)",
-        len(toolset), len(cfg.agent_tools) + len(cfg.agent_confirm_tools),
-        routed_tool or "cps", datapack_id,
+        len(toolset),
+        len(cfg.agent_tools) + len(cfg.agent_confirm_tools),
+        routed_tool or "cps",
+        datapack_id,
     )
 
     results: List[Any] = []
@@ -831,7 +853,8 @@ async def _agentic_llm_invoke(
 
         logger.info(
             "agentic chat round %d (datapack=%s): model requested %s",
-            _round + 1, datapack_id,
+            _round + 1,
+            datapack_id,
             "; ".join(
                 f"{tc.get('name')}({_truncate(json.dumps(tc.get('args') or {}, default=str), 400)})"
                 for tc in tool_calls
@@ -847,8 +870,9 @@ async def _agentic_llm_invoke(
             if tool is None:
                 # Model asked for something outside the allowlist — answer
                 # with a structured error so it can recover, never crash.
-                content = json.dumps({"error": "tool_not_available",
-                                      "detail": f"{name} is not available here"})
+                content = json.dumps(
+                    {"error": "tool_not_available", "detail": f"{name} is not available here"}
+                )
                 status, note = "error", "not in allowlist"
                 merged = model_args
             elif name in confirm_names:
@@ -857,8 +881,11 @@ async def _agentic_llm_invoke(
                 # gateway-enforced) for the user to approve in the UI, and
                 # tell the model so it describes the pending action.
                 merged = _merge_agent_tool_args(
-                    tool, model_args, agent_id=cfg.agent_id,
-                    conversation_id=conversation_id, datapack_id=datapack_id,
+                    tool,
+                    model_args,
+                    agent_id=cfg.agent_id,
+                    conversation_id=conversation_id,
+                    datapack_id=datapack_id,
                 )
                 if pending_action is None:
                     pending_action = {
@@ -866,25 +893,32 @@ async def _agentic_llm_invoke(
                         "tool_name": name,
                         "args": dict(merged),
                     }
-                    content = json.dumps({
-                        "status": "confirmation_required",
-                        "detail": (
-                            "This action was NOT executed. The user is being "
-                            "shown a confirmation card; describe exactly what "
-                            "will happen and ask them to confirm."
-                        ),
-                    })
+                    content = json.dumps(
+                        {
+                            "status": "confirmation_required",
+                            "detail": (
+                                "This action was NOT executed. The user is being "
+                                "shown a confirmation card; describe exactly what "
+                                "will happen and ask them to confirm."
+                            ),
+                        }
+                    )
                     status, note = "skipped", "awaiting user confirmation"
                 else:
-                    content = json.dumps({
-                        "error": "pending_action_exists",
-                        "detail": "Only one action can await confirmation at a time.",
-                    })
+                    content = json.dumps(
+                        {
+                            "error": "pending_action_exists",
+                            "detail": "Only one action can await confirmation at a time.",
+                        }
+                    )
                     status, note = "error", "second confirm-tier call dropped"
             else:
                 merged = _merge_agent_tool_args(
-                    tool, model_args, agent_id=cfg.agent_id,
-                    conversation_id=conversation_id, datapack_id=datapack_id,
+                    tool,
+                    model_args,
+                    agent_id=cfg.agent_id,
+                    conversation_id=conversation_id,
+                    datapack_id=datapack_id,
                 )
                 try:
                     out = await tool.ainvoke(merged)
@@ -896,7 +930,9 @@ async def _agentic_llm_invoke(
                     status, note = "error", str(exc)[:200]
             logger.info(
                 "agent_tool %s: %s (%s) in %dms args=%s",
-                name, status, note,
+                name,
+                status,
+                note,
                 int((time.monotonic() - step_start) * 1000),
                 _truncate(json.dumps(merged, default=str), 400),
             )
@@ -904,7 +940,9 @@ async def _agentic_llm_invoke(
                 ProcessingStep(
                     f"agent_tool:{name}",
                     int((time.monotonic() - step_start) * 1000),
-                    status, note, tool_args=dict(merged),
+                    status,
+                    note,
+                    tool_args=dict(merged),
                 )
             )
             messages.append(ToolMessage(content=content, tool_call_id=call_id, name=name))
@@ -912,8 +950,9 @@ async def _agentic_llm_invoke(
     # Round cap exhausted with the model still asking for tools: force a
     # final answer with the tool results gathered so far (no tools bound,
     # so it cannot ask again).
-    logger.info("agentic chat: tool-round cap (%d) reached; forcing final answer",
-                cfg.max_tool_rounds)
+    logger.info(
+        "agentic chat: tool-round cap (%d) reached; forcing final answer", cfg.max_tool_rounds
+    )
     result = await llm.ainvoke(messages)
     results.append(result)
     return result, results, pending_action
@@ -1005,7 +1044,8 @@ async def run_chat_turn(
         )
         logger.info(
             "resumed MCP conversation %s for session %s",
-            resume_conversation_id, session_id,
+            resume_conversation_id,
+            session_id,
         )
     elif conversation_id is None:
         # Branch (c): mint a fresh one.
@@ -1054,7 +1094,9 @@ async def run_chat_turn(
         )
         await session_store.set_conversation_id(session_id, conversation_id)
         logger.info(
-            "created MCP conversation %s for session %s", conversation_id, session_id,
+            "created MCP conversation %s for session %s",
+            conversation_id,
+            session_id,
         )
 
     # 2. Parallel retrieval: memory_search + knowledgebase_search.
@@ -1096,7 +1138,8 @@ async def run_chat_turn(
     if _is_trivial_query(user_message):
         logger.info(
             "skipping retrieval for trivial query session=%s len=%d",
-            session_id, len(user_message.strip()),
+            session_id,
+            len(user_message.strip()),
         )
         for nm in ("conversation_search", "memory_search", "knowledgebase_search"):
             steps.append(ProcessingStep(nm, 0, "skipped", "trivial query", query=user_message))
@@ -1116,9 +1159,15 @@ async def run_chat_turn(
 
         if bypass:
             bypass_reason = (
-                "review config supplied" if (tone or strictness or focus) else "user rejected cache answer"
+                "review config supplied"
+                if (tone or strictness or focus)
+                else "user rejected cache answer"
             )
-            steps.append(ProcessingStep("conversation_search", 0, "skipped", bypass_reason, query=user_message))
+            steps.append(
+                ProcessingStep(
+                    "conversation_search", 0, "skipped", bypass_reason, query=user_message
+                )
+            )
 
         # Phase 3 (MEKO_AGENTIC_CHAT): cheap-model tool router. CPS stays the
         # default search; when the summary model says the user explicitly
@@ -1128,7 +1177,10 @@ async def run_chat_turn(
         # again, not replay the old answer).
         if cfg.agentic_chat_enabled and not bypass:
             routed_tool = await _route_tool_decision(
-                summary_llm or llm, user_message, cfg, steps,
+                summary_llm or llm,
+                user_message,
+                cfg,
+                steps,
                 datapack_id=datapack_id,
             )
             if routed_tool:
@@ -1193,7 +1245,11 @@ async def run_chat_turn(
             # (not just silently empty) so the Agent Reasoning panel shows why.
             steps.append(
                 ProcessingStep(
-                    "knowledgebase_search", 0, "skipped", "disabled for this turn", query=user_message
+                    "knowledgebase_search",
+                    0,
+                    "skipped",
+                    "disabled for this turn",
+                    query=user_message,
                 )
             )
             kb_hits, conv_result = [], None
@@ -1238,7 +1294,9 @@ async def run_chat_turn(
             # decision-trace timeline.
             steps.append(
                 ProcessingStep(
-                    "llm_invoke", 0, "skipped",
+                    "llm_invoke",
+                    0,
+                    "skipped",
                     "answered from conversation history (small-model summary)",
                 )
             )
@@ -1332,7 +1390,9 @@ async def run_chat_turn(
         if not use_unified_search and enable_memory_search is False:
             # Caller disabled memory grounding for this turn.
             steps.append(
-                ProcessingStep("memory_search", 0, "skipped", "disabled for this turn", query=user_message)
+                ProcessingStep(
+                    "memory_search", 0, "skipped", "disabled for this turn", query=user_message
+                )
             )
         elif not use_unified_search:
             memory_hits = await _search_memories(
@@ -1355,8 +1415,11 @@ async def run_chat_turn(
     logger.debug(
         "run_chat_turn: retrieval complete session=%s conversation_id=%s "
         "datapack_id=%s memory_hits=%d kb_hits=%d",
-        session_id, conversation_id, datapack_id,
-        len(memory_hits), len(kb_hits),
+        session_id,
+        conversation_id,
+        datapack_id,
+        len(memory_hits),
+        len(kb_hits),
     )
 
     # TEMP DEBUG: dump the exact memory/KB context fed to the LLM so we can see
@@ -1395,8 +1458,10 @@ async def run_chat_turn(
     logger.debug(
         "run_chat_turn: invoking LLM session=%s conversation_id=%s "
         "system_prompt_chars=%d user_message_chars=%d",
-        session_id, conversation_id,
-        len(messages[0].content) if messages else 0, len(user_message),
+        session_id,
+        conversation_id,
+        len(messages[0].content) if messages else 0,
+        len(user_message),
     )
 
     llm_start = time.monotonic()
@@ -1405,9 +1470,13 @@ async def run_chat_turn(
     try:
         if cfg.agentic_chat_enabled:
             result, llm_results, pending_action = await _agentic_llm_invoke(
-                cfg=cfg, llm=llm, tools_by_name=tools_by_name,
-                messages=messages, steps=steps,
-                conversation_id=conversation_id, datapack_id=datapack_id,
+                cfg=cfg,
+                llm=llm,
+                tools_by_name=tools_by_name,
+                messages=messages,
+                steps=steps,
+                conversation_id=conversation_id,
+                datapack_id=datapack_id,
                 routed_tool=routed_tool,
             )
             # One pending action per session: a newer proposal replaces an
@@ -1420,10 +1489,11 @@ async def run_chat_turn(
             llm_results = [result]
     except Exception as exc:
         logger.warning(
-            "run_chat_turn: LLM invocation FAILED session=%s conversation_id=%s "
-            "llm_ms=%d err=%s",
-            session_id, conversation_id,
-            int((time.monotonic() - llm_start) * 1000), exc,
+            "run_chat_turn: LLM invocation FAILED session=%s conversation_id=%s llm_ms=%d err=%s",
+            session_id,
+            conversation_id,
+            int((time.monotonic() - llm_start) * 1000),
+            exc,
         )
         steps.append(
             ProcessingStep(
@@ -1436,17 +1506,20 @@ async def run_chat_turn(
         raise
     steps.append(
         ProcessingStep(
-            "llm_invoke", int((time.monotonic() - llm_start) * 1000), "ok",
+            "llm_invoke",
+            int((time.monotonic() - llm_start) * 1000),
+            "ok",
             f"{len(llm_results)} llm round(s)" if len(llm_results) > 1 else "",
         )
     )
     assistant_text = _coerce_text(result.content)
 
     logger.debug(
-        "run_chat_turn: LLM done session=%s conversation_id=%s "
-        "llm_ms=%d assistant_chars=%d",
-        session_id, conversation_id,
-        int((time.monotonic() - llm_start) * 1000), len(assistant_text),
+        "run_chat_turn: LLM done session=%s conversation_id=%s llm_ms=%d assistant_chars=%d",
+        session_id,
+        conversation_id,
+        int((time.monotonic() - llm_start) * 1000),
+        len(assistant_text),
     )
 
     # Capture token usage from the main LLM call here, but DEFER the
@@ -1488,7 +1561,8 @@ async def run_chat_turn(
     # from the gateway pipeline entirely.
     logger.debug(
         "run_chat_turn: persisting turn session=%s conversation_id=%s",
-        session_id, conversation_id,
+        session_id,
+        conversation_id,
     )
 
     addmsg_start = time.monotonic()
@@ -1509,7 +1583,9 @@ async def run_chat_turn(
         logger.debug(
             "run_chat_turn: persisted turn session=%s conversation_id=%s "
             "message_id=%s addmsg_ms=%d",
-            session_id, conversation_id, message_id or "<empty>",
+            session_id,
+            conversation_id,
+            message_id or "<empty>",
             int((time.monotonic() - addmsg_start) * 1000),
         )
         steps.append(
@@ -1523,10 +1599,11 @@ async def run_chat_turn(
         # `_add_message` is best-effort but doesn't currently raise — keep
         # this branch defensively in case its error contract changes.
         logger.warning(
-            "run_chat_turn: persist FAILED session=%s conversation_id=%s "
-            "addmsg_ms=%d err=%s",
-            session_id, conversation_id,
-            int((time.monotonic() - addmsg_start) * 1000), exc,
+            "run_chat_turn: persist FAILED session=%s conversation_id=%s addmsg_ms=%d err=%s",
+            session_id,
+            conversation_id,
+            int((time.monotonic() - addmsg_start) * 1000),
+            exc,
         )
         steps.append(
             ProcessingStep(
@@ -1647,8 +1724,12 @@ async def _search_memories(
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "memory_search", 0, "skipped", "tool unavailable",
-                    query=query, tool_args=mem_tool_args,
+                    "memory_search",
+                    0,
+                    "skipped",
+                    "tool unavailable",
+                    query=query,
+                    tool_args=mem_tool_args,
                 )
             )
         return []
@@ -1666,7 +1747,10 @@ async def _search_memories(
     except Exception as exc:  # noqa: BLE001 — MCP failure must not break chat
         logger.warning(
             "memory_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
-            agent_id, datapack_id, query, _format_exc_chain(exc),
+            agent_id,
+            datapack_id,
+            query,
+            _format_exc_chain(exc),
             exc_info=exc,
         )
         if steps is not None:
@@ -1753,8 +1837,12 @@ async def _search_knowledge(
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "knowledgebase_search", 0, "skipped", "no datapack_id",
-                    query=query, tool_args=kb_tool_args,
+                    "knowledgebase_search",
+                    0,
+                    "skipped",
+                    "no datapack_id",
+                    query=query,
+                    tool_args=kb_tool_args,
                 )
             )
         return [], None
@@ -1764,8 +1852,12 @@ async def _search_knowledge(
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "knowledgebase_search", 0, "skipped", "tool unavailable",
-                    query=query, tool_args=kb_tool_args,
+                    "knowledgebase_search",
+                    0,
+                    "skipped",
+                    "tool unavailable",
+                    query=query,
+                    tool_args=kb_tool_args,
                 )
             )
         return [], None
@@ -1785,7 +1877,10 @@ async def _search_knowledge(
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "knowledgebase_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
-            agent_id, datapack_id, query, _format_exc_chain(exc),
+            agent_id,
+            datapack_id,
+            query,
+            _format_exc_chain(exc),
             exc_info=exc,
         )
         if steps is not None:
@@ -1882,22 +1977,28 @@ async def _search_context(
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "context_search", 0, "skipped", "no datapack_id",
-                    query=query, tool_args=tool_args,
+                    "context_search",
+                    0,
+                    "skipped",
+                    "no datapack_id",
+                    query=query,
+                    tool_args=tool_args,
                 )
             )
         return [], [], None
 
     tool = tools_by_name.get("context_search")
     if tool is None:
-        logger.warning(
-            "context_search tool unavailable; skipping unified grounding"
-        )
+        logger.warning("context_search tool unavailable; skipping unified grounding")
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "context_search", 0, "skipped", "tool unavailable",
-                    query=query, tool_args=tool_args,
+                    "context_search",
+                    0,
+                    "skipped",
+                    "tool unavailable",
+                    query=query,
+                    tool_args=tool_args,
                 )
             )
         return [], [], None
@@ -1908,7 +2009,10 @@ async def _search_context(
     except Exception as exc:  # noqa: BLE001 — MCP failure must not break chat
         logger.warning(
             "context_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
-            agent_id, datapack_id, query, _format_exc_chain(exc),
+            agent_id,
+            datapack_id,
+            query,
+            _format_exc_chain(exc),
             exc_info=exc,
         )
         if steps is not None:
@@ -1916,7 +2020,10 @@ async def _search_context(
                 ProcessingStep(
                     "context_search",
                     int((time.monotonic() - start) * 1000),
-                    "error", str(exc), query=query, tool_args=tool_args,
+                    "error",
+                    str(exc),
+                    query=query,
+                    tool_args=tool_args,
                 )
             )
         return [], [], None
@@ -1933,7 +2040,10 @@ async def _search_context(
                 ProcessingStep(
                     "context_search",
                     int((time.monotonic() - start) * 1000),
-                    "error", str(detail), query=query, tool_args=tool_args,
+                    "error",
+                    str(detail),
+                    query=query,
+                    tool_args=tool_args,
                 )
             )
         return [], [], None
@@ -1957,9 +2067,7 @@ async def _search_context(
     results_field = parsed.get("results")
     savings = parsed.get("token_savings") or {}
     total_tokens_saved = sum(
-        v.get("tokens_saved", 0)
-        for v in savings.values()
-        if isinstance(v, dict)
+        v.get("tokens_saved", 0) for v in savings.values() if isinstance(v, dict)
     )
 
     if not isinstance(results_field, dict):
@@ -1971,9 +2079,12 @@ async def _search_context(
         if steps is not None:
             steps.append(
                 ProcessingStep(
-                    "context_search", duration_ms, "error",
+                    "context_search",
+                    duration_ms,
+                    "error",
                     f"unexpected results type: {type(results_field).__name__}",
-                    query=query, tool_args=tool_args,
+                    query=query,
+                    tool_args=tool_args,
                 )
             )
         return [], [], None
@@ -1990,10 +2101,14 @@ async def _search_context(
                 top_d = hits[0].get("distance") if hits else None
                 steps.append(
                     ProcessingStep(
-                        "conversation_search", duration_ms, "ok",
-                        f"{len(hits)} chunk(s)" + (f", top_distance={top_d}" if hits else "")
+                        "conversation_search",
+                        duration_ms,
+                        "ok",
+                        f"{len(hits)} chunk(s)"
+                        + (f", top_distance={top_d}" if hits else "")
                         + " (via context_search)",
-                        query=query, tool_args=tool_args,
+                        query=query,
+                        tool_args=tool_args,
                     )
                 )
 
@@ -2008,7 +2123,9 @@ async def _search_context(
     for h in memory_hits:
         logger.debug(
             "context_search: kept memory hit kind=%s score=%s text=%r",
-            h.kind, f"{h.score:.3f}" if h.score is not None else "-", _truncate(h.text, 80),
+            h.kind,
+            f"{h.score:.3f}" if h.score is not None else "-",
+            _truncate(h.text, 80),
         )
     for h in kb_hits:
         logger.debug(
@@ -2023,27 +2140,37 @@ async def _search_context(
         if conv_result is None:
             steps.append(
                 ProcessingStep(
-                    "conversation_search", 0, "skipped",
+                    "conversation_search",
+                    0,
+                    "skipped",
                     "no conversation hit (via context_search)",
                 )
             )
         steps.append(
             ProcessingStep(
-                "memory_search", duration_ms, "ok",
+                "memory_search",
+                duration_ms,
+                "ok",
                 f"{len(memory_hits)} hit{'' if len(memory_hits) == 1 else 's'} (via context_search)",
-                query=query, tool_args=tool_args,
+                query=query,
+                tool_args=tool_args,
             )
         )
         steps.append(
             ProcessingStep(
-                "knowledgebase_search", duration_ms, "ok",
+                "knowledgebase_search",
+                duration_ms,
+                "ok",
                 f"{len(kb_hits)} hit{'' if len(kb_hits) == 1 else 's'} (via context_search)",
-                query=query, tool_args=tool_args,
+                query=query,
+                tool_args=tool_args,
             )
         )
         steps.append(
             ProcessingStep(
-                "context_search", 0, "ok",
+                "context_search",
+                0,
+                "ok",
                 f"mem={len(memory_hits)} kb={len(kb_hits)} "
                 f"conv={'yes' if conv_result else 'no'} tokens_saved={total_tokens_saved}",
                 tool_args=tool_args,
@@ -2145,7 +2272,10 @@ async def _add_message(
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "conversation_add_message failed (agent_id=%s, conversation_id=%s, datapack_id=%s): %s",
-            agent_id, conversation_id, datapack_id, _format_exc_chain(exc),
+            agent_id,
+            conversation_id,
+            datapack_id,
+            _format_exc_chain(exc),
             exc_info=exc,
         )
         return ""
@@ -2161,17 +2291,22 @@ async def _add_message(
     # it). Log only the error fields (never the full payload — the tool
     # may echo the user's message, and warnings must stay PII-free).
     if isinstance(payload, dict):
-        error_detail = "; ".join(
-            _truncate(str(payload[k]), 150)
-            for k in ("error", "message", "detail")
-            if payload.get(k)
-        ) or f"keys: {list(payload.keys())}"
+        error_detail = (
+            "; ".join(
+                _truncate(str(payload[k]), 150)
+                for k in ("error", "message", "detail")
+                if payload.get(k)
+            )
+            or f"keys: {list(payload.keys())}"
+        )
     else:
         error_detail = f"non-dict payload of type {type(payload).__name__}"
     logger.warning(
         "conversation_add_message returned no message_id "
         "(agent_id=%s, conversation_id=%s, datapack_id=%s): %s",
-        agent_id, conversation_id, datapack_id,
+        agent_id,
+        conversation_id,
+        datapack_id,
         error_detail,
     )
     return ""
@@ -2266,7 +2401,9 @@ def _extract_memory_hits(payload: object, relation_cap: Optional[int] = None) ->
     for item in relations:
         triple = _format_relation_triple(item)
         if triple:
-            graph_hits.append(MemoryHit(kind="graph", text=triple, score=None, char_count=len(triple)))
+            graph_hits.append(
+                MemoryHit(kind="graph", text=triple, score=None, char_count=len(triple))
+            )
 
     # Promoted relations — same shape, different provenance tag so the
     # UI (and a future debugger) can tell them apart.
@@ -2359,7 +2496,9 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
             )
         elif isinstance(item, str):
             hits.append(
-                KbHit(document_id="", chunk_text=item, score=None, distance=None, char_count=len(item))
+                KbHit(
+                    document_id="", chunk_text=item, score=None, distance=None, char_count=len(item)
+                )
             )
 
     # Sort by distance ASC so the closest match leads the list (and the
@@ -2391,18 +2530,8 @@ def _format_relation_triple(item: Any) -> str:
     if not isinstance(item, dict):
         return ""
     source = item.get("source") or item.get("subject") or ""
-    target = (
-        item.get("destination")
-        or item.get("target")
-        or item.get("object")
-        or ""
-    )
-    relation = (
-        item.get("relationship")
-        or item.get("relation")
-        or item.get("predicate")
-        or ""
-    )
+    target = item.get("destination") or item.get("target") or item.get("object") or ""
+    relation = item.get("relationship") or item.get("relation") or item.get("predicate") or ""
     if not (source and target and relation):
         return ""
     return f"{source} {relation} {target}"

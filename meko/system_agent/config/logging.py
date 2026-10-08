@@ -10,11 +10,11 @@ from pathlib import Path
 def setup_logging(log_file: str = None, log_level: str = "INFO") -> logging.Logger:
     """
     Configure logging for the CLI agent.
-    
+
     Args:
         log_file: Path to log file. Defaults to cli/logs/agent.log
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
-    
+
     Returns:
         Configured logger instance
     """
@@ -61,10 +61,10 @@ def setup_logging(log_file: str = None, log_level: str = "INFO") -> logging.Logg
 def get_logger(name: str = None) -> logging.Logger:
     """
     Get a child logger for a specific module.
-    
+
     Args:
         name: Optional name suffix for the logger
-    
+
     Returns:
         Logger instance
     """

@@ -22,9 +22,7 @@ def test_base_url_appends_api_v1():
 
 
 def test_get_storage_pool_path_and_raw_body():
-    handler = RecordingHandler(
-        {"GET /api/v1/storage-pools/p1": {"id": "p1", "name": "pool"}}
-    )
+    handler = RecordingHandler({"GET /api/v1/storage-pools/p1": {"id": "p1", "name": "pool"}})
     client = make_client(handler)
     result = client.get_storage_pool("p1")
     assert result == {"id": "p1", "name": "pool"}
@@ -33,9 +31,7 @@ def test_get_storage_pool_path_and_raw_body():
 
 
 def test_create_storage_pool_sends_owner_user_id():
-    handler = RecordingHandler(
-        {"POST /api/v1/storage-pools": (201, {"id": "p1", "name": "n"})}
-    )
+    handler = RecordingHandler({"POST /api/v1/storage-pools": (201, {"id": "p1", "name": "n"})})
     client = make_client(handler)
     result = client.create_storage_pool(name="n", owner_user_id="u9")
     assert result == {"id": "p1", "name": "n"}
@@ -54,9 +50,7 @@ def test_list_pagination_params():
 
 def test_create_cluster_async_returns_task_body():
     task = {"id": "t1", "kind": "create_cluster", "status": "pending"}
-    handler = RecordingHandler(
-        {"POST /api/v1/storage-pools/p1/clusters": (202, task)}
-    )
+    handler = RecordingHandler({"POST /api/v1/storage-pools/p1/clusters": (202, task)})
     client = make_client(handler)
     result = client.create_cluster(pool_id="p1", name="db", pg_version=15)
     assert result == task
@@ -64,9 +58,7 @@ def test_create_cluster_async_returns_task_body():
 
 
 def test_create_cluster_omits_pg_version_when_none():
-    handler = RecordingHandler(
-        {"POST /api/v1/storage-pools/p1/clusters": (202, {"id": "t1"})}
-    )
+    handler = RecordingHandler({"POST /api/v1/storage-pools/p1/clusters": (202, {"id": "t1"})})
     client = make_client(handler)
     client.create_cluster(pool_id="p1", name="db")
     assert handler.last_json() == {"name": "db"}
@@ -88,9 +80,7 @@ def test_non_envelope_error_raises_http_code():
         return httpx.Response(500, text="boom")
 
     client = ControllerClient()
-    client.initialize(
-        controller_url="http://c:8080", transport=httpx.MockTransport(handler)
-    )
+    client.initialize(controller_url="http://c:8080", transport=httpx.MockTransport(handler))
     with pytest.raises(ControllerApiError) as exc:
         client.get_task("t1")
     assert exc.value.status_code == 500
@@ -102,9 +92,7 @@ def test_network_error_raises_controller_unreachable():
         raise httpx.ConnectError("connection refused", request=request)
 
     client = ControllerClient()
-    client.initialize(
-        controller_url="http://down:8080", transport=httpx.MockTransport(handler)
-    )
+    client.initialize(controller_url="http://down:8080", transport=httpx.MockTransport(handler))
     with pytest.raises(ControllerApiError) as exc:
         client.list_storage_pools()
     assert exc.value.code == "controller_unreachable"
@@ -116,9 +104,7 @@ def test_long_non_envelope_error_is_truncated():
         return httpx.Response(502, text="x" * 5000)
 
     client = ControllerClient()
-    client.initialize(
-        controller_url="http://c:8080", transport=httpx.MockTransport(handler)
-    )
+    client.initialize(controller_url="http://c:8080", transport=httpx.MockTransport(handler))
     with pytest.raises(ControllerApiError) as exc:
         client.get_task("t1")
     assert exc.value.status_code == 502
@@ -131,9 +117,7 @@ def test_empty_2xx_body_returns_empty_dict():
         return httpx.Response(202, content=b"")
 
     client = ControllerClient()
-    client.initialize(
-        controller_url="http://c:8080", transport=httpx.MockTransport(handler)
-    )
+    client.initialize(controller_url="http://c:8080", transport=httpx.MockTransport(handler))
     assert client.delete_cluster("p1", "pr1") == {}
 
 
@@ -144,9 +128,7 @@ def test_uninitialized_client_raises():
 
 
 def test_list_tasks_filters():
-    handler = RecordingHandler(
-        {"GET /api/v1/tasks": {"tasks": [], "total": 0, "count": 0}}
-    )
+    handler = RecordingHandler({"GET /api/v1/tasks": {"tasks": [], "total": 0, "count": 0}})
     client = make_client(handler)
     client.list_tasks(status="failed", kind="create_branch", cluster_id="pr1")
     params = dict(handler.last.url.params)
@@ -199,9 +181,7 @@ SOURCE_BODY = {
 
 
 def test_test_source_connectivity_wraps_source():
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/connectivity-checks": {"reachable": True}}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/connectivity-checks": {"reachable": True}})
     client = make_client(handler)
     result = client.test_source_connectivity(**SOURCE_KWARGS)
     assert result == {"reachable": True}
@@ -248,20 +228,14 @@ def test_list_migrations_aliases_migration_id():
 
 
 def test_get_migration_path():
-    handler = RecordingHandler(
-        {"GET /api/v1/migrations/m1": {"id": "m1", "state": "assessed"}}
-    )
+    handler = RecordingHandler({"GET /api/v1/migrations/m1": {"id": "m1", "state": "assessed"}})
     client = make_client(handler)
-    assert client.get_migration("m1") == {
-        "id": "m1", "migration_id": "m1", "state": "assessed"
-    }
+    assert client.get_migration("m1") == {"id": "m1", "migration_id": "m1", "state": "assessed"}
     assert handler.last.url.path == "/api/v1/migrations/m1"
 
 
 def test_get_migration_assessment_path():
-    handler = RecordingHandler(
-        {"GET /api/v1/migrations/m1/assessment": {"complexity": "MEDIUM"}}
-    )
+    handler = RecordingHandler({"GET /api/v1/migrations/m1/assessment": {"complexity": "MEDIUM"}})
     client = make_client(handler)
     assert client.get_migration_assessment("m1") == {"complexity": "MEDIUM"}
     assert handler.last.url.path == "/api/v1/migrations/m1/assessment"
@@ -269,9 +243,7 @@ def test_get_migration_assessment_path():
 
 def test_start_migration_assessment_posts_without_body():
     task = {"id": "t1", "kind": "voyager_start_migration_run", "status": "pending"}
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/m1/assess": (202, task)}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/m1/assess": (202, task)})
     client = make_client(handler)
     assert client.start_migration_assessment("m1") == task
     assert handler.last.method == "POST"
@@ -280,9 +252,7 @@ def test_start_migration_assessment_posts_without_body():
 
 def test_provision_migration_target_full_body():
     task = {"id": "t2", "kind": "voyager_create_migration_target", "status": "pending"}
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/m1/provision-target": (202, task)}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/m1/provision-target": (202, task)})
     client = make_client(handler)
     result = client.provision_migration_target(
         "m1", pool_id="p1", vcpu=4, project_name="shop-target"
@@ -296,27 +266,21 @@ def test_provision_migration_target_full_body():
 
 
 def test_provision_migration_target_omits_optionals():
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/m1/provision-target": (202, {"id": "t2"})}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/m1/provision-target": (202, {"id": "t2"})})
     client = make_client(handler)
     client.provision_migration_target("m1", pool_id="p1")
     assert handler.last_json() == {"pool_id": "p1"}
 
 
 def test_start_migration_includes_parallel_jobs_when_set():
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/m1/migrate": (202, {"id": "t3"})}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/m1/migrate": (202, {"id": "t3"})})
     client = make_client(handler)
     client.start_migration("m1", parallel_jobs=16)
     assert handler.last_json() == {"parallel_jobs": 16}
 
 
 def test_start_migration_omits_parallel_jobs_when_none():
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/m1/migrate": (202, {"id": "t3"})}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/m1/migrate": (202, {"id": "t3"})})
     client = make_client(handler)
     client.start_migration("m1")
     assert handler.last_json() == {}
@@ -324,9 +288,7 @@ def test_start_migration_omits_parallel_jobs_when_none():
 
 def test_end_migration_posts_without_body():
     task = {"id": "t4", "kind": "voyager_start_migration_run", "status": "pending"}
-    handler = RecordingHandler(
-        {"POST /api/v1/migrations/m1/end": (202, task)}
-    )
+    handler = RecordingHandler({"POST /api/v1/migrations/m1/end": (202, task)})
     client = make_client(handler)
     assert client.end_migration("m1") == task
     assert handler.last.method == "POST"

@@ -30,9 +30,7 @@ def create_storage_pool(name: str, owner_user_id: str) -> dict[str, Any]:
     return controller_client.create_storage_pool(name, owner_user_id)
 
 
-def list_storage_pools(
-    limit: Optional[int] = None, offset: Optional[int] = None
-) -> dict[str, Any]:
+def list_storage_pools(limit: Optional[int] = None, offset: Optional[int] = None) -> dict[str, Any]:
     """List every storage pool in the placement group.
 
     Paginated via `limit` (1..1000, default 100) and `offset`. The response
@@ -113,9 +111,7 @@ def create_cluster(
     `/version`, `/managed-by`) and any key under `amp.yugabyte.com/`. Set at
     create only.
     """
-    return controller_client.create_cluster(
-        pool_id, name, pg_version, engine, extensions, tags
-    )
+    return controller_client.create_cluster(pool_id, name, pg_version, engine, extensions, tags)
 
 
 def add_branch_extensions(
@@ -132,9 +128,7 @@ def add_branch_extensions(
     or a controller without an extension catalog (e.g. the Docker driver) is
     rejected with 400.
     """
-    return controller_client.add_branch_extensions(
-        pool_id, cluster_id, branch_id, extensions
-    )
+    return controller_client.add_branch_extensions(pool_id, cluster_id, branch_id, extensions)
 
 
 def list_clusters(
@@ -201,9 +195,7 @@ def get_branch(pool_id: str, cluster_id: str, branch_id: str) -> dict[str, Any]:
     return controller_client.get_branch(pool_id, cluster_id, branch_id)
 
 
-def delete_branch(
-    pool_id: str, cluster_id: str, branch_id: str
-) -> dict[str, Any]:
+def delete_branch(pool_id: str, cluster_id: str, branch_id: str) -> dict[str, Any]:
     """Delete a branch, cascading to its endpoints. ASYNCHRONOUS.
 
     Returns a Task; poll `get_task(task_id=<id>)` until `status` is `succeeded`
@@ -282,8 +274,18 @@ def create_endpoint(
     set at create only.
     """
     return controller_client.create_endpoint(
-        pool_id, cluster_id, branch_id, role, disk_type, cpu, memory,
-        pg_settings, pageserver_settings, safekeeper_settings, password, tags
+        pool_id,
+        cluster_id,
+        branch_id,
+        role,
+        disk_type,
+        cpu,
+        memory,
+        pg_settings,
+        pageserver_settings,
+        safekeeper_settings,
+        password,
+        tags,
     )
 
 
@@ -299,18 +301,12 @@ def list_endpoints(
     Paginated via `limit`/`offset`. Items are under `endpoints` plus `total` and
     `count`.
     """
-    return controller_client.list_endpoints(
-        pool_id, cluster_id, branch_id, limit, offset
-    )
+    return controller_client.list_endpoints(pool_id, cluster_id, branch_id, limit, offset)
 
 
-def get_endpoint(
-    pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str
-) -> dict[str, Any]:
+def get_endpoint(pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str) -> dict[str, Any]:
     """Get an endpoint by id."""
-    return controller_client.get_endpoint(
-        pool_id, cluster_id, branch_id, endpoint_id
-    )
+    return controller_client.get_endpoint(pool_id, cluster_id, branch_id, endpoint_id)
 
 
 def delete_endpoint(
@@ -321,9 +317,7 @@ def delete_endpoint(
     Returns a Task; poll `get_task(task_id=<id>)` until `status` is `succeeded`
     or `failed`.
     """
-    return controller_client.delete_endpoint(
-        pool_id, cluster_id, branch_id, endpoint_id
-    )
+    return controller_client.delete_endpoint(pool_id, cluster_id, branch_id, endpoint_id)
 
 
 def resize_endpoint(
@@ -517,9 +511,7 @@ def create_migration(
     )
 
 
-def list_migrations(
-    limit: Optional[int] = None, offset: Optional[int] = None
-) -> dict[str, Any]:
+def list_migrations(limit: Optional[int] = None, offset: Optional[int] = None) -> dict[str, Any]:
     """List migration summaries, most recent first.
 
     Each item is a lightweight summary (`id`/`migration_id`, `name`, `state`,
@@ -590,14 +582,10 @@ def provision_migration_target(
     attached or a provision task is in flight; `not_implemented` (501) without
     the endpoint deployer.
     """
-    return controller_client.provision_migration_target(
-        migration_id, pool_id, vcpu, project_name
-    )
+    return controller_client.provision_migration_target(migration_id, pool_id, vcpu, project_name)
 
 
-def start_migration(
-    migration_id: str, parallel_jobs: Optional[int] = None
-) -> dict[str, Any]:
+def start_migration(migration_id: str, parallel_jobs: Optional[int] = None) -> dict[str, Any]:
     """Start the offline migration (export from source, import into target). ASYNCHRONOUS.
 
     Requires a target attached first (`provision_migration_target`); errors

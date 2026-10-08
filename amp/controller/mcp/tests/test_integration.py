@@ -18,9 +18,7 @@ def build_in_memory(routes: dict):
 
 
 async def test_round_trip_get_storage_pool():
-    mcp, handler = build_in_memory(
-        {"GET /api/v1/storage-pools/p1": {"id": "p1", "name": "pool"}}
-    )
+    mcp, handler = build_in_memory({"GET /api/v1/storage-pools/p1": {"id": "p1", "name": "pool"}})
     async with Client(mcp) as client:
         result = await client.call_tool("get_storage_pool", {"pool_id": "p1"})
     assert result.data == {"id": "p1", "name": "pool"}
@@ -29,13 +27,9 @@ async def test_round_trip_get_storage_pool():
 
 async def test_round_trip_create_cluster_returns_task():
     task = {"id": "t1", "kind": "create_cluster", "status": "pending"}
-    mcp, handler = build_in_memory(
-        {"POST /api/v1/storage-pools/p1/clusters": (202, task)}
-    )
+    mcp, handler = build_in_memory({"POST /api/v1/storage-pools/p1/clusters": (202, task)})
     async with Client(mcp) as client:
-        result = await client.call_tool(
-            "create_cluster", {"pool_id": "p1", "name": "db"}
-        )
+        result = await client.call_tool("create_cluster", {"pool_id": "p1", "name": "db"})
     assert result.data["kind"] == "create_cluster"
     assert result.data["status"] == "pending"
 
@@ -82,16 +76,16 @@ async def test_round_trip_migration_ladder_polls_get_migration():
         }
     )
     async with Client(mcp) as client:
-        assert (
-            await client.call_tool("start_migration_assessment", {"migration_id": "m1"})
-        ).data["kind"] == "voyager_start_migration_run"
+        assert (await client.call_tool("start_migration_assessment", {"migration_id": "m1"})).data[
+            "kind"
+        ] == "voyager_start_migration_run"
         # Progress is tracked via get_migration, not get_task.
-        assert (
-            await client.call_tool("get_migration", {"migration_id": "m1"})
-        ).data["state"] == "assessed"
-        assert (
-            await client.call_tool("get_migration_assessment", {"migration_id": "m1"})
-        ).data["complexity"] == "LOW"
+        assert (await client.call_tool("get_migration", {"migration_id": "m1"})).data[
+            "state"
+        ] == "assessed"
+        assert (await client.call_tool("get_migration_assessment", {"migration_id": "m1"})).data[
+            "complexity"
+        ] == "LOW"
         prov = (
             await client.call_tool(
                 "provision_migration_target", {"migration_id": "m1", "pool_id": "p1"}
@@ -99,12 +93,12 @@ async def test_round_trip_migration_ladder_polls_get_migration():
         ).data
         assert prov["status"] == "pending"
         assert handler.last_json() == {"pool_id": "p1"}
-        assert (
-            await client.call_tool("start_migration", {"migration_id": "m1"})
-        ).data["status"] == "pending"
-        assert (
-            await client.call_tool("end_migration", {"migration_id": "m1"})
-        ).data["status"] == "pending"
+        assert (await client.call_tool("start_migration", {"migration_id": "m1"})).data[
+            "status"
+        ] == "pending"
+        assert (await client.call_tool("end_migration", {"migration_id": "m1"})).data[
+            "status"
+        ] == "pending"
 
 
 async def test_round_trip_not_found_surfaces_as_tool_error():
@@ -119,9 +113,7 @@ async def test_healthz_route_serves_ok():
     mcp = server.build_server(config)
     app = mcp.http_app()
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
@@ -192,9 +184,7 @@ async def test_real_controller_resource_ladder():
         cluster_id = proj["id"]
         default_branch_id = proj["default_branch"]["branch_id"]
         assert (
-            await client.call_tool(
-                "get_cluster", {"pool_id": pool_id, "cluster_id": cluster_id}
-            )
+            await client.call_tool("get_cluster", {"pool_id": pool_id, "cluster_id": cluster_id})
         ).data["id"] == cluster_id
 
         # fork_point_lsn is required when no deployer can resolve the parent's
@@ -212,9 +202,7 @@ async def test_real_controller_resource_ladder():
         ).data
         assert _await_status(await _poll_task(client, branch_task["id"])) == "succeeded"
         branches = (
-            await client.call_tool(
-                "list_branches", {"pool_id": pool_id, "cluster_id": cluster_id}
-            )
+            await client.call_tool("list_branches", {"pool_id": pool_id, "cluster_id": cluster_id})
         ).data
         assert branches["total"] >= 2
 
@@ -231,17 +219,13 @@ async def test_real_controller_resource_ladder():
         except ToolError:
             pass
 
-        assert (
-            await client.call_tool("get_user", {"user_id": user_id})
-        ).data["id"] == user_id
+        assert (await client.call_tool("get_user", {"user_id": user_id})).data["id"] == user_id
         tasks = (await client.call_tool("list_tasks", {"kind": "create_cluster"})).data
         assert any(t["id"] == proj_task["id"] for t in tasks["tasks"])
 
         # Delete cascade: succeeds with a deployer, fails by design without one.
         del_task = (
-            await client.call_tool(
-                "delete_cluster", {"pool_id": pool_id, "cluster_id": cluster_id}
-            )
+            await client.call_tool("delete_cluster", {"pool_id": pool_id, "cluster_id": cluster_id})
         ).data
         assert _await_status(await _poll_task(client, del_task["id"])) in (
             "succeeded",
