@@ -1,7 +1,7 @@
 # ac — Shared Postgres ingress
 
 **Status:** Draft (schema, allocator, API surface, lifecycle wiring and charts landed; capacity reconciler outstanding)
-**Last updated:** 2026-09-16
+**Last updated:** 2026-09-29
 
 How an endpoint becomes reachable from outside the cluster **without provisioning
 a load balancer of its own** ([meko#462](https://github.com/yugabyte/meko/issues/462)).
@@ -82,6 +82,43 @@ running on kind and not.
 The name is still allocated and still unique — only unpublished — so a deployment
 that later gets a zone has one ready rather than having to mint addresses for a
 fleet that already exists.
+
+### The documentdb gateway
+
+A documentdb endpoint's gateway (10260) is routed by hostname, the path the
+Postgres port could not take, because neither objection above applies. A MongoDB
+driver with `tls=true` starts TLS on its first byte and sends SNI, and a MongoDB
+cancel (`killOp`) is an ordinary command that the same route carries. A plaintext
+client sends no ClientHello, so it matches no route and the shard drops it.
+
+So every shard declares ONE more entryPoint, `documentdb` on 10260, shared by all
+its endpoints. Each documentdb endpoint's release adds an `IngressRouteTCP` on it
+that matches `HostSNI(<its published name>)` with `tls.passthrough`. Traefik
+reads the ClientHello and forwards the session without terminating it. The route
+binds the same allowlist middleware as the Postgres route, and it takes no port
+from the range.
+
+It needs a published name, since the name is what the route matches. Where the
+family has no zone, the client dials the shard's host, which every endpoint on
+the shard shares, so there is nothing to route on. The chart renders no gateway
+route and the API reports no `documentdb_address`. A second shard port per
+documentdb endpoint would cover that case, at the cost of doubling what such an
+endpoint takes from the range. It is not built.
+
+The listener counts against the load balancer's budget. An AWS NLB holds 50,
+so the default range is 49 ports (20000-20048), and the shard chart refuses an
+aws shard that would need more.
+
+A shard installed before the entryPoint existed has no 10260 listener. Upgrading
+its release adds one, which `deploy/controller/redeploy.sh` does on every run.
+`verifyShardRelease` does not check for it, because it checks only the
+allocatable range. That upgrade changes the proxy's arguments and ports, so it
+**rolls every proxy replica on the shard**. Each draining replica cuts its
+Postgres sessions once `traefik.drainTimeoutSeconds` (300s) runs out, for every
+`ingress_*` endpoint on the shard, not just documentdb ones, so schedule it. A
+deployment registered at the old 20000-20049 default also has to be narrowed
+first (`runbooks/controller_runbook.md`, "Ingress shard registered at
+20000-20049").
 
 ## Allocation
 
@@ -171,7 +208,7 @@ can correct — it means reissuing addresses customers already hold.
 | `--deploy-ingress-enabled` | The opt-in. Off = the `ingress_*` modes are refused. |
 | `--deploy-ingress-zone-internal` | DNS zone for internal endpoint names, `nlb_internal` included. Optional: empty = names unpublished, addresses are `shard:port`. |
 | `--deploy-ingress-zone-external` | DNS zone for external endpoint names, `nlb_external` included. Must differ from the internal zone, so an internal name can never reach a public one. |
-| `--deploy-ingress-port-range` | Range each shard provisions in full; its width is how many endpoints a shard holds. |
+| `--deploy-ingress-port-range` | Range each shard provisions in full; its width is how many endpoints a shard holds. Default 20000-20048: with the gateway listener that is an AWS NLB's 50. |
 | `--deploy-ingress-headroom` | Free ports kept per family before another shard is built. Measured across the family's ready shards, so it may exceed one shard's width; refused only if above what `--deploy-ingress-max-shards` shards can hold. |
 | `--deploy-ingress-max-shards` | Ceiling on what the control plane may build unattended. |
 | `--deploy-ingress-quarantine` | How long a released port stays unissued. Should exceed the record TTL. |
@@ -208,7 +245,7 @@ can correct — it means reissuing addresses customers already hold.
   shape is shards in a namespace of their own — which needs `allowCrossNamespace`
   and buys nothing this deployment wants. That cluster-scope flag is what keeps
   the Role namespaced at all: the Node informer is cluster-scoped, so without the
-  flag the sync fails and the shard listens on all 50 ports and routes nothing.
+  flag the sync fails and the shard listens on every port and routes nothing.
 - **external-dns**, *only when a zone is configured*, publishes the per-endpoint records from the `DNSEndpoint`
   objects each endpoint release renders. It needs its **CRD source** enabled
   (`--source=crd`) or those objects are inert, and `policy=sync` rather than

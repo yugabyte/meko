@@ -24,8 +24,20 @@ ports:
   # Provisioned once so that creating an endpoint never mutates a load balancer
   # that live connections are sitting behind — an endpoint create only adds a
   # route inside the cluster. Its width is how many endpoints one shard holds.
+  #
+  # 49 wide, not 50: the documentdb gateway takes one more listener, and an AWS
+  # Network Load Balancer holds 50. The chart refuses more on aws.
   lo: 20000
-  hi: 20049
+  hi: 20048
+
+# -- The documentdb gateway's listener. ONE port for every endpoint on the shard,
+# unlike Postgres's one per endpoint: a MongoDB driver opens TLS on its first byte
+# and sends SNI, so each endpoint's route matches its own published name and the
+# session is passed through untouched. Must equal the gateway's own port, because
+# the API reports an endpoint's documentdb_address as its name on that port, and
+# must lie outside `ports`.
+documentdbGateway:
+  port: 10260
 
 # -- CIDRs allowed to reach the shard's load balancer. A coarse outer gate only:
 # it is per-Service and a shard is shared, so per-endpoint filtering is done by

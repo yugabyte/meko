@@ -1894,16 +1894,16 @@ func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string
 }
 
 // documentDBGatewayReachable answers whether documentdb_address should be reported for
-// this endpoint: the branch has to mount documentdb, and the deployer has to put
-// the pod's own address in Address. A deployer that does not implement
-// deploy.DocumentDBGatewayRouter is assumed to route — Docker and local both run the
-// gateway on the same host as the compute.
+// this endpoint: the branch has to mount documentdb, and whatever fronts the
+// endpoint has to publish the gateway port on Address's host. A deployer that does
+// not implement deploy.DocumentDBGatewayRouter is assumed to route — Docker and
+// local both run the gateway on the same host as the compute.
 func (c *Controllers) documentDBGatewayReachable(branchExts []string, e core.Endpoint) bool {
 	if !slices.Contains(branchExts, "documentdb") {
 		return false
 	}
 	if r, ok := c.prov.Deployer.(deploy.DocumentDBGatewayRouter); ok {
-		return r.DocumentDBGatewayReachable(e.Connectivity)
+		return r.DocumentDBGatewayReachable(e)
 	}
 	return true
 }
@@ -1955,8 +1955,7 @@ func (c *Controllers) branchExtensions(ctx context.Context, poolID, clusterID, b
 
 // endpointToAPI renders one endpoint for the API. gatewayReachable says whether this
 // endpoint has a documentdb gateway a client can actually reach at the
-// endpoint's own address — the branch mounts documentdb AND the deploy path puts
-// the pod's own address in Address (see documentDBGatewayReachable). The gateway
+// endpoint's own host (see documentDBGatewayReachable). The gateway
 // address is derived rather than stored: it is that address on a fixed port, so
 // a column would only add a migration and a way to disagree with the pod.
 func endpointToAPI(e core.Endpoint, gatewayReachable bool) Endpoint {
@@ -1999,7 +1998,7 @@ func endpointToAPI(e core.Endpoint, gatewayReachable bool) Endpoint {
 		out.Connectivity = &conn
 	}
 	// The gateway is a sidecar in this endpoint's pod, so it answers on the
-	// endpoint's own host — but only where that host is the pod's. Decided by
+	// endpoint's own host — but only where that host publishes it. Decided by
 	// the caller; here it is just "report it or not", plus the endpoint having
 	// an address at all.
 	if e.Address != "" && gatewayReachable {

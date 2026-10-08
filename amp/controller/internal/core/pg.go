@@ -563,10 +563,13 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // match Endpoint.Address being a plain string.
 // An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
-// what scopes a query to a cluster.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.tags, e.ycp_generation, e.created_at
+// what scopes a query to a cluster. The ingress name is LEFT JOINed from the live
+// allocation, as in endpointDeploySelect; at most one is live per endpoint.
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.tags, e.ycp_generation, COALESCE(ia.dns_name, ''), e.created_at
 	FROM amp_registry.endpoints e
-	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
+	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
+	LEFT JOIN amp_registry.ingress_allocations ia
+	       ON ia.endpoint_id = e.id AND ia.released_at IS NULL`
 
 func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error) {
 	row := b.pool.QueryRow(ctx, endpointSelect+` WHERE e.id = $1::uuid`, id.String())
@@ -1021,7 +1024,7 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		ep          Endpoint
 	)
 	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &ep.Version, &ep.TargetVersion,
-		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &tagsRaw, &ycpGen, &ep.CreatedAt); err != nil {
+		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &tagsRaw, &ycpGen, &ep.IngressDNSName, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	// A malformed allowed_cidrs is not worth failing the read over — the endpoint

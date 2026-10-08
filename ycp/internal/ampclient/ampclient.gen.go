@@ -862,7 +862,15 @@ type Endpoint struct {
 	// extension — the gateway runs as a sidecar beside the compute and is
 	// deployed with it. The port is the gateway's own default (10260), not
 	// MongoDB's conventional 27017, so a client has to be pointed at it.
-	// Same host as `address`; absent when the endpoint is not yet deployed.
+	// Same host as `address`, so it is reachable wherever `address` is,
+	// including over the `nlb_*` and `ingress_*` connectivity modes. Absent
+	// when the endpoint is not yet deployed, and wherever that host does
+	// not publish the gateway port: for a `cluster_ip` endpoint whose
+	// deployment uses a NodePort or LoadBalancer Service type; for an
+	// `nlb_*` endpoint whose `address` fell back to a NodePort
+	// `<node>:<nodePort>` because its load balancer was not ready in
+	// time; and for an `ingress_*` endpoint addressed by its shard's host
+	// because the deployment publishes no DNS name for it.
 	//
 	// The gateway always speaks TLS, so the endpoint's `/ca` answer
 	// decides the connection string. `documentdb_verifiable` and

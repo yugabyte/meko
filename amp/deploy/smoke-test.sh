@@ -59,6 +59,11 @@
 # the same documents. A wrong password is refused. Under COMPUTE_TLS=issue the
 # driver verifies the gateway against the endpoint's CA from GET .../ca, and a
 # client without that CA is refused; otherwise it cannot verify the gateway.
+# SMOKE_DOCUMENTDB_CONNECTIVITY=<mode> (nlb_internal, nlb_external,
+# ingress_internal or ingress_external) creates that endpoint with the given
+# connectivity and drives the driver at the reported documentdb_address from this
+# host instead of through a port-forward, so the host needs a route to it.
+# SMOKE_DOCUMENTDB_ALLOWED_CIDRS (comma-separated) becomes its allowed_cidrs.
 # Requires the cluster's ImageVolume feature gate and images pushed by
 # deploy/extensions/build.sh, plus docker on this host for the client.
 #
@@ -84,6 +89,9 @@ PF_PORT="${PF_PORT:-18080}"
 # using pymongo from upstream documentdb's own functional-test image, pinned by
 # digest as upstream pins it (documentdb-local/functional-tests/config/image.yml).
 GW_PF_PORT="${GW_PF_PORT:-18260}"
+# Empty: the documentdb endpoint is cluster_ip and reached through a port-forward.
+SMOKE_DOCUMENTDB_CONNECTIVITY="${SMOKE_DOCUMENTDB_CONNECTIVITY:-}"
+SMOKE_DOCUMENTDB_ALLOWED_CIDRS="${SMOKE_DOCUMENTDB_ALLOWED_CIDRS:-}"
 # Compute TLS as up-gke.sh deployed it. Under `issue` the documentdb check
 # verifies the gateway's certificate against the endpoint's CA.
 COMPUTE_TLS="${COMPUTE_TLS:-disable}"
@@ -932,8 +940,12 @@ SQL
   DDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$DPROJ" ] && [ -n "$DDEF" ] && ok "documentdb cluster materialized ($DPROJ / $DDEF)" || bad "documentdb cluster not materialized"
 
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
-  [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(documentdb) code=$code"
+  dbody=$(jq -nc --arg pw "$EP_PASSWORD" --arg mode "$SMOKE_DOCUMENTDB_CONNECTIVITY" --arg cidrs "$SMOKE_DOCUMENTDB_ALLOWED_CIDRS" '
+    {role: "read_write", password: $pw}
+    + (if $mode == "" then {} else {connectivity: ({mode: $mode}
+        + (if $cidrs == "" then {} else {allowed_cidrs: ($cidrs | split(","))} end))} end)')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" "$dbody")
+  [ "$code" = 202 ] && ok "createEndpoint 202 (connectivity=${SMOKE_DOCUMENTDB_CONNECTIVITY:-cluster_ip})" || bad "createEndpoint(documentdb) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(documentdb) succeeded" || bad "create_endpoint(documentdb) task=$st"
   DEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" | jq -r '.endpoints[0].id')
   DPOD=$(wait_ready_pod "$DEP")
@@ -960,14 +972,36 @@ SQL
     echo "--- end documentdb diagnostics ---"
   fi
 
-  # The API reports the gateway address where the Service publishes the
-  # gateway port, and only there (deploy.DocumentDBGatewayReachable).
-  daddr=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints/$DEP" | jq -r '.documentdb_address // ""')
-  want=$(want_endpoint_addr "$DEP")
-  if [ -n "$want" ]; then
-    [ "$daddr" = "${want%:*}:10260" ] && ok "documentdb_address = $daddr" || bad "documentdb_address=$daddr (want ${want%:*}:10260)"
+  # The API reports the gateway address where whatever fronts the endpoint
+  # publishes the gateway port on the endpoint's own host, and only there
+  # (deploy.DocumentDBGatewayReachable).
+  djson=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints/$DEP")
+  daddr=$(echo "$djson" | jq -r '.documentdb_address // ""')
+  if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ]; then
+    eaddr=$(echo "$djson" | jq -r '.address // ""')
+    # An nlb_* address falls back to the in-cluster one when the load balancer
+    # outruns the controller's wait, and this host cannot reach that.
+    case "$eaddr" in
+      *.svc.cluster.local:*) bad "endpoint address $eaddr is the in-cluster fallback, not the $SMOKE_DOCUMENTDB_CONNECTIVITY one" ;;
+      *) [ -n "$daddr" ] && [ "$daddr" = "${eaddr%:*}:10260" ] \
+           && ok "documentdb_address = $daddr, the $SMOKE_DOCUMENTDB_CONNECTIVITY host on 10260" \
+           || bad "documentdb_address=$daddr (address=$eaddr, want its host on 10260)" ;;
+    esac
+    case "$SMOKE_DOCUMENTDB_CONNECTIVITY" in
+      nlb_*)
+        lbport=$(kubectl -n "$NS" get svc "yb-ep-$DEP-lb" -o jsonpath='{.spec.ports[?(@.name=="documentdb")].port}' 2>/dev/null)
+        [ "$lbport" = 10260 ] && ok "the -lb Service publishes the gateway on 10260" || bad "the -lb Service has no documentdb port (got '$lbport')" ;;
+      ingress_*)
+        match=$(kubectl -n "$NS" get ingressroutetcp "yb-ep-$DEP-documentdb" -o jsonpath='{.spec.routes[0].match}' 2>/dev/null)
+        [ "$match" = "HostSNI(\`${daddr%:*}\`)" ] && ok "the gateway route matches $match on the shard" || bad "gateway route match='$match' (want HostSNI of ${daddr%:*})" ;;
+    esac
   else
-    ok "documentdb_address not checked: the Service is not a plain ClusterIP (got '$daddr')"
+    want=$(want_endpoint_addr "$DEP")
+    if [ -n "$want" ]; then
+      [ "$daddr" = "${want%:*}:10260" ] && ok "documentdb_address = $daddr" || bad "documentdb_address=$daddr (want ${want%:*}:10260)"
+    else
+      ok "documentdb_address not checked: the Service is not a plain ClusterIP (got '$daddr')"
+    fi
   fi
 
   # Nobody runs CREATE EXTENSION: compute_ctl creates a `documentdb` database
@@ -980,17 +1014,25 @@ SQL
     && ok "documentdb 0.116-0 created by compute_ctl in database documentdb" \
     || bad "documentdb extension not in database documentdb (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
-  # The client reaches the gateway through the endpoint's Service.
-  kubectl -n "$NS" port-forward "svc/yb-ep-$DEP" "${GW_PF_PORT}:10260" >/tmp/smoke-gw-pf.log 2>&1 &
-  GW_PF_PID=$!
-  for ((i=0; i<30; i++)); do (exec 3<>"/dev/tcp/127.0.0.1/$GW_PF_PORT") 2>/dev/null && break; sleep 1; done
+  # cluster_ip: the client reaches the gateway through a port-forward to the
+  # endpoint's Service. Any other mode: straight at documentdb_address, by name,
+  # so the driver sends the SNI an ingress shard routes on.
+  if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ]; then
+    GW_HOST="${daddr%:*}" GW_PORT="${daddr##*:}"
+  else
+    kubectl -n "$NS" port-forward "svc/yb-ep-$DEP" "${GW_PF_PORT}:10260" >/tmp/smoke-gw-pf.log 2>&1 &
+    GW_PF_PID=$!
+    for ((i=0; i<30; i++)); do (exec 3<>"/dev/tcp/127.0.0.1/$GW_PF_PORT") 2>/dev/null && break; sleep 1; done
+    GW_HOST=127.0.0.1 GW_PORT="$GW_PF_PORT"
+  fi
 
   # How the driver verifies the gateway. Under `issue` the gateway serves the
-  # compute's certificate, whose SANs name the endpoint's Service, so the driver
-  # dials that name, pinned to the port-forward, and trusts only the CA the API
-  # hands out. With compute TLS off the gateway self-signs and the API says so.
+  # compute's certificate, and the driver trusts only the CA the API hands out.
+  # It dials a name the certificate carries: the endpoint's Service, pinned to
+  # the port-forward, or in an external mode the address it was given, which the
+  # certificate covers too. With compute TLS off the gateway self-signs and the
+  # API says so.
   ca=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints/$DEP/ca")
-  GW_HOST=127.0.0.1
   GW_TLS="tls=true&tlsAllowInvalidCertificates=true"
   GW_DOCKER_ARGS=()
   GW_CA_FILE=""
@@ -998,15 +1040,19 @@ SQL
     [ "$(jq -r '.required and .documentdb_verifiable and ((.ca_crt // "") | length > 0)' <<<"$ca")" = true ] \
       && ok "GET .../ca: the gateway serves the compute's certificate, and here is its CA" \
       || bad "GET .../ca under COMPUTE_TLS=issue (got: $ca)"
-    # The certificate names the Service only when the Service DNS is included,
-    # and the address is that name only on a plain ClusterIP Service.
-    if [ "$COMPUTE_TLS_SERVICE_DNS" = 1 ] && [ -n "$(want_endpoint_addr "$DEP")" ]; then
+    # In cluster_ip the certificate names the Service only when the Service DNS
+    # is included, and the address is that name only on a plain ClusterIP Service.
+    if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ] \
+       || { [ "$COMPUTE_TLS_SERVICE_DNS" = 1 ] && [ -n "$(want_endpoint_addr "$DEP")" ]; }; then
       GW_CA_FILE=$(mktemp)
       jq -r '.ca_crt' <<<"$ca" >"$GW_CA_FILE"
       chmod 0644 "$GW_CA_FILE"   # a public certificate; the client image is not root
-      GW_HOST="yb-ep-$DEP.$NS.svc.cluster.local"
       GW_TLS="tls=true&tlsCAFile=/tmp/ca.crt"
-      GW_DOCKER_ARGS=(--add-host "$GW_HOST:127.0.0.1" -v "$GW_CA_FILE:/tmp/ca.crt:ro")
+      GW_DOCKER_ARGS=(-v "$GW_CA_FILE:/tmp/ca.crt:ro")
+      if [ -z "$SMOKE_DOCUMENTDB_CONNECTIVITY" ]; then
+        GW_HOST="yb-ep-$DEP.$NS.svc.cluster.local"
+        GW_DOCKER_ARGS+=(--add-host "$GW_HOST:127.0.0.1")
+      fi
     fi
   elif [ "$COMPUTE_TLS" = disable ]; then
     [ "$(jq -r '.documentdb_verifiable' <<<"$ca")" = false ] \
@@ -1015,13 +1061,25 @@ SQL
   fi
   gw_uri() {
     printf 'mongodb://cloud_admin:%s@%s:%s/?%s&directConnection=true&authMechanism=SCRAM-SHA-256&serverSelectionTimeoutMS=30000' \
-      "$1" "$GW_HOST" "$GW_PF_PORT" "${2:-$GW_TLS}"
+      "$1" "$GW_HOST" "$GW_PORT" "${2:-$GW_TLS}"
   }
   # pymongo from the pinned client image; the Python arrives on stdin.
   pymongo_run() {
     docker run --rm -i --network host ${GW_DOCKER_ARGS[@]+"${GW_DOCKER_ARGS[@]}"} \
       -e URI="$1" --entrypoint python3 "$DOCUMENTDB_CLIENT_IMAGE" - 2>&1
   }
+
+  # A fresh load balancer's name can take minutes to resolve and to pass its
+  # health checks, so an external address gets a grace period before the checks.
+  if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ]; then
+    for ((i=0; i<10; i++)); do
+      pymongo_run "$(gw_uri "$EP_PASSWORD")" <<'PY' | grep -q '^PING:1$' && break
+import os, pymongo
+print("PING:%d" % pymongo.MongoClient(os.environ["URI"]).admin.command("ping")["ok"])
+PY
+      sleep 10
+    done
+  fi
 
   # Every step goes client -> gateway -> documentdb on the compute (over the
   # pod's loopback) -> amp storage. The filter, sort, $inc and $group run in
@@ -1095,7 +1153,7 @@ PY
     rm -f "$GW_CA_FILE"
   fi
 
-  kill "$GW_PF_PID" 2>/dev/null; GW_PF_PID=""
+  [ -n "${GW_PF_PID:-}" ] && kill "$GW_PF_PID" 2>/dev/null; GW_PF_PID=""
   IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$DPROJ")
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "documentdb cluster cascade deleted" || bad "documentdb cluster delete task=$st"
 fi

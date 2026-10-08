@@ -834,6 +834,82 @@ without an operator is
 [#1380](https://github.com/yugabyte/meko/issues/1380).
 
 
+## `documentdb_address` on an `nlb_*` or `ingress_*` endpoint refuses connections
+
+**Symptom.** A documentdb endpoint reports a `documentdb_address` on its load
+balancer, its `nlb_*` name or its published ingress name, but a MongoDB driver's
+connection to it is refused or times out. Postgres on `address` works.
+
+**Cause.** The API derives the address from the endpoint's connectivity and does
+not check the release. An endpoint deployed by a controller that predates the
+gateway on these modes has no `documentdb` port on its `-lb` Service and no
+`<release>-documentdb` IngressRouteTCP. An `ingress_*` endpoint also needs its
+shard to declare the `documentdb` entryPoint, which a shard release installed
+before that chart change does not.
+
+**Check.**
+
+```sh
+kubectl -n "$NS" get svc "yb-ep-$EP-lb" -o jsonpath='{.spec.ports[*].name}{"\n"}'   # nlb_*: wants documentdb
+kubectl -n "$NS" get ingressroutetcp "yb-ep-$EP-documentdb"                          # ingress_*
+kubectl -n "$NS" get deploy "$SHARD" -o yaml | grep -- '--entryPoints.documentdb'  # ingress_*: the shard
+```
+
+**Recover.** Re-render the endpoint the same way as above
+(`POST /endpoint-rerenders` with its id). `POST /endpoint-upgrades` refuses an
+endpoint already at the controller's version with `409 fleet_at_version`. For a
+shard, upgrade its release, which `deploy/controller/redeploy.sh` does on every run. That upgrade rolls the shard's
+proxy replicas, cutting every `ingress_*` session on the shard once the 300s
+drain runs out, so schedule it.
+
+
+## Ingress shard registered at 20000-20049
+
+**Symptom.** After an upgrade the controller exits at startup with
+`ingress shard pgin-0 serves 20000-20049 but this controller is configured for
+20000-20048`. Or, with the old range pinned on AWS, the shard's helm upgrade fails
+with `cloud=aws: ports 20000-20049 plus the documentdb gateway need 51 listeners`.
+
+**Cause.** The default range became 20000-20048, so an AWS NLB has a listener
+left for the shard's documentdb gateway (50 per NLB). A shard row is never
+rewritten from config, because the range describes listeners its release serves.
+
+**Check** whether anything holds, or is quarantined on, the port being given up:
+
+```sql
+SELECT shard, endpoint_id, released_at FROM amp_registry.ingress_allocations
+ WHERE port = 20049 AND (released_at IS NULL OR released_at > now() - interval '10 minutes');
+```
+
+**Recover.**
+
+- **Nothing on 20049:** narrow the rows, then redeploy with the new default.
+  The old controller keeps allocating from the row until it is replaced, so the
+  `UPDATE` re-checks for itself rather than trusting the `SELECT` above. Use your
+  `--deploy-ingress-quarantine` if it isn't the 10-minute default.
+  ```sql
+  UPDATE amp_registry.ingress_shards s SET port_hi = 20048
+   WHERE s.port_lo = 20000 AND s.port_hi = 20049
+     AND NOT EXISTS (SELECT 1 FROM amp_registry.ingress_allocations a
+                      WHERE a.shard = s.name AND a.port = 20049
+                        AND (a.released_at IS NULL OR a.released_at > now() - interval '10 minutes'));
+  ```
+  A shard it skipped still reads 20049: an endpoint took the port in the
+  meantime, so treat that shard as the case below.
+- **An endpoint holds 20049:** on GCP or Azure, pin the old range instead
+  (`INGRESS_PORT_RANGE=20000-20049` / `--deploy-ingress-port-range`). The
+  50-listener limit is AWS's. On AWS, that endpoint must leave the port first:
+  delete it, wait out the quarantine (`--deploy-ingress-quarantine`), narrow as
+  above, and recreate it. Its address changes.
+
+**Rollback.** Once the rows read 20000-20048, the previous controller refuses to
+start on its own 20000-20049 default for the same reason. Roll back with
+`INGRESS_PORT_RANGE=20000-20048` / `--deploy-ingress-port-range=20000-20048`
+pinned. Widening the rows back to 20049 also works, but only together with
+re-rendering the shard releases at 20000-20049. Otherwise the allocator can hand
+out a port the shard does not listen on.
+
+
 ## `nlb_*` endpoint's name does not resolve
 
 **Symptom.** The endpoint reports `yb-ep-<id>.<zone>:<port>` as its `address`, the

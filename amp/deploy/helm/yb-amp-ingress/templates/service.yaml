@@ -21,6 +21,14 @@ required there and nowhere else.
 {{- fail "cloud=gcp with family=external needs allowedCidrs: GCP allows 5 ports per forwarding rule, so a shard's 50-port Service becomes an ALL-PORTS rule and this internet-facing address would publish every NodePort on its nodes. Set allowedCidrs, or use family=internal" }}
 {{- end }}
 {{- $ports := include "yb-amp-ingress.ports" . | fromJsonArray }}
+{{- /*
+An AWS Network Load Balancer holds 50 listeners by default, one per Service port.
+Past that the load balancer controller cannot reconcile the Service, so a new shard
+never gets an address and an upgraded one silently lacks its last listener.
+*/}}
+{{- if and (eq .Values.cloud "aws") (gt (add1 (len $ports)) 50) }}
+{{- fail (printf "cloud=aws: ports %d-%d plus the documentdb gateway need %d listeners, and an AWS Network Load Balancer holds 50 — narrow ports to at most 49 (e.g. 20000-20048)" (int .Values.ports.lo) (int .Values.ports.hi) (add1 (len $ports))) }}
+{{- end }}
 {{- $internal := eq .Values.family "internal" }}
 {{- /*
 The shard's load balancer, and the whole reason this design costs one billed
@@ -96,3 +104,7 @@ spec:
       targetPort: {{ $p }}
       protocol: TCP
     {{- end }}
+    - name: documentdb
+      port: {{ .Values.documentdbGateway.port }}
+      targetPort: documentdb
+      protocol: TCP

@@ -46,8 +46,9 @@ The chart renders:
   `ReadWriteOnce` claim of that class (EBS/PD) backing `/data`. Part of the
   release, so `helm uninstall` frees it.
 - **LoadBalancer Service** `<fullname>-lb` (when `service.connectivity` is
-  `nlb_internal` or `nlb_external`) — a **second**, Postgres-only Service behind
-  an AWS Network Load Balancer, so clients outside the cluster get a stable
+  `nlb_internal` or `nlb_external`) — a **second** Service behind an AWS Network
+  Load Balancer, carrying Postgres and, where the gateway runs, its `documentdb`
+  port, so clients outside the cluster get a stable
   address that survives pod replacement (the load balancer controller re-targets
   the new pod IP). `nlb_internal` is VPC-routable, `nlb_external` internet-facing;
   restrict either with `service.allowedCidrs`.
@@ -57,7 +58,9 @@ The chart renders:
   **shared** load balancer: a port on an ingress shard rather than a load
   balancer of its own. Carries `amp.yugabyte.com/ingress-shard` so only that
   shard's proxy serves it. The `DNSEndpoint` is what external-dns publishes the
-  endpoint's own name from. Needs the Traefik CRDs installed
+  endpoint's own name from. Where the gateway runs and that name is published, a
+  second IngressRouteTCP puts it on the shard's shared `documentdb` entryPoint,
+  matched by `HostSNI(<name>)` with TLS passthrough. Needs the Traefik CRDs installed
   (`controller/architecture/ac-ingress.md`).
 
   Portable across clouds: the mode is the concept, and `service.cloud` selects

@@ -149,3 +149,44 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --entryPoints.pg-20000.proxyProtocol.trustedIPs=
+
+  # --- the documentdb gateway entryPoint --------------------------------------
+  # Its name is the join with every endpoint's gateway route, spelled on the
+  # controller side as deploy.DocumentDBEntryPoint.
+  - it: declares one shared documentdb entryPoint on the gateway port
+    set:
+      cloud: aws
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.documentdb.address=:10260
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.documentdb.transport.lifeCycle.graceTimeOut=300s
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: documentdb
+            containerPort: 10260
+            protocol: TCP
+
+  # The load balancer sends PROXY protocol on every port once it is on, so a
+  # gateway entryPoint that did not expect it would read the header as TLS.
+  - it: trusts PROXY protocol on the gateway entryPoint too
+    set:
+      cloud: aws
+      proxyProtocol.enabled: true
+      proxyProtocol.trustedIPs: [10.1.2.0/24]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --entryPoints.documentdb.proxyProtocol.trustedIPs=10.1.2.0/24
+
+  - it: refuses a gateway port inside the Postgres range
+    set:
+      cloud: aws
+      ports.lo: 10250
+      ports.hi: 10299
+    asserts:
+      - failedTemplate:
+          errorMessage: "documentdbGateway.port 10260 lies inside ports 10250-10299: an endpoint allocated that port would share its listener with every endpoint's documentdb gateway"

@@ -384,13 +384,16 @@ With `computeTls.enabled` the chart mounts the same `compute-tls` volume into th
 `DOCUMENTDB_TLS_CERT_FILE` / `DOCUMENTDB_TLS_KEY_FILE` at it. Without it the
 gateway self-signs into an emptyDir and no client can verify it.
 
-The address is reported only for a `cluster_ip` endpoint
-([`ac-apis.md`](ac-apis.md)), so its host is always the Service's in-cluster
-name. Under `issue` with `includeServiceDns` (the default for a private CA)
-that name is in the SANs and the gateway verifies. A public wildcard can never
-name it, so under `existingSecret` with Let's Encrypt a client verifying the
-gateway fails on the hostname. That is left to fail rather than papered over:
-see below.
+The address shares its host with `address` ([`ac-apis.md`](ac-apis.md)), so it
+is in the SANs wherever the compute's address is (the table above). That covers
+an `nlb_*` endpoint's load balancer or published name and an `ingress_*`
+endpoint's published name. A `cluster_ip` endpoint's host is the Service's
+in-cluster name, which is in the SANs under `issue` with `includeServiceDns`
+(the default for a private CA). A public wildcard can never name that one, so
+under `existingSecret` with Let's Encrypt a client verifying a `cluster_ip`
+endpoint's gateway fails on the hostname. That is left to fail rather than
+papered over: see below. An `ingress_*` endpoint addressed by its shard's host
+gets no `documentdb_address` at all.
 
 - **`DOCUMENTDB_TLS_AUTO_GENERATE=false`, explicitly.** The image sets it `true`,
   and upstream refuses `true` alongside a cert file. `false` also makes a missing

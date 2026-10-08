@@ -1,6 +1,10 @@
 {{- if and .Values.proxyProtocol.enabled (not .Values.proxyProtocol.trustedIPs) }}
 {{- fail "proxyProtocol.enabled needs proxyProtocol.trustedIPs — the load balancer's range and nothing wider. Empty would trust every peer's claimed client address, and a per-endpoint allowlist would then match whatever a caller asserts" }}
 {{- end }}
+{{- $gw := int .Values.documentdbGateway.port }}
+{{- if and (ge $gw (int .Values.ports.lo)) (le $gw (int .Values.ports.hi)) }}
+{{- fail (printf "documentdbGateway.port %d lies inside ports %d-%d: an endpoint allocated that port would share its listener with every endpoint's documentdb gateway" $gw (int .Values.ports.lo) (int .Values.ports.hi)) }}
+{{- end }}
 {{- $ports := include "yb-amp-ingress.ports" . | fromJsonArray }}
 {{- /*
 Traefik rendered directly rather than through its chart as a subchart: the
@@ -87,7 +91,7 @@ spec:
             Endpoint releases and every shard live in one namespace (the route is
             rendered into the endpoint's release, and allowCrossNamespace is
             false), and every shard is built from the same --deploy-ingress-port-
-            range — so pgin-0 and pgin-0-ext both declare pg-20000..pg-20049.
+            range — so pgin-0 and pgin-0-ext both declare pg-20000..pg-20048.
             Without this selector each shard's proxy would program EVERY
             endpoint's route: an ingress_internal endpoint would answer on the
             external shard's internet-facing load balancer, and two endpoints
@@ -110,6 +114,7 @@ spec:
             {{- range $p := $ports }}
             - --entryPoints.pg-{{ $p }}.transport.lifeCycle.graceTimeOut={{ $.Values.traefik.drainTimeoutSeconds }}s
             {{- end }}
+            - --entryPoints.documentdb.transport.lifeCycle.graceTimeOut={{ .Values.traefik.drainTimeoutSeconds }}s
             - --log.level={{ .Values.traefik.logLevel }}
             {{- range $p := $ports }}
             - --entryPoints.pg-{{ $p }}.address=:{{ $p }}
@@ -122,6 +127,16 @@ spec:
             */}}
             - --entryPoints.pg-{{ $p }}.proxyProtocol.trustedIPs={{ join "," $.Values.proxyProtocol.trustedIPs }}
             {{- end }}
+            {{- end }}
+            {{- /*
+            The documentdb gateway's entryPoint, shared by every endpoint on the
+            shard: each endpoint's route matches its own name by SNI. The load
+            balancer sends PROXY protocol on every port, so this one trusts it too.
+            The name is deploy.DocumentDBEntryPoint on the controller side.
+            */}}
+            - --entryPoints.documentdb.address=:{{ .Values.documentdbGateway.port }}
+            {{- if .Values.proxyProtocol.enabled }}
+            - --entryPoints.documentdb.proxyProtocol.trustedIPs={{ join "," .Values.proxyProtocol.trustedIPs }}
             {{- end }}
           env:
             {{- /*
@@ -150,6 +165,9 @@ spec:
               containerPort: {{ $p }}
               protocol: TCP
             {{- end }}
+            - name: documentdb
+              containerPort: {{ .Values.documentdbGateway.port }}
+              protocol: TCP
           readinessProbe:
             httpGet: { path: /ping, port: 9000 }
             initialDelaySeconds: 3

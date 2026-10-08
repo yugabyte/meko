@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/internal/core"
 )
 
 // testKubernetesConfig returns a fully-populated KubernetesConfig for the
@@ -1211,6 +1213,9 @@ func TestKubernetesValuesIngress(t *testing.T) {
 	if got.EntryPoint != EntryPointName(20007) {
 		t.Errorf("entryPoint = %q, want %q", got.EntryPoint, EntryPointName(20007))
 	}
+	if got.DocumentDBEntryPoint != DocumentDBEntryPoint {
+		t.Errorf("documentdbEntryPoint = %q, want %q", got.DocumentDBEntryPoint, DocumentDBEntryPoint)
+	}
 	if got.ShardHost != "lb.example" || got.RecordType != "CNAME" {
 		t.Errorf("shard address = %q/%q, want it carried for the DNS record", got.ShardHost, got.RecordType)
 	}
@@ -1279,6 +1284,12 @@ func TestEntryPointNameMatchesTheShardChart(t *testing.T) {
 	// And the Go side must produce exactly that shape for a concrete port.
 	if got := EntryPointName(20007); got != "pg-20007" {
 		t.Errorf("EntryPointName(20007) = %q, want pg-20007 to match the chart's pg-{{ $p }}", got)
+	}
+	// The gateway's shared entryPoint fails the same silent way.
+	gw := "--entryPoints." + DocumentDBEntryPoint + ".address=:{{ .Values.documentdbGateway.port }}"
+	if !strings.Contains(string(b), gw) {
+		t.Errorf("the shard chart does not render %q; DocumentDBEntryPoint must match its gateway entryPoint "+
+			"or every documentdb route names one that does not exist", gw)
 	}
 }
 
@@ -1376,37 +1387,60 @@ func TestKubernetesValuesNoDocumentDBGatewayWithoutTheExtension(t *testing.T) {
 	}
 }
 
-// documentdb_address is the endpoint's own address on the gateway port, which only
-// resolves to the sidecar when Address is the pod's. Under NodePort the address
-// carries the nodePort allocated for the COMPUTE port and the gateway port gets a
-// different one; under an NLB the load balancer publishes pg-compute alone. In
-// both cases the derived address names a port nothing listens on, so the API
-// must report none.
+// documentdb_address is the endpoint's own host on the gateway port, so it is
+// reported only where whatever fronts the endpoint publishes that port on the
+// same host. Under NodePort the address carries the nodePort allocated for the
+// COMPUTE port and the gateway gets a different one; an ingress endpoint with no
+// published name is addressed by its shard's shared host, which the gateway's
+// SNI route cannot tell apart from any other endpoint's.
 func TestKubernetesDocumentDBGatewayReachable(t *testing.T) {
+	const (
+		lb        = "lb-0.elb.amazonaws.com:55433"
+		svcDNS    = "yb-ep-x.amp.svc.cluster.local:55433"
+		nodePort  = "10.0.0.7:31544"
+		published = "ep-3f9a2c41.internal.example"
+	)
 	for _, tc := range []struct {
-		serviceType  string
-		connectivity string
-		want         bool
+		name        string
+		serviceType string
+		ep          core.Endpoint
+		want        bool
 	}{
-		{"", "", true},
-		{"ClusterIP", "", true},
-		{"ClusterIP", ConnectivityClusterIP, true},
-		{"ClusterIP", ConnectivityNLBInternal, false},
-		{"ClusterIP", ConnectivityNLBExternal, false},
-		// The ingress shard routes pg-compute only, like the NLB.
-		{"ClusterIP", ConnectivityIngressInternal, false},
-		{"ClusterIP", ConnectivityIngressExternal, false},
-		{serviceTypeNodePort, "", false},
-		{serviceTypeNodePort, ConnectivityClusterIP, false},
-		{serviceTypeLoadBalancer, "", false},
+		{"default service, no mode", "", core.Endpoint{Address: svcDNS}, true},
+		{"ClusterIP, no mode", "ClusterIP", core.Endpoint{Address: svcDNS}, true},
+		{"ClusterIP, cluster_ip", "ClusterIP", core.Endpoint{Connectivity: ConnectivityClusterIP, Address: svcDNS}, true},
+		{"NodePort, no mode", serviceTypeNodePort, core.Endpoint{Address: nodePort}, false},
+		{"NodePort, cluster_ip", serviceTypeNodePort, core.Endpoint{Connectivity: ConnectivityClusterIP, Address: nodePort}, false},
+		{"LoadBalancer, no mode", serviceTypeLoadBalancer, core.Endpoint{Address: lb}, false},
+
+		// The -lb Service carries the gateway beside Postgres.
+		{"nlb_internal at its load balancer", "ClusterIP", core.Endpoint{Connectivity: ConnectivityNLBInternal, Address: lb}, true},
+		{"nlb_external at its load balancer", "ClusterIP", core.Endpoint{Connectivity: ConnectivityNLBExternal, Address: lb}, true},
+		{"nlb under NodePort, at its load balancer", serviceTypeNodePort, core.Endpoint{Connectivity: ConnectivityNLBInternal, Address: lb}, true},
+		// Still provisioning: the address fell back to the Service-type one.
+		{"nlb fallen back to the Service DNS", "ClusterIP", core.Endpoint{Connectivity: ConnectivityNLBInternal, Address: svcDNS}, true},
+		{"nlb fallen back to a nodePort", serviceTypeNodePort, core.Endpoint{Connectivity: ConnectivityNLBInternal, Address: nodePort}, false},
+		{"nlb with no address", "ClusterIP", core.Endpoint{Connectivity: ConnectivityNLBInternal}, false},
+
+		{"ingress_internal, published", "ClusterIP", core.Endpoint{Connectivity: ConnectivityIngressInternal,
+			Address: published + ":20007", IngressDNSName: published}, true},
+		{"ingress_external, published", serviceTypeNodePort, core.Endpoint{Connectivity: ConnectivityIngressExternal,
+			Address: published + ":20007", IngressDNSName: published}, true},
+		{"ingress, no zone", "ClusterIP", core.Endpoint{Connectivity: ConnectivityIngressInternal,
+			Address: "lb-0.elb.amazonaws.com:20007", IngressDNSName: "ep-3f9a2c41"}, false},
+		{"ingress, no live allocation", "ClusterIP", core.Endpoint{Connectivity: ConnectivityIngressInternal,
+			Address: "lb-0.elb.amazonaws.com:20007"}, false},
+
+		{"unknown mode", "ClusterIP", core.Endpoint{Connectivity: "vpc_peering", Address: svcDNS}, false},
 	} {
-		cfg := testKubernetesConfig()
-		cfg.ServiceType = tc.serviceType
-		got := NewKubernetesDeployer(cfg, nil).DocumentDBGatewayReachable(tc.connectivity)
-		if got != tc.want {
-			t.Errorf("DocumentDBGatewayReachable(serviceType=%q, connectivity=%q) = %v, want %v",
-				tc.serviceType, tc.connectivity, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testKubernetesConfig()
+			cfg.ServiceType = tc.serviceType
+			if got := NewKubernetesDeployer(cfg, nil).DocumentDBGatewayReachable(tc.ep); got != tc.want {
+				t.Errorf("DocumentDBGatewayReachable(serviceType=%q, %+v) = %v, want %v",
+					tc.serviceType, tc.ep, got, tc.want)
+			}
+		})
 	}
 }
 

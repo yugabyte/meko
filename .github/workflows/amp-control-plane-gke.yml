@@ -31,7 +31,7 @@ name: Amp control-plane GKE (itest-dev)
 #     (amp/deploy/extensions/build.sh --push --cache: the ABI-anchor PG18 base +
 #     every manifest extension) to Quay, and runs the smoke test with
 #     SMOKE_EXTENSIONS=1 so it exercises each extension's ImageVolume opt-in +
-#     fork inheritance. The first run
+#     fork inheritance, and the documentdb gateway over nlb_external. The first run
 #     pays a cold PG18 base build (~30 min) on top of amp_deploy_gke; --cache
 #     (:buildcache) then restores it in minutes, so it is PR-directive-only:
 #     nightly does NOT rebuild it.
@@ -464,11 +464,23 @@ jobs:
       # the controller's catalog resolves them — so exercise the ImageVolume
       # opt-in + fork inheritance (SMOKE_EXTENSIONS=1). Requires the cluster's
       # ImageVolume feature gate to be enabled on itest-dev.
+      #
+      # The documentdb case in that block runs over nlb_external, so the gateway
+      # is driven through a real load balancer rather than a port-forward. It is
+      # allow-listed to this runner's own address alone.
       - name: Smoke test (amp/deploy/smoke-test.sh)
         if: env.YCP != '1'
         env:
           SMOKE_EXTENSIONS: ${{ (fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true') && '1' || '0' }}
-        run: NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/smoke-test.sh
+        run: |
+          # Only the documentdb case, inside SMOKE_EXTENSIONS=1, uses these.
+          if [ "$SMOKE_EXTENSIONS" = 1 ]; then
+            RUNNER_IP=$(curl -sf --retry 3 https://checkip.amazonaws.com | tr -d '[:space:]')
+            [ -n "$RUNNER_IP" ] || { echo "could not read this runner's public address"; exit 1; }
+            export SMOKE_DOCUMENTDB_CONNECTIVITY=nlb_external
+            export SMOKE_DOCUMENTDB_ALLOWED_CIDRS="${RUNNER_IP}/32"
+          fi
+          NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/smoke-test.sh
 
       # YCP mode: the agent-driven reconcile smoke. Declares desired state through
       # the control plane and asserts the reconcile-agent creates the tree, reports

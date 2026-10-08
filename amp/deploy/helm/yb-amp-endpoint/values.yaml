@@ -442,11 +442,12 @@ service:
   # is tailnet-exposed). `ingress_internal` / `ingress_external` put it on a
   # SHARED ingress shard — a port on a load balancer many endpoints sit behind —
   # so creating one provisions no cloud resource at all; the slot arrives in
-  # `service.ingress`. `nlb_internal` / `nlb_external` add a SECOND,
-  # Postgres-only Service fronted by an AWS Network Load Balancer — internal
-  # (VPC-routable) or internet-facing. The pageserver/safekeeper/supervisor ports
-  # are deliberately never published on it: the supervisor's settings API is
-  # unauthenticated and can restart Postgres.
+  # `service.ingress`. `nlb_internal` / `nlb_external` add a SECOND Service
+  # fronted by an AWS Network Load Balancer — internal (VPC-routable) or
+  # internet-facing — carrying Postgres and, where the gateway runs, the
+  # documentdb port. The pageserver/safekeeper/supervisor ports are deliberately
+  # never published on it: the supervisor's settings API is unauthenticated and
+  # can restart Postgres.
   connectivity: cluster_ip
   # -- Which cloud's load-balancer annotations to render for the `nlb_*` modes:
   # `aws`, `gcp` or `azure`. The controller sets it — from its own `--deploy-cloud`,
@@ -464,6 +465,8 @@ service:
   #   entryPoint  the listener its port is bound to on that release
   #   port        the port clients connect to
   #   dnsName     this endpoint's own published name
+  #   documentdbEntryPoint  the shard's shared gateway listener, routed by
+  #               dnsName over SNI; used only when the gateway runs and dnsName is set
   #   shardHost   where that name points: the shard load balancer's address
   #   recordType  CNAME where the cloud gave a hostname, A where it gave an address
   ingress: {}

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/helm"
 )
 
@@ -262,26 +263,34 @@ func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnable
 func (k *KubernetesDeployer) PlacesIngress() bool { return true }
 
 // DocumentDBGatewayReachable reports whether a client reaches this endpoint's
-// documentdb gateway at the endpoint's own address on the gateway port. That
-// holds only where whatever fronts the endpoint ALSO publishes the gateway port on
-// the same host: the default ClusterIP Service, whose in-cluster DNS name is the
-// address and which carries a `documentdb` port whenever the gateway renders. It
-// fails everywhere else. A NodePort Service allocates a separate high port per
-// service port, so the address carries the COMPUTE port's nodePort and the
-// gateway's is a different one; the nlb_* load balancer and the ingress_* shard
-// route publish pg-compute alone. In each case that address on the gateway port
-// names something nothing listens on, so the API reports no documentdb_address rather
-// than a dead one. A connectivity mode this does not recognise is treated as
-// unreachable for the same reason.
-func (k *KubernetesDeployer) DocumentDBGatewayReachable(connectivity string) bool {
-	switch k.cfg.ServiceType {
-	case "", "ClusterIP":
-	default:
-		return false
-	}
-	switch connectivity {
-	case "", ConnectivityClusterIP:
-		return true
+// documentdb gateway at the endpoint's own host on the gateway port, which holds
+// only where whatever fronts the endpoint publishes that port on the same host:
+//
+//   - cluster_ip: the default ClusterIP Service, which carries a `documentdb`
+//     port whenever the gateway renders. A NodePort Service does not qualify: it
+//     allocates each port its own nodePort, so the address carries the COMPUTE
+//     port's and the gateway's is a different one.
+//   - nlb_*: the -lb Service publishes the gateway beside Postgres. Its address
+//     falls back to the Service-type one while the load balancer provisions,
+//     which still reaches the gateway unless it is a nodePort — the one fallback
+//     not on the compute port.
+//   - ingress_*: the shard routes the gateway by the endpoint's published name
+//     over SNI, so an endpoint whose family had no zone, addressed by its shard's
+//     shared host, has no gateway route.
+//
+// Where it fails, the address on the gateway port names something nothing listens
+// on, so the API reports no documentdb_address rather than a dead one. A
+// connectivity mode this does not recognise is treated as unreachable for the
+// same reason.
+func (k *KubernetesDeployer) DocumentDBGatewayReachable(e core.Endpoint) bool {
+	switch {
+	case IsIngress(e.Connectivity):
+		return PublishableDNSName(e.IngressDNSName)
+	case IsDedicatedLB(e.Connectivity):
+		_, port, err := net.SplitHostPort(e.Address)
+		return err == nil && port == strconv.Itoa(k.cfg.ComputePort)
+	case e.Connectivity == "" || e.Connectivity == ConnectivityClusterIP:
+		return k.cfg.ServiceType == "" || k.cfg.ServiceType == "ClusterIP"
 	default:
 		return false
 	}
@@ -1756,7 +1765,10 @@ type ingressValues struct {
 	// name of the listener its port is bound to on that release.
 	Shard      string `json:"shard"`
 	EntryPoint string `json:"entryPoint"`
-	Port       int    `json:"port"`
+	// DocumentDBEntryPoint is the shard's shared gateway listener; the chart
+	// binds a route to it only for a gateway endpoint with a published name.
+	DocumentDBEntryPoint string `json:"documentdbEntryPoint"`
+	Port                 int    `json:"port"`
 	// DNSName is the endpoint's own published name, and ShardHost/RecordType
 	// what its record points at — a CNAME to the shard load balancer's hostname,
 	// or an A to its address.
@@ -2073,12 +2085,13 @@ func ingressValuesFor(spec EndpointSpec) *ingressValues {
 		dnsName = ""
 	}
 	return &ingressValues{
-		Shard:      spec.Ingress.Shard,
-		EntryPoint: EntryPointName(spec.Ingress.Port),
-		Port:       spec.Ingress.Port,
-		DNSName:    dnsName,
-		ShardHost:  spec.Ingress.ShardHost,
-		RecordType: spec.Ingress.RecordType,
+		Shard:                spec.Ingress.Shard,
+		EntryPoint:           EntryPointName(spec.Ingress.Port),
+		DocumentDBEntryPoint: DocumentDBEntryPoint,
+		Port:                 spec.Ingress.Port,
+		DNSName:              dnsName,
+		ShardHost:            spec.Ingress.ShardHost,
+		RecordType:           spec.Ingress.RecordType,
 	}
 }
 

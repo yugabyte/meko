@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/amp/controller/internal/extensions"
 	"github.com/yugabyte/amp/controller/pkg/pglease"
 )
 
@@ -408,7 +409,7 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&d.IngressEnabled, "deploy-ingress-enabled", envBool("AMP_DEPLOY_INGRESS_ENABLED", false), "k8s: route endpoints through shared ingress shards. Off (the default) = the ingress_* connectivity modes are refused")
 	fs.StringVar(&d.IngressZoneInternal, "deploy-ingress-zone-internal", env("AMP_DEPLOY_INGRESS_ZONE_INTERNAL", ""), "k8s: DNS zone INTERNAL endpoint names (ingress_internal and nlb_internal) are published under, e.g. internal.pg.example.com. Empty = that family's names are not published: an ingress endpoint's address is its shard's host:port, an nlb one's its load balancer's — what a cluster with no external-dns (kind, CI) gets")
 	fs.StringVar(&d.IngressZoneExternal, "deploy-ingress-zone-external", env("AMP_DEPLOY_INGRESS_ZONE_EXTERNAL", ""), "k8s: DNS zone EXTERNAL endpoint names (ingress_external and nlb_external) are published under, e.g. external.pg.example.com. Must differ from the internal zone, so external-dns can be pinned to each with --zone-id-filter and an internal name is never published publicly")
-	fs.StringVar(&d.IngressPortRange, "deploy-ingress-port-range", env("AMP_DEPLOY_INGRESS_PORT_RANGE", "20000-20049"), "k8s: listener range each ingress shard provisions in full, \"lo-hi\"; its width is how many endpoints one shard holds")
+	fs.StringVar(&d.IngressPortRange, "deploy-ingress-port-range", env("AMP_DEPLOY_INGRESS_PORT_RANGE", "20000-20048"), "k8s: listener range each ingress shard provisions in full, \"lo-hi\"; its width is how many endpoints one shard holds")
 	fs.IntVar(&d.IngressHeadroom, "deploy-ingress-headroom", envInt("AMP_DEPLOY_INGRESS_HEADROOM", 10), "k8s: free ports kept per family before another ingress shard is built, so a slow shard build never lands on an endpoint create")
 	fs.IntVar(&d.IngressMaxShards, "deploy-ingress-max-shards", envInt("AMP_DEPLOY_INGRESS_MAX_SHARDS", 24), "k8s: ceiling on ingress shards the control plane may build on its own; reaching it alerts rather than spending more")
 	fs.DurationVar(&d.IngressQuarantine, "deploy-ingress-quarantine", envDuration("AMP_DEPLOY_INGRESS_QUARANTINE", 10*time.Minute), "k8s: how long a released ingress port stays unissued, so a cached address cannot reach the database that takes the slot next")
@@ -791,6 +792,12 @@ func (d *DeployConfig) validateIngress() error {
 		return fmt.Errorf("invalid deploy ingress port range %q: %w", d.IngressPortRange, err)
 	}
 	d.IngressPortLo, d.IngressPortHi = lo, hi
+	// Every shard also listens on the gateway port, shared by all its endpoints.
+	// The shard chart refuses the overlap too, but only once somebody installs it.
+	if gw := extensions.DocumentDBGatewayPort; lo <= gw && gw <= hi {
+		return fmt.Errorf("invalid deploy ingress port range %q: it contains %d, the port every shard "+
+			"serves the documentdb gateway on", d.IngressPortRange, gw)
+	}
 
 	switch d.IngressPlacement {
 	case "", "spread":

@@ -1,7 +1,7 @@
 # controller — Kubernetes endpoint deploy
 
 **Status:** Current (demo-grade — see Assumptions)
-**Last updated:** 2026-07-01
+**Last updated:** 2026-09-29
 
 How the **amp controller** runs on Kubernetes and deploys compute **endpoints**
 there ([#108](https://github.com/yugabyte/amp/issues/108)). The k8s deployer
@@ -383,6 +383,20 @@ no local-disk path yet).
   second Service port (`documentdb`, 10260). Both carry request == limit, which
   `tests/guaranteed-qos.sh` asserts per scenario.
 
+  The API reports the gateway as `documentdb_address`: the endpoint's own host on
+  10260, so only where whatever fronts the endpoint publishes 10260 on that host
+  (`DocumentDBGatewayReachable`). The ClusterIP Service does; so does the `-lb`
+  Service of the `nlb_*` modes, and a shard for an `ingress_*` endpoint with a
+  published name, which routes it by SNI ([`ac-ingress.md`](ac-ingress.md)
+  §The documentdb gateway). A NodePort Service does not, since it gives 10260 a
+  nodePort of its own, and neither does an `ingress_*` endpoint addressed by its
+  shard's shared host. A `cluster_ip` endpoint under a LoadBalancer Service type
+  is not reported either, nor an `nlb_*` endpoint whose address fell back to a
+  nodePort because its load balancer was not ready in time. The rule reads the endpoint row, not the release, so an
+  endpoint last deployed before its mode carried the gateway reports the address
+  before its release publishes it, until it is redeployed
+  (`runbooks/controller_runbook.md`).
+
   The gateway's probes are `tcpSocket` on its own port, deliberately not its
   `check` subcommand, since readiness is pod-wide. The port still waits on the
   extension: the gateway binds only once the documentdb schema exists, retrying
@@ -528,7 +542,7 @@ endpoint:
 | `connectivity.mode` | What the endpoint gets |
 |---|---|
 | `cluster_ip` (default) | the ClusterIP Service only — in-cluster, plus the tailnet when tailnet-exposed |
-| `nlb_internal` | additionally a Postgres-only Service behind a VPC-routable load balancer of its own, and a published name where there is a zone (§Published names) |
+| `nlb_internal` | additionally a Service behind a VPC-routable load balancer of its own, carrying Postgres and, where it runs, the documentdb gateway, and a published name where there is a zone (§Published names) |
 | `nlb_external` | the same, internet-facing |
 | `ingress_internal` | a port on a **shared** VPC-routable load balancer instead of one of its own ([`ac-ingress.md`](ac-ingress.md)) |
 | `ingress_external` | the same, internet-facing |
@@ -538,8 +552,8 @@ The `ingress_*` pair is refused with `400` unless the deployment has
 shard; the error says which is missing. `allowed_cidrs` is refused on them too —
 a shared load balancer cannot carry a per-endpoint allowlist.
 
-`connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`;
-empty is unrestricted, which on `nlb_external` leaves password authentication as
+`connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`,
+which covers the gateway port as well as Postgres's; empty is unrestricted, which on `nlb_external` leaves password authentication as
 the only barrier. Each `nlb_*` endpoint provisions its own load balancer — a
 billed resource that counts against the account's per-region quota. Both fields
 are **create-time only** — the endpoint's update paths are `/settings` and `/resize`,
@@ -581,7 +595,8 @@ Three properties are deliberate:
 - **A second Service, not a type change.** The main endpoint Service also carries
   `sup-http` (9899), the supervisor's settings API — unauthenticated, and able to
   reload config and restart Postgres. The load-balanced Service publishes the
-  Postgres port alone.
+  Postgres port and, on a documentdb endpoint, the gateway's — both of which
+  make the client log in with SCRAM.
 - **Pod-IP target group (AWS)** (`nlb-target-type: ip`), so there is no kube-proxy hop
   and the load balancer controller re-registers the pod when it is replaced. That
   is what keeps this address correct across a pod replacement, with no redeploy.

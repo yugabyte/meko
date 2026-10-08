@@ -218,6 +218,46 @@ tests:
           path: spec.loadBalancerSourceRanges
           value: ["10.1.0.0/16"]
 
+  # The gateway rides the same load balancer as Postgres: its clients log in with
+  # SCRAM, so it is not the unauthenticated surface the HTTP ports are.
+  - it: publishes the documentdb gateway port alongside Postgres when the gateway runs
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+      service.allowedCidrs: ["10.0.0.0/16"]
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 2
+      - equal:
+          path: spec.ports[1]
+          value:
+            name: documentdb
+            port: 10260
+            targetPort: documentdb
+            protocol: TCP
+      # One allow-list for the whole Service, so it filters the gateway exactly
+      # as it filters Postgres.
+      - equal:
+          path: spec.loadBalancerSourceRanges
+          value: ["10.0.0.0/16"]
+
+  - it: leaves the gateway port off when the gateway is turned off
+    set:
+      service.connectivity: nlb_internal
+      service.cloud: aws
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+      documentdbGateway.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+
   # The published name. Rendered only once the controller knows what it points at:
   # the cloud assigns the load balancer's address after the Service exists.
   - it: publishes the endpoint's name as a CNAME to the load balancer's hostname
@@ -293,3 +333,28 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # The published name and the gateway port live on the same load balancer, so a
+  # documentdb endpoint's documentdb_address is that name on 10260.
+  - it: carries the gateway port beside a published name
+    set:
+      service.connectivity: nlb_external
+      service.cloud: aws
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:0.116-0
+      service.dns:
+        name: yb-ep-abc.external.example
+        target: k8s-abc.elb.us-west-2.amazonaws.com
+        recordType: CNAME
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.ports[1].name
+          value: documentdb
+        documentIndex: 0
+      - equal:
+          path: spec.endpoints[0].targets[0]
+          value: k8s-abc.elb.us-west-2.amazonaws.com
+        documentIndex: 1

@@ -123,25 +123,31 @@ func TestEngineTableMatchesManifest(t *testing.T) {
 }
 
 // The controller derives an endpoint's documentdb_address from this constant, but the
-// chart is what actually opens the port. If they disagree the API hands clients
-// an address nothing listens on, which is invisible until someone tries to
-// connect — so read the chart's value rather than trusting a comment.
+// charts are what actually open the port: the endpoint chart on the pod and its
+// Services, the shard chart on the shared gateway entryPoint an ingress endpoint's
+// address points at. If either disagrees the API hands clients an address nothing
+// listens on, which is invisible until someone tries to connect — so read each
+// chart's value rather than trusting a comment.
 func TestDocumentDBGatewayPortMatchesChart(t *testing.T) {
-	const values = "../../../deploy/helm/yb-amp-endpoint/values.yaml"
-	raw, err := os.ReadFile(values)
-	if err != nil {
-		t.Skipf("chart values not readable (%v)", err)
-	}
-	m := regexp.MustCompile(`(?m)^documentdbGateway:\n(?:.*\n)*?\s+port:\s*(\d+)`).FindSubmatch(raw)
-	if m == nil {
-		t.Fatal("could not find documentdbGateway.port in the chart values — " +
-			"the shape changed; update this check rather than deleting it")
-	}
-	got, err := strconv.Atoi(string(m[1]))
-	if err != nil {
-		t.Fatalf("parse chart port %q: %v", m[1], err)
-	}
-	if got != DocumentDBGatewayPort {
-		t.Errorf("chart documentdbGateway.port = %d, DocumentDBGatewayPort = %d", got, DocumentDBGatewayPort)
+	for _, values := range []string{
+		"../../../deploy/helm/yb-amp-endpoint/values.yaml",
+		"../../../deploy/helm/yb-amp-ingress/values.yaml",
+	} {
+		raw, err := os.ReadFile(values)
+		if err != nil {
+			t.Skipf("chart values not readable (%v)", err)
+		}
+		m := regexp.MustCompile(`(?m)^documentdbGateway:\n(?:.*\n)*?\s+port:\s*(\d+)`).FindSubmatch(raw)
+		if m == nil {
+			t.Fatalf("could not find documentdbGateway.port in %s — "+
+				"the shape changed; update this check rather than deleting it", values)
+		}
+		got, err := strconv.Atoi(string(m[1]))
+		if err != nil {
+			t.Fatalf("parse %s port %q: %v", values, m[1], err)
+		}
+		if got != DocumentDBGatewayPort {
+			t.Errorf("%s documentdbGateway.port = %d, DocumentDBGatewayPort = %d", values, got, DocumentDBGatewayPort)
+		}
 	}
 }

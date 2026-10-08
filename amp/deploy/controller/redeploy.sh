@@ -82,7 +82,7 @@
 #                           reach a public zone. Omit both on a cluster with no
 #                           external-dns and endpoints are addressed as
 #                           <shard-host>:<port> instead
-#   INGRESS_PORT_RANGE      "lo-hi" the shard serves (default 20000-20049)
+#   INGRESS_PORT_RANGE      "lo-hi" the shard serves (default 20000-20048)
 #   INGRESS_CLOUD           aws|gcp|azure; required, the shard will not guess
 #   INGRESS_PROXY_PROTOCOL  true to trust PROXY protocol from the load balancer,
 #                           without which per-endpoint allowlists see the LB
@@ -149,7 +149,7 @@ ENDPOINT_YB_USER="${ENDPOINT_YB_USER:-yugabyte}"
 INGRESS_ZONE_INTERNAL="${INGRESS_ZONE_INTERNAL:-}"
 INGRESS_ZONE_EXTERNAL="${INGRESS_ZONE_EXTERNAL:-}"
 INGRESS_ENABLED="${INGRESS_ENABLED:-$([ -n "${INGRESS_ZONE_INTERNAL}${INGRESS_ZONE_EXTERNAL}" ] && echo true || echo false)}"
-INGRESS_PORT_RANGE="${INGRESS_PORT_RANGE:-20000-20049}"
+INGRESS_PORT_RANGE="${INGRESS_PORT_RANGE:-20000-20048}"
 # The cloud whose load-balancer annotations the shard renders. Required for an
 # internal shard: every provider defaults a LoadBalancer Service to
 # internet-facing, so the chart refuses to guess.

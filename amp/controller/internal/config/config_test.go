@@ -800,8 +800,8 @@ func TestDeployIngressDefaults(t *testing.T) {
 		t.Errorf("IngressPlacement = %q, want spread", d.IngressPlacement)
 	}
 	// The parsed range is a side effect of validation; nothing else fills it.
-	if d.IngressPortLo != 20000 || d.IngressPortHi != 20049 {
-		t.Errorf("parsed port range = %d-%d, want 20000-20049", d.IngressPortLo, d.IngressPortHi)
+	if d.IngressPortLo != 20000 || d.IngressPortHi != 20048 {
+		t.Errorf("parsed port range = %d-%d, want 20000-20048", d.IngressPortLo, d.IngressPortHi)
 	}
 	if d.IngressQuarantine != 10*time.Minute {
 		t.Errorf("IngressQuarantine = %v, want 10m", d.IngressQuarantine)
@@ -831,6 +831,7 @@ func TestDeployIngressRejectsBadConfig(t *testing.T) {
 		// range fails to bind only sometimes, under load, on one node.
 		{"ephemeral high port", []string{"--deploy-ingress-port-range", "32000-40000"}, "ephemeral"},
 		{"port above 65535", []string{"--deploy-ingress-port-range", "20000-70000"}, "1-65535"},
+		{"range over the gateway port", []string{"--deploy-ingress-port-range", "10250-10299"}, "documentdb gateway"},
 		{"unknown placement", []string{"--deploy-ingress-placement", "balanced"}, "spread"},
 		// Only a watermark the ceiling itself cannot hold is unreachable: 10 ports
 		// a shard, 24 shards, so 240 is the most that can ever be free.

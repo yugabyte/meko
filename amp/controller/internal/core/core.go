@@ -219,7 +219,12 @@ type Endpoint struct {
 	// cluster_ip.
 	Connectivity string
 	AllowedCIDRs []string
-	CreatedAt    time.Time
+	// IngressDNSName is the name allocated to an ingress_* endpoint, read from
+	// its live allocation; empty for every other mode. Only a qualified name
+	// (deploy.PublishableDNSName) is published, and the documentdb gateway is
+	// routed by that name, so it decides whether documentdb_address is reported.
+	IngressDNSName string
+	CreatedAt      time.Time
 	// YCPGeneration is the highest YCP desired-state generation fully applied to
 	// this endpoint, echoed back so the reconcile agent can tell an applied update
 	// from one whose async task never finished (meko#985). Written by the worker

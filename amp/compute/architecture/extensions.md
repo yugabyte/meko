@@ -817,8 +817,13 @@ example.
   gateway**:
   - an `engine:"documentdb"` cluster's endpoint runs the sidecar, Ready, and
     reports `documentdb_address`;
-  - pymongo from upstream's pinned `functional-tests` image logs in through the
-    Service as `cloud_admin` over SCRAM-SHA-256;
+  - with `SMOKE_DOCUMENTDB_CONNECTIVITY` set (CI sets `nlb_external`,
+    allow-listed to the runner), the endpoint is created in that mode, the
+    address must be on the endpoint's external host, and the `-lb` Service's
+    `documentdb` port or the shard's SNI route must exist;
+  - pymongo from upstream's pinned `functional-tests` image logs in as
+    `cloud_admin` over SCRAM-SHA-256: through a port-forward to the Service, or
+    straight at `documentdb_address` in an external mode;
   - over the wire protocol it inserts, indexes, finds, updates, aggregates and
     deletes, and SQL reads the same documents back;
   - a wrong password is refused.

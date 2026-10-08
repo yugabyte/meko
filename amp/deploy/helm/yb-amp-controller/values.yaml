@@ -222,8 +222,9 @@ controller:
       # later config change can undo.
       zoneExternal: ""
       # -- Listener range each shard provisions in full at build; its width is
-      # how many endpoints one shard holds.
-      portRange: "20000-20049"
+      # how many endpoints one shard holds. At most 49 wide on AWS: the shard also
+      # listens for the documentdb gateway, and an NLB holds 50 listeners.
+      portRange: "20000-20048"
       # -- Free ports kept per family before another shard is built, so a slow
       # shard build never lands on an endpoint create. Must be below the range's
       # width or every new shard arrives already short of headroom.

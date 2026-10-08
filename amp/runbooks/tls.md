@@ -305,17 +305,20 @@ did not run — look for `endpoint certificate does not cover its client address
 in the controller log, and re-render the endpoint to retry it.
 
 **The documentdb gateway** on a documentdb endpoint serves the same certificate
-on port 10260. It is published only on a `cluster_ip` endpoint's Service, so a
-MongoDB client dials the in-cluster name, which the certificate names under
-`mode: issue` with the Service DNS included (the default):
+on port 10260, at `documentdb_address`: the endpoint's own host, which the
+certificate names wherever it names `address`. For a `cluster_ip` endpoint that is
+the in-cluster name, covered under `mode: issue` with the Service DNS included
+(the default):
 
 ```bash
 mongosh "mongodb://cloud_admin@yb-ep-<id>.<ns>.svc.cluster.local:10260/?tls=true&tlsCAFile=amp-ca.crt"
 ```
 
-A Let's Encrypt wildcard cannot name that host, so under `existing-secret` a
-verifying client fails on the hostname, and the UI still hands out the verifying
-string so that it does. With compute TLS off the gateway self-signs, and the
+A Let's Encrypt wildcard cannot name that in-cluster host, so under
+`existing-secret` a verifying client of a `cluster_ip` endpoint fails on the
+hostname, and the UI still hands out the verifying string so that it does. An
+`nlb_*` or `ingress_*` endpoint's published name is in the zone, so the wildcard
+covers it. With compute TLS off the gateway self-signs, and the
 only string that connects is `tls=true&tlsAllowInvalidCertificates=true`:
 encrypted, with the server unverified. `GET …/endpoints/<id>/ca` reports which
 (`documentdb_verifiable`).

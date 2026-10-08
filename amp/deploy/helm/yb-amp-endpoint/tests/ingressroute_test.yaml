@@ -150,3 +150,141 @@ tests:
       - equal:
           path: spec.endpoints[0].recordType
           value: A
+
+  # --- the documentdb gateway ------------------------------------------------
+  # Every endpoint on a shard shares one gateway entryPoint, so the published
+  # name, read from the ClientHello's SNI, is what picks the endpoint.
+  - it: routes the documentdb gateway by the endpoint's published name, passed through
+    set:
+      service.connectivity: ingress_internal
+      documentdbGateway.enabled: true
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        documentdbEntryPoint: documentdb
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+        recordType: CNAME
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: IngressRouteTCP
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-endpoint-documentdb
+      - equal:
+          path: metadata.labels["amp.yugabyte.com/ingress-shard"]
+          value: pgin-0
+      - equal:
+          path: spec.entryPoints
+          value: [documentdb]
+      - equal:
+          path: spec.routes[0].match
+          value: HostSNI(`ep-3f9a2c41.internal.example`)
+      - equal:
+          path: spec.routes[0].services[0].port
+          value: 10260
+      # Passthrough is what keeps the gateway's TLS end to end; terminating here
+      # would put a key on the proxy.
+      - equal:
+          path: spec.tls.passthrough
+          value: true
+      - notExists:
+          path: spec.routes[0].middlewares
+
+  - it: follows the extension when the gateway is not set explicitly
+    set:
+      service.connectivity: ingress_internal
+      endpoint.extensions:
+        - name: documentdb
+          image: quay.io/yugabyte/amp-ext-documentdb:x
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        documentdbEntryPoint: documentdb
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-endpoint-documentdb
+
+  - it: binds the gateway route to the same allowlist as Postgres
+    set:
+      service.connectivity: ingress_internal
+      documentdbGateway.enabled: true
+      service.allowedCidrs: ["10.0.0.0/16"]
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        documentdbEntryPoint: documentdb
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: spec.routes[0].middlewares[0].name
+          value: RELEASE-NAME-yb-amp-endpoint-allow
+        documentIndex: 0
+      - equal:
+          path: spec.routes[0].middlewares[0].name
+          value: RELEASE-NAME-yb-amp-endpoint-allow
+        documentIndex: 1
+      - isKind:
+          of: MiddlewareTCP
+        documentIndex: 2
+
+  # No name means the client dials the shard's own host, which every endpoint on
+  # the shard shares: there is nothing to route the gateway on.
+  - it: renders no gateway route without a published name
+    set:
+      service.connectivity: ingress_internal
+      documentdbGateway.enabled: true
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        documentdbEntryPoint: documentdb
+        port: 20007
+        shardHost: 10.0.5.20
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.routes[0].match
+          value: HostSNI(`*`)
+
+  - it: renders no gateway route for an endpoint without the gateway
+    set:
+      service.connectivity: ingress_internal
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        documentdbEntryPoint: documentdb
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: DNSEndpoint
+        documentIndex: 1
+
+  - it: refuses a gateway route with no entryPoint to bind it to
+    set:
+      service.connectivity: ingress_internal
+      documentdbGateway.enabled: true
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        dnsName: ep-3f9a2c41.internal.example
+        shardHost: lb-0.example
+    asserts:
+      - failedTemplate:
+          errorMessage: "service.ingress.documentdbEntryPoint is required to route the documentdb gateway"

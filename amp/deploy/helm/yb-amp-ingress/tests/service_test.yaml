@@ -71,13 +71,30 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.ports
-          count: 5
+          count: 6
       - equal:
           path: spec.ports[0].port
           value: 20000
       - equal:
           path: spec.ports[4].port
           value: 20004
+
+  # One gateway listener for the whole shard, routed by SNI, so it costs one
+  # load-balancer port however many documentdb endpoints the shard carries.
+  - it: publishes one shared documentdb gateway port after the range
+    set:
+      family: internal
+      cloud: aws
+      ports.lo: 20000
+      ports.hi: 20004
+    asserts:
+      - equal:
+          path: spec.ports[5]
+          value:
+            name: documentdb
+            port: 10260
+            targetPort: documentdb
+            protocol: TCP
 
   - it: carries the allowlist onto the load balancer as a coarse outer gate
     set:
@@ -96,3 +113,24 @@ tests:
     asserts:
       - notExists:
           path: spec.loadBalancerSourceRanges
+
+  # An AWS NLB holds 50 listeners. One more makes the load balancer controller
+  # fail to reconcile the Service, which nothing here would otherwise surface.
+  - it: refuses an AWS shard whose ports and gateway exceed 50 listeners
+    set:
+      family: internal
+      cloud: aws
+      ports.lo: 20000
+      ports.hi: 20049
+    asserts:
+      - failedTemplate:
+          errorMessage: "cloud=aws: ports 20000-20049 plus the documentdb gateway need 51 listeners, and an AWS Network Load Balancer holds 50 — narrow ports to at most 49 (e.g. 20000-20048)"
+
+  - it: fits the default range and the gateway in 50 AWS listeners
+    set:
+      family: internal
+      cloud: aws
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 50

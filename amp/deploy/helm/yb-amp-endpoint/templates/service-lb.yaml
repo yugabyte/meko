@@ -5,14 +5,15 @@ the cluster can reach this endpoint's Postgres at a stable address. The
 ClusterIP Service in service.yaml stays as it is: the controller reaches the
 pageserver/safekeeper over it by DNS, and the tailnet proxy fronts it.
 
-Postgres only, deliberately. service.yaml publishes ps-http (9898), sk-http
+Client ports only, deliberately. service.yaml publishes ps-http (9898), sk-http
 (7676) and sup-http (9899) alongside pg-compute, and the supervisor's settings
 API is unauthenticated and can reload config and restart Postgres — so
 converting THAT Service to a LoadBalancer would put a restart button on the
-network. Hence a separate Service with one port rather than a type change.
+network. Hence a separate Service carrying Postgres and, where the gateway
+runs, the documentdb port, whose clients log in with SCRAM like Postgres's.
 
 `loadBalancerSourceRanges` below is a core Service field, so the allow-list works
-the same on every cloud. Everything a provider disagrees about is an annotation,
+the same on every cloud and covers both ports. Everything a provider disagrees about is an annotation,
 which is why they are selected by `service.cloud` rather than hardcoded.
 */}}
 {{- $internal := eq .Values.service.connectivity "nlb_internal" }}
@@ -81,6 +82,12 @@ spec:
       port: {{ .Values.endpoint.computePort }}
       targetPort: pg-compute
       protocol: TCP
+    {{- if eq (include "yb-amp-endpoint.documentdbGatewayEnabled" .) "true" }}
+    - name: documentdb
+      port: {{ .Values.documentdbGateway.port }}
+      targetPort: documentdb
+      protocol: TCP
+    {{- end }}
 {{- with .Values.service.dns }}
 {{- if and .name .target (contains "." .name) }}
 ---
