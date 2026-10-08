@@ -26,6 +26,8 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
+const partitionRestartIsFailKey = "stress.backing_node_partition.non_target_restart_is_failure"
+
 func init() {
 	core.Register(core.Test{
 		Name:        "stress/backing_node_partition",
@@ -225,6 +227,9 @@ func runBackingNodePartition(t *core.T, topologySpec string) error {
 			if err != nil {
 				return err
 			}
+			// Quorum holds, so any pod but the victim going down is the product
+			// failing to ride out one tserver (meko#1767), not env damage to retry.
+			gate.asProductFailure(t.Options, partitionRestartIsFailKey)
 			ex := bkube.ForPod(victim, "")
 			peerAddr = podIPNow(t.Context, bkube, peer, peerIP)
 			open, err := tcpOpen(t.Context, ex, peerAddr(), tserverRPCPort)

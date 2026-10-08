@@ -3,7 +3,8 @@
 // opened, a slow image pull or a neighbouring test's pod churn inside it reads
 // as amp stalling. Both verdicts are environmental by default, since a pod
 // nobody targeted going down says nothing about the guarantee under test. A
-// test whose subject IS the cascade (backing_disk_full) opts out.
+// test whose subject IS the cascade (backing_disk_full, backing_node_partition)
+// opts out.
 package stress
 
 import (

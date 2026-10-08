@@ -1842,6 +1842,9 @@ stress:
     resume_duration: "30s"
     payload_bytes: 256
     control_plane_recovery_max: "2m"
+    # An untargeted pod going down while one tserver is cut off is a product
+    # failure: the surviving quorum should carry every endpoint (meko#1767).
+    non_target_restart_is_failure: true
     # multi_region_topology is the netshape topology
     # backing_node_partition_multi_region shapes the backing and the endpoints
     # into before writing: tserver N by name order is site N, the endpoints sit

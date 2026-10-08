@@ -73,7 +73,9 @@ const (
 	// statements over disjoint slices, not one statement over the whole band.
 	// "5" = a gated rung's cold scan is the median of perf.branch_depth.scan_passes
 	// passes on rolled pods, and its writes run on the last rolled pod.
-	branchDepthHarnessRev = "5"
+	// "6" = a gated rung's cold point-read p50 is the median of the per-pass
+	// p50s over the same rolled pods.
+	branchDepthHarnessRev = "6"
 
 	DefaultBranchDepthMaxDepth     = 20
 	DefaultBranchDepthRows         = 2000000
@@ -173,6 +175,11 @@ func branchDepthParamsFromConfig(c *core.Config) (branchDepthParams, error) {
 			p.GateDepths = append(p.GateDepths, d)
 		}
 	}
+	// Only gated rungs are read on several pods, and a ratio of a single pod
+	// over a median of pods is the noise the passes exist to remove.
+	if p.MaxRatio > 0 && (!slices.Contains(p.GateDepths, 0) || !slices.Contains(p.GateDepths, p.RatioDepth)) {
+		return p, fmt.Errorf("perf.branch_depth.gate_depths %v must include 0 and ratio_depth %d for the max_ratio assertion", p.GateDepths, p.RatioDepth)
+	}
 	return p, nil
 }
 
@@ -248,7 +255,9 @@ type branchLevel struct {
 	// has already given that endpoint back.
 	flushLSN string
 	cold     []float64
-	warm     []float64
+	// One cold p50 per pass on a rolled pod, set on gated rungs only.
+	coldPasses []float64
+	warm       []float64
 	// The *MS fields are the medians of the matching per-slice timings.
 	scanMS   float64
 	insertMS float64
@@ -437,30 +446,52 @@ func (r *branchDepthRun) restartEndpoint(l *branchLevel, step string) error {
 
 // One cold scan is one pod on one node at one moment, so a busy neighbour moves
 // all of its slices together and their spread cannot tell: 0.261003.0 scanned
-// depth 1 in 698, 717 and 721 ms and then 1256 ms. A gated rung is scanned
-// again on a rolled pod and gates the median pass.
+// depth 1 in 698, 717 and 721 ms and then 1256 ms. Cold point reads have the
+// same problem: the root's p50 ranged 3.2-4.7 ms across runs, and a 3.17 ms root
+// put depth 1 at 2.20x on 0.261007.0 where it is otherwise 1.4-1.7x. A gated
+// rung is read and scanned again on a rolled pod and gates the median pass.
 func (r *branchDepthRun) rescanCold(l *branchLevel) error {
 	l.scanPasses = []float64{l.scanMS}
+	l.coldPasses = []float64{median(l.cold)}
+	ids := r.sampleReadIDs(r.t.Seed.Fork("branch_depth").Rand())
 	for pass := 2; pass <= r.params.ScanPasses; pass++ {
 		suffix := fmt.Sprintf("_pass%d", pass)
 		if err := r.restartEndpoint(l, fmt.Sprintf("restart_endpoint_depth%d%s", l.depth, suffix)); err != nil {
 			return err
 		}
-		ms, _, err := r.scanCold(l, suffix)
+		cold, ms, err := r.coldPass(l, ids, suffix)
 		if lostTheEndpoint(err) {
-			r.logf("branch_depth: depth %d lost its endpoint mid-scan (%v); scanning again on the replacement", l.depth, err)
+			r.logf("branch_depth: depth %d lost its endpoint mid-pass (%v); measuring again on the replacement", l.depth, err)
 			if err := r.reconnect(l); err != nil {
 				return err
 			}
-			ms, _, err = r.scanCold(l, suffix+"_retry")
+			cold, ms, err = r.coldPass(l, ids, suffix+"_retry")
 		}
 		if err != nil {
 			return err
 		}
+		l.coldPasses = append(l.coldPasses, median(cold))
 		l.scanPasses = append(l.scanPasses, ms)
 	}
 	l.scanMS = median(l.scanPasses)
 	return nil
+}
+
+// The reads go first: the scan would warm the cache they need cold.
+func (r *branchDepthRun) coldPass(l *branchLevel, ids []int, suffix string) (cold []float64, scanMS float64, err error) {
+	if cold, err = r.timedReads(l, "cold", suffix, ids); err != nil {
+		return nil, 0, err
+	}
+	scanMS, _, err = r.scanCold(l, suffix)
+	return cold, scanMS, err
+}
+
+// coldP50 is what a rung's cold point read is gated on.
+func coldP50(l *branchLevel) float64 {
+	if len(l.coldPasses) > 1 {
+		return median(l.coldPasses)
+	}
+	return median(l.cold)
 }
 
 func (r *branchDepthRun) fork(depth int) error {
@@ -886,11 +917,16 @@ func branchColdRatio(levels []*branchLevel, depth int) (float64, bool) {
 	if depth < 1 || depth >= len(levels) || len(levels[0].cold) == 0 || len(levels[depth].cold) == 0 {
 		return 0, false
 	}
-	base := median(levels[0].cold)
+	// Like for like: the pod medians only when both sides were read on several pods.
+	root, l := levels[0], levels[depth]
+	base, v := median(root.cold), median(l.cold)
+	if len(root.coldPasses) > 1 && len(l.coldPasses) > 1 {
+		base, v = median(root.coldPasses), median(l.coldPasses)
+	}
 	if base <= 0 {
 		return 0, false
 	}
-	return median(levels[depth].cold) / base, true
+	return v / base, true
 }
 
 func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepthParams) (gated, info []core.Datapoint, err error) {
@@ -903,7 +939,7 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 			bucket = &gated
 		}
 		if len(l.cold) > 0 {
-			cold := median(l.cold)
+			cold := coldP50(l)
 			*bucket = append(*bucket, core.Datapoint{Name: branchDepthPrefix + "read_cold_p50_ms" + suffix, Value: cold, Unit: "ms", Direction: core.LowerIsBetter,
 				MinDelta: coldFloorMS(cold)})
 			// p99 of the sample set is ~3 reads, so one slow read triples it.
@@ -950,8 +986,8 @@ func branchDepthDatapoints(levels []*branchLevel, tableMB float64, p branchDepth
 		info = append(info, core.Datapoint{Name: branchDepthPrefix + "table_mb", Value: tableMB, Unit: "MiB", Direction: core.LowerIsBetter})
 	}
 	if ratio, ok := branchColdRatio(levels, p.RatioDepth); ok && p.MaxRatio > 0 && ratio > p.MaxRatio {
-		err = fmt.Errorf("cold point-read p50 on the depth-%d branch is %.2fx the root's (limit %.2fx, %d samples each): a page miss on the fork costs more than one extra lookup should",
-			p.RatioDepth, ratio, p.MaxRatio, len(levels[p.RatioDepth].cold))
+		err = fmt.Errorf("cold point-read p50 on the depth-%d branch is %.2fx the root's (limit %.2fx, %d samples per pod, %d pod(s) per side): a page miss on the fork costs more than one extra lookup should",
+			p.RatioDepth, ratio, p.MaxRatio, len(levels[p.RatioDepth].cold), max(len(levels[p.RatioDepth].coldPasses), 1))
 	}
 	return gated, info, err
 }
