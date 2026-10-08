@@ -18,6 +18,7 @@ templates:
   - templates/langfuse/configmap.yaml
   - templates/langfuse/schema-configmap.yaml
   - templates/langfuse/deployment.yaml
+  - templates/langfuse/serviceaccount.yaml
   - templates/dataplane-secrets.yaml
   - charts/valkey/templates/deploy_valkey.yaml
   - charts/valkey/templates/init_config.yaml
@@ -35,6 +36,12 @@ set:
   # (the schema-init containers reference apiServer's ConfigMap/Secret by name
   # only, which resolves in-namespace) — unrelated to every case below.
   global.singleNamespace: true
+  # A chart-managed langfuse now requires an S3 event-upload store (MEKO-832);
+  # provide a valid one suite-wide (a real bucket + iam-user static keys) so the
+  # rendering cases keep rendering. The guard cases below override it.
+  langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET: test-events-bucket
+  dataPlaneSecrets.langfuseS3AccessKey: suite-key
+  dataPlaneSecrets.langfuseS3SecretKey: suite-secret
 tests:
   - it: renders no schema-init containers when migrate is off
     template: templates/langfuse/deployment.yaml
@@ -416,3 +423,181 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled) or name an external one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."
+
+  # MEKO-832: the S3 event-upload store is required, since every conversation event
+  # lands there before ingestion. The cases below cover the failure modes (no
+  # bucket, no auth, a bad auth mode, an iam-role without the EKS annotation) and
+  # the valid auth paths (static keys, EKS IRSA), plus the ServiceAccount render.
+  - it: fails the render when the event bucket is left at the hosted placeholder
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse-meko-bucket
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled: set langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET to your own S3 bucket. Langfuse uploads every conversation event there before ingesting it, so without a real bucket conversations are dropped silently; the default 'langfuse-meko-bucket' is the hosted bucket, not yours."
+
+  - it: fails the render in iam-user mode without static S3 credentials
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      langfuse.s3AuthMode: iam-user
+      dataPlaneSecrets.langfuseS3AccessKey: ""
+      dataPlaneSecrets.langfuseS3SecretKey: ""
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.migrate.enabled with langfuse.s3AuthMode=iam-user needs dataPlaneSecrets.langfuseS3AccessKey and langfuseS3SecretKey for the S3 event store — or, on EKS, set langfuse.s3AuthMode=iam-role to authenticate through EKS IRSA (eks.amazonaws.com/role-arn) instead."
+
+  - it: renders the S3 event-upload creds in iam-user mode when they are supplied
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      langfuse.s3AuthMode: iam-user
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseS3AccessKey: AKIAEXAMPLE
+      dataPlaneSecrets.langfuseS3SecretKey: s3cr3t
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+          value: AKIAEXAMPLE
+
+  - it: renders with a pod IAM role and no static keys (iam-role)
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: langfuse-secrets
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      langfuse.s3AuthMode: iam-role
+      langfuse.serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/langfuse
+      dataPlaneSecrets.langfuseS3AccessKey: ""
+      dataPlaneSecrets.langfuseS3SecretKey: ""
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - notExists:
+          path: stringData.LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+
+  - it: fails the render in iam-role mode without a ServiceAccount role annotation
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      langfuse.s3AuthMode: iam-role
+      dataPlaneSecrets.langfuseS3AccessKey: ""
+      dataPlaneSecrets.langfuseS3SecretKey: ""
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "langfuse.s3AuthMode=iam-role is EKS IRSA: set langfuse.serviceAccount.annotations.\"eks.amazonaws.com/role-arn\" to the role ARN that can reach the S3 event bucket — the EKS pod-identity webhook then injects the AWS credentials. On GKE, or on AWS without IRSA, use iam-user with static keys instead: a GKE Workload Identity annotation gives a Google identity the AWS SDK cannot use for S3, so iam-role would render green and still drop every conversation."
+
+  - it: rejects iam-role with only a GKE Workload Identity annotation (no AWS creds)
+    template: templates/dataplane-secrets.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+      langfuse.s3AuthMode: iam-role
+      langfuse.serviceAccount.annotations:
+        iam.gke.io/gcp-service-account: lf@proj.iam.gserviceaccount.com
+      dataPlaneSecrets.langfuseS3AccessKey: ""
+      dataPlaneSecrets.langfuseS3SecretKey: ""
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate: {}
+
+  - it: runs chart-managed langfuse pods on their own ServiceAccount, with the role annotation
+    template: templates/langfuse/serviceaccount.yaml
+    set:
+      langfuse.migrate.enabled: true
+      langfuse.serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/langfuse
+    asserts:
+      - equal:
+          path: metadata.name
+          value: meko-langfuse
+      - equal:
+          path: metadata.annotations["eks.amazonaws.com/role-arn"]
+          value: arn:aws:iam::000000000000:role/langfuse
+
+  - it: does not create the ServiceAccount for a hosted (migrate off) langfuse
+    template: templates/langfuse/serviceaccount.yaml
+    set:
+      langfuse.migrate.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: names that ServiceAccount on the chart-managed langfuse Deployment
+    template: templates/langfuse/deployment.yaml
+    set:
+      langfuse.migrate.enabled: true
+      yugabyte.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: meko-langfuse
+
+  - it: leaves a hosted (migrate off) langfuse Deployment on its existing ServiceAccount
+    template: templates/langfuse/deployment.yaml
+    set:
+      langfuse.migrate.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.serviceAccountName

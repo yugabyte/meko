@@ -140,6 +140,14 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	// required below is real cryptographic material this shell can generate on
 	// the spot (openssl rand), but the seeded owner needs an actual mailbox.
 	fmt.Fprintf(&b, "LANGFUSE_OWNER_EMAIL=<you@your-domain>        # bundled langfuse's seeded owner login\n")
+	// The langfuse S3 event store is the conversation ingestion buffer: without it
+	// the stack comes up green and drops every conversation (MEKO-832), so the
+	// render now requires it. Your own bucket and region; iam-user static keys
+	// here, or switch to a pod IAM role (README) and blank the two keys.
+	fmt.Fprintf(&b, "LANGFUSE_S3_BUCKET=<your s3 bucket>        # langfuse conversation event store\n")
+	fmt.Fprintf(&b, "LANGFUSE_S3_REGION=<bucket region>        # e.g. us-east-2\n")
+	fmt.Fprintf(&b, "LANGFUSE_S3_KEY=<aws access key id>        # may reuse BEDROCK_KEY if it reaches the bucket\n")
+	fmt.Fprintf(&b, "LANGFUSE_S3_SECRET=<aws secret access key>\n")
 	// Worth a line of its own rather than a footnote: without it the stack comes up
 	// entirely green and remembers nothing, which reads as a bug rather than a
 	// missing credential. The refs are optional, so empty installs fine.
@@ -193,7 +201,8 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
 	// values-byoc.yaml turns langfuse on with migrate.enabled — a fresh install
-	// fails at dataplane-secrets.yaml's own fail-fast guard without these seven.
+	// fails at dataplane-secrets.yaml's own fail-fast guard without these seven
+	// crypto fields AND the S3 event store below.
 	// Six are generated inline (openssl rand, once, at paste time — see the
 	// README for why these must NOT be regenerated on a later upgrade); the
 	// seventh is the header var above, since a chart cannot invent an email.
@@ -204,6 +213,17 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitUserEmail=\"${LANGFUSE_OWNER_EMAIL}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitUserPassword=\"$(openssl rand -hex 16)\" \\\n")
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseInitProjectSecretKey=\"$(openssl rand -hex 16)\" \\\n")
+	// The S3 event store (MEKO-832): all three buckets point at the operator's own
+	// bucket so media/export never write to the hosted default, and the region is
+	// set so a non-us-east-2 bucket works. iam-user static keys by default.
+	fmt.Fprintf(&b, "  --set-string langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET=\"${LANGFUSE_S3_BUCKET}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string langfuse.config.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET=\"${LANGFUSE_S3_BUCKET}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string langfuse.config.LANGFUSE_S3_BATCH_EXPORT_BUCKET=\"${LANGFUSE_S3_BUCKET}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_REGION=\"${LANGFUSE_S3_REGION}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string langfuse.config.LANGFUSE_S3_MEDIA_UPLOAD_REGION=\"${LANGFUSE_S3_REGION}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string langfuse.config.LANGFUSE_S3_BATCH_EXPORT_REGION=\"${LANGFUSE_S3_REGION}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseS3AccessKey=\"${LANGFUSE_S3_KEY}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.langfuseS3SecretKey=\"${LANGFUSE_S3_SECRET}\" \\\n")
 	fmt.Fprintf(&b, "  --set otel.enabled=true \\\n")
 	fmt.Fprintf(&b, "  --set otel.byoc.enabled=true \\\n")
 	if byocMetricsURL != "" {

@@ -28,6 +28,12 @@ spec:
         {{- end }}
         {{- include "meko.configChecksum" (dict "root" $ "files" $checksumFiles) | nindent 8 }}
     spec:
+      {{- if $c.migrate.enabled }}
+      {{- /* Chart-managed langfuse runs on its own SA (templates/langfuse/serviceaccount.yaml),
+             which carries the IRSA role annotation under s3AuthMode=iam-role. Hosted
+             dev/prod (migrate off) keep their existing SA — see that file. */}}
+      serviceAccountName: {{ $c.serviceAccount.name | default "meko-langfuse" }}
+      {{- end }}
       {{- include "meko.imagePullSecrets" . }}
       {{- if $c.migrate.enabled }}
       {{- /* Mirrors api-server's ensure-extensions in spirit, not literally: the

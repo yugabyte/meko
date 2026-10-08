@@ -9,6 +9,14 @@
 #
 #   helm unittest charts/meko
 suite: oidc and the byoc-full overlay
+set:
+  # values-byoc enables langfuse.migrate, which now requires an S3 event store
+  # (MEKO-832). Provide a valid one suite-wide — a real bucket with role auth, so
+  # no S3 keys are added to the rendered secret — so these cases still render.
+  langfuse.s3AuthMode: iam-role
+  langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET: test-events-bucket
+  langfuse.serviceAccount.annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/langfuse
 tests:
   - it: wires the OIDC flags and env, and passes the client secret by env var only
     template: templates/api-server/deployment.yaml

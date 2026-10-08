@@ -212,10 +212,12 @@ k -n "$NS" create secret generic meko-data-plane "${creds[@]}" \
 # Quay one and the pull secret named. If it drifts from the hint, the hint is wrong.
 #
 # values-byoc.yaml turns langfuse on with migrate.enabled, so — same as the hint —
-# this needs its seven dataPlaneSecrets.langfuse* values or the chart fails at
-# dataplane-secrets.yaml's own fail-fast guard. Generated fresh per run: nothing
-# here reads them back, unlike a real install where they must be kept (see the
-# chart README).
+# this needs its seven dataPlaneSecrets.langfuse* values AND the S3 event store (a
+# bucket, its region on all three prefixes, and iam-user keys) or the chart fails
+# at dataplane-secrets.yaml's own fail-fast guard. The e2e never exercises
+# conversation ingestion, so a throwaway bucket and keys are enough. Generated
+# fresh per run: nothing here reads them back, unlike a real install where they
+# must be kept (see the chart README).
 LANGFUSE_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 LANGFUSE_NEXTAUTH_SECRET="$(openssl rand -hex 16)"
 LANGFUSE_SALT="$(openssl rand -hex 16)"
@@ -236,6 +238,14 @@ helm --kube-context "$CTX" upgrade --install meko "$CHART" -n "$NS" \
   --set-string dataPlaneSecrets.langfuseInitUserEmail="e2e@meko-reconcile.test" \
   --set-string dataPlaneSecrets.langfuseInitUserPassword="$LANGFUSE_INIT_USER_PASSWORD" \
   --set-string dataPlaneSecrets.langfuseInitProjectSecretKey="$LANGFUSE_INIT_PROJECT_SECRET_KEY" \
+  --set-string langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET=meko-reconcile-events \
+  --set-string langfuse.config.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET=meko-reconcile-events \
+  --set-string langfuse.config.LANGFUSE_S3_BATCH_EXPORT_BUCKET=meko-reconcile-events \
+  --set-string langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-2 \
+  --set-string langfuse.config.LANGFUSE_S3_MEDIA_UPLOAD_REGION=us-east-2 \
+  --set-string langfuse.config.LANGFUSE_S3_BATCH_EXPORT_REGION=us-east-2 \
+  --set-string dataPlaneSecrets.langfuseS3AccessKey=test-key \
+  --set-string dataPlaneSecrets.langfuseS3SecretKey=test-secret \
   --set reconcileAgent.enabled=true \
   --set reconcileAgent.ycpUrl="http://meko-api-server.$CP_NS.svc.cluster.local:80$BASE/api/v1" \
   --set reconcileAgent.envName="$ENV_NAME" \

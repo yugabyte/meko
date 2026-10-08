@@ -621,10 +621,11 @@ dataPlaneSecrets:
   #   { "Effect": "Allow",
   #     "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject","s3:AbortMultipartUpload"],
   #     "Resource": "arn:aws:s3:::<bucket>/*" }
-  # Optional, unlike the seven above: the langfuse Deployment takes the whole
-  # Secret through a bare envFrom.secretRef, so a missing pair just means these
-  # two keys are absent from it — uploads fail at the point of use rather than
-  # the pod failing to start, matching apiServer's own S3 credential.
+  # Required under the default langfuse.s3AuthMode=iam-user: dataplane-secrets.yaml
+  # FAILS the render for a chart-managed langfuse without this pair, because the
+  # S3 event-upload store is the conversation ingestion buffer (MEKO-832). Leave
+  # the pair empty only with langfuse.s3AuthMode=iam-role (EKS IRSA), where the pods
+  # reach S3 through langfuse.serviceAccount's eks.amazonaws.com/role-arn annotation.
   langfuseS3AccessKey: ""
   langfuseS3SecretKey: ""
   # REDIS_AUTH for an external, authenticated Valkey (langfuse.valkey.managed:
@@ -1104,6 +1105,25 @@ langfuse:
   # image, nothing langfuse-specific to pin separately.
   migrate:
     enabled: false
+  # S3 auth mode for langfuse's object store (its event-upload bucket is the
+  # ingestion buffer — every conversation event lands there first, see
+  # templates/dataplane-secrets.yaml). iam-user: static keys in
+  # dataPlaneSecrets.langfuseS3AccessKey/SecretKey (works on any cloud). iam-role:
+  # no keys — EKS IRSA only, via the serviceAccount.annotations below. langfuse
+  # reaches S3 through the AWS SDK, and only the EKS pod-identity webhook injects
+  # AWS credentials from an SA annotation; a GKE Workload Identity annotation gives
+  # a Google identity the SDK cannot use for S3, so on GKE (or AWS without IRSA)
+  # use iam-user. Mirrors apiServer.staticArgs.s3AuthMode.
+  s3AuthMode: iam-user
+  # The chart-managed langfuse pods' ServiceAccount (created only with
+  # migrate.enabled — hosted keeps its own SA). Under s3AuthMode=iam-role put the
+  # EKS IRSA role ARN here so the pods get the role:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<role>
+  # dataplane-secrets.yaml REFUSES iam-role without that exact annotation, so the
+  # mode can't pass the render yet silently fail to reach S3.
+  serviceAccount:
+    name: meko-langfuse
+    annotations: {}
   # §5 SECURITY FIX (flagged for confirmation): these keys carried secrets in
   # the ConfigMap today — DATABASE_URL/TRACING_DATABASE_URL embed the YB
   # password, and the S3 *_ACCESS_KEY_ID keys are AWS creds. The chart does NOT

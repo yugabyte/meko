@@ -59,6 +59,13 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		"LANGFUSE_OWNER_EMAIL=",
 		`--set-string dataPlaneSecrets.langfuseInitUserEmail="${LANGFUSE_OWNER_EMAIL}"`,
 		`--set-string dataPlaneSecrets.langfuseEncryptionKey="$(openssl rand -hex 32)"`,
+		// The langfuse S3 event store is now required (MEKO-832): a header var the
+		// operator fills, wired into all three bucket overrides so media/export
+		// never hit the hosted bucket.
+		"LANGFUSE_S3_BUCKET=",
+		`--set-string langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET="${LANGFUSE_S3_BUCKET}"`,
+		`--set-string langfuse.config.LANGFUSE_S3_BATCH_EXPORT_BUCKET="${LANGFUSE_S3_BUCKET}"`,
+		`--set-string dataPlaneSecrets.langfuseS3AccessKey="${LANGFUSE_S3_KEY}"`,
 		// The footnote for the configurations that do need a token — either
 		// identity provider, not just Cognito.
 		"identity provider ON (Cognito or OIDC)",
@@ -78,6 +85,8 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 			strings.HasPrefix(line, "QUAY_USER=") || strings.HasPrefix(line, "QUAY_TOKEN=") ||
 			strings.HasPrefix(line, "BEDROCK_KEY=") || strings.HasPrefix(line, "BEDROCK_SECRET=") ||
 			strings.HasPrefix(line, "LANGFUSE_OWNER_EMAIL=") ||
+			strings.HasPrefix(line, "LANGFUSE_S3_BUCKET=") || strings.HasPrefix(line, "LANGFUSE_S3_REGION=") ||
+			strings.HasPrefix(line, "LANGFUSE_S3_KEY=") || strings.HasPrefix(line, "LANGFUSE_S3_SECRET=") ||
 			strings.HasPrefix(line, "BYOC_PASSWORD=") || strings.HasPrefix(line, "DD_API_KEY=") ||
 			strings.HasPrefix(line, "AGENT_API_KEY=") {
 			continue

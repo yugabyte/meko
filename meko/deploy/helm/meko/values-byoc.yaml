@@ -287,10 +287,16 @@ mekoUi:
 # same install (no ClickHouse anywhere — this fork's "tracing" backend is a
 # `clickhouse`-named Postgres schema in the SAME YugabyteDB database, not a real
 # ClickHouse deployment; see templates/langfuse/deployment.yaml). What it still
-# needs from the installer: an image tag for web/worker, an S3 bucket for
-# event/media/export uploads (optional — degrades to failed uploads, not a blocked
-# pod), and the required dataPlaneSecrets.langfuse* crypto fields below, none of
-# which has a default.
+# needs from the installer: an image tag for web/worker; an S3 event-upload store —
+# your own bucket in langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET (set the MEDIA
+# and BATCH_EXPORT buckets and all three REGIONs too — they default to the hosted
+# bucket in us-east-2, so a bare event override still writes media/export to the
+# hosted bucket and breaks a non-us-east-2 event bucket) plus auth: static keys in
+# dataPlaneSecrets.langfuseS3AccessKey/SecretKey, or langfuse.s3AuthMode=iam-role
+# with a role annotation on langfuse.serviceAccount. The event store is REQUIRED —
+# every conversation event is uploaded there before ingestion, so the render fails
+# without it (MEKO-832). See deploy/helm/meko/README.md for the exact --set flags.
+# Plus the required dataPlaneSecrets.langfuse* crypto fields below, no defaults.
 #
 # Image coordinates are carried here whether or not a component is on, so enabling
 # one is a flag and not a flag plus two image values: meko.image falls back to

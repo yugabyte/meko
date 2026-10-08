@@ -303,6 +303,36 @@ report already turned into an RCE:
 --set dataPlaneSecrets.langfuseInitProjectSecretKey=$(openssl rand -hex 16)
 ```
 
+langfuse also needs an **S3 event-upload store** — its ingestion buffer, where every
+conversation event lands before a worker reads it into the tracing store. The render
+now fails without one (otherwise conversations are accepted on write and silently
+dropped — MEKO-832). Point **all three** buckets at your own bucket and set its region
+(the defaults are the hosted bucket in `us-east-2`, so a bare event-bucket override
+still sends media/export to the hosted bucket and breaks a non-us-east-2 event bucket):
+
+```bash
+--set langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET=<your-bucket> \
+--set langfuse.config.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET=<your-bucket> \
+--set langfuse.config.LANGFUSE_S3_BATCH_EXPORT_BUCKET=<your-bucket> \
+--set langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_REGION=<region> \
+--set langfuse.config.LANGFUSE_S3_MEDIA_UPLOAD_REGION=<region> \
+--set langfuse.config.LANGFUSE_S3_BATCH_EXPORT_REGION=<region> \
+# then pick ONE auth mode:
+# (a) static keys — langfuse.s3AuthMode defaults to iam-user; works on any cloud:
+--set dataPlaneSecrets.langfuseS3AccessKey=AKIA… --set dataPlaneSecrets.langfuseS3SecretKey=… \
+# (b) EKS IRSA — leave the keys empty and annotate the langfuse ServiceAccount with
+#     the role ARN; the EKS pod-identity webhook then injects the AWS credentials.
+#     (EKS only: langfuse reaches S3 via the AWS SDK, and a GKE Workload Identity
+#     annotation gives a Google identity the SDK can't use for S3 — on GKE use (a).)
+--set langfuse.s3AuthMode=iam-role \
+--set langfuse.serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=arn:aws:iam::<acct>:role/<role>
+```
+
+The render requires the event-upload store; `MEDIA_UPLOAD` / `BATCH_EXPORT` are not
+required, but they default to the hosted bucket, so repoint (above) or disable them
+(`--set langfuse.config.LANGFUSE_S3_BATCH_EXPORT_ENABLED=false`, and leave the media
+bucket pointed at yours) rather than writing to the hosted bucket with your credentials.
+
 **Generate these once and keep them** — in a values file of your own, or a password
 manager — rather than re-running the command above on a second `helm upgrade`.
 `dataplane-secrets.yaml` re-renders `langfuse-secrets` from whatever values it's given
