@@ -139,7 +139,10 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 Before anything else, the installer checks for tmux, git, curl, gh and Claude Code and offers to
 install the missing ones (and `agent-k-local install` offers Meko's own setup for Claude Code),
 showing the commands and asking first (`--install-deps` to skip the question,
-`--no-install-deps` to never install, `--deps-only` to stop after that step). Its tests
+`--no-install-deps` to never install, `--deps-only` to stop after that step). Where AgentK Local
+is already installed (`app/current` and `config.toml` in its home), it says so and stops before
+any of that, unless given `--reinstall`, `--deps-only` or a `--version` other than the installed
+one. Its tests
 (`test/unit/install-script.test.ts`) run the real script against stub tools.
 
 The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current` at it, links

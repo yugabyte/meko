@@ -11,6 +11,7 @@
 #                       Claude Code setup) without asking
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
+#   --reinstall         download and set up again even though AgentK Local is already installed
 #   anything else       forwarded to `agent-k-local install`
 #                       (--non-interactive, --repos-root, --meko-key, --no-meko, --bind, --port,
 #                       --no-service); Meko is optional: without a key the install goes on without it
@@ -23,6 +24,9 @@
 # is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
 # it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
 #
+# Run again where AgentK Local is already installed (it updates itself), it says so and stops
+# without changing anything, unless given --reinstall, --deps-only or another --version.
+#
 # Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
 # GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
 set -eu
@@ -32,6 +36,7 @@ ak_home=${AK_HOME:-$HOME/.agent-k-local}
 version=""
 install_deps=ask
 deps_only=false
+reinstall=false
 interactive=true
 
 # Output: color and marks only on a terminal, never with NO_COLOR.
@@ -58,6 +63,7 @@ while [ $# -gt 0 ]; do
     --install-deps) install_deps=yes; shift ;;
     --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
+    --reinstall) reinstall=true; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
     *) forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
@@ -105,6 +111,31 @@ need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but was not foun
 # The user's own PATH, to tell them later whether their shell will find agent-k-local.
 user_path=$PATH
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac
+short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
+
+# ---- already installed ----
+# A release linked as app/current and a config.toml from `agent-k-local install`: nothing to do,
+# since the server updates itself. A half-done install (no config.toml yet) goes on to finish.
+if ! $reinstall && ! $deps_only && [ -x "$ak_home/app/current/bin/agent-k-local" ] && [ -f "$ak_home/config.toml" ]; then
+  installed=$(readlink "$ak_home/app/current" 2>/dev/null) || installed=""
+  installed=${installed##*/}
+  if [ -z "$version" ] || [ "$version" = "$installed" ]; then
+    # shellcheck disable=SC2088 # shown to the user, not run
+    case ":$user_path:" in *":$HOME/.local/bin:"*) cmd=agent-k-local ;; *) cmd="~/.local/bin/agent-k-local" ;; esac
+    row() { printf '    %s%-13s%s %s\n' "$d" "$1" "$n" "$2" >&2; }
+    say ""
+    say "${b}AgentK Local installer${n}"
+    say ""
+    ok "Installed" "${installed:-unknown version} in $short_home"
+    say ""
+    say "  AgentK Local is already installed, and it updates itself."
+    row "Status" "$cmd status"
+    row "Setup" "$cmd install   (change the repos folder, access, port or Meko)"
+    row "Reinstall" "gh release download --repo $repo --pattern install.sh --output - | sh -s -- --reinstall"
+    exit 0
+  fi
+fi
+
 need tar ""
 if command -v sha256sum >/dev/null 2>&1; then
   sha256_check() { sha256sum -c -; }
@@ -416,7 +447,6 @@ rm -f "$ak_home/update-pending.json"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$ak_home/app/current/bin/agent-k-local" "$HOME/.local/bin/agent-k-local"
-short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
 ok "Installed" "$short_home/app/$version"
 case ":$user_path:" in
   *":$HOME/.local/bin:"*) ok "Command" "agent-k-local (in ~/.local/bin)" ;;

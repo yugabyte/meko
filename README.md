@@ -46,6 +46,10 @@ default over SSH or on a machine with no display. Then it prints the address, or
 access a one-time setup link that creates your login. Local access trusts everyone who can log
 in to the computer, so pick remote on a shared host.
 
+Run again where AgentK Local is already installed, the installer says so and stops: AgentK Local
+updates itself. To change its setup (repos folder, access, port, Meko), run `agent-k-local
+install`; to download and install it again, pass `--reinstall` (`… | sh -s -- --reinstall`).
+
 Forgot your password? Run `agent-k-local setup-link` on the host and open the link it prints to
 choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 

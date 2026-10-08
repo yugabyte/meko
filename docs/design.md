@@ -2033,6 +2033,9 @@ comes back. **Auto-continue is on by default**, with guards:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
+#  0. stops, saying so, if AgentK Local is already installed in AK_HOME (app/current and
+#     config.toml): it updates itself, and `agent-k-local install` redoes the setup. --reinstall,
+#     --deps-only, or a --version other than the installed one go on
 #  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, curl, gh and Claude Code; offers to
 #     install whatever is missing (it shows the commands and asks first): brew on macOS, the
 #     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
