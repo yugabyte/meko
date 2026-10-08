@@ -336,20 +336,21 @@ git commit -m "..."
 The commit subject follows:
 
 ```
-[<KEY>-<num>] <component>: <title>     # with a Jira ticket
-[#<issue>] <component>: <title>        # with a GitHub issue in this repo
-<component>: <title>                   # without one
+[<KEY>-<num>] <component>: <title>              # with a Jira ticket
+[#<issue>] <component>: <title>                 # with a GitHub issue in this repo
+[<KEY>-<num>][#<issue>] <component>: <title>    # tracked in several places
 ```
 
 - **`[<KEY>-<num>]`** — the tracking ticket, first so `git log --oneline` is
   greppable by ticket. Any Jira project's key works (`MEKO-`, `AMP-`, `CLOUDGA-`,
   `PLAT-`, …): use the ticket that actually tracks the work, whichever project it
   is in. Work tracked as a GitHub issue in this repo uses `[#<issue>]` instead
-  (see the `create-amp-issue` skill). **Omit the tag entirely
-  when the work genuinely has no ticket or issue** — start with `<component>:`.
-  Never invent a placeholder like `[MEKO-xxx]` or guess a number: a tag that
-  resolves to nothing is worse than no tag, because it looks greppable but isn't,
-  and it outlives the reason it was used.
+  (see the `create-amp-issue` skill). Several tags go back to back with no space
+  between them. **The tag is required**: the squash merge makes the PR title the
+  subject on `main`, and the `PR title` check fails a PR without one. When the
+  work has no ticket or issue, file one. Never invent a placeholder like
+  `[MEKO-xxx]` or guess a number: a tag that resolves to nothing looks greppable
+  but isn't, and it outlives the reason it was used.
 - **`<component>`** — the top-level directory the change lives in: `api_server`,
   `cli_app`, `meko_ui`, `meko_admin`, `meko-provisioner`, `inference_gateway`,
   `system_agent`, `docs` — or a meta token (`ci`, `build`, `tools`) for work that
@@ -364,11 +365,7 @@ Examples (all real subjects from this repo's history):
 [MEKO-375] meko_ui: integrate Meko Admin console + align theme to meko_admin
 [AMP-55] test/functional: add stress/sqlancer, SQLancer logic-bug oracles against amp endpoints (opt-in)
 [CLOUDGA-37256] api_server: fix the amp install hint's credentials, telemetry and foundation steps
-api_server: make the app usable without Cognito
-docs(mcp-server): datapack_update takes name/description, not connection_string
 ```
-
-The last two carry no ticket and that is correct — untagged, not `[MEKO-xxx]`.
 
 The subject describes the **code** change; companion updates (docs, tests,
 generated files) ride along silently — don't enumerate them in the subject. Call
@@ -426,7 +423,7 @@ If this commit advances or completes a tracked ticket or GitHub issue:
 - **Reference it** with the subject tag (see Subject format above) so the work is
   linked: `[<KEY>-<num>]` for a Jira ticket in any project (`[MEKO-12]`,
   `[AMP-55]`, `[CLOUDGA-37256]`), `[#<issue>]` for a GitHub issue in this repo.
-  Omit the tag entirely when there is genuinely no ticket — never invent a
+  The tag is required — file a ticket when there is none; never invent a
   placeholder or guess a number.
 - **Close it when the work ships.** Put `Closes <full ticket or issue URL>` in the
   PR body so the merge closes it: GitHub closes the issue, and the

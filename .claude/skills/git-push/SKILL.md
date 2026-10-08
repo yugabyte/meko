@@ -211,14 +211,15 @@ branch and update it so it matches reality:
 git log --oneline origin/main..HEAD    # re-read the full set of commits
 ```
 
-- **Title** — must carry the tracking reference so the change is traceable,
-  mirroring the commit subject style: `[<KEY>-<num>] <component>: <title>` with
-  the Jira ticket from any project (e.g. `[MEKO-123] meko_ui: make Create Cluster
-  pg_version selectable`, `[AMP-55] ...`, `[CLOUDGA-37256] ...`), or
-  `[#<issue>]` for work tracked as a GitHub issue in this repo. When there is no ticket or
-  issue, omit the tag and start at `<component>:` — never invent `[MEKO-xxx]` or
-  guess a number. If the branch grew from one commit to several, the title should
-  describe the branch as a whole, not just the first commit.
+- **Title** — must start with the tracking reference so the change is traceable
+  (the `PR title` check fails the PR otherwise), mirroring the commit subject
+  style: `[<KEY>-<num>] <component>: <title>` with the Jira ticket from any
+  project (e.g. `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`,
+  `[AMP-55] ...`, `[CLOUDGA-37256] ...`), or `[#<issue>]` for work tracked as a
+  GitHub issue in this repo. Several tags go back to back: `[AMP-55][#512] ...`.
+  The tag is required: when there is no ticket or issue, file one — never invent
+  `[MEKO-xxx]` or guess a number. If the branch grew from one commit to several,
+  the title should describe the branch as a whole, not just the first commit.
 - **Summary** — update the body so it describes what the branch actually does
   now, using the sections below (drop one only when it truly doesn't apply, and
   say so):

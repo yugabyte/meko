@@ -140,9 +140,10 @@ in the root [`REVIEW.md`](../REVIEW.md). On top of those:
 - **Title carries the tracking ticket** — e.g.
   `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`. A Jira key from
   any project is fine (`[AMP-55]`, `[CLOUDGA-37256]`, …), as is `[#<issue>]` for a
-  GitHub issue; don't ask for a `MEKO-` ticket instead. An untagged
-  title is correct when there is genuinely no ticket, so don't ask for a
-  placeholder like `[MEKO-xxx]`. Do flag an invented or guessed number.
+  GitHub issue; don't ask for a `MEKO-` ticket instead. The tag is required (the
+  `PR title` check fails an untagged PR): when there is no ticket, ask the author to
+  file one, not to add a placeholder like `[MEKO-xxx]`. Do flag an invented or
+  guessed number.
 - Body includes the `open-pr` sections that apply: Summary, Files changed, Testing,
   Config/env vars, plus Upgrade safety, Math/derivation or Deploy notes when relevant.
 - Lint/typecheck clean for the touched module: Go — `go build ./...`,

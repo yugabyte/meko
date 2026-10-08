@@ -134,8 +134,8 @@ in the PR body or final commit to auto-close on merge.
 
 Note the two tag forms this repo accepts: a Jira key from any project
 (`[AMP-55]`, `[MEKO-12]`, `[CLOUDGA-37256]`, …) when a Jira ticket tracks the
-work, and `[#<issue>]` for a GitHub issue; see the `commit` skill. Don't invent a number: if there's no issue, either file one or omit the
-tag entirely.
+work, and `[#<issue>]` for a GitHub issue; see the `commit` skill. The tag is
+required. Don't invent a number: if there's no issue, file one.
 
 ## When NOT to fire
 

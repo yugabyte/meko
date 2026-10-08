@@ -79,7 +79,8 @@ merge.
 `<area>` is either a **subsystem** — `compute` / `control_plane` / `voyager` /
 `perf_advisor`, mirroring the labels above — or a **meta token** for work that
 touches no subsystem: `pm`, `docs`, `ci`, `build`, `tools`. The meta tokens are
-commit-subject-only; they are not issue labels. The tag is optional, and any Jira
+commit-subject-only; they are not issue labels. The tag is required (the `PR title`
+check enforces it), several go back to back (`[AMP-55][#512]`), and any Jira
 project's key works: use the ticket that tracks the work. `<sub-component>` is optional.
 
 See the `commit` skill's "Subject format" for the full spec. Close issues with

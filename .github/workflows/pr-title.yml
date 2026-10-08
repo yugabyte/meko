@@ -1,0 +1,40 @@
+name: PR title
+
+# Fails a PR whose title doesn't start with its tracking tags (`[AMP-55] ...`,
+# `[#512] ...`, `[AMP-55][#512] ...`). The repo squash-merges with the PR title
+# as the subject, so this keeps every commit on main tagged. Bot PRs are exempt.
+# See .github/scripts/pr-title.js.
+#
+# `edited` re-runs it when the title is fixed, with no push needed. A separate
+# workflow so that an edit doesn't re-run the build gates.
+#
+# Meant to be a required check of the `main-branch` ruleset, by its job name: keep
+# the name, and never add a `paths:` filter — a workflow that doesn't run never
+# reports, and a required check then waits forever.
+#
+# It runs the PR's own copy of this workflow and script, so a PR that changes them
+# is checked by its changes, and the subject can still be edited in the merge
+# dialog: those cases rest on review.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pr_title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/scripts
+      - name: Test the title parser
+        run: node --test .github/scripts/pr-title.test.js
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            await require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/pr-title.js`).run({ context, core });

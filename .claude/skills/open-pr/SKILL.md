@@ -41,20 +41,24 @@ the `check-branch-name.sh` hook blocks the push otherwise. See `git-push` Step 4
 
 ## Step 2 — write the title
 
-A PR title must carry the tracking reference so the change is traceable. Mirror
-the commit subject convention (see the `commit` skill):
+A PR title must start with the tracking reference so the change is traceable. The
+`PR title` CI check fails the PR otherwise (only bot-opened PRs are exempt), and the
+squash merge makes the title the commit subject on `main`. Mirror the commit
+subject convention (see the `commit` skill):
 
 ```
-[<KEY>-<num>] <component>: <title>     # with a Jira ticket
-[#<issue>] <component>: <title>        # with a GitHub issue in this repo
-<component>: <title>                   # without one
+[<KEY>-<num>] <component>: <title>              # with a Jira ticket
+[#<issue>] <component>: <title>                 # with a GitHub issue in this repo
+[<KEY>-<num>][#<issue>] <component>: <title>    # tracked in several places
 ```
 
 - `[<KEY>-<num>]` — the tracking Jira ticket, in whichever project tracks the
-  work: `MEKO-`, `AMP-`, `CLOUDGA-`, `PLAT-`, …. Work tracked as a GitHub issue
-  in this repo uses `[#<issue>]` (see the `create-amp-issue` skill).
-  **Omit the tag entirely when the work genuinely has no ticket or issue**; never
-  invent a placeholder like `[MEKO-xxx]` or guess a number, since it looks
+  work: `MEKO-`, `AMP-`, `CLOUDGA-`, `PLAT-`, … (the project is all caps). Work
+  tracked as a GitHub issue in this repo uses `[#<issue>]` (see the
+  `create-amp-issue` skill). Several tags go back to back with no space between
+  them, and one space follows the last — no colon.
+  **The tag is required.** When the work has no ticket or issue, file one first;
+  never invent a placeholder like `[MEKO-xxx]` or guess a number, since it looks
   greppable but resolves to nothing.
 - `<component>` — the top-level directory the change lives in: `api_server`,
   `cli_app`, `meko_ui`, `meko_admin`, `meko-provisioner`, `inference_gateway`,
@@ -68,7 +72,6 @@ Examples:
 [MEKO-377] api_server: serve promote-memories over PAT
 [AMP-55] test/functional: add stress/sqlancer, SQLancer logic-bug oracles against amp endpoints (opt-in)
 [CLOUDGA-37256] api_server: fix the amp install hint's credentials, telemetry and foundation steps
-api_server: make the app usable without Cognito
 ```
 
 If the branch has one commit, reuse its subject. If it has several, write a title
@@ -182,8 +185,8 @@ closes an issue, confirm the `Closes <url>` line is present.
 
 - **Opening a PR from `main`.** Always branch first.
 - **Opening a second PR when one already exists** for the branch. Use `git-push`.
-- **Inventing a ticket tag.** `[MEKO-xxx]` or a guessed number is worse than no
-  tag. When there really is no ticket, start the title at `<component>:`.
+- **Inventing a ticket tag.** `[MEKO-xxx]` or a guessed number resolves to
+  nothing. When there really is no ticket, file one and tag that.
 - **A one-line body that just restates the title.** Give the reviewer the *why*,
   the per-file breakdown, and the test evidence.
 - **Bare `#123` cross-references.** Use full URLs.

@@ -10,9 +10,9 @@
 # ecosystem at a time, rather than all at once.
 #
 # The `ci` commit prefix produces subjects like
-# `ci: bump the github-actions group with 3 updates`, which already matches this
-# repo's untagged subject convention — a dependency bump has no ticket, so it
-# correctly carries no ticket tag.
+# `ci: bump the github-actions group with 3 updates`. A dependency bump has no
+# ticket, so it carries no ticket tag; the `PR title` check exempts PRs opened by
+# bots for exactly this reason.
 version: 2
 updates:
   - package-ecosystem: "github-actions"

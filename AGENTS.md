@@ -392,10 +392,13 @@ and the hook's test suite: [`meko/AGENTS.md`](meko/AGENTS.md).
 
 ### Tracking references
 
-Commit subjects and PR titles carry the tracking ticket: a Jira key from any project
-(`[MEKO-12]`, `[AMP-55]`, `[CLOUDGA-37256]`, `[PLAT-22775]`, …) or `[#<issue>]` for a
-GitHub issue in this repo. They **omit the tag entirely** when there is genuinely no ticket — never
-invent a placeholder or guess a number.
+Commit subjects and PR titles **start with** the tracking ticket: a Jira key from any
+project (`[MEKO-12]`, `[AMP-55]`, `[CLOUDGA-37256]`, `[PLAT-22775]`, …) or `[#<issue>]`
+for a GitHub issue in this repo. Work tracked in several places carries every tag, back
+to back with no space between them: `[AMP-55][#512] compute: …`. The tag is required:
+the `PR title` check fails any PR without one, except PRs opened by bots, and the squash
+merge makes the PR title the subject on `main`. When there is no ticket, file one —
+never invent a placeholder or guess a number.
 
 #### `[#N]` in commits that predate the monorepo merge means an *amp* number
 
