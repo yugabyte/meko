@@ -283,6 +283,16 @@ are easy to tell apart. The server name is `[server] name` (set in Settings), el
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
 version moves below it first, then the user name is cut off before the server name.
 
+The app follows the system's light or dark theme, or the one picked with the theme button at the
+foot of the rail. The terminals have their own colors: dark by default, whatever the app's theme,
+or light, or the same as the app, picked under **Terminal colors** in Settings → General. The choice
+is kept in this browser (`localStorage`, like the app theme and the terminal font size) and applies
+at once to every open terminal and to what sits on it (the selected tab, the phone key bar);
+`termtheme.ts` sets `data-term-theme="light"` on `<html>` for the CSS, and `index.html` sets it
+before first paint. On light, xterm.js raises any color with less than 4.5:1 contrast against the
+background (`minimumContrastRatio`), since Claude Code picks some colors from its own theme
+(`/theme` in Claude Code switches it).
+
 ![The AgentK Local window: the project rail, session tabs, the stage bar and a live Claude terminal](screenshots/workbench.png)
 
 Session states, shown with a dot in the rail and on each tab:

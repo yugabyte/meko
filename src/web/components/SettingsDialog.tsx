@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
@@ -119,6 +120,7 @@ function GeneralTab() {
 
   return (
     <form className="stack" onSubmit={save}>
+      <TerminalColors />
       <div className="field">
         <span className="label">Repo folders</span>
         <span className="hint">The Open project dialog lists the git repos in these folders.</span>
@@ -240,6 +242,34 @@ function GeneralTab() {
         {saved && <span className="muted small">Saved</span>}
       </div>
     </form>
+  );
+}
+
+/** The terminals' colors: saved in this browser as soon as one is picked, not by Save. */
+function TerminalColors() {
+  const [pref, setPref] = useState(termThemePref);
+  return (
+    <Field
+      label="Terminal colors"
+      hint="Saved in this browser as soon as you pick one. Claude Code has its own colors too: run /theme in a session to match."
+    >
+      <select
+        id="set-term-theme"
+        className="input"
+        value={pref}
+        onChange={(e) => {
+          const v = e.target.value as TermThemePref;
+          setPref(v);
+          setTermThemePref(v);
+        }}
+      >
+        {(Object.keys(TERM_THEME_LABEL) as TermThemePref[]).map((k) => (
+          <option key={k} value={k}>
+            {TERM_THEME_LABEL[k]}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 

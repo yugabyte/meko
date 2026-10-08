@@ -27,8 +27,15 @@
   /* Text on a --bad fill (danger buttons). */
   --bad-ink: #ffffff;
   --idle: #8a948f;
+  /* The terminal and what touches it (selected tab, key bar): termtheme.ts's colors, dark unless
+     data-term-theme='light' (below). Not redefined per app theme: the terminal has its own setting. */
   --term: #101412;
-  --term-ink: #d5dde8;
+  --term-ink: #d5ddd8;
+  --term-rule: #1f2622;
+  --term-key: #232a26;
+  --term-key-down: #33403a;
+  --term-key-on: #2e3b55;
+  --term-key-on-ink: #afc6ff;
   --rail: #e9ece9;
   --shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.35);
   --display: 'Bricolage Grotesque', 'IBM Plex Sans', system-ui, sans-serif;
@@ -62,7 +69,6 @@
     --bad-soft: #3d1c19;
     --bad-ink: #1f0a07;
     --idle: #77827c;
-    --term: #101412;
     --rail: #151a17;
     --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
   }
@@ -92,9 +98,18 @@
   --bad-soft: #3d1c19;
   --bad-ink: #1f0a07;
   --idle: #77827c;
-  --term: #101412;
   --rail: #151a17;
   --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
+}
+/* Settings → General → Terminal colors: Light, or Same as the app on a light theme. */
+:root[data-term-theme='light'] {
+  --term: #fafbfa;
+  --term-ink: #1f2622;
+  --term-rule: #dde2df;
+  --term-key: #e8ece9;
+  --term-key-down: #d5dcd8;
+  --term-key-on: #dce5fb;
+  --term-key-on-ink: #2f5bd3;
 }
 
 * {
@@ -1053,7 +1068,7 @@ textarea.input {
 }
 .tab.sel {
   background: var(--term);
-  color: #d5ddd8;
+  color: var(--term-ink);
 }
 .tab.new {
   color: var(--accent);
@@ -1127,7 +1142,7 @@ textarea.input {
   pointer-events: none;
 }
 /* xterm's stylesheet paints the viewport black under the last partial row; match the theme.
-   --term is the terminal theme's background in terminals.ts in both themes. */
+   --term is the terminal theme's background (termtheme.ts). */
 .xterm-host .xterm .xterm-viewport {
   background-color: var(--term);
 }
@@ -1636,7 +1651,7 @@ a.icon-btn {
 }
 .prose pre {
   background: var(--term);
-  color: #d5ddd8;
+  color: var(--term-ink);
   padding: 12px 14px;
   border-radius: 8px;
   overflow-x: auto;
@@ -3467,7 +3482,7 @@ div[id^='dak-mermaid-'] .label {
   overflow-wrap: anywhere;
 }
 
-/* Terminal key bar and compose box (touch screens). The bar sits on the terminal, which is always dark. */
+/* Terminal key bar and compose box (touch screens). The bar sits on the terminal and takes its colors. */
 .term-keys {
   flex: none;
   background: var(--surface);
@@ -3479,7 +3494,7 @@ div[id^='dak-mermaid-'] .label {
   overflow-x: auto;
   scrollbar-width: none;
   background: var(--term);
-  border-top: 1px solid #1f2622;
+  border-top: 1px solid var(--term-rule);
 }
 /* The row of more keys the ▾ key opens, under the bar. */
 .keybar + .keybar {
@@ -3495,8 +3510,8 @@ div[id^='dak-mermaid-'] .label {
   padding: 0 5px;
   border: 0;
   border-radius: 6px;
-  background: #232a26;
-  color: #d5ddd8;
+  background: var(--term-key);
+  color: var(--term-ink);
   font-family: var(--mono);
   font-size: 13px;
   cursor: pointer;
@@ -3506,11 +3521,11 @@ div[id^='dak-mermaid-'] .label {
   user-select: none;
 }
 .key:active:not(:disabled) {
-  background: #33403a;
+  background: var(--term-key-down);
 }
 .key.on {
-  background: #2e3b55;
-  color: #afc6ff;
+  background: var(--term-key-on);
+  color: var(--term-key-on-ink);
 }
 .key:disabled {
   opacity: 0.4;

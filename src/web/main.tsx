@@ -4,8 +4,10 @@ import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { Root } from './components/Root';
 import { trackAppHeight } from './hooks/useMedia';
+import { watchTermTheme } from './termtheme';
 
 trackAppHeight();
+watchTermTheme();
 
 // It shows the notifications (see public/sw.js); browsers allow it on HTTPS and localhost.
 if ('serviceWorker' in navigator && window.isSecureContext) {

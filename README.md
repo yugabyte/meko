@@ -101,6 +101,8 @@ your phone can connect.
   in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
   can still attach from iTerm: `tmux -L agentk attach -t ak-<project>--<session>` (sessions created
   before this naming keep `ak-<project>-<session>`).
+- **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
+  colors makes them light or has them follow the app's theme, remembered per browser.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next
   session on the same repo (from any project on it) with its ignored build outputs intact, so
   repos that take long to build start incremental. Each repo keeps up to 3 idle worktrees, and one
