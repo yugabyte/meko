@@ -35,6 +35,7 @@
 
 mod cluster;
 pub(crate) use integration_common::db;
+mod gc_reclaim;
 mod page_api;
 mod psql;
 mod scenarios;

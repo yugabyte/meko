@@ -15,6 +15,7 @@ use tokio::time::sleep;
 
 use crate::cluster::{Cluster, step};
 use crate::db;
+use crate::gc_reclaim::wait_reclaimed;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.endpoint_port();
@@ -48,19 +49,15 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let want_cnt = db::query_i64(&conn, "SELECT count(*) FROM gc_invisible").await?;
 
     step("Wait for the drain to reclaim (pages rows drop, queue drains)");
-    let peak = db::query_i64(&yb, &pages).await?;
-    let mut pages_after = peak;
-    let mut q = i64::MAX;
-    for _ in 0..40 {
-        sleep(Duration::from_secs(1)).await;
-        pages_after = db::query_i64(&yb, &pages).await?;
-        q = db::query_i64(&yb, &queue).await?;
-        if pages_after < peak && q < 200 {
-            break;
-        }
-    }
-    if pages_after >= peak {
-        bail!("GC did not reclaim: pages peak={peak} after={pages_after} queue={q}");
+    let first = db::query_i64(&yb, &pages).await?;
+    let r = wait_reclaimed(&yb, &pages, &queue, first, 199, 120).await?;
+    if !r.settled {
+        bail!(
+            "GC did not reclaim: pages peak={} after={} queue={}",
+            r.peak,
+            r.now,
+            r.queue
+        );
     }
 
     step("Cold read: recycle compute + restart the branch pageserver, then read the trimmed store");

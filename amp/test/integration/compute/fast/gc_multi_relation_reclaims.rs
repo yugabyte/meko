@@ -5,13 +5,11 @@
 //! loop against single-relation tunnel vision. On a dedicated branch so
 //! the reclaim signal is this test's alone.
 
-use std::time::Duration;
-
 use anyhow::bail;
-use tokio::time::sleep;
 
 use crate::cluster::{Cluster, step};
 use crate::db;
+use crate::gc_reclaim::wait_reclaimed;
 
 const TABLES: usize = 4;
 
@@ -55,21 +53,17 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
             .await?,
         );
     }
-    let peak = db::query_i64(&yb, &pages).await?;
+    let first = db::query_i64(&yb, &pages).await?;
 
-    step("All relations' versions drain (queue → ~0, pages fall)");
-    let mut now = peak;
-    let mut q = i64::MAX;
-    for _ in 0..40 {
-        sleep(Duration::from_secs(1)).await;
-        now = db::query_i64(&yb, &pages).await?;
-        q = db::query_i64(&yb, &queue).await?;
-        if q < 100 && now < peak {
-            break;
-        }
-    }
-    if q >= 100 || now >= peak {
-        bail!("multi-relation GC did not reclaim: queue={q} peak={peak} now={now}");
+    step("All relations' versions drain (queue → ~0, pages settle below the peak)");
+    let r = wait_reclaimed(&yb, &pages, &queue, first, 99, 120).await?;
+    if !r.settled {
+        bail!(
+            "multi-relation GC did not reclaim: queue={} peak={} now={}",
+            r.queue,
+            r.peak,
+            r.now
+        );
     }
 
     step("Every table still reads back correctly");

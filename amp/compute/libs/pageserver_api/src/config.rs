@@ -824,7 +824,12 @@ pub mod defaults {
     pub const DEFAULT_HEATMAP_UPLOAD_CONCURRENCY: usize = 8;
     pub const DEFAULT_SECONDARY_DOWNLOAD_CONCURRENCY: usize = 1;
 
-    pub const DEFAULT_INGEST_BATCH_SIZE: u64 = 100;
+    /// Records the walreceiver ingests per commit (it also commits at the end
+    /// of each safekeeper message). Keep it well above
+    /// `ingest_parallelism_min_batch` (256): an OLTP record carries about one
+    /// value, and a smaller batch is applied serially on the walreceiver's
+    /// one task, which caps ingest on large endpoints.
+    pub const DEFAULT_INGEST_BATCH_SIZE: u64 = 1000;
 
     /// Soft limit for the maximum size of a vectored read.
     pub const DEFAULT_MAX_VECTORED_READ_BYTES: usize = 130 * 1024;

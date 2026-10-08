@@ -592,6 +592,11 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    `pgdatadir_mapping::DatadirModification.put`.
 2. `DatadirModification.commit` calls `TimelineWriter::put_batch`,
    which forwards the serialized batch to `PageWriter::put_serialized`.
+   The walreceiver commits every `ingest_batch_size` records (default
+   1000) and at the end of each safekeeper message. A message carries at
+   most `MAX_SEND_SIZE` (128 KiB) of WAL, about 1,000 OLTP records, so a
+   batch is the smaller of the two: a larger `ingest_batch_size` changes
+   little, and a caught-up pageserver sees smaller batches.
    With `ingest_parallelism > 1` and a batch of at least
    `ingest_parallelism_min_batch` entries, the deserialize + row-build
    work is partitioned by page key across blocking workers; the same
@@ -1271,6 +1276,13 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `ingest_parallelism` | 4 | Workers for `put_serialized` batch apply; `1` = serial. Same key always lands on one worker |
 | `ingest_parallelism_min_batch` | 256 | Minimum batch size before the parallel apply engages; `1` forces it (tests) |
 | `release_backpressure_per_chunk` | true | Release a flush's rows from `backpressure_bytes` as each chunk lands, not when the flush is marked |
+
+`ingest_batch_size` (top level, default 1000) is the walreceiver's
+records-per-commit, the size of the batch `ingest_parallelism` and
+`ingest_parallelism_min_batch` see, capped by the records in one
+safekeeper message (128 KiB of WAL, ~1,000 OLTP records). Below
+`ingest_parallelism_min_batch` values per batch, the apply stays on the
+walreceiver's one task.
 
 Other relevant settings: `yb_payload_compression` (`none` | `lz4`,
 default `lz4` — the codec for the `BYTEA` payload columns; write-side

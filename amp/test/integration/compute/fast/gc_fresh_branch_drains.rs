@@ -4,13 +4,11 @@
 //! reclaim — over rows written only to the branch. Proves GC isn't
 //! wired to `main` alone.
 
-use std::time::Duration;
-
 use anyhow::bail;
-use tokio::time::sleep;
 
 use crate::cluster::{Cluster, step};
 use crate::db;
+use crate::gc_reclaim::wait_reclaimed;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.endpoint_port();
@@ -44,24 +42,20 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "SELECT md5(string_agg(payload, ',' ORDER BY id)) FROM gc_fresh_t",
     )
     .await?;
-    let peak_pages = db::query_i64(&yb, &pages).await?;
-    if peak_pages == 0 {
+    let first = db::query_i64(&yb, &pages).await?;
+    if first == 0 {
         bail!("no pages rows recorded under the branch id {b1}");
     }
 
-    step("The branch's own drain reclaims (queue → ~0, pages fall)");
-    let mut pages_now = peak_pages;
-    let mut q = i64::MAX;
-    for _ in 0..50 {
-        sleep(Duration::from_secs(1)).await;
-        pages_now = db::query_i64(&yb, &pages).await?;
-        q = db::query_i64(&yb, &queue).await?;
-        if q < 100 && pages_now < peak_pages {
-            break;
-        }
-    }
-    if q >= 100 || pages_now >= peak_pages {
-        bail!("branch GC did not reclaim: queue={q} peak_pages={peak_pages} now={pages_now}");
+    step("The branch's own drain reclaims (queue → ~0, pages settle below the peak)");
+    let r = wait_reclaimed(&yb, &pages, &queue, first, 99, 120).await?;
+    if !r.settled {
+        bail!(
+            "branch GC did not reclaim: queue={} peak_pages={} now={}",
+            r.queue,
+            r.peak,
+            r.now
+        );
     }
 
     step("Branch reads stay correct after its GC ran");

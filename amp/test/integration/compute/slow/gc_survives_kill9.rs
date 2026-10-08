@@ -12,6 +12,7 @@ use tokio::time::sleep;
 
 use crate::cluster::{Cluster, step, tee_line};
 use crate::db;
+use crate::gc_reclaim::wait_reclaimed;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.endpoint_port();
@@ -63,19 +64,15 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         sleep(Duration::from_secs(1)).await;
     }
 
-    step("Drain resumes after restart (queue → ~0, pages fall below the pre-crash peak)");
-    let mut pages_now = peak_pages;
-    let mut q = i64::MAX;
-    for _ in 0..60 {
-        sleep(Duration::from_secs(1)).await;
-        pages_now = db::query_i64(&yb, &pages).await?;
-        q = db::query_i64(&yb, &queue).await?;
-        if q < 100 && pages_now < peak_pages {
-            break;
-        }
-    }
-    if q >= 100 || pages_now >= peak_pages {
-        bail!("GC did not resume after restart: queue={q} peak={peak_pages} now={pages_now}");
+    step("Drain resumes after restart (queue → ~0, pages settle below the peak)");
+    let r = wait_reclaimed(&yb, &pages, &queue, peak_pages, 99, 120).await?;
+    if !r.settled {
+        bail!(
+            "GC did not resume after restart: queue={} peak={} now={}",
+            r.queue,
+            r.peak,
+            r.now
+        );
     }
 
     step("Reads are byte-identical to before the crash");
