@@ -266,8 +266,7 @@ func (h *SharingHandler) IncomingShares(c echo.Context) error {
 
 	shares, err := h.svc.ListIncomingShares(account.Email)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "list incoming shares")
 	}
 
 	return ok(c, http.StatusOK, shares)
@@ -320,8 +319,7 @@ func (h *SharingHandler) InviteAction(c echo.Context) error {
 			return apiError(c, http.StatusForbidden,
 				"FORBIDDEN", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "process the invite")
 	}
 
 	return ok(c, http.StatusOK, resp)
@@ -348,8 +346,7 @@ func (h *SharingHandler) OutgoingShares(c echo.Context) error {
 
 	resp, err := h.svc.ListOutgoingPendingInvites(dp.ID)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "list pending invites")
 	}
 
 	return ok(c, http.StatusOK, resp)
@@ -375,8 +372,7 @@ func (h *SharingHandler) MemberList(c echo.Context) error {
 
 	resp, err := h.svc.ListDatapackMembers(dp.ID, dp.UserID)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "list datapack members")
 	}
 
 	return ok(c, http.StatusOK, resp)
@@ -465,8 +461,7 @@ func (h *SharingHandler) RevokeInvite(c echo.Context) error {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "revoke the invite")
 	}
 
 	return ok(c, http.StatusOK, map[string]string{
@@ -518,8 +513,7 @@ func (h *SharingHandler) UpdateGrant(c echo.Context) error {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "update the member")
 	}
 
 	return ok(c, http.StatusOK, resp)

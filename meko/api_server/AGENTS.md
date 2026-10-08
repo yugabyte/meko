@@ -31,6 +31,12 @@ internal/
   the response and returns a real, checkable error, or return `bool` the way
   `bindJSON`/`resolveAgent` do -- never propagate `apiError`'s own result as
   if it were one.
+  For a failure that wraps an internal call (an upstream HTTP request, the DB),
+  use `internalError(c, err, action)` (`handlers/response.go`) instead of
+  `apiError(c, 500, "INTERNAL_ERROR", err.Error())`: it logs `err` server-side
+  and returns a generic message, so Go's `*url.Error` (which embeds the internal
+  URL) and raw SQL never reach the client (MEKO-812). Keep `apiError` with its
+  own message for input validation, where the message is meant for the caller.
 - **Services** hold logic and call repos + clients. External-system vocabulary
   stays at the edge — translate a third party's terms to Meko's at the service
   boundary rather than leaking them inward. (The AMP client used to be the

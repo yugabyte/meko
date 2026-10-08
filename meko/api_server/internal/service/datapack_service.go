@@ -527,7 +527,11 @@ func (s *DatapackService) Update(
 		}
 	}
 	if req.Name != "" && dp.Name == defaultDatapackName {
-		return fmt.Errorf("%s cannot be renamed", defaultDatapackName)
+		// A validation error, not a generic failure: renaming the default datapack
+		// is refused outright, so the handler must map it to 400 with this reason.
+		// Returning a bare error here would fall through to internalError and invite
+		// a 500 retry that can never succeed (PAT/MCP callers hit this path).
+		return newInvalidDatapackNameError(fmt.Sprintf("%s cannot be renamed", defaultDatapackName))
 	}
 
 	if err := s.repo.UpdateByID(userID, datapackID, repository.UpdateDatapackParams{

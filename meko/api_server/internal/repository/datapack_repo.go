@@ -174,6 +174,13 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 		detailsJSON,
 	).Scan(&datapackID)
 	if err != nil {
+		// A 23505 on this INSERT can only be uq_datapacks_user_name: it never
+		// supplies datapack_id, so idx_datapacks_user_id (user_id, datapack_id)
+		// can't collide. Classify by SQLSTATE, not pq.Error.Constraint, which YSQL
+		// leaves empty (AGENTS.md; CLOUDGA-36978).
+		if isUniqueViolation23505(err) {
+			return nil, fmt.Errorf("a datapack with this name already exists")
+		}
 		slog.Error("failed to insert datapack",
 			"datapack", p.Name, "user_id", p.UserID, "error", err)
 		return nil, fmt.Errorf("failed to insert datapack: %w", err)
@@ -587,6 +594,12 @@ func (r *DatapackRepo) UpdateByID(
 
 	res, err := r.db.Exec(query, args...)
 	if err != nil {
+		// A 23505 on this UPDATE can only be uq_datapacks_user_name: it never
+		// changes user_id or datapack_id. Classify by SQLSTATE, not
+		// pq.Error.Constraint, which YSQL leaves empty (AGENTS.md; CLOUDGA-36978).
+		if isUniqueViolation23505(err) {
+			return fmt.Errorf("a datapack with this name already exists")
+		}
 		return fmt.Errorf("failed to update datapack: %w", err)
 	}
 	n, err := res.RowsAffected()

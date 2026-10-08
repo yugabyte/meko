@@ -2,6 +2,8 @@
 package handlers
 
 import (
+	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -49,6 +51,22 @@ func apiError(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, APIResponse{
 		Error: &APIError{Code: code, Message: message},
 	})
+}
+
+// internalError logs the underlying error server-side and returns a generic 500
+// to the client, so an error that wraps an internal call never reaches the caller
+// verbatim. Go's net/http errors embed the full request URL — e.g. the internal
+// Langfuse ELB host and the /api/public/projects/<id> path — so passing
+// err.Error() straight through leaks internal topology (MEKO-812). Use this for a
+// failure that wraps an upstream HTTP/DB call; `action` is a caller-supplied
+// literal (never err), so "delete the datapack" becomes "Could not delete the
+// datapack. Please try again." Keep apiError with its own message for input
+// validation, where the message is meant for the caller.
+func internalError(c echo.Context, err error, action string, logArgs ...any) error {
+	args := append([]any{"action", action, "route", c.Path(), "error", err}, logArgs...)
+	slog.Error("request failed", args...)
+	return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR",
+		fmt.Sprintf("Could not %s. Please try again.", action))
 }
 
 // writeAndFail writes the given error response via apiError and returns a

@@ -57,6 +57,7 @@ func NewDatapackHandler(
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Failure	409		{object}	APIResponse
 //	@Failure	503		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks [post]
@@ -129,8 +130,7 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "create the datapack")
 	}
 
 	// File it. Best-effort: the folder was already validated above, so a
@@ -167,8 +167,7 @@ func (h *DatapackHandler) List(c echo.Context) error {
 
 	datapacks, err := h.svc.List(account.ID)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "list datapacks")
 	}
 	if datapacks == nil {
 		datapacks = []models.Datapack{}
@@ -276,8 +275,7 @@ func (h *DatapackHandler) SetConversationSearchOptOut(c echo.Context) error {
 	}
 
 	if err := h.svc.SetConversationSearchOptOut(account.ID, dp.ID, req.OptedOut); err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "update the datapack", "datapack_id", dp.ID)
 	}
 
 	return ok(c, http.StatusOK, map[string]bool{"conversation_search_opt_out": req.OptedOut})
@@ -294,6 +292,7 @@ func (h *DatapackHandler) SetConversationSearchOptOut(c echo.Context) error {
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Failure	409		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks/{datapack_id} [patch]
 func (h *DatapackHandler) Update(c echo.Context) error {
@@ -320,12 +319,14 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 			return apiError(c, http.StatusBadRequest,
 				"VALIDATION_ERROR", err.Error())
 		}
+		if isConflictErr(err) {
+			return apiError(c, http.StatusConflict, "CONFLICT", err.Error())
+		}
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "update the datapack", "datapack_id", dp.ID)
 	}
 
 	return ok(c, http.StatusOK, map[string]string{
@@ -359,11 +360,17 @@ func (h *DatapackHandler) Delete(c echo.Context) error {
 
 	if err := h.svc.Delete(account.ID, dp.ID); err != nil {
 		if isNotFoundErr(err) {
-			return apiError(c, http.StatusNotFound,
-				"NOT_FOUND", err.Error())
+			// A clean message, not err.Error(): defense in depth, so no future
+			// not-found error from a downstream call can leak its detail here.
+			return apiError(c, http.StatusNotFound, "NOT_FOUND", "datapack not found")
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		// Defense in depth against the MEKO-812 class: the delete path talks to
+		// Langfuse and the DB, and such errors can embed internal URLs/SQL. Today
+		// the Langfuse cleanup is best-effort (logged, not returned — see
+		// https://github.com/yugabyte/meko/pull/1665), so the error here is a repo/DB
+		// error; log it and return a generic message rather than err.Error(), which
+		// is also where the pre-1665 URL leak came from.
+		return internalError(c, err, "delete the datapack", "datapack_id", dp.ID)
 	}
 
 	return ok(c, http.StatusOK, map[string]string{
@@ -400,8 +407,7 @@ func (h *DatapackHandler) Status(c echo.Context) error {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+		return internalError(c, err, "get the datapack status", "datapack_id", dp.ID)
 	}
 
 	redactDatapackStatus(st)

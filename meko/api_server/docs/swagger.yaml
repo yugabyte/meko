@@ -1553,6 +1553,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "503":
           description: Service Unavailable
           schema:
@@ -1645,6 +1649,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       security:
