@@ -71,12 +71,17 @@ extern void RelsizeCacheShmemRequest(void);
 extern void WalproposerShmemRequest(void);
 extern void LwLsnCacheShmemRequest(void);
 extern void YbAmpPerfCountersShmemRequest(void);
+extern void YbAmpUnloggedBuildShmemRequest(void);
 
 extern void LfcShmemInit(void);
 extern void RelsizeCacheShmemInit(void);
 extern void WalproposerShmemInit(void);
 extern void LwLsnCacheShmemInit(void);
 extern void YbAmpPerfCountersShmemInit(void);
+extern void YbAmpUnloggedBuildShmemInit(void);
+
+extern void YbAmpUnloggedBuildForgetDatabase(Oid dbid);
+extern uint32 YbAmpUnloggedBuildCount(void);
 
 
 #endif							/* YBAMP_H */

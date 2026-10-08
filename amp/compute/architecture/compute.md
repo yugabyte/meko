@@ -199,7 +199,8 @@ because there is no file descriptor to hand back.
 `yb_amp_writev()` mirrors the read path:
 
 - Temporary and unlogged relations (and the unlogged-build case) go to
-  `mdwritev()`.
+  `mdwritev()`. A relation under an unlogged build is listed in shared memory,
+  so its pages go there whichever process evicts them, not only the builder.
 - For permanent relations the dirty page is **not written to a local data
   file**. Instead `yb_amp_wallog_pagev()` emits the WAL that makes the change
   durable, and `lfc_writev()` populates the local file cache with the new page
@@ -210,6 +211,24 @@ Because permanent-relation writes never touch a local data file, the
 `base/<dboid>/<relfilenode>` files that a self-contained Postgres materializes on
 disk are absent on a `yb_amp` compute; the pageserver reconstructs them on
 demand from ingested WAL.
+
+The `unlogged_builds` gauge in the `yb_amp` extension's `yb_amp_perf_counters`
+view (SQL only, not exported) is the length of that shared list. Where
+`compute_ctl` installed the extension, the view is in the `yb_amp` schema:
+
+```sql
+SELECT value FROM yb_amp.yb_amp_perf_counters WHERE metric = 'unlogged_builds';
+```
+
+It counts one entry per running GiST, SP-GiST, GIN or pgvector HNSW build, plus
+one per invalid index left by a failed `CREATE INDEX CONCURRENTLY` or
+`REINDEX CONCURRENTLY`. That index's half-built pages stay in shared buffers, so
+its entry stays until the index or its database is dropped. While the gauge is
+above 0, every eviction of a permanent page takes the list's lock, and the list
+holds at most `MaxBackends` entries: a build that finds it full fails with
+`too many unlogged relation builds in progress`. Dropping or reindexing the
+invalid indexes (`SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid`)
+clears their entries.
 
 ### Read LSNs
 

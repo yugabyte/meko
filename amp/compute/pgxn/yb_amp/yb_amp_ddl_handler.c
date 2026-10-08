@@ -29,6 +29,7 @@
 #include "access/xact.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_proc.h"
+#include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/user.h"
@@ -1271,6 +1272,7 @@ YbAmpProcessUtility(
 				   QueryCompletion *qc)
 {
 	Node	   *parseTree = pstmt->utilityStmt;
+	Oid			dropped_db = InvalidOid;
 
 	/*
 	 * The process utility hook for CREATE EVENT TRIGGER is its own
@@ -1306,6 +1308,7 @@ YbAmpProcessUtility(
 			break;
 		case T_DropdbStmt:
 			HandleDropDb(castNode(DropdbStmt, parseTree));
+			dropped_db = get_database_oid(castNode(DropdbStmt, parseTree)->dbname, true);
 			break;
 		case T_CreateRoleStmt:
 			HandleCreateRole(castNode(CreateRoleStmt, parseTree));
@@ -1352,6 +1355,9 @@ YbAmpProcessUtility(
 			dest,
 			qc);
 	}
+
+	if (OidIsValid(dropped_db))
+		YbAmpUnloggedBuildForgetDatabase(dropped_db);
 }
 
 /*

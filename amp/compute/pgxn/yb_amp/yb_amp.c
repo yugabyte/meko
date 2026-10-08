@@ -855,6 +855,7 @@ yb_amp_shmem_request_hook(void)
 	RelsizeCacheShmemRequest();
 	WalproposerShmemRequest();
 	LwLsnCacheShmemRequest();
+	YbAmpUnloggedBuildShmemRequest();
 }
 
 
@@ -877,6 +878,7 @@ yb_amp_shmem_startup_hook(void)
 	RelsizeCacheShmemInit();
 	WalproposerShmemInit();
 	LwLsnCacheShmemInit();
+	YbAmpUnloggedBuildShmemInit();
 
 #if PG_MAJORVERSION_NUM >= 17
 	WAIT_EVENT_YBAMP_LFC_MAINTENANCE = WaitEventExtensionNew("YbAmp/FileCache_Maintenance");

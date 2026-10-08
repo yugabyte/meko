@@ -106,6 +106,124 @@ int debug_compare_local;
 static NRelFileInfo unlogged_build_rel_info;
 static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
 
+/*
+ * Permanent relations under an unlogged build, so that any process evicting
+ * their pages writes them to the local file. Evictors hold the lock shared
+ * while writing; the builder removes its entry exclusively before unlinking.
+ * A failed CREATE INDEX CONCURRENTLY keeps its entry until its files are
+ * unlinked or its database is dropped, because its unlogged buffers outlive
+ * the transaction.
+ */
+typedef struct
+{
+	pg_atomic_uint32 nbuilds;
+	NRelFileInfo rels[FLEXIBLE_ARRAY_MEMBER];
+} UnloggedBuilds;
+
+static UnloggedBuilds *unlogged_builds;
+static LWLockId unlogged_builds_lock;
+
+static Size
+YbAmpUnloggedBuildShmemSize(void)
+{
+	return add_size(offsetof(UnloggedBuilds, rels),
+					mul_size(MaxBackends, sizeof(NRelFileInfo)));
+}
+
+void
+YbAmpUnloggedBuildShmemRequest(void)
+{
+	RequestAddinShmemSpace(YbAmpUnloggedBuildShmemSize());
+	RequestNamedLWLockTranche("yb_amp_unlogged_build", 1);
+}
+
+void
+YbAmpUnloggedBuildShmemInit(void)
+{
+	bool		found;
+
+	unlogged_builds = ShmemInitStruct("yb_amp_unlogged_builds", YbAmpUnloggedBuildShmemSize(), &found);
+	if (!found)
+	{
+		unlogged_builds_lock = (LWLockId) GetNamedLWLockTranche("yb_amp_unlogged_build");
+		pg_atomic_init_u32(&unlogged_builds->nbuilds, 0);
+	}
+}
+
+static void
+yb_amp_unlogged_build_share(NRelFileInfo rinfo)
+{
+	uint32		n;
+
+	LWLockAcquire(unlogged_builds_lock, LW_EXCLUSIVE);
+	n = pg_atomic_read_u32(&unlogged_builds->nbuilds);
+	if (n >= MaxBackends)
+	{
+		LWLockRelease(unlogged_builds_lock);
+		ereport(ERROR,
+				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+				 errmsg(YBAMP_TAG "too many unlogged relation builds in progress"),
+				 errhint("Invalid indexes left by a failed CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY count as builds until dropped. "
+						 "Find them in each database with \"SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid\".")));
+	}
+	unlogged_builds->rels[n] = rinfo;
+	pg_atomic_write_u32(&unlogged_builds->nbuilds, n + 1);
+	LWLockRelease(unlogged_builds_lock);
+}
+
+static void
+yb_amp_unlogged_build_unshare(NRelFileInfo rinfo)
+{
+	uint32		n;
+
+	if (pg_atomic_read_u32(&unlogged_builds->nbuilds) == 0)
+		return;
+
+	LWLockAcquire(unlogged_builds_lock, LW_EXCLUSIVE);
+	n = pg_atomic_read_u32(&unlogged_builds->nbuilds);
+	for (uint32 i = 0; i < n; i++)
+	{
+		if (RelFileInfoEquals(unlogged_builds->rels[i], rinfo))
+		{
+			unlogged_builds->rels[i] = unlogged_builds->rels[n - 1];
+			pg_atomic_write_u32(&unlogged_builds->nbuilds, n - 1);
+			break;
+		}
+	}
+	LWLockRelease(unlogged_builds_lock);
+}
+
+/*
+ * Forget the entries of a dropped database. DROP DATABASE removes its files
+ * without yb_amp_unlink, after dropping all of its buffers.
+ */
+void
+YbAmpUnloggedBuildForgetDatabase(Oid dbid)
+{
+	uint32		n;
+
+	if (pg_atomic_read_u32(&unlogged_builds->nbuilds) == 0)
+		return;
+
+	LWLockAcquire(unlogged_builds_lock, LW_EXCLUSIVE);
+	n = pg_atomic_read_u32(&unlogged_builds->nbuilds);
+	for (uint32 i = 0; i < n;)
+	{
+		if (NInfoGetDbOid(unlogged_builds->rels[i]) == dbid)
+			unlogged_builds->rels[i] = unlogged_builds->rels[--n];
+		else
+			i++;
+	}
+	pg_atomic_write_u32(&unlogged_builds->nbuilds, n);
+	LWLockRelease(unlogged_builds_lock);
+}
+
+uint32
+YbAmpUnloggedBuildCount(void)
+{
+	return pg_atomic_read_u32(&unlogged_builds->nbuilds);
+}
+
 static bool yb_amp_redo_read_buffer_filter(XLogReaderState *record, uint8 block_id);
 static bool (*old_redo_read_buffer_filter) (XLogReaderState *record, uint8 block_id) = NULL;
 
@@ -884,6 +1002,8 @@ yb_amp_unlink(NRelFileInfoBackend rinfo, ForkNumber forkNum, bool isRedo)
 	if (!NRelFileInfoBackendIsTemp(rinfo))
 	{
 		forget_cached_relsize(InfoFromNInfoB(rinfo), forkNum);
+		/* A failed build: its buffers were dropped before the unlink */
+		yb_amp_unlogged_build_unshare(InfoFromNInfoB(rinfo));
 	}
 }
 
@@ -1685,6 +1805,27 @@ yb_amp_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, const 
 
 
 #if PG_MAJORVERSION_NUM >= 17
+/* Write to the local file if 'reln' is on the shared list of unlogged builds. */
+static bool
+yb_amp_unlogged_build_writev(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
+							 const void **buffers, BlockNumber nblocks, bool skipFsync)
+{
+	bool		found = false;
+	uint32		n;
+
+	if (pg_atomic_read_u32(&unlogged_builds->nbuilds) == 0)
+		return false;
+
+	LWLockAcquire(unlogged_builds_lock, LW_SHARED);
+	n = pg_atomic_read_u32(&unlogged_builds->nbuilds);
+	for (uint32 i = 0; i < n && !found; i++)
+		found = RelFileInfoEquals(unlogged_builds->rels[i], InfoFromSMgrRel(reln));
+	if (found)
+		mdwritev(reln, forknum, blkno, buffers, nblocks, skipFsync);
+	LWLockRelease(unlogged_builds_lock);
+	return found;
+}
+
 static void
 yb_amp_writev(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			 const void **buffers, BlockNumber nblocks, bool skipFsync)
@@ -1715,6 +1856,8 @@ yb_amp_writev(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 				mdwritev(reln, forknum, blkno, buffers, nblocks, skipFsync);
 				return;
 			}
+			if (yb_amp_unlogged_build_writev(reln, forknum, blkno, buffers, nblocks, skipFsync))
+				return;
 			break;
 
 		case RELPERSISTENCE_TEMP:
@@ -2026,6 +2169,7 @@ yb_amp_start_unlogged_build(SMgrRelation reln)
  	if (!IsParallelWorker())
 	{
 		mdcreate(reln, debug_compare_local ? INIT_FORKNUM : MAIN_FORKNUM, false);
+		yb_amp_unlogged_build_share(InfoFromSMgrRel(reln));
 	}
 }
 
@@ -2107,6 +2251,9 @@ yb_amp_end_unlogged_build(SMgrRelation reln)
 		yb_amp_set_lwlsn_relation(recptr,
 								InfoFromNInfoB(rinfob),
 								MAIN_FORKNUM);
+
+		/* Waits out other processes still writing to the local copy */
+		yb_amp_unlogged_build_unshare(InfoFromNInfoB(rinfob));
 
 		/* Remove local copy */
 		for (int forknum = 0; forknum <= MAX_FORKNUM; forknum++)

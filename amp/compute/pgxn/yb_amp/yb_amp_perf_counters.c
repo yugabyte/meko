@@ -422,7 +422,7 @@ yb_amp_get_perf_counters(PG_FUNCTION_ARGS)
 	}
 
 	/*
-	 * Not ideal, but piggyback the error counters onto the yb_amp perf counters
+	 * Not ideal, but piggyback these shared counters onto the yb_amp perf counters
 	 * view so that we don't need to introduce yb_amp--1.x+1.sql to add a new
 	 * view.
 	 */
@@ -432,6 +432,7 @@ yb_amp_get_perf_counters(PG_FUNCTION_ARGS)
 			{"sql_data_corruption_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->data_corruption_count)},
 			{"sql_internal_error_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->internal_error_count)},
 			{"ps_corruption_detected", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->ps_corruption_detected)},
+			{"unlogged_builds", false, 0, (double) YbAmpUnloggedBuildCount()},
 			{NULL, false, 0, 0},
 		};
 		for (int i = 0; extra_metrics[i].name != NULL; i++)
