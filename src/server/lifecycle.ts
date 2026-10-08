@@ -13,7 +13,7 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type DesignAnswerInput, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
+import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
@@ -364,22 +364,30 @@ export class Lifecycle {
       if (this.sessions.row(id).stage === 'code') this.sessions.setStage(id, 'design', 'auto');
       throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
     }
-    this.recordAnswers(id, answers?.answers ?? [], true);
+    this.recordAnswers(id, answers, true);
   }
 
   /**
    * Once the user's answers have gone to Claude, marks the questions they answered resolved, with
    * their answers (`all`: every open one, see DesignQuestionStore.record), so the Questions tab
-   * shows what they sent. The design's time moves on so the browser fetches them again. It isn't a
-   * change AgentK made in its turn. A file that can't be written is logged: the answers went.
+   * shows what they sent. It isn't a change AgentK made in its turn. A questions file that can't be
+   * read or written is logged and left alone: the answers went, and AgentK is asked to resolve them.
    */
-  private recordAnswers(id: string, answers: DesignAnswerInput[], all: boolean): void {
+  private recordAnswers(id: string, answers: CheckedAnswers | null, all: boolean): void {
+    this.questionsUpdate(id, 'Recording the user\'s answers in', (row) => this.core.questions.record(row, answers?.answers ?? [], answers?.questions ?? [], all));
+  }
+
+  /**
+   * Changes the design's questions with `fn` (true when they changed): the design's time moves on
+   * so the browser fetches them again. A failure is logged.
+   */
+  private questionsUpdate(id: string, what: string, fn: (row: SessionRow) => boolean): void {
     const row = sessionRow(this.db, id);
     if (!row) return;
     try {
-      if (!this.core.questions.record(row, answers, all)) return;
+      if (!fn(row)) return;
     } catch (e) {
-      this.warn(id, `Recording the user's answers in the design's questions (${this.sessions.questionsFile(row)})`, e);
+      this.warn(id, `${what} the design's questions (${this.sessions.questionsFile(row)})`, e);
       return;
     }
     run(this.db, 'UPDATE designs SET updated_at = ? WHERE session_id = ?', Date.now(), id);
@@ -462,7 +470,7 @@ export class Lifecycle {
     // Mid-turn, AgentK may have changed the questions already: read them first, so that counts as
     // its change and the answers go on top of it.
     this.collectQuestions(row);
-    this.recordAnswers(row.id, answers.answers, false);
+    this.recordAnswers(row.id, answers, false);
   }
 
   designApproved(id: string, by: 'you' | 'auto'): void {
@@ -560,6 +568,8 @@ export class Lifecycle {
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
+      // Back in Design, what an approval left to AgentK is open again.
+      if (stage === 'design') this.questionsUpdate(id, 'Reopening', (row) => this.core.questions.reopen(row));
     }
     if (!send) return;
     const row = this.sessions.row(id);

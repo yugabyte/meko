@@ -644,15 +644,21 @@ Once the answers have gone to Claude, the server records them in `questions.json
 (`DesignQuestionStore.record`): each answered question is resolved, with the answer as its decision
 (the option's label, then ` — ` and the note if there is one, or the custom answer). An approval
 also resolves every other open question, as *Left to AgentK: <recommended option>* (or *Left to
-AgentK* without one), since nothing revisits the questions after it. The file is written the same
-way as the tool's (temp file, then rename), the kept questions are replaced, and the design's time
-moves on so every browser shows them; this isn't a change AgentK made in its turn, so it neither
-drops a queued approval nor marks the design ready. Before recording answers to revise the design,
-the server reads the file again, so a change AgentK made mid-turn counts as its own and the answers
-go on top of it. The `design-answers` prompt tells Claude they're already resolved, to keep them so
-(it may reword a decision). A markdown design's questions are only written with the approval: until
-then AgentK revises its "Open questions" list, which a questions file would hide. Nothing is
-recorded when the send fails, and a file that can't be written is logged (the answers went).
+AgentK* without one). The questions are read from the file as it is then, so a change AgentK made
+mid-turn is kept, and an answer to a question that changed since the answers were checked is left
+out; a file that can't be read is left alone for AgentK to fix (logged), never overwritten from
+the questions kept in memory. The file is written the same way as the tool's (temp file, then
+rename), the kept questions are replaced, and the design's time moves on so every browser shows
+them; this isn't a change AgentK made in its turn, so it neither drops a queued approval nor marks
+the design ready. The `design-answers` prompt still asks Claude to mark each answered question
+resolved, saying AgentK Local may have done so already. A markdown design's questions are only
+written with the approval: until then AgentK revises its "Open questions" list, which a questions
+file would hide. Nothing is recorded when the send fails.
+
+What an approval did beyond the user's answers is noted in `questions-approval.json` beside the
+questions file: the questions it left to AgentK, and whether it made the file (for a markdown
+design). When the session is moved back to Design, `reopen` undoes that: those questions are open
+again, and a file it made is removed so the design's own list shows again.
 
 After an approval goes out, the browser forgets the drafts (an approval queued for the turn's end
 keeps them, in case it's dropped). After a revision it forgets the feedback and keeps the answers
@@ -885,6 +891,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
+  designs/<session>/questions-approval.json # what an approval left to AgentK, undone on a move back to Design
   pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
   pastes/.new/<project>/<time>-<random>.<ext>  # images added in the New session dialog, until a session starts with them (or a day)
 

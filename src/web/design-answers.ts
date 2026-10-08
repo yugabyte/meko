@@ -155,11 +155,13 @@ export function draftFor(q: DesignQuestion, d: Draft | undefined): Draft {
 
 /**
  * A question's answer as shown, `answerable` or not (past Design, the session archived): there,
- * a question with no answer from this browser shows nothing picked, never the recommendation,
- * which would look like the user's answer.
+ * a question with no answer from this browser, or one whose option is gone, shows nothing picked,
+ * never the recommendation, which would look like the user's answer.
  */
 export function shownDraft(q: DesignQuestion, d: Draft | undefined, answerable: boolean): Draft {
-  return answerable || d || !q.options.length ? draftFor(q, d) : { choice: null, label: null, custom: false, text: '' };
+  if (answerable || !q.options.length) return draftFor(q, d);
+  if (d && (d.custom || q.options.some((o) => o.label === d.label))) return draftFor(q, d);
+  return { choice: null, label: null, custom: false, text: d?.text ?? '' };
 }
 
 /**

@@ -226,7 +226,7 @@ describe('the design prompts', () => {
     expect(line).toMatch(/keep each question's id/);
     const sent = render(DEFAULT_PROMPTS['design-answers'], { count: '1 answer to an open question', answers: '### Q1', questionsFile: '/d/q.json' });
     expect(sent).toContain('The user sent 1 answer to an open question on your design');
-    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), AgentK Local has already marked each question with an answer "resolved", with the user\'s answer as its "decision": keep those resolved');
+    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), mark each answered question "resolved" with its "decision" (AgentK Local may have marked some already');
     expect(sent).toMatch(/Don't change anything in the repo/);
     expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
   });
@@ -270,6 +270,9 @@ describe('answers in the browser', () => {
     expect(shownDraft(store, undefined, false)).toEqual(draft({}));
     expect(shownDraft(store, draft({ choice: 0, label: 'Datapack' }), false)).toMatchObject({ choice: 0, label: 'Datapack' });
     expect(shownDraft(free, undefined, false)).toEqual(draft({ custom: true }));
+    // An option that's gone falls back to nothing picked, not to the recommendation.
+    expect(shownDraft(store, draft({ choice: 0, label: 'Gone', text: 'n' }), false)).toEqual(draft({ text: 'n' }));
+    expect(shownDraft(store, draft({ custom: true, text: 'Mine' }), false)).toEqual(draft({ custom: true, text: 'Mine' }));
   });
 
   it('drops the answers to questions that are no longer open', () => {

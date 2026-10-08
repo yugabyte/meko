@@ -43,7 +43,7 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     expect(sent).toMatch(/### Other feedback Keep it short\./);
     expect(events(s.id)).toContain('Sent 1 answer to an open question and other feedback to AgentK');
     // The answered question is resolved with the answer as it goes, on disk too; the other waits for AgentK.
-    expect(sent).toContain('AgentK Local has already marked each question with an answer');
+    expect(sent).toContain('AgentK Local may have marked some already');
     expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack — RESOLVE_STORE please'], ['tabs', 'open', null]]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
 
@@ -97,6 +97,40 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     expect(decided(s.id)).toEqual([['store', 'resolved', 'Left to AgentK: Datapack'], ['tabs', 'resolved', 'Left to AgentK']]);
   });
 
+  it('reopens what an approval left to AgentK when the session moves back to Design', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Back', prompt: 'DESIGN_QUESTIONS it' });
+    await designReady(s.id, 'design with questions');
+    await env.core.sessions.action(s.id, 'approve-design', { answers: [{ questionId: 'store', choice: 0, label: 'Datapack', text: '' }], feedback: '' });
+    expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack'], ['tabs', 'resolved', 'Left to AgentK']]);
+    const note = join(env.core.paths.designs, s.id, 'questions-approval.json');
+    expect(existsSync(note)).toBe(true);
+    await waitFor(() => get(s.id).status, (st) => st === 'idle', 10000, 'the Code turn to end');
+    await env.core.lifecycle.move(row(s.id), { stage: 'design', prompt: false });
+    // The user's answer stays; what was left to AgentK is open again.
+    expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack'], ['tabs', 'open', null]]);
+    expect(onDisk(s.id)).toEqual(questions(s.id));
+    expect(existsSync(note)).toBe(false);
+  });
+
+  it("records nothing over a questions file it can't read, or for a question that changed since", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Changed', prompt: 'DESIGN_QUESTIONS it' });
+    await designReady(s.id, 'design with questions');
+    const store = { questionId: 'store', choice: 0, label: 'Datapack', text: '' };
+    // AgentK changed the question after the answers were checked against it.
+    const asked = questions(s.id).map((q) => (q.id === 'store' ? { ...q, question: 'Where did they live?' } : q));
+    expect(env.core.questions.record(row(s.id), [store], asked, false)).toBe(false);
+    expect(decided(s.id)[0]).toEqual(['store', 'open', null]);
+
+    // A broken file is AgentK's to fix: the answers go, and it's left as it is.
+    const file = env.core.sessions.questionsFile(row(s.id));
+    writeFileSync(file, '{oops');
+    await revise(s.id, { answers: [store], feedback: '' });
+    await waitFor(() => transcript(s.id), (t) => t.includes('Answer: Datapack'), 10000, 'answers prompt');
+    expect(readFileSync(file, 'utf8')).toBe('{oops');
+  });
+
   it("leaves the questions open when the answers or the approval couldn't be sent", async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Fails', prompt: 'DESIGN_QUESTIONS it' });
@@ -144,6 +178,13 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     await env.core.sessions.action(s.id, 'approve-design', { answers: [{ questionId: tabs, choice: null, label: null, text: 'One column.' }], feedback: '' });
     expect(decided(s.id)).toEqual([[tabs, 'resolved', 'One column.'], [questions(s.id)[1].id, 'resolved', 'Left to AgentK']]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
+
+    // Back in Design, the file the approval made goes, and the design's own list shows again.
+    await waitFor(() => get(s.id).status, (st) => st === 'idle', 10000, 'the Code turn to end');
+    await env.core.lifecycle.move(row(s.id), { stage: 'design', prompt: false });
+    expect(existsSync(file)).toBe(false);
+    expect(env.core.questions.get(row(s.id)).source).toBe('markdown');
+    expect(get(s.id).designQuestions.open).toBe(2);
   });
 
   it('reads the questions from disk again after a restart, and still sees them change', async () => {
