@@ -1196,19 +1196,27 @@ sent, withdrawn or dropped.
   being refused. It goes when the turn ends (at the `Stop`, before review comments), or at the next
   poll when Claude is back at its prompt (a turn that ended while the server was down), exactly as a
   press between turns would send it. It waits another turn while Claude holds prompts you sent
-  mid-turn, and is dropped when Claude exits or is relaunched, on a move and on archive. With
+  mid-turn, and is dropped when Claude exits (however that's found: its `SessionEnd`, a dead pane at
+  startup, a failed restart) or is relaunched, on a move and on archive. A Cancel, a move or an exit
+  while the prompt is being prepared (the PR prompt waits on GitHub and Meko first) still stops it. With
   Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
   AgentK's mod.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
-  AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come or its
-  findings being addressed, and, mid-turn only, unpushed commits and uncommitted files (AgentK's work
-  in progress). The others don't: CI failing, changes requested, required approvals missing (only on
-  repos that require them, since people's approvals can take days), merge conflicts, a branch behind
-  its base, a draft, a PR that isn't open, and unpushed or uncommitted work between turns. With only
+  AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
+  being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
+  (AgentK's work in progress; mid-turn when they were measured counts too, since a turn can push and
+  end during the look at the PR). The others don't: CI failing, changes requested, required approvals
+  missing (only on repos that require them, since people's approvals can take days), merge conflicts,
+  a branch behind its base, a draft, a PR that isn't open, unpushed or uncommitted work between turns,
+  a Needs you with no turn behind it (a parked recovery), and findings left mid-address by a Claude
+  that exited. With only
   the first kind left (`Session.mergeQueueable`), the gate reads **Merge when ready** and a press
   queues the merge; the reasons line reads *Merges when these clear*. While it waits, the PR is
-  checked every 15 seconds instead of 45. At the first look that finds no blocker it merges, as
-  Merge & Close does, and you're notified; a blocker of the second kind drops it, and you're
+  checked at every 15-second pass instead of every 45 seconds. A queued merge also waits for CI to
+  show up on a new head: GitHub lists no checks on a fresh push for a moment, so *CI hasn't started on
+  the latest push yet* holds it for up to 2 minutes after the head first appeared, after which a head
+  with no checks counts as one without CI. At the first look that finds no blocker it merges, as
+  Merge & Close does, and you're notified; a blocker of the second kind drops it, mid-turn or not, and you're
   notified to press Merge & Close again once that's fixed. A move out of Review, archive or a merge
   on GitHub clears it too. While the merge is being requested, Cancel is refused.
 

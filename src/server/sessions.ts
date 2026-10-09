@@ -353,6 +353,8 @@ export class SessionManager {
 
   setStatus(id: string, status: SessionStatus, detail: string | null = null): void {
     this.update(id, { status, status_detail: detail, last_event_at: Date.now() });
+    // However Claude was found gone (its SessionEnd, a dead pane at startup, a failed restart), the turn a queued Open PR waited for is over.
+    if (status === 'exited') this.core.lifecycle.dropQueued(id, detail ?? 'Claude exited', 'open-pr');
   }
 
   event(id: string, kind: string, text: string | null, payload?: unknown): void {

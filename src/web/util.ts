@@ -362,6 +362,7 @@ export function mergeGate(session: Session): GateButton {
 /** What a queued merge waits on, from its first blocker, for the gate's pill. */
 const MERGE_WAITS: [string, string][] = [
   ['CI is still running.', 'waiting on CI'],
+  ["CI hasn't started on the latest push yet.", 'waiting on CI'],
   ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
   ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
 ];

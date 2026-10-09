@@ -39,8 +39,25 @@ const CI_SETTLE_MS = 10 * 60 * 1000;
 const MAX_CI_FIXES = 3;
 /** Heads in a row that get a prompt to resolve merge conflicts before the conflicts are left to the user. */
 const MAX_CONFLICT_FIXES = 3;
+/** How long a queued merge waits for CI to show up on a new head before taking a PR without checks as one without CI. */
+const CI_START_MS = 2 * 60 * 1000;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
+
+/** What mergeInfo learns from looking at the branch and the worktree (see there). */
+interface MergeChecks {
+  unpushed?: boolean;
+  uncommitted?: number;
+  turnAtStart?: boolean;
+  newHead?: boolean;
+}
+
+/** A queued Open PR was withdrawn before its prompt went. */
+class QueueWithdrawn extends Error {
+  constructor() {
+    super('The queued Open PR was withdrawn.');
+  }
+}
 
 /** A queued gate as the activity log names it. */
 const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'merge' };
@@ -120,6 +137,8 @@ export class Lifecycle {
   private designSends = new Map<string, Promise<void>>();
   /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
   private ciFailSince = new Map<string, { head: string; at: number }>();
+  /** Per session, the PR head at the last look and when it was first seen there (CI_START_MS). */
+  private headSeen = new Map<string, { head: string; at: number }>();
   /** The GitHub login gh is signed in as, once known (whose reviews a Review a PR session logs). */
   private ghLogin: string | null = null;
 
@@ -495,14 +514,19 @@ export class Lifecycle {
       if (row.queued_gate !== 'open-pr') this.queueGate(row.id, 'open-pr', 'Open PR queued: it goes when AgentK finishes its turn');
       return;
     }
-    const check = this.prCheck(row.id);
+    const check = this.prCheck(row.id, false);
     check(row);
     await this.sendPr(row, check);
   }
 
-  /** The check before the PR prompt goes: still in Code, and Claude can take it. Clears a queued Open PR as it passes. */
-  private prCheck(id: string): (r: SessionRow) => void {
+  /**
+   * The check before the PR prompt goes: still in Code, and Claude can take it. Clears a queued
+   * Open PR as it passes. For a queued one (`queued`), a withdrawal meanwhile (Cancel, a move,
+   * Claude exiting) stops it with QueueWithdrawn: sendPr waits on GitHub and Meko before the check.
+   */
+  private prCheck(id: string, queued: boolean): (r: SessionRow) => void {
     return (r) => {
+      if (queued && r.queued_gate !== 'open-pr') throw new QueueWithdrawn();
       if (r.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
       this.checkPromptable(r);
       if (this.sessions.promptsHeld(id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Open the PR once it has.');
@@ -526,9 +550,11 @@ export class Lifecycle {
       }
       if ((row.status !== 'idle' && row.status !== 'recovered') || this.sessions.runtime(id).busy || this.sessions.promptsHeld(id) > 0) return;
       try {
-        await this.sendPr(row, this.prCheck(id));
+        await this.sendPr(row, this.prCheck(id, true));
         this.sessions.event(id, 'queued', 'Queued Open PR sent');
       } catch (e) {
+        // Withdrawn while sendPr waited: whatever withdrew it said so in the activity log.
+        if (e instanceof QueueWithdrawn) return;
         const cur = sessionRow(this.db, id);
         // Still queued: Claude took another prompt meanwhile, and the PR goes after that turn.
         if (cur?.queued_gate === 'open-pr') return;
@@ -698,6 +724,7 @@ export class Lifecycle {
       this.sessions.update(id, { review_state: 'addressed' });
     }
     this.ciFailSince.delete(id);
+    this.headSeen.delete(id);
     this.lastPoll.delete(id);
   }
 
@@ -847,8 +874,8 @@ export class Lifecycle {
       const now = Date.now();
       for (const row of sessionRows(this.db)) {
         if (!projectRow(this.db, row.project_id)) continue;
-        // A queued merge is checked as often as a PR is looked for, so it goes soon after CI does.
-        const due = now - (this.lastPoll.get(row.id) ?? 0) >= (row.queued_gate === 'merge' ? POLL_MS : REVIEW_POLL_MS);
+        // A queued merge is checked at every pass (every POLL_MS), so it goes soon after CI does.
+        const due = row.queued_gate === 'merge' || now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
         if (row.desired !== 'running') {
           // A cleanup that a restart cut short after archiving: finish it.
           if (row.stage === 'merge' && due && now - (row.archived_at ?? 0) < CLOSING_RESUME_MS) {
@@ -928,7 +955,11 @@ export class Lifecycle {
     const p = projectRow(this.db, before.project_id);
     if (!p) return;
     this.lastPoll.set(id, Date.now());
+    // Mid-turn as the branch and worktree are measured: a turn that pushes and ends during this
+    // poll leaves unpushed commits measured before its push. Its Stop polls again after this one.
+    const turnAtStart = this.inTurn(before);
     const st = await github.prStatus(this.ghCwd(before), before.pr_number, prRepoOf(before.pr_url));
+    if (st.headRefOid && this.headSeen.get(id)?.head !== st.headRefOid) this.headSeen.set(id, { head: st.headRefOid, at: Date.now() });
     const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(sessionRepo(this.db, before) ?? p.repo_path, before.branch, st));
     // Merge & Close ends in an archive, which would keep a dirty worktree on the branch.
     const uncommitted = this.sessions.ownsWorktree(before) ? await uncommittedCount(before.worktree_path) : 0;
@@ -1040,7 +1071,10 @@ export class Lifecycle {
     this.watchCi(this.sessions.row(row.id), st, ci, unpushed);
     // A failed send stays queued; the next poll or turn end retries it.
     await this.deliverNext(row.id).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
-    const info = this.mergeInfo(this.sessions.row(row.id), st, mode, unpushed, uncommitted);
+    const headAt = this.headSeen.get(row.id)?.at;
+    const info = this.mergeInfo(this.sessions.row(row.id), st, mode, {
+      unpushed, uncommitted, turnAtStart, newHead: headAt !== undefined && Date.now() - headAt < CI_START_MS,
+    });
     this.sessions.setMergeInfo(row.id, info);
     this.core.changed();
     await this.takeQueuedMerge(row.id, info);
@@ -1215,10 +1249,14 @@ export class Lifecycle {
   /**
    * What blocks the merge, in plain words. A blocker that clears by itself (`waits`: AgentK at
    * work, CI running, AgentK's review to come) lets the merge be queued; any other one doesn't,
-   * and drops a queued merge. Unpushed commits and uncommitted files wait only mid-turn, where
-   * they're AgentK's work in progress.
+   * and drops a queued merge, mid-turn or not. Unpushed commits and uncommitted files wait only
+   * mid-turn (`turnAtStart`: when they were measured, or now), where they're AgentK's work in
+   * progress; a question in the terminal only during a turn; findings being addressed only while
+   * Claude runs. A queued merge also waits up to CI_START_MS for CI to show up on a new head
+   * (`newHead`), so it never goes before CI has started on a fresh push.
    */
-  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false, uncommitted = 0): MergeInfo {
+  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, opts: MergeChecks = {}): MergeInfo {
+    const { unpushed = false, uncommitted = 0 } = opts;
     const b: string[] = [];
     let hard = false;
     const block = (text: string, waits = false) => {
@@ -1226,20 +1264,22 @@ export class Lifecycle {
       if (!waits) hard = true;
     };
     const working = row.status === 'working' || this.sessions.runtime(row.id).busy;
-    const turn = working || this.sessions.midTurn(row.id);
+    const turn = this.inTurn(row);
     if (st.state !== 'OPEN') block('The PR is not open.');
     if (working) block('AgentK is still working.', true);
-    else if (row.status === 'needs_input') block('AgentK is waiting on you in the terminal.', true);
-    if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn);
-    if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn);
+    else if (row.status === 'needs_input') block('AgentK is waiting on you in the terminal.', turn);
+    if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart);
+    if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart);
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') block('CI is failing.');
     else if (ci === 'pending') block('CI is still running.', true);
+    else if (ci === 'none' && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
     // AgentK gates the merge only once it's active on the PR, so repos it doesn't watch never wait for it.
     if (reviewer !== 'people' && row.agentk_seen && (row.review_state === 'waiting' || row.review_state === 'in_review')) {
       block('Waiting for the AgentK review.', true);
     }
-    if (row.review_state === 'addressing') block('AgentK is addressing review findings.', true);
+    // With Claude exited, the turn addressing them is gone until a Resume.
+    if (row.review_state === 'addressing') block('AgentK is addressing review findings.', row.status !== 'exited');
     if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.');
     // Only on a repo that requires approvals: people's approvals can take days, so the merge isn't queued for them.
     if (st.reviewDecision === 'REVIEW_REQUIRED') block('Required approvals are missing.');
@@ -1414,6 +1454,11 @@ export class Lifecycle {
     } finally {
       this.merging.delete(row.id);
     }
+  }
+
+  /** A turn is running (or a gate action is in flight): AgentK working, or Claude asking during a turn. */
+  private inTurn(row: SessionRow): boolean {
+    return row.status === 'working' || this.sessions.runtime(row.id).busy || this.sessions.midTurn(row.id);
   }
 
   /** Asks GitHub to merge the PR, then looks at it again (which closes the session once it's merged). In the serial queue, under `merging`. */

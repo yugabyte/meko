@@ -1507,8 +1507,9 @@ export type TermServerMessage =
 //        cancel-approval withdraws it: 409 when none is queued. open-pr while AgentK is mid-turn or Claude is starting is
 //        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it.
 //        merge while the only blockers clear by themselves (Session.mergeQueueable) is queued and goes at the first poll
-//        that finds none; any other blocker is a 409, and one found between turns drops a queued merge (the user is
-//        notified). cancel-queued withdraws either: 409 when none is queued, or while the merge is being requested)
+//        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
+//        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
+//        none is queued, or while the merge is being requested)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)

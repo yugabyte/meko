@@ -837,6 +837,31 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).stage).toBe('code');
   });
 
+  it('drops a queued Open PR when Claude is found exited, as at startup', async () => {
+    const s = await working('Died while down');
+    await env.core.sessions.action(s.id, 'open-pr');
+    env.core.sessions.setStatus(s.id, 'exited', 'Claude exited while the server was down');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR dropped: Claude exited while the server was down');
+  });
+
+  it('honors a Cancel that comes while a queued Open PR waits on Meko', async () => {
+    let answer: ((id: string) => void) | null = null;
+    const s = await working('Cancel in flight');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    env.meko.ensureConversation = () => new Promise<string>((r) => (answer = r));
+    await env.core.sessions.action(s.id, 'open-pr');
+    // The turn ends: the queued PR starts out and waits for Meko to name the conversation.
+    await waitFor(() => answer, (a) => a !== null, 15000, 'the Meko lookup');
+    await env.core.sessions.action(s.id, 'cancel-queued');
+    answer!('conv-1');
+    await waitFor(() => lastEvent(s.id, 'queued'), (t) => t === 'Queued Open PR withdrawn', 5000, 'withdrawn');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(transcript(s.id)).not.toContain('Open a pull request');
+    expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'code', queued_gate: null });
+    expect(notify.mock.calls.filter((c) => c[1] === 'Open PR not sent')).toEqual([]);
+  });
+
   it('sends an Open PR still queued after a restart once Claude is between turns', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     const s = await env.core.sessions.create(p.id, { name: 'Restarted', prompt: 'do it', kind: 'quick' });
@@ -881,6 +906,36 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(await infoFor({ headRefOid: pushed })).toEqual({ canMerge: false, queueable: true });
     env.core.sessions.update(s.id, { status: 'idle' });
     expect(await infoFor({ headRefOid: pushed })).toEqual({ canMerge: false, queueable: false });
+    // ...unless they were measured mid-turn: the turn may have pushed and ended during the poll.
+    const row = () => env.core.sessions.row(s.id);
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people', { unpushed: true, turnAtStart: true }).queueable).toBe(true);
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people', { uncommitted: 2, turnAtStart: true }).queueable).toBe(true);
+    // A Needs you with no turn behind it (a parked recovery) needs the user.
+    env.core.sessions.setStatus(s.id, 'needs_input', 'Recovered twice in the last hour; waiting for you before continuing');
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people')).toMatchObject({ canMerge: false, queueable: false });
+    // Findings being addressed clear by themselves only while Claude runs.
+    env.core.sessions.update(s.id, { status: 'idle', review_state: 'addressing' });
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people').queueable).toBe(true);
+    env.core.sessions.setStatus(s.id, 'exited', 'Claude exited');
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people').queueable).toBe(false);
+  });
+
+  it('holds a queued merge until CI shows up on a new head, then takes no checks as no CI', async () => {
+    const s = await inReview('No checks yet');
+    const approved = gh.status!;
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await env.core.sessions.action(s.id, 'merge');
+    // A fresh push: GitHub lists no checks on it yet.
+    commitIn(env.core.sessions.row(s.id).worktree_path);
+    gh.status = { ...approved, statusCheckRollup: [] };
+    await poll(s.id);
+    expect(gh.merges).toEqual([]);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ queued: 'merge', mergeBlockers: ["CI hasn't started on the latest push yet."] });
+    // Still no checks two minutes after the head first showed up: the repo runs none on it.
+    const seen = (env.core.lifecycle as unknown as { headSeen: Map<string, { head: string; at: number }> }).headSeen;
+    seen.set(s.id, { ...seen.get(s.id)!, at: Date.now() - 3 * 60 * 1000 });
+    await poll(s.id);
+    expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
   });
 
   it('queues Merge & Close while CI runs, and merges once it passes', async () => {

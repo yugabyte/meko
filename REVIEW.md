@@ -103,8 +103,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 3. Lifecycle and GitHub
 
 - [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically. A gate
-      pressed early (`sessions.queued_gate`) goes only as that press would have, shows with Cancel, and is
-      dropped (logged) when what it waited for is gone: Claude exits, a move, archive.
+      pressed early (`sessions.queued_gate`) goes only as that press would have, shows with Cancel (honored
+      until the prompt is typed or the merge requested), and is dropped (logged) when what it waited for is
+      gone: a queued Open PR when Claude exits by any path (`setStatus` to exited, a relaunch), either one on
+      a move or archive, and a queued merge when a blocker appears that won't clear by itself.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
