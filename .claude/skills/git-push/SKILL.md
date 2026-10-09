@@ -4,10 +4,9 @@ description: >-
   Push the current branch to `origin` in this repo. On a first push, check the
   branch name matches `<username>/<kebab-topic>` (or `feature/<kebab-topic>`)
   and set the upstream. **Before pushing, verify the components you touched are
-  formatted (`gofmt -l`, `ruff format --check`, `npm run check`, `pycodestyle`)
-  and that no outgoing commit is co-authored by or attributed to Claude or
-  Cursor** (fix formatting
-  and scrub any agent trailer first). **If a PR already exists for the branch,
+  formatted (`.github/scripts/format.sh --check`, `npm run check`,
+  `pycodestyle`) and that no outgoing commit is co-authored by or attributed to
+  Claude or Cursor** (fix formatting and scrub any agent trailer first). **If a PR already exists for the branch,
   refresh its title and summary from the branch's landed commits after pushing**
   so the PR always reflects what's actually on it. Use for `git push`, "push my
   changes", "push and update the PR", or any flow that ends in pushing the
@@ -41,38 +40,32 @@ touches. Start from the changed paths:
 git diff --name-only origin/main..HEAD | cut -d/ -f1 | sort -u
 ```
 
-Then run the checks for those components. Each stays silent when clean and
-prints the offenders otherwise:
+Then run the checks for those components. Each exits non-zero and prints the
+offenders when something is wrong:
 
 ```
-# Go — pass only the modules that appear above (each has its own go.mod)
-gofmt -l meko/api_server meko/cli_app meko/meko-provisioner meko/docs
+# Go, Rust, Python — the ones this branch touches, so a toolchain you don't need
+# can't block the push. CI's required `Format` check runs all three.
+langs=$(git diff --name-only --diff-filter=d origin/main..HEAD |
+  sed -nE 's/.*\.go$/go/p; s/.*\.rs$/rust/p; s/.*\.py$/python/p' | sort -u)
+[ -z "$langs" ] || .github/scripts/format.sh --check $langs
 
 # TypeScript — if meko/meko_ui/ or meko/meko_admin/ changed
 (cd meko/meko_ui    && npm run check)      # tsc
 (cd meko/meko_admin && npm run check)      # tsc
-
-# Python — if any .py changed (ruff 0.11.2; CI's `Format` check runs the same, repo-wide)
-git diff --name-only -z --diff-filter=d origin/main..HEAD -- '*.py' | xargs -0r ruff format --check -q
 
 # Python — if meko/system_agent/ changed
 (cd meko/system_agent && mypy . && pycodestyle .)
 
 # Python — if meko/inference_gateway/ changed (run its tests)
 (cd meko/inference_gateway && pytest)
-
-# Rust + Go — if amp/ changed. CI's `Format` check runs both repo-wide; this catches it first.
-(cd amp && cargo fmt --all -- --check)
-(cd amp && gofmt -l controller test/functional)   # `make fmt` does NOT cover Go
 ```
 
-If they're silent, move on. Otherwise **do not push** — fix and re-check:
+If they all pass, move on. Otherwise **do not push** — fix and re-check:
 
 ```
-gofmt -w <the files gofmt -l listed>
-ruff format <the .py files it listed>
-(cd amp && make fmt)              # cargo fmt + ruff, in place; does not touch Go
-git diff                          # review what it rewrote
+.github/scripts/format.sh <the languages it flagged>   # it prints the exact command
+git diff                                               # review what it rewrote
 ```
 
 Line limits are **120 for Go, 100 elsewhere**; tabs for Go, 4 spaces for Python,
@@ -83,7 +76,7 @@ since PRs merge squashed, so there's no need to amend or rebase it back into the
 commit that introduced the drift. Format only what you're landing: if the
 formatter rewrites files unrelated to your change, leave those out.
 
-Re-run the checks until they're silent, then continue.
+Re-run the checks until they pass, then continue.
 
 Optional but cheap when you've touched Go — `golangci-lint run ./...` in the
 module you changed (`meko/.golangci.yml` at the repo root governs `cli_app` and

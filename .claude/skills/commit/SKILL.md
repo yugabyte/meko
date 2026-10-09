@@ -11,10 +11,10 @@ description: >-
   For each, decide whether the change makes it wrong or missing, and update it in
   the same commit. Then cut the editorial prose the change added — comments that
   restate the code, doc and runbook paragraphs that say the same thing twice —
-  because reviewers spend their review budget deleting it. Also, run the formatter
-  and linter for every language the commit touches before committing — including
-  `cargo fmt` and `cargo clippy` for Rust, which CI fails on but nothing runs
-  for you. Use for `git commit`, `git add`-then-commit, `/commit-commands:commit`,
+  because reviewers spend their review budget deleting it. Also, run
+  `.github/scripts/format.sh` and the linter for every language the commit
+  touches before committing — including `cargo clippy` for Rust, which CI fails
+  on but nothing runs for you. Use for `git commit`, `git add`-then-commit, `/commit-commands:commit`,
   `/commit-commands:commit-push-pr`, or any flow that ends in a commit.
 ---
 
@@ -243,14 +243,25 @@ language it touches — same as the companions above, this is part of "landing
 complete". Run only the toolchains for the components in your staged set
 (Step 1).
 
+### Formatting (Go, Rust, Python)
+
+One script formats all three, with the pinned tool versions CI's required
+`Format` check uses (it runs the same script with `--check`):
+
+```
+.github/scripts/format.sh go python    # the languages you touched; no args = all
+git add -u
+```
+
+Go's gofmt comes from the release in `meko/api_server/go.mod`, fetched once
+through `GOTOOLCHAIN` if your `go` is a different one, so a local run and CI
+format the same way. `main` is kept formatted by that check, so the script only
+rewrites what you changed. It exits 2 and says what to install when a tool is
+missing (`go`, `cargo` with rustfmt, or ruff 0.11.2 via uv or pip).
+
 ### Go (`api_server`, `cli_app`, `meko-provisioner`, `docs`)
 
-```
-gofmt -l <the modules you touched>     # silent == clean
-gofmt -w <any files it listed> && git add -u
-```
-
-Then lint the module you changed — `meko/.golangci.yml` at the repo root governs
+Lint the module you changed — `meko/.golangci.yml` at the repo root governs
 `cli_app` and `api_server`:
 
 ```
@@ -272,33 +283,20 @@ Line limit 120 for Go.
 ### Python (any `*.py`; `system_agent`, `inference_gateway`)
 
 ```
-ruff format <the .py files you changed>              # ruff 0.11.2, the version CI's Format check pins
 (cd meko/system_agent && mypy . && pycodestyle .)    # max-line-length 100 (tox.ini)
 (cd meko/inference_gateway && pytest)
 ```
 
-Run `ruff format` from anywhere: it picks `amp/pyproject.toml` for files under
-`amp/` and the root `ruff.toml` for everything else. Both set `force-exclude`,
-so a vendored file you name (`amp/deploy/lru/amp-time/vendor/`) is left alone.
+ruff picks `amp/pyproject.toml` for files under `amp/` and the root `ruff.toml`
+for everything else. Both set `force-exclude`, so even a vendored file named
+explicitly (`amp/deploy/lru/amp-time/vendor/`) is left alone.
 
 ### Rust (`amp/**` — `*.rs`, `Cargo.toml`, build scripts)
 
-**Nothing runs this for you.** CI's `Format` check fails on any `cargo fmt`
-diff and the `Amp Compute` job on any clippy warning, but `cargo build` only
-compiles, and the `pre-commit.py` hook (`cargo fmt`) is opt-in via
-`make setup-pre-commit-hook` — so if you skip this, you find out from a red PR.
-
-```
-(cd amp && cargo fmt --all -- --check)    # is anything mis-formatted?
-```
-
-If that reports diffs, format in place and re-stage:
-
-```
-(cd amp && cargo fmt --all) && git add -u
-```
-
-Then clippy, which must print nothing:
+**Nothing runs clippy for you.** The `Amp Compute` CI job fails on any clippy
+warning, but `cargo build` only compiles, so if you skip this you find out from
+a red PR. Format with `.github/scripts/format.sh rust` (above), then run clippy,
+which must print nothing:
 
 ```
 (cd amp && cargo clippy --workspace --all-targets) 2>&1 | grep -E "^warning: " | grep -v generated

@@ -1,10 +1,9 @@
 name: Format
 
-# The repo's one formatting gate: gofmt on every tracked .go file (amp, meko,
-# foundation, ycp), `cargo fmt --check` on the amp Rust workspace (the only Rust
-# in the repo) and `ruff format --check` on every tracked .py file. Each check
-# only reads source, so none needs a build, and the job finishes in about a
-# minute.
+# The repo's one formatting gate: .github/scripts/format.sh --check, which runs
+# gofmt on every tracked .go file, `cargo fmt --check` on the amp Rust workspace
+# and `ruff format --diff` on every tracked .py file. The steps before it only
+# install the pinned tools. Nothing needs a build, so the job takes about a minute.
 #
 # A required check of the `main-branch` ruleset, by its job name: keep the
 # name, and never add a `paths:` filter — a workflow that doesn't run never
@@ -38,29 +37,13 @@ jobs:
           go-version-file: meko/api_server/go.mod
           cache: false
 
-      - name: Go (gofmt)
-        run: |
-          unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt needed on:"; echo "$unformatted"
-            echo "$unformatted" | xargs gofmt -d
-            exit 1
-          fi
-
       - name: Install pinned Rust toolchain
         working-directory: amp
         # Reads rust-toolchain.toml (channel + rustfmt component).
         run: rustup toolchain install
 
-      - name: Rust (cargo fmt --check)
-        working-directory: amp
-        run: cargo fmt --all -- --check
-
+      # format.sh runs ruff through uvx at the version it pins.
       - uses: astral-sh/setup-uv@v7
 
-      # ruff's output changes between releases: keep this pin in step with
-      # amp/poetry.lock. amp/ uses amp/pyproject.toml and the rest of the repo
-      # uses ruff.toml; --force-exclude applies their excludes (vendored code)
-      # to the explicit file list.
-      - name: Python (ruff format --check)
-        run: git ls-files -z '*.py' | xargs -0 uvx ruff@0.11.2 format --check --force-exclude
+      - name: Check formatting
+        run: .github/scripts/format.sh --check
