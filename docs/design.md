@@ -890,6 +890,32 @@ row is demoted or detached in the same transaction as the new one is added, the 
 server-side Meko conversation (used for search) is made again in the new datapack. Pins are per session, so a running
 session's stays on the old datapack and the next one to start pins the new one.
 
+**Log Meko calls** (Project settings, off by default; shown while Meko is on, or while it's on for
+the project so it can be turned off) keeps, for each of the project's sessions, every Meko call
+AgentK makes for it, with what it sent and what came back, in
+`~/.agent-k-local/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
+(the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
+conversation (created and renamed), design uploads, the learn step's searches and writes, and the
+"Shipped in…" memory: the call sites wrap their work in `withMekoScope(session)`, an
+AsyncLocalStorage that `MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). Calls
+that belong to no session (the project home's search and Datapacks box, sharing, the invite sync,
+Settings → Meko's checks) and Claude's own Meko calls (already in its transcript) aren't kept, nor
+are transcript capture runs (their failures go to `server.log`). Each line holds the tool, its
+args and its reply (parsed, or its text), the error, how long it took, the tries (2 when a read
+was sent again after a transport failure) and the learn step that made it. Nothing is cut and the
+file has no cap: it's deleted when the session is archived (and when its start fails). The API key
+is never in it: it's only ever in a header. The file is the owner's alone (`0600`).
+
+**View calls**, beside the setting, opens the **Meko calls** page (`/p/<project>/meko`, or
+`/p/<project>/meko/<session>` from the session's ⋯ sheet or the command palette, both offered while
+the setting is on). It shows one session at a time (the one written to last unless one is named),
+newest first, 50 at a time with **Load older**, filtered by tool or **Failed only**. The server reads
+the file backwards from the end in 64 KB chunks (`GET /api/sessions/:id/meko-calls?before=`, the
+byte offset the page stopped at), so a big file stays quick; a call opens to **Sent** and **Got
+back** by the offset its line starts at, checked against its id. **Copy call**, **Download** (the
+file) and **Clear** (deletes it) are there too. With the setting off, the page says so and offers
+**Turn on**.
+
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
 picked up from GitHub), a dialog offers **Close project** (as on the project home; the repo and
 datapacks stay), **New session** or **Keep it open**. It asks only on the project's session view,
@@ -932,6 +958,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
   designs/<session>/questions-approval.json # what an approval left to AgentK, undone on a move back to Design
+  designs/<session>/meko-calls.jsonl # the session's Meko calls with their content, while its project has Log Meko calls on (removed on archive)
   pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
   pastes/.new/<project>/<time>-<random>.<ext>  # images added in the New session dialog, until a session starts with them (or a day)
 
@@ -1775,7 +1802,10 @@ the Meko calls in the transcript during it.
 
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
 candidates, saves, updates, skips, lookups, errors, sent_chars)`, with `trigger` `merge`, `discard`
-or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id.
+or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id,
+and, while the project has Log Meko calls on, in the session's Meko call log with what was sent and
+what came back (see [Project home](#project-home)). A step at Merge & Close is deleted with the
+session moments later, so run `/agentk_learn` during the session to look at one.
 
 ## Token usage
 

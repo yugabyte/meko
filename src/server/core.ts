@@ -20,6 +20,7 @@ import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { MekoClient } from './meko.js';
+import { MekoCallLog } from './mekolog.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
@@ -29,7 +30,7 @@ import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
-import { openProjectDatapacks, projectRows, pruneSessionEvents, toProject } from './store.js';
+import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { SessionHost } from './hostclient.js';
@@ -91,6 +92,8 @@ export class Core extends EventEmitter {
   readonly hostFull: string;
   readonly meko: MekoClient;
   readonly capture: TranscriptCapture;
+  /** Each session's Meko calls, with their content, when its project has Log Meko calls on. */
+  readonly mekoLog: MekoCallLog;
   readonly host: SessionHost;
   readonly services: () => ServiceManager | null;
   private legacyTmuxSocket: string | undefined;
@@ -155,6 +158,17 @@ export class Core extends EventEmitter {
     // AgentK's own Meko calls, for the usage report (counts and sizes, never their content).
     this.meko.onCall = (r) => this.record('INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       r.at, r.tool, r.inputChars, r.resultChars, r.ok ? 1 : 0, r.ms, r.tag);
+    this.mekoLog = new MekoCallLog({
+      designs: this.paths.designs,
+      enabled: (id) => {
+        if (this.stopped) return false;
+        const r = sessionRow(this.db, id);
+        const p = r && r.desired !== 'archived' ? projectRow(this.db, r.project_id) : undefined;
+        return !!p && parseSettings(p.settings_json).mekoLog;
+      },
+      log: this.log,
+    });
+    this.meko.onTrace = (t) => this.mekoLog.record(t);
     this.services = o.services ?? (() => servicesFor(o.paths.home));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
     this.legacyTmuxSocket = o.legacyTmuxSocket;

@@ -35,6 +35,7 @@ import { Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
+import { MekoCallsView } from './MekoCallsView';
 
 type Modal =
   | { kind: 'none' }
@@ -456,6 +457,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
+        ) : currentProject && route.view === 'meko' ? (
+          <MekoCallsView
+            key={currentProject.id}
+            project={currentProject}
+            sessionId={route.sessionId}
+            onMenu={openDrawer}
+            onError={showToast}
+          />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}

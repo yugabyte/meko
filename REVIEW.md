@@ -187,6 +187,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
       session launch, after Claude Code's setup), in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
+- [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the
+      session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.
+      The log never holds the API key, is written only while the project has Log Meko calls on and
+      the session isn't archived, and is deleted wherever the session's pastes are (archive, failed
+      start, closing the project). Writing it never fails the call.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path); the typed path relies on the saving rule in its prompt. It

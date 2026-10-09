@@ -198,6 +198,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect((await env.core.projects.home(p.id)).activity.find((a) => a.kind === 'renamed')).toMatchObject({ text: 'Renamed from "Old name" to "New name"' });
     const retitled = await waitFor(() => env.meko.calls.filter((c) => c.name === 'retitleConversation'), (c) => c.length === 1, 5000, 'the Meko retitle');
     expect(retitled[0].args.slice(0, 4)).toEqual([agentId, 'dp-agent-k-local-test-demo', 'conv-1', 'New name (Demo)']);
+    expect(retitled[0].scope).toBe(s.id); // in the session's Meko call log
 
     // The same name again changes nothing; a bad one is refused.
     env.core.sessions.rename(s.id, { name: 'New name' });
@@ -434,6 +435,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(ready.designUpdatedAt).toBeGreaterThan(0);
     expect(designRow(s.id)).toEqual({ markdown: '# Design\n\nDo the thing.\n', html: null, artifact_url: null });
     await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-design-me.md'), 5000, 'design saved to Meko');
+    expect(env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.scope)).toEqual([s.id]);
 
     // While designing, edits inside the repo are denied and edits elsewhere go ahead.
     await env.core.sessions.submit(s.id, 'EDIT_REPO');

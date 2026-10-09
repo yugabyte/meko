@@ -15,7 +15,10 @@ import type {
   DiscardCheck,
   InviteCheck,
   LoginRequest,
+  MekoCallDetail,
+  MekoCallPage,
   MekoDatapack,
+  MekoLogInfo,
   MoveSessionRequest,
   NewComment,
   PastedImage,
@@ -184,6 +187,20 @@ export const api = {
   reviseDesign: (id: string, b: DesignAnswersRequest) => post<void>(`/api/sessions/${enc(id)}/design/answers`, b),
   answerAsk: (id: string, askId: string, b: AskAnswerRequest) => post<void>(`/api/sessions/${enc(id)}/ask/${enc(askId)}`, b),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
+  mekoLogs: (projectId: string) => get<MekoLogInfo[]>(`/api/projects/${enc(projectId)}/meko-logs`),
+  mekoCalls: (id: string, q: { before?: number; tool?: string; failed?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (q.before !== undefined) qs.set('before', String(q.before));
+    if (q.tool) qs.set('tool', q.tool);
+    if (q.failed) qs.set('failed', '1');
+    const tail = qs.toString();
+    return get<MekoCallPage>(`/api/sessions/${enc(id)}/meko-calls${tail ? `?${tail}` : ''}`);
+  },
+  mekoCall: (id: string, offset: number, callId: string) =>
+    get<MekoCallDetail>(`/api/sessions/${enc(id)}/meko-calls/${offset}?id=${enc(callId)}`),
+  /** Where the browser downloads the session's Meko call log (a plain link: the login cookie goes with it). */
+  mekoLogUrl: (id: string) => `/api/sessions/${enc(id)}/meko-calls.jsonl`,
+  clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
 
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: SettingsUpdate) => request<Settings>('PUT', '/api/settings', b),

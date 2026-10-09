@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
-import { sessionAgentId } from '../../src/server/meko.js';
+import { mekoScope, sessionAgentId } from '../../src/server/meko.js';
 import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, the session host and the (fake) claude process are real.
@@ -409,7 +409,11 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
         { kind: 'gotcha', component: '', text: `The worktree at ${worktree} has a stale lock.` },
       ] }),
     });
-    const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => (query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : []));
+    const similarScopes: (string | undefined)[] = [];
+    const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => {
+      similarScopes.push(mekoScope.getStore());
+      return query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : [];
+    });
     Object.assign(env.meko, { similar });
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
@@ -427,6 +431,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(String(added[1].args[0])).toMatch(/^Shipped in Demo/); // then what shipped, as before
     const updated = env.meko.calls.find((c) => c.name === 'updateMemory');
     expect(updated?.args.slice(0, 4)).toEqual(['m1', 'Decision: polls run in one queue per session.', 'dp-1', 'claude_code:other-1']);
+    // Each of these calls is the session's, for its Meko call log.
+    expect([...similarScopes, ...added.map((c) => c.scope), updated?.scope]).toEqual([s.id, s.id, s.id, s.id, s.id]);
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'done' }]);
     expect(dbGet(env.core.db, 'SELECT candidates, saves, updates, skips FROM meko_learns WHERE session_id = ?', s.id))
       .toEqual({ candidates: 2, saves: 1, updates: 1, skips: 0 });

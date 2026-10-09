@@ -68,6 +68,33 @@ export interface MekoCallRecord {
 /** Tags AgentK's Meko calls made inside `mekoTag.run(tag, fn)`, such as a learn step's. */
 export const mekoTag = new AsyncLocalStorage<string>();
 
+/** The session AgentK's Meko calls made inside `withMekoScope(sessionId, fn)` are for (its Meko call log). */
+export const mekoScope = new AsyncLocalStorage<string>();
+
+/** Runs `fn` with its Meko calls (and those of the work it starts) counted as the session's. */
+export function withMekoScope<T>(sessionId: string, fn: () => T): T {
+  return mekoScope.run(sessionId, fn);
+}
+
+/** One Meko call AgentK made, with its content, for a session's Meko call log (mekolog.ts). */
+export interface MekoTrace {
+  tool: string;
+  at: number;
+  ms: number;
+  ok: boolean;
+  /** Tries: 2 when the call was sent again after a transport failure. */
+  attempts: number;
+  args: Json;
+  /** The reply's text, or null when none came. */
+  text: string | null;
+  /** Why it failed. */
+  error: string | null;
+  /** The learn step that made it (mekoTag), if any. */
+  tag: string | null;
+  /** The session it was made for (mekoScope), if any. */
+  sessionId: string | null;
+}
+
 /** A memory like a given text, as `similar` finds them: what an update needs to name it. */
 export interface SimilarMemory {
   id: string;
@@ -116,6 +143,9 @@ export class MekoClient {
 
   /** Told of every call (onCall in Core records them); a failing listener never fails the call. */
   onCall: ((r: MekoCallRecord) => void) | null = null;
+
+  /** Told of every call with what was sent and what came back (the Meko call log); never fails the call either. */
+  onTrace: ((t: MekoTrace) => void) | null = null;
 
   constructor(private creds: () => MekoCreds, private version = '0.0.0') {}
 
@@ -177,9 +207,10 @@ export class MekoClient {
    * Runs one request, reconnecting and trying once more after a transport failure. A timeout
    * is not retried, and a call that isn't idempotent is retried only when it surely never ran.
    */
-  private async request<T>(idempotent: boolean, fn: (c: Client) => Promise<T>): Promise<T> {
+  private async request<T>(idempotent: boolean, fn: (c: Client) => Promise<T>, tried?: (attempts: number) => void): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       let c: Client | null = null;
+      tried?.(attempt + 1);
       try {
         c = await this.connect();
         return await fn(c);
@@ -197,29 +228,41 @@ export class MekoClient {
 
   async call(name: string, args: Json, timeoutMs = 30000): Promise<unknown> {
     const at = Date.now();
-    let resultChars = 0;
+    let text = null as string | null; // (set in a callback, so TS must not narrow it to null)
+    let attempts = 0;
     let ok = false;
+    let error: string | null = null;
     try {
-      const r = await this.callOnce(name, args, timeoutMs, (n) => (resultChars = n));
+      const r = await this.callOnce(name, args, timeoutMs, (t) => (text = t), (n) => (attempts = n));
       ok = true;
       return r;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      throw e;
     } finally {
+      const ms = Date.now() - at;
+      const tag = mekoTag.getStore() ?? null;
       try {
-        this.onCall?.({ tool: name, at, inputChars: JSON.stringify(args).length, resultChars, ok, ms: Date.now() - at, tag: mekoTag.getStore() ?? null });
+        this.onCall?.({ tool: name, at, inputChars: JSON.stringify(args).length, resultChars: text?.length ?? 0, ok, ms, tag });
       } catch {
         /* the record is best-effort */
+      }
+      try {
+        this.onTrace?.({ tool: name, at, ms, ok, attempts, args, text, error, tag, sessionId: mekoScope.getStore() ?? null });
+      } catch {
+        /* so is the trace */
       }
     }
   }
 
-  private callOnce(name: string, args: Json, timeoutMs: number, got: (chars: number) => void): Promise<unknown> {
+  private callOnce(name: string, args: Json, timeoutMs: number, got: (text: string) => void, tried: (attempts: number) => void): Promise<unknown> {
     return this.request(!NOT_IDEMPOTENT.has(name), async (c) => {
       const res = (await c.callTool({ name, arguments: args }, undefined, { timeout: timeoutMs })) as {
         content?: { type: string; text?: string }[];
         isError?: boolean;
       };
       const text = res.content?.find((x) => x.type === 'text')?.text ?? '';
-      got(text.length);
+      got(text);
       let parsed: unknown = text;
       try {
         parsed = JSON.parse(text);
@@ -232,7 +275,7 @@ export class MekoClient {
         throw new MekoError(`${String(p.error)}${p.detail ? `: ${String(p.detail)}` : ''}`);
       }
       return parsed;
-    });
+    }, tried);
   }
 
   async ensureConversation(agentId: string, datapackId: string | null, key: string, title: string, timeoutMs?: number): Promise<string> {
