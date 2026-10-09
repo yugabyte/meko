@@ -24,8 +24,9 @@
 # is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
 # it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
 #
-# Run again where AgentK Local is already installed (it updates itself), it says so and stops
-# without changing anything, unless given --reinstall, --deps-only or another --version.
+# Run again where AgentK Local is already installed and set up (services included), it says so
+# and stops without changing anything, unless given --reinstall, --deps-only, another --version
+# or options for `agent-k-local install` (--non-interactive aside), which go on as before.
 #
 # Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
 # GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
@@ -37,6 +38,7 @@ version=""
 install_deps=ask
 deps_only=false
 reinstall=false
+setup_flags=false
 interactive=true
 
 # Output: color and marks only on a terminal, never with NO_COLOR.
@@ -65,7 +67,7 @@ while [ $# -gt 0 ]; do
     --deps-only) deps_only=true; shift ;;
     --reinstall) reinstall=true; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
-    *) forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
+    *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
 done
 
@@ -114,9 +116,22 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; e
 short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
 
 # ---- already installed ----
-# A release linked as app/current and a config.toml from `agent-k-local install`: nothing to do,
-# since the server updates itself. A half-done install (no config.toml yet) goes on to finish.
-if ! $reinstall && ! $deps_only && [ -x "$ak_home/app/current/bin/agent-k-local" ] && [ -f "$ak_home/config.toml" ]; then
+# Set up all the way: a release linked as app/current and as ~/.local/bin/agent-k-local, a
+# config.toml, and both background services, the last step of `agent-k-local install` (which
+# `agent-k-local uninstall` removes). Anything less, like an install that failed at its services
+# or one made with --no-service, goes on to install again. So do options for `agent-k-local
+# install`: they'd be dropped otherwise.
+services_set_up() {
+  if [ "$platform" = darwin ]; then
+    launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local" >/dev/null 2>&1 &&
+      launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.tmux" >/dev/null 2>&1
+  else
+    systemctl --user is-enabled agent-k-local.service >/dev/null 2>&1 &&
+      systemctl --user is-enabled agent-k-local-tmux.service >/dev/null 2>&1
+  fi
+}
+if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/bin/agent-k-local" ] &&
+  [ -f "$ak_home/config.toml" ] && [ -x "$HOME/.local/bin/agent-k-local" ] && services_set_up; then
   installed=$(readlink "$ak_home/app/current" 2>/dev/null) || installed=""
   installed=${installed##*/}
   if [ -z "$version" ] || [ "$version" = "$installed" ]; then
@@ -128,9 +143,10 @@ if ! $reinstall && ! $deps_only && [ -x "$ak_home/app/current/bin/agent-k-local"
     say ""
     ok "Installed" "${installed:-unknown version} in $short_home"
     say ""
-    say "  AgentK Local is already installed, and it updates itself."
+    say "  AgentK Local is already installed, so nothing was changed."
     row "Status" "$cmd status"
-    row "Setup" "$cmd install   (change the repos folder, access, port or Meko)"
+    row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
+    row "Update" "the Update banner or button in AgentK Local, when there's a newer release"
     row "Reinstall" "gh release download --repo $repo --pattern install.sh --output - | sh -s -- --reinstall"
     exit 0
   fi
