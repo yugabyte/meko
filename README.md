@@ -91,8 +91,8 @@ your phone can connect.
   detached. When a session starts, AgentK searches the project's datapacks for its task (and the
   GitHub issues it names) and gives Claude what Meko already knows, and the prompts ask Claude to
   search Meko before reading code.
-- **What sessions learn goes to the team's datapack.** When a PR merges, before the session closes,
-  AgentK asks the session what it learned about the product and repo (how things work, decisions
+- **What sessions learn goes to the team's datapack.** When a PR merges or a session is discarded,
+  before the session closes, AgentK asks the session what it learned about the product and repo (how things work, decisions
   and why, root causes, gotchas, measured numbers) and saves each new fact, after checking it
   against what the datapack already has: known facts are skipped, and ones that correct a memory
   replace it. Claude is told to leave out anything about your machine or one person's
@@ -100,6 +100,7 @@ your phone can connect.
   model for the duplicate check), and AgentK also drops any fact that names a local path; without
   the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
   header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
+  Check **Don't save learnings** beside Merge & Close or Discard to close a session without it.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.

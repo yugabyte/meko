@@ -251,8 +251,8 @@ describe('token formatting (web)', () => {
     const { learningText } = await import('../../src/web/util.js');
     const none = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null };
     expect(learningText(none)).toEqual({
-      learned: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close, or when you choose Save learnings.' },
-      cost: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close, or when you choose Save learnings.' },
+      learned: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.' },
+      cost: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.' },
     });
     expect(learningText({ ...none, skipped: 2 }).learned.title).toMatch(/Save learnings\. 2 sessions were closed without one, since Claude was gone or busy\.$/);
     const some = learningText({ runs: 3, failed: 1, skipped: 1, saves: 12, updates: 2, skips: 5, tokens: 345_000, usd: 0.42 });

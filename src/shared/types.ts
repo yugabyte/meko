@@ -397,8 +397,8 @@ export interface CallHomeMeko {
 /** Learn steps as the report counts them, by when they began. */
 export interface CallHomeLearn {
   runs: number;
-  byTrigger: { merge: number; manual: number };
-  /** `mod`: through AgentK's mod; `turn`: a typed prompt; `none`: skipped at Merge & Close. */
+  byTrigger: { merge: number; manual: number; discard: number };
+  /** `mod`: through AgentK's mod; `turn`: a typed prompt; `none`: skipped at Merge & Close or Discard. */
   byPath: { mod: number; turn: number; none: number };
   byOutcome: { done: number; failed: number; interrupted: number; skipped: number };
   /** Facts proposed, then added, corrected and found known already (a typed turn counts its adds and corrections). */
@@ -598,6 +598,8 @@ export interface Session {
   approvalQueued: boolean;
   /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
   learning: boolean;
+  /** Discard was asked for: the session is discarded once its learn step ends. */
+  discarding: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
@@ -1237,6 +1239,14 @@ export interface DesignAnswerInput {
 }
 
 /**
+ * The body of the merge and discard actions. Both save what the session learned to the project's
+ * datapack first (the learn step), unless skipLearn.
+ */
+export interface CloseSessionRequest {
+  skipLearn?: boolean;
+}
+
+/**
  * Answers to the design's open questions and other feedback on it. An open question left out is
  * sent as unanswered: AgentK goes with its recommendation, or its own judgment when it has none.
  */
@@ -1580,7 +1590,10 @@ export type TermServerMessage =
 //        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
 //        none is queued, or while the merge is being requested). learn starts the learn step: 409 without a
-//        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs)
+//        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs. merge and discard take
+//        an optional CloseSessionRequest: skipLearn skips the learn step they run first. A discard that runs one answers
+//        with the session still running (Session.discarding) and discards it when the step ends; asked again with
+//        skipLearn, it discards now)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)

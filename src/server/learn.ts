@@ -11,7 +11,7 @@ import { SAVING_RULE } from './prompts.js';
 import type { DatapackRef } from '../shared/types.js';
 import { sessionDatapack, sessionRepo, sessionRow, type SessionRow } from './store.js';
 
-export type LearnTrigger = 'merge' | 'manual';
+export type LearnTrigger = 'merge' | 'manual' | 'discard';
 export type LearnPath = 'mod' | 'turn' | 'none';
 export type LearnOutcome = 'done' | 'failed' | 'interrupted' | 'skipped';
 
@@ -186,7 +186,8 @@ interface Job {
  * are new, known or corrections, and AgentK writes them. Every part of it reaches the mod on a poll
  * and its reply comes back on /mod/learn, which answers at once, so no request is held while Meko
  * works. Without the mod, a typed `learn` prompt asks Claude to save them itself. Runs at Merge &
- * Close (before cleanup), and when the user asks (the session menu, or /agentk_learn in the terminal).
+ * Close (before cleanup) and Discard (before the session ends), unless the user asked to skip it,
+ * and when the user asks (the session menu, or /agentk_learn in the terminal).
  */
 export class Learner {
   private jobs = new Map<string, Job>();
@@ -248,25 +249,53 @@ export class Learner {
   /**
    * At Merge & Close, before cleanup: true while the cleanup should wait for a learn step (one ran
    * now, or one is still running, Save learnings' too); `merged` runs again once it ends
-   * (Lifecycle.afterLearn). One that finished since the session got to Merge & Close covers it. A
-   * session that can't run one (Claude isn't there or is busy) is recorded as skipped.
+   * (Lifecycle.afterLearn). One that finished since the session got to Merge & Close covers it, and
+   * none runs when the user asked Merge & Close to skip it (`skip_learn`). A session that can't run
+   * one (Claude isn't there or is busy) is recorded as skipped.
    */
   async beforeClose(row: SessionRow): Promise<boolean> {
     if (this.openRow(row.id)) return true;
     if (get(this.db, "SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND trigger = 'merge'", row.id)) return false;
     if (!this.datapack(row)) return false;
+    if (row.skip_learn) {
+      this.skipped(row);
+      return false;
+    }
     const merging = get<{ at: number | null }>(this.db, "SELECT MAX(entered_at) AS at FROM session_stages WHERE session_id = ? AND stage = 'merge'", row.id)?.at;
     if (merging && get(this.db, "SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND outcome = 'done' AND ended_at >= ?", row.id, merging)) return false;
+    return this.beforeEnd(row, 'merge');
+  }
+
+  /**
+   * At Discard, unless the user asked to skip it: true while the discard should wait for a learn
+   * step (one ran now, or Save learnings' is still running); Lifecycle.afterLearn discards the
+   * session once it ends. A session that can't run one (Claude isn't there or is busy) is recorded
+   * as skipped.
+   */
+  async beforeDiscard(row: SessionRow): Promise<boolean> {
+    if (this.openRow(row.id)) return true;
+    if (!this.datapack(row)) return false;
+    return this.beforeEnd(row, 'discard');
+  }
+
+  /** Notes in the timeline, once, that the user asked a closing session to skip the learn step (when it had one to run). */
+  skipped(row: SessionRow): void {
+    if (!this.datapack(row) || get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'learn-skipped'", row.id)) return;
+    this.core.sessions.event(row.id, 'learn-skipped', SKIPPED_TEXT);
+  }
+
+  /** Starts the learn step a closing session runs; false (recorded as skipped) when it can't run. */
+  private async beforeEnd(row: SessionRow, trigger: 'merge' | 'discard'): Promise<boolean> {
     if (this.notNow(row)) {
-      this.insert(row.id, randomUUID(), 'merge', 'none', 'skipped');
+      this.insert(row.id, randomUUID(), trigger, 'none', 'skipped');
       return false;
     }
     try {
-      await this.start(row, 'merge');
+      await this.start(row, trigger);
       return true;
     } catch (e) {
       this.core.log.warn(`the learn step didn't start for ${row.id}`, errMsg(e));
-      if (!this.openRow(row.id)) this.insert(row.id, randomUUID(), 'merge', 'none', 'skipped');
+      if (!this.openRow(row.id)) this.insert(row.id, randomUUID(), trigger, 'none', 'skipped');
       return false;
     }
   }
@@ -424,7 +453,7 @@ export class Learner {
   private fail(job: Job, step: string, reason: string): void {
     this.close(job, 'failed', step);
     const saved = job.saves + job.updates ? ` (${learnSummary(job.saves, job.updates, job.datapack.name).replace(/^S/, 's')} first)` : '';
-    // Save learnings can be tried again; at Merge & Close the session is closing.
+    // Save learnings can be tried again; at Merge & Close or Discard the session is closing.
     const again = job.trigger === 'manual' ? ' Try Save learnings again.' : '';
     const text = `AgentK couldn't save what this session learned: ${reason}${saved}.${again}`;
     this.core.sessions.event(job.sessionId, 'learned', text);
@@ -500,6 +529,9 @@ export class Learner {
     this.jobs.clear();
   }
 }
+
+/** The timeline's line for a Merge & Close or Discard the user asked to skip the learn step. */
+export const SKIPPED_TEXT = "Didn't save what this session learned: you asked to skip it";
 
 /** What a step's timer says, by the part the step was in. */
 const TIMED_OUT: Record<Job['step'], string> = {

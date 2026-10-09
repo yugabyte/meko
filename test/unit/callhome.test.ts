@@ -391,7 +391,8 @@ describe('the usage stats report', () => {
     // As a typed turn when asked for: the session's responses while it ran.
     learn('L2', 's1', 'manual', 'turn', '2026-09-28T03:00:00Z', '2026-09-28T03:05:00Z', 'done', [1, 1, 0, 0, 1, 0, 80]);
     usage('s1', 'm6', null, 'claude-opus-5-5', '2026-09-28T03:02:00Z', [5, 50, 2000, 0]);
-    learn('L3', 's2', 'merge', 'none', '2026-09-28T04:00:00Z', '2026-09-28T04:00:00Z', 'skipped', [0, 0, 0, 0, 0, 0, 0]);
+    // Skipped at a Discard: Claude was busy.
+    learn('L3', 's2', 'discard', 'none', '2026-09-28T04:00:00Z', '2026-09-28T04:00:00Z', 'skipped', [0, 0, 0, 0, 0, 0, 0]);
     const own = (iso: string, tool: string, chars: number, ok: number, ms: number) =>
       run(db, 'INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, 10, ?, ?, NULL)', at(iso), tool, chars, ok, ms);
     own('2026-09-27T17:00:40Z', 'context_search', 120, 1, 200);
@@ -402,7 +403,7 @@ describe('the usage stats report', () => {
     const r = report(db);
     const tokens = (input: number, output: number, cacheRead: number) => ({ input, output, cacheRead, cacheWrite: 0, messages: 1 });
     expect(r.totals.meko.learn).toEqual({
-      runs: 3, byTrigger: { merge: 2, manual: 1 }, byPath: { mod: 1, turn: 1, none: 1 },
+      runs: 3, byTrigger: { merge: 1, manual: 1, discard: 1 }, byPath: { mod: 1, turn: 1, none: 1 },
       byOutcome: { done: 2, failed: 0, interrupted: 0, skipped: 1 },
       candidates: 5, saves: 3, updates: 1, skips: 1, empty: 0, lookups: 5, errors: 0, sentTokens: 120,
       tokens: { extract: tokens(12, 300, 150000), dedup: tokens(800, 100, 0), turn: tokens(5, 50, 2000) },
@@ -480,7 +481,7 @@ describe('the usage stats report', () => {
       sentTokens: big,
       sentByTool: Object.fromEntries([...REPORTED_TOOLS, 'other'].map((t) => [t, big])),
       learn: {
-        runs: big, byTrigger: { merge: big, manual: big }, byPath: { mod: big, turn: big, none: big },
+        runs: big, byTrigger: { merge: big, manual: big, discard: big }, byPath: { mod: big, turn: big, none: big },
         byOutcome: { done: big, failed: big, interrupted: big, skipped: big },
         candidates: big, saves: big, updates: big, skips: big, empty: big, lookups: big, errors: big, sentTokens: big,
         tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }])) as never,

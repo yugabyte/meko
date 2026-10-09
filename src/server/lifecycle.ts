@@ -13,7 +13,7 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
+import { KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type MergeInfo, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
@@ -771,6 +771,8 @@ export class Lifecycle {
     this.sessions.setBusy(id, false);
     // A typed learn step's turn (no mod) is over; at Merge & Close the poll below then cleans up.
     this.core.learn.turnEnded(id);
+    // A Discard that waited for it goes now, and nothing else for the session does.
+    if (this.sessions.row(id).discarding) return this.afterLearn(id);
     if (row.stage === 'code') {
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'pr') {
@@ -1436,10 +1438,12 @@ export class Lifecycle {
    * Merge & Close: merges now when nothing blocks it, or queues the merge when only blockers that
    * clear by themselves are left (takeQueuedMerge sends it). Any other blocker is refused.
    */
-  async merge(row: SessionRow): Promise<void> {
+  async merge(row: SessionRow, req: CloseSessionRequest = {}): Promise<void> {
     if (row.stage !== 'review' || !row.pr_number || !row.pr_url) throw new HttpError(409, 'Merge is only available in the Review stage.');
     if (!projectRow(this.db, row.project_id)) throw new HttpError(404, 'Project not found.');
     if (this.merging.has(row.id)) throw new HttpError(409, 'A merge is already in progress.');
+    // Kept until the merge lands (a queued one too), when the learn step runs or doesn't (Learner.beforeClose).
+    this.sessions.update(row.id, { skip_learn: req.skipLearn ? 1 : 0 });
     this.merging.add(row.id);
     try {
       await this.serial(row.id, async () => {
@@ -1504,6 +1508,7 @@ export class Lifecycle {
     if (!gate) throw new HttpError(409, 'Nothing is queued.');
     if (gate === 'merge' && this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');
     this.setQueued(row.id, null);
+    if (gate === 'merge') this.sessions.update(row.id, { skip_learn: 0 });
     this.sessions.event(row.id, 'queued', `Queued ${GATE_NAMES[gate]} withdrawn`);
   }
 
@@ -1516,12 +1521,18 @@ export class Lifecycle {
   }
 
   /**
-   * A learn step ended (or Claude went away during it). In Merge & Close it held the cleanup back,
-   * whether it ran for the merge or was Save learnings already running: look at the PR again, which
-   * finishes Merge & Close.
+   * A learn step ended (or Claude went away during it). A Discard waiting for it goes now. In Merge
+   * & Close it held the cleanup back, whether it ran for the merge or was Save learnings already
+   * running: look at the PR again, which finishes Merge & Close.
    */
   afterLearn(id: string): void {
     const row = sessionRow(this.db, id);
+    if (row?.discarding) {
+      if (row.desired === 'running' && !this.core.learn.running(id)) {
+        void this.sessions.discardNow(id).catch((e) => this.core.log.warn(`discarding ${id} failed`, errMsg(e)));
+      }
+      return;
+    }
     if (row?.stage !== 'merge') return;
     void this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
   }

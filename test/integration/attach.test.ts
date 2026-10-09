@@ -274,7 +274,7 @@ describe('sessions on an existing branch or an open PR (real tmux + git, fake cl
 
     // Discard keeps a branch that existed before the session, and says so.
     expect(await env.core.sessions.discardCheck(d.id)).toMatchObject({ unpushedCommits: 0 });
-    await env.core.sessions.action(d.id, 'discard');
+    await env.core.sessions.action(d.id, 'discard', { skipLearn: true });
     expect(branches()).toContain('feature/diverged');
     expect(event(d.id, 'discarded')).toBe('Discarded; changes deleted, worktree kept for the next session, branch feature/diverged kept (it existed before the session)');
   });

@@ -132,7 +132,7 @@ describe('worktree reuse (real tmux + git, fake claude)', () => {
     writeFileSync(join(s.worktreePath, 'build', 'out.o'), 'object code');
     writeFileSync(join(s.worktreePath, 'README.md'), 'edited\n');
     writeFileSync(join(s.worktreePath, 'draft.txt'), 'wip\n');
-    await env.core.sessions.action(s.id, 'discard');
+    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
     expect(event(s.id, 'discarded')).toBe('Discarded; changes and branch ak/throw-away deleted, worktree kept for the next session');
     expect(readFileSync(join(s.worktreePath, 'README.md'), 'utf8')).toBe('# test\n');
     expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(false);

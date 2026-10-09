@@ -228,6 +228,30 @@ describe('config and db', () => {
     expect(() => add('api-tools')).not.toThrow();
   });
 
+  it("keeps a schema 27 database's learn steps, and lets Discard record its own", () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+      VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, saves) VALUES ('l1', 's1', 'merge', 'mod', 1, 2, 'done', 3)`);
+    // Schema 27's meko_learns took only 'merge' and 'manual'.
+    db.exec(`ALTER TABLE meko_learns RENAME TO meko_learns_new;
+      CREATE TABLE meko_learns AS SELECT * FROM meko_learns_new WHERE 0;
+      INSERT INTO meko_learns SELECT * FROM meko_learns_new; DROP TABLE meko_learns_new`);
+    dropV28(db);
+    db.exec(`PRAGMA user_version = ${version - 1}`);
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(all(db, 'SELECT id, trigger, outcome, saves FROM meko_learns')).toEqual([{ id: 'l1', trigger: 'merge', outcome: 'done', saves: 3 }]);
+    expect(sessionRow(db, 's1')).toMatchObject({ discarding: 0, skip_learn: 0 });
+    run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at) VALUES ('l2', 's1', 'discard', 'none', 3)`);
+    expect(() => run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at) VALUES ('l3', 's1', 'archive', 'none', 3)`)).toThrow(/CHECK/);
+    db.close();
+  });
+
   it("uses the project's dedicated datapack for sessions launched before schema 18", () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
@@ -236,6 +260,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -246,7 +271,7 @@ describe('config and db', () => {
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 10}`);
+    db.exec(`PRAGMA user_version = ${version - 11}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -266,6 +291,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -274,7 +300,7 @@ describe('config and db', () => {
     dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 8}`);
+    db.exec(`PRAGMA user_version = ${version - 9}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -299,6 +325,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -341,6 +368,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -388,6 +416,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -418,6 +447,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -453,6 +483,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -490,6 +521,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -522,6 +554,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -558,6 +591,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV28(db);
     dropV27(db);
     dropV26(db);
     dropV25(db);
@@ -598,6 +632,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 28 (Discard waits for the learn step; skipping it at Merge & Close), for tests that rewind the schema. */
+function dropV28(db: ReturnType<typeof openDb>) {
+  db.exec('ALTER TABLE sessions DROP COLUMN discarding; ALTER TABLE sessions DROP COLUMN skip_learn');
+}
 
 /** Undoes migration 27 (the learn step, AgentK's own Meko calls and transcript captures), for tests that rewind the schema. */
 function dropV27(db: ReturnType<typeof openDb>) {

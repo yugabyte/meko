@@ -385,7 +385,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: true, uncommittedFiles: 1, unpushedCommits: 1 });
 
-    await env.core.sessions.action(s.id, 'discard');
+    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
     expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
     // The changes are gone; the worktree itself waits, clean and detached, for the next session.
     expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(false);
@@ -411,7 +411,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(c.files).toMatchObject([{ path: 'notes.txt', kind: 'untracked', added: 2, uncommitted: true }]);
     await env.core.sessions.refreshDiff(s.id);
     expect(env.core.sessions.get(s.id).diffStat).toEqual({ added: 2, removed: 0 });
-    await env.core.sessions.action(s.id, 'discard');
+    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
     await expect(env.core.sessions.changes(s.id)).rejects.toThrow(/worktree is gone/);
   });
 

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -55,6 +55,12 @@ export function sessionName(v: unknown): string {
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) throw new HttpError(400, 'The name can\'t have control characters.');
   return name;
+}
+
+/** The body of a merge or discard action (CloseSessionRequest); anything else asks for nothing. */
+export function closeRequest(body: unknown): CloseSessionRequest {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  return { skipLearn: b.skipLearn === true };
 }
 
 /** The status detail while Claude asks the user something: its first question, shortened. */
@@ -200,6 +206,8 @@ export class SessionManager {
   private creating = new Set<string>();
   /** Sessions we are deliberately stopping; their exit isn't an event. */
   private stopping = new Set<string>();
+  /** Sessions being discarded now (discardNow). */
+  private discardingNow = new Set<string>();
   /** Sessions whose Claude was launched but hasn't sent SessionStart yet (it may be showing the folder-trust dialog). */
   private awaitingStart = new Set<string>();
   /** The tail of each session's prompt submissions, so two prompts are never pasted at once. */
@@ -1414,6 +1422,11 @@ export class SessionManager {
     }
     for (const row of sessionRows(this.db)) {
       if (!this.recoverable(row) || !projectRow(this.db, row.project_id)) continue;
+      // A Discard that waited for a learn step the restart cut short (Learner.recover ended it).
+      if (row.discarding && !this.core.learn.running(row.id)) {
+        await this.discardNow(row.id).catch((e) => this.core.log.error(`discarding ${row.id} failed`, e));
+        continue;
+      }
       const pane = panes.get(row.tmux_name);
       if (pane && !pane.dead) {
         // Server restart; Claude kept running. One still starting lost its progress with the old
@@ -1608,7 +1621,7 @@ export class SessionManager {
       case 'cancel-approval': lc.cancelApproval(row); break;
       case 'cancel-queued': lc.cancelQueued(row); break;
       case 'open-pr': await lc.openPr(row); break;
-      case 'merge': await lc.merge(row); break;
+      case 'merge': await lc.merge(row, closeRequest(body)); break;
       case 'request-review': await lc.requestReview(row, false); break;
       case 'force-review': await lc.requestReview(row, true); break;
       case 'resume': await this.resume(row); break;
@@ -1616,14 +1629,56 @@ export class SessionManager {
         await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');
         await this.archive(row, { keepBranch: true });
         break;
-      // A branch the session started on existed before it, and isn't the session's to delete.
-      case 'discard': await this.archive(row, { keepBranch: !!row.branch_reused, force: true }); break;
+      case 'discard': await this.discard(row, closeRequest(body)); break;
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
       case 'learn': await this.core.learn.start(row, 'manual'); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
+  }
+
+  /**
+   * Discard: what the session learned goes to the project's datapack first, unless skipLearn, and
+   * the session is discarded once that learn step ends (Lifecycle.afterLearn; `discarding` keeps
+   * it waiting across a restart). Asked again while it waits, with skipLearn, it goes now.
+   */
+  private async discard(row: SessionRow, req: CloseSessionRequest): Promise<void> {
+    if (req.skipLearn) {
+      this.core.learn.skipped(row);
+    } else if (row.discarding) {
+      return;
+    } else {
+      // Set first: a learn step that ends at once must find the discard waiting for it.
+      this.update(row.id, { discarding: 1 });
+      let waits = false;
+      try {
+        waits = await this.core.learn.beforeDiscard(this.row(row.id));
+      } finally {
+        if (!waits) this.update(row.id, { discarding: 0 });
+      }
+      if (waits) {
+        this.event(row.id, 'discarding', 'Discarding once AgentK has saved what this session learned');
+        // It may have ended meanwhile, before the event.
+        if (!this.core.learn.running(row.id)) await this.discardNow(row.id);
+        return;
+      }
+    }
+    await this.discardNow(row.id);
+  }
+
+  /** Discards the session now (once, however many callers ask). */
+  async discardNow(id: string): Promise<void> {
+    if (this.discardingNow.has(id)) return;
+    const row = this.row(id);
+    if (row.desired !== 'running') return;
+    this.discardingNow.add(id);
+    try {
+      // A branch the session started on existed before it, and isn't the session's to delete.
+      await this.archive(row, { keepBranch: !!row.branch_reused, force: true });
+    } finally {
+      this.discardingNow.delete(id);
+    }
   }
 
   /** Changes the session's type, stage or both, at the user's request (see Lifecycle.move). */
@@ -1764,7 +1819,7 @@ export class SessionManager {
     this.stopping.add(row.id);
     try {
       this.ingestUsage(row.id);
-      run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = COALESCE(?, archived_at) WHERE id = ?`,
+      run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', discarding = 0, archived_at = COALESCE(?, archived_at) WHERE id = ?`,
         wasArchived ? null : Date.now(), row.id);
       await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
       await this.core.tmux.kill(row.tmux_name);
