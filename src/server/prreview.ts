@@ -31,7 +31,6 @@ export function reviewerEmailKey(login: string): string {
  */
 export class PrReviewService {
   private profiles = new Map<string, { at: number; name: string | null; email: string | null }>();
-  private login: string | null = null;
 
   constructor(private core: Core) {}
 
@@ -114,7 +113,7 @@ export class PrReviewService {
       if (!pr) return { ...base, error: "The PR's link isn't a GitHub PR link." };
       const cwd = existsSync(r.worktree_path) && this.core.sessions.ownsWorktree(r) ? r.worktree_path : (sessionRepo(this.db, r) ?? r.worktree_path);
       try {
-        const [people, me] = await Promise.all([github.prPeople(cwd, pr.repo, pr.number), this.viewer(cwd)]);
+        const [people, me] = await Promise.all([github.prPeople(cwd, pr.repo, pr.number), this.core.ghLogin(cwd)]);
         const logins = people.users.filter((u) => LOGIN_RE.test(u) && !same(u, people.author) && !(me && same(u, me)));
         return { ...base, title: people.title, teams: people.teams, reviewers: await Promise.all(logins.map((l) => this.reviewer(cwd, l))) };
       } catch (e) {
@@ -144,11 +143,6 @@ export class PrReviewService {
     const got = await github.userProfile(cwd, login).catch(() => ({ name: null, email: null }));
     this.profiles.set(key, { at: Date.now(), ...got });
     return got;
-  }
-
-  private async viewer(cwd: string): Promise<string | null> {
-    if (!this.login) this.login = await github.viewerLogin(cwd).catch(() => null) || null;
-    return this.login;
   }
 
   /** The repos a PR's repo can be matched to: the scanned ones, and the project's and its sessions' repos. */

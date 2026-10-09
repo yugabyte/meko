@@ -464,6 +464,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
             mekoConfigured={state.meko.configured}
+            ghLogin={state.ghLogin ?? null}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
             onError={showToast}
@@ -515,6 +516,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {newSessionProject && (
         <NewSessionDialog
           project={newSessionProject}
+          ghLogin={state.ghLogin ?? null}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
           initial={modal.kind === 'new-session' ? modal.retry?.request : undefined}
           onClose={() => setModal({ kind: 'none' })}

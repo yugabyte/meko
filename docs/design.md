@@ -352,7 +352,7 @@ project on a repo gets its own datapack, settings, sessions and worktrees; proje
 names must differ within a repo, and a name is taken from the moment its open starts, so two
 opens of the same name at once can't both succeed. Their session branches
 share the repo, so a branch name that another project already uses gets a number added
-(`ak/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
+(`ak_<login>/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
 the repo.
 
 ![The Open project dialog listing the git repos under ~/code](screenshots/new-project.png)
@@ -970,7 +970,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b <prefix><slug> <base>` (`<prefix>` is the project's branch prefix, `ak_<login>/` by default; or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b <prefix><slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
 | Open tab | Attaches to the pane in the session host, one attach per viewer. The pane takes the size of the viewer that attached or was used last (see Sizing above). A phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, so it holds no connections it doesn't show, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Ends that attach only. The session host and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
@@ -1225,8 +1225,19 @@ stateDiagram-v2
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),
   merge conflicts with the base through `conflicts` (`{{sha}}`, the conflicting head), and CI failures
   through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
-- **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
-  enforce a branch-name prefix with rulesets.
+- **Branch names.** The branch prefix is a project setting, `ak_{login}/` by default, because some
+  orgs enforce a branch-name prefix with rulesets, and so a shared repo's branches say whose they
+  are. `{login}` is the login `gh` is signed in as, lowercased (`expandBranchPrefix` in
+  `src/shared/branches.ts`). The server asks gh until it answers (`Core.ghLogin`, which the PR
+  stages' "is this review the user's" checks use too), one lookup at a time, and sends it in
+  `AppState.ghLogin` for the New session dialog's branch preview and the setting's hint. A session
+  start waits for the lookup (5 s cap); a gh that hit the cap isn't asked again for a minute, so
+  starts go on without it meanwhile. Without a login (gh missing, signed out or hanging),
+  `{login}` is left out with the `_`, `-` or `.` before it and doubled slashes are collapsed, so
+  `ak_{login}/` comes to `ak/` and `team/{login}/` to `team/`; a prefix that comes to nothing
+  (`{login}/`) is `ak/`, so a branch is never just its slug. Projects on `ak/` moved to
+  `ak_{login}/` (migration 29) and any other prefix stays; an `ak/` typed in by hand can't be told
+  from the old default, so it moved too.
 
 ### Queued gates
 

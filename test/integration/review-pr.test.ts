@@ -124,19 +124,19 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await idle(s.id, 'first turn');
     const got = env.core.sessions.get(s.id);
     expect(got).toMatchObject({
-      name: 'Review #7 Add the widget', kind: 'review-pr', stage: 'reviewing-pr', branch: 'ak/review-pr-7', baseBranch: 'main', repoPath: clone,
+      name: 'Review #7 Add the widget', kind: 'review-pr', stage: 'reviewing-pr', branch: 'ak_me/review-pr-7', baseBranch: 'main', repoPath: clone,
       prNumber: 7, prUrl: 'https://github.com/acme/demo/pull/7', hasTask: true,
       reviewingPr: { repo: 'acme/demo', title: 'Add the widget', author: 'dana', reviewSha: head, headSha: head, newCommits: 0, prState: 'OPEN' },
     });
     expect(git(got.worktreePath, 'rev-parse', 'HEAD')).toBe(head);
-    expect(git(got.worktreePath, 'symbolic-ref', '--short', 'HEAD')).toBe('ak/review-pr-7');
+    expect(git(got.worktreePath, 'symbolic-ref', '--short', 'HEAD')).toBe('ak_me/review-pr-7');
     // No upstream, and a bare `git push` is refused even where the push config would push a new branch.
     expect(() => git(got.worktreePath, 'rev-parse', '--abbrev-ref', '@{upstream}')).toThrow();
     git(clone, 'config', 'push.default', 'current');
     git(clone, 'config', 'push.autoSetupRemote', 'true');
     expect(() => git(got.worktreePath, 'push')).toThrow(/agentk-review-no-push/);
-    expect(git(author, 'ls-remote', upstream, 'refs/heads/ak/*')).toBe('');
-    expect(event(s.id, 'created')).toBe(`Checked out PR #7 of acme/demo at ${head.slice(0, 7)} on ak/review-pr-7 (base main)`);
+    expect(git(author, 'ls-remote', upstream, 'refs/heads/ak_me/*')).toBe('');
+    expect(event(s.id, 'created')).toBe(`Checked out PR #7 of acme/demo at ${head.slice(0, 7)} on ak_me/review-pr-7 (base main)`);
     // The first prompt: get ready, sum up, wait; and search Meko on every why-question.
     const t = transcript(s.id);
     expect(t).toContain("You're assisting the user while they review PR #7 (https://github.com/acme/demo/pull/7) by dana");
@@ -236,7 +236,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     alias(other, 'acme/other', otherBare);
     pr(7, {}, 'acme/other');
     const b = await env.core.sessions.create(p.id, { name: 'b', kind: 'review-pr', repoPath: other, pr: { repo: 'acme/other', number: 7 } });
-    expect(env.core.sessions.get(b.id)).toMatchObject({ branch: 'ak/review-pr-7-2', repoPath: other, reviewingPr: { repo: 'acme/other' } });
+    expect(env.core.sessions.get(b.id)).toMatchObject({ branch: 'ak_me/review-pr-7-2', repoPath: other, reviewingPr: { repo: 'acme/other' } });
     expect(git(env.core.sessions.get(b.id).worktreePath, 'rev-parse', 'HEAD')).toBe(git(otherAuthor, 'rev-parse', 'HEAD'));
     // A repo that isn't a clone of the PR's repo is refused.
     await expect(env.core.sessions.create(p.id, { name: 'c', kind: 'review-pr', repoPath: other, pr: { repo: 'acme/demo', number: 7 } }))
@@ -244,7 +244,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     // Discard ends a review too, and takes the PR's head ref with it.
     await env.core.sessions.action(a.id, 'discard', { skipLearn: true });
     expect(() => git(fork, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
-    expect(git(fork, 'branch', '--list', 'ak/*')).toBe('');
+    expect(git(fork, 'branch', '--list', 'ak_me/*')).toBe('');
   });
 
   it('flags new commits without typing anything, updates on request, and closes the review', async () => {
@@ -298,7 +298,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await env.core.sessions.action(s.id, 'close-review');
     const row = env.core.sessions.row(s.id);
     expect(row).toMatchObject({ desired: 'archived', stage: 'done' });
-    expect(git(clone, 'branch', '--list', 'ak/*')).toBe('');
+    expect(git(clone, 'branch', '--list', 'ak_me/*')).toBe('');
     expect(() => git(clone, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
     expect(event(s.id, 'review-closed')).toBe('Closed the review of PR #7');
     expect(existsSync(wt)).toBe(true); // idle, for the next session on the repo
@@ -325,8 +325,8 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await env.core.lifecycle.pollReviewedPr(env.core.sessions.row(s.id));
     expect(env.core.sessions.get(s.id).reviewingPr).toMatchObject({ headSha: unseen, newCommits: 1 });
     await env.core.sessions.action(s.id, 'close-review');
-    expect(git(clone, 'branch', '--list', '--format=%(refname:short)', 'ak/*')).toBe('ak/review-pr-7');
-    expect(event(s.id, 'review-closed')).toBe('Closed the review of PR #7; branch ak/review-pr-7 kept, since it has a commit of yours');
+    expect(git(clone, 'branch', '--list', '--format=%(refname:short)', 'ak_me/*')).toBe('ak_me/review-pr-7');
+    expect(event(s.id, 'review-closed')).toBe('Closed the review of PR #7; branch ak_me/review-pr-7 kept, since it has a commit of yours');
   });
 
   it('sends Changes panel comments as review comments to draft, not changes to make', async () => {

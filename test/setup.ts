@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 for (const k of Object.keys(process.env)) {
-  if (/^(MEKO_|AK_|CLAUDE|GH_|GIT_|TMUX|XDG_CONFIG_HOME$|XDG_STATE_HOME$|XDG_DATA_HOME$)/.test(k)) delete process.env[k];
+  if (/^(MEKO_|AK_|CLAUDE|GH_|GIT_|GITHUB_|TMUX|XDG_CONFIG_HOME$|XDG_STATE_HOME$|XDG_DATA_HOME$)/.test(k)) delete process.env[k];
 }
 const home = realpathSync(mkdtempSync(join(tmpdir(), 'akl-home-')));
 process.env.HOME = home;

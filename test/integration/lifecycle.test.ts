@@ -15,6 +15,11 @@ const gh = vi.hoisted(() => ({
   mergeError: null as null | Error,
   bots: [] as string[],
   viewer: 'me' as string | null,
+  /** How many times gh was asked for its login, and how long it takes to answer. */
+  viewerCalls: 0,
+  viewerDelay: 0,
+  /** Thrown instead of answering (a timed-out gh is `killed`). */
+  viewerError: null as null | Error,
   stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
 }));
 
@@ -34,6 +39,9 @@ vi.mock('../../src/server/github.js', async (orig) => {
     resolveMergeMethod: async () => 'squash' as const,
     botLogins: async () => gh.bots,
     viewerLogin: async () => {
+      gh.viewerCalls++;
+      if (gh.viewerDelay) await new Promise((r) => setTimeout(r, gh.viewerDelay));
+      if (gh.viewerError) throw gh.viewerError;
       if (!gh.viewer) throw new Error('gh: not logged in');
       return gh.viewer;
     },
@@ -75,6 +83,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.mergeError = null;
     gh.bots = [];
     gh.viewer = 'me';
+    gh.viewerCalls = 0;
+    gh.viewerDelay = 0;
+    gh.viewerError = null;
     gh.stats = null;
     env = await makeEnv();
   });
@@ -142,8 +153,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(row.desired).toBe('archived');
     expect(existsSync(worktree)).toBe(true); // idle, for the next session on the repo
     expect(env.core.sessions.ownsWorktree(row)).toBe(false);
-    expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak/fix-the-thing removed; worktree kept for the next session');
-    const branches = execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' });
+    expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak_me/fix-the-thing removed; worktree kept for the next session');
+    const branches = execFileSync('git', ['branch', '--list', 'ak_me/*'], { cwd: env.repo, encoding: 'utf8' });
     expect(branches.trim()).toBe(''); // cleanup deletes the local branch
     const memory = env.meko.calls.find((c) => c.name === 'addMemory');
     expect(String(memory?.args[0])).toMatch(/Shipped in Demo: "Fix the thing" \(PR #7/);
@@ -291,7 +302,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const worktree = env.core.sessions.row(s.id).worktree_path;
     await env.core.sessions.action(s.id, 'merge');
     await closed(s.id);
-    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: other, encoding: 'utf8' }).trim()).toBe('');
+    expect(execFileSync('git', ['branch', '--list', 'ak_me/*'], { cwd: other, encoding: 'utf8' }).trim()).toBe('');
     expect(dbGet<{ repo: string }>(env.core.db, 'SELECT repo FROM worktrees WHERE path = ? AND session_id IS NULL', worktree)?.repo).toBe(other);
   });
 
@@ -599,7 +610,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).desired).toBe('archived');
     expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'mod', outcome: 'done' }]);
     expect(lastEvent(s.id, 'learned')).toBe('Nothing new to save to team/demo');
-    expect(lastEvent(s.id, 'discarded')).toMatch(/^Discarded; changes and branch ak\/discard-learned deleted/);
+    expect(lastEvent(s.id, 'discarded')).toMatch(/^Discarded; changes and branch ak_me\/discard-learned deleted/);
     expect(dbGet<{ n: number }>(env.core.db, "SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'discarded'", s.id)!.n).toBe(1);
     expect(env.core.sessions.row(s.id).discarding).toBe(0);
     expect(execFileSync('git', ['branch', '--list', branch], { cwd: env.repo, encoding: 'utf8' }).trim()).toBe('');
@@ -875,6 +886,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await inReview('Login lookup');
     const notify = vi.spyOn(env.core.sessions, 'notifyUser');
     gh.viewer = null;
+    // Starting the session looked the login up already; as if gh had been signed out then.
+    (env.core as unknown as { ghUser: string | null }).ghUser = null;
     env.core.sessions.update(s.id, { status: 'working' });
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h1', 'me', 'Rename x.', 'COMMENTED', 'CONTRIBUTOR')] };
     await poll(s.id);
@@ -884,6 +897,34 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await poll(s.id);
     expect(lastEvent(s.id, 'review')).toBe('Review from me');
     expect(queued(s.id)['review-people']).toEqual({ state: 'queued', vars: { reviewers: 'me' } });
+  });
+
+  it('asks gh for the login one lookup at a time, and not again for a while after it hung', async () => {
+    const core = env.core as unknown as { ghUser: string | null };
+    core.ghUser = null;
+    gh.viewerDelay = 50;
+    const calls = gh.viewerCalls;
+    expect(await Promise.all([env.core.ghLogin(env.repo), env.core.ghLogin(env.repo)])).toEqual(['me', 'me']);
+    expect(gh.viewerCalls).toBe(calls + 1);
+    // A signed-out gh answers at once: asked again next time.
+    core.ghUser = null;
+    gh.viewer = null;
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    gh.viewer = 'me';
+    expect(await env.core.ghLogin(env.repo)).toBe('me');
+    // One that hung (execFile killed it at the time limit) isn't asked again for a minute, so
+    // session starts don't each wait for it; their branches get the prefix without the login.
+    core.ghUser = null;
+    gh.viewerError = Object.assign(new Error('gh timed out'), { killed: true });
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    gh.viewerError = null;
+    const before = gh.viewerCalls;
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    expect(gh.viewerCalls).toBe(before);
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Offline', prompt: 'do it', kind: 'quick' });
+    expect(s.branch).toBe('ak/offline');
+    expect(gh.viewerCalls).toBe(before);
   });
 
   it('counts /agentk review only from the user and people with a role on the repo', async () => {

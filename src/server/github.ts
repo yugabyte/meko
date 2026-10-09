@@ -422,9 +422,9 @@ export async function prWatch(cwd: string, repo: string, number: number): Promis
   };
 }
 
-/** The login `gh` is signed in as. */
-export async function viewerLogin(cwd: string): Promise<string> {
-  return gh(cwd, 'api', 'user', '--jq', '.login');
+/** The login `gh` is signed in as (with a time limit; 0: none). */
+export async function viewerLogin(cwd: string, timeoutMs = 0): Promise<string> {
+  return ghWithin(cwd, timeoutMs, 'api', 'user', '--jq', '.login');
 }
 
 export interface PrPeople {

@@ -500,6 +500,7 @@ export interface ProjectSettings {
   reviewer: ReviewerMode;
   /** GitHub login of the AgentK bot, matched with or without a `[bot]` suffix. */
   reviewerLogin: string;
+  /** New sessions' branches start with it; `{login}` in it is your GitHub login (expandBranchPrefix). */
   branchPrefix: string;
   mergeMethod: MergeMethod;
   /** Browser notifications for this project. */
@@ -683,6 +684,8 @@ export interface AppState {
   update: UpdateStatus;
   version: string;
   username: string;
+  /** The login gh is signed in as, or null until it has said (gh missing or signed out): `{login}` in a branch prefix. */
+  ghLogin: string | null;
   /** The name shown next to the user name: `[server] name` from config.toml, else the machine's short host name. */
   serverName: string;
   /** The machine's full host name as the OS reports it, for the tooltip when it differs from `serverName`. */
@@ -1394,9 +1397,9 @@ export interface CreateSessionRequest {
   /** A main git repo to work in instead of the project's (one of the scanned repos). */
   repoPath?: string;
   /**
-   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`. An
-   * existing branch (local, or only on origin) is picked up as it is, unless a running session
-   * uses it or another checkout has it.
+   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`, with
+   * `{login}` in the prefix filled in. An existing branch (local, or only on origin) is picked up
+   * as it is, unless a running session uses it or another checkout has it.
    */
   branch?: string;
   /**

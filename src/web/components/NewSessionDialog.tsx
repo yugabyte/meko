@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
+import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
@@ -22,12 +23,15 @@ const WORK_ON: { value: WorkOn; label: string }[] = [
 
 export function NewSessionDialog({
   project,
+  ghLogin,
   fresh = false,
   initial,
   onClose,
   onCreated,
 }: {
   project: Project;
+  /** The login gh is signed in as, for `{login}` in the branch prefix. */
+  ghLogin: string | null;
   /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
   fresh?: boolean;
   /** What a failed start asked for, to try it again. */
@@ -229,7 +233,8 @@ export function NewSessionDialog({
       .catch((e) => setReposError(errorMessage(e)));
   }, [advanced, repos, reposError]);
 
-  const autoBranch = `${project.settings.branchPrefix}${slugify(name) || 'task-name'}`;
+  const prefix = expandBranchPrefix(project.settings.branchPrefix, ghLogin);
+  const autoBranch = `${prefix}${slugify(name) || 'task-name'}`;
   const repoChoices = [
     { path: project.repoPath, label: `${repoFolder(project.repoPath)} (project repo)` },
     ...(repos ?? [])
@@ -238,7 +243,7 @@ export function NewSessionDialog({
   ];
   // A review's repo is the PR's clone, which may not be listed yet (Advanced never opened, or just cloned).
   if (!repoChoices.some((r) => r.path === repoPath)) repoChoices.push({ path: repoPath, label: repoFolder(repoPath) });
-  const reviewBranch = picked ? `${project.settings.branchPrefix}review-pr-${picked.number}` : '';
+  const reviewBranch = picked ? `${prefix}review-pr-${picked.number}` : '';
   const typedExists = workOn === 'new' && !!branch.trim() && !!branches?.includes(branch.trim());
   const ready = workOn === 'branch' ? !!existing.trim() : workOn === 'pr' ? !!taskPr : true;
   const canStart = review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches && ready;
