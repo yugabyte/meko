@@ -1410,6 +1410,8 @@ export class SessionManager {
       void this.captureTranscript(r.id); // catches up on turns from before this server version
     }
     this.backfillUsage();
+    // Sessions may still run in tmux (an install moving off it): starting them here would run them twice.
+    if (!this.core.tmuxMoved) return;
     let panes: Map<string, PaneInfo>;
     try {
       await this.core.host.ensureServer();
@@ -1469,6 +1471,7 @@ export class SessionManager {
 
   /** Periodic check: dead panes become `exited`; missing panes (the host died) are recovered. */
   async reconcile(): Promise<void> {
+    if (!this.core.tmuxMoved) return;
     if (!(await this.core.host.serverRunning())) {
       this.core.log.warn('the session host is gone; recovering sessions');
       await this.recover();

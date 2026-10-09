@@ -27,6 +27,8 @@ export interface Paths {
   hostSock: string;
   /** What the running session host wrote about itself: pid, version, app dir, protocol. */
   hostState: string;
+  /** The running session host's lease on this home (instance.ts): one host per home. */
+  hostLock: string;
   /** The running server's lease on this home (instance.ts): one server per home, even across hosts. */
   lock: string;
   /** Written by versions that ran sessions in tmux; removed once a session host has taken over. */
@@ -53,6 +55,7 @@ export function getPaths(home: string = akHome()): Paths {
     hookSock: sockPath(home, 'hook'),
     hostSock: sockPath(home, 'host'),
     hostState: join(home, 'run', 'host.json'),
+    hostLock: join(home, 'host.lock'),
     lock: join(home, 'server.lock'),
     tmuxConf: join(home, 'tmux.conf'),
     logs: join(home, 'logs'),

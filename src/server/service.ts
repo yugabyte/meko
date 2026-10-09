@@ -50,6 +50,8 @@ export interface ServiceManager {
   addHost(files: Record<Service, string>): void;
   /** Restarts a service (for the host, this ends every Claude; recovery resumes them). */
   restart(s: Service): void;
+  /** Stops and deletes the host service, ending every Claude in it (before a rollback to a version without it). */
+  removeHost(): void;
   /** Whether the tmux service of versions before the session host is still installed. */
   legacyTmuxInstalled(): boolean;
   /** Stops and deletes the tmux service of versions before the session host. */
@@ -63,6 +65,8 @@ export interface ServiceManager {
   bootCheck(): BootCheck;
   /** A command that shows why a service isn't running. */
   statusHint(s: Service): string;
+  /** A command that stops a service until it's started again. */
+  stopHint(s: Service): string;
 }
 
 export type Runner = (cmd: string, args: string[]) => { ok: boolean; out: string; err: string };
@@ -156,6 +160,12 @@ export class SystemdServices implements ServiceManager {
     must(this.run, 'systemctl', ['--user', 'restart', this.id(s)]);
   }
 
+  removeHost(): void {
+    this.run('systemctl', ['--user', 'disable', '--now', this.id('host')]);
+    if (existsSync(this.file('host'))) unlinkSync(this.file('host'));
+    this.run('systemctl', ['--user', 'daemon-reload']);
+  }
+
   private tmuxFile(): string {
     return join(this.dir(), SYSTEMD_TMUX);
   }
@@ -202,6 +212,10 @@ export class SystemdServices implements ServiceManager {
 
   statusHint(s: Service): string {
     return `systemctl --user status ${this.id(s)}`;
+  }
+
+  stopHint(s: Service): string {
+    return `systemctl --user stop ${this.id(s)}`;
   }
 }
 
@@ -323,6 +337,11 @@ export class LaunchdServices implements ServiceManager {
     else this.bootstrap(s);
   }
 
+  removeHost(): void {
+    this.unload('host');
+    if (existsSync(this.file('host'))) unlinkSync(this.file('host'));
+  }
+
   private tmuxFile(): string {
     return join(this.home, 'Library', 'LaunchAgents', `${LAUNCHD_TMUX}.plist`);
   }
@@ -363,6 +382,11 @@ export class LaunchdServices implements ServiceManager {
   statusHint(s: Service): string {
     return `launchctl print ${this.target(s)}`;
   }
+
+  stopHint(s: Service): string {
+    // KeepAlive restarts a job that is only killed: unload it (the next login, or a reinstall, loads it again).
+    return `launchctl bootout ${this.target(s)}`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -384,11 +408,17 @@ export function servicesFor(home: string, svc: ServiceManager | null = hostServi
   const file = svc.installed('server') ? svc.file('server') : svc.installed('host') ? svc.file('host') : null;
   if (!file) return svc;
   try {
-    const text = readFileSync(file, 'utf8');
-    return text.includes(svc.kind === 'launchd' ? xmlEscape(home) : home) ? svc : null;
+    return serviceHome(readFileSync(file, 'utf8'), svc.kind) === home ? svc : null;
   } catch {
     return null;
   }
+}
+
+/** The AK_HOME a unit file or property list sets, or null when it sets none. */
+export function serviceHome(text: string, kind: ServiceManager['kind']): string | null {
+  if (kind === 'systemd') return /^Environment=AK_HOME=(.*)$/m.exec(text)?.[1].trim() ?? null;
+  const v = /<key>AK_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(text)?.[1];
+  return v === undefined ? null : v.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
 }
 
 function templatesDir(kind: ServiceManager['kind'], probe: string): string {

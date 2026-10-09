@@ -196,7 +196,7 @@ Design: [`docs/design.md`](docs/design.md).
 | `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
 | `agent-k-local uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
 | `agent-k-local attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
-| `agent-k-local host restart` | Restart the session host (its sessions resume); `host stop` ends every session |
+| `agent-k-local host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
 
 ## Develop
 

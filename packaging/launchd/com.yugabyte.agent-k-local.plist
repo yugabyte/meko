@@ -26,9 +26,6 @@
   <true/>
   <key>ThrottleInterval</key>
   <integer>2</integer>
-  <!-- Stopping the server never takes down a session host it had to start itself. -->
-  <key>AbandonProcessGroup</key>
-  <true/>
   <key>ExitTimeOut</key>
   <integer>15</integer>
   <!-- The server writes its own log (logs/server.log); keep only errors here. -->

@@ -402,8 +402,8 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
     `# agent-k-local launcher for session ${spec.sessionId}. Rewritten on every launch.`,
     `if [ "$1" != ${INNER} ]; then`,
     `  cd ${shq(spec.worktree)} || exit 1`,
-    // Never let an outer Claude Code session's markers, or this install's own state dir, leak in.
-    `  unset ${CLAUDE_SESSION_MARKERS.join(' ')} TMUX TMUX_PANE AK_HOME`,
+    // Never let an outer Claude Code session's markers, or this install's own home and app, leak in.
+    `  unset ${CLAUDE_SESSION_MARKERS.join(' ')} TMUX TMUX_PANE AK_HOME AK_APP_DIR AK_VERSION`,
     `  exec ${shq(shell)} -l -c ${shq(cmd)}`,
     'fi',
     `cd ${shq(spec.worktree)} || exit 1`,

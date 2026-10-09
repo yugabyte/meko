@@ -91,6 +91,11 @@ export class Core extends EventEmitter {
   private legacyTmuxSocket: string | undefined;
   /** The old tmux service is gone (or never was): nothing left to retire. */
   private tmuxRetired = false;
+  /**
+   * This home's sessions still in tmux (versions before the session host) have been ended, or there
+   * were none. Recovery waits for it: a session must never run in tmux and in the host at once.
+   */
+  tmuxMoved = false;
   readonly log: Logger;
   readonly projects: ProjectService;
   readonly worktrees: WorktreePool;
@@ -282,6 +287,7 @@ export class Core extends EventEmitter {
 
   async start(): Promise<void> {
     this.stopped = false;
+    this.tmuxMoved = false;
     writeHookFiles(this.paths);
     try {
       if (!writeModFiles(this.paths)) this.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
@@ -305,15 +311,21 @@ export class Core extends EventEmitter {
     this.questions.preload();
     // Not awaited: startup doesn't wait on Meko.
     void this.claudeMeko.refresh();
-    // Before the hook socket is bound: the Claudes ended in tmux report their end to no one, and
-    // recovery resumes them in the session host as it finds them.
-    await this.moveOffTmux();
-    await this.bindHooks();
-    this.hooksOn = true;
     this.addHostService();
     // A session host that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs the host) retries on every reconcile tick.
-    await this.host.ensureServer().catch((e) => this.log.error('the session host is not available', e));
+    const hostUp = await this.host.ensureServer().then(
+      () => true,
+      (e: unknown) => {
+        this.log.error('the session host is not available', e);
+        return false;
+      },
+    );
+    // Only once a host answers, so sessions still in tmux are never ended with nowhere to resume
+    // them; and before the hook socket is bound, so their Claudes report their end to no one.
+    if (hostUp) await this.moveOffTmux();
+    await this.bindHooks();
+    this.hooksOn = true;
     this.learn.recover();
     await this.sessions.recover();
     void this.sessions.refreshDiffStats().catch(() => undefined);
@@ -321,7 +333,11 @@ export class Core extends EventEmitter {
     this.prunePins();
     this.sweepStaged();
     if (this.timersOn) {
-      this.every(5000, () => this.sessions.reconcile());
+      this.every(5000, async () => {
+        // A host that was down at start: end the sessions still in tmux once one answers.
+        if (!this.tmuxMoved && (await this.host.ensureServer().then(() => true, () => false))) await this.moveOffTmux();
+        await this.sessions.reconcile();
+      });
       this.every(60000, () => this.retireTmux());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
@@ -402,20 +418,26 @@ export class Core extends EventEmitter {
     return this.hookCheck;
   }
 
-  /** Ends sessions still running in tmux (versions before the session host). Remove after 2026-10-14. */
+  /**
+   * Ends this home's sessions still running in tmux (versions before the session host), so recovery
+   * resumes them in the host. Call it only once a host answers. Remove after 2026-10-14.
+   */
   private async moveOffTmux(): Promise<void> {
+    if (this.tmuxMoved) return;
     try {
       const ours = new Set(all<{ tmux_name: string }>(this.db, 'SELECT tmux_name FROM sessions').map((r) => r.tmux_name));
       await moveOffTmux({ paths: this.paths, log: this.log, services: this.services(), ours, socket: this.legacyTmuxSocket });
+      this.tmuxMoved = true;
     } catch (e) {
-      this.log.warn("couldn't end the sessions still running in tmux", errMsg(e));
+      this.log.warn("couldn't end the sessions still running in tmux; trying again", errMsg(e));
     }
-    this.retireTmux();
+    await this.retireTmux();
   }
 
   /** Removes the old tmux service once the update is final. Remove after 2026-10-14. */
-  private retireTmux(): void {
-    if (!this.tmuxRetired) this.tmuxRetired = retireTmuxService({ paths: this.paths, log: this.log, services: this.services() });
+  private async retireTmux(): Promise<void> {
+    if (this.tmuxRetired || !this.tmuxMoved) return;
+    this.tmuxRetired = await retireTmuxService({ paths: this.paths, log: this.log, services: this.services(), socket: this.legacyTmuxSocket });
   }
 
   /**

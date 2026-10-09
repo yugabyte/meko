@@ -67,6 +67,36 @@ describe.skipIf(!hasTmux)('moving off tmux (real tmux, session host + git, fake 
     expect(relaunch.at(-1)).toMatch(/host restarted/);
   }, 30_000);
 
+  it('leaves the sessions in tmux while no session host answers, and moves them once one does', async () => {
+    env = await makeEnv();
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Waits', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    await env.core.stop();
+    await env.killHost();
+    tmux('new-session', '-d', '-s', s.paneName, 'sleep 300');
+    const launches = argvLog().length;
+
+    // The host service couldn't be added, say: nothing may end the Claude in tmux.
+    const ensure = env.core.host.ensureServer.bind(env.core.host);
+    env.core.host.ensureServer = async () => {
+      throw new Error('no host service');
+    };
+    await env.core.start();
+    await env.core.sessions.reconcile();
+    await env.core.sessions.recover();
+    expect(hasSession(s.paneName)).toBe(true);
+    expect(argvLog().length).toBe(launches);
+
+    // A host answers (the reconcile tick tries again): the session moves.
+    env.core.host.ensureServer = ensure;
+    await ensure();
+    await (env.core as unknown as { moveOffTmux(): Promise<void> }).moveOffTmux();
+    expect(hasSession(s.paneName)).toBe(false);
+    await env.core.sessions.reconcile();
+    await waitFor(() => env.core.host.panes(), (panes) => panes.get(s.paneName)?.dead === false, 10000, 'resumed in the host');
+  }, 30_000);
+
   it('ends a tmux server left with no sessions when no tmux service owns it', async () => {
     env = await makeEnv({ start: false });
     mkdirSync(env.core.paths.home, { recursive: true });
@@ -78,19 +108,25 @@ describe.skipIf(!hasTmux)('moving off tmux (real tmux, session host + git, fake 
     expect(existsSync(env.core.paths.tmuxConf)).toBe(false);
   });
 
-  it('removes the tmux service only once the update is final', async () => {
+  it("removes the tmux service only once the update is final, and while no other home's sessions use it", async () => {
     env = await makeEnv({ start: false });
     let removed = 0;
     const svc = { legacyTmuxInstalled: () => removed === 0, removeLegacyTmux: () => void removed++ } as unknown as ServiceManager;
     const paths = env.core.paths;
+    const retire = () => retireTmuxService({ paths, log: silentLogger, services: svc, socket: env.socket });
     mkdirSync(paths.home, { recursive: true });
     writeFileSync(paths.updatePending, '{}');
-    expect(retireTmuxService({ paths, log: silentLogger, services: svc })).toBe(false);
+    expect(await retire()).toBe(false);
     expect(removed).toBe(0);
     rmSync(paths.updatePending);
-    expect(retireTmuxService({ paths, log: silentLogger, services: svc })).toBe(true);
+    // Removing the service would end the tmux server, and another home's session on it.
+    tmux('new-session', '-d', '-s', 'ak-elsewhere--theirs', 'sleep 300');
+    expect(await retire()).toBe(false);
+    expect(removed).toBe(0);
+    tmux('kill-session', '-t', '=ak-elsewhere--theirs');
+    expect(await retire()).toBe(true);
     expect(removed).toBe(1);
-    expect(retireTmuxService({ paths, log: silentLogger, services: svc })).toBe(true);
+    expect(await retire()).toBe(true);
     expect(removed).toBe(1);
   });
 });

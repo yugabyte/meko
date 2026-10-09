@@ -1,9 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Socket } from 'node:net';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HostRunningError, startHost, type HostHandle } from '../../src/server/host/host.js';
 import { MIN_PROTOCOL, type HostControl } from '../../src/server/host/protocol.js';
 import { HostRequestError, NoHostError, SessionHost, type HostStream } from '../../src/server/hostclient.js';
@@ -64,14 +66,42 @@ describe('session host (real ptys)', () => {
     await expect(host.capture('ak-a')).rejects.toBeInstanceOf(HostRequestError);
   });
 
-  it('runs a program with a color terminal, in the directory it was given, without tmux variables', async () => {
-    process.env.TMUX = '/tmp/tmux-1/default,1,0';
+  it("runs a program with a color terminal, in the directory it was given, without tmux's or this install's variables", async () => {
+    const vars = { TMUX: '/tmp/tmux-1/default,1,0', AK_APP_DIR: '/opt/ak/app/1.2.3', AK_VERSION: '1.2.3', AK_HOME: '/opt/ak' };
+    Object.assign(process.env, vars);
     try {
-      await host.spawn('ak-env', home, ['/bin/sh', '-c', 'printf "%s|%s|%s|%s\\n" "$TERM" "$COLORTERM" "${TMUX:-none}" "$(pwd)"; sleep 30']);
+      await host.spawn('ak-env', home, ['/bin/sh', '-c', 'printf "%s|%s|%s|%s|%s|%s|%s\\n" "$TERM" "$COLORTERM" "${TMUX:-none}" "${AK_APP_DIR:-none}" "${AK_VERSION:-none}" "${AK_HOME:-none}" "$(pwd)"; sleep 30']);
     } finally {
-      delete process.env.TMUX;
+      for (const k of Object.keys(vars)) delete process.env[k];
     }
-    expect(await waitFor(() => host.capture('ak-env'), (t) => t.includes('|'))).toContain(`xterm-256color|truecolor|none|${home}`);
+    expect(await waitFor(() => host.capture('ak-env'), (t) => t.includes('|'))).toContain(`xterm-256color|truecolor|none|none|none|none|${home}`);
+  });
+
+  it('leaves no pane behind when its program fails to start, so the session can be started again', async () => {
+    const spawnSpy = vi.spyOn(pty, 'spawn').mockImplementationOnce(() => {
+      throw new Error('forkpty(3) failed');
+    });
+    try {
+      await expect(host.spawn('ak-fail', home, ['/bin/sh', '-c', 'sleep 30'])).rejects.toThrow(/forkpty/);
+    } finally {
+      spawnSpy.mockRestore();
+    }
+    expect((await host.panes()).has('ak-fail')).toBe(false);
+    await host.spawn('ak-fail', home, ['/bin/sh', '-c', 'sleep 30']);
+    expect((await host.panes()).get('ak-fail')).toMatchObject({ dead: false });
+  });
+
+  it("starts a program again from a clean screen, without the last one's hidden cursor", async () => {
+    await host.spawn('ak-again', home, ['/bin/sh', '-c', "printf '\\033[?25l\\033[?1000h\\033[?1006hbye'"]);
+    await waitFor(() => host.panes(), (p) => p.get('ak-again')?.dead === true);
+    await host.spawn('ak-again', home, ['/bin/sh', '-c', 'printf "hello again"; sleep 30']);
+    await waitFor(() => host.capture('ak-again'), (t) => t.includes('hello again'));
+    const v = await viewer(host, 'ak-again', { cols: 80, rows: 24 });
+    streams.push(v.stream);
+    await waitFor(() => v.out, (o) => o.includes('hello again'));
+    expect(v.out).not.toContain('\x1b[?25l');
+    expect(v.out).not.toContain('\x1b[?1006h');
+    expect(v.out).not.toContain('bye');
   });
 
   it('pastes two prompts at once without either one being lost, bracketed only when the program asked for it', async () => {
@@ -165,6 +195,54 @@ describe('session host (real ptys)', () => {
     await expect(startHost({ paths, version: 'other' })).rejects.toBeInstanceOf(HostRunningError);
   });
 
+  it("refuses to start while another host holds the home's lease, even one that doesn't answer", async () => {
+    await handle!.close();
+    handle = null;
+    // A host elsewhere (a home shared over NFS), or one too busy to answer: its lease still beats.
+    writeFileSync(paths.hostLock, JSON.stringify({ host: `not-${hostname()}`, pid: 4242, version: 'x', port: 0, startedAt: Date.now(), beatAt: Date.now() }));
+    await expect(startHost({ paths, version: 'other' })).rejects.toThrow(/already running for .* \(pid 4242 on not-/);
+    rmSync(paths.hostLock);
+    handle = await startHost({ paths, version: '1.2.3' });
+    expect(JSON.parse(readFileSync(paths.hostLock, 'utf8'))).toMatchObject({ pid: process.pid });
+    await handle.close();
+    handle = null;
+    expect(existsSync(paths.hostLock)).toBe(false);
+  });
+
+  it('takes only "nothing listening" for no host: a host that is slow to answer is never started again', async () => {
+    await handle!.close();
+    handle = null;
+    // Something on the socket that never answers, as a host stuck for a while would.
+    const conns: Socket[] = [];
+    const stuck = createServer((c) => void conns.push(c));
+    await new Promise<void>((r) => stuck.listen(paths.hostSock, () => r()));
+    let started = 0;
+    const client = new SessionHost(paths, { services: () => null, start: () => void started++ });
+    try {
+      await expect(client.serverRunning()).rejects.toThrow(/didn't answer hello in time/);
+      await expect(client.ensureServer()).rejects.toThrow(/didn't answer hello in time/);
+      expect(started).toBe(0);
+    } finally {
+      for (const c of conns) c.destroy();
+      await new Promise<void>((r) => stuck.close(() => r()));
+    }
+  }, 20_000);
+
+  it('starts one host for calls that come at the same time', async () => {
+    await handle!.close();
+    handle = null;
+    let started = 0;
+    const client = new SessionHost(paths, {
+      services: () => null,
+      start: async () => {
+        started++;
+        handle = await startHost({ paths, version: '1.2.3' });
+      },
+    });
+    await Promise.all([client.ensureServer(), client.ensureServer(), client.ensureServer()]);
+    expect(started).toBe(1);
+  });
+
   it('lists no panes when no host runs, and never starts its own when the server or the host runs as a service', async () => {
     await handle!.close();
     handle = null;
@@ -238,7 +316,8 @@ describe('agent-k-local host and attach (the commands)', () => {
     }
     expect(code).toBe(75);
 
-    await host.spawn('ak-demo--fix-it', home, ['/bin/sh', '-c', 'printf "pane says hi\n"; sleep 30']);
+    const typed = join(home, 'typed');
+    await host.spawn('ak-demo--fix-it', home, ['/bin/sh', '-c', `printf "pane says hi\n"; stty raw -echo; cat > ${typed}`]);
     expect(execFileSync(tsx, [cli, 'attach'], { env, encoding: 'utf8' })).toContain('  ak-demo--fix-it\n');
 
     // Attached by its slug in a terminal: the screen shows, and Ctrl+\ detaches, leaving it running.
@@ -247,12 +326,30 @@ describe('agent-k-local host and attach (the commands)', () => {
     term.onData((d) => (out += d));
     const exited = new Promise<number>((r) => term.onExit(({ exitCode }) => r(exitCode)));
     await waitFor(() => out, (o) => o.includes('pane says hi'), 20000, 'the pane on screen');
+    // The terminal's own answer to a query is dropped (the host answered it); typing goes through.
+    term.write('\x1b[?1;2c');
+    await new Promise((r) => setTimeout(r, 300));
+    term.write('typed');
+    await waitFor(() => (existsSync(typed) ? readFileSync(typed, 'utf8') : ''), (t) => t === 'typed', 10000, 'the typing');
     term.write('\x1c');
     expect(await exited).toBe(0);
     expect(out).toContain('Detached from ak-demo--fix-it. Claude keeps running.');
     expect((await host.panes()).get('ak-demo--fix-it')?.dead).toBe(false);
 
-    expect(execFileSync(tsx, [cli, 'host', 'stop'], { env, encoding: 'utf8' })).toContain('Stopped the session host and the 1 session(s) in it.');
+    // While a server runs on this home, stopping the host would only see every session resumed.
+    const lock = join(home, 'server.lock');
+    writeFileSync(lock, JSON.stringify({ host: hostname(), pid: process.pid, version: 'x', port: 7777, startedAt: Date.now(), beatAt: Date.now() }));
+    let refused = '';
+    try {
+      execFileSync(tsx, [cli, 'host', 'stop'], { env, stdio: 'pipe' });
+    } catch (e) {
+      refused = String((e as { stderr: Buffer }).stderr);
+    }
+    expect(refused).toContain('The AgentK Local server for this home is running');
+    expect((await host.panes()).size).toBe(1);
+    rmSync(lock);
+
+    expect(execFileSync(tsx, [cli, 'host', 'stop'], { env, encoding: 'utf8' })).toContain('Stopped the session host and the 1 session(s) in it. They resume when the server starts.');
     await waitFor(() => host.serverRunning(), (up) => !up, 10000, 'host down');
   }, 60000);
 });

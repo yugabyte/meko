@@ -9,6 +9,7 @@ import {
   renderServiceFiles,
   renderTemplate,
   ServiceError,
+  serviceHome,
   servicesFor,
   SystemdServices,
   type Runner,
@@ -64,7 +65,8 @@ describe('service templates', () => {
     expect(out.host).toContain('<string>com.yugabyte.agent-k-local.host</string>');
     expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/app\/current\/bin\/agent-k-local<\/string>\s*<string>host<\/string>/);
     expect(out.server).toContain('<string>/Users/me/.agent-k-local/app/current/bin/agent-k-local</string>');
-    expect(out.server).toContain('<key>AbandonProcessGroup</key>\n  <true/>');
+    // The server never starts a host of its own under its job, so nothing it starts must outlive it.
+    expect(out.server).not.toContain('AbandonProcessGroup');
   });
 
   it('renders the systemd units: the session host, and the server that wants it', () => {
@@ -103,7 +105,19 @@ describe('servicesFor', () => {
     svc.install({ server: 'Environment=AK_HOME=/home/me/.agent-k-local\n', host: 'host\n' });
     expect(servicesFor('/home/me/.agent-k-local', svc)).toBe(svc);
     expect(servicesFor('/home/me/code/agent-k-local/.dev-home', svc)).toBeNull();
+    // A home whose path starts another's is still another home.
+    expect(servicesFor('/home/me/.agent-k', svc)).toBeNull();
     expect(servicesFor('/x', null)).toBeNull();
+  });
+
+  it("reads a unit's or a property list's AK_HOME exactly", () => {
+    const vars = { AK_HOME: '/Users/a&b/.agent-k-local', HOST: 'mac' };
+    const launchd = renderServiceFiles(new LaunchdServices(() => ok, '/Users/a&b', 501), vars);
+    expect(serviceHome(launchd.server, 'launchd')).toBe('/Users/a&b/.agent-k-local');
+    expect(serviceHome(launchd.host, 'launchd')).toBe('/Users/a&b/.agent-k-local');
+    const systemd = renderServiceFiles(new SystemdServices(() => ok, {}, '/home/me'), { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
+    expect(serviceHome(systemd.server, 'systemd')).toBe('/home/me/.agent-k-local');
+    expect(serviceHome('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local serve', 'systemd')).toBeNull();
   });
 });
 
@@ -143,6 +157,17 @@ describe('SystemdServices', () => {
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
     expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
     expect(calls).toEqual(['systemctl --user daemon-reload', 'systemctl --user enable --now agent-k-local-host.service']);
+  });
+
+  it('removes the host unit before a rollback to a version without it, and says how to stop a unit', () => {
+    const { svc, calls } = make();
+    svc.install(files);
+    calls.length = 0;
+    svc.removeHost();
+    expect(existsSync(svc.file('host'))).toBe(false);
+    expect(existsSync(svc.file('server'))).toBe(true);
+    expect(calls).toEqual(['systemctl --user disable --now agent-k-local-host.service', 'systemctl --user daemon-reload']);
+    expect(svc.stopHint('server')).toBe('systemctl --user stop agent-k-local.service');
   });
 
   it('removes the tmux unit of older versions', () => {
@@ -266,6 +291,17 @@ describe('LaunchdServices', () => {
     expect(calls).toEqual([`bootstrap gui/501 ${svc.file('host')}`]);
     expect(loaded.has('com.yugabyte.agent-k-local.host')).toBe(true);
     expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
+  });
+
+  it('removes the host job before a rollback to a version without it, and unloads a job to stop it', () => {
+    const { svc, calls, loaded } = make();
+    svc.install(files);
+    calls.length = 0;
+    svc.removeHost();
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local.host']);
+    expect([...loaded]).toEqual(['com.yugabyte.agent-k-local']);
+    expect(existsSync(svc.file('host'))).toBe(false);
+    expect(svc.stopHint('server')).toBe('launchctl bootout gui/501/com.yugabyte.agent-k-local');
   });
 
   it('removes the tmux job of older versions', () => {

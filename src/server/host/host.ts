@@ -5,6 +5,7 @@ import pty from 'node-pty';
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
 import { listenPrivate, socketId } from '../hooks.js';
+import { BEAT_MS, InstanceBusyError, InstanceLock, type InstanceDeps } from '../instance.js';
 import { errMsg, silentLogger, type Logger } from '../log.js';
 import type { Paths } from '../paths.js';
 import {
@@ -44,8 +45,10 @@ export interface HostOptions {
   log?: Logger;
   /** Lines of scrollback kept per pane. */
   scrollback?: number;
-  /** Called after a `stop` request has ended every pane (the CLI exits there). */
+  /** Called after a `stop` request has ended every pane, or once another host took the lease (the CLI exits there). */
   onStop?: () => void;
+  /** For tests: how the lease sees this process and the time. */
+  lockDeps?: InstanceDeps;
 }
 
 export interface HostHandle {
@@ -53,7 +56,7 @@ export interface HostHandle {
   close(): Promise<void>;
 }
 
-/** Another host already answers on the socket. */
+/** Another host already runs on this home. */
 export class HostRunningError extends Error {}
 
 class Viewer {
@@ -91,6 +94,13 @@ class Pane {
   /** Modes the screen copy doesn't carry: mouse encoding (1005, 1006, 1015) and a hidden cursor. */
   private mouseEncoding: number | null = null;
   private cursorHidden = false;
+
+  /** A clean screen for a program started again, the modes tracked beside it included. */
+  reset(): void {
+    this.term.reset();
+    this.mouseEncoding = null;
+    this.cursorHidden = false;
+  }
 
   constructor(readonly name: string, cols: number, rows: number, scrollback: number) {
     this.cols = cols;
@@ -158,7 +168,14 @@ class Pane {
   }
 }
 
-/** Starts the session host on `paths.hostSock`. Throws HostRunningError when one already answers there. */
+/** Variables of this install that sessions must not inherit (a checkout run in a session would take them as its own). */
+const HOST_ONLY_ENV = new Set(['TMUX', 'TMUX_PANE', 'AK_HOME', 'AK_APP_DIR', 'AK_VERSION']);
+
+/**
+ * Starts the session host on `paths.hostSock`. Throws HostRunningError when another host runs on
+ * this home: it holds the home's host lease (`host.lock`, the way `server.lock` guards the server)
+ * for as long as it runs, so a host that is only slow to answer is never replaced.
+ */
 export async function startHost(o: HostOptions): Promise<HostHandle> {
   const log = o.log ?? silentLogger;
   const scrollback = o.scrollback ?? 5000;
@@ -166,11 +183,22 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
   const panes = new Map<string, Pane>();
   const sockets = new Set<Socket>();
 
+  // A quick refusal for a host that answers; the lease below is what keeps a second one out.
   if (await answers(o.paths.hostSock)) throw new HostRunningError(`a session host is already running on ${o.paths.hostSock}`);
+  mkdirSync(o.paths.home, { recursive: true, mode: 0o700 });
+  let lock: InstanceLock;
+  try {
+    lock = await InstanceLock.acquire(o.paths.hostLock, o.paths.home, { version: o.version, port: 0 }, o.lockDeps);
+  } catch (e) {
+    if (e instanceof InstanceBusyError) {
+      throw new HostRunningError(`a session host is already running for ${o.paths.home} (pid ${e.lease.pid} on ${e.lease.host})`);
+    }
+    throw e;
+  }
 
   const childEnv = (): Record<string, string> => {
     const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== 'TMUX' && k !== 'TMUX_PANE') env[k] = v;
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !HOST_ONLY_ENV.has(k)) env[k] = v;
     env.TERM = 'xterm-256color';
     env.COLORTERM = 'truecolor';
     return env;
@@ -237,15 +265,16 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
     if (p && !p.dead) throw Object.assign(new Error(`${r.name} is already running`), { code: 'live' });
     const cols = p?.active?.cols || (r.cols ? clampCols(r.cols) : p?.cols ?? DEFAULT_COLS);
     const rows = p?.active?.rows || (r.rows ? clampRows(r.rows) : p?.rows ?? DEFAULT_ROWS);
+    // Start the program before the pane counts as live: a failed start must not leave one behind.
+    const proc = pty.spawn(r.argv[0], r.argv.slice(1), { name: 'xterm-256color', cols, rows, cwd: r.cwd, env: childEnv() });
     if (!p) {
       p = new Pane(r.name, cols, rows, scrollback);
       panes.set(r.name, p);
     } else {
-      p.term.reset();
+      p.reset();
       p.resize(cols, rows);
     }
     const pane = p;
-    const proc = pty.spawn(r.argv[0], r.argv.slice(1), { name: 'xterm-256color', cols, rows, cwd: r.cwd, env: childEnv() });
     pane.proc = proc;
     pane.dead = false;
     pane.exitStatus = null;
@@ -429,8 +458,12 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
   writeFileSync(o.paths.hostState, JSON.stringify({ pid: process.pid, version: o.version, appDir: o.appDir ?? null, protocol: PROTOCOL, startedAt }) + '\n');
   log.info(`session host ${o.version} listening on ${o.paths.hostSock}`);
 
-  return {
+  let closed = false;
+  const host: HostHandle = {
     async close() {
+      if (closed) return;
+      closed = true;
+      clearInterval(beat);
       if (!stopping) for (const name of [...panes.keys()]) kill(name, 'stopped');
       await new Promise<void>((r) => {
         server.close(() => r());
@@ -443,8 +476,18 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
       } catch {
         /* gone already */
       }
+      lock.release();
     },
   };
+  const beat = setInterval(() => {
+    if (lock.beat()) return;
+    // This host stalled past the lease and another one took the home: its Claudes are out of the
+    // server's reach, and would run beside the ones recovery starts there. End them.
+    log.error(`another session host took over ${o.paths.home}; ending this one`);
+    void host.close().finally(() => o.onStop?.());
+  }, BEAT_MS);
+  beat.unref();
+  return host;
 }
 
 /** True when something answers a hello on the socket. */

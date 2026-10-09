@@ -86,14 +86,21 @@ reaches Claude Code.
 (`TERM=xterm-256color`, `COLORTERM=truecolor`), and keeps a pane whose process exited, with its
 exit status, until it is started again or ended. It answers the program's terminal queries
 (device attributes, cursor position, colors) itself from its headless xterm, so Claude gets one
-answer whether or not anyone is watching; the browsers' own answers are dropped. It listens only on
+answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
+real terminal's with `agent-k-local attach`). Sessions don't inherit this install's `AK_HOME`,
+`AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
+as live only once its program has started. It listens only on
 `host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
 one JSON request per connection: `hello`, `list`, `spawn` (never over a live pane), `kill`,
 `write`, `paste` (a bracketed paste when Claude turned that on, then Enter after 300 ms; pastes to
 one pane go one at a time), `capture` (the visible screen as text), `stop`, and `attach`, which
-turns the connection into frames both ways (`src/server/host/protocol.ts`). A second host on the
-same socket refuses to start (exit 75). It writes `run/host.json` (pid, version, app directory,
-protocol) when it starts.
+turns the connection into frames both ways (`src/server/host/protocol.ts`). One host runs per home:
+it holds the home's host lease, `host.lock`, for as long as it runs (beaten every 10 seconds, as
+`server.lock` is for the server), so a second host refuses to start (exit 75) even when the first is
+only slow to answer; one that lost its lease (it stalled for longer than 45 seconds) ends its panes
+and exits. On the server's side, only "nothing listening on the socket" means no host: a timeout or
+a garbled answer skips that reconcile tick instead, and starts of a host never run two at once. It
+writes `run/host.json` (pid, version, app directory, protocol) when it starts.
 
 **Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
@@ -2102,14 +2109,14 @@ restarting it ends every Claude (the server's recovery resumes them). So the upd
 the version directory `run/host.json` names (node-pty runs a helper from it on macOS), and the
 server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one has to be
 restarted (`agent-k-local host restart`), which the server's log says. `agent-k-local host stop`
-ends every session and stops the host (the service starts an empty one again).
+ends every session in the host, and refuses while the server for this home runs: it would start
+the host again at once and resume them all. With the server stopped, they resume when it starts.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
 (`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….host.plist`), with `RunAtLoad`
 and `KeepAlive`. They start when you log in, not at boot: Claude Code keeps its login in the
 Keychain, which is only unlocked during a desktop login, so the installer refuses to run without
-one. The host runs in the foreground, as launchd wants. The server job sets
-`AbandonProcessGroup`, so stopping it never takes down a host it had to start itself. Both jobs set
+one. The host runs in the foreground, as launchd wants. Both jobs set
 `LANG=en_US.UTF-8`, because launchd sets no locale and Claude needs a UTF-8 one. Updates
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
 back; reinstalling never reloads a loaded host job.
@@ -2117,17 +2124,27 @@ back; reinstalling never reloads a loaded host job.
 **Moving off tmux.** Versions before the session host ran every Claude in tmux (socket `agentk`,
 or `[tmux] socket`), in a tmux service. The updater swaps the app but never writes service files,
 so on its first start a version with the session host adds the host service itself (`addHost`,
-which never restarts the server), then, before binding the hook socket, ends this home's sessions
-still in tmux (only panes named by its own `state.db`) and waits for their Claudes to exit. Recovery
-resumes them all in the host with `claude --resume`, auto-continuing the turns it cut off (the
-usual guards apply). The tmux service is removed once the update is final (`update-pending.json`
-gone): a rollback to a version without the host finds it still there, and the launcher stops the
-host before it rolls back, so no session runs twice. Going back to such a version by hand needs
-`agent-k-local host stop` first. Without a tmux service, a tmux server left with no AgentK sessions
-is ended at once. This code (`legacytmux.ts`) goes after 2026-10-14.
+which never restarts the server) and starts the host. Only once a host answers, and before binding
+the hook socket, does it end this home's sessions still in tmux (only panes named by its own
+`state.db`) and wait for their Claudes to exit; until then recovery waits too, so the sessions keep
+running in tmux and none runs twice (a host that comes up later is found by the reconcile tick).
+Recovery resumes them all in the host with `claude --resume`, auto-continuing the turns it cut off
+(the usual guards apply). The tmux service is removed once the update is final
+(`update-pending.json` gone) and no other home has AgentK sessions on its tmux server (removing the
+service ends that server, and its socket is shared by every home on the account). A rollback to a
+version without the host finds the tmux service still there, and the launcher first runs
+`agent-k-local host retire`: it removes the host service, ending every Claude in it, so they resume
+in tmux, none runs twice, and nothing keeps restarting a host that version can't run. To go back to
+such a version by hand, run `agent-k-local uninstall` (it removes both services, ending the
+sessions, and keeps your state), then install that version with `--version`. Without a tmux
+service, a tmux server left with no AgentK sessions is ended at once. This code (`legacytmux.ts`)
+goes after 2026-10-14.
 
-All of this sits behind one interface in `src/server/service.ts` (install, add the host, start,
-restart, state, remove, boot check, removing the old tmux service), with a systemd and a launchd implementation picked by platform.
+All of this sits behind one interface in `src/server/service.ts` (install, add or remove the host,
+start, restart, state, remove, boot check, removing the old tmux service), with a systemd and a
+launchd implementation picked by platform. `servicesFor(home)` uses the installed services only
+when their `AK_HOME` is exactly this home, so a dev server or a second home never acts on another
+install's services.
 
 ### One server per home
 

@@ -19,7 +19,7 @@ import { fqdn, loadTls } from './tls.js';
 import { hostServices, servicesFor } from './service.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
-import { BEAT_MS, EXIT_BUSY, InstanceBusyError, InstanceLock } from './instance.js';
+import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
 import { HEALTHY_MS, uncountStart, Updater } from './updater.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -235,14 +235,18 @@ async function status(): Promise<void> {
     console.log('services: none for this home (the installed services run another one)');
   }
   const host = new SessionHost(paths, { services: () => null });
-  if (await host.serverRunning()) {
+  const up = await host.serverRunning().catch((e) => {
+    console.log(`host:     not answering (${errMsg(e)})`);
+    return null;
+  });
+  if (up) {
     const panes = await host.panes().catch((e) => {
       console.log(`sessions: couldn't list them (${errMsg(e)})`);
       return null;
     });
     console.log(`host:     version ${host.hello?.version}, pid ${host.hello?.pid}`);
     if (panes) console.log(`sessions: ${panes.size} (${[...panes.values()].filter((p) => !p.dead).length} running)`);
-  } else {
+  } else if (up === false) {
     console.log('host:     not running');
   }
   const probe = await probeLocal(cfg);
@@ -250,11 +254,33 @@ async function status(): Promise<void> {
   console.log(`logs:     ${join(paths.logs, 'server.log')}`);
 }
 
-/** `host`, `host stop`, `host restart`. */
+/**
+ * `host`, `host stop`, `host restart`, and `host retire`: the launcher's, before it rolls back to a
+ * version without the session host.
+ */
 async function host(args: string[]): Promise<void> {
   const paths = getPaths();
   const client = new SessionHost(paths, { services: () => null });
+  const svc = servicesFor(paths.home);
+  if (args[0] === 'retire') {
+    // That version runs its sessions in tmux: end every session here and remove the host service,
+    // so nothing starts a host it can't run, and no Claude runs twice once it resumes them.
+    if (svc?.installed('host')) svc.removeHost();
+    await client.stop().catch(() => undefined);
+    return;
+  }
   if (args[0] === 'stop' || args[0] === 'restart') {
+    if (args[0] === 'stop') {
+      // A running server would start the host again at once and resume every session in it.
+      const server = heldLease(paths.lock);
+      if (server) {
+        const how = svc?.installed('server') ? ` (${svc.stopHint('server')})` : '';
+        throw new Error(
+          `The AgentK Local server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
+            `session host again and resume every session. Stop the server first${how}, or use: agent-k-local host restart`,
+        );
+      }
+    }
     const n = (await client.panes().catch(() => new Map())).size;
     try {
       await client.stop();
@@ -266,11 +292,10 @@ async function host(args: string[]): Promise<void> {
       }
     }
     if (args[0] === 'stop') {
-      console.log(`Stopped the session host${n ? ` and the ${n} session(s) in it` : ''}.`);
+      console.log(`Stopped the session host${n ? ` and the ${n} session(s) in it. They resume when the server starts` : ''}.`);
       return;
     }
     // A service restarts its host by itself; without one, start it again here.
-    const svc = servicesFor(paths.home);
     if (svc?.installed('host')) svc.restart('host');
     else startDetached(paths);
     console.log(`Restarted the session host${n ? `; the server resumes the ${n} session(s) in a few seconds` : ''}.`);
@@ -282,17 +307,18 @@ async function host(args: string[]): Promise<void> {
   const log = fileLogger(join(paths.logs, 'host.log'));
   // A terminal it was started from may close: the host keeps going.
   process.on('SIGHUP', () => undefined);
-  let handle: Awaited<ReturnType<typeof startHost>>;
+  let handle: Awaited<ReturnType<typeof startHost>> | null = null;
+  // After a stop request (or a lost lease): let go of the socket and the lease, then exit.
+  const exit = () => void (handle?.close() ?? Promise.resolve()).finally(() => process.exit(0));
   try {
-    handle = await startHost({ paths, version: version(), appDir: process.env.AK_APP_DIR ?? null, log, onStop: () => process.exit(0) });
+    handle = await startHost({ paths, version: version(), appDir: process.env.AK_APP_DIR ?? null, log, onStop: exit });
   } catch (e) {
     if (!(e instanceof HostRunningError)) throw e;
     console.error(`agent-k-local: ${e.message}`);
     process.exit(EXIT_BUSY);
   }
-  const quit = () => void handle.close().finally(() => process.exit(0));
-  process.on('SIGTERM', quit);
-  process.on('SIGINT', quit);
+  process.on('SIGTERM', exit);
+  process.on('SIGINT', exit);
 }
 
 function help(): void {
@@ -310,7 +336,7 @@ Usage: agent-k-local <command>
   status        Show services, URL, certificate fingerprint and sessions
   attach [name] Show a session's terminal here (Ctrl+\\ detaches; Claude keeps running); no name lists them
   host          Run the session host that holds every Claude (the background service runs this for you);
-                host stop ends every session, host restart ends and resumes them
+                host restart ends every session and resumes them; host stop ends them (with the server stopped)
   logs [-f]     Print the server log (-f to follow, -n <lines>)
   selftest      Check that the runtime and bundled modules load
   version       Print the version`);

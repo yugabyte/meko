@@ -78,11 +78,20 @@ export async function moveOffTmux(o: TmuxMove): Promise<string[]> {
 
 /**
  * Removes the old tmux service once the update that brought the session host is final (a
- * rollback within the trial needs it). True when there is nothing left to remove.
+ * rollback within the trial needs it), and once no other home has AgentK sessions on its tmux
+ * server: removing the service ends that server, and the socket is shared by every home on the
+ * account. True when there is nothing left to remove.
  */
-export function retireTmuxService(o: TmuxMove): boolean {
+export async function retireTmuxService(o: TmuxMove): Promise<boolean> {
   if (!o.services?.legacyTmuxInstalled()) return true;
   if (existsSync(o.paths.updatePending)) return false;
+  const socket = o.socket ?? legacySocket(o.paths);
+  try {
+    const { stdout } = await exec(o.bin ?? 'tmux', ['-L', socket, 'list-sessions', '-F', '#{session_name}']);
+    if (stdout.split('\n').some((name) => name.startsWith('ak-'))) return false;
+  } catch {
+    /* no tmux server on the socket: nothing on it to keep */
+  }
   try {
     o.services.removeLegacyTmux();
     rmSync(o.paths.tmuxConf, { force: true });

@@ -1,3 +1,4 @@
+import { isTerminalReport } from '../shared/termreports.js';
 import { NoHostError, SessionHost, type PaneInfo } from './hostclient.js';
 import type { Paths } from './paths.js';
 
@@ -57,6 +58,8 @@ export async function runAttach(paths: Paths, args: string[]): Promise<void> {
       resolve();
     };
     const onKey = (d: Buffer) => {
+      // This terminal's answers to Claude's queries: the host has answered them already.
+      if (isTerminalReport(d.toString('utf8'))) return;
       const at = d.indexOf(DETACH);
       if (at >= 0) {
         if (at > 0) stream.write(d.subarray(0, at).toString('utf8'));

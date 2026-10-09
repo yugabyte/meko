@@ -23,7 +23,7 @@ Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens with
 access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
 use another folder), so it never opens an installed AgentK Local's database, hook socket or session
 host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
-restarts (`AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
+restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
 an installed server is running there.
 
 Local state uses Node's built-in `node:sqlite`, which prints an experimental warning on Node 22.

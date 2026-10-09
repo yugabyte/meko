@@ -31,7 +31,7 @@ const REQUEST_MS = 30_000;
 /** Keys by name (Enter, Escape, …), for the few keys AgentK presses itself. */
 const KEYS: Record<string, string> = { Enter: '\r', Escape: '\x1b', Tab: '\t', Up: '\x1b[A', Down: '\x1b[B' };
 
-/** A viewer's connection to a pane (see HostStream in the host). */
+/** A viewer's connection to a pane (the host's side is its `Viewer` and `attach()`). */
 export interface HostStream {
   onData(fn: (data: Buffer) => void): void;
   onControl(fn: (m: HostControl) => void): void;
@@ -100,12 +100,18 @@ export class SessionHost {
     });
   }
 
+  /**
+   * True when a host answers, false when none runs (no socket, or nothing listening on it). Any
+   * other failure (a timeout, a malformed answer) throws: a host that is only slow must never be
+   * taken for a missing one, or recovery would start every Claude a second time.
+   */
   async serverRunning(): Promise<boolean> {
     try {
       await this.sayHello();
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      if (e instanceof NoHostError) return false;
+      throw e;
     }
   }
 
@@ -120,9 +126,19 @@ export class SessionHost {
   /**
    * Makes sure a host is up. When the host service is installed it owns the host (so server
    * restarts never end sessions): start the service, never a host of our own, which would run in
-   * the server's service and end with it. Otherwise start one detached.
+   * the server's service and end with it. Otherwise start one detached. Calls at the same time
+   * share one start.
    */
-  async ensureServer(): Promise<void> {
+  ensureServer(): Promise<void> {
+    this.starting ??= this.startServer().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private starting: Promise<void> | null = null;
+
+  private async startServer(): Promise<void> {
     if (await this.serverRunning()) return this.checkProtocol();
     const svc = (this.opts.services ?? hostServices)();
     if (svc?.installed('host')) {
@@ -148,7 +164,7 @@ export class SessionHost {
 
   private async waitUp(ms: number): Promise<boolean> {
     for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) {
-      if (await this.serverRunning()) return true;
+      if (await this.serverRunning().catch(() => false)) return true;
     }
     return false;
   }
