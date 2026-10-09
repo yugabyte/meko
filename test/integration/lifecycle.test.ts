@@ -15,6 +15,11 @@ const gh = vi.hoisted(() => ({
   mergeError: null as null | Error,
   bots: [] as string[],
   viewer: 'me' as string | null,
+  /** How many times gh was asked for its login, and how long it takes to answer. */
+  viewerCalls: 0,
+  viewerDelay: 0,
+  /** Thrown instead of answering (a timed-out gh is `killed`). */
+  viewerError: null as null | Error,
   stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
 }));
 
@@ -34,6 +39,9 @@ vi.mock('../../src/server/github.js', async (orig) => {
     resolveMergeMethod: async () => 'squash' as const,
     botLogins: async () => gh.bots,
     viewerLogin: async () => {
+      gh.viewerCalls++;
+      if (gh.viewerDelay) await new Promise((r) => setTimeout(r, gh.viewerDelay));
+      if (gh.viewerError) throw gh.viewerError;
       if (!gh.viewer) throw new Error('gh: not logged in');
       return gh.viewer;
     },
@@ -75,6 +83,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.mergeError = null;
     gh.bots = [];
     gh.viewer = 'me';
+    gh.viewerCalls = 0;
+    gh.viewerDelay = 0;
+    gh.viewerError = null;
     gh.stats = null;
     env = await makeEnv();
   });
@@ -886,6 +897,34 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await poll(s.id);
     expect(lastEvent(s.id, 'review')).toBe('Review from me');
     expect(queued(s.id)['review-people']).toEqual({ state: 'queued', vars: { reviewers: 'me' } });
+  });
+
+  it('asks gh for the login one lookup at a time, and not again for a while after it hung', async () => {
+    const core = env.core as unknown as { ghUser: string | null };
+    core.ghUser = null;
+    gh.viewerDelay = 50;
+    const calls = gh.viewerCalls;
+    expect(await Promise.all([env.core.ghLogin(env.repo), env.core.ghLogin(env.repo)])).toEqual(['me', 'me']);
+    expect(gh.viewerCalls).toBe(calls + 1);
+    // A signed-out gh answers at once: asked again next time.
+    core.ghUser = null;
+    gh.viewer = null;
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    gh.viewer = 'me';
+    expect(await env.core.ghLogin(env.repo)).toBe('me');
+    // One that hung (execFile killed it at the time limit) isn't asked again for a minute, so
+    // session starts don't each wait for it; their branches get the prefix without the login.
+    core.ghUser = null;
+    gh.viewerError = Object.assign(new Error('gh timed out'), { killed: true });
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    gh.viewerError = null;
+    const before = gh.viewerCalls;
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    expect(gh.viewerCalls).toBe(before);
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Offline', prompt: 'do it', kind: 'quick' });
+    expect(s.branch).toBe('ak/offline');
+    expect(gh.viewerCalls).toBe(before);
   });
 
   it('counts /agentk review only from the user and people with a role on the repo', async () => {

@@ -384,7 +384,7 @@ function branchPrefixHint(prefix: string, login: string | null): string | null {
   const now = expandBranchPrefix(prefix, login);
   return login
     ? `${LOGIN_PLACEHOLDER} is your GitHub login: new branches start with ${now}`
-    : `${LOGIN_PLACEHOLDER} is your GitHub login, once gh is signed in. Until then, new branches start with ${now || 'just the name'}`;
+    : `${LOGIN_PLACEHOLDER} is your GitHub login, once gh is signed in. Until then, new branches start with ${now}`;
 }
 
 function ProjectSettingsForm({

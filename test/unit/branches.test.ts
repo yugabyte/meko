@@ -13,8 +13,16 @@ describe('branch prefix', () => {
   it('leaves {login} out, with what joins it, when gh has no login', () => {
     expect(expandBranchPrefix(DEFAULT_BRANCH_PREFIX, null)).toBe('ak/');
     expect(expandBranchPrefix('ak-{login}/', '')).toBe('ak/');
-    expect(expandBranchPrefix('{login}/', null)).toBe('');
     expect(expandBranchPrefix('{login}-ak/', null)).toBe('ak/');
+    // A path-style prefix keeps one slash, which git needs.
+    expect(expandBranchPrefix('team/{login}/', null)).toBe('team/');
+    expect(expandBranchPrefix('team/{login}/', 'me')).toBe('team/me/');
+  });
+
+  it('falls back to ak/ when the prefix comes to nothing without a login', () => {
+    expect(expandBranchPrefix('{login}/', null)).toBe('ak/');
+    expect(expandBranchPrefix('{login}', null)).toBe('ak/');
+    expect(expandBranchPrefix('{login}/', 'me')).toBe('me/');
   });
 
   it('keeps a prefix without {login} as it is', () => {
