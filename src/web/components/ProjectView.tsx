@@ -137,6 +137,9 @@ export function ProjectView({
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.sharing;
+  // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
+  const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
+  const learnDisabled = acting || !!session?.busy || !!session?.learning;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -273,6 +276,16 @@ export function ProjectView({
                   )}
                 </button>
               )}
+              {canLearn && (
+                <button
+                  className="btn small"
+                  disabled={learnDisabled}
+                  title={`Have AgentK save what this session learned to ${dedicated?.name ?? 'Meko'}`}
+                  onClick={() => act('learn')}
+                >
+                  {session?.learning ? <Busy label="Saving learnings" /> : 'Save learnings'}
+                </button>
+              )}
               {session?.status === 'exited' && (
                 <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
                   Resume
@@ -362,6 +375,8 @@ export function ProjectView({
             />
           }
           canDesign={canDesign}
+          canLearn={canLearn}
+          learnDisabled={learnDisabled}
           openQuestions={openQuestions}
           acting={acting}
           info={

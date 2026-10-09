@@ -218,6 +218,8 @@ export function SessionSheet({
   session,
   stage,
   canDesign,
+  canLearn,
+  learnDisabled,
   openQuestions,
   acting,
   info,
@@ -233,6 +235,10 @@ export function SessionSheet({
   /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
+  /** Save learnings to Meko is offered (the project has a datapack, and Claude is there). */
+  canLearn: boolean;
+  /** It waits: another action is in flight, Claude is busy, or AgentK is already saving them. */
+  learnDisabled: boolean;
   /** The design's open questions, shown on its row during Design. */
   openQuestions: number;
   /** A session action is in flight: Resume and Archive wait for it. */
@@ -277,6 +283,11 @@ export function SessionSheet({
         {session.prUrl && (
           <SheetItem href={session.prUrl} hint="↗" onClick={onClose}>
             PR #{session.prNumber} on GitHub
+          </SheetItem>
+        )}
+        {canLearn && (
+          <SheetItem disabled={learnDisabled} onClick={then(() => void onAct('learn'))}>
+            {session.learning ? <Busy label="Saving learnings to Meko" /> : 'Save learnings to Meko'}
           </SheetItem>
         )}
         {!moveBlockedIn(session.stage) && (

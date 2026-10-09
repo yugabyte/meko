@@ -267,6 +267,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     promptsHeld: rt.promptsHeld,
     asking: rt.asking,
     approvalQueued: rt.approvalQueued,
+    learning: !!get(db, 'SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND ended_at IS NULL', r.id),
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     createdAt: r.created_at,

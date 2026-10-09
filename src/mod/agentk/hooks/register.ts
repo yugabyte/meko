@@ -15,6 +15,11 @@
 //                 meanwhile, and whichever answers first wins
 //   /mod/ask/done the call has its answer (or ended): the server stops offering the questions
 //   /mod/questions the design's questions from the design_questions tool the mod gives Claude
+//   /mod/learn    a learn step's results, answered at once: what forking the session found (step
+//                 "facts"), then the duplicate check's answer (step "decisions"). Each part of the
+//                 step (`learn` on a poll answer) and the line saying what AgentK saved (`toast`)
+//                 come on polls
+//   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
@@ -22,15 +27,22 @@
 //
 // This file is compiled by Claude Code, not by the repo's tsc: `claude-code` is the engine's own
 // module, typed by the declarations Claude Code writes into .claude-plugin/types when it loads the mod.
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, ModelForkResult, Register } from 'claude-code'
 
-/** The protocol version the server checks in /mod/hello. */
-const PROTOCOL = 1
+/**
+ * The protocol the server checks, on /mod/hello and on every poll: 2 runs learn steps. AgentK loads
+ * the mod only into Claude Code that has what they use (MIN_MOD_CLAUDE in src/server/claude.ts).
+ */
+const PROTOCOL = 2
 /** How long to wait after a poll failed (the server restarting, say) before the next one. */
 const RETRY_MS = 3000
 /** The tool the mod gives Claude for the design's questions; Claude calls it `mcp__agentk__design_questions` (`mcp__<plugin>__<name>`). */
 const QUESTIONS_TOOL = 'design_questions'
 const QUESTIONS_FAILED = "AgentK Local didn't take the questions. Write them to the questions file your Design prompt names instead."
+/** The slash command that saves what the session learned to Meko. */
+const LEARN_COMMAND = 'agentk_learn'
+/** The most the duplicate check may write. */
+const DEDUP_MAX_TOKENS = 8000
 
 interface Link {
   sock: string
@@ -40,6 +52,14 @@ interface Link {
 interface Prompt {
   id: string
   text: string
+}
+
+/** A part of a learn step from the server: fork the session with `prompt` (extract), or run it on `model` (check). */
+interface LearnJob {
+  id: string
+  kind: 'extract' | 'check'
+  prompt: string
+  model?: string
 }
 
 // Per load: a reload of the module evaluates it again, runs register() and session.start again,
@@ -174,12 +194,75 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
   }).catch(() => undefined)
 }
 
+/** What a model call came to, as /mod/learn takes it: the reply's text, or why there is none, and its usage. */
+function modelReply(r: ModelForkResult | null): Record<string, unknown> {
+  if (!r) return { reason: 'the model call failed' }
+  if (r.isAnswered) return { text: r.text, usage: r.usage }
+  return { reason: r.reason, usage: 'usage' in r ? r.usage : null }
+}
+
+/**
+ * A part of a learn step. `extract` asks the session's own context (a fork: no tools, nothing added
+ * to the transcript, the prefix served from the prompt cache) what it learned; `check` runs the
+ * duplicate check AgentK built from what Meko already has on a small model. Either way the reply
+ * goes to /mod/learn, which answers at once. Started from a timer by poll, so it outlives the
+ * poll's dispatch; each call is guarded on its own, so a failure reaches AgentK as a reason at once.
+ */
+async function learn($: EngineInterface, l: Link, job: LearnJob): Promise<void> {
+  let reply: ModelForkResult | null = null
+  let model: string | null = job.model ?? null
+  if (job.kind === 'check') {
+    try {
+      reply = await $.model.complete({ model: job.model ?? 'haiku', prompt: job.prompt, maxTokens: DEDUP_MAX_TOKENS })
+    } catch {
+      // reported as the call failing
+    }
+    await post($, l, '/mod/learn', { id: job.id, step: 'decisions', model, ...modelReply(reply) }).catch(() => undefined)
+    return
+  }
+  try {
+    model = await $.session.model()
+  } catch {
+    // the model only labels the usage
+  }
+  try {
+    reply = await $.model.fork({ prompt: job.prompt })
+  } catch {
+    // reported as the call failing
+  }
+  await post($, l, '/mod/learn', { id: job.id, step: 'facts', model, ...modelReply(reply) }).catch(() => undefined)
+}
+
+/** Shows a line from AgentK (what a learn step saved). */
+function toast($: EngineInterface, text: string): void {
+  try {
+    $.ui.toast(text)
+  } catch {
+    // the timeline has it too
+  }
+}
+
+/** Gives the terminal /agentk_learn. A Claude Code without slash commands for plugins goes without it. */
+async function registerLearnCommand($: EngineInterface): Promise<void> {
+  try {
+    await $.command.register({ name: LEARN_COMMAND, description: "Save what this session learned to the project's Meko datapack (AgentK)" })
+  } catch {
+    // Save learnings in AgentK Local does the same
+  }
+}
+
 async function poll($: EngineInterface, l: Link): Promise<void> {
   let wait = 1
   try {
-    const r = await post($, l, '/mod/poll', { held: [...held] })
-    if (r.status === 200) await take($, l, (JSON.parse(r.text) as { prompts?: Prompt[] }).prompts ?? [])
-    else if (r.status !== 204) wait = RETRY_MS
+    // The protocol too: a server restarted since hello hears it here.
+    const r = await post($, l, '/mod/poll', { held: [...held], protocol: PROTOCOL })
+    if (r.status === 200) {
+      const answer = JSON.parse(r.text) as { prompts?: Prompt[]; learn?: LearnJob; toast?: unknown }
+      const job = answer.learn
+      if (typeof job?.id === 'string' && typeof job.prompt === 'string') $.clock.after(1, () => void learn($, l, job).catch(() => undefined))
+      if (typeof answer.toast === 'string') toast($, answer.toast)
+      await take($, l, answer.prompts ?? [])
+    } else if (r.status !== 204) wait = RETRY_MS
   } catch {
     wait = RETRY_MS
   }
@@ -189,7 +272,10 @@ async function poll($: EngineInterface, l: Link): Promise<void> {
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     // Before next: a tool registered then is Claude's from the first turn.
-    if (await linkOf($).catch(() => null)) await registerQuestionsTool($)
+    if (await linkOf($).catch(() => null)) {
+      await registerQuestionsTool($)
+      await registerLearnCommand($)
+    }
     const started = await next(e)
     const l = await linkOf($).catch(() => null)
     if (!l || polling) return started
@@ -232,6 +318,15 @@ export const register: Register = (on) => {
       void post($, l, '/mod/ask/done', { id }).catch(() => undefined)
     }
   }).catch(($, e, next) => next(e))
+
+  // /agentk_learn: AgentK starts a learn step (the next poll brings it), or says why it can't.
+  on('command.run', { command: LEARN_COMMAND }, async ($) => {
+    const l = await linkOf($).catch(() => null)
+    if (!l) return { text: 'This session is not run by AgentK Local.' }
+    const r = await post($, l, '/mod/learn/start', {}).catch(() => null)
+    const text = json(r?.text).text
+    return { text: typeof text === 'string' ? text : "AgentK Local didn't answer. Use Save learnings in the session's header in AgentK Local (⋯ on a phone) instead." }
+  }).catch(() => ({ text: "AgentK Local didn't answer. Use Save learnings in the session's header in AgentK Local (⋯ on a phone) instead." }))
 
   on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

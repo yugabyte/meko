@@ -24,7 +24,7 @@ export interface Config {
   state: { dbPath: string };
   tmux: { socket: string };
   /**
-   * command: how Claude Code is run. mod: load AgentK's mod into sessions (Claude Code 2.1.286 or
+   * command: how Claude Code is run. mod: load AgentK's mod into sessions (Claude Code 2.1.287 or
    * later), which takes AgentK's prompts and reports the context fill; off, prompts are typed into
    * the terminal.
    */

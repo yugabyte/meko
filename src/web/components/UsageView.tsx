@@ -72,7 +72,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
   }, []);
 
   const t = usage?.total;
-  const showMeko = !!usage && (usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || mekoConfigured);
+  const showMeko = !!usage && (usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || usage.mekoLearning.runs > 0 || mekoConfigured);
   return (
     <div className="home-view">
       {mobile && <TopBar onMenu={onMenu} title="Usage" />}
@@ -113,7 +113,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
 
             {showMeko && (
               <section className="box">
-                <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} />
+                <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} learning={usage.mekoLearning} />
               </section>
             )}
 

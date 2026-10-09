@@ -193,7 +193,28 @@ export interface MekoUsage {
   saves: number;
   /** About how many tokens the lookups that returned something brought in. */
   foundTokens: number;
+  /** About how many tokens the calls sent to Meko (their input, characters ÷ 4). */
+  sentTokens: number;
   savings: MekoSavings;
+}
+
+/**
+ * What the learn step (src/server/learn.ts) saved to Meko and what it cost, for the project home and
+ * the Usage page.
+ */
+export interface MekoLearning {
+  /** Learn steps that ran, and those of them that didn't finish (failed or interrupted). */
+  runs: number;
+  failed: number;
+  /** Merge & Close sessions whose Claude was gone or busy, so no step ran. */
+  skipped: number;
+  /** Memories added and corrected, and facts found already known. */
+  saves: number;
+  updates: number;
+  skips: number;
+  /** Tokens the steps' model calls used, all kinds together, and their price; null when none had a known price. */
+  tokens: number;
+  usd: number | null;
 }
 
 /**
@@ -251,6 +272,7 @@ export interface ProjectUsage {
   cost: UsageCost;
   meko: MekoUsage;
   mekoFirstTurn: MekoFirstTurn;
+  mekoLearning: MekoLearning;
   byModel: ModelUsage[];
   /** Every session with usage, archived ones included, largest first. */
   bySession: SessionUsage[];
@@ -283,6 +305,7 @@ export interface UsageOverview {
   cost: UsageCost;
   meko: MekoUsage;
   mekoFirstTurn: MekoFirstTurn;
+  mekoLearning: MekoLearning;
   mergedPrs: number;
   directPushes: number;
   directCommits: number;
@@ -359,6 +382,49 @@ export interface CallHomeMeko {
   savings: { searches: number; seeds: number; tokens: number; usdCents: number; unpricedSearches: number; unpricedSeeds: number };
   /** AgentK's search at session start, by outcome, and the milliseconds they took in all (for an average). */
   starts: { found: number; empty: number; error: number; late: number; ms: number };
+  /** About how many tokens Claude's calls sent to Meko (characters ÷ 4); left out by installs from before it. */
+  sentTokens?: number;
+  /** The same by tool; tools with none are left out. */
+  sentByTool?: Partial<Record<CallHomeMekoTool, number>>;
+  /** Learn steps (src/server/learn.ts) begun then; left out when there were none. */
+  learn?: CallHomeLearn;
+  /** The Meko calls AgentK made itself (searches at start, what shipped, designs, the learn step's); left out when there were none. */
+  agentk?: CallHomeAgentkMeko;
+  /** The Meko plugin's transcript captures AgentK ran; left out when there were none. */
+  capture?: { runs: number; failures: number; ms: number };
+}
+
+/** Learn steps as the report counts them, by when they began. */
+export interface CallHomeLearn {
+  runs: number;
+  byTrigger: { merge: number; manual: number };
+  /** `mod`: through AgentK's mod; `turn`: a typed prompt; `none`: skipped at Merge & Close. */
+  byPath: { mod: number; turn: number; none: number };
+  byOutcome: { done: number; failed: number; interrupted: number; skipped: number };
+  /** Facts proposed, then added, corrected and found known already (a typed turn counts its adds and corrections). */
+  candidates: number;
+  saves: number;
+  updates: number;
+  skips: number;
+  /** Steps that ended done with nothing saved or corrected. */
+  empty: number;
+  /** The step's Meko searches, its failed Meko calls, and about how many tokens it sent to Meko. */
+  lookups: number;
+  errors: number;
+  sentTokens: number;
+  /** What the step's model calls cost: the fork (`extract`), the duplicate check (`dedup`), and typed turns (`turn`). */
+  tokens: { extract: CallHomeTokens; dedup: CallHomeTokens; turn: CallHomeTokens };
+  /** Their price in whole cents (models without a known price count 0). */
+  usdCents: number;
+}
+
+/** AgentK's own Meko calls: how many, how many failed, about how many tokens they sent, the time they took, and by tool. */
+export interface CallHomeAgentkMeko {
+  calls: number;
+  errors: number;
+  sentTokens: number;
+  ms: number;
+  byTool: Record<string, number>;
 }
 
 /**
@@ -530,6 +596,8 @@ export interface Session {
   asking: AskRequest | null;
   /** The user approved the design while AgentK was busy: the approval goes when this turn ends, if the turn leaves the design alone. */
   approvalQueued: boolean;
+  /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
+  learning: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
   usage: TokenUsage;
@@ -1381,7 +1449,9 @@ export type SessionAction =
   /** Review a PR: check out the PR's latest head and have AgentK sum up what changed. */
   | 'update-pr'
   /** Review a PR: end the review (archives the session and deletes its local review branch). */
-  | 'close-review';
+  | 'close-review'
+  /** Save what the session learned to its project's dedicated datapack (the learn step); 409 while Claude is busy or one runs. */
+  | 'learn';
 
 export interface TotpEnrollResponse {
   secret: string;
@@ -1509,7 +1579,8 @@ export type TermServerMessage =
 //        merge while the only blockers clear by themselves (Session.mergeQueueable) is queued and goes at the first poll
 //        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
-//        none is queued, or while the merge is being requested)
+//        none is queued, or while the merge is being requested). learn starts the learn step: 409 without a
+//        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)

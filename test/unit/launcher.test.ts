@@ -184,9 +184,9 @@ describe("AgentK's mod", () => {
     expect(existsSync(modDirPath(paths))).toBe(false);
   });
 
-  it('needs Claude Code 2.1.286 or later, comparing versions part by part', () => {
-    expect(MIN_MOD_CLAUDE).toBe('2.1.286');
-    expect(versionAtLeast('2.1.286', MIN_MOD_CLAUDE)).toBe(true);
+  it('needs Claude Code 2.1.287 or later, comparing versions part by part', () => {
+    expect(MIN_MOD_CLAUDE).toBe('2.1.287');
+    expect(versionAtLeast('2.1.286', MIN_MOD_CLAUDE)).toBe(false);
     expect(versionAtLeast('2.1.287', MIN_MOD_CLAUDE)).toBe(true);
     expect(versionAtLeast('2.2.0', MIN_MOD_CLAUDE)).toBe(true);
     expect(versionAtLeast('3.0.1', MIN_MOD_CLAUDE)).toBe(true);

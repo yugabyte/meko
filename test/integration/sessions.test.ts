@@ -250,6 +250,9 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const argv = argvLog(env)[0].args;
     const sys = argv[argv.indexOf('--append-system-prompt') + 1];
     expect(sys).toContain('ToolSearch query "+meko context_search"');
+    // And the rule for what the session saves there for the team.
+    expect(sys).toContain(`Saving to Meko: this project's datapack is shared by the team working on it.`);
+    expect(sys).toContain(`"session":"${s.id}"`);
     expect(argv[argv.length - 1]).toMatch(/search Meko for earlier designs, decisions and gotchas about this task/);
 
     // A resumed session starts without it.

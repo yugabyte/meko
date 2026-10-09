@@ -48,6 +48,8 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
     describeDatapack: rec('describeDatapack', { memoryCount: 3, knowledgeCount: 7, grant: 'owner', ownerName: 'Test', ownerEmail: 'test@example.com' }),
     search: rec('search', []),
     addMemory: rec('addMemory', undefined),
+    updateMemory: rec('updateMemory', undefined),
+    similar: rec('similar', []),
     putArtifact: rec('putArtifact', undefined),
     ensureConversation: rec('ensureConversation', 'conv-1'),
     retitleConversation: rec('retitleConversation', undefined),

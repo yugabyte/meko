@@ -36,6 +36,7 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 const ACTIONS: SessionAction[] = [
   'approve-design', 'cancel-approval', 'open-pr', 'merge', 'cancel-queued', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
+  'learn',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 

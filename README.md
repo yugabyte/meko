@@ -91,6 +91,15 @@ your phone can connect.
   detached. When a session starts, AgentK searches the project's datapacks for its task (and the
   GitHub issues it names) and gives Claude what Meko already knows, and the prompts ask Claude to
   search Meko before reading code.
+- **What sessions learn goes to the team's datapack.** When a PR merges, before the session closes,
+  AgentK asks the session what it learned about the product and repo (how things work, decisions
+  and why, root causes, gotchas, measured numbers) and saves each new fact, after checking it
+  against what the datapack already has: known facts are skipped, and ones that correct a memory
+  replace it. Claude is told to leave out anything about your machine or one person's
+  preferences. With AgentK's mod it runs out of sight (one cached look at the session, plus a small
+  model for the duplicate check), and AgentK also drops any fact that names a local path; without
+  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
+  header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
@@ -124,7 +133,7 @@ your phone can connect.
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
-- **AgentK's mod in Claude:** with Claude Code 2.1.286 or later, each session loads a small Claude
+- **AgentK's mod in Claude:** with Claude Code 2.1.287 or later, each session loads a small Claude
   Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
   never land in a permission dialog or a running turn. When Claude asks you something
   (`AskUserQuestion`), the question shows in AgentK Local too, on a phone as well: answer it there or
@@ -162,8 +171,9 @@ your phone can connect.
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
-  cost that Meko searches saved, and how many sessions had something from Meko in their first
-  turn, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
+  cost that Meko searches saved, how many sessions had something from Meko in their first
+  turn, and what the learn step saved (memories added and corrected) and cost, on the project home
+  and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
