@@ -152,6 +152,10 @@ const (
 	// full waitReady poll that follows.
 	controllerProbeRetries = 3
 	controllerProbeDelay   = 200 * time.Millisecond
+	// controllerProbeTimeout caps each attempt. Without it an address that is not
+	// routable from the coordinator waits out the 30s dial timeout four times,
+	// and the ClusterIP plus the pod IP cost a stack 4 minutes before the relay.
+	controllerProbeTimeout = 3 * time.Second
 )
 
 // ControllerReachMode selects how the App (and its ControllerClient) reaches
@@ -1038,7 +1042,10 @@ func (a *App) resolveControllerAddr(ctx context.Context) (string, error) {
 func (a *App) probeDirectHealthz(ctx context.Context, addr string) bool {
 	url := fmt.Sprintf("http://%s:%d", addr, a.cfg.ControllerPort)
 	for attempt := 0; ; attempt++ {
-		if a.newClient(url).Healthz(ctx) == nil {
+		attemptCtx, cancel := context.WithTimeout(ctx, controllerProbeTimeout)
+		err := a.newClient(url).Healthz(attemptCtx)
+		cancel()
+		if err == nil {
 			return true
 		}
 		if attempt >= controllerProbeRetries {

@@ -402,15 +402,17 @@ func TestChainDatapointsGateP50Only(t *testing.T) {
 			t.Errorf("a p99 of ~3 reads must not gate: %s", dp.Name)
 		}
 	}
-	if len(gated) != 2 {
-		t.Errorf("want p50 gated at both depths, got %d", len(gated))
+	if len(gated) != 1 || gated[0].Name != chainPrefix+"p50_ratio@depth20" || gated[0].Value != 1.5 {
+		t.Errorf("want only the depth-20 p50 over the depth-1 p50 gated (1.5x), got %+v", gated)
 	}
-	found := false
+	names := map[string]bool{}
 	for _, dp := range info {
-		found = found || dp.Name == chainPrefix+"p99_ms@depth1"
+		names[dp.Name] = true
 	}
-	if !found {
-		t.Error("p99 must still be reported")
+	for _, want := range []string{"p99_ms@depth1", "p50_ms@depth1", "p50_ms@depth20"} {
+		if !names[chainPrefix+want] {
+			t.Errorf("%s must still be reported", want)
+		}
 	}
 }
 

@@ -180,7 +180,8 @@ tests need (a single run would demand every cloud credential at once):
   five, or than the best-sampled operation when repeats is below five, such as a
   cold endpoint create on a small stack, is reported and not gated),
   `chain_depth_read` times cold single-page
-  reads at each delta-chain depth and also asserts the `image_chain_limit`
+  reads at each delta-chain depth, gates each rung's p50 over the shallowest
+  rung's in the same run (absolute latency follows pod placement), and also asserts the `image_chain_limit`
   contract outright, `branch_depth` measures cold and warm point reads, a cold
   scan, an insert, an update and a delete at each depth of a 20-deep fork chain,
   each write and the scan split into `perf.branch_depth.repeats` disjoint slices

@@ -432,13 +432,23 @@ func chainRatio(reads map[int][]float64, p chainParams) (float64, bool) {
 }
 
 func chainDatapoints(reads map[int][]float64, p chainParams) (gated, info []core.Datapoint, err error) {
-	for _, depth := range p.Depths {
+	// Absolute p50 follows pod placement, not depth: one image read 1.99 to 3.44 ms
+	// at depth 1 on amp-dev in one day. Each rung over the shallowest one in the
+	// same run cancels that, and the cost of depth is what this test is about.
+	base := 0.0
+	if vals := reads[p.Depths[0]]; len(vals) > 0 {
+		base = median(vals)
+	}
+	for i, depth := range p.Depths {
 		vals := reads[depth]
 		if len(vals) == 0 {
 			continue
 		}
 		suffix := fmt.Sprintf("@depth%d", depth)
-		gated = append(gated, core.Datapoint{Name: chainPrefix + "p50_ms" + suffix, Value: median(vals), Unit: "ms", Direction: core.LowerIsBetter})
+		info = append(info, core.Datapoint{Name: chainPrefix + "p50_ms" + suffix, Value: median(vals), Unit: "ms", Direction: core.LowerIsBetter})
+		if i > 0 && base > 0 {
+			gated = append(gated, core.Datapoint{Name: chainPrefix + "p50_ratio" + suffix, Value: median(vals) / base, Unit: "x", Direction: core.LowerIsBetter})
+		}
 		// p99 of the sample set is ~3 reads, so one slow read sets it: 0.260923.0
 		// read 3.2 ms at depth 1 in one run and 24.4 ms in the next.
 		info = append(info, core.Datapoint{Name: chainPrefix + "p99_ms" + suffix, Value: percentile(vals, 99), Unit: "ms", Direction: core.LowerIsBetter})
