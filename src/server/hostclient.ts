@@ -130,6 +130,11 @@ export class SessionHost {
       if (await this.waitUp(3000)) return this.checkProtocol();
       throw new Error(`The session host service (${svc.id('host')}) isn't running. Check: ${svc.statusHint('host')}`);
     }
+    // A server running as a service without the host's: a host started here would run in the
+    // server's service and end, with every Claude in it, at the next server restart or update.
+    if (svc?.installed('server')) {
+      throw new Error(`The session host service (${svc.id('host')}) isn't installed. Run: agent-k-local install`);
+    }
     await (this.opts.start ?? (() => startDetached(this.paths)))();
     if (!(await this.waitUp(10_000))) throw new Error(`The session host didn't start. Check ${join(this.paths.logs, 'host.log')}`);
     return this.checkProtocol();

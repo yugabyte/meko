@@ -165,7 +165,7 @@ describe('session host (real ptys)', () => {
     await expect(startHost({ paths, version: 'other' })).rejects.toBeInstanceOf(HostRunningError);
   });
 
-  it('lists no panes when no host runs, and never starts its own while the host service is installed', async () => {
+  it('lists no panes when no host runs, and never starts its own when the server or the host runs as a service', async () => {
     await handle!.close();
     handle = null;
     expect((await host.panes()).size).toBe(0);
@@ -181,6 +181,12 @@ describe('session host (real ptys)', () => {
     } as unknown as ServiceManager;
     const owned = new SessionHost(paths, { services: () => svc, start: () => void (started += 100) });
     await expect(owned.ensureServer()).rejects.toThrow(/agent-k-local-host\.service\) isn't running\. Check: systemctl --user status/);
+    expect(started).toBe(1);
+
+    // Nor when only the server runs as a service (adding the host's failed): it would end with the server.
+    const serverOnly = { ...svc, installed: (s: string) => s === 'server' } as unknown as ServiceManager;
+    const half = new SessionHost(paths, { services: () => serverOnly, start: () => void (started += 100) });
+    await expect(half.ensureServer()).rejects.toThrow(/agent-k-local-host\.service\) isn't installed\. Run: agent-k-local install/);
     expect(started).toBe(1);
   });
 });

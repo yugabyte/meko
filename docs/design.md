@@ -2093,8 +2093,9 @@ in:
 
 Keeping the session host in its own unit is the key point. If it were a child of the server's unit,
 systemd would kill every Claude session on each update. The server never starts a host of its own
-while the host service is installed (it reports the service as down); without services (a source
-checkout, `--no-service`) it starts one detached, in its own process group.
+while the host service is installed (it reports the service as down), nor while it runs as a
+service itself without the host's (it says to run `agent-k-local install`); without services (a
+source checkout, `--no-service`) it starts one detached, in its own process group.
 
 **The host keeps its version.** A running host keeps the code it started with across updates:
 restarting it ends every Claude (the server's recovery resumes them). So the updater never deletes
