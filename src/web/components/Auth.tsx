@@ -1,10 +1,14 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ApiError, api, errorMessage } from '../api';
+import { keepFocusInView } from '../hooks/useMedia';
 import { Busy, ErrorText, Field } from './common';
 
 function AuthFrame({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
+  const page = useRef<HTMLDivElement>(null);
+  // The page scrolls itself above the on-screen keyboard; keep the field being typed in on screen.
+  useEffect(() => (page.current ? keepFocusInView(page.current) : undefined), []);
   return (
-    <div className="auth-page">
+    <div className="auth-page" ref={page}>
       <div className="auth-card">
         <div className="auth-brand">
           <img src="/logo.png" alt="" width={56} height={56} />
@@ -62,7 +66,7 @@ export function SetupScreen({ reset, onDone }: { reset: boolean; onDone: () => v
         >
           <input id="setup-token" className="input mono" value={token} onChange={(e) => setToken(e.target.value)} required />
         </Field>
-        <Field label="Username">
+        <Field label="Username" hint="Up to 64 letters, digits, dots, @, dashes or underscores. Most email addresses work, but not ones with +.">
           <input
             id="setup-username"
             className="input"

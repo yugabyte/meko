@@ -151,7 +151,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     // A valid setup link gets past the limit: it's how a locked-out owner gets back in. The token
     // is 192 random bits, so letting it through doesn't help anyone guess it.
     if (limiter.blocked(ip) && !setupTokenValid(db, token)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
-    if (typeof username !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(username)) return reply.code(400).send({ error: 'Use letters, digits, dots, dashes or underscores for the username.' });
+    if (typeof username !== 'string' || !/^[A-Za-z0-9._@-]{1,64}$/.test(username)) return reply.code(400).send({ error: 'Use up to 64 characters for the username: letters, digits, dots, @, dashes or underscores.' });
     const bad = validatePassword(password ?? '');
     if (bad) return reply.code(400).send({ error: bad });
     if (!consumeSetupToken(db, token)) {
