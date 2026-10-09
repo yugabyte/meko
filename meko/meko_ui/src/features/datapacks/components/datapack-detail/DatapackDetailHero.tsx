@@ -4,10 +4,10 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, Copy, Database, FolderTree, Sparkles } from "lucide-react";
+import { Check, Copy, Database, FolderTree } from "lucide-react";
 import { projectDetailPath, ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
+import { NewPill } from "@/components/new-badge";
 import { copyToClipboard } from "@/lib/clipboard";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
@@ -72,15 +72,6 @@ function ActiveStatusPill() {
       />
       active
     </span>
-  );
-}
-
-function NewDatapackPill() {
-  return (
-    <Badge variant="brand" className="gap-1 rounded-full px-2 py-0.5 text-[11px] tracking-wide">
-      <Sparkles className="size-3 shrink-0" aria-hidden />
-      new
-    </Badge>
   );
 }
 
@@ -173,7 +164,7 @@ export function DatapackDetailHero({
                 {datapackName}
               </h1>
               {SHOW_DATAPACK_ACTIVE_STATUS_TAG ? <ActiveStatusPill /> : null}
-              {isNewDatapack ? <NewDatapackPill /> : null}
+              {isNewDatapack ? <NewPill /> : null}
             </div>
 
             {/* Where this datapack lives, directly under its name. This used

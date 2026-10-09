@@ -21,6 +21,8 @@ import {
   FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { NewBadge } from "@/components/new-badge";
+import { PROJECTS_LAUNCHED_ON } from "@/features/projects/projectsCopy";
 import { useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
@@ -440,6 +442,7 @@ export default function Sidebar() {
             >
               <FolderTree className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
               {!isCollapsed && <span className="animate-in fade-in truncate">Projects</span>}
+              {!isCollapsed && <NewBadge since={PROJECTS_LAUNCHED_ON} className="-ml-1.5" />}
             </NavLink>
           ) : null}
 

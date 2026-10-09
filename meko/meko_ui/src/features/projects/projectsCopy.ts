@@ -3,6 +3,9 @@
 
 export const PROJECTS_TITLE = "Projects";
 
+/** When Projects launched; its "new" badge shows for 20 days from here. */
+export const PROJECTS_LAUNCHED_ON = "2026-10-09";
+
 export const PROJECTS_SUBTITLE =
   "Group the datapacks that work toward one outcome. Folders inside a project hold the " +
   "standards, the work in flight, and what it taught you.";

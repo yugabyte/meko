@@ -2,6 +2,7 @@
 // with its folder and datapack counts, plus the entry point for creating one.
 
 import { useMemo, useState } from "react";
+import { NewBadge } from "@/components/new-badge";
 import { useNavigate } from "react-router-dom";
 import { FolderTree, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import {
 import {
   NEW_PROJECT_LABEL,
   PROJECTS_SUBTITLE,
+  PROJECTS_LAUNCHED_ON,
   PROJECTS_TITLE,
 } from "@/features/projects/projectsCopy";
 
@@ -91,6 +93,7 @@ export default function ProjectsOverviewPage() {
               <h1 className="text-2xl font-semibold tracking-tight text-foreground">
                 {PROJECTS_TITLE}
               </h1>
+              <NewBadge since={PROJECTS_LAUNCHED_ON} className="-ml-1.5" />
             </div>
             <p className="text-muted-foreground text-sm max-w-xl leading-relaxed">
               {PROJECTS_SUBTITLE}
