@@ -1225,8 +1225,15 @@ stateDiagram-v2
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),
   merge conflicts with the base through `conflicts` (`{{sha}}`, the conflicting head), and CI failures
   through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
-- **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
-  enforce a branch-name prefix with rulesets.
+- **Branch names.** The branch prefix is a project setting, `ak_{login}/` by default, because some
+  orgs enforce a branch-name prefix with rulesets, and so a shared repo's branches say whose they
+  are. `{login}` is the login `gh` is signed in as, lowercased (`expandBranchPrefix` in
+  `src/shared/branches.ts`). The server asks gh once (`Core.ghLogin`, which the PR stages' "is this
+  review the user's" checks use too) and sends it in `AppState.ghLogin` for the New session
+  dialog's branch preview and the setting's hint. Until gh answers (missing or signed out, 5 s
+  cap), `{login}` is left out with the `_`, `-` or `.` before it, so the default comes to `ak/`.
+  Projects still on the old default, `ak/`, moved to `ak_{login}/` (migration 29); a prefix someone
+  set stays.
 
 ### Queued gates
 

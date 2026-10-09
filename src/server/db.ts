@@ -465,6 +465,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE meko_learns_v28 RENAME TO meko_learns;
   CREATE INDEX meko_learns_session ON meko_learns(session_id, started_at);
   `,
+  // 29: the default branch prefix is ak_<your GitHub login>/ (DEFAULT_BRANCH_PREFIX). Projects
+  // still on the old default, ak/, move to it; a prefix someone set stays.
+  `
+  UPDATE projects SET settings_json = json_set(settings_json, '$.branchPrefix', 'ak_{login}/')
+    WHERE json_valid(settings_json) AND json_extract(settings_json, '$.branchPrefix') = 'ak/';
+  `,
 ];
 
 export function openDb(path: string): Db {

@@ -10,6 +10,7 @@ import {
   type ReviewerMode,
   type SearchResult,
 } from '../../shared/types';
+import { LOGIN_PLACEHOLDER, expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
@@ -32,6 +33,7 @@ export function ProjectHomeView({
   onMove,
   mekoWebUrl,
   mekoConfigured,
+  ghLogin,
   onMenu,
   onBack,
   onError,
@@ -44,6 +46,8 @@ export function ProjectHomeView({
   mekoWebUrl: string | null;
   /** Meko is on (a key is set). */
   mekoConfigured: boolean;
+  /** The login gh is signed in as, for `{login}` in the branch prefix. */
+  ghLogin: string | null;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
@@ -231,7 +235,7 @@ export function ProjectHomeView({
           </section>
         </div>
         {home && <UsagePanel projectId={project.id} usage={home.usage} mekoOn={mekoConfigured && project.datapacks.length > 0} />}
-        <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
+        <ProjectSettingsForm project={project} order={order} onMove={onMove} ghLogin={ghLogin} onError={onError} />
       </div>
       {dialog?.kind === 'share' && dedicated && (
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
@@ -374,15 +378,26 @@ function AttachDatapack({
   );
 }
 
+/** Under the branch prefix: what {login} stands for, and what the prefix comes to. */
+function branchPrefixHint(prefix: string, login: string | null): string | null {
+  if (!prefix.includes(LOGIN_PLACEHOLDER)) return null;
+  const now = expandBranchPrefix(prefix, login);
+  return login
+    ? `${LOGIN_PLACEHOLDER} is your GitHub login: new branches start with ${now}`
+    : `${LOGIN_PLACEHOLDER} is your GitHub login, once gh is signed in. Until then, new branches start with ${now || 'just the name'}`;
+}
+
 function ProjectSettingsForm({
   project,
   order,
   onMove,
+  ghLogin,
   onError,
 }: {
   project: ProjectWithSessions;
   order: { index: number; count: number };
   onMove: (index: number) => void;
+  ghLogin: string | null;
   onError: (m: string) => void;
 }) {
   const [name, setName] = useState(project.name);
@@ -421,7 +436,7 @@ function ProjectSettingsForm({
         <Field label="Name">
           <input id="ps-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Branch prefix">
+        <Field label="Branch prefix" hint={branchPrefixHint(s.branchPrefix, ghLogin)}>
           <input
             id="ps-prefix"
             className="input mono"

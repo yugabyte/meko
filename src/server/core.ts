@@ -6,6 +6,7 @@ import { hostname, userInfo } from 'node:os';
 import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
+import * as github from './github.js';
 import { TranscriptCapture } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
@@ -76,6 +77,8 @@ const STAGED_SWEEP_MS = 60 * 60 * 1000;
 const HOOK_SOCKET_CHECK_MS = 10_000;
 /** How long stopping waits for transcript captures still running (systemd and launchd allow 15 s to stop). */
 const STOP_CAPTURE_MS = 5000;
+/** How long asking gh for its login may take (a session's start waits for it). */
+const GH_LOGIN_TIMEOUT_MS = 5000;
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -128,6 +131,8 @@ export class Core extends EventEmitter {
   private stopped = false;
   /** A rebind of the hook socket in progress; stop() waits for it. */
   private hookCheck: Promise<void> | null = null;
+  /** The login gh is signed in as, once it has said (ghLogin). */
+  private ghUser: string | null = null;
 
   constructor(o: CoreOptions) {
     super();
@@ -257,6 +262,21 @@ export class Core extends EventEmitter {
     void this.syncInvites();
   }
 
+  /**
+   * The login gh is signed in as, looked up once (from <cwd>); null, and asked again next time,
+   * when gh can't say.
+   */
+  async ghLogin(cwd: string): Promise<string | null> {
+    if (this.ghUser) return this.ghUser;
+    try {
+      this.ghUser = (await github.viewerLogin(cwd, GH_LOGIN_TIMEOUT_MS)) || null;
+      if (this.ghUser) this.changed();
+    } catch (e) {
+      this.log.warn('looking up the GitHub login failed', errMsg(e));
+    }
+    return this.ghUser;
+  }
+
   state(): AppState {
     return {
       projects: (() => {
@@ -274,6 +294,7 @@ export class Core extends EventEmitter {
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
       username: getOwner(this.db)?.username ?? this.username,
+      ghLogin: this.ghUser,
       serverName: this.serverName(),
       serverHost: this.hostFull,
       limits: this.limits.current(),
@@ -310,6 +331,8 @@ export class Core extends EventEmitter {
     this.questions.preload();
     // Not awaited: startup doesn't wait on Meko.
     void this.claudeMeko.refresh();
+    // Not awaited: the New session dialog shows branch names with it once it's in.
+    void this.ghLogin(this.paths.home);
     this.addHostService();
     // A session host that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs the host) retries on every reconcile tick.

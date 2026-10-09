@@ -77,7 +77,8 @@ your phone can connect.
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its
   sessions, settings and usage.
-  New sessions start from the base branch after it's fast-forwarded to `origin`. Under
+  New sessions start from the base branch after it's fast-forwarded to `origin`, on a branch
+  named `ak_<your GitHub login>/<task>` (the prefix is a project setting). Under
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
   requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on

@@ -21,6 +21,7 @@ import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQ
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
+import { expandBranchPrefix } from '../shared/branches.js';
 import {
   EDIT_TOOLS, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
 } from './claude.js';
@@ -485,8 +486,10 @@ export class SessionManager {
     // Pushes go where the PR's head is, when that isn't origin's branch of the same name.
     const push = attach && (from.remote !== 'origin' || from.branch !== wanted) ? from : null;
 
-    const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
-    const branch = wanted || `${settings.branchPrefix}${slug}`;
+    // A new branch's prefix names you (ak_<GitHub login>/ by default).
+    const prefix = wanted ? null : expandBranchPrefix(settings.branchPrefix, await this.core.ghLogin(repo));
+    const slug = await this.uniqueSlug(projectId, repo, prefix, review ? `review-pr-${review.info.number}` : slugify(name));
+    const branch = wanted || `${prefix}${slug}`;
     const id = `${projectId}--${slug}`;
     const now = Date.now();
     const pool = this.core.worktrees;

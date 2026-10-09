@@ -139,8 +139,6 @@ export class Lifecycle {
   private ciFailSince = new Map<string, { head: string; at: number }>();
   /** Per session, the PR head at the last look and when it was first seen there (CI_START_MS). */
   private headSeen = new Map<string, { head: string; at: number }>();
-  /** The GitHub login gh is signed in as, once known (whose reviews a Review a PR session logs). */
-  private ghLogin: string | null = null;
 
   constructor(private core: Core) {}
 
@@ -1368,14 +1366,8 @@ export class Lifecycle {
   }
 
   /** gh's login, looked up once; null (and asked again next time) when gh can't say. */
-  private async viewerLogin(cwd: string): Promise<string | null> {
-    if (this.ghLogin) return this.ghLogin;
-    try {
-      this.ghLogin = (await github.viewerLogin(cwd)) || null;
-    } catch (e) {
-      this.core.log.warn('looking up the GitHub login failed', errMsg(e));
-    }
-    return this.ghLogin;
+  private viewerLogin(cwd: string): Promise<string | null> {
+    return this.core.ghLogin(cwd);
   }
 
   /**
