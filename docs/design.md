@@ -1177,7 +1177,9 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-comments`) with `.agent-k/stages/<name>.md`. This lets a team
+  `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
+  `learn`) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
@@ -1644,13 +1646,15 @@ datapack, which the team working on the project shares.
 **The saving rule.** Every session whose project has a dedicated datapack gets it in its system
 prompt (`mekoSaveSystemLine()` in `prompts.ts`), so it holds for saves Claude makes on its own
 too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `EXTRACT_PROMPT` and
-the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line. Save what a teammate on this product would want and couldn't easily get from the code, the
+the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line,
+and so does the Explore prompt, which ends by saving under it. Only the mod path also filters what
+is written (local paths); on the typed path, and for Claude's own saves, the rule is all there is. Save what a teammate on this product would want and couldn't easily get from the code, the
 PR, the design or the git log: how a subsystem works, decisions and the rejected alternatives,
 root causes, traps and invariants, build/test/CI quirks, measured numbers. Never anything about
 the machine, worktree or environment, one person's preferences, task or PR status, what the diff
 or PR already says, or AgentK's process steps. Search before each save; skip what's known, and
 correct a memory that's now wrong with `memory_update`. No limit. It says it overrides the Meko
-plugin's advice not to call `memory_add`. The Explore prompt ends by saving under it.
+plugin's advice not to call `memory_add`. The Explore prompt ends by saving under it (the rule appended in code, when the project has datapacks).
 
 **When.** At Merge & Close, before the cleanup (`Lifecycle.merged()` asks `Learner.beforeClose`,
 and runs again when any learn step ends there, `afterLearn`), once per session; and when the user

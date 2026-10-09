@@ -716,8 +716,10 @@ describe('Meko recall in prompts', () => {
     expect(rule).toContain('search Meko for it: skip it if an equivalent memory exists');
     expect(rule).toContain('there is no limit');
     expect(rule).toContain('{"source":"agent-k-local","kind":"learned","session":"s-1"}');
-    // Explore ends by saving under that rule, and the typed learn step asks for the same.
-    expect(DEFAULT_PROMPTS.explore).toMatch(/save what you learned to Meko, following the saving rule in your system prompt\.$/);
+    // Explore ends by saving, with the rule added in code; the typed learn step asks for the same.
+    expect(DEFAULT_PROMPTS.explore).not.toContain('Meko');
+    expect(mekoLearnLine('explore', 's-1')).toMatch(/^Before you finish, save what you learned to Meko for the team working on this product\. What to save: /);
+    expect(mekoLearnLine('explore', 's-1')).toContain(SAVING_RULE);
     expect(DEFAULT_PROMPTS.learn).toMatch(/^Save what this session learned to Meko/);
     expect(mekoRecallLine('learn')).toBe('');
   });

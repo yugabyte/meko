@@ -166,6 +166,7 @@ interface LearnRow {
 interface Job {
   id: string;
   sessionId: string;
+  trigger: LearnTrigger;
   datapack: DatapackRef;
   /** extract: waiting for the fork; search: AgentK looks up what Meko has; check: waiting for the duplicate check; save: AgentK writes. */
   step: 'extract' | 'search' | 'check' | 'save';
@@ -274,6 +275,7 @@ export class Learner {
     const now = Date.now();
     run(this.db, 'INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome) VALUES (?, ?, ?, ?, ?, ?, ?)',
       id, sessionId, trigger, path, now, outcome ? now : null, outcome);
+    this.core.changed(); // Session.learning
   }
 
   // ---- through the mod ----
@@ -283,10 +285,10 @@ export class Learner {
     this.insert(row.id, id, trigger, 'mod', null);
     const timer = setTimeout(() => {
       const job = this.jobs.get(id);
-      if (job) this.fail(job, job.step, job.step === 'save' ? 'Meko took too long to save them' : "AgentK's mod in Claude didn't finish in time");
+      if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
     }, this.timeoutMs);
     timer.unref?.();
-    this.jobs.set(id, { id, sessionId: row.id, datapack: dp, step: 'extract', facts: [], similar: [], saves: 0, updates: 0, skips: 0, timer });
+    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], saves: 0, updates: 0, skips: 0, timer });
     this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: EXTRACT_PROMPT });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
   }
@@ -315,9 +317,9 @@ export class Learner {
   }
 
   private facts(row: SessionRow, job: Job, body: Record<string, unknown>): void {
-    if (typeof body.text !== 'string') return this.fail(job, 'extract', reasonOf(body.reason, 'the fork gave no reply'));
+    if (typeof body.text !== 'string') return this.fail(job, 'extract', noReply(body.reason, 'look back over the session'));
     const parsed = parseFacts(body.text);
-    if (!parsed) return this.fail(job, 'extract', "the fork's reply wasn't the JSON asked for");
+    if (!parsed) return this.fail(job, 'extract', "Claude didn't list them in a form AgentK could read");
     const local = this.localPaths(row);
     job.facts = parsed.filter((f) => !machineSpecific(`${f.component} ${f.text}`, local));
     run(this.db, 'UPDATE meko_learns SET candidates = ? WHERE id = ?', job.facts.length, job.id);
@@ -334,7 +336,7 @@ export class Learner {
       job.similar = await mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
         this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => []))));
     } catch (e) {
-      if (this.jobs.has(job.id)) this.fail(job, 'search', errMsg(e));
+      if (this.jobs.has(job.id)) this.fail(job, 'search', `Meko couldn't be searched (${errMsg(e)})`);
       return;
     }
     if (!this.jobs.has(job.id)) return; // timed out meanwhile
@@ -343,9 +345,9 @@ export class Learner {
   }
 
   private decisions(row: SessionRow, job: Job, body: Record<string, unknown>): void {
-    if (typeof body.text !== 'string') return this.fail(job, 'dedup', reasonOf(body.reason, 'the duplicate check gave no reply'));
+    if (typeof body.text !== 'string') return this.fail(job, 'dedup', noReply(body.reason, 'check them against what Meko has'));
     const decided = parseDecisions(body.text);
-    if (!decided) return this.fail(job, 'dedup', "the duplicate check's reply wasn't the JSON asked for");
+    if (!decided) return this.fail(job, 'dedup', "the check against what Meko has didn't answer in a form AgentK could read");
     job.step = 'save';
     void this.save(row, job, decided);
   }
@@ -380,7 +382,7 @@ export class Learner {
         }
       });
     } catch (e) {
-      if (this.jobs.has(job.id)) this.fail(job, 'save', errMsg(e));
+      if (this.jobs.has(job.id)) this.fail(job, 'save', `Meko couldn't be reached (${errMsg(e)})`);
       return;
     }
     if (this.jobs.has(job.id)) this.finish(job);
@@ -400,6 +402,8 @@ export class Learner {
   private close(job: Job, outcome: 'done' | 'failed', failedStep: string | null): void {
     this.jobs.delete(job.id);
     clearTimeout(job.timer);
+    // A part the mod hasn't polled for yet would make it fork the session for nothing.
+    this.core.sessions.mod.withdrawLearn(job.sessionId, job.id);
     const c = get<{ lookups: number; errors: number; sent: number }>(this.db,
       `SELECT COALESCE(SUM(tool = 'context_search'), 0) AS lookups, COALESCE(SUM(ok = 0), 0) AS errors, COALESCE(SUM(input_chars), 0) AS sent
        FROM meko_agentk_calls WHERE learn_id = ?`, job.id);
@@ -420,9 +424,11 @@ export class Learner {
   private fail(job: Job, step: string, reason: string): void {
     this.close(job, 'failed', step);
     const saved = job.saves + job.updates ? ` (${learnSummary(job.saves, job.updates, job.datapack.name).replace(/^S/, 's')} first)` : '';
-    const text = `AgentK couldn't save what this session learned: ${reason}${saved}`;
+    // Save learnings can be tried again; at Merge & Close the session is closing.
+    const again = job.trigger === 'manual' ? ' Try Save learnings again.' : '';
+    const text = `AgentK couldn't save what this session learned: ${reason}${saved}.${again}`;
     this.core.sessions.event(job.sessionId, 'learned', text);
-    this.core.sessions.mod.queueToast(job.sessionId, `${text}.`);
+    this.core.sessions.mod.queueToast(job.sessionId, text);
     this.core.log.warn(`the learn step for ${job.sessionId} failed at ${step}`, reason);
   }
 
@@ -495,6 +501,21 @@ export class Learner {
   }
 }
 
-function reasonOf(v: unknown, fallback: string): string {
-  return typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : fallback;
+/** What a step's timer says, by the part the step was in. */
+const TIMED_OUT: Record<Job['step'], string> = {
+  extract: "AgentK's mod in Claude didn't answer in time",
+  search: 'Meko took too long to look them up',
+  check: "AgentK's mod in Claude didn't answer in time",
+  save: 'Meko took too long to save them',
+};
+
+/** Why a model call the mod ran gave no reply, in plain words (`reason` is the engine's code). */
+function noReply(reason: unknown, what: string): string {
+  switch (reason) {
+    case 'nothing-to-fork': return `Claude had nothing to look back on yet (the session was just started or cleared)`;
+    case 'api-error': return `the model call to ${what} failed`;
+    case 'empty-reply': return `Claude gave an empty answer when asked to ${what}`;
+    case 'aborted': return `the model call to ${what} was interrupted`;
+    default: return `this Claude Code couldn't ${what}`;
+  }
 }

@@ -33,7 +33,7 @@ export interface LearnJob {
  */
 export type PollAnswer = { prompts: { id: string; text: string }[]; learn?: LearnJob; toast?: string } | null;
 
-/** The mod protocol that runs learn steps (its /mod/hello says which it speaks). */
+/** The mod protocol that runs learn steps (its /mod/hello and every poll say which it speaks). */
 export const LEARN_PROTOCOL = 2;
 
 /** A prompt another plugin in Claude refused after the mod took it. */
@@ -77,7 +77,10 @@ interface Ask {
 interface Link {
   /** When the mod last said hello or polled; 0 before it ever has. */
   seenAt: number;
-  /** The protocol its /mod/hello named (1 before learn steps); 0 until it says hello. */
+  /**
+   * The protocol the mod speaks (1 before learn steps), from its /mod/hello and from every poll
+   * (after a server restart, only from polls); 0 until either names one.
+   */
   protocol: number;
   /** A part of a learn step waiting for the mod, until a poll hands it over. */
   learn: LearnJob | null;
@@ -192,6 +195,12 @@ export class ModLinks {
   queueLearn(session: string, job: LearnJob): void {
     this.link(session).learn = job;
     this.handNow(session);
+  }
+
+  /** Takes back a part of learn step `id` the mod hasn't polled for yet: the step is over. */
+  withdrawLearn(session: string, id: string): void {
+    const l = this.links.get(session);
+    if (l?.learn?.id === id) l.learn = null;
   }
 
   /** Has the mod show a line (what a learn step saved) with its next poll. */

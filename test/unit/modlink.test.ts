@@ -275,6 +275,15 @@ describe('the link to AgentK\'s mod', () => {
     expect(links.learnReady('new')).toBe(false); // gone stale
   });
 
+  it('takes back a part of a learn step the mod has not polled for, only for that step', async () => {
+    links.hello('s1', LEARN_PROTOCOL);
+    links.queueLearn('s1', { id: 'L1', kind: 'extract', prompt: 'What did you learn?' });
+    links.withdrawLearn('s1', 'L2'); // another step's: left alone
+    links.withdrawLearn('s1', 'L1');
+    links.queueToast('s1', "AgentK couldn't save what this session learned.");
+    expect(await links.poll('s1')).toEqual({ prompts: [], toast: "AgentK couldn't save what this session learned." });
+  });
+
   it("knows a mod's protocol from its polls, after a server restart lost its hello", () => {
     void links.poll('s1'); // the running mod's next poll: no hello since the restart
     expect(links.learnReady('s1')).toBe(false);

@@ -247,7 +247,7 @@ async function registerLearnCommand($: EngineInterface): Promise<void> {
   try {
     await $.command.register({ name: LEARN_COMMAND, description: "Save what this session learned to the project's Meko datapack (AgentK)" })
   } catch {
-    // the session menu in AgentK Local does the same
+    // Save learnings in AgentK Local does the same
   }
 }
 
@@ -325,8 +325,8 @@ export const register: Register = (on) => {
     if (!l) return { text: 'This session is not run by AgentK Local.' }
     const r = await post($, l, '/mod/learn/start', {}).catch(() => null)
     const text = json(r?.text).text
-    return { text: typeof text === 'string' ? text : "AgentK Local didn't answer. Use Save learnings to Meko in its session menu instead." }
-  }).catch(() => ({ text: "AgentK Local didn't answer. Use Save learnings to Meko in its session menu instead." }))
+    return { text: typeof text === 'string' ? text : "AgentK Local didn't answer. Use Save learnings in the session's header in AgentK Local (⋯ on a phone) instead." }
+  }).catch(() => ({ text: "AgentK Local didn't answer. Use Save learnings in the session's header in AgentK Local (⋯ on a phone) instead." }))
 
   on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

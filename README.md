@@ -95,9 +95,10 @@ your phone can connect.
   AgentK asks the session what it learned about the product and repo (how things work, decisions
   and why, root causes, gotchas, measured numbers) and saves each new fact, after checking it
   against what the datapack already has: known facts are skipped, and ones that correct a memory
-  replace it. Nothing about your machine or one person's preferences is saved. With AgentK's mod
-  it runs out of sight (one cached look at the session, plus a small model for the duplicate
-  check); without it, AgentK asks Claude in a turn of its own. **Save learnings** in the session's
+  replace it. Claude is told to leave out anything about your machine or one person's
+  preferences. With AgentK's mod it runs out of sight (one cached look at the session, plus a small
+  model for the duplicate check), and AgentK also drops any fact that names a local path; without
+  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
   header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name

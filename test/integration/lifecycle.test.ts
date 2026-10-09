@@ -461,6 +461,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     env.core.learn.timeoutMs = 200;
     await env.core.sessions.action(s.id, 'learn');
     await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 5000, 'the timeout');
+    // Asked for by hand, it says what to do next.
+    expect(lastEvent(s.id, 'learned')).toBe("AgentK couldn't save what this session learned: AgentK's mod in Claude didn't answer in time. Try Save learnings again.");
     const { id } = dbGet<{ id: string }>(env.core.db, 'SELECT id FROM meko_learns WHERE session_id = ?', s.id)!;
     const usage = { input_tokens: 3, output_tokens: 400, cache_read_input_tokens: 90000, cache_creation_input_tokens: 0 };
     const late = env.core.learn.fromMod(env.core.sessions.row(s.id), { id, step: 'facts', model: 'claude-fake-1', text: '{"facts":[]}', usage });
@@ -490,7 +492,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.get(s.id).learning).toBe(true);
     await closed(s.id);
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'failed' }]);
-    expect(lastEvent(s.id, 'learned')).toBe("AgentK couldn't save what this session learned: AgentK's mod in Claude didn't finish in time");
+    // At Merge & Close there's nothing to try again: the session is closing.
+    expect(lastEvent(s.id, 'learned')).toBe("AgentK couldn't save what this session learned: AgentK's mod in Claude didn't answer in time.");
     expect(shipped()).toBe(1);
   });
 
@@ -498,7 +501,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     fakeFiles({ mod: '' });
     const s = await inReview('Asked');
     await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const changed = vi.spyOn(env.core, 'changed');
     await env.core.sessions.action(s.id, 'learn');
+    // The browser hears at once that a step runs (the button waits), not only when it ends.
+    expect(changed).toHaveBeenCalled();
     await expect(env.core.sessions.action(s.id, 'learn')).rejects.toThrow(/already saving/);
     await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
     expect(learns(s.id)).toEqual([{ trigger: 'manual', path: 'mod', outcome: 'done' }]);

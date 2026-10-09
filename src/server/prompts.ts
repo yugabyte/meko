@@ -29,7 +29,7 @@ Task: {{task}}
 
 Investigate: read the code, answer questions, and build POCs or run experiments in this worktree (branch {{branch}}) when they help. You can commit and push experimental branches. There is no design approval in Explore, and AgentK Local runs no PR, review or merge stage until the user moves the session on to Design, Code or a PR.
 
-Finish with a short summary of what you found and what you'd recommend next. Before you finish, save what you learned to Meko, following the saving rule in your system prompt.`,
+Finish with a short summary of what you found and what you'd recommend next.`,
 
   design: `You are in the Design stage of an AgentK Local task.
 
@@ -206,10 +206,16 @@ export function mekoSaveSystemLine(sessionId: string): string {
   return `Saving to Meko: this project's datapack is shared by the team working on it. ${SAVING_RULE} ${savingHow(sessionId)} This rule takes precedence over the Meko plugin's advice not to call memory_add.`;
 }
 
-/** The typed learn prompt's rule, added in code (like mekoRecallLine) so a repo's own learn prompt gets it too. */
+/**
+ * The saving rule in full, added in code (like mekoRecallLine) to the prompts that ask Claude to
+ * save what it learned: the typed learn prompt, and Explore's, which ends by saving. A repo's own
+ * prompt gets it too, and so does a session launched before the rule was in the system prompt.
+ */
 export function mekoLearnLine(name: PromptName, sessionId: string): string {
-  if (name !== 'learn') return '';
-  return `What to save: ${SAVING_RULE} ${savingHow(sessionId)} This takes precedence over the Meko plugin's advice not to call memory_add.`;
+  const rule = `What to save: ${SAVING_RULE} ${savingHow(sessionId)} This takes precedence over the Meko plugin's advice not to call memory_add.`;
+  if (name === 'learn') return rule;
+  if (name === 'explore') return `Before you finish, save what you learned to Meko for the team working on this product. ${rule}`;
+  return '';
 }
 
 /**
