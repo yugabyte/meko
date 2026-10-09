@@ -436,6 +436,35 @@ const MIGRATIONS: string[] = [
     ms INTEGER NOT NULL
   );
   `,
+  // 28: Discard runs the learn step too (trigger 'discard', so meko_learns is made again for its
+  // CHECK), and waits for it (sessions.discarding, so a restart finishes the discard); Merge &
+  // Close and Discard can skip it (sessions.skip_learn, the merge's choice kept until it lands).
+  `
+  ALTER TABLE sessions ADD COLUMN discarding INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN skip_learn INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE meko_learns_v28 (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL CHECK (trigger IN ('merge', 'manual', 'discard')),
+    path TEXT NOT NULL CHECK (path IN ('mod', 'turn', 'none')),
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    outcome TEXT CHECK (outcome IN ('done', 'failed', 'interrupted', 'skipped')),
+    failed_step TEXT,
+    candidates INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    updates INTEGER NOT NULL DEFAULT 0,
+    skips INTEGER NOT NULL DEFAULT 0,
+    lookups INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    sent_chars INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO meko_learns_v28(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step, candidates, saves, updates, skips, lookups, errors, sent_chars)
+    SELECT id, session_id, trigger, path, started_at, ended_at, outcome, failed_step, candidates, saves, updates, skips, lookups, errors, sent_chars FROM meko_learns;
+  DROP TABLE meko_learns;
+  ALTER TABLE meko_learns_v28 RENAME TO meko_learns;
+  CREATE INDEX meko_learns_session ON meko_learns(session_id, started_at);
+  `,
 ];
 
 export function openDb(path: string): Db {

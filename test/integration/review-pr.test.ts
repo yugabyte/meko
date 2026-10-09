@@ -242,7 +242,7 @@ describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', (
     await expect(env.core.sessions.create(p.id, { name: 'c', kind: 'review-pr', repoPath: other, pr: { repo: 'acme/demo', number: 7 } }))
       .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/other isn't a clone of acme\/demo/) });
     // Discard ends a review too, and takes the PR's head ref with it.
-    await env.core.sessions.action(a.id, 'discard');
+    await env.core.sessions.action(a.id, 'discard', { skipLearn: true });
     expect(() => git(fork, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
     expect(git(fork, 'branch', '--list', 'ak/*')).toBe('');
   });

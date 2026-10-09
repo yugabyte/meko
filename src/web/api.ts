@@ -4,6 +4,7 @@ import type {
   AttachDatapackRequest,
   AuthStatus,
   ChangeSide,
+  CloseSessionRequest,
   ClaudeCodeStatus,
   CreateProjectRequest,
   CreateSessionRequest,
@@ -159,7 +160,8 @@ export const api = {
       raw: { data: image, type: image.type.startsWith('image/') ? image.type : 'image/png' },
     }),
   dismissFailedStart: (id: string) => request<void>('DELETE', `/api/failed-starts/${enc(id)}`),
-  sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
+  /** merge and discard take a CloseSessionRequest (skip the learn step). */
+  sessionAction: (id: string, action: SessionAction, b?: CloseSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`, b),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),

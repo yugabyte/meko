@@ -12,6 +12,7 @@ const gh = vi.hoisted(() => ({
   status: null as null | PrStatus,
   comments: [] as string[],
   merges: [] as string[],
+  mergeError: null as null | Error,
   bots: [] as string[],
   viewer: 'me' as string | null,
   stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
@@ -26,6 +27,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
     prStatus: async (w: string) => ({ ...gh.status!, headRefOid: gh.status!.headRefOid || tip(w) }),
     comment: async (_w: string, _n: number, body: string) => void gh.comments.push(body),
     merge: async (_w: string, url: string) => {
+      if (gh.mergeError) throw gh.mergeError;
       gh.merges.push(url);
       gh.status = { ...gh.status!, state: 'MERGED' };
     },
@@ -51,7 +53,8 @@ function tip(dir: string): string {
 }
 
 const { makeEnv, waitFor } = await import('../helpers.js');
-const { all, get: dbGet } = await import('../../src/server/db.js');
+const { all, get: dbGet, run } = await import('../../src/server/db.js');
+const { SKIPPED_TEXT } = await import('../../src/server/learn.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 function status(over: Partial<PrStatus> = {}): PrStatus {
@@ -69,6 +72,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = null;
     gh.comments = [];
     gh.merges = [];
+    gh.mergeError = null;
     gh.bots = [];
     gh.viewer = 'me';
     gh.stats = null;
@@ -522,6 +526,149 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
     await expect(env.core.sessions.action(s.id, 'learn')).rejects.toThrow(/no Meko datapack/);
     expect(learns(s.id)).toEqual([]);
+  });
+
+  it('closes a merged session without a learn step when asked to skip it', async () => {
+    fakeFiles({ mod: '' });
+    const s = await inReview('Skip at merge');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    await env.core.sessions.action(s.id, 'merge', { skipLearn: true });
+    await closed(s.id);
+    expect(learns(s.id)).toEqual([]);
+    expect(modLearn()).toEqual([]);
+    expect(lastEvent(s.id, 'learn-skipped')).toBe(SKIPPED_TEXT);
+    expect(shipped()).toBe(1); // what shipped is still saved
+  });
+
+  it("forgets Don't save learnings for a merge that doesn't happen, so a merge on GitHub runs the step", async () => {
+    const s = await inReview('Skip forgotten');
+    const skip = () => env.core.sessions.row(s.id).skip_learn;
+    const approved = gh.status!;
+    // Refused: not written at all.
+    gh.status = { ...approved, statusCheckRollup: [failing()] };
+    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: true })).rejects.toMatchObject({ status: 409 });
+    expect(skip()).toBe(0);
+    // Queued, then dropped when CI fails.
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await env.core.sessions.action(s.id, 'merge', { skipLearn: true });
+    expect(skip()).toBe(1);
+    gh.status = { ...approved, statusCheckRollup: [failing()] };
+    await poll(s.id);
+    expect(queuedGate(s.id)).toBeNull();
+    expect(skip()).toBe(0);
+    await idle(s.id, 'CI prompt done');
+    // GitHub refuses it.
+    gh.status = approved;
+    gh.mergeError = new Error('merge conflict');
+    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: true })).rejects.toMatchObject({ status: 502 });
+    expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'review', skip_learn: 0 });
+    // Requested, but the PR is closed and the session goes back to Review.
+    gh.mergeError = null;
+    env.core.sessions.update(s.id, { skip_learn: 1 });
+    env.core.sessions.setStage(s.id, 'merge', 'you');
+    gh.status = { ...approved, state: 'CLOSED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'review', skip_learn: 0 });
+    // Merged on GitHub after all: the learn step runs.
+    gh.status = { ...approved, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    await closed(s.id);
+    expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'turn', outcome: 'done' }]);
+    expect(lastEvent(s.id, 'learn-skipped')).toBeUndefined();
+  });
+
+  it('refuses a skipLearn that is not true or false', async () => {
+    const s = await inReview('Bad body');
+    await expect(env.core.sessions.action(s.id, 'discard', { skipLearn: 'true' })).rejects.toMatchObject({ status: 400, message: 'skipLearn must be true or false.' });
+    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: 1 })).rejects.toMatchObject({ status: 400 });
+    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'running', stage: 'review', discarding: 0 });
+    expect(gh.merges).toEqual([]);
+  });
+
+  it('saves what the session learned through the mod before discarding it', async () => {
+    fakeFiles({ mod: '', 'learn-delay': '1000' });
+    const s = await inReview('Discard learned');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const branch = env.core.sessions.row(s.id).branch;
+    // The discard waits for the learn step: the session runs until it ends.
+    const waiting = await env.core.sessions.action(s.id, 'discard');
+    expect(waiting).toMatchObject({ desired: 'running', discarding: true, learning: true });
+    // Asked again, it keeps waiting.
+    await env.core.sessions.action(s.id, 'discard');
+    await waitFor(() => lastEvent(s.id, 'discarded'), (t) => !!t, 10000, 'the discard');
+    expect(env.core.sessions.row(s.id).desired).toBe('archived');
+    expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'mod', outcome: 'done' }]);
+    expect(lastEvent(s.id, 'learned')).toBe('Nothing new to save to team/demo');
+    expect(lastEvent(s.id, 'discarded')).toMatch(/^Discarded; changes and branch ak\/discard-learned deleted/);
+    expect(dbGet<{ n: number }>(env.core.db, "SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'discarded'", s.id)!.n).toBe(1);
+    expect(env.core.sessions.row(s.id).discarding).toBe(0);
+    expect(execFileSync('git', ['branch', '--list', branch], { cwd: env.repo, encoding: 'utf8' }).trim()).toBe('');
+  });
+
+  it("saves what the session learned in a typed turn before discarding it, without the mod", async () => {
+    const s = await inReview('Discard typed');
+    await env.core.sessions.action(s.id, 'discard');
+    await waitFor(() => lastEvent(s.id, 'discarded'), (t) => !!t, 10000, 'the discard');
+    expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'turn', outcome: 'done' }]);
+  });
+
+  it('discards at once, saving nothing, when asked to skip the learn step', async () => {
+    fakeFiles({ mod: '' });
+    const s = await inReview('Discard skipped');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const done = await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
+    expect(done).toMatchObject({ desired: 'archived', discarding: false });
+    expect(learns(s.id)).toEqual([]);
+    expect(modLearn()).toEqual([]);
+    expect(lastEvent(s.id, 'learn-skipped')).toBe(SKIPPED_TEXT);
+  });
+
+  it('discards now when asked to skip the learn step it waits for', async () => {
+    fakeFiles({ mod: '', 'learn-silent': '' });
+    const s = await inReview('Discard now');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    await env.core.sessions.action(s.id, 'discard');
+    expect(env.core.sessions.get(s.id).discarding).toBe(true);
+    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
+    expect(env.core.sessions.row(s.id).desired).toBe('archived');
+    expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'mod', outcome: 'interrupted' }]);
+    // A step ran, cut short: it's recorded as interrupted, not as skipped.
+    expect(lastEvent(s.id, 'learn-skipped')).toBeUndefined();
+  });
+
+  it('discards a session whose Claude is gone, the learn step recorded as skipped', async () => {
+    const s = await inReview('Discard exited');
+    await env.core.tmux.submit(env.core.sessions.row(s.id).tmux_name, 'exit');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).status;
+    }, (st) => st === 'exited', 10000, 'exited');
+    await env.core.sessions.action(s.id, 'discard');
+    expect(env.core.sessions.row(s.id).desired).toBe('archived');
+    expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'none', outcome: 'skipped' }]);
+  });
+
+  it('finishes a discard that a restart cut short', async () => {
+    const s = await inReview('Discard restarted');
+    // As the old server left it: waiting for a learn step that died with it.
+    env.core.sessions.update(s.id, { discarding: 1 });
+    run(env.core.db, "INSERT INTO meko_learns(id, session_id, trigger, path, started_at) VALUES ('l1', ?, 'discard', 'mod', ?)", s.id, Date.now());
+    env.core.learn.recover();
+    await env.core.sessions.recover();
+    expect(env.core.sessions.row(s.id).desired).toBe('archived');
+    expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'mod', outcome: 'interrupted' }]);
+  });
+
+  it("lets a typed learn turn a restart cut short finish in a live Claude, then discards", async () => {
+    const s = await inReview('Discard typed restart');
+    env.core.sessions.update(s.id, { discarding: 1 });
+    run(env.core.db, "INSERT INTO meko_learns(id, session_id, trigger, path, started_at) VALUES ('l1', ?, 'discard', 'turn', ?)", s.id, Date.now());
+    env.core.learn.recover();
+    await env.core.sessions.recover();
+    // Claude kept running across the restart: its learn turn goes on.
+    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'running', discarding: 1 });
+    await env.core.sessions.submit(s.id, 'save what you learned');
+    await waitFor(() => lastEvent(s.id, 'discarded'), (t) => !!t, 10000, 'the discard at the turn end');
   });
 
   it('goes back to Review when a requested merge does not happen', async () => {

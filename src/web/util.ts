@@ -303,7 +303,7 @@ export function learningText(l: MekoLearning): { learned: LearningTile; cost: Le
   const n = (k: number, one: string, many: string) => `${f(k)} ${k === 1 ? one : many}`;
   const skipped = l.skipped > 0 ? ` ${n(l.skipped, 'session was', 'sessions were')} closed without one, since Claude was gone or busy.` : '';
   if (l.runs === 0) {
-    const none = 'No learn step has run yet. One runs at Merge & Close, or when you choose Save learnings.';
+    const none = 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.';
     return { learned: { num: '—', line: null, title: none + skipped }, cost: { num: '—', line: null, title: none } };
   }
   const failed = l.failed > 0 ? `; ${f(l.failed)} didn't finish` : '';

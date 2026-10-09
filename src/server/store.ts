@@ -109,6 +109,10 @@ export interface SessionRow {
   start_images: string | null;
   /** A gate pressed before it could go (Session.queued). */
   queued_gate: QueuedGate | null;
+  /** Discard was asked for and waits for the learn step (Session.discarding). */
+  discarding: number;
+  /** The user asked Merge & Close to skip the learn step. */
+  skip_learn: number;
   /**
    * A task started on a PR whose head is on another remote, or under another name, than origin's
    * branch of the session's name (a fork's PR): where its pushes go. NULL: origin.
@@ -268,6 +272,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     asking: rt.asking,
     approvalQueued: rt.approvalQueued,
     learning: !!get(db, 'SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND ended_at IS NULL', r.id),
+    discarding: !!r.discarding,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     createdAt: r.created_at,

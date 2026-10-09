@@ -939,7 +939,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
-| Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
+| Discard | Chosen in Archive's confirmation step. First runs the [learn step](#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
 | Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](#open-project)). |
 
 ```sql
@@ -981,6 +981,8 @@ CREATE TABLE sessions (
                                    --   heads in a row did (both cleared once the PR merges cleanly)
   queued_gate TEXT,                -- a gate pressed before it could go: 'open-pr' (at the turn's end) | 'merge' (once
                                    --   nothing blocks it); NULL: none
+  skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
+  discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
@@ -1142,7 +1144,7 @@ stateDiagram-v2
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running, AgentK's review to come), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
-| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
+| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when **Don't save learnings** beside the button was checked), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
   **Request another round**, which posts `/agentk review` (**Request AgentK review** before AgentK
@@ -1657,14 +1659,36 @@ correct a memory that's now wrong with `memory_update`. No limit. It says it ove
 plugin's advice not to call `memory_add`. The Explore prompt ends by saving under it (the rule appended in code, when the project has datapacks).
 
 **When.** At Merge & Close, before the cleanup (`Lifecycle.merged()` asks `Learner.beforeClose`,
-and runs again when any learn step ends there, `afterLearn`), once per session; and when the user
-asks: the **learn** session action (**Save learnings** in the header, or the ⋯ sheet), or
-`/agentk_learn` in the terminal. It needs Meko on, a dedicated datapack, and Claude there and
-between turns; asked for otherwise, it's a 409 that says why (exited: resume it; starting; busy).
-At Merge & Close a session whose Claude is gone or busy is recorded as skipped and closes as
-before. One runs at a time per session (`Session.learning`): a Save learnings step still running
-when the PR merges holds the cleanup like one of its own, and a step that ended done since the
-session got to Merge & Close stands for it.
+and runs again when any learn step ends there, `afterLearn`), once per session; at Discard, before
+the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn** session action
+(**Save learnings** in the header, or the ⋯ sheet), or `/agentk_learn` in the terminal. It needs
+Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
+that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
+Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
+(`Session.learning`): a Save learnings step still running when the PR merges, or when Discard is
+asked for, holds the close like one of its own, and a step that ended done since the session got
+to Merge & Close stands for it.
+
+**Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
+checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
+Checked, the action's `CloseSessionRequest` carries `skipLearn` (400 when it isn't a boolean), no
+learn step runs, and the timeline says so (`learn-skipped`, once, and not for **Discard now**,
+whose step is recorded as interrupted). Merge & Close writes the choice to `sessions.skip_learn`
+only once the merge is requested or queued, and keeps it until the PR merges; a merge given up on
+clears it (a queued merge withdrawn or dropped, GitHub refusing it, or the session back in Review),
+so a PR merged on GitHub without the button runs the step as usual. Nothing is recorded in
+`meko_learns` for a skipped step, so the usage stats' *skipped* count stays the sessions Claude
+was gone or busy in.
+
+**Discard waits for it.** Unless skipped, Discard starts the step (trigger `discard`), sets
+`sessions.discarding` (`Session.discarding`) and answers at once with the session still running:
+the confirmation shows *Saving learnings, then discarding* with **Discard now**, which discards at
+once (`skipLearn`, interrupting the step). When the step ends, done, failed, timed out or
+interrupted (`Lifecycle.afterLearn`, and `onTurnEnd` for a typed step, which then does nothing else
+for the session), `SessionManager.discardNow()` discards the session, once however many ask. A
+restart that cut the step short finishes the discard in `recover()`, unless the step was a typed
+turn in a Claude still running: that turn goes on, and its end discards the session. Archive
+clears `discarding`.
 
 **Through the mod** (its link live, protocol 2):
 
@@ -1701,8 +1725,8 @@ under the saving rule itself. The step ends with that turn (`Lifecycle.onTurnEnd
 the Meko calls in the transcript during it.
 
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
-candidates, saves, updates, skips, lookups, errors, sent_chars)`, with `path` `mod`, `turn` or
-`none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id.
+candidates, saves, updates, skips, lookups, errors, sent_chars)`, with `trigger` `merge`, `discard`
+or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id.
 
 ## Token usage
 
@@ -1919,8 +1943,8 @@ reports.
   AgentK's searches at session start by outcome with the milliseconds they took in all. Calls go on
   the day they were made, seeds and searches at start on the day the search ran. Added since
   (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
-  Meko (their input, characters ÷ 4), also by tool; [learn steps](#the-learn-step) by trigger,
-  path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
+  Meko (their input, characters ÷ 4), also by tool; [learn steps](#the-learn-step) by trigger
+  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
   typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
   recorded in `MekoClient.call`: searches at start, what shipped, designs, the learn step's) with

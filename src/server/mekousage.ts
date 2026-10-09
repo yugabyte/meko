@@ -355,7 +355,7 @@ interface LearnTokens {
 /** A learn step (meko_learns) as the usage report counts it, with what its model calls cost. */
 export interface LearnRun {
   at: number;
-  trigger: 'merge' | 'manual';
+  trigger: 'merge' | 'manual' | 'discard';
   path: 'mod' | 'turn' | 'none';
   outcome: 'done' | 'failed' | 'interrupted' | 'skipped' | null;
   candidates: number;
@@ -402,7 +402,7 @@ const noTokens = (): CallHomeTokens => ({ input: 0, output: 0, cacheRead: 0, cac
 /** Learn steps as the usage report has them: counts, tokens by part, and their price in whole cents. */
 export function summarizeLearn(runs: LearnRun[]): CallHomeLearn {
   const l: CallHomeLearn = {
-    runs: 0, byTrigger: { merge: 0, manual: 0 }, byPath: { mod: 0, turn: 0, none: 0 },
+    runs: 0, byTrigger: { merge: 0, manual: 0, discard: 0 }, byPath: { mod: 0, turn: 0, none: 0 },
     byOutcome: { done: 0, failed: 0, interrupted: 0, skipped: 0 },
     candidates: 0, saves: 0, updates: 0, skips: 0, empty: 0, lookups: 0, errors: 0, sentTokens: 0,
     tokens: { extract: noTokens(), dedup: noTokens(), turn: noTokens() }, usdCents: 0,
