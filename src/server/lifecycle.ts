@@ -13,9 +13,9 @@ import { launchedAgentId } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type ReviewerMode, type Stage } from '../shared/types.js';
+import { KIND_LABELS, STAGE_LABELS, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
-import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type SessionRow } from './store.js';
+import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type MergeInfo, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
 
 /**
@@ -41,6 +41,9 @@ const MAX_CI_FIXES = 3;
 const MAX_CONFLICT_FIXES = 3;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
+
+/** A queued gate as the activity log names it. */
+const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'merge' };
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
@@ -482,13 +485,58 @@ export class Lifecycle {
 
   // ---- PR ----
 
+  /**
+   * Sends the PR prompt, or, while AgentK is mid-turn (or Claude is starting), queues it for the
+   * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go.
+   */
   async openPr(row: SessionRow): Promise<void> {
-    const check = (r: SessionRow) => {
-      if (r.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
-      this.checkPromptable(r);
-    };
+    if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
+    if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
+      if (row.queued_gate !== 'open-pr') this.queueGate(row.id, 'open-pr', 'Open PR queued: it goes when AgentK finishes its turn');
+      return;
+    }
+    const check = this.prCheck(row.id);
     check(row);
     await this.sendPr(row, check);
+  }
+
+  /** The check before the PR prompt goes: still in Code, and Claude can take it. Clears a queued Open PR as it passes. */
+  private prCheck(id: string): (r: SessionRow) => void {
+    return (r) => {
+      if (r.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
+      this.checkPromptable(r);
+      if (this.sessions.promptsHeld(id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Open the PR once it has.');
+      if (r.queued_gate === 'open-pr') this.setQueued(id, null);
+    };
+  }
+
+  /** A turn is running, or Claude is starting and will take its first prompt. */
+  private turnRunning(row: SessionRow): boolean {
+    return row.status === 'working' || row.status === 'starting' || this.sessions.midTurn(row.id);
+  }
+
+  /** Sends an Open PR queued during a turn, once Claude is between turns; it stays queued until then. */
+  private takeQueuedPr(id: string): Promise<void> {
+    return this.serial(id, async () => {
+      const row = sessionRow(this.db, id);
+      if (row?.queued_gate !== 'open-pr' || row.desired !== 'running') return;
+      if (row.stage !== 'code') {
+        this.dropQueued(id, `the session moved to ${STAGE_LABELS[row.stage]}`);
+        return;
+      }
+      if ((row.status !== 'idle' && row.status !== 'recovered') || this.sessions.runtime(id).busy || this.sessions.promptsHeld(id) > 0) return;
+      try {
+        await this.sendPr(row, this.prCheck(id));
+        this.sessions.event(id, 'queued', 'Queued Open PR sent');
+      } catch (e) {
+        const cur = sessionRow(this.db, id);
+        // Still queued: Claude took another prompt meanwhile, and the PR goes after that turn.
+        if (cur?.queued_gate === 'open-pr') return;
+        this.warn(id, 'Sending the queued Open PR', e);
+        this.sessions.event(id, 'queued', `Queued Open PR not sent: ${errMsg(e)}`);
+        this.sessions.notifyUser(id, 'Open PR not sent', `The queued PR prompt couldn't be sent (${errMsg(e)}). Press Open PR again.`);
+      }
+    });
   }
 
   /**
@@ -554,7 +602,12 @@ export class Lifecycle {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
     }
     this.checkBetweenTurns(cur);
-    if (stage === 'review' && movesStep(cur.stage, stage)) return this.moveToReview(cur);
+    // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes.
+    const dropQueued = () => this.dropQueued(id, `the session moved to ${STAGE_LABELS[stage]}`);
+    if (stage === 'review' && movesStep(cur.stage, stage)) {
+      dropQueued();
+      return this.moveToReview(this.sessions.row(id));
+    }
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
     if (send) {
@@ -565,6 +618,7 @@ export class Lifecycle {
     // Designs are written as markdown or an Artifact now; plan mode is only for older sessions.
     if (stage === 'design') this.sessions.update(id, { plan_mode: 0 });
     if (movesStep(cur.stage, stage)) {
+      dropQueued();
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
@@ -688,7 +742,9 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row) return;
     this.sessions.setBusy(id, false);
-    if (row.stage === 'pr') {
+    if (row.stage === 'code') {
+      await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
+    } else if (row.stage === 'pr') {
       await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
     } else if (row.stage === 'review') {
       await this.serial(id, async () => {
@@ -791,7 +847,8 @@ export class Lifecycle {
       const now = Date.now();
       for (const row of sessionRows(this.db)) {
         if (!projectRow(this.db, row.project_id)) continue;
-        const due = now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
+        // A queued merge is checked as often as a PR is looked for, so it goes soon after CI does.
+        const due = now - (this.lastPoll.get(row.id) ?? 0) >= (row.queued_gate === 'merge' ? POLL_MS : REVIEW_POLL_MS);
         if (row.desired !== 'running') {
           // A cleanup that a restart cut short after archiving: finish it.
           if (row.stage === 'merge' && due && now - (row.archived_at ?? 0) < CLOSING_RESUME_MS) {
@@ -799,7 +856,10 @@ export class Lifecycle {
           }
           continue;
         }
-        if (row.stage === 'pr') {
+        if (row.stage === 'code' && row.queued_gate === 'open-pr') {
+          // A turn that ended while the server was down, or a prompt that came between.
+          await this.takeQueuedPr(row.id).catch((e) => this.warn(row.id, 'Sending the queued Open PR', e));
+        } else if (row.stage === 'pr') {
           await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
         } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
@@ -980,8 +1040,38 @@ export class Lifecycle {
     this.watchCi(this.sessions.row(row.id), st, ci, unpushed);
     // A failed send stays queued; the next poll or turn end retries it.
     await this.deliverNext(row.id).catch((e) => this.warn(row.id, 'Sending a queued prompt', e));
-    this.sessions.setMergeInfo(row.id, this.mergeInfo(this.sessions.row(row.id), st, mode, unpushed, uncommitted));
+    const info = this.mergeInfo(this.sessions.row(row.id), st, mode, unpushed, uncommitted);
+    this.sessions.setMergeInfo(row.id, info);
     this.core.changed();
+    await this.takeQueuedMerge(row.id, info);
+  }
+
+  /**
+   * A queued merge, at the end of a look at the PR: it goes once nothing blocks it, waits while
+   * only blockers that clear by themselves are left, and is dropped (the user is told) when another
+   * one appears. Runs in the session's serial queue.
+   */
+  private async takeQueuedMerge(id: string, info: MergeInfo): Promise<void> {
+    const row = this.sessions.row(id);
+    if (row.queued_gate !== 'merge' || this.merging.has(id) || row.stage !== 'review' || row.desired !== 'running') return;
+    if (info.canMerge) {
+      this.sessions.event(id, 'queued', 'Queued merge: nothing blocks it now; merging');
+      this.sessions.notifyUser(id, 'Merging', `PR #${row.pr_number} is ready: merging it now, as you queued.`);
+      this.merging.add(id);
+      try {
+        await this.doMerge(id);
+      } catch (e) {
+        this.sessions.event(id, 'queued', `Queued merge failed: ${errMsg(e)}`);
+        this.sessions.notifyUser(id, 'Merge failed', `${errMsg(e)} Press Merge & Close again once that's fixed.`);
+      } finally {
+        this.merging.delete(id);
+      }
+      return;
+    }
+    if (info.queueable) return;
+    const why = info.blockers.join(' ');
+    this.dropQueued(id, why);
+    this.sessions.notifyUser(id, 'Queued merge dropped', `${why} Press Merge & Close again once that's fixed.`);
   }
 
   /** The PR's bot reviewers, or null (retry at the next poll) when GitHub can't say. */
@@ -1122,27 +1212,41 @@ export class Lifecycle {
     }
   }
 
-  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false, uncommitted = 0): { canMerge: boolean; blockers: string[] } {
+  /**
+   * What blocks the merge, in plain words. A blocker that clears by itself (`waits`: AgentK at
+   * work, CI running, AgentK's review to come) lets the merge be queued; any other one doesn't,
+   * and drops a queued merge. Unpushed commits and uncommitted files wait only mid-turn, where
+   * they're AgentK's work in progress.
+   */
+  mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, unpushed = false, uncommitted = 0): MergeInfo {
     const b: string[] = [];
-    if (st.state !== 'OPEN') b.push('The PR is not open.');
-    if (row.status === 'working' || this.sessions.runtime(row.id).busy) b.push('AgentK is still working.');
-    else if (row.status === 'needs_input') b.push('AgentK is waiting on you in the terminal.');
-    if (unpushed) b.push("The branch has commits that aren't pushed to the PR.");
-    if (uncommitted) b.push(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`);
+    let hard = false;
+    const block = (text: string, waits = false) => {
+      b.push(text);
+      if (!waits) hard = true;
+    };
+    const working = row.status === 'working' || this.sessions.runtime(row.id).busy;
+    const turn = working || this.sessions.midTurn(row.id);
+    if (st.state !== 'OPEN') block('The PR is not open.');
+    if (working) block('AgentK is still working.', true);
+    else if (row.status === 'needs_input') block('AgentK is waiting on you in the terminal.', true);
+    if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn);
+    if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn);
     const ci = github.ciState(st.statusCheckRollup);
-    if (ci === 'failure') b.push('CI is failing.');
-    else if (ci === 'pending') b.push('CI is still running.');
+    if (ci === 'failure') block('CI is failing.');
+    else if (ci === 'pending') block('CI is still running.', true);
     // AgentK gates the merge only once it's active on the PR, so repos it doesn't watch never wait for it.
     if (reviewer !== 'people' && row.agentk_seen && (row.review_state === 'waiting' || row.review_state === 'in_review')) {
-      b.push('Waiting for the AgentK review.');
+      block('Waiting for the AgentK review.', true);
     }
-    if (row.review_state === 'addressing') b.push('AgentK is addressing review findings.');
-    if (st.reviewDecision === 'CHANGES_REQUESTED') b.push('Changes were requested.');
-    if (st.reviewDecision === 'REVIEW_REQUIRED') b.push('Required approvals are missing.');
-    if (st.mergeable === 'CONFLICTING') b.push('The branch has merge conflicts.');
-    if (st.mergeStateStatus === 'BEHIND') b.push('The branch is behind its base.');
-    if (st.mergeStateStatus === 'DRAFT') b.push('The PR is a draft.');
-    return { canMerge: b.length === 0, blockers: b };
+    if (row.review_state === 'addressing') block('AgentK is addressing review findings.', true);
+    if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.');
+    // Only on a repo that requires approvals: people's approvals can take days, so the merge isn't queued for them.
+    if (st.reviewDecision === 'REVIEW_REQUIRED') block('Required approvals are missing.');
+    if (st.mergeable === 'CONFLICTING') block('The branch has merge conflicts.');
+    if (st.mergeStateStatus === 'BEHIND') block('The branch is behind its base.');
+    if (st.mergeStateStatus === 'DRAFT') block('The PR is a draft.');
+    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard };
   }
 
   async requestReview(row: SessionRow, force: boolean): Promise<void> {
@@ -1286,12 +1390,13 @@ export class Lifecycle {
 
   // ---- merge / cleanup ----
 
+  /**
+   * Merge & Close: merges now when nothing blocks it, or queues the merge when only blockers that
+   * clear by themselves are left (takeQueuedMerge sends it). Any other blocker is refused.
+   */
   async merge(row: SessionRow): Promise<void> {
     if (row.stage !== 'review' || !row.pr_number || !row.pr_url) throw new HttpError(409, 'Merge is only available in the Review stage.');
-    const p = projectRow(this.db, row.project_id);
-    if (!p) throw new HttpError(404, 'Project not found.');
-    const settings = parseSettings(p.settings_json);
-    const url = row.pr_url;
+    if (!projectRow(this.db, row.project_id)) throw new HttpError(404, 'Project not found.');
     if (this.merging.has(row.id)) throw new HttpError(409, 'A merge is already in progress.');
     this.merging.add(row.id);
     try {
@@ -1300,21 +1405,10 @@ export class Lifecycle {
         const fresh = this.sessions.row(row.id);
         if (fresh.stage !== 'review') return; // merged elsewhere and already cleaned up
         const info = this.sessions.runtime(row.id);
-        if (!info.canMerge) throw new HttpError(409, `Not ready to merge: ${info.mergeBlockers.join(' ')}`);
-        const method = await github.resolveMergeMethod(row.worktree_path, settings.mergeMethod);
-        this.sessions.setBusy(row.id, true);
-        try {
-          this.sessions.setStage(row.id, 'merge', 'you');
-          await github.merge(row.worktree_path, url, method);
-        } catch (e) {
-          if (this.sessions.row(row.id).stage === 'merge') this.sessions.setStage(row.id, 'review', 'auto');
-          throw new HttpError(502, `GitHub refused the merge: ${errMsg(e)}`);
-        } finally {
-          this.sessions.setBusy(row.id, false);
-        }
-        await this.doPollReview(row.id);
-        if (this.sessions.row(row.id).stage === 'merge') {
-          this.sessions.event(row.id, 'merge', `Merge requested; waiting for GitHub to merge PR #${fresh.pr_number}`);
+        if (info.canMerge) return this.doMerge(row.id);
+        if (!info.mergeQueueable) throw new HttpError(409, `Not ready to merge: ${info.mergeBlockers.join(' ')}`);
+        if (fresh.queued_gate !== 'merge') {
+          this.queueGate(row.id, 'merge', `Merge queued: it goes once nothing blocks it (now: ${info.mergeBlockers.join(' ')})`);
         }
       });
     } finally {
@@ -1322,9 +1416,63 @@ export class Lifecycle {
     }
   }
 
+  /** Asks GitHub to merge the PR, then looks at it again (which closes the session once it's merged). In the serial queue, under `merging`. */
+  private async doMerge(id: string): Promise<void> {
+    const row = this.sessions.row(id);
+    const p = projectRow(this.db, row.project_id);
+    if (!p || !row.pr_url) throw new HttpError(409, 'Merge is only available in the Review stage.');
+    if (row.queued_gate) this.setQueued(id, null);
+    const method = await github.resolveMergeMethod(row.worktree_path, parseSettings(p.settings_json).mergeMethod);
+    this.sessions.setBusy(id, true);
+    try {
+      this.sessions.setStage(id, 'merge', 'you');
+      await github.merge(row.worktree_path, row.pr_url, method);
+    } catch (e) {
+      if (this.sessions.row(id).stage === 'merge') this.sessions.setStage(id, 'review', 'auto');
+      throw new HttpError(502, `GitHub refused the merge: ${errMsg(e)}`);
+    } finally {
+      this.sessions.setBusy(id, false);
+    }
+    await this.doPollReview(id);
+    if (this.sessions.row(id).stage === 'merge') {
+      this.sessions.event(id, 'merge', `Merge requested; waiting for GitHub to merge PR #${row.pr_number}`);
+    }
+  }
+
+  // ---- queued gates ----
+
+  private setQueued(id: string, gate: QueuedGate | null): void {
+    this.sessions.update(id, { queued_gate: gate });
+    this.core.changed();
+  }
+
+  private queueGate(id: string, gate: QueuedGate, text: string): void {
+    this.setQueued(id, gate);
+    this.sessions.event(id, 'queued', text);
+  }
+
+  /** Withdraws a queued Open PR or merge at the user's request. */
+  cancelQueued(row: SessionRow): void {
+    const gate = row.queued_gate;
+    if (!gate) throw new HttpError(409, 'Nothing is queued.');
+    if (gate === 'merge' && this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');
+    this.setQueued(row.id, null);
+    this.sessions.event(row.id, 'queued', `Queued ${GATE_NAMES[gate]} withdrawn`);
+  }
+
+  /** Drops a queued gate (only `only`, when given), saying why in the activity log. */
+  dropQueued(id: string, why: string, only?: QueuedGate): void {
+    const gate = sessionRow(this.db, id)?.queued_gate;
+    if (!gate || (only && gate !== only)) return;
+    this.setQueued(id, null);
+    this.sessions.event(id, 'queued', `Queued ${GATE_NAMES[gate]} dropped: ${why}`);
+  }
+
   /** The PR is merged (here, or on GitHub): finish Merge & Close. Safe to call again after a restart. */
   private async merged(row: SessionRow, st: github.PrStatus): Promise<void> {
     if (row.stage === 'done' || this.closing.has(row.id)) return;
+    // Merged on GitHub while a merge waited here: nothing is left for it to do.
+    if (row.queued_gate) this.setQueued(row.id, null);
     const announced = !!get(this.db, `SELECT 1 AS x FROM session_events WHERE project_id = ? AND session_id = ? AND kind = 'merged'`,
       row.project_id, row.id);
     if (row.desired === 'running' && (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy)) {

@@ -329,6 +329,52 @@ export function designApprovalBlocker(session: Session): string | null {
   return null;
 }
 
+/** A gate button: its label, why it's disabled (null when it isn't), and its tooltip. */
+export interface GateButton {
+  label: string;
+  reason: string | null;
+  title: string;
+}
+
+/** The Open PR gate in Code. Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the server's checks. */
+export function openPrGate(session: Session): GateButton {
+  const gate = (reason: string | null, title = 'Commit, push and open a pull request'): GateButton => ({ label: 'Open PR', reason, title: reason ?? title });
+  if (session.status === 'exited') return gate('Claude has exited. Resume the session first.');
+  if (!session.busy && (session.status === 'working' || session.status === 'starting' || session.midTurn)) {
+    return { label: 'Open PR after this turn', reason: null, title: 'AgentK is mid-turn: the PR prompt goes when the turn ends' };
+  }
+  if (session.status === 'needs_input') return gate('AgentK is waiting on you in the terminal. Answer it first.');
+  if (session.promptsHeld > 0) return gate('AgentK has prompts from you to take first. Open the PR once it has.');
+  return gate(null);
+}
+
+/** The Merge & Close gate in Review. With only blockers that clear by themselves left, a press queues the merge. */
+export function mergeGate(session: Session): GateButton {
+  if (session.canMerge) return { label: 'Merge & Close', reason: null, title: 'Merge the pull request, then remove the worktree and branch' };
+  const blockers = session.mergeBlockers.join('\n');
+  if (session.mergeQueueable) {
+    return { label: 'Merge when ready', reason: null, title: `Merge the pull request once nothing blocks it. Waiting on:\n${blockers}` };
+  }
+  const reason = blockers || 'Not ready to merge yet.';
+  return { label: 'Merge & Close', reason, title: reason };
+}
+
+/** What a queued merge waits on, from its first blocker, for the gate's pill. */
+const MERGE_WAITS: [string, string][] = [
+  ['CI is still running.', 'waiting on CI'],
+  ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
+  ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
+];
+
+/** The pill a queued gate shows in place of its button (`Session.queued`); null when nothing is queued. */
+export function queuedText(session: Session): string | null {
+  if (session.queued === 'open-pr') return '✓ Open PR queued: goes when the turn ends';
+  if (session.queued !== 'merge') return null;
+  const first = session.mergeBlockers[0];
+  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
+  return `✓ Merge queued: ${waits}`;
+}
+
 /** Why answers can't be sent for AgentK to revise the design right now, or null when they can. */
 export function designReviseBlocker(session: Session): string | null {
   if (session.approvalQueued) return 'You approved the design. Cancel the approval to send answers instead.';

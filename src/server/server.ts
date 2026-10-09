@@ -35,7 +35,7 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 /** A browser with this much unsent data skips state snapshots until it catches up. */
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 const ACTIONS: SessionAction[] = [
-  'approve-design', 'cancel-approval', 'open-pr', 'merge', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
+  'approve-design', 'cancel-approval', 'open-pr', 'merge', 'cancel-queued', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 

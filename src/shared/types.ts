@@ -129,6 +129,13 @@ export type ReviewState =
 export type CiState = 'none' | 'pending' | 'success' | 'failure';
 
 /**
+ * A gate pressed before it could go, kept until it can (`Session.queued`): Open PR pressed while
+ * AgentK was mid-turn goes when the turn ends; Merge & Close pressed while only blockers that clear
+ * by themselves were left goes once nothing blocks it.
+ */
+export type QueuedGate = 'open-pr' | 'merge';
+
+/**
  * Whose reviews Claude addresses: `all` (AgentK, people and other bots), `agentk-people`
  * (AgentK and people) or `people` (people only). Merge waits for AgentK only once it's
  * active on the PR, and never in `people`.
@@ -482,6 +489,14 @@ export interface Session {
   canMerge: boolean;
   /** Why Merge is disabled, in plain words. Empty when canMerge. */
   mergeBlockers: string[];
+  /**
+   * Merge & Close can be queued: it isn't mergeable yet, but every blocker clears by itself (AgentK
+   * working or waiting on you mid-turn, CI running, AgentK's review to come or its findings being
+   * addressed). The gate reads Merge when ready.
+   */
+  mergeQueueable: boolean;
+  /** A gate pressed early, waiting to go (kept in state.db across restarts); null when none. */
+  queued: QueuedGate | null;
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   /**
@@ -1352,8 +1367,12 @@ export type SessionAction =
   | 'approve-design'
   /** Withdraws an approval waiting for AgentK's turn to end (`Session.approvalQueued`). */
   | 'cancel-approval'
+  /** Sends the PR prompt, or mid-turn queues it for the turn's end (`Session.queued`). */
   | 'open-pr'
+  /** Merges now, or queues the merge when only blockers that clear by themselves are left (`Session.mergeQueueable`). */
   | 'merge'
+  /** Withdraws a queued Open PR or merge (`Session.queued`). */
+  | 'cancel-queued'
   | 'request-review'
   | 'force-review'
   | 'resume'
@@ -1485,7 +1504,11 @@ export type TermServerMessage =
 //        (Session.promptsHeld). Mid-turn (Session.midTurn), with the mod live, the approval is queued for the turn's
 //        end (Session.approvalQueued) and dropped if the turn changes the design; without the mod that's a 409. Once
 //        sent, every open question is resolved, with its answer or left to AgentK (reopened on a move back to Design).
-//        cancel-approval withdraws it: 409 when none is queued)
+//        cancel-approval withdraws it: 409 when none is queued. open-pr while AgentK is mid-turn or Claude is starting is
+//        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it.
+//        merge while the only blockers clear by themselves (Session.mergeQueueable) is queued and goes at the first poll
+//        that finds none; any other blocker is a 409, and one found between turns drops a queued merge (the user is
+//        notified). cancel-queued withdraws either: 409 when none is queued, or while the merge is being requested)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)

@@ -3,7 +3,7 @@ import { all, get, run, type Db } from './db.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, CiState, DatapackRef, Project, ProjectSettings, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, CiState, DatapackRef, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -107,6 +107,8 @@ export interface SessionRow {
   review_notes: string | null;
   /** The images added in the New session dialog that reached the session: a JSON list of paths. */
   start_images: string | null;
+  /** A gate pressed before it could go (Session.queued). */
+  queued_gate: QueuedGate | null;
   /**
    * A task started on a PR whose head is on another remote, or under another name, than origin's
    * branch of the session's name (a fork's PR): where its pushes go. NULL: origin.
@@ -199,6 +201,13 @@ export function dedicatedDatapack(db: Db, projectId: string): DatapackRef | null
   return projectDatapacks(db, projectId).find((d) => d.role === 'dedicated') ?? null;
 }
 
+/** Whether the Merge gate can be passed now, why not, and whether the merge can be queued (Session.mergeQueueable). */
+export interface MergeInfo {
+  canMerge: boolean;
+  blockers: string[];
+  queueable: boolean;
+}
+
 export interface SessionRuntime {
   usage: TokenUsage;
   startup: StartupState | null;
@@ -206,6 +215,7 @@ export interface SessionRuntime {
   diffStat: { added: number; removed: number } | null;
   canMerge: boolean;
   mergeBlockers: string[];
+  mergeQueueable: boolean;
   contextPercent: number | null;
   modLive: boolean;
   midTurn: boolean;
@@ -240,6 +250,8 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     agentkSeen: !!r.agentk_seen,
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
+    mergeQueueable: rt.mergeQueueable,
+    queued: r.queued_gate,
     busy: rt.busy,
     skippedStages: skippedStages(db, r),
     hasDesign: !!design,

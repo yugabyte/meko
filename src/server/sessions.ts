@@ -29,7 +29,7 @@ import { DESIGN_READY } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
-  type SessionRow, type SessionRuntime,
+  type MergeInfo, type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
@@ -191,7 +191,7 @@ const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<vo
 export class SessionManager {
   private busy = new Set<string>();
   private diffs = new Map<string, { added: number; removed: number } | null>();
-  private mergeInfo = new Map<string, { canMerge: boolean; blockers: string[] }>();
+  private mergeInfo = new Map<string, MergeInfo>();
   /** Sessions showing Claude's plan-approval dialog. */
   readonly planPending = new Set<string>();
   /** Sessions being launched right now; reconcile leaves them alone. */
@@ -265,6 +265,7 @@ export class SessionManager {
       diffStat: this.diffs.get(id) ?? null,
       canMerge: m?.canMerge ?? false,
       mergeBlockers: m?.blockers ?? [],
+      mergeQueueable: m?.queueable ?? false,
       contextPercent: this.contextFill.get(id) ?? null,
       modLive: this.modLive(id),
       midTurn: this.midTurn(id),
@@ -336,7 +337,7 @@ export class SessionManager {
     this.core.changed();
   }
 
-  setMergeInfo(id: string, info: { canMerge: boolean; blockers: string[] }): void {
+  setMergeInfo(id: string, info: MergeInfo): void {
     this.mergeInfo.set(id, info);
   }
 
@@ -1210,13 +1211,15 @@ export class SessionManager {
 
   /**
    * Claude's process ended or is being replaced: its mod link (prompts on their way fail with `why`,
-   * by default that Claude restarted), the prompts it held and an approval queued for its turn's
-   * end (`ended` says why in the activity log) go with it.
+   * by default that Claude restarted), the prompts it held, and an approval or Open PR queued for
+   * its turn's end (`ended` says why in the activity log) go with it.
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
     this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
+    // The turn a queued Open PR waited for is gone with it.
+    this.core.lifecycle.dropQueued(id, ended, 'open-pr');
   }
 
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
@@ -1588,6 +1591,7 @@ export class SessionManager {
     switch (action) {
       case 'approve-design': await lc.approveDesign(row, body); break;
       case 'cancel-approval': lc.cancelApproval(row); break;
+      case 'cancel-queued': lc.cancelQueued(row); break;
       case 'open-pr': await lc.openPr(row); break;
       case 'merge': await lc.merge(row); break;
       case 'request-review': await lc.requestReview(row, false); break;
@@ -1765,6 +1769,7 @@ export class SessionManager {
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
       this.forgetClaude(row.id, 'The session was archived');
+      this.core.lifecycle.dropQueued(row.id, 'The session was archived');
       this.contextFill.delete(row.id);
       // A kept branch is one that existed before the session (see Discard in action()).
       const kept = `branch ${row.branch} kept (it existed before the session)`;
