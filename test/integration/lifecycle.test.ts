@@ -411,7 +411,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     });
     const similarScopes: (string | undefined)[] = [];
     const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => {
-      similarScopes.push(mekoScope.getStore());
+      similarScopes.push(mekoScope.getStore()?.id);
       return query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : [];
     });
     Object.assign(env.meko, { similar });

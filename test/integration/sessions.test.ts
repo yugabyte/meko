@@ -13,6 +13,7 @@ import { transcriptPathFor } from '../../src/server/claude.js';
 import { socketId, startHookServer } from '../../src/server/hooks.js';
 import { MISSED_START_MS } from '../../src/server/sessions.js';
 import { stagedDir } from '../../src/server/pastes.js';
+import { mekoLogPath } from '../../src/server/mekolog.js';
 import type { CreateSessionRequest } from '../../src/shared/types.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
@@ -685,10 +686,13 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(get<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'images'", h.id)?.text)
       .toBe("An image you added wasn't on the host any more when the session started, so AgentK doesn't have it. Paste it into the terminal.");
 
-    // Closing the project removes what's still staged.
+    // Closing the project removes what's still staged, and its sessions' Meko call logs.
     env.core.sessions.stageImage(p.id, png);
+    const mekoLog = mekoLogPath(env.core.paths.designs, h.id);
+    writeFileSync(mekoLog, '{}\n');
     await env.core.projects.delete(p.id);
     expect(existsSync(stagedDir(pastes, p.id))).toBe(false);
+    expect(existsSync(mekoLog)).toBe(false);
   });
 
   it("keeps a start whose worktree can't be made as a failed start, until it's dismissed or started again", async () => {
@@ -704,9 +708,13 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     block('ak/no-base/x');
     const image = env.core.sessions.stageImage(p.id, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])).id;
     const { session, done } = await env.core.sessions.begin(p.id, { name: 'No base', prompt: 'the task', start: 'code', images: [image] });
+    const mekoLog = mekoLogPath(env.core.paths.designs, session.id);
+    mkdirSync(dirname(mekoLog), { recursive: true });
+    writeFileSync(mekoLog, '{}\n');
     await expect(done).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^Couldn't create the worktree: /) });
-    // Its images go with it; the request still names them, so Try again can say they weren't kept.
+    // Its images and Meko call log go with it; the request still names the images, so Try again can say they weren't kept.
     expect(existsSync(join(env.core.paths.pastes, session.id))).toBe(false);
+    expect(existsSync(mekoLog)).toBe(false);
     expect(env.core.state().projects[0].sessions.map((s) => s.id)).not.toContain(session.id);
     expect(get(env.core.db, 'SELECT path FROM worktrees WHERE session_id = ?', session.id)).toBeUndefined();
     expect(env.core.state().failedStarts).toEqual([{

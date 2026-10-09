@@ -218,7 +218,7 @@ export class Lifecycle {
     if (!parts.length) return;
     const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      await withMekoScope(row.id, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
+      await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
       // The version is used; it's the current design only if nothing changed while it was sent.
       run(this.db, p.sent, p.version, p.text, id);
     }));
@@ -1611,7 +1611,7 @@ export class Lifecycle {
         this.sessions.ingestUsage(row.id);
         const u = this.sessions.runtime(row.id).usage;
         const tokens = `Token usage: ${u.output} output, ${u.input} input, ${u.cacheWrite} cache write, ${u.cacheRead} cache read tokens over ${u.messages} responses.`;
-        await withMekoScope(row.id, () => this.core.meko.addMemory(
+        await withMekoScope(row, () => this.core.meko.addMemory(
           `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}. ${tokens}${body ? `\n\n${body}` : ''}`,
           dp.id, launchedAgentId(row), conv,
           { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },

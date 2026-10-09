@@ -897,21 +897,29 @@ AgentK makes for it, with what it sent and what came back, in
 (the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
 conversation (created and renamed), design uploads, the learn step's searches and writes, and the
 "Shipped in…" memory: the call sites wrap their work in `withMekoScope(session)`, an
-AsyncLocalStorage that `MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). Calls
+AsyncLocalStorage that `MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). The
+scope names the session's id and when that start of it was made: Try again reuses a failed start's
+id, and a call the failed start still had in flight is dropped rather than logged as the new
+start's. Calls
 that belong to no session (the project home's search and Datapacks box, sharing, the invite sync,
 Settings → Meko's checks) and Claude's own Meko calls (already in its transcript) aren't kept, nor
 are transcript capture runs (their failures go to `server.log`). Each line holds the tool, its
-args and its reply (parsed, or its text), the error, how long it took, the tries (2 when a read
-was sent again after a transport failure) and the learn step that made it. Nothing is cut and the
-file has no cap: it's deleted when the session is archived (and when its start fails). The API key
+args and its reply (parsed, or its text), the error, how long it took, the tries (2 when it was
+sent again after a transport failure: a read, or a write that surely never reached Meko) and the
+learn step that made it. The summary's keys come first, before `args`. Nothing is cut and the
+file has no cap: it's deleted when the session is archived, when its start fails and when the
+project is closed. A line a crash cut short is skipped when the file is read, and the next line
+written starts on a line of its own. The API key
 is never in it: it's only ever in a header. The file is the owner's alone (`0600`).
 
 **View calls**, beside the setting, opens the **Meko calls** page (`/p/<project>/meko`, or
 `/p/<project>/meko/<session>` from the session's ⋯ sheet or the command palette, both offered while
 the setting is on). It shows one session at a time (the one written to last unless one is named),
 newest first, 50 at a time with **Load older**, filtered by tool or **Failed only**. The server reads
-the file backwards from the end in 64 KB chunks (`GET /api/sessions/:id/meko-calls?before=`, the
-byte offset the page stopped at), so a big file stays quick; a call opens to **Sent** and **Got
+the file backwards from the end in 64 KB chunks, asynchronously so it never holds up other requests
+(`GET /api/sessions/:id/meko-calls?before=`, the byte offset the page stopped at), parsing only each
+line's summary. An unfiltered page reads only as far back as its own calls; a filter that matches
+few calls may read the whole file. A call opens to **Sent** and **Got
 back** by the offset its line starts at, checked against its id. **Copy call**, **Download** (the
 file) and **Clear** (deletes it) are there too. With the setting off, the page says so and offers
 **Turn on**.

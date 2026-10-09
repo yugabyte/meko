@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MEKO_LOG_TOOLS, type MekoCallDetail, type MekoCallSummary, type MekoLogInfo, type ProjectWithSessions } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
@@ -55,6 +55,8 @@ export function MekoCallsView({
   const [opened, setOpened] = useState<Record<string, Opened>>({});
   const [reload, setReload] = useState(0);
   const [turningOn, setTurningOn] = useState(false);
+  // Bumped whenever the list is loaded afresh: a Load older answer for a view that's gone is dropped.
+  const view = useRef(0);
   const logging = project.settings.mekoLog;
 
   useEffect(() => {
@@ -72,6 +74,7 @@ export function MekoCallsView({
   useEffect(() => {
     if (!sid) return;
     let gone = false;
+    view.current++;
     setLoading(true);
     setOpened({});
     api
@@ -92,15 +95,17 @@ export function MekoCallsView({
   const older = async () => {
     const last = calls?.at(-1);
     if (!sid || !last) return;
+    const asked = view.current;
     setLoading(true);
     try {
       const p = await api.mekoCalls(sid, { before: last.offset, tool, failed });
+      if (view.current !== asked) return;
       setCalls((c) => [...(c ?? []), ...p.calls]);
       setMore(p.more);
     } catch (e) {
-      onError(errorMessage(e));
+      if (view.current === asked) onError(errorMessage(e));
     } finally {
-      setLoading(false);
+      if (view.current === asked) setLoading(false);
     }
   };
 

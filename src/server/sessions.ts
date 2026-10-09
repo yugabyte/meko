@@ -1811,12 +1811,12 @@ export class SessionManager {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean }): MekoCallPage {
+  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean }): Promise<MekoCallPage> {
     return this.core.mekoLog.page(this.row(id).id, q);
   }
 
-  mekoCall(id: string, offset: number, callId: string): MekoCallDetail {
-    const d = this.core.mekoLog.detail(this.row(id).id, offset, callId);
+  async mekoCall(id: string, offset: number, callId: string): Promise<MekoCallDetail> {
+    const d = await this.core.mekoLog.detail(this.row(id).id, offset, callId);
     if (!d) throw new HttpError(404, 'That call is no longer in the session\'s Meko call log.');
     return d;
   }
@@ -2030,7 +2030,7 @@ export class SessionManager {
     if (!task || !this.sessionDatapacks(r.project_id).length) return;
     const pid = r.project_id;
     const cwd = sessionRepo(this.db, r) ?? r.worktree_path;
-    const work = withMekoScope(r.id, () => {
+    const work = withMekoScope(r, () => {
       this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
       return runRecall(r.name, task, {
         issue: (n) => issueText(cwd, n),
@@ -2079,7 +2079,7 @@ export class SessionManager {
     if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);
-      await withMekoScope(r.id, () =>
+      await withMekoScope(r, () =>
         this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id)));
     } catch (e) {
       this.core.log.warn(`renaming the Meko conversation for ${r.id} failed`, errMsg(e));
@@ -2093,7 +2093,7 @@ export class SessionManager {
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
-    return withMekoScope(r.id, () => this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title));
+    return withMekoScope(r, () => this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title));
   }
 
   // ---- token usage ----

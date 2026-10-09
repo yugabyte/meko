@@ -370,7 +370,7 @@ export class Learner {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      job.similar = await withMekoScope(row.id, () => mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
+      job.similar = await withMekoScope(row, () => mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
         this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => [])))));
     } catch (e) {
       if (this.jobs.has(job.id)) this.fail(job, 'search', `Meko couldn't be searched (${errMsg(e)})`);
@@ -395,7 +395,7 @@ export class Learner {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      await withMekoScope(row.id, () => mekoTag.run(job.id, async () => {
+      await withMekoScope(row, () => mekoTag.run(job.id, async () => {
         for (const [i, f] of job.facts.entries()) {
           if (!this.jobs.has(job.id)) return; // the time was up: the timer closed the step
           const d = decided.get(i + 1) ?? { action: 'add', id: null, text: null };

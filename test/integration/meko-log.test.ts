@@ -28,11 +28,18 @@ describe('Meko call log', () => {
   const call = (method: 'GET' | 'PATCH' | 'DELETE', url: string, payload?: unknown) =>
     app.inject({ method, url, headers: { cookie }, ...(payload !== undefined ? { payload: payload as object } : {}) });
 
-  /** A call AgentK made for the session, as MekoClient reports it. */
-  const traced = (sessionId: string, over: Partial<MekoTrace> = {}) => env.core.meko.onTrace!({
+  /** A call AgentK made for the session (this start of it, unless `createdAt` says otherwise), as MekoClient reports it. */
+  const traced = (sessionId: string, over: Partial<MekoTrace> = {}, createdAt = rowCreatedAt(sessionId)) => env.core.meko.onTrace!({
     tool: 'context_search', at: Date.now(), ms: 120, ok: true, attempts: 1, args: { query: 'q' },
-    text: '{"results":{"memory":[{"id":"m1","memory":"Gotcha: x."}]}}', error: null, tag: null, sessionId, ...over,
+    text: '{"results":{"memory":[{"id":"m1","memory":"Gotcha: x."}]}}', error: null, tag: null, session: { id: sessionId, createdAt }, ...over,
   });
+  const rowCreatedAt = (id: string) => {
+    try {
+      return env.core.sessions.row(id).created_at;
+    } catch {
+      return 0;
+    }
+  };
 
   async function session() {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
@@ -72,6 +79,8 @@ describe('Meko call log', () => {
     traced(s.id, { tag: 'L1' });
     traced(s.id, { tool: 'memory_add', ok: false, attempts: 2, args: { text: 'Gotcha: y.' }, text: '{"error":"agent_id required"}', error: 'agent_id required' });
     traced('another-session');
+    // A failed start's late call, under the id its Try again reused, isn't this start's.
+    traced(s.id, { tool: 'conversation_create' }, rowCreatedAt(s.id) - 1);
     const logs = (await call('GET', `/api/projects/${p.id}/meko-logs`)).json() as MekoLogInfo[];
     expect(logs).toEqual([{ sessionId: s.id, name: 'Fix it', bytes: expect.any(Number), updatedAt: expect.any(Number) }]);
 

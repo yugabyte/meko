@@ -40,7 +40,7 @@ export interface StubMekoCall {
 export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> = {}): MekoClient & { calls: StubMekoCall[] } {
   const calls: StubMekoCall[] = [];
   const rec = (name: string, ret: unknown) => async (...args: unknown[]) => {
-    calls.push({ name, args, scope: mekoScope.getStore() ?? null });
+    calls.push({ name, args, scope: mekoScope.getStore()?.id ?? null });
     return typeof ret === 'function' ? (ret as (...a: unknown[]) => unknown)(...args) : ret;
   };
   const base = {

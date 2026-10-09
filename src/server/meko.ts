@@ -68,12 +68,20 @@ export interface MekoCallRecord {
 /** Tags AgentK's Meko calls made inside `mekoTag.run(tag, fn)`, such as a learn step's. */
 export const mekoTag = new AsyncLocalStorage<string>();
 
-/** The session AgentK's Meko calls made inside `withMekoScope(sessionId, fn)` are for (its Meko call log). */
-export const mekoScope = new AsyncLocalStorage<string>();
+/**
+ * The session AgentK's Meko calls made inside `withMekoScope(row, fn)` are for (its Meko call log):
+ * its id, and when that start of it was made, since Try again reuses a failed start's id.
+ */
+export interface MekoScope {
+  id: string;
+  createdAt: number;
+}
+
+export const mekoScope = new AsyncLocalStorage<MekoScope>();
 
 /** Runs `fn` with its Meko calls (and those of the work it starts) counted as the session's. */
-export function withMekoScope<T>(sessionId: string, fn: () => T): T {
-  return mekoScope.run(sessionId, fn);
+export function withMekoScope<T>(session: { id: string; created_at: number }, fn: () => T): T {
+  return mekoScope.run({ id: session.id, createdAt: session.created_at }, fn);
 }
 
 /** One Meko call AgentK made, with its content, for a session's Meko call log (mekolog.ts). */
@@ -92,7 +100,7 @@ export interface MekoTrace {
   /** The learn step that made it (mekoTag), if any. */
   tag: string | null;
   /** The session it was made for (mekoScope), if any. */
-  sessionId: string | null;
+  session: MekoScope | null;
 }
 
 /** A memory like a given text, as `similar` finds them: what an update needs to name it. */
@@ -248,7 +256,7 @@ export class MekoClient {
         /* the record is best-effort */
       }
       try {
-        this.onTrace?.({ tool: name, at, ms, ok, attempts, args, text, error, tag, sessionId: mekoScope.getStore() ?? null });
+        this.onTrace?.({ tool: name, at, ms, ok, attempts, args, text, error, tag, session: mekoScope.getStore() ?? null });
       } catch {
         /* so is the trace */
       }

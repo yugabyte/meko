@@ -160,10 +160,11 @@ export class Core extends EventEmitter {
       r.at, r.tool, r.inputChars, r.resultChars, r.ok ? 1 : 0, r.ms, r.tag);
     this.mekoLog = new MekoCallLog({
       designs: this.paths.designs,
-      enabled: (id) => {
+      enabled: (s) => {
         if (this.stopped) return false;
-        const r = sessionRow(this.db, id);
-        const p = r && r.desired !== 'archived' ? projectRow(this.db, r.project_id) : undefined;
+        const r = sessionRow(this.db, s.id);
+        // Not a failed start's late calls landing in the log of the start that reused its id.
+        const p = r && r.created_at === s.createdAt && r.desired !== 'archived' ? projectRow(this.db, r.project_id) : undefined;
         return !!p && parseSettings(p.settings_json).mekoLog;
       },
       log: this.log,
