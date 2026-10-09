@@ -9,13 +9,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 1. Sessions and recovery
 
-- [ ] Nothing makes tmux or Claude a child of the server process or its service (systemd unit or
-      launchd job). Code that manages the services goes through `src/server/service.ts`.
+- [ ] Nothing makes the session host or Claude a child of the server process or its service (systemd
+      unit or launchd job). Code that manages the services goes through `src/server/service.ts`.
 - [ ] Server restarts and updates leave running sessions untouched.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
-- [ ] Nothing respawns a live pane, and a tmux error other than "no server" is never read as every
-      pane being gone.
+- [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
+      every pane being gone.
 - [ ] Creating a session answers once its row is in (`begin()`): only the checks that must fail in
       the New session dialog run before that, never a worktree checkout. A failure after the answer
       is a failed start or an exited session with its error, never silent.
@@ -47,7 +47,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mod pass `claude plugin validate` and
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
-- [ ] tmux commands work on tmux 2.7 (no `new-session -e`; window options via `set-window-option`).
+- [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
+      server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
+      updates). Nothing restarts the host by itself, and the program never waits on a viewer.
 - [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
       wherever one is published (Claude Code's installer script from claude.ai publishes none, so
@@ -162,7 +164,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
 - [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
-      (tmux names, lookups) is keyed by project id, not repo path, and git work on the repo only
+      (pane names, lookups) is keyed by project id, not repo path, and git work on the repo only
       touches the session's own branch. The exceptions are a repo's empty first commit (§3), and idle worktrees, which belong to the repo
       (keyed by its real path) and are shared by all its projects: a claim is one SQLite write, so
       two sessions never get the same worktree, and closing a project leaves idle worktrees another

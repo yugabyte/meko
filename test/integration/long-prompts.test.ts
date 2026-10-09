@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 
-describe('typed prompts (real tmux + git, fake claude)', () => {
+describe('typed prompts (real session host + git, fake claude)', () => {
   let env: TestEnv;
   afterEach(async () => {
     await env.cleanup();

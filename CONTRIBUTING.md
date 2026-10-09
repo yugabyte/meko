@@ -2,7 +2,7 @@
 
 ## Development setup
 
-Requirements: Linux or macOS, Node 22, tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, and Claude
+Requirements: Linux or macOS, Node 22, git, and Claude
 Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is required to create
 projects.
 
@@ -13,7 +13,7 @@ nvm use 22                      # .nvmrc pins the major version
 # is too old; use gcc-toolset-13:
 export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc
 export CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
-# On macOS, skip the exports: `xcode-select --install` and `brew install tmux gh` are enough.
+# On macOS, skip the exports: `xcode-select --install` and `brew install gh` are enough.
 npm ci                          # also makes node-pty's macOS spawn-helper executable (scripts/postinstall.mjs)
 
 npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0.1:5173
@@ -21,9 +21,10 @@ npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0
 
 Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
 access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
-use another folder), so it never opens an installed AgentK Local's database or hook socket. It
-still uses the default tmux socket (`agentk`) unless you set `[tmux] socket` in
-`.dev-home/config.toml`, and port 7777 is taken if an installed server is running there.
+use another folder), so it never opens an installed AgentK Local's database, hook socket or session
+host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
+restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
+an installed server is running there.
 
 Local state uses Node's built-in `node:sqlite`, which prints an experimental warning on Node 22.
 The release wrapper runs Node with `--disable-warning=ExperimentalWarning`.
@@ -35,7 +36,7 @@ npm run typecheck
 npm run lint
 npm test                        # unit + integration
 npm run test:unit
-npm run test:integration        # needs tmux and git; uses a stub `claude`
+npm run test:integration        # needs git; uses a stub `claude` (tmux only for the move-off-tmux tests)
 ```
 
 CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`).
@@ -136,7 +137,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
   | sh -s -- --version 0.2.0 --non-interactive --repos-root ~/code
 ```
 
-Before anything else, the installer checks for tmux, git, curl, gh and Claude Code and offers to
+Before anything else, the installer checks for git, curl, gh and Claude Code and offers to
 install the missing ones (and `agent-k-local install` offers Meko's own setup for Claude Code),
 showing the commands and asking first (`--install-deps` to skip the question,
 `--no-install-deps` to never install, `--deps-only` to stop after that step). Where AgentK Local
@@ -148,6 +149,6 @@ and both services enabled or loaded), it says so and stops before any of that, u
 
 The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current` at it, links
 `~/.local/bin/agent-k-local`, and runs `agent-k-local install`, which writes `config.toml`,
-checks Meko, installs the two background services (the `agent-k-local` and `agent-k-local-tmux`
-systemd user units on Linux; the `com.yugabyte.agent-k-local` and `com.yugabyte.agent-k-local.tmux`
+checks Meko, installs the two background services (the `agent-k-local` and `agent-k-local-host`
+systemd user units on Linux; the `com.yugabyte.agent-k-local` and `com.yugabyte.agent-k-local.host`
 LaunchAgents on macOS), and prints the address, or for remote access the one-time setup link.

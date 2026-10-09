@@ -347,7 +347,6 @@ export interface CallHomeInstall {
   arch: string;
   node: string;
   /** The version number only, or '' when it can't be read. */
-  tmux: string;
   claudeCode: string;
   access: 'local' | 'remote';
   service: 'systemd' | 'launchd' | 'none';
@@ -536,7 +535,8 @@ export interface Session {
   /** The repo the session works in (the project's unless another one was picked). */
   repoPath: string;
   worktreePath: string;
-  tmuxName: string;
+  /** The session's pane in the session host (`agent-k-local attach <paneName>`). */
+  paneName: string;
   desired: 'running' | 'archived';
   status: SessionStatus;
   /** Human-readable detail for the status, e.g. the Notification message. */
@@ -695,6 +695,16 @@ export interface AppState {
   failedStarts: FailedStart[];
   /** The Claude Code sessions launch with, and whether it runs AgentK's mod. */
   claudeCode: ClaudeCodeStatus;
+  /** The session host that runs every Claude, as it last answered. */
+  sessionHost: SessionHostStatus;
+}
+
+/** The session host (`agent-k-local host`). It keeps running across updates, so it can be older than the server. */
+export interface SessionHostStatus {
+  /** Its version, or null before it first answered. */
+  version: string | null;
+  /** Too old for this server: it has to be restarted (`agent-k-local host restart`), which restarts and resumes every session. */
+  outdated: boolean;
 }
 
 /**
@@ -1476,10 +1486,10 @@ export interface TotpEnrollResponse {
 // change or reset); the client should show the login screen rather than reconnect. The
 // server pings every 30 s and drops sockets that don't answer.
 //
-// /ws/term/:sessionId[?cols=&rows=]: the optional query is the browser terminal's size, used
-// to start the tmux client at that size. Client → server JSON TermClientMessage (text frames).
-// server → client: binary frames are raw terminal output; text frames are
-// JSON TermServerMessage.
+// /ws/term/:sessionId[?cols=&rows=]: the optional query is the browser terminal's size; the
+// pane takes it, as its newest viewer's. Client → server JSON TermClientMessage (text frames).
+// server → client: binary frames are raw terminal output (the screen as it is first, then
+// what follows); text frames are JSON TermServerMessage.
 
 export type ServerEvent =
   | { type: 'state'; state: AppState }
@@ -1493,10 +1503,18 @@ export type EventsClientMessage = { type: 'ping' };
 
 export type TermClientMessage =
   | { type: 'input'; data: string }
-  | { type: 'resize'; cols: number; rows: number };
+  /** This terminal's size. The pane takes it while this viewer is the active one. */
+  | { type: 'resize'; cols: number; rows: number }
+  /** The terminal was used (focused, typed in): it becomes the active viewer and the pane takes its size. */
+  | { type: 'active' };
 
 export type TermServerMessage =
   | { type: 'exit'; reason: string }
+  /**
+   * The pane's size, sent on attach and when it changes. `active`: this viewer sets it; any other
+   * viewer shows the pane at this size until it's used.
+   */
+  | { type: 'size'; cols: number; rows: number; active: boolean }
   /** `retry`: the failure may pass (the attach couldn't start), so reconnect with backoff; otherwise it's final. */
   | { type: 'error'; error: string; retry?: boolean };
 

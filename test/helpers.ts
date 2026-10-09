@@ -11,7 +11,8 @@ import { pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import { getPaths } from '../src/server/paths.js';
-import { Tmux } from '../src/server/tmux.js';
+import { startHost, type HostHandle } from '../src/server/host/host.js';
+import { SessionHost } from '../src/server/hostclient.js';
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 export const FAKE_CAPTURE = fileURLToPath(new URL('./fixtures/fake-capture.mjs', import.meta.url));
@@ -143,7 +144,10 @@ export interface TestEnv {
   mekoApi: ReturnType<typeof fakeMekoApi>;
   mekoTools: ReturnType<typeof stubMekoTools>;
   fakeDir: string;
+  /** The tmux socket name this env's server would move sessions off (legacytmux.ts). */
   socket: string;
+  /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
+  killHost(): Promise<void>;
   cleanup(): Promise<void>;
 }
 
@@ -183,33 +187,40 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   process.env.CLAUDE_CONFIG_DIR = join(home, 'claude-config');
   const paths = getPaths(join(home, 'ak'));
   const socket = `akl-test-${process.pid}-${seq++}`;
-  // The Tmux below never uses this host's background services (it gets no service manager).
+  // The session host runs in this process, and never through this machine's background services.
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
   // A network bind, as on a remote-access install: a loopback one skips the login (localAccess).
   cfg.server.bind = '0.0.0.0';
   cfg.repos.roots = [join(home, 'code')];
   cfg.repos.cloneInto = join(home, 'code');
-  cfg.tmux.socket = socket;
   cfg.claude.command = FAKE_CLAUDE;
   cfg.meko.apiKey = 'test-key';
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();
   const mekoTools = stubMekoTools();
+  let hostHandle: HostHandle | null = null;
+  const host = new SessionHost(paths, {
+    services: () => null,
+    start: async () => {
+      hostHandle ??= await startHost({ paths, version: '0.0.0-test' });
+    },
+  });
+  const killHost = async () => {
+    const h = hostHandle;
+    hostHandle = null;
+    await h?.close();
+  };
   const core = new Core({
     paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
-    tmux: new Tmux(socket, paths.tmuxConf, 'tmux', () => null), log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
+    host, services: () => null, legacyTmuxSocket: socket, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, fakeDir, socket,
+    home, repo, core, meko, mekoApi, mekoTools, fakeDir, socket, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
-      try {
-        execFileSync('tmux', ['-L', socket, 'kill-server'], { stdio: 'ignore' });
-      } catch {
-        /* not running */
-      }
+      await killHost();
       db.close();
       // core.stop() waited for the transcript captures that write into fakeDir; the retries cover
       // any other late writer (removing a folder while something writes into it fails with ENOTEMPTY).

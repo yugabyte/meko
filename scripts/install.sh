@@ -7,7 +7,7 @@
 #
 # Options (pass through `sh -s -- ...` when piping):
 #   --version <X.Y.Z>   install a specific version instead of the latest
-#   --install-deps      install missing tools (tmux, git, curl, gh, Claude Code, and Meko's
+#   --install-deps      install missing tools (git, curl, gh, Claude Code, and Meko's
 #                       Claude Code setup) without asking
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
@@ -80,7 +80,6 @@ case $(uname -s) in
       aarch64|arm64) arch=arm64 ;;
       *) die "unsupported CPU architecture: $(uname -m)" ;;
     esac
-    tmux_min="2 7"
     missing_hint=""
     ;;
   Darwin)
@@ -88,8 +87,6 @@ case $(uname -s) in
     # uname -m says x86_64 in a shell running under Rosetta; ask the hardware.
     [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || die "only Apple Silicon Macs are supported (this Mac has an Intel CPU)"
     arch=arm64
-    # The launchd service runs tmux in the foreground (tmux -D), which needs 3.2.
-    tmux_min="3 2"
     missing_hint=" Releases from before macOS support have no macOS build."
     # Homebrew's tools may not be on PATH yet in a fresh shell. (AK_BREW_DIRS is for tests.)
     for brew_dir in ${AK_BREW_DIRS-/opt/homebrew/bin /usr/local/bin}; do
@@ -118,16 +115,19 @@ short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
 # ---- already installed ----
 # Set up all the way: a release linked as app/current and as ~/.local/bin/agent-k-local, a
 # config.toml, and both background services, the last step of `agent-k-local install` (which
-# `agent-k-local uninstall` removes). Anything less, like an install that failed at its services
+# `agent-k-local uninstall` removes). Versions before the session host had a tmux service in its
+# place; their server adds the host service once it updates itself. Anything less, like an install that failed at its services
 # or one made with --no-service, goes on to install again. So do options for `agent-k-local
 # install`: they'd be dropped otherwise.
 services_set_up() {
   if [ "$platform" = darwin ]; then
     launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local" >/dev/null 2>&1 &&
-      launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.tmux" >/dev/null 2>&1
+      { launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.host" >/dev/null 2>&1 ||
+        launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.tmux" >/dev/null 2>&1; }
   else
     systemctl --user is-enabled agent-k-local.service >/dev/null 2>&1 &&
-      systemctl --user is-enabled agent-k-local-tmux.service >/dev/null 2>&1
+      { systemctl --user is-enabled agent-k-local-host.service >/dev/null 2>&1 ||
+        systemctl --user is-enabled agent-k-local-tmux.service >/dev/null 2>&1; }
   fi
 }
 if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/bin/agent-k-local" ] &&
@@ -161,19 +161,6 @@ else
   die "sha256sum (coreutils) or shasum is required but neither was found on PATH."
 fi
 
-# shellcheck disable=SC2086 # intentional split into major/minor
-set -- $tmux_min
-min_major=$1 min_minor=$2
-# The installed tmux's "major minor", or nothing when there's none (or it can't be read).
-tmux_version() {
-  command -v tmux >/dev/null 2>&1 || return 0
-  tmux -V 2>/dev/null | sed -n 's/^tmux [^0-9]*\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p'
-}
-tmux_new_enough() {
-  # shellcheck disable=SC2046 # intentional split into major/minor
-  set -- $(tmux_version)
-  [ $# -eq 2 ] && { [ "$1" -gt "$min_major" ] || { [ "$1" -eq "$min_major" ] && [ "$2" -ge "$min_minor" ]; }; }
-}
 git_ok() {
   command -v git >/dev/null 2>&1 || return 1
   # macOS ships a git that only asks to install the Command Line Tools.
@@ -182,13 +169,8 @@ git_ok() {
 
 # What's missing, and the plan to install it: `plan` is shown to the user, `pkgs` goes to the
 # package manager, `gh_download` fetches gh from its GitHub release (Linux).
-missing="" pkgs="" plan="" gh_download=false tmux_upgrade=false claude_install=false
+missing="" pkgs="" plan="" gh_download=false claude_install=false
 add_missing() { missing="${missing:+$missing, }$1"; }
-if ! tmux_new_enough; then
-  if [ -n "$(tmux_version)" ]; then add_missing "tmux $min_major.$min_minor+ (found $(tmux_version | tr ' ' .))"; tmux_upgrade=true
-  else add_missing tmux; fi
-  pkgs="$pkgs tmux"
-fi
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
 gh_skipped=false
@@ -207,15 +189,9 @@ sudo=""
 if [ "$platform" = darwin ]; then
   if [ -n "$pkgs" ]; then
     command -v brew >/dev/null 2>&1 ||
-      die "missing: $missing. Install Homebrew (https://brew.sh), then run this installer again; or install them yourself (tmux $min_major.$min_minor or newer)."
-    brew_new="" brew_old=""
-    for p in $pkgs; do
-      if [ "$p" = tmux ] && $tmux_upgrade && brew list tmux >/dev/null 2>&1; then brew_old="$brew_old $p"; else brew_new="$brew_new $p"; fi
-    done
-    [ -n "$brew_new" ] && plan="$plan
-      brew install$brew_new"
-    [ -n "$brew_old" ] && plan="$plan
-      brew upgrade$brew_old"
+      die "missing: $missing. Install Homebrew (https://brew.sh), then run this installer again; or install them yourself."
+    plan="$plan
+      brew install$pkgs"
   fi
 else
   if [ -n "$pkgs" ]; then
@@ -242,7 +218,7 @@ else
       ${s}pacman -S --needed --noconfirm$pkgs" ;;
       apk) plan="$plan
       ${s}apk add$pkgs" ;;
-      *) die "missing: $missing, and no supported package manager (apt-get, dnf, yum, zypper, pacman, apk) was found. Install them yourself (tmux $min_major.$min_minor or newer) and run this installer again." ;;
+      *) die "missing: $missing, and no supported package manager (apt-get, dnf, yum, zypper, pacman, apk) was found. Install them yourself and run this installer again." ;;
     esac
     [ "$sudo" = "(as root)" ] &&
       die "missing: $missing. Installing them needs root, and sudo isn't available. As root, run:$plan"
@@ -257,11 +233,9 @@ $claude_install && plan="$plan
 install_system_pkgs() {
   # shellcheck disable=SC2086 # intentional word splitting of package lists
   if [ "$platform" = darwin ]; then
-    # Both run even if the first fails: it may have installed its tools anyway (see below).
-    brew_rc=0
-    if [ -n "$brew_new" ]; then brew install $brew_new </dev/null || brew_rc=1; fi
-    if [ -n "$brew_old" ]; then brew upgrade $brew_old </dev/null || brew_rc=1; fi
-    return $brew_rc
+    # It may have installed its tools even when it fails (see below).
+    brew install $pkgs </dev/null
+    return
   fi
   # shellcheck disable=SC2086 # intentional word splitting of the sudo prefix and package list
   case $pm in
@@ -273,11 +247,10 @@ install_system_pkgs() {
   esac </dev/null
 }
 
-# The first tool in $pkgs that still isn't there (or is too old), if any.
+# The first tool in $pkgs that still isn't there, if any.
 first_missing() {
   for p in $pkgs; do
     case $p in
-      tmux) tmux_new_enough ;;
       git) git_ok ;;
       *) command -v "$p" >/dev/null 2>&1 ;;
     esac || { echo "$p"; return 0; }
@@ -331,20 +304,14 @@ if [ -n "$plan" ]; then
     hash -r 2>/dev/null || true
     # Check the result, not the package manager's word for it: Homebrew can exit with an error
     # after installing what it was asked for (on a macOS it no longer builds bottles for, it
-    # builds from source, and a dependency's step can fail without stopping tmux).
+    # builds from source, and a dependency's step can fail without stopping the tool asked for).
     bad=$(first_missing)
     if [ -n "$bad" ]; then
-      advice=""
-      case $bad in
-        tmux) problem="tmux $min_major.$min_minor or newer is still not on PATH (found: $(tmux_version | tr ' ' . || true))."
-          advice=" Your package manager's tmux may be too old; install a newer one yourself." ;;
-        *) problem="$bad is still not available after installing it." ;;
-      esac
+      problem="$bad is still not available after installing it."
       if $brew_failed; then
-        case " $brew_old " in *" $bad "*) by_hand="brew upgrade $bad" ;; *) by_hand="brew install $bad" ;; esac
-        die "brew failed (see the output above: its error can be well before its last lines). $problem Run '$by_hand' yourself to see what went wrong, then run this installer again."
+        die "brew failed (see the output above: its error can be well before its last lines). $problem Run 'brew install $bad' yourself to see what went wrong, then run this installer again."
       fi
-      die "$problem$advice"
+      die "$problem"
     fi
     $brew_failed && warn "brew" "exited with an error, but$pkgs work: going on"
   fi
@@ -388,9 +355,8 @@ elif ! gh auth status >/dev/null 2>&1; then
   fi
 fi
 
-tmux_ver=$(tmux_version)
 if $deps_only; then
-  ok "Tools" "tmux $(printf '%s' "$tmux_ver" | tr ' ' .), git, curl, gh, Claude Code"
+  ok "Tools" "git, curl, gh, Claude Code"
   exit 0
 fi
 
@@ -398,7 +364,7 @@ have_gh=false
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then have_gh=true; fi
 
 say "${b}Download${n}"
-ok "Prerequisites" "tmux $(printf '%s' "$tmux_ver" | tr ' ' .), git, curl, gh, Claude Code"
+ok "Prerequisites" "git, curl, gh, Claude Code"
 
 # ---- resolve version ----
 if [ -z "$version" ]; then

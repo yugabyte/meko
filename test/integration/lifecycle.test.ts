@@ -6,7 +6,7 @@ import type { PrStatus } from '../../src/server/github.js';
 import { sessionAgentId } from '../../src/server/meko.js';
 import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 
-// GitHub is mocked; git, tmux and the (fake) claude process are real.
+// GitHub is mocked; git, the session host and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
   pr: null as null | { number: number; url: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; createdAt?: string; baseRefName?: string },
   status: null as null | PrStatus,
@@ -478,7 +478,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it("says to resume Claude when asked to save learnings after it exited", async () => {
     const s = await inReview('Exited');
-    await env.core.tmux.submit(env.core.sessions.row(s.id).tmux_name, 'exit');
+    await env.core.host.submit(env.core.sessions.row(s.id).tmux_name, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -638,7 +638,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it('discards a session whose Claude is gone, the learn step recorded as skipped', async () => {
     const s = await inReview('Discard exited');
-    await env.core.tmux.submit(env.core.sessions.row(s.id).tmux_name, 'exit');
+    await env.core.host.submit(env.core.sessions.row(s.id).tmux_name, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -723,9 +723,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it('stays in Code when the PR prompt could not be typed', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Flaky tmux', prompt: 'do it', kind: 'quick' });
+    const s = await env.core.sessions.create(p.id, { name: 'Flaky host', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
-    vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 502 });
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', busy: false });
   });
@@ -735,7 +735,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack });
     const s = await env.core.sessions.create(p.id, { name: 'Footer', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
-    const submit = vi.spyOn(env.core.tmux, 'submit');
+    const submit = vi.spyOn(env.core.host, 'submit');
     await env.core.sessions.action(s.id, 'open-pr');
     const text = String(submit.mock.calls.find((c) => String(c[1]).startsWith('Open a pull request'))?.[1]);
     return { text, row: env.core.sessions.row(s.id) };
@@ -765,7 +765,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Slow Meko', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
     env.meko.ensureConversation = () => new Promise<string>((r) => (answer = r));
-    const submit = vi.spyOn(env.core.tmux, 'submit');
+    const submit = vi.spyOn(env.core.host, 'submit');
     const opening = env.core.sessions.action(s.id, 'open-pr');
     await waitFor(() => answer, (a) => a !== null, 5000, 'the Meko lookup');
     env.core.sessions.update(s.id, { status: 'needs_input' });
@@ -1119,7 +1119,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it('queues Open PR while Claude is working, and sends it when the turn ends', async () => {
     const s = await working('Busy');
-    const submit = vi.spyOn(env.core.tmux, 'submit');
+    const submit = vi.spyOn(env.core.host, 'submit');
     await env.core.sessions.action(s.id, 'open-pr');
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', queued: 'open-pr' });
     expect(lastEvent(s.id, 'queued')).toBe('Open PR queued: it goes when AgentK finishes its turn');

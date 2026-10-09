@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import type { Server as NetServer } from 'node:net';
 import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -69,16 +70,6 @@ export function startHookServer(
   onContext: (token: string, payload: HookPayload) => Promise<HookContext> = async () => null,
   onMod: (token: string, route: string, body: Record<string, unknown>, signal: AbortSignal) => Promise<ModReply> = async () => ({ status: 404 }),
 ): Promise<Server> {
-  const dir = dirname(sockPath);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const st = lstatSync(dir);
-  if (!st.isDirectory() || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
-    throw new Error(`${dir} is not a directory owned by this user; refusing to put the hook socket there.`);
-  }
-  if (st.mode & 0o077) chmodSync(dir, 0o700);
-  // No longer than the socket's own name, so it fits the same path length limit (see paths.ts).
-  const bound = join(dir, `.h${randomBytes(3).toString('hex')}`);
-  rmSync(bound, { force: true });
   const server = createServer((req, res) => {
     if (req.method !== 'POST' || ![...MOD_ROUTES, '/hook', '/guard', '/statusline', '/context'].includes(req.url ?? '')) {
       res.writeHead(404).end();
@@ -149,6 +140,26 @@ export function startHookServer(
       }
     });
   });
+  return listenPrivate(server, sockPath, 'the hook socket').then(() => server);
+}
+
+/**
+ * Listens on a unix socket only this user can reach: its directory is owner-only, the socket
+ * mode 0600. It binds under a temporary name and renames into place, because closing a server
+ * unlinks the path it was bound to: this way closing never removes a socket file another server
+ * put at `sockPath` since. Used for the hook socket and the session host's.
+ */
+export function listenPrivate(server: NetServer, sockPath: string, what: string): Promise<void> {
+  const dir = dirname(sockPath);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
+    return Promise.reject(new Error(`${dir} is not a directory owned by this user; refusing to put ${what} there.`));
+  }
+  if (st.mode & 0o077) chmodSync(dir, 0o700);
+  // No longer than the socket's own name, so it fits the same path length limit (see paths.ts).
+  const bound = join(dir, `.h${randomBytes(3).toString('hex')}`);
+  rmSync(bound, { force: true });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(bound, () => {
@@ -160,7 +171,8 @@ export function startHookServer(
         reject(e instanceof Error ? e : new Error(String(e)));
         return;
       }
-      resolve(server);
+      server.off('error', reject);
+      resolve();
     });
   });
 }

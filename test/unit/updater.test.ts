@@ -27,6 +27,7 @@ import {
   uncountStart,
   Updater,
   verifySha256,
+  hostVersionDir,
   versionsToPrune,
   type Release,
   type ReleaseSource,
@@ -93,6 +94,20 @@ describe('removing old versions', () => {
   it('never removes the running version under either of its names', () => {
     expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.11-ctrl');
     expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.10');
+  });
+});
+
+describe('hostVersionDir', () => {
+  it('names the version a running session host started from, so pruning keeps it', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-hostver-')));
+    expect(hostVersionDir(paths)).toBeNull();
+    mkdirSync(join(paths.home, 'run'), { recursive: true });
+    writeFileSync(paths.hostState, JSON.stringify({ pid: process.pid, version: '0.1.2', appDir: join(paths.home, 'app', '0.1.2') }));
+    expect(hostVersionDir(paths)).toBe('0.1.2');
+    // A host that is gone keeps nothing.
+    writeFileSync(paths.hostState, JSON.stringify({ pid: 2 ** 22 + 12345, version: '0.1.2', appDir: join(paths.home, 'app', '0.1.2') }));
+    expect(hostVersionDir(paths)).toBeNull();
+    rmSync(paths.home, { recursive: true, force: true });
   });
 });
 

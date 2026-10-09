@@ -28,7 +28,7 @@ function fakeFiles(env: TestEnv, files: Record<string, string>): void {
   for (const [f, text] of Object.entries(files)) writeFileSync(join(env.fakeDir, f), text);
 }
 
-describe("AgentK's mod in Claude (real tmux + git, fake claude)", () => {
+describe("AgentK's mod in Claude (real session host + git, fake claude)", () => {
   let env: TestEnv;
   afterEach(async () => {
     await env.cleanup();
@@ -135,7 +135,7 @@ describe("AgentK's mod in Claude (real tmux + git, fake claude)", () => {
     const s = await session();
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
     const reset = vi.spyOn(env.core.sessions.mod, 'reset');
-    await env.core.tmux.kill(env.core.sessions.row(s.id).tmux_name);
+    await env.core.host.kill(env.core.sessions.row(s.id).tmux_name);
     await env.core.sessions.reconcile();
     await waitFor(() => launches(env).length, (n) => n === 2, 10000, 'the relaunch');
     expect(reset.mock.calls.map(([id]) => id)).toContain(s.id);

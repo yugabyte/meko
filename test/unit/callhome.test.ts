@@ -93,7 +93,7 @@ const NOW = Date.parse('2026-09-28T12:00:00Z');
 const at = (iso: string) => Date.parse(iso);
 
 const INSTALL: CallHomeInstall = {
-  version: '0.20260928.0', channel: 'stable', platform: 'linux', arch: 'x64', node: '22.18.0', tmux: '3.2a', claudeCode: '2.4.1',
+  version: '0.20260928.0', channel: 'stable', platform: 'linux', arch: 'x64', node: '22.18.0', claudeCode: '2.4.1',
   access: 'remote', service: 'none', meko: { enabled: true, keySource: 'claude', sharing: 'api' }, firstDay: '2026-07-02',
 };
 const INSTALL_ID = '5f0c7a8e-3b1d-4c2e-9f6a-1b2c3d4e5f60';
@@ -517,15 +517,15 @@ describe('what the report says about the install', () => {
     return a;
   };
 
-  it('reads the tmux and Claude Code versions, and Meko and access from the config', async () => {
+  it('reads the Claude Code version, and Meko and access from the config', async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.server.bind = '127.0.0.1';
     cfg.meko.apiKey = 'key';
     cfg.update.channel = 'prerelease';
-    const facts = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ tmux: 'tmux 3.2a\n', claude: '2.4.1 (Claude Code)\n' }) });
+    const facts = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n' }) });
     expect(facts).toMatchObject({
       version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
-      tmux: '3.2a', claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
+      claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
     });
     // A self-hosted Meko with no web app or API URL set: AgentK can't share.
     cfg.meko.url = 'https://meko.example.com/mcp';
@@ -549,8 +549,9 @@ describe('what the report says about the install', () => {
 
   it('leaves out versions it cannot read, and Meko details when Meko is off', async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
-    const facts = await installFacts({ config: cfg, version: 'not a version!', firstDay: '2026-09-28', probe: probe({ tmux: new Error('ENOENT'), claude: 'no digits here' }) });
-    expect(facts).toMatchObject({ version: '0.0.0', tmux: '', claudeCode: '', access: 'remote', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
+    const facts = await installFacts({ config: cfg, version: 'not a version!', firstDay: '2026-09-28', probe: probe({ claude: 'no digits here' }) });
+    expect(facts).not.toHaveProperty('tmux');
+    expect(facts).toMatchObject({ version: '0.0.0', claudeCode: '', access: 'remote', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
   });
 
   it('reads the collector URL a release build carries', () => {

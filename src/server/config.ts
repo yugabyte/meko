@@ -22,7 +22,6 @@ export interface Config {
    */
   meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
   state: { dbPath: string };
-  tmux: { socket: string };
   /**
    * command: how Claude Code is run. mod: load AgentK's mod into sessions (Claude Code 2.1.287 or
    * later), which takes AgentK's prompts and reports the context fill; off, prompts are typed into
@@ -56,7 +55,6 @@ export const DEFAULT_CONFIG: Config = {
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
   meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: true },
   state: { dbPath: '' },
-  tmux: { socket: 'agentk' },
   claude: { command: 'claude', mod: true },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '' },
