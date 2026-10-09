@@ -91,21 +91,26 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
     setError(null);
     const descTrim = description.trim();
     const initialDescTrim = initialDescription.trim();
-      const dirty =
+    const dirty =
       (!isDefaultDatapack && trimmedName !== initialName) || descTrim !== initialDescTrim;
     const optOutDirty = conversationSearchOptOut !== initialConversationSearchOptOut;
     try {
       if (dirty) {
-        await updateDatapack(datapackId, {
-          name: trimmedName,
-          description: description,
-        }, {});
+        await updateDatapack(
+          datapackId,
+          {
+            name: trimmedName,
+            description: description,
+          },
+          {},
+        );
         setCachedDatapackName(datapackId, trimmedName);
         toast({
           title: "Datapack updated",
-          description: trimmedName !== initialName
-            ? `Renamed to "${trimmedName}" successfully.`
-            : "Description updated successfully.",
+          description:
+            trimmedName !== initialName
+              ? `Renamed to "${trimmedName}" successfully.`
+              : "Description updated successfully.",
         });
       }
       // Separate request: a different endpoint, gated owner-or-maintainer
@@ -113,7 +118,9 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
       if (optOutDirty) {
         await setConversationSearchOptOut(datapackId, conversationSearchOptOut, {});
         toast({
-          title: conversationSearchOptOut ? "Conversation search disabled" : "Conversation search enabled",
+          title: conversationSearchOptOut
+            ? "Conversation search disabled"
+            : "Conversation search enabled",
         });
       }
       navigate(datapackDetailPath(datapackId), { replace: true });
@@ -162,7 +169,9 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
           {isDefaultDatapack ? (
             <div className="flex items-start gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              <span>The default datapack cannot be renamed. You can still update its description.</span>
+              <span>
+                The default datapack cannot be renamed. You can still update its description.
+              </span>
             </div>
           ) : null}
 
@@ -182,7 +191,8 @@ export default function DatapackEditPage({ datapackId, currentUser }: Props) {
               <Label htmlFor="datapack-edit-page-conversation-search">Conversation search</Label>
               <p className="text-xs text-muted-foreground">
                 Cache substantive conversation turns so future searches can reuse them. Turning this
-                off only stops future turns from being indexed — turns already cached are unaffected.
+                off only stops future turns from being indexed — turns already cached are
+                unaffected.
               </p>
             </div>
             <Switch

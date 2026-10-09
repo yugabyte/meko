@@ -36,8 +36,7 @@ export const dataBranchingMessages = {
 
   // Extensions
   extensionsTitle: (branch: string) => `Extensions — ${branch}`,
-  extensionsDescription:
-    "Externalized extensions mounted on every compute on this branch.",
+  extensionsDescription: "Externalized extensions mounted on every compute on this branch.",
   extensionsRedeployWarning:
     "Adding extensions redeploys every compute on this branch and drops their connections. Extensions can't be removed once added.",
   extensionsAdded: (names: string) => `Adding ${names} — redeploying this branch's compute.`,
@@ -78,8 +77,7 @@ export const dataBranchingMessages = {
     `Give ${key} a value under ${label}, or remove the row — a setting with no value stops the compute from starting.`,
   settingsDuplicateKey: (label: string, key: string) =>
     `${key} appears twice under ${label}. Edit the existing row instead of adding a second one.`,
-  settingsInvalidValue: (label: string, key: string) =>
-    `${key} under ${label} needs a number.`,
+  settingsInvalidValue: (label: string, key: string) => `${key} under ${label} needs a number.`,
 
   // Unprovision (delete compute)
   unprovisionTitle: (role: string) => `Unprovision ${role} compute?`,
@@ -108,8 +106,7 @@ export const dataBranchingMessages = {
   deleteClusterTitle: (name: string) => `Delete cluster "${name}"?`,
   deleteClusterConfirm: (name: string) =>
     `This permanently deletes "${name}" and everything in it — every branch, all compute, and all data. This cascade can't be undone.`,
-  deleteClusterConfirmPrompt: (name: string) =>
-    `Type the cluster name (${name}) to confirm.`,
+  deleteClusterConfirmPrompt: (name: string) => `Type the cluster name (${name}) to confirm.`,
   deleteClusterSuccess: (name: string) => `Cluster "${name}" deleted`,
   deleteClusterError: "Failed to delete cluster",
 

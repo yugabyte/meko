@@ -5,7 +5,9 @@ import { MemoryRouter } from "react-router-dom";
 
 import { labRunnerPath, ROUTES } from "@/app/routes/paths";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import LabRunnerPage, { shouldShowProvisionStatusSpinner } from "@/features/labs/pages/LabRunnerPage";
+import LabRunnerPage, {
+  shouldShowProvisionStatusSpinner,
+} from "@/features/labs/pages/LabRunnerPage";
 
 const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
 vi.mock("react-router-dom", async (importOriginal) => {
@@ -55,7 +57,10 @@ describe("LabRunnerPage", () => {
 
   // Both exits discard the run, so neither acts on the first click.
   it("asks before exiting, then clears the run's saved state and leaves", () => {
-    localStorage.setItem("meko:lab-progress:adlc-review-agent", '{"chapterIndex":2,"stageIndex":1}');
+    localStorage.setItem(
+      "meko:lab-progress:adlc-review-agent",
+      '{"chapterIndex":2,"stageIndex":1}',
+    );
     renderPage();
 
     fireEvent.click(screen.getByRole("button", { name: /exit lab/i }));
@@ -68,7 +73,10 @@ describe("LabRunnerPage", () => {
   });
 
   it("asks before restarting, then clears the run's saved state and stays put", () => {
-    localStorage.setItem("meko:lab-progress:adlc-review-agent", '{"chapterIndex":2,"stageIndex":1}');
+    localStorage.setItem(
+      "meko:lab-progress:adlc-review-agent",
+      '{"chapterIndex":2,"stageIndex":1}',
+    );
     localStorage.setItem("meko:lab-completed:adlc-review-agent", '["see-the-pr"]');
     renderPage();
 

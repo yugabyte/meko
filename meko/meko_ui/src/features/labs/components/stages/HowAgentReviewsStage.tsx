@@ -13,12 +13,7 @@ import { Check, Info } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatTokens } from "@/lib/tokenSavings";
 import { useDatapackMetrics } from "@/features/datapacks/hooks/useDatapackMetrics";
 
@@ -290,9 +285,7 @@ function ModelCard({
       aria-pressed={selected}
       className={cn(
         "flex flex-col gap-2 rounded-lg border p-3 text-left transition-colors",
-        selected
-          ? "border-primary bg-primary/[0.04]"
-          : "border-border bg-card",
+        selected ? "border-primary bg-primary/[0.04]" : "border-border bg-card",
         comparisonOnly ? "opacity-70" : "hover:border-foreground/25",
       )}
     >

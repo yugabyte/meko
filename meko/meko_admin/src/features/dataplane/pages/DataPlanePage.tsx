@@ -16,8 +16,20 @@ type Tile = { label: string; value: string; sub: string; icon: LucideIcon; accen
 const SAMPLE_TILES: Tile[] = [
   { label: "Nodes", value: "1", sub: "kubernetes", icon: Boxes, accent: "text-blue-400" },
   { label: "vCPU", value: "8 / 4", sub: "TServer / Master", icon: Cpu, accent: "text-orange-400" },
-  { label: "Memory", value: "16 / 8 GiB", sub: "TServer / Master", icon: MemoryStick, accent: "text-violet-400" },
-  { label: "Storage", value: "100 GiB", sub: "1 × 100 GiB", icon: HardDrive, accent: "text-sky-400" },
+  {
+    label: "Memory",
+    value: "16 / 8 GiB",
+    sub: "TServer / Master",
+    icon: MemoryStick,
+    accent: "text-violet-400",
+  },
+  {
+    label: "Storage",
+    value: "100 GiB",
+    sub: "1 × 100 GiB",
+    icon: HardDrive,
+    accent: "text-sky-400",
+  },
   { label: "Replication factor", value: "1", sub: "RF", icon: Copy, accent: "text-pink-400" },
   { label: "Region", value: "US East", sub: "kubernetes", icon: Globe, accent: "text-emerald-400" },
 ];
@@ -142,7 +154,9 @@ function StatusPill({ live, healthy }: { live: boolean; healthy: boolean }) {
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
     : "border-amber-500/30 bg-amber-500/10 text-amber-400";
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${tone}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${tone}`}
+    >
       <span className={`h-1.5 w-1.5 rounded-full ${healthy ? "bg-emerald-400" : "bg-amber-400"}`} />
       {healthy ? "Running" : "Degraded"}
     </span>

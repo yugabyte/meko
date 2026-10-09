@@ -129,8 +129,7 @@ export function BulkInviteEmailInput({
       </div>
       {parse.skippedRows.length > 0 ? (
         <p className="text-xs text-amber-700 dark:text-amber-300">
-          Skipped (no valid email):{" "}
-          {parse.skippedRows.slice(0, SKIPPED_PREVIEW_LIMIT).join(" · ")}
+          Skipped (no valid email): {parse.skippedRows.slice(0, SKIPPED_PREVIEW_LIMIT).join(" · ")}
           {parse.skippedRows.length > SKIPPED_PREVIEW_LIMIT
             ? ` · +${parse.skippedRows.length - SKIPPED_PREVIEW_LIMIT} more`
             : ""}

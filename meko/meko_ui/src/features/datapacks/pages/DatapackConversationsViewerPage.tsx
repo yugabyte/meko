@@ -61,10 +61,7 @@ type Props = {
   conversationId?: string;
 };
 
-export default function DatapackConversationsViewerPage({
-  datapackId,
-  conversationId,
-}: Props) {
+export default function DatapackConversationsViewerPage({ datapackId, conversationId }: Props) {
   const navigate = useNavigate();
   const datapackName = useDatapackName(datapackId);
   const [searchParams] = useSearchParams();

@@ -1,9 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  BILLING_QUERY_KEYS,
-  getBillingSummary,
-  type BillingSummary,
-} from "@/lib/api/billingApi";
+import { BILLING_QUERY_KEYS, getBillingSummary, type BillingSummary } from "@/lib/api/billingApi";
 
 /**
  * Pulls /billing/summary (renews date + card on file) via react-query.

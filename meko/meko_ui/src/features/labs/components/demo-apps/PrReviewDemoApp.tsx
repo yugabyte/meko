@@ -18,7 +18,11 @@ import { ExternalLink, Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { InvokeDeploymentError, invokeDeployment, invokeSharedDeployment } from "@/lib/api/deploymentInvokeApi";
+import {
+  InvokeDeploymentError,
+  invokeDeployment,
+  invokeSharedDeployment,
+} from "@/lib/api/deploymentInvokeApi";
 import { ChatInput } from "@/features/workbench-lm/components/workbench-lm-chat/ChatInput";
 import type { Message } from "@/features/workbench-lm/components/workbench-lm-chat/types";
 
@@ -36,13 +40,11 @@ import type { LabDemoAppConfig } from "../../types";
 import { FindingsList } from "./FindingsList";
 import { PrDiffViewer } from "./PrDiffViewer";
 import { ReviewRunSummary } from "./ReviewRunSummary";
-import {
-  MODEL_LABELS,
-  type ReviewAgentConfig,
-  type SlmModelId,
-} from "./ReviewAgentConfigPanel";
+import { MODEL_LABELS, type ReviewAgentConfig, type SlmModelId } from "./ReviewAgentConfigPanel";
 
-export type ContextStats = NonNullable<Extract<ReviewStreamEvent, { type: "done" }>["context_stats"]>;
+export type ContextStats = NonNullable<
+  Extract<ReviewStreamEvent, { type: "done" }>["context_stats"]
+>;
 
 /** A real PR fetched client-side (BringYourOwnPrStage), overriding the
  *  bundled sample diff for this run. `htmlUrl` is optional purely because
@@ -143,7 +145,9 @@ export function PrReviewDemoApp({
 }) {
   const [messages, setMessages] = useState<Message[]>(() => savedRun?.messages ?? []);
   const [diffTitle, setDiffTitle] = useState<string | null>(() => savedRun?.diffTitle ?? null);
-  const [diffContent, setDiffContent] = useState<string | null>(() => savedRun?.diffContent ?? null);
+  const [diffContent, setDiffContent] = useState<string | null>(
+    () => savedRun?.diffContent ?? null,
+  );
   // Captured once at send time (handleRunReview), same lifetime/reasoning as
   // selectedModelId below -- `prSource` itself is BringYourOwnPrStage's own
   // local state, which resets to undefined on every remount (stage
@@ -153,7 +157,9 @@ export function PrReviewDemoApp({
   const [sourceUrl, setSourceUrl] = useState<string | null>(() => savedRun?.sourceUrl ?? null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(() => savedRun?.conversationId ?? null);
+  const [conversationId, setConversationId] = useState<string | null>(
+    () => savedRun?.conversationId ?? null,
+  );
   // The original review's full text, captured once and reused as the
   // context anchor for every follow-up question (not replaced by later
   // follow-up answers) -- matches agentcore_entrypoint.py's follow-up
@@ -162,13 +168,16 @@ export function PrReviewDemoApp({
   // Captured once from the initial review's `done` event, same lifetime as
   // reviewText -- a follow-up turn is a separate LLM call with its own
   // usage, not part of the Claude-vs-SLM cost comparison this stage shows.
-  const [reviewUsage, setReviewUsage] = useState<{ input_tokens: number; output_tokens: number } | null>(
-    () => savedRun?.reviewUsage ?? null,
-  );
+  const [reviewUsage, setReviewUsage] = useState<{
+    input_tokens: number;
+    output_tokens: number;
+  } | null>(() => savedRun?.reviewUsage ?? null);
   // Real knowledgebase_search/memory_search retrieval counts (+ totals, from
   // datapack_describe) and an estimated per-tool token share for THIS run --
   // same lifetime as reviewUsage, see review.py's _build_context_stats.
-  const [contextStats, setContextStats] = useState<ContextStats | null>(() => savedRun?.contextStats ?? null);
+  const [contextStats, setContextStats] = useState<ContextStats | null>(
+    () => savedRun?.contextStats ?? null,
+  );
   // Structured findings (severity/location/comment) parsed server-side from
   // the initial review's response -- see review.py's REVIEW_SYSTEM_PROMPT.
   // Three states, not two: `null` = still in flight; `"unstructured"` = done,
@@ -201,7 +210,9 @@ export function PrReviewDemoApp({
   // user can go back to Chapter 2 and pick a different model after a review
   // has run, and the cost comparison must keep naming the model that run
   // actually used.
-  const [selectedModelId, setSelectedModelId] = useState<SlmModelId | null>(() => savedRun?.selectedModelId ?? null);
+  const [selectedModelId, setSelectedModelId] = useState<SlmModelId | null>(
+    () => savedRun?.selectedModelId ?? null,
+  );
   const [sendError, setSendError] = useState<string | null>(() => savedRun?.sendError ?? null);
   const [durationMs, setDurationMs] = useState<number | null>(() => savedRun?.durationMs ?? null);
   // id of the first, diff-embedded user turn — hidden from the transcript
@@ -220,8 +231,8 @@ export function PrReviewDemoApp({
   // already gates rendering this component behind session.deploymentActive.
   const canReview = Boolean(
     session.datapackId &&
-      session.userId &&
-      (session.deploymentMode === "shared" || Boolean(session.userToken && session.deploymentId)),
+    session.userId &&
+    (session.deploymentMode === "shared" || Boolean(session.userToken && session.deploymentId)),
   );
 
   // Aborts an in-flight invokeDeployment call on unmount -- otherwise a user
@@ -289,7 +300,11 @@ export function PrReviewDemoApp({
       if (isReviewPrompt) setReviewPromptMessageId(userMessage.id);
       const assistantId = crypto.randomUUID();
       if (isReviewPrompt) setInitialReviewMessageId(assistantId);
-      setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "" }]);
+      setMessages((prev) => [
+        ...prev,
+        userMessage,
+        { id: assistantId, role: "assistant", content: "" },
+      ]);
 
       try {
         let fullReviewText = "";
@@ -300,7 +315,11 @@ export function PrReviewDemoApp({
         let accumulatedText = "";
         const stream =
           session.deploymentMode === "shared"
-            ? invokeSharedDeployment(demoApp.deployable?.agentSlug ?? "", payload, controller.signal)
+            ? invokeSharedDeployment(
+                demoApp.deployable?.agentSlug ?? "",
+                payload,
+                controller.signal,
+              )
             : invokeDeployment(session.deploymentId as string, payload, controller.signal);
         for await (const event of stream) {
           if (event.type === "meta") {
@@ -308,7 +327,9 @@ export function PrReviewDemoApp({
           } else if (event.type === "text_delta") {
             accumulatedText += event.text;
             setMessages((prev) =>
-              prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + event.text } : m)),
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: m.content + event.text } : m,
+              ),
             );
           } else if (event.type === "done") {
             fullReviewText = event.review;
@@ -319,7 +340,9 @@ export function PrReviewDemoApp({
             // follow-up's. Setting it for every "done" (not just the
             // findings case) keeps Slack-posting/canFollowUp's own read of
             // message.content correct either way.
-            setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: event.review } : m)));
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantId ? { ...m, content: event.review } : m)),
+            );
             // "findings" in event distinguishes "the key is genuinely absent"
             // (an old deployed image) from "present", whatever its value --
             // event.findings ?? null would collapse both to the same state
@@ -332,9 +355,8 @@ export function PrReviewDemoApp({
               // could not read my own response" -- it sends [] for both. When
               // the raw text it also sends parses into findings, it was the
               // second. See recoverReviewFindings.
-              const recovered = reported && reported.length === 0
-                ? recoverReviewFindings(event.review)
-                : null;
+              const recovered =
+                reported && reported.length === 0 ? recoverReviewFindings(event.review) : null;
               setReviewFindings(recovered ?? reported ?? "unstructured");
               // Set here, beside the findings, not only after the loop: an
               // error frame arriving after `done`, a dropped connection or an
@@ -353,7 +375,11 @@ export function PrReviewDemoApp({
         if (isReviewPrompt) setReviewText(fullReviewText || accumulatedText || null);
       } catch (err) {
         if (controller.signal.aborted) return; // unmounted mid-stream -- nothing left to show it to
-        setSendError(err instanceof InvokeDeploymentError || err instanceof Error ? err.message : "Review failed.");
+        setSendError(
+          err instanceof InvokeDeploymentError || err instanceof Error
+            ? err.message
+            : "Review failed.",
+        );
         // Drop the placeholder if nothing ever streamed into it -- otherwise
         // it lingers as a dead, permanently-empty card in the transcript.
         setMessages((prev) => prev.filter((m) => !(m.id === assistantId && m.content === "")));
@@ -408,11 +434,21 @@ export function PrReviewDemoApp({
         text,
       );
     },
-    [conversationId, reviewText, send, session.datapackId, session.userToken, session.deploymentMode, reviewConfig],
+    [
+      conversationId,
+      reviewText,
+      send,
+      session.datapackId,
+      session.userToken,
+      session.deploymentMode,
+      reviewConfig,
+    ],
   );
 
   const handlePostToSlack = useCallback(async () => {
-    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim());
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant" && m.content.trim());
     if (!lastAssistant || !slackToken.trim() || !slackChannel.trim()) return;
     setSlackStatus("sending");
     try {
@@ -523,7 +559,9 @@ export function PrReviewDemoApp({
                 so "what's being reviewed" is visible in every phase: after
                 fetching, while configuring, and (below, hasReviewed) during
                 and after the review itself. */}
-            {prSource && <PrDiffViewer title={prSource.title} diff={prSource.diff} url={prSource.htmlUrl} />}
+            {prSource && (
+              <PrDiffViewer title={prSource.title} diff={prSource.diff} url={prSource.htmlUrl} />
+            )}
             <div className="flex max-w-md flex-col gap-4 rounded-md border border-border p-4">
               {configSentence}
               <Button
@@ -626,8 +664,8 @@ export function PrReviewDemoApp({
                 )}
                 {slackStatus === "error" && (
                   <p className="text-sm text-destructive">
-                    Failed to post. Slack's API may not allow this call directly from a browser
-                    for this token type.
+                    Failed to post. Slack's API may not allow this call directly from a browser for
+                    this token type.
                   </p>
                 )}
               </div>

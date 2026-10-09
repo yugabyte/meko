@@ -60,9 +60,14 @@ export function useReviewRetrieval({
         );
         const reviewMessageId = detail.conversation.thread?.[0]?.message_id;
         if (!reviewMessageId) throw new Error("This review's message hasn't been indexed yet.");
-        const res = await getDatapackMessageDecisionTrace(datapackId, conversationId, reviewMessageId, {
-          signal: ac.signal,
-        });
+        const res = await getDatapackMessageDecisionTrace(
+          datapackId,
+          conversationId,
+          reviewMessageId,
+          {
+            signal: ac.signal,
+          },
+        );
         if (ac.signal.aborted) return;
         setState({ trace: res.decision_trace, loading: false, error: null });
       } catch (err) {

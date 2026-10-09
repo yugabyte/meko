@@ -73,7 +73,9 @@ function toFindings(value: unknown): ReviewFinding[] | null {
     const entry = item as Record<string, unknown>;
     const comment = String(entry.comment ?? "").trim();
     if (!comment) continue;
-    const severity = String(entry.severity ?? "minor").trim().toLowerCase();
+    const severity = String(entry.severity ?? "minor")
+      .trim()
+      .toLowerCase();
     findings.push({
       severity: (VALID_SEVERITIES as readonly string[]).includes(severity)
         ? (severity as ReviewFinding["severity"])

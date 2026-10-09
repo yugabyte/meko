@@ -94,12 +94,15 @@ export const handler = async (event) => {
     // vector. The regex also keeps the value safe to interpolate into the
     // ListUsers filter (a stray quote would otherwise break the expression).
     if (!email || !emailVerified || !EMAIL_RE.test(email)) {
-      console.log("PRESIGNUP_SKIP_LINK", JSON.stringify({
-        reason: "email missing/unverified/malformed",
-        hasEmail: !!email,
-        emailVerified,
-        wellFormed: email ? EMAIL_RE.test(email) : false,
-      }));
+      console.log(
+        "PRESIGNUP_SKIP_LINK",
+        JSON.stringify({
+          reason: "email missing/unverified/malformed",
+          hasEmail: !!email,
+          emailVerified,
+          wellFormed: email ? EMAIL_RE.test(email) : false,
+        }),
+      );
       return event;
     }
 
@@ -108,7 +111,7 @@ export const handler = async (event) => {
         UserPoolId: userPoolId,
         Filter: `email = "${email}"`,
         Limit: 1,
-      })
+      }),
     );
 
     const match = Users[0];
@@ -135,12 +138,15 @@ export const handler = async (event) => {
     );
 
     if (!exactMatch || !isLinkableStatus || !destEmailVerified) {
-      console.log("PRESIGNUP_SKIP_LINK", JSON.stringify({
-        reason: "destination not eligible",
-        exactMatch,
-        status,
-        destEmailVerified,
-      }));
+      console.log(
+        "PRESIGNUP_SKIP_LINK",
+        JSON.stringify({
+          reason: "destination not eligible",
+          exactMatch,
+          status,
+          destEmailVerified,
+        }),
+      );
       return event;
     }
 
@@ -156,7 +162,7 @@ export const handler = async (event) => {
           ProviderAttributeName: "Cognito_Subject",
           ProviderAttributeValue: originalSub,
         },
-      })
+      }),
     );
     event.response.autoConfirmUser = true;
     console.log("PRESIGNUP_LINKED", "linked + auto-confirmed existing account");

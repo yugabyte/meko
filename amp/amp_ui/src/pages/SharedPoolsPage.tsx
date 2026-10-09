@@ -24,12 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  ErrorState,
-  LoadingState,
-  PageContainer,
-  PageHeader,
-} from "@/components/data/Page";
+import { ErrorState, LoadingState, PageContainer, PageHeader } from "@/components/data/Page";
 import {
   useCreateStoragePool,
   useCurrentUser,
@@ -83,11 +78,7 @@ export default function SharedPoolsPage() {
         title="Shared pools"
         description="A shared pool is a team or business unit sitting on a foundation. Clusters are created inside a pool, which owns its clusters and branches."
         action={
-          <Button
-            onClick={() => setDialogOpen(true)}
-            disabled={!currentUser.data}
-            variant="brand"
-          >
+          <Button onClick={() => setDialogOpen(true)} disabled={!currentUser.data} variant="brand">
             <Plus className="h-4 w-4" />
             New shared pool
           </Button>
@@ -109,9 +100,7 @@ export default function SharedPoolsPage() {
               // or an empty pool would read as "count unknown" forever.
               dbCount={fleet.isLoading ? undefined : (dbCountByPool[pool.id] ?? 0)}
               dbCountLoading={fleet.isLoading}
-              onOpen={() =>
-                navigate(`/fleet?pool=${encodeURIComponent(pool.name)}`)
-              }
+              onOpen={() => navigate(`/fleet?pool=${encodeURIComponent(pool.name)}`)}
               onRename={() => setRenaming(pool)}
               onDelete={() => setDeleting(pool)}
             />
@@ -134,14 +123,8 @@ export default function SharedPoolsPage() {
         onOpenChange={setDialogOpen}
         ownerUserId={currentUser.data?.id}
       />
-      <RenamePoolDialog
-        pool={renaming}
-        onOpenChange={(open) => !open && setRenaming(null)}
-      />
-      <DeletePoolDialog
-        pool={deleting}
-        onOpenChange={(open) => !open && setDeleting(null)}
-      />
+      <RenamePoolDialog pool={renaming} onOpenChange={(open) => !open && setRenaming(null)} />
+      <DeletePoolDialog pool={deleting} onOpenChange={(open) => !open && setDeleting(null)} />
     </PageContainer>
   );
 }
@@ -170,11 +153,7 @@ export function PoolCard({
       <div className="absolute right-2 top-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Actions for ${pool.name}`}
-            >
+            <Button variant="ghost" size="icon" aria-label={`Actions for ${pool.name}`}>
               <MoreVertical className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -195,20 +174,14 @@ export function PoolCard({
         </DropdownMenu>
       </div>
 
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex flex-1 flex-col p-5 text-left"
-      >
+      <button type="button" onClick={onOpen} className="flex flex-1 flex-col p-5 text-left">
         <div className="flex items-center gap-3 pr-8">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand/15 text-brand">
             <Boxes className="h-[18px] w-[18px]" />
           </div>
           <div className="min-w-0">
             <p className="truncate font-semibold">{pool.name}</p>
-            <p className="font-mono text-xs text-muted-foreground">
-              {pool.id}
-            </p>
+            <p className="font-mono text-xs text-muted-foreground">{pool.id}</p>
           </div>
         </div>
 
@@ -255,8 +228,7 @@ export function RenamePoolDialog({
           toast.success(`Shared pool renamed to "${updated.name}"`);
           onOpenChange(false);
         },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : "Failed to rename pool"),
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to rename pool"),
       },
     );
   }
@@ -268,8 +240,8 @@ export function RenamePoolDialog({
           <DialogHeader>
             <DialogTitle>Rename shared pool</DialogTitle>
             <DialogDescription>
-              Nothing addresses a pool by name, so renaming one breaks no
-              reference. The name must be free.
+              Nothing addresses a pool by name, so renaming one breaks no reference. The name must
+              be free.
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-2">
@@ -292,9 +264,7 @@ export function RenamePoolDialog({
             </Button>
             <Button
               type="submit"
-              disabled={
-                !name.trim() || name.trim() === pool?.name || rename.isPending
-              }
+              disabled={!name.trim() || name.trim() === pool?.name || rename.isPending}
               variant="brand"
             >
               {rename.isPending ? "Renaming…" : "Rename pool"}
@@ -326,8 +296,7 @@ function DeletePoolDialog({
           toast.success(`Shared pool "${pool.name}" deleted`);
           onOpenChange(false);
         },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : "Failed to delete pool"),
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to delete pool"),
       },
     );
   }
@@ -338,8 +307,8 @@ function DeletePoolDialog({
         <DialogHeader>
           <DialogTitle>Delete shared pool &ldquo;{pool?.name}&rdquo;?</DialogTitle>
           <DialogDescription>
-            The pool holds no clusters, so nothing is lost. Its name becomes
-            available again straight away.
+            The pool holds no clusters, so nothing is lost. Its name becomes available again
+            straight away.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -351,12 +320,7 @@ function DeletePoolDialog({
           >
             Cancel
           </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={remove}
-            disabled={del.isPending}
-          >
+          <Button type="button" variant="destructive" onClick={remove} disabled={del.isPending}>
             {del.isPending ? "Deleting…" : "Delete pool"}
           </Button>
         </DialogFooter>
@@ -389,8 +353,7 @@ function CreatePoolDialog({
           setName("");
           onOpenChange(false);
         },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : "Failed to create pool"),
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to create pool"),
       },
     );
   }
@@ -402,8 +365,8 @@ function CreatePoolDialog({
           <DialogHeader>
             <DialogTitle>New shared pool</DialogTitle>
             <DialogDescription>
-              A pool groups clusters for a team or business unit. It&apos;s
-              owned by the current tenant.
+              A pool groups clusters for a team or business unit. It&apos;s owned by the current
+              tenant.
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-2">
@@ -417,11 +380,7 @@ function CreatePoolDialog({
             />
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button

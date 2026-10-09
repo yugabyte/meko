@@ -18,9 +18,7 @@ export function describePendingAction(action: PendingAction): string {
         : "Promote memories to the team knowledge base";
     }
     case "memory_delete_by_id":
-      return args.memory_id
-        ? `Delete memory "${String(args.memory_id)}"`
-        : "Delete a memory";
+      return args.memory_id ? `Delete memory "${String(args.memory_id)}"` : "Delete a memory";
     case "datapack_update": {
       const parts: string[] = [];
       if (args.name) parts.push(`rename to "${String(args.name)}"`);
@@ -60,9 +58,7 @@ export function describeActionResult(action: PendingAction): string {
         : `${ids.length || "The"} memories promoted to the team knowledge base.`;
     }
     case "memory_delete_by_id":
-      return args.memory_id
-        ? `Memory "${String(args.memory_id)}" deleted.`
-        : "Memory deleted.";
+      return args.memory_id ? `Memory "${String(args.memory_id)}" deleted.` : "Memory deleted.";
     case "datapack_update":
       return "Datapack updated.";
     case "amp_cluster_create":
@@ -99,9 +95,7 @@ export function PendingActionCard({ action, busy, onAllow, onDeny }: Props) {
         <ShieldQuestion className="h-4 w-4 shrink-0 text-primary" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-sm text-foreground">{describePendingAction(action)}?</p>
-          <p className="text-[11px] text-muted-foreground">
-            Nothing happens until you allow it.
-          </p>
+          <p className="text-[11px] text-muted-foreground">Nothing happens until you allow it.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <button

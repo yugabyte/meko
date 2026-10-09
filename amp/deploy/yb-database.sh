@@ -33,7 +33,10 @@ YB_EXEC_POD="${YB_EXEC_POD:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+die() {
+  printf '\nERROR: %s\n' "$*" >&2
+  exit 1
+}
 say() { printf '\n==> %s\n' "$*"; }
 
 # host only: the pod dials 5433 itself, and YB_HOST_PORTS carries the port.

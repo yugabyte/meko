@@ -79,7 +79,10 @@ export function CapturedExtractedCard({
           <MetricStatRow>
             <MetricStat value={conversationCount?.toLocaleString() ?? "—"} label="Conversations" />
             <MetricStatDivider />
-            <MetricStat value={extractedCount?.toLocaleString() ?? "—"} label="Memories extracted" />
+            <MetricStat
+              value={extractedCount?.toLocaleString() ?? "—"}
+              label="Memories extracted"
+            />
           </MetricStatRow>
 
           {conversationCount != null && conversationCount > 0 && extractionRate != null && (
@@ -90,7 +93,9 @@ export function CapturedExtractedCard({
                   // Extraction turns a conversation into memories, so the bar
                   // carries memory's hue rather than a colour of its own.
                   className={`h-full rounded-full ${CONTEXT_TONE.memory.fill}`}
-                  style={{ width: `${Math.min(100, (extractionRate / EXTRACTION_RATE_FULL) * 100)}%` }}
+                  style={{
+                    width: `${Math.min(100, (extractionRate / EXTRACTION_RATE_FULL) * 100)}%`,
+                  }}
                 />
               </div>
               <p className="text-xs text-muted-foreground">

@@ -70,9 +70,7 @@ export function ConversationThreadHeader({
             ) : null}
             <span title={detail.started_at}>started {startedDisplay}</span>
             <span>·</span>
-            <span>
-              last activity {formatRelativeTime(detail.last_activity_at, now)}
-            </span>
+            <span>last activity {formatRelativeTime(detail.last_activity_at, now)}</span>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Chip icon={<MessageSquare className="h-3 w-3" />} accent="slate">

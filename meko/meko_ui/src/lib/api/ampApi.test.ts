@@ -78,16 +78,24 @@ describe("ampApi wire contract", () => {
 
   it("ampListBranches → GET .../amp/clusters/:cid/branches", async () => {
     await ampListBranches("dp1", "cl1");
-    expect(mockRequest).toHaveBeenCalledWith("/datapacks/dp1/amp/clusters/cl1/branches", "GET", undefined, {});
+    expect(mockRequest).toHaveBeenCalledWith(
+      "/datapacks/dp1/amp/clusters/cl1/branches",
+      "GET",
+      undefined,
+      {},
+    );
   });
 
   it("ampCreateBranch omits fork_point_lsn when blank", async () => {
-    await ampCreateBranch("dp1", "cl1", { name: "feat", parent_branch_id: "b0", fork_point_lsn: "  " });
-    expect(mockRequest).toHaveBeenCalledWith(
-      "/datapacks/dp1/amp/clusters/cl1/branches",
-      "POST",
-      { name: "feat", parent_branch_id: "b0" },
-    );
+    await ampCreateBranch("dp1", "cl1", {
+      name: "feat",
+      parent_branch_id: "b0",
+      fork_point_lsn: "  ",
+    });
+    expect(mockRequest).toHaveBeenCalledWith("/datapacks/dp1/amp/clusters/cl1/branches", "POST", {
+      name: "feat",
+      parent_branch_id: "b0",
+    });
   });
 
   it("ampListCompute → GET .../branches/:bid/compute", async () => {
@@ -120,6 +128,9 @@ describe("ampApi wire contract", () => {
 
   it("ampDeleteCompute → DELETE .../compute/:id", async () => {
     await ampDeleteCompute("dp1", "cl1", "br1", "e1");
-    expect(mockRequest).toHaveBeenCalledWith("/datapacks/dp1/amp/clusters/cl1/branches/br1/compute/e1", "DELETE");
+    expect(mockRequest).toHaveBeenCalledWith(
+      "/datapacks/dp1/amp/clusters/cl1/branches/br1/compute/e1",
+      "DELETE",
+    );
   });
 });

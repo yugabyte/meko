@@ -47,6 +47,8 @@ describe("ProductionReviewsStage, thirty-day half", () => {
 
   it("describes the chart for a reader who cannot see it", () => {
     render(<ProductionReviewsStage />);
-    expect(screen.getByRole("img", { name: /runs per day from .* peaking at \d+ runs/i })).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: /runs per day from .* peaking at \d+ runs/i }),
+    ).toBeTruthy();
   });
 });

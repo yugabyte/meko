@@ -98,8 +98,7 @@ export const CONVERSATION_SOURCE = {
   memorySummary: "memory-summary",
   collectiveMemorySummary: "collective-memory-summary",
 } as const;
-export type ConversationSource =
-  (typeof CONVERSATION_SOURCE)[keyof typeof CONVERSATION_SOURCE];
+export type ConversationSource = (typeof CONVERSATION_SOURCE)[keyof typeof CONVERSATION_SOURCE];
 
 /** Build a conversation viewer URL with a `from` source attached. */
 export function datapackConversationsPathWithSource(
@@ -160,16 +159,12 @@ export const LEARNINGS_SOURCE_QUERY_PARAM = "from" as const;
 export const LEARNINGS_SOURCE = {
   sharedKnowledge: "shared-knowledge",
 } as const;
-export type LearningsSource =
-  (typeof LEARNINGS_SOURCE)[keyof typeof LEARNINGS_SOURCE];
+export type LearningsSource = (typeof LEARNINGS_SOURCE)[keyof typeof LEARNINGS_SOURCE];
 
 /** Build a Learnings URL with a `from` source attached (used by
  *  "Review N pending" on the SharedKnowledge "Promoted memories" tab
  *  to deep-link into review while preserving the breadcrumb trail). */
-export function datapackLearningsPathFrom(
-  datapackId: string,
-  source: LearningsSource,
-): string {
+export function datapackLearningsPathFrom(datapackId: string, source: LearningsSource): string {
   const base = datapackLearningsPath(datapackId);
   const q = new URLSearchParams();
   q.set(LEARNINGS_SOURCE_QUERY_PARAM, source);
@@ -180,9 +175,7 @@ export function datapackMemorySummaryPath(datapackId: string): string {
   return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.memorySummary);
 }
 
-export function datapackCollectiveMemorySummaryPath(
-  datapackId: string,
-): string {
+export function datapackCollectiveMemorySummaryPath(datapackId: string): string {
   return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.collectiveMemorySummary);
 }
 
@@ -212,14 +205,9 @@ export function datapackArtifactsPath(datapackId: string): string {
 /** Full conversation viewer route. When `conversationId` is provided
  *  the viewer pre-selects that session in the left rail; otherwise it
  *  lands on the first row of the newest page. */
-export function datapackConversationsPath(
-  datapackId: string,
-  conversationId?: string,
-): string {
+export function datapackConversationsPath(datapackId: string, conversationId?: string): string {
   const base = datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.conversations);
-  return conversationId
-    ? `${base}/${encodeURIComponent(conversationId)}`
-    : base;
+  return conversationId ? `${base}/${encodeURIComponent(conversationId)}` : base;
 }
 
 export const AUTH_ROUTES = [

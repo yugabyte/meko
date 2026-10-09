@@ -8,7 +8,12 @@ import { FileText, MessageSquare, Sparkles, type LucideIcon } from "lucide-react
 
 export type ContextSourceKey = "knowledge-base" | "memory" | "conversation";
 
-export const CONTEXT_SOURCES: { key: ContextSourceKey; icon: LucideIcon; title: string; body: string }[] = [
+export const CONTEXT_SOURCES: {
+  key: ContextSourceKey;
+  icon: LucideIcon;
+  title: string;
+  body: string;
+}[] = [
   {
     key: "knowledge-base",
     icon: FileText,

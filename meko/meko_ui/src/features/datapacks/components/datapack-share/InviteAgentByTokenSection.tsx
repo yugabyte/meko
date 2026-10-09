@@ -36,12 +36,48 @@ const SCOPE_ROWS: {
   defaultOn: boolean;
   column: 1 | 2;
 }[] = [
-  { id: "memory.read", label: "memory.read", description: "Read own memories", defaultOn: true, column: 1 },
-  { id: "ko.read", label: "ko.read", description: "Read shared knowledge (Ko)", defaultOn: true, column: 1 },
-  { id: "ko.write", label: "ko.write", description: "Directly write to Ko", defaultOn: false, column: 1 },
-  { id: "memory.write", label: "memory.write", description: "Write own memories", defaultOn: true, column: 2 },
-  { id: "ko.propose", label: "ko.propose", description: "Propose Me → Ko promotions", defaultOn: true, column: 2 },
-  { id: "memory.read_all", label: "memory.read_all", description: "Read other agents' memories", defaultOn: false, column: 2 },
+  {
+    id: "memory.read",
+    label: "memory.read",
+    description: "Read own memories",
+    defaultOn: true,
+    column: 1,
+  },
+  {
+    id: "ko.read",
+    label: "ko.read",
+    description: "Read shared knowledge (Ko)",
+    defaultOn: true,
+    column: 1,
+  },
+  {
+    id: "ko.write",
+    label: "ko.write",
+    description: "Directly write to Ko",
+    defaultOn: false,
+    column: 1,
+  },
+  {
+    id: "memory.write",
+    label: "memory.write",
+    description: "Write own memories",
+    defaultOn: true,
+    column: 2,
+  },
+  {
+    id: "ko.propose",
+    label: "ko.propose",
+    description: "Propose Me → Ko promotions",
+    defaultOn: true,
+    column: 2,
+  },
+  {
+    id: "memory.read_all",
+    label: "memory.read_all",
+    description: "Read other agents' memories",
+    defaultOn: false,
+    column: 2,
+  },
 ];
 
 const EXPIRES_OPTIONS: { id: ExpiresChoice; label: string }[] = [
@@ -76,12 +112,15 @@ export function InviteAgentByTokenSection() {
   return (
     <div className="space-y-6">
       <p className="text-sm leading-relaxed text-muted-foreground">
-        Generate an access token so an agent (running in Claude Code, Cursor, Codex, a CI pipeline, or any MCP
-        client) can connect to this datapack.
+        Generate an access token so an agent (running in Claude Code, Cursor, Codex, a CI pipeline,
+        or any MCP client) can connect to this datapack.
       </p>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-invite-name" className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <Label
+          htmlFor="agent-invite-name"
+          className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+        >
           Agent name
         </Label>
         <div className="relative">
@@ -102,7 +141,10 @@ export function InviteAgentByTokenSection() {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="agent-invite-role" className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <Label
+          htmlFor="agent-invite-role"
+          className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+        >
           Role
         </Label>
         <Select value={role} onValueChange={(v) => setRole(v as DatapackShareGrant)}>
@@ -117,11 +159,15 @@ export function InviteAgentByTokenSection() {
             ))}
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">Controls what this agent can read and write.</p>
+        <p className="text-xs text-muted-foreground">
+          Controls what this agent can read and write.
+        </p>
       </div>
 
       <div className="space-y-3">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Scopes</span>
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          Scopes
+        </span>
         <div className="grid gap-4 sm:grid-cols-2">
           {[1, 2].map((col) => (
             <div key={col} className="space-y-3">
@@ -138,7 +184,9 @@ export function InviteAgentByTokenSection() {
                   />
                   <span className="min-w-0">
                     <span className="font-mono text-xs text-foreground">{row.label}</span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">{row.description}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {row.description}
+                    </span>
                   </span>
                 </label>
               ))}
@@ -148,7 +196,9 @@ export function InviteAgentByTokenSection() {
       </div>
 
       <div className="space-y-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Expires</span>
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          Expires
+        </span>
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2">
             {EXPIRES_OPTIONS.map((opt) => (

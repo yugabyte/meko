@@ -52,7 +52,11 @@ function readCompleted(labId: string): Set<LabStageId> {
   }
 }
 
-function clamp(chapters: LabDefinition["chapters"], chapterIndex: number, stageIndex: number): Progress {
+function clamp(
+  chapters: LabDefinition["chapters"],
+  chapterIndex: number,
+  stageIndex: number,
+): Progress {
   const c = Math.max(0, Math.min(chapterIndex, chapters.length - 1));
   const s = Math.max(0, Math.min(stageIndex, chapters[c].stages.length - 1));
   return { chapterIndex: c, stageIndex: s };
@@ -72,8 +76,14 @@ function clamp(chapters: LabDefinition["chapters"], chapterIndex: number, stageI
  */
 export function useLabProgress(lab: LabDefinition) {
   const [progress, setProgress] = useState<Progress>(() => readProgress(lab.id));
-  const [completedStages, setCompletedStages] = useState<Set<LabStageId>>(() => readCompleted(lab.id));
-  const { chapterIndex, stageIndex } = clamp(lab.chapters, progress.chapterIndex, progress.stageIndex);
+  const [completedStages, setCompletedStages] = useState<Set<LabStageId>>(() =>
+    readCompleted(lab.id),
+  );
+  const { chapterIndex, stageIndex } = clamp(
+    lab.chapters,
+    progress.chapterIndex,
+    progress.stageIndex,
+  );
 
   const orderedStages = useMemo(() => flattenLabStages(lab.chapters), [lab.chapters]);
 
@@ -99,7 +109,6 @@ export function useLabProgress(lab: LabDefinition) {
     },
     [lab.chapters, goToStage],
   );
-
 
   const markStageComplete = useCallback(
     (stageId: LabStageId) => {

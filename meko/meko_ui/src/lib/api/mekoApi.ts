@@ -1824,7 +1824,6 @@ export async function listPendingUploads(
   return { items: resp?.items ?? [], count: resp?.count ?? 0 };
 }
 
-
 /** Discriminated row for the SharedKnowledge "Activity log" feed.
  *  `type` selects which side of the BE's UNION populated this row — the
  *  fields keyed off the other side stay null/undefined. */

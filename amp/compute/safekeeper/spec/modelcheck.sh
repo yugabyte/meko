@@ -17,28 +17,28 @@ echo "saving results to $outfile"
 touch $outfile
 
 # Save some info about the run.
-GIT_REV=`git rev-parse --short HEAD`
-INFO=`uname -a`
+GIT_REV=$(git rev-parse --short HEAD)
+INFO=$(uname -a)
 
 # First for Linux, second for Mac.
 CPUNAMELinux=$(lscpu | grep 'Model name' | cut -f 2 -d ":" | awk '{$1=$1}1')
-CPUCORESLinux=`nproc`
-CPUNAMEMac=`sysctl -n machdep.cpu.brand_string`
-CPUCORESMac=`sysctl -n machdep.cpu.thread_count`
+CPUCORESLinux=$(nproc)
+CPUNAMEMac=$(sysctl -n machdep.cpu.brand_string)
+CPUCORESMac=$(sysctl -n machdep.cpu.thread_count)
 
-echo "git revision: $GIT_REV" >> $outfile
-echo "Platform: $INFO" >> $outfile
-echo "CPU Info Linux: $CPUNAMELinux" >> $outfile
-echo "CPU Cores Linux: $CPUCORESLinux" >> $outfile
-echo "CPU Info Mac: $CPUNAMEMac" >> $outfile
-echo "CPU Cores Mac: $CPUCORESMac" >> $outfile
-echo "Spec: $SPEC" >> $outfile
-echo "Config: $CONFIG" >> $outfile
-echo "----" >> $outfile
-cat $CONFIG >> $outfile
-echo "" >> $outfile
-echo "----" >> $outfile
-echo "" >> $outfile
+echo "git revision: $GIT_REV" >>$outfile
+echo "Platform: $INFO" >>$outfile
+echo "CPU Info Linux: $CPUNAMELinux" >>$outfile
+echo "CPU Cores Linux: $CPUCORESLinux" >>$outfile
+echo "CPU Info Mac: $CPUNAMEMac" >>$outfile
+echo "CPU Cores Mac: $CPUCORESMac" >>$outfile
+echo "Spec: $SPEC" >>$outfile
+echo "Config: $CONFIG" >>$outfile
+echo "----" >>$outfile
+cat $CONFIG >>$outfile
+echo "" >>$outfile
+echo "----" >>$outfile
+echo "" >>$outfile
 
 # see
 # https://lamport.azurewebsites.net/tla/current-tools.pdf

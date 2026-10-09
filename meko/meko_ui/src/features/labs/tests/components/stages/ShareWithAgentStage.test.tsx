@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { inviteDatapackShare, listDatapackMembers, listDatapackOutgoingShares } from "@/lib/api/mekoApi";
+import {
+  inviteDatapackShare,
+  listDatapackMembers,
+  listDatapackOutgoingShares,
+} from "@/lib/api/mekoApi";
 import type { useLabRunnerSession } from "@/features/labs/hooks/useLabRunnerSession";
 import { ShareWithAgentStage } from "@/features/labs/components/stages/ShareWithAgentStage";
 
 vi.mock("@/lib/runtimeEnv", () => ({
-  readRuntimeEnv: (name: string) => (name === "MEKO_LABS_AGENTK_ADMIN_EMAIL" ? "agentk-admin@example.com" : undefined),
+  readRuntimeEnv: (name: string) =>
+    name === "MEKO_LABS_AGENTK_ADMIN_EMAIL" ? "agentk-admin@example.com" : undefined,
 }));
 
 vi.mock("@/lib/api/mekoApi", async (importOriginal) => {
@@ -42,7 +47,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListMembers.mockResolvedValue({
     members: [
-      { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
+      {
+        user_id: "user-1",
+        is_owner: true,
+        user_name: "Owner User",
+        user_email_id: "owner@example.com",
+        grant: "maintainer",
+      },
     ],
   });
   mockListOutgoingShares.mockResolvedValue({ pending_invites: [] });
@@ -117,8 +128,18 @@ describe("ShareWithAgentStage", () => {
   it("treats an existing member as already shared, so nobody shares twice", async () => {
     mockListMembers.mockResolvedValue({
       members: [
-        { user_id: "user-1", is_owner: true, user_email_id: "owner@example.com", grant: "maintainer" },
-        { user_id: "agent-1", is_owner: false, user_email_id: "agentk-admin@example.com", grant: "contributor" },
+        {
+          user_id: "user-1",
+          is_owner: true,
+          user_email_id: "owner@example.com",
+          grant: "maintainer",
+        },
+        {
+          user_id: "agent-1",
+          is_owner: false,
+          user_email_id: "agentk-admin@example.com",
+          grant: "contributor",
+        },
       ],
     } as never);
     const onComplete = vi.fn();
@@ -130,7 +151,9 @@ describe("ShareWithAgentStage", () => {
       />,
     );
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
-    expect((await screen.findByRole("button", { name: /shared/i })).hasAttribute("disabled")).toBe(true);
+    expect((await screen.findByRole("button", { name: /shared/i })).hasAttribute("disabled")).toBe(
+      true,
+    );
   });
 
   // A pending invite is not a grant. The shared AgentK runtime authenticates

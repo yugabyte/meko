@@ -42,8 +42,11 @@ WORK="$(mktemp -d)"
 CONTROLLER_BIN="${CONTROLLER_BIN:-$WORK/controller}"
 CONTROLLER_PID=""
 
-say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
+die() {
+  printf '\033[1;31merror: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 cleanup() {
   set +e
@@ -72,9 +75,11 @@ YB_FQDN="$(docker exec "$YB_NAME" hostname -f)"
 echo -n "   waiting for YSQL"
 for i in $(seq 1 60); do
   if docker exec "$YB_NAME" bin/ysqlsh -h "$YB_FQDN" -p 5433 -U yugabyte -d yugabyte -tAc "select 1" >/dev/null 2>&1; then
-    echo " ready"; break
+    echo " ready"
+    break
   fi
-  echo -n "."; sleep 3
+  echo -n "."
+  sleep 3
   [ "$i" = 60 ] && die "YugabyteDB did not become ready"
 done
 
@@ -85,9 +90,16 @@ AMP_LOG_FORMAT=text "$CONTROLLER_BIN" serve \
 CONTROLLER_PID=$!
 echo -n "   waiting for /readyz"
 for i in $(seq 1 30); do
-  [ "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CONTROLLER_PORT}/readyz")" = "200" ] && { echo " ready"; break; }
-  echo -n "."; sleep 2
-  [ "$i" = 30 ] && { tail -20 "$WORK/controller.log"; die "controller did not become ready"; }
+  [ "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CONTROLLER_PORT}/readyz")" = "200" ] && {
+    echo " ready"
+    break
+  }
+  echo -n "."
+  sleep 2
+  [ "$i" = 30 ] && {
+    tail -20 "$WORK/controller.log"
+    die "controller did not become ready"
+  }
 done
 
 say "start the MCP server container (--network host -> controller on 127.0.0.1:$CONTROLLER_PORT)"
@@ -98,9 +110,16 @@ docker run -d --name "$MCP_NAME" --network host \
   "$MCP_IMAGE" >/dev/null
 echo -n "   waiting for MCP /healthz"
 for i in $(seq 1 30); do
-  [ "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${MCP_PORT}/healthz")" = "200" ] && { echo " ready"; break; }
-  echo -n "."; sleep 2
-  [ "$i" = 30 ] && { docker logs "$MCP_NAME" 2>&1 | tail -20; die "MCP server did not become ready"; }
+  [ "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${MCP_PORT}/healthz")" = "200" ] && {
+    echo " ready"
+    break
+  }
+  echo -n "."
+  sleep 2
+  [ "$i" = 30 ] && {
+    docker logs "$MCP_NAME" 2>&1 | tail -20
+    die "MCP server did not become ready"
+  }
 done
 
 say "smoke-test the MCP container over the Streamable-HTTP transport"

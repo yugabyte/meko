@@ -18,9 +18,13 @@ export function KbImportStatusBanner() {
       role="status"
       aria-live="polite"
     >
-      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-700 dark:text-blue-300" aria-hidden />
+      <Loader2
+        className="h-4 w-4 shrink-0 animate-spin text-blue-700 dark:text-blue-300"
+        aria-hidden
+      />
       <span>
-        Importing knowledge into <span className="font-semibold text-foreground">{datapackName}</span>…
+        Importing knowledge into{" "}
+        <span className="font-semibold text-foreground">{datapackName}</span>…
       </span>
     </div>
   );

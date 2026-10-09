@@ -3,10 +3,7 @@
 // Lifetime counters, so a longish staleTime is fine.
 
 import { useQuery } from "@tanstack/react-query";
-import {
-  getDatapackTokenSavings,
-  type TokenSavingsSummary,
-} from "@/lib/api/mekoApi";
+import { getDatapackTokenSavings, type TokenSavingsSummary } from "@/lib/api/mekoApi";
 
 export const DATAPACK_TOKEN_SAVINGS_QUERY_KEY = "datapack-token-savings";
 

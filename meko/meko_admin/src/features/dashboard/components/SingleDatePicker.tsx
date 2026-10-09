@@ -23,7 +23,13 @@ export function SingleDatePicker({ label, value, onChange, disabled }: Props) {
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="end">
-        <Calendar mode="single" selected={value} onSelect={onChange} disabled={disabled} defaultMonth={value} />
+        <Calendar
+          mode="single"
+          selected={value}
+          onSelect={onChange}
+          disabled={disabled}
+          defaultMonth={value}
+        />
       </PopoverContent>
     </Popover>
   );

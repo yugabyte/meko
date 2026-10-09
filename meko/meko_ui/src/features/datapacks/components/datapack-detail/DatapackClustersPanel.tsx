@@ -28,7 +28,9 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
   const atLimit = budgetQuery.data?.at_limit ?? false;
   const clusters = clustersQuery.data ?? [];
   const loading = clustersQuery.isLoading;
-  const error = clustersQuery.error ? getApiErrorMessage(clustersQuery.error, "Failed to load clusters.") : null;
+  const error = clustersQuery.error
+    ? getApiErrorMessage(clustersQuery.error, "Failed to load clusters.")
+    : null;
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -41,10 +43,7 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
 
   return (
     <section
-      className={cn(
-        "w-full rounded-xl border border-border bg-card/50 shadow-sm",
-        className,
-      )}
+      className={cn("w-full rounded-xl border border-border bg-card/50 shadow-sm", className)}
     >
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <Database className="h-4 w-4 shrink-0 text-orange-400" aria-hidden />
@@ -132,11 +131,7 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
         )}
       </div>
 
-      <CreateClusterWizard
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        datapackId={datapackId}
-      />
+      <CreateClusterWizard open={createOpen} onOpenChange={setCreateOpen} datapackId={datapackId} />
     </section>
   );
 }

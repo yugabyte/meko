@@ -113,8 +113,7 @@ export function insertSyntheticContextAssemble(
     out.push(steps[i]);
     const next = steps[i + 1];
     const isLastPreprocess =
-      PREPROCESS_NAMES.has(steps[i].name) &&
-      (!next || !PREPROCESS_NAMES.has(next.name));
+      PREPROCESS_NAMES.has(steps[i].name) && (!next || !PREPROCESS_NAMES.has(next.name));
     if (!inserted && isLastPreprocess) {
       out.push(synthetic);
       inserted = true;
@@ -150,8 +149,7 @@ export function preprocessTagline(
   const parts: string[] = [];
   if (memoryHits.length > 0)
     parts.push(`${memoryHits.length} ${memoryHits.length === 1 ? "memory" : "memories"}`);
-  if (kbHits.length > 0)
-    parts.push(`${kbHits.length} ${kbHits.length === 1 ? "chunk" : "chunks"}`);
+  if (kbHits.length > 0) parts.push(`${kbHits.length} ${kbHits.length === 1 ? "chunk" : "chunks"}`);
   if (parts.length === 0) {
     return `${steps.length} step${steps.length === 1 ? "" : "s"}`;
   }

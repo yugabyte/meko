@@ -21,11 +21,7 @@ type Props = {
  * for the API key — the user copies the actual token from Settings →
  * Security (also linked from the Connect dialog).
  */
-export function DatapackDetailConnectTile({
-  mcpServerUrl,
-  onOpenConnect,
-  className,
-}: Props) {
+export function DatapackDetailConnectTile({ mcpServerUrl, onOpenConnect, className }: Props) {
   const [copied, setCopied] = useState(false);
   const ready = Boolean(mcpServerUrl);
   const command = ready ? buildMekoSetupCommand(mcpServerUrl!) : "";
@@ -67,12 +63,18 @@ export function DatapackDetailConnectTile({
                 onClick={() => void handleCopy()}
                 aria-label="Copy setup command"
               >
-                {copied ? <Check className="h-4 w-4 text-green-500" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+                {copied ? (
+                  <Check className="h-4 w-4 text-green-500" aria-hidden />
+                ) : (
+                  <Copy className="h-4 w-4" aria-hidden />
+                )}
               </Button>
             </div>
             <p className="text-[11px] leading-snug text-muted-foreground">
               Replace{" "}
-              <code className="font-mono text-foreground/90">{MEKO_TOKEN_INSTALLER_PLACEHOLDER}</code>{" "}
+              <code className="font-mono text-foreground/90">
+                {MEKO_TOKEN_INSTALLER_PLACEHOLDER}
+              </code>{" "}
               with a Meko API key from{" "}
               <button
                 type="button"

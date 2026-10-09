@@ -27,7 +27,9 @@ export function ActivityBarChart({
   const rawMax = Math.max(1, ...activity.map(pointTotal));
   const yMax = rawMax <= 5 ? 5 : rawMax <= 10 ? 10 : Math.ceil(rawMax / 5) * 5;
   const tickCount = yMax <= 10 ? 2 : yMax <= 50 ? 3 : 4;
-  const yTicks = Array.from({ length: tickCount }, (_, i) => Math.round((yMax / (tickCount - 1)) * i));
+  const yTicks = Array.from({ length: tickCount }, (_, i) =>
+    Math.round((yMax / (tickCount - 1)) * i),
+  );
   const axisFontSize = yMax <= 10 ? 11 : yMax <= 50 ? 9 : 8;
   const LPAD = yMax >= 1000 ? 36 : yMax >= 100 ? 30 : 26;
 
@@ -64,16 +66,49 @@ export function ActivityBarChart({
           const gy = yAt(v);
           return (
             <g key={v}>
-              <line x1={LPAD} y1={gy} x2={W - PAD} y2={gy}
-                stroke="currentColor" strokeOpacity="0.1" strokeWidth="1" />
-              <text x={LPAD - 4} y={gy + axisFontSize * 0.35} textAnchor="end"
-                fontSize={axisFontSize} fill="currentColor" fillOpacity="0.5">{v}</text>
+              <line
+                x1={LPAD}
+                y1={gy}
+                x2={W - PAD}
+                y2={gy}
+                stroke="currentColor"
+                strokeOpacity="0.1"
+                strokeWidth="1"
+              />
+              <text
+                x={LPAD - 4}
+                y={gy + axisFontSize * 0.35}
+                textAnchor="end"
+                fontSize={axisFontSize}
+                fill="currentColor"
+                fillOpacity="0.5"
+              >
+                {v}
+              </text>
             </g>
           );
         })}
 
-        <text x={LPAD} y={H - 3} fontSize="9" fill="currentColor" fillOpacity="0.4" textAnchor="start">{oldestLabel}</text>
-        <text x={W - PAD} y={H - 3} fontSize="9" fill="currentColor" fillOpacity="0.4" textAnchor="end">Today</text>
+        <text
+          x={LPAD}
+          y={H - 3}
+          fontSize="9"
+          fill="currentColor"
+          fillOpacity="0.4"
+          textAnchor="start"
+        >
+          {oldestLabel}
+        </text>
+        <text
+          x={W - PAD}
+          y={H - 3}
+          fontSize="9"
+          fill="currentColor"
+          fillOpacity="0.4"
+          textAnchor="end"
+        >
+          Today
+        </text>
 
         {activity.map((d) => {
           const total = pointTotal(d);
@@ -91,7 +126,10 @@ export function ActivityBarChart({
           return (
             <g
               key={d.date}
-              onMouseEnter={() => { setHovered(d); setTipPct(cx / W); }}
+              onMouseEnter={() => {
+                setHovered(d);
+                setTipPct(cx / W);
+              }}
               onMouseLeave={() => setHovered(null)}
               style={{ cursor: "default" }}
             >
@@ -101,8 +139,15 @@ export function ActivityBarChart({
                 const ry = yBottom - segH;
                 yBottom -= segH;
                 return (
-                  <rect key={i} x={x} y={ry} width={BAR_W} height={segH}
-                    fill={seg.color} rx={i === segs.length - 1 ? 1.5 : 0} />
+                  <rect
+                    key={i}
+                    x={x}
+                    y={ry}
+                    width={BAR_W}
+                    height={segH}
+                    fill={seg.color}
+                    rx={i === segs.length - 1 ? 1.5 : 0}
+                  />
                 );
               })}
             </g>

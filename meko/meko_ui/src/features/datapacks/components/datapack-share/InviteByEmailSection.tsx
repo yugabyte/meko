@@ -11,7 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { SHARE_INVITE_ROLES, type ShareInviteRoleId } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
+import {
+  SHARE_INVITE_ROLES,
+  type ShareInviteRoleId,
+} from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { parseSingleInviteEmail } from "@/features/datapacks/components/datapack-share/shareInviteEmail";
 import { DATAPACK_SHARE_GRANT_CONTRIBUTOR } from "@/lib/datapackShareGrants";
 import { getApiErrorMessage, inviteDatapackShare } from "@/lib/api/mekoApi";
@@ -63,9 +66,13 @@ export function InviteByEmailSection({
 }: Props) {
   const [email, setEmail] = useState(lockedEmail ?? "");
   const [emailError, setEmailError] = useState<string | null>(null);
-  const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(lockedGrant ?? DATAPACK_SHARE_GRANT_CONTRIBUTOR);
+  const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(
+    lockedGrant ?? DATAPACK_SHARE_GRANT_CONTRIBUTOR,
+  );
   // Mirrors inviteRole so the three role tiles reflect the same selection as the dropdown.
-  const [tileRole, setTileRole] = useState<ShareInviteRoleId>(lockedGrant ?? DATAPACK_SHARE_GRANT_CONTRIBUTOR);
+  const [tileRole, setTileRole] = useState<ShareInviteRoleId>(
+    lockedGrant ?? DATAPACK_SHARE_GRANT_CONTRIBUTOR,
+  );
   const [submitting, setSubmitting] = useState(false);
   const emailLocked = Boolean(lockedEmail);
   const grantLocked = Boolean(lockedGrant);
@@ -99,10 +106,14 @@ export function InviteByEmailSection({
     }
     setSubmitting(true);
     try {
-      await inviteDatapackShare(datapackId, {
-        recipient_email: parsed?.email?.toLowerCase(),
-        grant: inviteRole,
-      }, {});
+      await inviteDatapackShare(
+        datapackId,
+        {
+          recipient_email: parsed?.email?.toLowerCase(),
+          grant: inviteRole,
+        },
+        {},
+      );
       trackEvent(TELEMETRY_EVENTS.DATAPACK_SHARED, {
         datapack_id: datapackId,
         shared_by_email: currentUserEmail,
@@ -181,7 +192,9 @@ export function InviteByEmailSection({
           </Button>
         </div>
       </div>
-      {disabled && disabledReason && <p className="text-xs text-muted-foreground">{disabledReason}</p>}
+      {disabled && disabledReason && (
+        <p className="text-xs text-muted-foreground">{disabledReason}</p>
+      )}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         {SHARE_INVITE_ROLES.map((r) => {
@@ -201,7 +214,10 @@ export function InviteByEmailSection({
                 (submitting || grantLocked) && "pointer-events-none opacity-60",
               )}
             >
-              <Icon className={cn("h-5 w-5", selected ? "text-brand" : "text-muted-foreground")} aria-hidden />
+              <Icon
+                className={cn("h-5 w-5", selected ? "text-brand" : "text-muted-foreground")}
+                aria-hidden
+              />
               <span className="text-sm font-semibold text-foreground">{r.label}</span>
               <span className="text-xs leading-snug text-muted-foreground">{r.description}</span>
             </button>

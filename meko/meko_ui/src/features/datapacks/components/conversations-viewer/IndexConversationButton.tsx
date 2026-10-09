@@ -32,14 +32,21 @@ export function IndexConversationButton({ datapackId, conversationId, onIndexed 
         user_token: token,
       });
       toast({
-        title: res.quota_exceeded ? "Conversation partially indexed" : "Conversation indexed successfully",
+        title: res.quota_exceeded
+          ? "Conversation partially indexed"
+          : "Conversation indexed successfully",
         description: res.quota_exceeded
           ? `${res.indexed} turn${res.indexed === 1 ? "" : "s"} added before your plan's embedding limit was reached; the remaining turns were not embedded.`
-          : res.indexed > 0 ? `${res.indexed} turn${res.indexed === 1 ? "" : "s"} added to the cache.` : undefined,
+          : res.indexed > 0
+            ? `${res.indexed} turn${res.indexed === 1 ? "" : "s"} added to the cache.`
+            : undefined,
       });
       onIndexed?.();
     } catch (err) {
-      toast({ title: "Index failed", description: getInferenceGatewayErrorMessage(err, "Could not index this conversation.") });
+      toast({
+        title: "Index failed",
+        description: getInferenceGatewayErrorMessage(err, "Could not index this conversation."),
+      });
     } finally {
       setBusy(false);
     }
@@ -54,7 +61,11 @@ export function IndexConversationButton({ datapackId, conversationId, onIndexed 
       className="gap-1.5 border-border bg-background text-foreground/80 hover:text-foreground"
       title="Embed this conversation's turns into the shared answer cache"
     >
-      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Database className="h-3.5 w-3.5" aria-hidden />}
+      {busy ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+      ) : (
+        <Database className="h-3.5 w-3.5" aria-hidden />
+      )}
       {busy ? "Indexing…" : "Index conversation"}
     </Button>
   );

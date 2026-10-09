@@ -12,9 +12,13 @@ vi.mock("@/lib/api/ampApi", () => ({
   ampCreateCluster: vi.fn().mockResolvedValue({ id: "c1", name: "orders" }),
   // Unlimited (Enterprise) budget → no remaining-vCPU cap, so the wizard keeps
   // the default 0.5 vCPU / 4Gi sizing.
-  ampCoreBudget: vi
-    .fn()
-    .mockResolvedValue({ tier: "enterprise", next_tier: "", used_cores: 0, max_cores: null, at_limit: false }),
+  ampCoreBudget: vi.fn().mockResolvedValue({
+    tier: "enterprise",
+    next_tier: "",
+    used_cores: 0,
+    max_cores: null,
+    at_limit: false,
+  }),
   ampCoreLimitMessage: vi.fn().mockReturnValue(null),
 }));
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
@@ -32,10 +36,18 @@ beforeEach(() => vi.clearAllMocks());
 describe("CreateClusterWizard", () => {
   it("keeps PostgreSQL / AI Database / Oracle / SQL Server / DocumentDB selectable", () => {
     renderWizard(<CreateClusterWizard open onOpenChange={() => {}} datapackId="dp" />);
-    expect((screen.getByRole("button", { name: /sql server/i }) as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: /documentdb/i }) as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: /postgresql/i }) as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByRole("button", { name: /oracle/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: /sql server/i }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: /documentdb/i }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: /postgresql/i }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect((screen.getByRole("button", { name: /oracle/i }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it("fires ONE composite create with the name + writer sizing (default engine, no extras)", async () => {

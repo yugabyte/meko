@@ -30,14 +30,14 @@ function renderPane(f: LabContextFeed) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-    <LabContextPane
-      feed={f}
-      datapackId="dp-1"
-      datapackName="foo-project"
-      datapackGrant={null}
-      lastLessonTrace={null}
-      showContext
-    />
+      <LabContextPane
+        feed={f}
+        datapackId="dp-1"
+        datapackName="foo-project"
+        datapackGrant={null}
+        lastLessonTrace={null}
+        showContext
+      />
     </QueryClientProvider>,
   );
 }
@@ -75,7 +75,9 @@ describe("LabContextPane", () => {
 
   it("shows nothing about context on the step that runs before any datapack exists", () => {
     render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
         <LabContextPane
           feed={feed({ knowledgeTotal: 3, memoriesTotal: 2 })}
           datapackId="dp-1"

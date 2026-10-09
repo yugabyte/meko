@@ -1,0 +1,2 @@
+# Copies of external code: keep them byte-identical to upstream.
+**/vendor/

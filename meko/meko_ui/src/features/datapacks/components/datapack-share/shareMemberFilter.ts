@@ -55,7 +55,10 @@ export function effectiveMemberGrant(member: DatapackOutgoingMember): DatapackSh
 export function memberEmailDomain(email: string | null | undefined): string {
   const at = (email ?? "").lastIndexOf("@");
   if (at < 0) return "";
-  return email!.slice(at + 1).trim().toLowerCase();
+  return email!
+    .slice(at + 1)
+    .trim()
+    .toLowerCase();
 }
 
 /**

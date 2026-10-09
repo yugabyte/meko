@@ -53,12 +53,14 @@ function CountsRow({
 }) {
   return (
     <div className="min-w-0 flex-1 text-center text-xs text-muted-foreground sm:text-left">
-      <span className="font-medium text-emerald-400">{knowledgeCount}</span> knowledge file{knowledgeCount === 1 ? "" : "s"}
+      <span className="font-medium text-emerald-400">{knowledgeCount}</span> knowledge file
+      {knowledgeCount === 1 ? "" : "s"}
       <span className="text-muted-foreground">, </span>
       <span className="font-medium text-sky-400">{conversationsCount}</span> conversation
       {conversationsCount === 1 ? "" : "s"}
       <span className="text-muted-foreground">, </span>
-      <span className="font-medium text-purple-400">{skillsCount}</span> skill{skillsCount === 1 ? "" : "s"}
+      <span className="font-medium text-purple-400">{skillsCount}</span> skill
+      {skillsCount === 1 ? "" : "s"}
       {importStep ? (
         total === 0 ? (
           <span className="block pt-1 text-muted-foreground/80">
@@ -100,24 +102,23 @@ export function ConfigureWizardUnifiedFooter({
   onFinish,
 }: Props) {
   const kbJob = useKbImportJobDetail();
-  const finishBusy = stepId === WIZARD_STEP_ID.import && (kbJob.phase === "creating" || kbJob.phase === "polling");
+  const finishBusy =
+    stepId === WIZARD_STEP_ID.import && (kbJob.phase === "creating" || kbJob.phase === "polling");
 
-  const showCounts =
-    stepId === WIZARD_STEP_ID.sync ||
-    stepId === WIZARD_STEP_ID.import;
+  const showCounts = stepId === WIZARD_STEP_ID.sync || stepId === WIZARD_STEP_ID.import;
 
   const counts =
     stepId === WIZARD_STEP_ID.sync
       ? {
-        k: syncKnowledgeCount,
-        c: syncConversationsCount,
-        s: syncSkillsCount,
-      }
+          k: syncKnowledgeCount,
+          c: syncConversationsCount,
+          s: syncSkillsCount,
+        }
       : {
-        k: importKnowledgeCount,
-        c: importConversationsCount,
-        s: importSkillsCount,
-      };
+          k: importKnowledgeCount,
+          c: importConversationsCount,
+          s: importSkillsCount,
+        };
 
   const total = counts.k + counts.c + counts.s;
 
@@ -125,7 +126,8 @@ export function ConfigureWizardUnifiedFooter({
     <Button
       type="button"
       disabled={!canProceedFromConfigure || configureSubmitting}
-      variant="default" className="font-semibold shadow-sm disabled:opacity-60"
+      variant="default"
+      className="font-semibold shadow-sm disabled:opacity-60"
       onClick={onConfigureSubmit}
     >
       {configureSubmitting ? (
@@ -157,7 +159,8 @@ export function ConfigureWizardUnifiedFooter({
   const syncCtaButton = (
     <Button
       type="button"
-      variant="default" className="font-semibold shadow-sm"
+      variant="default"
+      className="font-semibold shadow-sm"
       onClick={syncCtaOnClick}
     >
       {syncCtaLabel}
@@ -171,7 +174,8 @@ export function ConfigureWizardUnifiedFooter({
   const installNextButton = (
     <Button
       type="button"
-      variant="default" className="font-semibold shadow-sm"
+      variant="default"
+      className="font-semibold shadow-sm"
       onClick={onSkipForward}
     >
       Next
@@ -183,7 +187,8 @@ export function ConfigureWizardUnifiedFooter({
     <Button
       type="button"
       disabled={finishBusy}
-      variant="default" className="font-semibold shadow-sm disabled:opacity-50"
+      variant="default"
+      className="font-semibold shadow-sm disabled:opacity-50"
       onClick={onFinish}
     >
       {finishBusy ? "Finishing…" : "Finish"}
@@ -256,7 +261,9 @@ export function ConfigureWizardUnifiedFooter({
           <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             Datapack name
           </div>
-          <code className="block truncate text-sm font-semibold text-foreground">{datapackName || "—"}</code>
+          <code className="block truncate text-sm font-semibold text-foreground">
+            {datapackName || "—"}
+          </code>
         </div>
 
         {showCounts ? (

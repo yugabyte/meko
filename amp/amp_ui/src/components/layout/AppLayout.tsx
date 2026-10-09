@@ -32,23 +32,18 @@ export function AppLayout() {
 // build identity.
 function AppFooter() {
   const { data } = useVersion();
-  const commit =
-    data?.git_commit && data.git_commit !== "unknown" ? data.git_commit : "";
+  const commit = data?.git_commit && data.git_commit !== "unknown" ? data.git_commit : "";
   // Only surface a real release version; hide placeholder builds ("dev" /
   // "unknown") so the footer never reads "amp vdev" in local/dev.
   const version =
-    data?.version && data.version !== "dev" && data.version !== "unknown"
-      ? data.version
-      : "";
+    data?.version && data.version !== "dev" && data.version !== "unknown" ? data.version : "";
   // Nothing meaningful to show (typical in dev) -> no footer at all.
   if (!version && !commit) return null;
   const title =
     [
       version ? `version ${version}` : "",
       commit ? `commit ${commit}` : "",
-      data?.build_date && data.build_date !== "unknown"
-        ? `built ${data.build_date}`
-        : "",
+      data?.build_date && data.build_date !== "unknown" ? `built ${data.build_date}` : "",
     ]
       .filter(Boolean)
       .join(" · ") || undefined;

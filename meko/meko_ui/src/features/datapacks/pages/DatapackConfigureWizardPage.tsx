@@ -20,7 +20,10 @@ import { ConfigureWizardInstallStep } from "@/features/datapacks/components/conf
 import { ConfigureWizardUnifiedFooter } from "@/features/datapacks/components/configure-wizard/ConfigureWizardUnifiedFooter";
 import { ConfigureWizardSyncStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardSyncStep";
 import { ConfigureWizardPageHeader } from "@/features/datapacks/components/configure-wizard/ConfigureWizardPageHeader";
-import type { ListedSource, SyncSectionId } from "@/features/datapacks/components/configure-wizard/types";
+import type {
+  ListedSource,
+  SyncSectionId,
+} from "@/features/datapacks/components/configure-wizard/types";
 import {
   WIZARD_STEP_ID,
   WIZARD_STEPS,
@@ -88,7 +91,7 @@ export default function DatapackConfigureWizardPage({
   /** Resolved server name for display (set after create, or from route / load for existing). */
   const [apiDatapackName, setApiDatapackName] = useState<string | null>(null);
   const [apiDatapackId, setApiDatapackId] = useState<string | null>(() =>
-    isCreateFlow ? null : routeDatapackId ?? null,
+    isCreateFlow ? null : (routeDatapackId ?? null),
   );
 
   // Create flow only: the folder the new datapack is filed into. Empty until
@@ -96,7 +99,9 @@ export default function DatapackConfigureWizardPage({
   const projectsEnabled = useProjectsEnabled();
   const [createFolderId, setCreateFolderId] = useState("");
   const [configureDraftName, setConfigureDraftName] = useState("");
-  const [configureDraftDescription, setConfigureDraftDescription] = useState(() => descriptionFromState ?? "");
+  const [configureDraftDescription, setConfigureDraftDescription] = useState(
+    () => descriptionFromState ?? "",
+  );
   const [configureInitialName, setConfigureInitialName] = useState("");
   const [configureInitialDescription, setConfigureInitialDescription] = useState("");
   const [configureLoading, setConfigureLoading] = useState(!isCreateFlow);
@@ -259,8 +264,9 @@ export default function DatapackConfigureWizardPage({
   const addFiles = (section: SyncSectionId, files: FileList | null) => {
     if (section !== "knowledge" || !files?.length) return;
     setKnowledgeItems((prev) => {
-      const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE)
-        .length;
+      const staging = prev.filter(
+        (it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE,
+      ).length;
       const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(
         Array.from(files),
         staging,
@@ -283,132 +289,146 @@ export default function DatapackConfigureWizardPage({
       prev.map((x) =>
         x.id === id && x.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR
           ? {
-            ...x,
-            uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING,
-            uploadProgress: undefined,
-            uploadError: undefined,
-          }
+              ...x,
+              uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING,
+              uploadProgress: undefined,
+              uploadError: undefined,
+            }
           : x,
       ),
     );
   }, []);
 
-  const handleUploadKnowledgeFiles = useCallback(async (includedIds: Set<string>) => {
-    const pack = apiDatapackId;
-    if (!pack) return;
-    setKnowledgeUploading(true);
-    try {
-      const pending = knowledgeItems.filter(
-        (it) =>
-          it.kind === "file" &&
-          it.file &&
-          includedIds.has(it.id) &&
-          (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
-            it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR),
-      );
-      for (const item of pending) {
-        const file = item.file!;
-        // Decided from the filename, so it costs nothing: refuse before the
-        // hash and the presign, neither of which an unsupported type can use.
-        const unsupported = unsupportedKnowledgeFileMessage(file.name);
-        if (unsupported) {
-          setKnowledgeItems((prev) =>
-            prev.map((x) =>
-              x.id === item.id
-                ? {
-                    ...x,
-                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
-                    uploadProgress: 0,
-                    uploadError: unsupported,
-                  }
-                : x,
-            ),
-          );
-          continue;
-        }
-
-        // Reads only 3 KB, far cheaper than hashing the whole file, so a
-        // spoofed file fails before the hash and the presign, not after.
-        // uploadFileToS3 re-checks right before the transfer too, since the
-        // file can still change between now and then.
-        const contentIssue = await verifyFileContent(file);
-        if (contentIssue) {
-          setKnowledgeItems((prev) =>
-            prev.map((x) =>
-              x.id === item.id
-                ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR, uploadProgress: 0, uploadError: contentIssue }
-                : x,
-            ),
-          );
-          continue;
-        }
-
-        setKnowledgeItems((prev) =>
-          prev.map((x) =>
-            x.id === item.id
-              ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, uploadProgress: 0, uploadError: undefined }
-              : x,
-          ),
+  const handleUploadKnowledgeFiles = useCallback(
+    async (includedIds: Set<string>) => {
+      const pack = apiDatapackId;
+      if (!pack) return;
+      setKnowledgeUploading(true);
+      try {
+        const pending = knowledgeItems.filter(
+          (it) =>
+            it.kind === "file" &&
+            it.file &&
+            includedIds.has(it.id) &&
+            (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+              it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR),
         );
-        try {
-          const contentHash = await sha256Hex(file);
-          const { url, fields, key, already_uploaded, existing_filename } = await requestUploadURL(
-            pack,
-            file.name,
-            file.size,
-            contentHash,
-          );
-          if (already_uploaded) {
-            // Identical content already exists server-side: nothing uploaded or
-            // added. Mark it skipped (not "uploaded"); the user can remove the
-            // row. It still counts as settled so the import gate isn't blocked.
-            const uploadNote = dedupNote(file.name, existing_filename, false);
+        for (const item of pending) {
+          const file = item.file!;
+          // Decided from the filename, so it costs nothing: refuse before the
+          // hash and the presign, neither of which an unsupported type can use.
+          const unsupported = unsupportedKnowledgeFileMessage(file.name);
+          if (unsupported) {
             setKnowledgeItems((prev) =>
               prev.map((x) =>
                 x.id === item.id
-                  ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.SKIPPED, uploadProgress: 0, uploadNote }
+                  ? {
+                      ...x,
+                      uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                      uploadProgress: 0,
+                      uploadError: unsupported,
+                    }
                   : x,
               ),
             );
             continue;
           }
 
-          await uploadFileToS3(url, fields ?? {}, file, (pct) => {
+          // Reads only 3 KB, far cheaper than hashing the whole file, so a
+          // spoofed file fails before the hash and the presign, not after.
+          // uploadFileToS3 re-checks right before the transfer too, since the
+          // file can still change between now and then.
+          const contentIssue = await verifyFileContent(file);
+          if (contentIssue) {
             setKnowledgeItems((prev) =>
-              prev.map((x) => (x.id === item.id ? { ...x, uploadProgress: pct } : x)),
+              prev.map((x) =>
+                x.id === item.id
+                  ? {
+                      ...x,
+                      uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                      uploadProgress: 0,
+                      uploadError: contentIssue,
+                    }
+                  : x,
+              ),
             );
-          });
-          await confirmUpload(pack, key, file.name, file.size);
-          // KB storage counter changed → invalidate so gates flip on
-          // the next read.
-          void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
-          setKnowledgeItems((prev) =>
-            prev.map((x) =>
-              x.id === item.id
-                ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE, uploadProgress: 100 }
-                : x,
-            ),
-          );
-        } catch (err) {
-          const message = getApiErrorMessage(err, "Upload failed.");
+            continue;
+          }
+
           setKnowledgeItems((prev) =>
             prev.map((x) =>
               x.id === item.id
                 ? {
-                  ...x,
-                  uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
-                  uploadProgress: 0,
-                  uploadError: message,
-                }
+                    ...x,
+                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
+                    uploadProgress: 0,
+                    uploadError: undefined,
+                  }
                 : x,
             ),
           );
+          try {
+            const contentHash = await sha256Hex(file);
+            const { url, fields, key, already_uploaded, existing_filename } =
+              await requestUploadURL(pack, file.name, file.size, contentHash);
+            if (already_uploaded) {
+              // Identical content already exists server-side: nothing uploaded or
+              // added. Mark it skipped (not "uploaded"); the user can remove the
+              // row. It still counts as settled so the import gate isn't blocked.
+              const uploadNote = dedupNote(file.name, existing_filename, false);
+              setKnowledgeItems((prev) =>
+                prev.map((x) =>
+                  x.id === item.id
+                    ? {
+                        ...x,
+                        uploadStatus: KNOWLEDGE_UPLOAD_STATUS.SKIPPED,
+                        uploadProgress: 0,
+                        uploadNote,
+                      }
+                    : x,
+                ),
+              );
+              continue;
+            }
+
+            await uploadFileToS3(url, fields ?? {}, file, (pct) => {
+              setKnowledgeItems((prev) =>
+                prev.map((x) => (x.id === item.id ? { ...x, uploadProgress: pct } : x)),
+              );
+            });
+            await confirmUpload(pack, key, file.name, file.size);
+            // KB storage counter changed → invalidate so gates flip on
+            // the next read.
+            void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
+            setKnowledgeItems((prev) =>
+              prev.map((x) =>
+                x.id === item.id
+                  ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE, uploadProgress: 100 }
+                  : x,
+              ),
+            );
+          } catch (err) {
+            const message = getApiErrorMessage(err, "Upload failed.");
+            setKnowledgeItems((prev) =>
+              prev.map((x) =>
+                x.id === item.id
+                  ? {
+                      ...x,
+                      uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                      uploadProgress: 0,
+                      uploadError: message,
+                    }
+                  : x,
+              ),
+            );
+          }
         }
+      } finally {
+        setKnowledgeUploading(false);
       }
-    } finally {
-      setKnowledgeUploading(false);
-    }
-  }, [apiDatapackId, knowledgeItems]);
+    },
+    [apiDatapackId, knowledgeItems],
+  );
 
   const syncAllKnowledgeUploaded =
     knowledgeItems.length > 0 &&
@@ -445,10 +465,14 @@ export default function DatapackConfigureWizardPage({
             trimmed !== configureInitialName ||
             configureDraftDescription.trim() !== configureInitialDescription.trim();
           if (dirty) {
-            await updateDatapack(apiDatapackId, {
-              name: trimmed,
-              description: configureDraftDescription,
-            }, {});
+            await updateDatapack(
+              apiDatapackId,
+              {
+                name: trimmed,
+                description: configureDraftDescription,
+              },
+              {},
+            );
             setApiDatapackName(trimmed);
             setConfigureInitialName(trimmed);
             setConfigureInitialDescription(configureDraftDescription);
@@ -506,10 +530,14 @@ export default function DatapackConfigureWizardPage({
         trimmed !== configureInitialName ||
         configureDraftDescription.trim() !== configureInitialDescription.trim();
       if (dirty) {
-        const updated = await updateDatapack(routeId, {
-          name: trimmed,
-          description: configureDraftDescription,
-        }, {});
+        const updated = await updateDatapack(
+          routeId,
+          {
+            name: trimmed,
+            description: configureDraftDescription,
+          },
+          {},
+        );
         setCachedDatapackName(routeId, trimmed);
         if (updated?.message) {
           notifyDatapacksListChanged(`rename:${routeId}->${trimmed}`);
@@ -585,7 +613,9 @@ export default function DatapackConfigureWizardPage({
   const backButtonLabel =
     currentIndex === 0 ? (isCreateFlow ? "Back to datapacks" : "Back") : "Back";
 
-  const hasUploadedKnowledge = knowledgeItems.some((it) => it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
+  const hasUploadedKnowledge = knowledgeItems.some(
+    (it) => it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE,
+  );
   const knowledgeDoneCount = knowledgeItems.filter(
     (it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE,
   ).length;
@@ -616,21 +646,19 @@ export default function DatapackConfigureWizardPage({
     Boolean(currentUser?.account_id);
 
   const headerDatapackName =
-    configureDraftName.trim() ||
-    apiDatapackName ||
-    (isCreateFlow ? "new datapack" : "");
+    configureDraftName.trim() || apiDatapackName || (isCreateFlow ? "new datapack" : "");
 
   const breadcrumbItems = isCreateFlow
     ? [
-      { label: "Datapacks", href: ROUTES.datapacks },
-      { label: "New datapack", href: ROUTES.datapacks },
-      { label: "configure" },
-    ]
+        { label: "Datapacks", href: ROUTES.datapacks },
+        { label: "New datapack", href: ROUTES.datapacks },
+        { label: "configure" },
+      ]
     : [
-      { label: "Datapacks", href: ROUTES.datapacks },
-      { label: apiDatapackName ?? "", href: datapackDetailPath(routeDatapackId ?? "") },
-      { label: "configure" },
-    ];
+        { label: "Datapacks", href: ROUTES.datapacks },
+        { label: apiDatapackName ?? "", href: datapackDetailPath(routeDatapackId ?? "") },
+        { label: "configure" },
+      ];
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -687,7 +715,7 @@ export default function DatapackConfigureWizardPage({
               conversationInputRef={conversationInputRef}
               skillsInputRef={skillsInputRef}
               onPickFiles={addFiles}
-              onAddUrl={() => { }}
+              onAddUrl={() => {}}
               onRemove={removeItem}
               knowledgeUploading={knowledgeUploading}
               onUploadKnowledgeFiles={handleUploadKnowledgeFiles}

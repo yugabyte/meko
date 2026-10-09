@@ -6,21 +6,9 @@
 // Panel content (name, icon, copy, CTA) comes from AGENT_PANELS in
 // navConfig; styling comes from layoutStyles.
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { AGENT_PANELS, type AgentPanelId } from "./navConfig";
 import { layoutStyles as s } from "./layoutStyles";
@@ -57,9 +45,7 @@ export function AgentPanelProvider({ children }: { children: ReactNode }) {
                 </span>
                 <div className="min-w-0">
                   <SheetTitle className={s.panelTitle}>{cfg.name}</SheetTitle>
-                  <SheetDescription className={s.panelSubtitle}>
-                    {cfg.subtitle}
-                  </SheetDescription>
+                  <SheetDescription className={s.panelSubtitle}>{cfg.subtitle}</SheetDescription>
                 </div>
               </div>
 
@@ -69,9 +55,7 @@ export function AgentPanelProvider({ children }: { children: ReactNode }) {
                   <Icon className={s.panelTileSmIcon} />
                 </span>
                 <div className="min-w-0">
-                  <div className={cn(s.panelLabel, cfg.labelClass)}>
-                    {cfg.label}
-                  </div>
+                  <div className={cn(s.panelLabel, cfg.labelClass)}>{cfg.label}</div>
                   <p className={s.panelText}>{cfg.description}</p>
                 </div>
               </div>

@@ -26,7 +26,10 @@ export type WarningBannerTone = "warning" | "success";
 /** Same amber and emerald the rest of the app already uses for these two
  *  meanings (see FindingsList's severity chips, KnowledgeBaseStage's done
  *  state) rather than a second green invented here. */
-const TONE: Record<WarningBannerTone, { container: string; icon: string; Icon: typeof AlertTriangle }> = {
+const TONE: Record<
+  WarningBannerTone,
+  { container: string; icon: string; Icon: typeof AlertTriangle }
+> = {
   warning: {
     container: "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-100",
     icon: "text-amber-700 dark:text-amber-300",

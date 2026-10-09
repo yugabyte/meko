@@ -36,7 +36,10 @@ export function estimateCost(
  * covered by a real test even after that fixture is eventually populated
  * with non-zero numbers (see this function's own test for the zero case).
  */
-export function computeSavingsPct(slmCost: number | null, claudeCost: number | null): number | null {
+export function computeSavingsPct(
+  slmCost: number | null,
+  claudeCost: number | null,
+): number | null {
   if (slmCost === null || claudeCost === null || claudeCost <= 0) return null;
   return Math.round((1 - slmCost / claudeCost) * 100);
 }

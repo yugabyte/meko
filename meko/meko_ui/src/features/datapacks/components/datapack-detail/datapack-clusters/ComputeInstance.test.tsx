@@ -3,7 +3,12 @@ import { type ReactElement } from "react";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ComputeInstance } from "./ComputeInstance";
-import { ampDeleteCompute, ampResizeCompute, ampCoreLimitMessage, type AmpCompute } from "@/lib/api/ampApi";
+import {
+  ampDeleteCompute,
+  ampResizeCompute,
+  ampCoreLimitMessage,
+  type AmpCompute,
+} from "@/lib/api/ampApi";
 import { toast } from "@/hooks/use-toast";
 
 vi.mock("@/lib/api/ampApi", () => ({

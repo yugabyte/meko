@@ -27,10 +27,7 @@ import { TELEMETRY_CLIENT_WORKBENCH, TELEMETRY_EVENTS } from "@/lib/telemetry/ev
 import { trackEvent } from "@/lib/telemetry/rudderstack";
 import { ChatBubble, ThinkingBubble } from "./workbench-lm-chat/ChatBubble";
 import { ChatInput } from "./workbench-lm-chat/ChatInput";
-import {
-  PendingActionCard,
-  describeActionResult,
-} from "./workbench-lm-chat/PendingActionCard";
+import { PendingActionCard, describeActionResult } from "./workbench-lm-chat/PendingActionCard";
 import { EmptyState } from "./workbench-lm-chat/EmptyState";
 import { downloadChat } from "./workbench-lm-chat/downloadChat";
 import type { KnowledgeReadiness, Message } from "./workbench-lm-chat/types";

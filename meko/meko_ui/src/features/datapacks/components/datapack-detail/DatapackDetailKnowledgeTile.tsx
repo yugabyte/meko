@@ -76,9 +76,7 @@ export function DatapackDetailKnowledgeTile({
 
   const chipTotal = totalFileCount ?? previewLen;
   const countLabel =
-    documentsLoading && totalFileCount == null && previewLen === 0
-      ? "…"
-      : String(chipTotal);
+    documentsLoading && totalFileCount == null && previewLen === 0 ? "…" : String(chipTotal);
 
   return (
     <aside

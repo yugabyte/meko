@@ -44,12 +44,7 @@ export async function createBillingCheckoutSession(
 export async function createBillingPortalSession(
   options: { signal?: AbortSignal } = {},
 ): Promise<PortalSessionResponse> {
-  return request<PortalSessionResponse>(
-    "/billing/portal-session",
-    "POST",
-    undefined,
-    options,
-  );
+  return request<PortalSessionResponse>("/billing/portal-session", "POST", undefined, options);
 }
 
 /** Shared cache key prefix for all billing-related queries. */

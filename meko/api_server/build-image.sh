@@ -41,18 +41,35 @@ TAG_GIVEN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-push) PUSH=0 ;;
-    --no-latest) LATEST=0 ;;
-    --tag) shift; TAG="${1:-}"; TAG_GIVEN=1 ;;
-    --tag=*) TAG="${1#--tag=}"; TAG_GIVEN=1 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  --no-push) PUSH=0 ;;
+  --no-latest) LATEST=0 ;;
+  --tag)
+    shift
+    TAG="${1:-}"
+    TAG_GIVEN=1
+    ;;
+  --tag=*)
+    TAG="${1#--tag=}"
+    TAG_GIVEN=1
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 2
+    ;;
   esac
   shift
 done
 
 if [ "$TAG_GIVEN" = 1 ]; then
-  [ -n "$TAG" ] || { echo "--tag needs a value" >&2; exit 2; }
+  [ -n "$TAG" ] || {
+    echo "--tag needs a value" >&2
+    exit 2
+  }
   LATEST=0
 fi
 
@@ -72,9 +89,11 @@ if [ "$PUSH" = "1" ]; then
     exit 1
   fi
   if [ -n "${QUAY_USER:-}" ]; then
-    quay_user="$QUAY_USER"; quay_pass="$token"
+    quay_user="$QUAY_USER"
+    quay_pass="$token"
   elif printf '%s' "$token" | grep -q ':'; then
-    quay_user="${token%%:*}"; quay_pass="${token#*:}"
+    quay_user="${token%%:*}"
+    quay_pass="${token#*:}"
   else
     echo "QUAY_TOKEN has no username: set QUAY_USER, or give QUAY_TOKEN as user:token" >&2
     exit 1

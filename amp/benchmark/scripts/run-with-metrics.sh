@@ -5,8 +5,10 @@
 # Example:
 #   ./run-with-metrics.sh ybAmp L -- bash ~/benchmark/scripts/big-load.sh ybAmp
 set -uo pipefail
-target="${1:?usage: $0 <target> <label> -- <cmd...>}"; shift
-label="${1:?need label}"; shift
+target="${1:?usage: $0 <target> <label> -- <cmd...>}"
+shift
+label="${1:?need label}"
+shift
 [[ "${1:-}" == "--" ]] && shift
 
 source ~/benchmark/scripts/_env.sh "$target"
@@ -15,22 +17,22 @@ source ~/benchmark/scripts/_metrics.sh
 ts=$(date -u +%Y%m%d-%H%M)
 outdir=~/benchmark/results/${ts}-${target}-8kcolo-${label}
 mkdir -p "$outdir"
-export CPU_SAMPLE_HOST=172.151.29.184   # ybAmp (compute + PS + control plane)
+export CPU_SAMPLE_HOST=172.151.29.184 # ybAmp (compute + PS + control plane)
 
 echo "[run-with-metrics] label=$label outdir=$outdir"
 echo "[run-with-metrics] cmd: $*"
 
 cpu_pid=$(start_server_cpu_sampler "$outdir/server-cpu.log")
-io_pid=$(start_server_io_sampler  "$outdir/server-io.log" nvme1n1)
+io_pid=$(start_server_io_sampler "$outdir/server-io.log" nvme1n1)
 mark_timestamp "$outdir" START
 
 # Run the workload, teeing its output.
-( "$@" ) 2>&1 | tee "$outdir/run.log"
+("$@") 2>&1 | tee "$outdir/run.log"
 rc=${PIPESTATUS[0]}
 
 mark_timestamp "$outdir" END
 stop_server_cpu_sampler "$cpu_pid"
-stop_server_io_sampler  "$io_pid"
+stop_server_io_sampler "$io_pid"
 
 {
   echo "=== $label  (rc=$rc) ==="

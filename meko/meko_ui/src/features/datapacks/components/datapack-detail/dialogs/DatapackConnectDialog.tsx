@@ -31,10 +31,7 @@ import {
   type MekoToken,
   type ProvisionStatus,
 } from "@/lib/api/mekoApi";
-import {
-  MEKO_TOKEN_INSTALLER_PLACEHOLDER,
-  filterActiveMekoTokens,
-} from "@/lib/mekoTokens";
+import { MEKO_TOKEN_INSTALLER_PLACEHOLDER, filterActiveMekoTokens } from "@/lib/mekoTokens";
 import { ROUTES } from "@/app/routes/paths";
 import { ConnectApiTokensField } from "./ConnectApiTokensField";
 
@@ -63,7 +60,9 @@ function InstallerCommandRow({
   return (
     <div className="flex items-start gap-2 rounded-md border border-border bg-card p-3">
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <code className="min-w-0 break-all text-xs leading-relaxed text-blue-700 dark:text-blue-100">{displayText}</code>
+        <code className="min-w-0 break-all text-xs leading-relaxed text-blue-700 dark:text-blue-100">
+          {displayText}
+        </code>
         {needsToggle ? (
           <button
             type="button"
@@ -223,7 +222,9 @@ export function DatapackConnectDialog({
               </>
             ) : null}
 
-            <h3 className={cn("text-lg font-semibold text-foreground", showDatapackName && "pt-2")}>MCP Server</h3>
+            <h3 className={cn("text-lg font-semibold text-foreground", showDatapackName && "pt-2")}>
+              MCP Server
+            </h3>
             <div className="space-y-2">
               <label className="text-sm font-medium text-muted-foreground">URL</label>
               <div className="flex items-center p-3 rounded-md bg-input border border-border">
@@ -256,7 +257,9 @@ export function DatapackConnectDialog({
             />
 
             <div className="space-y-2 pt-1">
-              <label className="text-sm font-medium text-muted-foreground">One-line installer</label>
+              <label className="text-sm font-medium text-muted-foreground">
+                One-line installer
+              </label>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Replace{" "}
                 <code className="rounded bg-input px-1 text-foreground/90">
@@ -266,22 +269,13 @@ export function DatapackConnectDialog({
               </p>
               <Tabs defaultValue="claude-code" className="w-full">
                 <TabsList variant="segmented" className="w-full justify-start">
-                  <TabsTrigger
-                    value="claude-code"
-                    variant="segmented" className="flex-1"
-                  >
+                  <TabsTrigger value="claude-code" variant="segmented" className="flex-1">
                     Claude Code
                   </TabsTrigger>
-                  <TabsTrigger
-                    value="claude-desktop"
-                    variant="segmented" className="flex-1"
-                  >
+                  <TabsTrigger value="claude-desktop" variant="segmented" className="flex-1">
                     Claude Desktop
                   </TabsTrigger>
-                  <TabsTrigger
-                    value="cursor"
-                    variant="segmented" className="flex-1"
-                  >
+                  <TabsTrigger value="cursor" variant="segmented" className="flex-1">
                     Cursor
                   </TabsTrigger>
                   <TabsTrigger
@@ -294,7 +288,10 @@ export function DatapackConnectDialog({
                 <TabsContent value="claude-desktop" className="mt-3 space-y-2 outline-none">
                   <InstallerCommandRow
                     dialogOpen={open}
-                    command={buildMekoInstallerCommand("claude-desktop", provisionStatus.mcp_server_url)}
+                    command={buildMekoInstallerCommand(
+                      "claude-desktop",
+                      provisionStatus.mcp_server_url,
+                    )}
                     copyField="mcpInstallClaudeDesktop"
                     copiedField={copiedField}
                     onCopy={handleCopy}
@@ -303,7 +300,10 @@ export function DatapackConnectDialog({
                 <TabsContent value="claude-code" className="mt-3 space-y-2 outline-none">
                   <InstallerCommandRow
                     dialogOpen={open}
-                    command={buildMekoInstallerCommand("claude-code", provisionStatus.mcp_server_url)}
+                    command={buildMekoInstallerCommand(
+                      "claude-code",
+                      provisionStatus.mcp_server_url,
+                    )}
                     copyField="mcpInstallClaudeCode"
                     copiedField={copiedField}
                     onCopy={handleCopy}

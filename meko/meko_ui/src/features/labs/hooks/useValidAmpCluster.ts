@@ -14,7 +14,10 @@ import type { useLabRunnerSession } from "./useLabRunnerSession";
  * never fires. Both CreateAmpClusterStage and ReviewDashboardStage need this
  * same check before trusting `session.ampClusterId`, hence a shared hook.
  */
-export function useValidAmpCluster(datapackId: string, session: ReturnType<typeof useLabRunnerSession>) {
+export function useValidAmpCluster(
+  datapackId: string,
+  session: ReturnType<typeof useLabRunnerSession>,
+) {
   const clustersQuery = useClusters(datapackId);
   const { data: clusters, isLoading } = clustersQuery;
   const { ampClusterId, clearAmpCluster } = session;

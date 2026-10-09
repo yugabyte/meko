@@ -42,8 +42,12 @@ vi.mock("@/features/datapacks/components/FileUpload", () => ({
         <button onClick={() => props.onQueuedDocsChange?.([{ name: "x", status: "QUEUED" }])}>
           simulate-queue-doc
         </button>
-        <button onClick={() => props.onProcessingActiveChange?.(true)}>simulate-processing-start</button>
-        <button onClick={() => props.onProcessingActiveChange?.(false)}>simulate-processing-stop</button>
+        <button onClick={() => props.onProcessingActiveChange?.(true)}>
+          simulate-processing-start
+        </button>
+        <button onClick={() => props.onProcessingActiveChange?.(false)}>
+          simulate-processing-stop
+        </button>
       </div>
     );
   },
@@ -76,19 +80,28 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("KnowledgeBaseStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
-    render(<KnowledgeBaseStage session={fakeSession({ datapackId: null })} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage
+        session={fakeSession({ datapackId: null })}
+        feed={feed()}
+        onGoToCreateDatapack={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
     expect(screen.queryByTestId("file-upload-mock")).toBeNull();
   });
 
   it("renders the upload widget once a datapack is selected", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.getByTestId("file-upload-mock")).toBeTruthy();
   });
 
-
   it("shows the sample-vs-own card, and 'Add the sample' seeds FileUpload's initialFiles", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.getByText("org-coding-standards.md")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /add this sample/i }));
@@ -101,7 +114,9 @@ describe("KnowledgeBaseStage", () => {
   // The card leads with "Add this sample"; the excerpt is there for whoever
   // wants to check what they're adding, not in the way of the one action.
   it("keeps the sample's content behind a preview toggle, showing the real file when opened", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.queryByText(/sql injection vulnerability/i)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
@@ -112,7 +127,9 @@ describe("KnowledgeBaseStage", () => {
   });
 
   it("labels the sample with its real type and size, so the reader knows what lands", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.getByText(/Markdown$/)).toBeTruthy();
   });
 
@@ -120,7 +137,9 @@ describe("KnowledgeBaseStage", () => {
   // started took the document off screen exactly as the page began narrating
   // what it was doing to it.
   it("keeps the sample card once the doc is queued, and marks it added", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.getByRole("button", { name: /add this sample/i })).toBeTruthy();
 
     fireEvent.click(screen.getByText("simulate-queue-doc"));
@@ -188,7 +207,9 @@ describe("KnowledgeBaseStage", () => {
   // too: a reader who opened it to check what they were adding should not
   // have it close under them.
   it("keeps the excerpt open across the upload", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
     expect(screen.getByText(/sql injection vulnerability/i)).toBeTruthy();
 
@@ -198,7 +219,9 @@ describe("KnowledgeBaseStage", () => {
   });
 
   it("shows a processing indicator while the upload is active", () => {
-    render(<KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={feed()} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.queryByText(/chunking and embedding your file/i)).toBeNull();
 
     fireEvent.click(screen.getByText("simulate-processing-start"));
@@ -221,18 +244,29 @@ describe("KnowledgeBaseStage", () => {
   });
 
   it("keeps showing done across a remount, since the document is still indexed", () => {
-    const indexed = feed({ knowledgeTotal: 1, knowledge: [{ id: "d1", status: "COMPLETED" }] as never });
+    const indexed = feed({
+      knowledgeTotal: 1,
+      knowledge: [{ id: "d1", status: "COMPLETED" }] as never,
+    });
     const { unmount } = render(
       <KnowledgeBaseStage session={fakeSession()} feed={indexed} onGoToCreateDatapack={vi.fn()} />,
     );
     unmount();
-    render(<KnowledgeBaseStage session={fakeSession()} feed={indexed} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage session={fakeSession()} feed={indexed} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.getByText(/1 document indexed/i)).toBeTruthy();
   });
 
   it("records one aggregate X-Ray call once processing finishes", () => {
     const recordLessonTrace = vi.fn();
-    render(<KnowledgeBaseStage session={fakeSession({ recordLessonTrace })} feed={feed()} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <KnowledgeBaseStage
+        session={fakeSession({ recordLessonTrace })}
+        feed={feed()}
+        onGoToCreateDatapack={vi.fn()}
+      />,
+    );
 
     fireEvent.click(screen.getByText("simulate-processing-start"));
     expect(recordLessonTrace).not.toHaveBeenCalled();

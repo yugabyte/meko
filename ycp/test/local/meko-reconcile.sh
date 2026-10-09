@@ -73,17 +73,22 @@ AGENT_ID=ycp-smoke
 HUMAN_AGENT_ID=meko_agent
 
 log() { printf '\n==> %s\n' "$*"; }
-die() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
+die() {
+  printf '\nFAIL: %s\n' "$*" >&2
+  exit 1
+}
 k() { kubectl --context "$CTX" "$@"; }
 api() {
-  local method="$1" path="$2"; shift 2
+  local method="$1" path="$2"
+  shift 2
   curl -fsS -X "$method" "http://127.0.0.1:$PORT$BASE$path" \
     -H "X-Meko-Admin-Secret: $ADMIN_KEY" "$@"
 }
 # The data plane's own api-server, over its port-forward. No admin secret: with
 # Cognito off it authenticates nobody, which is the same door the agent comes in by.
 dp() {
-  local method="$1" path="$2"; shift 2
+  local method="$1" path="$2"
+  shift 2
   curl -fsS -X "$method" "http://127.0.0.1:$DP_PORT/api/v1$path" "$@"
 }
 
@@ -144,7 +149,10 @@ port_free() { ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 pick_port() {
   local start="$1" candidate
   for candidate in $(seq "$start" $((start + 20))); do
-    if port_free "$candidate"; then printf '%s' "$candidate"; return 0; fi
+    if port_free "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
   done
   return 1
 }
@@ -276,7 +284,7 @@ curl -fsS "http://127.0.0.1:$DP_PORT/api/v1/health" >/dev/null 2>&1 ||
 
 log "creating a person's datapack (must never be touched)"
 dp POST /agents -H 'content-type: application/json' \
-  -d "{\"agent_id\":\"$HUMAN_AGENT_ID\"}" >/dev/null 2>&1 || true  # 409 if it exists
+  -d "{\"agent_id\":\"$HUMAN_AGENT_ID\"}" >/dev/null 2>&1 || true # 409 if it exists
 dp POST /datapacks -H 'content-type: application/json' \
   -d "{\"name\":\"handmade\",\"agent_id\":\"$HUMAN_AGENT_ID\",\"description\":\"made in the UI\"}" >/dev/null ||
   die "could not create the person's datapack"
@@ -307,7 +315,8 @@ wait_for() {
     if datapacks | grep -q "$want"; then return 0; fi
     sleep 1
   done
-  printf '    datapacks now:\n'; datapacks | sed 's/^/      /'
+  printf '    datapacks now:\n'
+  datapacks | sed 's/^/      /'
   die "$what"
 }
 wait_gone() {
@@ -316,7 +325,8 @@ wait_gone() {
     datapacks | grep -q "^$gone " || return 0
     sleep 1
   done
-  printf '    datapacks now:\n'; datapacks | sed 's/^/      /'
+  printf '    datapacks now:\n'
+  datapacks | sed 's/^/      /'
   die "$what"
 }
 

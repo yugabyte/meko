@@ -4,7 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ampCoreBudget, ampCoreLimitMessage, ampCreateCluster, ampListClusters } from "@/lib/api/ampApi";
+import {
+  ampCoreBudget,
+  ampCoreLimitMessage,
+  ampCreateCluster,
+  ampListClusters,
+} from "@/lib/api/ampApi";
 import type { useLabRunnerSession } from "@/features/labs/hooks/useLabRunnerSession";
 import { CreateAmpClusterStage } from "@/features/labs/components/stages/CreateAmpClusterStage";
 
@@ -48,12 +53,23 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListClusters.mockResolvedValue([]);
   mockCoreLimitMessage.mockReturnValue(null);
-  mockCoreBudget.mockResolvedValue({ tier: "free", next_tier: "standard", used_cores: 0, max_cores: 500, at_limit: false });
+  mockCoreBudget.mockResolvedValue({
+    tier: "free",
+    next_tier: "standard",
+    used_cores: 0,
+    max_cores: 500,
+    at_limit: false,
+  });
 });
 
 describe("CreateAmpClusterStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
-    renderStage(<CreateAmpClusterStage session={fakeSession({ datapackId: null })} onGoToCreateDatapack={vi.fn()} />);
+    renderStage(
+      <CreateAmpClusterStage
+        session={fakeSession({ datapackId: null })}
+        onGoToCreateDatapack={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
 
@@ -62,17 +78,28 @@ describe("CreateAmpClusterStage", () => {
       id: "cluster-1",
       name: "review-metrics",
       storage_pool_id: "pool-1",
-      default_branch: { branch_id: "branch-1", cluster_id: "cluster-1", name: "main", pg_version: 16, is_default: true, created_at: "" },
+      default_branch: {
+        branch_id: "branch-1",
+        cluster_id: "cluster-1",
+        name: "main",
+        pg_version: 16,
+        is_default: true,
+        created_at: "",
+      },
       created_at: "",
     });
     const session = fakeSession();
     renderStage(<CreateAmpClusterStage session={session} onGoToCreateDatapack={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByLabelText("Cluster name")).toBeTruthy());
-    fireEvent.change(screen.getByLabelText("Cluster name"), { target: { value: "review-metrics" } });
+    fireEvent.change(screen.getByLabelText("Cluster name"), {
+      target: { value: "review-metrics" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /create cluster/i }));
 
-    await waitFor(() => expect(session.selectAmpCluster).toHaveBeenCalledWith("cluster-1", "branch-1"));
+    await waitFor(() =>
+      expect(session.selectAmpCluster).toHaveBeenCalledWith("cluster-1", "branch-1"),
+    );
     expect(mockCreateCluster).toHaveBeenCalledWith("dp-1", { name: "review-metrics", cpu: "0.5" });
   });
 
@@ -82,7 +109,9 @@ describe("CreateAmpClusterStage", () => {
     renderStage(<CreateAmpClusterStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByLabelText("Cluster name")).toBeTruthy());
-    fireEvent.change(screen.getByLabelText("Cluster name"), { target: { value: "review-metrics" } });
+    fireEvent.change(screen.getByLabelText("Cluster name"), {
+      target: { value: "review-metrics" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /create cluster/i }));
 
     expect(await screen.findByText(/Upgrade to Standard to use more vCPU\./)).toBeTruthy();
@@ -108,14 +137,22 @@ describe("CreateAmpClusterStage", () => {
   });
 
   it("greys the create button (with an upgrade tooltip) when already at the per-tier vCPU cap", async () => {
-    mockCoreBudget.mockResolvedValue({ tier: "free", next_tier: "standard", used_cores: 500, max_cores: 500, at_limit: true });
+    mockCoreBudget.mockResolvedValue({
+      tier: "free",
+      next_tier: "standard",
+      used_cores: 500,
+      max_cores: 500,
+      at_limit: true,
+    });
     renderStage(<CreateAmpClusterStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
 
     // Same "grey the button, don't wait for a click" gate DatapackClustersPanel.tsx
     // uses -- the tooltip's own content is a Radix portal (hover-triggered),
     // not asserted here; the disabled state is the load-bearing behavior.
     await waitFor(() =>
-      expect((screen.getByRole("button", { name: /create cluster/i }) as HTMLButtonElement).disabled).toBe(true),
+      expect(
+        (screen.getByRole("button", { name: /create cluster/i }) as HTMLButtonElement).disabled,
+      ).toBe(true),
     );
   });
 });

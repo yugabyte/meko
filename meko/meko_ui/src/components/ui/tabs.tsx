@@ -1,10 +1,10 @@
-import * as React from "react"
-import * as TabsPrimitive from "@radix-ui/react-tabs"
-import { cva, type VariantProps } from "class-variance-authority"
+import * as React from "react";
+import * as TabsPrimitive from "@radix-ui/react-tabs";
+import { cva, type VariantProps } from "class-variance-authority";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
-const Tabs = TabsPrimitive.Root
+const Tabs = TabsPrimitive.Root;
 
 // Tab look is a `variant`, not per-file className. A call-site sets `variant`
 // once on <TabsList> and every <TabsTrigger> inside inherits it via context, so
@@ -13,8 +13,8 @@ const Tabs = TabsPrimitive.Root
 //   - segmented — flat control inside a bordered box, active = primary fill.
 // (Bespoke one-off tab styles, e.g. the share dialog's underline invite tabs,
 //  can still pass className; add a variant here if a look recurs.)
-type TabsVariant = "default" | "segmented"
-const TabsVariantContext = React.createContext<TabsVariant>("default")
+type TabsVariant = "default" | "segmented";
+const TabsVariantContext = React.createContext<TabsVariant>("default");
 
 const tabsListVariants = cva("inline-flex items-center text-muted-foreground", {
   variants: {
@@ -24,7 +24,7 @@ const tabsListVariants = cva("inline-flex items-center text-muted-foreground", {
     },
   },
   defaultVariants: { variant: "default" },
-})
+});
 
 const tabsTriggerVariants = cva(
   "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium text-muted-foreground ring-offset-background transition-all hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
@@ -36,14 +36,14 @@ const tabsTriggerVariants = cva(
       },
     },
     defaultVariants: { variant: "default" },
-  }
-)
+  },
+);
 
 const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.List> & VariantProps<typeof tabsListVariants>
 >(({ className, variant, ...props }, ref) => {
-  const resolved: TabsVariant = variant ?? "default"
+  const resolved: TabsVariant = variant ?? "default";
   return (
     <TabsVariantContext.Provider value={resolved}>
       <TabsPrimitive.List
@@ -52,26 +52,27 @@ const TabsList = React.forwardRef<
         {...props}
       />
     </TabsVariantContext.Provider>
-  )
-})
-TabsList.displayName = TabsPrimitive.List.displayName
+  );
+});
+TabsList.displayName = TabsPrimitive.List.displayName;
 
 const TabsTrigger = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger> & VariantProps<typeof tabsTriggerVariants>
+  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger> &
+    VariantProps<typeof tabsTriggerVariants>
 >(({ className, variant, ...props }, ref) => {
   // Inherit the list's variant unless a trigger overrides it explicitly.
-  const ctx = React.useContext(TabsVariantContext)
-  const resolved: TabsVariant = variant ?? ctx
+  const ctx = React.useContext(TabsVariantContext);
+  const resolved: TabsVariant = variant ?? ctx;
   return (
     <TabsPrimitive.Trigger
       ref={ref}
       className={cn(tabsTriggerVariants({ variant: resolved }), className)}
       {...props}
     />
-  )
-})
-TabsTrigger.displayName = TabsPrimitive.Trigger.displayName
+  );
+});
+TabsTrigger.displayName = TabsPrimitive.Trigger.displayName;
 
 const TabsContent = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Content>,
@@ -81,11 +82,11 @@ const TabsContent = React.forwardRef<
     ref={ref}
     className={cn(
       "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:slide-in-from-right-2 data-[state=inactive]:animate-out data-[state=inactive]:fade-out-0 data-[state=inactive]:slide-out-to-left-2",
-      className
+      className,
     )}
     {...props}
   />
-))
-TabsContent.displayName = TabsPrimitive.Content.displayName
+));
+TabsContent.displayName = TabsPrimitive.Content.displayName;
 
-export { Tabs, TabsList, TabsTrigger, TabsContent }
+export { Tabs, TabsList, TabsTrigger, TabsContent };

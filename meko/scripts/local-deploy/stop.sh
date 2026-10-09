@@ -16,11 +16,16 @@ REMOVE_VOLUMES=false
 KEEP_YB=false
 for arg in "$@"; do
   case "$arg" in
-    --volumes) REMOVE_VOLUMES=true ;;
-    --keep-yb) KEEP_YB=true ;;
-    -h|--help)
-      sed -n '2,9p' "$0"; exit 0 ;;
-    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+  --volumes) REMOVE_VOLUMES=true ;;
+  --keep-yb) KEEP_YB=true ;;
+  -h | --help)
+    sed -n '2,9p' "$0"
+    exit 0
+    ;;
+  *)
+    echo "unknown flag: $arg" >&2
+    exit 2
+    ;;
   esac
 done
 

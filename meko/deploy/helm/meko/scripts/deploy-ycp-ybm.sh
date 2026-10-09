@@ -76,11 +76,15 @@ WAIT_LB="${WAIT_LB:-true}"
 K="kubectl --context=$CONTEXT"
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 # DRY_RUN: applies become client dry-runs; helm gets --dry-run. Nothing is created.
-kapply() { if [ "$DRY_RUN" = "true" ]; then $K apply --dry-run=client -f - ; else $K apply -f - >/dev/null ; fi ; }
-DRY_FLAG=""; [ "$DRY_RUN" = "true" ] && DRY_FLAG="--dry-run"
-rand() { openssl rand -hex "${1:-24}" 2>/dev/null || head -c "$((${1:-24}*2))" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+kapply() { if [ "$DRY_RUN" = "true" ]; then $K apply --dry-run=client -f -; else $K apply -f - >/dev/null; fi; }
+DRY_FLAG=""
+[ "$DRY_RUN" = "true" ] && DRY_FLAG="--dry-run"
+rand() { openssl rand -hex "${1:-24}" 2>/dev/null || head -c "$((${1:-24} * 2))" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
-[ -f "$CHART_DIR/values-ycp.yaml" ] || { echo "CHART_DIR=$CHART_DIR has no values-ycp.yaml — need a meko chart with ycp mode."; exit 1; }
+[ -f "$CHART_DIR/values-ycp.yaml" ] || {
+  echo "CHART_DIR=$CHART_DIR has no values-ycp.yaml — need a meko chart with ycp mode."
+  exit 1
+}
 if [ "$DRY_RUN" != "true" ]; then
   : "${DB_HOST:?set DB_HOST (the YBM/Aeon YSQL endpoint)}"
   : "${DB_PASSWORD:?set DB_PASSWORD}"
@@ -90,7 +94,10 @@ fi
 
 # Admin key + MCP secret: generate if not supplied (admin key is printed below).
 GEN_ADMIN=false
-[ -z "$ADMIN_API_KEY" ] && { ADMIN_API_KEY="$(rand 24)"; GEN_ADMIN=true; }
+[ -z "$ADMIN_API_KEY" ] && {
+  ADMIN_API_KEY="$(rand 24)"
+  GEN_ADMIN=true
+}
 [ -z "$MCP_INTERNAL_SECRET" ] && MCP_INTERNAL_SECRET="$(rand 24)"
 
 log "Target: context=$CONTEXT ns=$NS release=$RELEASE mode=ycp db=$DB_USER@${DB_HOST:-<dry-run>}:$DB_PORT api_tag=$API_TAG base_path=${BASE_PATH:-<root>} byoc_metrics_url=$BYOC_METRICS_URL"
@@ -108,7 +115,7 @@ if [ "$DRY_RUN" = "true" ]; then
   PW="DRY_RUN"
 else
   PW="$(AWS_ACCESS_KEY_ID="$ECR_AWS_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$ECR_AWS_SECRET_ACCESS_KEY" \
-        aws ecr get-login-password --region "$ECR_REGION")"
+    aws ecr get-login-password --region "$ECR_REGION")"
 fi
 $K -n "$NS" create secret docker-registry ecr-registry-creds \
   --docker-server="$ECR_REGISTRY" --docker-username=AWS --docker-password="$PW" \
@@ -121,16 +128,17 @@ $K -n "$NS" create secret generic aws-ecr-refresher-creds \
 # --- Secrets (the chart references these; it holds no secret material) -------
 log "Secrets in $NS"
 mk() { $K -n "$NS" create secret generic "$1" "${@:2}" --dry-run=client -o yaml | kapply; }
-mk meko-api-server-db        --from-literal=db-password="${DB_PASSWORD:-dryrun}"
+mk meko-api-server-db --from-literal=db-password="${DB_PASSWORD:-dryrun}"
 mk meko-api-server-system-db --from-literal=db-password="${DB_PASSWORD:-dryrun}"
-mk meko-mcp-internal-secret  --from-literal=secret-key="$MCP_INTERNAL_SECRET"
-mk meko-admin-api-key        --from-literal=admin-api-key="$ADMIN_API_KEY"
+mk meko-mcp-internal-secret --from-literal=secret-key="$MCP_INTERNAL_SECRET"
+mk meko-admin-api-key --from-literal=admin-api-key="$ADMIN_API_KEY"
 
 # --- Deploy-time overrides (composed AFTER values-ycp so they win) ----------
 # controlPlaneDb off (external DB); both DB handles → the one YBM cluster; ECR
 # refresher scoped to $NS (chart default targets all meko namespaces).
-OVR="$(mktemp)"; trap 'rm -f "$OVR"' EXIT
-cat > "$OVR" <<EOF
+OVR="$(mktemp)"
+trap 'rm -f "$OVR"' EXIT
+cat >"$OVR" <<EOF
 controlPlaneDb: { enabled: false }
 apiServer:
   namespace: ${NS}
@@ -177,7 +185,8 @@ if [ "$WAIT_LB" = "true" ]; then
   log "Waiting for the YCP internal LoadBalancer (meko-api-server-lb) IP"
   for _ in $(seq 1 20); do
     LB_IP="$($K -n "$NS" get svc meko-api-server-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-    [ -n "$LB_IP" ] && break; sleep 12
+    [ -n "$LB_IP" ] && break
+    sleep 12
   done
 fi
 

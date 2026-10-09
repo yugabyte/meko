@@ -19,7 +19,11 @@
 // "No issues found." as if that were a real result) and the cost-savings guard
 // in PrReviewDemoApp -- update it here if the populated shape ever changes.
 
-export type ReviewFinding = { severity: "critical" | "major" | "minor"; location: string; comment: string };
+export type ReviewFinding = {
+  severity: "critical" | "major" | "minor";
+  location: string;
+  comment: string;
+};
 
 export const ANTHROPIC_REFERENCE_MODEL_LABEL = "Claude Sonnet 4.5";
 export const ANTHROPIC_REFERENCE_MODEL_ID = "anthropic.claude-sonnet-4-5-20250929-v1:0";

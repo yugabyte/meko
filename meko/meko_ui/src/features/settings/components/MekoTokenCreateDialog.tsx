@@ -46,7 +46,12 @@ type Props = {
   existingKeyCount?: number;
 };
 
-export function MekoTokenCreateDialog({ open, onOpenChange, onCreated, existingKeyCount = 0 }: Props) {
+export function MekoTokenCreateDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  existingKeyCount = 0,
+}: Props) {
   const { data: currentUser } = useCurrentUser();
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -232,11 +237,7 @@ function FormPhase({
         <Button type="button" variant="ghost" onClick={onCancel} disabled={submitting}>
           Cancel
         </Button>
-        <Button
-          type="submit"
-          disabled={!canSubmit}
-          className="gap-1.5"
-        >
+        <Button type="submit" disabled={!canSubmit} className="gap-1.5">
           {submitting ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
           ) : (
@@ -275,7 +276,10 @@ function RevealPhase({
       </div>
 
       <div className="rounded-md border border-border bg-card p-3">
-        <code className="block min-w-0 break-all font-mono text-xs text-foreground" aria-label="API token value">
+        <code
+          className="block min-w-0 break-all font-mono text-xs text-foreground"
+          aria-label="API token value"
+        >
           {token}
         </code>
       </div>

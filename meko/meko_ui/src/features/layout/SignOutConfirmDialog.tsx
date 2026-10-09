@@ -16,11 +16,7 @@ export type SignOutConfirmDialogProps = {
   onConfirm: () => Promise<void>;
 };
 
-export function SignOutConfirmDialog({
-  open,
-  onOpenChange,
-  onConfirm,
-}: SignOutConfirmDialogProps) {
+export function SignOutConfirmDialog({ open, onOpenChange, onConfirm }: SignOutConfirmDialogProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +49,8 @@ export function SignOutConfirmDialog({
             Sign out?
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Are you sure you want to sign out? You will need to sign in again to access your datapacks.
+            Are you sure you want to sign out? You will need to sign in again to access your
+            datapacks.
           </DialogDescription>
         </DialogHeader>
         {error ? (
@@ -62,7 +59,12 @@ export function SignOutConfirmDialog({
           </p>
         ) : null}
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+          >
             Cancel
           </Button>
           <Button type="button" onClick={() => void handleSignOut()} disabled={submitting}>

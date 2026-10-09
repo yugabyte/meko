@@ -38,7 +38,10 @@ export function LoginPage() {
         navigate(ROUTES.metrics, { replace: true });
       }
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Login failed. Please try again.");
+      setError(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          "Login failed. Please try again.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -60,7 +63,10 @@ export function LoginPage() {
       await completeNewPassword(email, newPassword, session, givenName, familyName);
       navigate(ROUTES.metrics, { replace: true });
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Failed to set password. Please try again.");
+      setError(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          "Failed to set password. Please try again.",
+      );
     } finally {
       setIsSubmitting(false);
     }

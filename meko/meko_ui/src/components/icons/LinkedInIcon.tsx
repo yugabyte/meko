@@ -5,10 +5,7 @@ import type { SVGProps } from "react";
  * of whatever element it's placed in (e.g. the "Continue with LinkedIn"
  * button). Pass `className` to size it (default 1em square).
  */
-export function LinkedInIcon({
-  className = "h-5 w-5",
-  ...props
-}: SVGProps<SVGSVGElement>) {
+export function LinkedInIcon({ className = "h-5 w-5", ...props }: SVGProps<SVGSVGElement>) {
   return (
     <svg
       aria-hidden="true"

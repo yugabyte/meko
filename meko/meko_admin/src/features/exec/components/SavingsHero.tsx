@@ -51,7 +51,9 @@ export function SavingsHero({ totalRequests, totalTokensSaved, isLoading }: Prop
         <div className="flex flex-col justify-start gap-3">
           <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <span>Money Saved</span>
-            <span className="normal-case text-[11px]">vs premier model · on {OUR_INFERENCE_MODEL.label}</span>
+            <span className="normal-case text-[11px]">
+              vs premier model · on {OUR_INFERENCE_MODEL.label}
+            </span>
           </div>
           {isLoading ? (
             <div className="flex flex-col gap-3">

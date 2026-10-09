@@ -31,19 +31,27 @@ jqf() { python3 -c "import sys,json; d=json.load(sys.stdin); $1"; }
 k -n "$AMP_NS" port-forward svc/amp-controller "$PORT:8080" >/dev/null 2>&1 &
 PF=$!
 trap 'kill $PF 2>/dev/null || true' EXIT
-for _ in $(seq 1 15); do curl -s -m 2 -o /dev/null "http://127.0.0.1:$PORT/healthz" && break; sleep 2; done
+for _ in $(seq 1 15); do
+  curl -s -m 2 -o /dev/null "http://127.0.0.1:$PORT/healthz" && break
+  sleep 2
+done
 
 wait_task() {
   local id=$1 st
   for _ in $(seq 1 240); do
     st=$(api "/tasks/$id" | jqf 'print(d["status"])')
     case $st in
-      succeeded|completed|done) return 0 ;;
-      failed|cancelled|error) api "/tasks/$id"; echo "task $id $st" >&2; return 1 ;;
+    succeeded | completed | done) return 0 ;;
+    failed | cancelled | error)
+      api "/tasks/$id"
+      echo "task $id $st" >&2
+      return 1
+      ;;
     esac
     sleep 5
   done
-  echo "task $id still $st after 20m" >&2; return 1
+  echo "task $id still $st after 20m" >&2
+  return 1
 }
 
 POOL_ID=$(api "/storage-pools?limit=500" | jqf 'print(next((p["id"] for p in d["storage_pools"] if p["name"]=="'"$POOL"'"), ""))')
@@ -81,7 +89,7 @@ fi
 EP_SVC="yb-ep-$EP_ID.$AMP_NS.svc.cluster.local"
 k -n "$AMP_NS" rollout status "deploy/yb-ep-$EP_ID" --timeout=600s
 
-cat > "$HERE/lru.env" <<ENV
+cat >"$HERE/lru.env" <<ENV
 POOL_ID=$POOL_ID
 CLUSTER_ID=$CLUSTER_ID
 BRANCH_ID=$BRANCH_ID

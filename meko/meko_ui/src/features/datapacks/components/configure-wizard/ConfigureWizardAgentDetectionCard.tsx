@@ -8,10 +8,7 @@ import { cn } from "@/lib/utils";
 
 function FlowConnector({ className }: { className?: string }) {
   return (
-    <div
-      className={cn("h-px min-w-[12px] flex-1 shrink bg-teal-500/35", className)}
-      aria-hidden
-    />
+    <div className={cn("h-px min-w-[12px] flex-1 shrink bg-teal-500/35", className)} aria-hidden />
   );
 }
 
@@ -82,7 +79,9 @@ function AgentDetectionPreviewBody() {
         <FlowConnector />
         <div className="flex min-w-[4.5rem] flex-col items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-500/5 px-2.5 py-2.5 text-center shadow-sm">
           <Check className="h-4 w-4 text-emerald-400" strokeWidth={2.25} aria-hidden />
-          <span className="text-[11px] font-medium leading-tight text-emerald-700 dark:text-emerald-100/95">verified</span>
+          <span className="text-[11px] font-medium leading-tight text-emerald-700 dark:text-emerald-100/95">
+            verified
+          </span>
         </div>
       </div>
     </div>

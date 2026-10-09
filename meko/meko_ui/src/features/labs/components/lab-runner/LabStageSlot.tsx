@@ -148,7 +148,11 @@ export function LabStageSlot({
       return <ConversationStage session={session} onGoToCreateDatapack={goToCreateDatapack} />;
     case "meet-agentk":
       return (
-        <MeetAgentKStage demoApp={lab.demoApp} session={session} onGoToCreateDatapack={goToCreateDatapack} />
+        <MeetAgentKStage
+          demoApp={lab.demoApp}
+          session={session}
+          onGoToCreateDatapack={goToCreateDatapack}
+        />
       );
     case "share-with-agent":
       return (
@@ -222,7 +226,9 @@ export function LabStageSlot({
     // />
     // );
     case "save-findings":
-      return <SaveFindingsStage session={session} run={reviewRun} onComplete={completeCurrentStage} />;
+      return (
+        <SaveFindingsStage session={session} run={reviewRun} onComplete={completeCurrentStage} />
+      );
     case "let-it-run":
       return <LetItRunStage />;
     case "public-runs":

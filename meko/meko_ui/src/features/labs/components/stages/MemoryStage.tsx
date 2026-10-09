@@ -65,7 +65,14 @@ export function MemoryStage({
       setError(message);
       session.recordLessonTrace({
         lessonTitle: "Add a memory",
-        calls: [{ name: "memory_add", durationMs: Date.now() - startedAt, status: "error", detail: message }],
+        calls: [
+          {
+            name: "memory_add",
+            durationMs: Date.now() - startedAt,
+            status: "error",
+            detail: message,
+          },
+        ],
       });
     } finally {
       setSaving(false);
@@ -125,7 +132,8 @@ export function MemoryStage({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground">Scope</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Private to you until you promote it. Promote one and every agent on this datapack reads it.
+            Private to you until you promote it. Promote one and every agent on this datapack reads
+            it.
           </p>
         </div>
         {/* Same memory blue the datapack detail page tags a private memory

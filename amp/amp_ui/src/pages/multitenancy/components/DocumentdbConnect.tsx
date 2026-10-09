@@ -7,12 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useEndpointCaBundle } from "@/hooks/useEndpoints";
 import type { Endpoint } from "@/lib/api/types";
-import {
-  caFileName,
-  documentdbURI,
-  downloadCaFile,
-  documentdbTrust,
-} from "@/lib/endpointTls";
+import { caFileName, documentdbURI, downloadCaFile, documentdbTrust } from "@/lib/endpointTls";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 
 export function DocumentdbConnect({

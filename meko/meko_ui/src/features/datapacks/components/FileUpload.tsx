@@ -17,10 +17,7 @@ import {
   type PipelineDetail,
   type SourceStatus,
 } from "@/lib/api/mekoApi";
-import {
-  useKnowledgeUploadCache,
-  type FileEntry,
-} from "@/features/datapacks/knowledgeUploadCache";
+import { useKnowledgeUploadCache, type FileEntry } from "@/features/datapacks/knowledgeUploadCache";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   KNOWLEDGE_UPLOAD_EXTENSIONS_HINT,
@@ -50,7 +47,6 @@ function nextFileEntryId(): string {
   fileEntryIdCounter += 1;
   return `f${fileEntryIdCounter}`;
 }
-
 
 /** Why a process run was queued: a fresh upload finished, or a leftover
  *  S3 orphan was found. */
@@ -133,9 +129,7 @@ export default function FileUpload({
   // so these let file/status state survive close/reopen; the provider drops
   // them on logout so nothing leaks across sessions.
   const { fileUploadStateCache, statusCache } = useKnowledgeUploadCache();
-  const [files, setFiles] = useState<FileEntry[]>(
-    () => fileUploadStateCache.get(datapackId) ?? [],
-  );
+  const [files, setFiles] = useState<FileEntry[]>(() => fileUploadStateCache.get(datapackId) ?? []);
   // Last `initialFiles` array already staged; compared by reference so a
   // new array (e.g. a fresh sample seed) gets re-added.
   const seededInitialFilesRef = useRef<File[] | undefined>(undefined);
@@ -317,7 +311,9 @@ export default function FileUpload({
   // Exclude orphans already in pipelineDetails so they aren't double-counted.
   const orphansAwaitingPipeline = pendingOrphans.filter((o) => !pipelineDocNames.has(o.filename));
   const pipelineInFlight = pipelineDetails.filter(
-    (d) => d.document_status !== KB_DOCUMENT_STATUS.COMPLETED && d.document_status !== KB_DOCUMENT_STATUS.FAILED,
+    (d) =>
+      d.document_status !== KB_DOCUMENT_STATUS.COMPLETED &&
+      d.document_status !== KB_DOCUMENT_STATUS.FAILED,
   ).length;
   // Total non-terminal files: staged, uploaded-but-not-yet-in-pipeline,
   // orphans, and actively processing docs. Uploading is always allowed,
@@ -325,7 +321,8 @@ export default function FileUpload({
   const inFlightCount =
     files.filter(
       (f) =>
-        f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
+        f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+        f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
     ).length +
     doneAwaitingPipeline +
     orphansAwaitingPipeline.length +
@@ -373,7 +370,13 @@ export default function FileUpload({
         ];
       });
     },
-    [showWarning, pipelineDocNames, orphansAwaitingPipeline.length, pipelineInFlight, maxFileSizeMB],
+    [
+      showWarning,
+      pipelineDocNames,
+      orphansAwaitingPipeline.length,
+      pipelineInFlight,
+      maxFileSizeMB,
+    ],
   );
 
   useEffect(() => {
@@ -507,7 +510,9 @@ export default function FileUpload({
       // clickable and a second click re-enters this loop over the same
       // still-PENDING ids (filesRef.current not yet updated) and double-uploads.
       setFiles((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, progress: 0 } : f)),
+        prev.map((f) =>
+          f.id === id ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, progress: 0 } : f,
+        ),
       );
 
       // Decided from the filename, so it costs nothing: refuse before the hash
@@ -560,7 +565,9 @@ export default function FileUpload({
           const note = dedupNote(entry.file.name, existing_filename, awaitingProcessing);
           setFiles((prev) =>
             prev.map((f) =>
-              f.id === id ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.SKIPPED, progress: 0, note } : f,
+              f.id === id
+                ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.SKIPPED, progress: 0, note }
+                : f,
             ),
           );
           continue;
@@ -616,7 +623,9 @@ export default function FileUpload({
       const hadDocsBefore = seen.size > 0;
       const totalDocs = details.length;
       details
-        .filter((d) => d.document_status === KB_DOCUMENT_STATUS.COMPLETED && !seen.has(d.document_name))
+        .filter(
+          (d) => d.document_status === KB_DOCUMENT_STATUS.COMPLETED && !seen.has(d.document_name),
+        )
         .forEach((d) => {
           seen.add(d.document_name);
           const name = pipelineDocumentDisplayName(d.document_name);
@@ -680,7 +689,6 @@ export default function FileUpload({
     [datapackId, showWarning],
   );
 
-
   const kbCreatedRef = useRef(kbCreated);
   kbCreatedRef.current = kbCreated;
   const pollingActiveRef = useRef(pollingActive);
@@ -708,7 +716,9 @@ export default function FileUpload({
       // keeps getting fresh QUEUED/PROCESSING updates for it right up
       // until its real row exists.
       if (details.length > 0) {
-        const discovered = new Set(details.map((d) => pipelineDocumentDisplayName(d.document_name)));
+        const discovered = new Set(
+          details.map((d) => pipelineDocumentDisplayName(d.document_name)),
+        );
         setQueuedDocNames((prev) => {
           const next = prev.filter((name) => !discovered.has(sanitizeFilenameForMatch(name)));
           return next.length === prev.length ? prev : next;
@@ -772,10 +782,7 @@ export default function FileUpload({
         const wasPolling = pollingActiveRef.current;
         setPollingActive(false);
 
-        if (
-          (wasPolling || pendingKBReadyNotificationRef.current) &&
-          !didNotifyCreatedRef.current
-        ) {
+        if ((wasPolling || pendingKBReadyNotificationRef.current) && !didNotifyCreatedRef.current) {
           didNotifyCreatedRef.current = true;
           pendingKBReadyNotificationRef.current = false;
           emitDocumentUploadedEvents(details);
@@ -790,7 +797,11 @@ export default function FileUpload({
         // on the mount snapshot until the next close/reopen.
         branch = "still-in-flight";
         setPollingActive(true);
-      } else if (kbCreatedRef.current && details.length === 0 && queuedDocNamesRef.current.length === 0) {
+      } else if (
+        kbCreatedRef.current &&
+        details.length === 0 &&
+        queuedDocNamesRef.current.length === 0
+      ) {
         // Every document was deleted. Deliberately keyed on details.length
         // alone, not sources.length too: a live repro showed sources
         // staying at length 1 forever after the only document was
@@ -934,11 +945,7 @@ export default function FileUpload({
             </div>
           )}
           {pendingCount > 0 && (
-            <Button
-              className="shrink-0 gap-2"
-              onClick={handleUpload}
-              disabled={isUploading}
-            >
+            <Button className="shrink-0 gap-2" onClick={handleUpload} disabled={isUploading}>
               {isUploading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
@@ -992,7 +999,8 @@ export default function FileUpload({
               </>
             ) : (
               <>
-                Drag & drop files here, or <span className="text-context-knowledge underline">browse</span>
+                Drag & drop files here, or{" "}
+                <span className="text-context-knowledge underline">browse</span>
               </>
             )}
           </p>
@@ -1048,121 +1056,121 @@ export default function FileUpload({
                 knowledgeFileExtension(entry.file.name),
               );
               return (
-              <li
-                key={entry.id}
-                className={cn(
-                  "rounded-xl border px-4 py-2.5 space-y-1.5 transition-colors",
-                  // Tints the whole card, not just the message, so the eye
-                  // finds the odd one out in a grid. Amber for skipped since
-                  // a duplicate is a no-op, not the failure red claims.
-                  entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR
-                    ? "border-red-500/40 bg-red-500/[0.07] dark:border-red-400/30 dark:bg-red-500/10"
-                    : entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED
-                      ? "border-amber-500/40 bg-amber-500/[0.07] dark:border-amber-400/30 dark:bg-amber-500/10"
-                      : "border-border bg-card",
-                )}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <FileTypeIcon
-                      className={cn(
-                        "w-4 h-4 shrink-0",
-                        // A file that didn't make it drops its type color: the
-                        // card already carries the state, and a green CSV
-                        // glyph inside a red one reads as a mixed signal.
-                        entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR
-                          ? "text-red-600 dark:text-red-400"
-                          : entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED
-                            ? "text-amber-600 dark:text-amber-400"
-                            : toneClass,
-                      )}
-                    />
-                    <span className="text-sm font-medium text-foreground truncate">
-                      {entry.file.name}
-                    </span>
-                    <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-                      {formatFileSize(entry.file.size)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING &&
-                      (entry.progress > 0 ? (
-                        <span className="text-xs text-context-knowledge tabular-nums">
-                          {entry.progress.toFixed(1)}%
-                        </span>
-                      ) : (
-                        // 0% while hashing/presigning, before S3 reports bytes.
-                        <span className="flex items-center gap-1.5 text-xs text-context-knowledge">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Preparing…
-                        </span>
-                      ))}
-                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING && (
-                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Clock className="w-3.5 h-3.5" />
-                        Staged…
-                      </span>
-                    )}
-                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
-                      <CheckCircle2 className="w-4 h-4 text-success" />
-                    )}
-                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && (
-                      <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
-                        Skipped
-                      </span>
-                    )}
-                    {/* Only when there's no message panel below to carry its own
-                        icon -- two red circles in one small card is noise. */}
-                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && !entry.error && (
-                      <AlertCircle
-                        className="w-4 h-4 text-red-600 dark:text-red-400"
-                        aria-label="Upload failed"
+                <li
+                  key={entry.id}
+                  className={cn(
+                    "rounded-xl border px-4 py-2.5 space-y-1.5 transition-colors",
+                    // Tints the whole card, not just the message, so the eye
+                    // finds the odd one out in a grid. Amber for skipped since
+                    // a duplicate is a no-op, not the failure red claims.
+                    entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR
+                      ? "border-red-500/40 bg-red-500/[0.07] dark:border-red-400/30 dark:bg-red-500/10"
+                      : entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED
+                        ? "border-amber-500/40 bg-amber-500/[0.07] dark:border-amber-400/30 dark:bg-amber-500/10"
+                        : "border-border bg-card",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <FileTypeIcon
+                        className={cn(
+                          "w-4 h-4 shrink-0",
+                          // A file that didn't make it drops its type color: the
+                          // card already carries the state, and a green CSV
+                          // glyph inside a red one reads as a mixed signal.
+                          entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR
+                            ? "text-red-600 dark:text-red-400"
+                            : entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED
+                              ? "text-amber-600 dark:text-amber-400"
+                              : toneClass,
+                        )}
                       />
-                    )}
-                    {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
-                      entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE ||
-                      entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED ||
-                      entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
-                      <button
-                        type="button"
-                        aria-label="Remove file"
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={() => removeFile(entry.id)}
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && entry.error ? (
-                  <TimedNotice
-                    tone="error"
-                    message={entry.error}
-                    onDismiss={() => dismissNotice(entry.id)}
-                  />
-                ) : null}
-                {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && entry.note ? (
-                  <TimedNotice
-                    tone="skipped"
-                    message={entry.note}
-                    onDismiss={() => dismissNotice(entry.id)}
-                  />
-                ) : null}
-                {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
-                  // `bg-white/10` was invisible on a light card -- the track has
-                  // to come from a token that inverts with the theme.
-                  <div className="h-1.5 w-full rounded-full bg-foreground/10 overflow-hidden">
-                    <div
-                      className={cn(
-                        "h-full rounded-full bg-context-knowledge transition-all duration-200",
-                        // Pulse at 0% so the bar doesn't look frozen while presigning.
-                        entry.progress > 0 ? "w-full" : "w-1/4 animate-pulse",
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {entry.file.name}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
+                        {formatFileSize(entry.file.size)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING &&
+                        (entry.progress > 0 ? (
+                          <span className="text-xs text-context-knowledge tabular-nums">
+                            {entry.progress.toFixed(1)}%
+                          </span>
+                        ) : (
+                          // 0% while hashing/presigning, before S3 reports bytes.
+                          <span className="flex items-center gap-1.5 text-xs text-context-knowledge">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Preparing…
+                          </span>
+                        ))}
+                      {entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING && (
+                        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Clock className="w-3.5 h-3.5" />
+                          Staged…
+                        </span>
                       )}
-                      style={entry.progress > 0 ? { width: `${entry.progress}%` } : undefined}
-                    />
+                      {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
+                        <CheckCircle2 className="w-4 h-4 text-success" />
+                      )}
+                      {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && (
+                        <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                          Skipped
+                        </span>
+                      )}
+                      {/* Only when there's no message panel below to carry its own
+                        icon -- two red circles in one small card is noise. */}
+                      {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && !entry.error && (
+                        <AlertCircle
+                          className="w-4 h-4 text-red-600 dark:text-red-400"
+                          aria-label="Upload failed"
+                        />
+                      )}
+                      {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+                        entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE ||
+                        entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED ||
+                        entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
+                        <button
+                          type="button"
+                          aria-label="Remove file"
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                          onClick={() => removeFile(entry.id)}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                )}
-              </li>
+                  {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && entry.error ? (
+                    <TimedNotice
+                      tone="error"
+                      message={entry.error}
+                      onDismiss={() => dismissNotice(entry.id)}
+                    />
+                  ) : null}
+                  {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && entry.note ? (
+                    <TimedNotice
+                      tone="skipped"
+                      message={entry.note}
+                      onDismiss={() => dismissNotice(entry.id)}
+                    />
+                  ) : null}
+                  {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
+                    // `bg-white/10` was invisible on a light card -- the track has
+                    // to come from a token that inverts with the theme.
+                    <div className="h-1.5 w-full rounded-full bg-foreground/10 overflow-hidden">
+                      <div
+                        className={cn(
+                          "h-full rounded-full bg-context-knowledge transition-all duration-200",
+                          // Pulse at 0% so the bar doesn't look frozen while presigning.
+                          entry.progress > 0 ? "w-full" : "w-1/4 animate-pulse",
+                        )}
+                        style={entry.progress > 0 ? { width: `${entry.progress}%` } : undefined}
+                      />
+                    </div>
+                  )}
+                </li>
               );
             })}
           </ul>

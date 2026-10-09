@@ -5,9 +5,13 @@
 #   test_id list  : default B1 B2 B3 B4 B5
 
 set -euo pipefail
-target="${1:?usage: $0 ybAmp|aurora [suffix] [B1...]}"; shift
+target="${1:?usage: $0 ybAmp|aurora [suffix] [B1...]}"
+shift
 suffix="${1:-}"
-[[ "$suffix" =~ ^B[1-5]$ ]] && suffix="" || { [[ $# -gt 0 ]] && shift; :; }
+[[ "$suffix" =~ ^B[1-5]$ ]] && suffix="" || {
+  [[ $# -gt 0 ]] && shift
+  :
+}
 
 source ~/benchmark/scripts/_env.sh "$target"
 source ~/benchmark/scripts/_metrics.sh
@@ -52,7 +56,7 @@ for t in "${tests[@]}"; do
 
   # Per-test CPU + disk-IO sampler + pg-stat
   cpu_pid=$(start_server_cpu_sampler "$outdir/${t}-server-cpu.log")
-  io_pid=$(start_server_io_sampler  "$outdir/${t}-server-io.log" nvme1n1)
+  io_pid=$(start_server_io_sampler "$outdir/${t}-server-io.log" nvme1n1)
   snapshot_pg_stat "$DBNAME" "$outdir/${t}-pg-stat-start.raw"
   mark_timestamp "$outdir" "${t}_START"
 
@@ -60,21 +64,23 @@ for t in "${tests[@]}"; do
   $PGBENCH -n -c 1 -j 1 -T 30 -M prepared -f "$sql" \
     -d $DBNAME -h $PGHOST -p $PGPORT -U $PGUSER >/dev/null 2>&1 || true
 
-  lats=(); tpss=()
+  lats=()
+  tpss=()
   for run in 1 2 3; do
     out=$($PGBENCH -n -c 1 -j 1 -T 60 -r -M prepared -f "$sql" \
-            -d $DBNAME -h $PGHOST -p $PGPORT -U $PGUSER 2>&1)
+      -d $DBNAME -h $PGHOST -p $PGPORT -U $PGUSER 2>&1)
     echo "=== $t run $run ===" >>"$log"
     echo "$out" >>"$log"
     echo "" >>"$log"
     lat=$(echo "$out" | awk '/^latency average/ {gsub(/[^0-9.]/,"",$4); print $4}')
     tps=$(echo "$out" | awk '/^tps =/ {print $3; exit}')
-    lats+=("$lat"); tpss+=("$tps")
+    lats+=("$lat")
+    tpss+=("$tps")
   done
 
   mark_timestamp "$outdir" "${t}_END"
   stop_server_cpu_sampler "$cpu_pid"
-  stop_server_io_sampler  "$io_pid"
+  stop_server_io_sampler "$io_pid"
   snapshot_pg_stat "$DBNAME" "$outdir/${t}-pg-stat-end.raw"
   diff_pg_stat "$outdir/${t}-pg-stat-start.raw" "$outdir/${t}-pg-stat-end.raw" \
     >"$outdir/${t}-pg-stat-delta.txt" 2>&1

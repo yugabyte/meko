@@ -28,11 +28,7 @@ export function BranchTree({
   const endpoints = useBranchEndpoints(poolId, clusterId, branches);
 
   if (branches.length === 0) {
-    return (
-      <p className="py-6 text-center text-sm text-muted-foreground">
-        {msg.noBranches}
-      </p>
-    );
+    return <p className="py-6 text-center text-sm text-muted-foreground">{msg.noBranches}</p>;
   }
 
   const ordered = root ? [root, ...forks] : forks;
@@ -43,11 +39,7 @@ export function BranchTree({
           key={branch.branch_id}
           branch={branch}
           isRoot={branch.is_default}
-          parentName={
-            branch.parent_branch_id
-              ? nameById[branch.parent_branch_id]
-              : undefined
-          }
+          parentName={branch.parent_branch_id ? nameById[branch.parent_branch_id] : undefined}
           poolId={poolId}
           clusterId={clusterId}
           endpoints={endpoints.byBranch[branch.branch_id] ?? []}

@@ -75,7 +75,12 @@ export function DatapackChangeRoleConfirmDialog({
           </p>
         ) : null}
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+          >
             Cancel
           </Button>
           <Button type="button" onClick={() => void handleConfirm()} disabled={submitting}>

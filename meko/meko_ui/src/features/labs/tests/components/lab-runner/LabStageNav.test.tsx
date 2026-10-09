@@ -14,9 +14,7 @@ const CHAPTER_ONE_STAGES: LabStage[] = [
   { id: "see-the-pr", title: "See the pull request", summary: "" },
   { id: "create-datapack", title: "Create a datapack", summary: "" },
 ];
-const CHAPTER_TWO_STAGES: LabStage[] = [
-  { id: "meet-agentk", title: "Meet AgentK", summary: "" },
-];
+const CHAPTER_TWO_STAGES: LabStage[] = [{ id: "meet-agentk", title: "Meet AgentK", summary: "" }];
 
 const TWO_CHAPTERS: LabChapter[] = [
   { id: "chapter-1", title: "Give your agent context", summary: "", stages: CHAPTER_ONE_STAGES },
@@ -56,16 +54,24 @@ describe("LabStageNav", () => {
   });
 
   it("lets the user click back to a step they've already reached", () => {
-    localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ chapterIndex: 0, stageIndex: 1 }));
+    localStorage.setItem(
+      "meko:lab-progress:test-lab",
+      JSON.stringify({ chapterIndex: 0, stageIndex: 1 }),
+    );
     localStorage.setItem("meko:lab-completed:test-lab", JSON.stringify(["see-the-pr"]));
     render(<TestHarness chapters={TWO_CHAPTERS} />);
 
     fireEvent.click(screen.getByRole("button", { name: /See the pull request/ }));
-    expect(screen.getByRole("button", { current: "step" }).textContent).toContain("See the pull request");
+    expect(screen.getByRole("button", { current: "step" }).textContent).toContain(
+      "See the pull request",
+    );
   });
 
   it("counts progress by completed steps, not by how far the user has clicked", () => {
-    localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ chapterIndex: 1, stageIndex: 0 }));
+    localStorage.setItem(
+      "meko:lab-progress:test-lab",
+      JSON.stringify({ chapterIndex: 1, stageIndex: 0 }),
+    );
     render(<TestHarness chapters={TWO_CHAPTERS} />);
     // Sitting on the last stage having finished nothing is still 0 of 3.
     expect(screen.getByText("0 of 3")).toBeTruthy();

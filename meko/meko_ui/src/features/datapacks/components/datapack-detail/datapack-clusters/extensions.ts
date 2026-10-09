@@ -15,8 +15,16 @@ export type AmpExtension = {
 export const AMP_EXTENSIONS: AmpExtension[] = [
   { name: "pgvector", version: "0.8.2", description: "Vector similarity search" },
   { name: "pg_cron", version: "1.6.7", description: "Cron-style job scheduler" },
-  { name: "hexabridge", version: "0.1", description: "Oracle compatibility (DBMS_*/UTL_* packages)" },
-  { name: "hexabridge_mssql", version: "0.1", description: "SQL Server (T-SQL) compatibility functions" },
+  {
+    name: "hexabridge",
+    version: "0.1",
+    description: "Oracle compatibility (DBMS_*/UTL_* packages)",
+  },
+  {
+    name: "hexabridge_mssql",
+    version: "0.1",
+    description: "SQL Server (T-SQL) compatibility functions",
+  },
   { name: "age", version: "1.8.0", description: "Apache AGE — openCypher graph" },
   { name: "documentdb", version: "0.116-0", description: "MongoDB-compatible document store" },
 ];

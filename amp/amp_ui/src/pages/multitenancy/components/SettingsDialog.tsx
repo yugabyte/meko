@@ -32,13 +32,7 @@ import { Label } from "@/components/ui/label";
 import { useUpdateBranchSettings } from "@/lib/api/queries";
 import { useUpdateEndpointSettings } from "@/hooks/useEndpoints";
 import type { SettingsUpdateResult } from "@/lib/api/types";
-import {
-  objectOf,
-  rowsOf,
-  SettingsRows,
-  type Row,
-  type ValueKind,
-} from "./SettingsRows";
+import { objectOf, rowsOf, SettingsRows, type Row, type ValueKind } from "./SettingsRows";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 
 /** One editable surface: what it is called, and how its values are typed. */

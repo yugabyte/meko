@@ -1,4 +1,13 @@
-import { ArrowUpDown, CreditCard, Sparkles, Zap, HardDrive, BookOpen, Database, Users } from "lucide-react";
+import {
+  ArrowUpDown,
+  CreditCard,
+  Sparkles,
+  Zap,
+  HardDrive,
+  BookOpen,
+  Database,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -72,9 +81,7 @@ export function CurrentPlanCard({
             <div className="mt-0.5 flex items-baseline gap-1.5">
               <h2 className="text-lg font-semibold text-foreground">{plan.name}</h2>
               <span className="text-xs text-muted-foreground">
-                {plan.priceMonthly === null
-                  ? "Custom"
-                  : `$${plan.priceMonthly}/mo`}
+                {plan.priceMonthly === null ? "Custom" : `$${plan.priceMonthly}/mo`}
               </span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{secondaryLine}</p>
@@ -166,7 +173,8 @@ export function CurrentPlanCard({
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3 text-xs text-muted-foreground">
         <p>
-          Billing cycle resets in <span className="font-medium text-foreground">{billingCycleResetIn}</span> · usage above
+          Billing cycle resets in{" "}
+          <span className="font-medium text-foreground">{billingCycleResetIn}</span> · usage above
           carries into next invoice as overage at standard rates
         </p>
         {/* <button
@@ -227,11 +235,7 @@ function UsageBar({
  * enterprise off-platform, /billing/summary still in flight) so the
  * sentence still parses.
  */
-function describeBillingCycleReset({
-  summary,
-}: {
-  summary?: BillingSummary | null;
-}): string {
+function describeBillingCycleReset({ summary }: { summary?: BillingSummary | null }): string {
   if (!summary?.current_period_end) return "—";
   const end = new Date(summary.current_period_end);
   if (Number.isNaN(end.getTime())) return "—";
@@ -287,8 +291,7 @@ function describeSecondaryLine({
     // Stripe returns lowercase brand strings ("visa", "mastercard"); the
     // UI capitalizes the first letter for visual parity with the Stripe
     // dashboard rendering.
-    const brand =
-      summary.card_brand.charAt(0).toUpperCase() + summary.card_brand.slice(1);
+    const brand = summary.card_brand.charAt(0).toUpperCase() + summary.card_brand.slice(1);
     parts.push(`Card on file ${brand} ${summary.card_last4}`);
   } else {
     parts.push("Card on file —");
@@ -296,4 +299,3 @@ function describeSecondaryLine({
 
   return parts.join(" · ");
 }
-

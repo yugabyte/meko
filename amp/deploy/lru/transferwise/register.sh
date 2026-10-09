@@ -15,12 +15,16 @@ YBA_URL=${YBA_URL:-http://a0ea6ee2d58194693870037cb841bdbe-1826583179.us-east-2.
 YBA_UNIVERSE=${YBA_UNIVERSE:-amp2-db}
 YBA_NAMESPACE=${YBA_NAMESPACE:-yb-dev-amp2-db}
 
-[ -f "$HERE/lru.env" ] || { echo "no lru.env; run ./up.sh first" >&2; exit 1; }
+[ -f "$HERE/lru.env" ] || {
+  echo "no lru.env; run ./up.sh first" >&2
+  exit 1
+}
 # shellcheck disable=SC1091
 . "$HERE/lru.env"
 
-ROW=$(ENDPOINT_ID="$ENDPOINT_ID" LRU="$LRU" YBA_URL="$YBA_URL" \
-  YBA_UNIVERSE="$YBA_UNIVERSE" YBA_NAMESPACE="$YBA_NAMESPACE" python3 - <<'PY'
+ROW=$(
+  ENDPOINT_ID="$ENDPOINT_ID" LRU="$LRU" YBA_URL="$YBA_URL" \
+    YBA_UNIVERSE="$YBA_UNIVERSE" YBA_NAMESPACE="$YBA_NAMESPACE" python3 - <<'PY'
 import json
 import os
 
@@ -53,9 +57,12 @@ print(json.dumps({
 PY
 )
 
-if [ -n "${DRY_RUN:-}" ]; then echo "$ROW"; exit 0; fi
+if [ -n "${DRY_RUN:-}" ]; then
+  echo "$ROW"
+  exit 0
+fi
 
-echo "$ROW" > "$HERE/lru.json"
+echo "$ROW" >"$HERE/lru.json"
 if yb amp lru get "$LRU" >/dev/null 2>&1; then
   yb amp lru update "$LRU" --data "$HERE/lru.json" --yes
 else

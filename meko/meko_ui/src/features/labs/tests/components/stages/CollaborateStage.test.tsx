@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { inviteDatapackShare, listDatapackMembers, listDatapackOutgoingShares } from "@/lib/api/mekoApi";
+import {
+  inviteDatapackShare,
+  listDatapackMembers,
+  listDatapackOutgoingShares,
+} from "@/lib/api/mekoApi";
 import type { useLabRunnerSession } from "@/features/labs/hooks/useLabRunnerSession";
 import { CollaborateStage } from "@/features/labs/components/stages/CollaborateStage";
 
@@ -64,11 +68,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListMembers.mockResolvedValue({
     members: [
-      { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
+      {
+        user_id: "user-1",
+        is_owner: true,
+        user_name: "Owner User",
+        user_email_id: "owner@example.com",
+        grant: "maintainer",
+      },
     ],
   });
   mockListOutgoingShares.mockResolvedValue({
-    pending_invites: [{ invite_id: "inv-1", grant: "contributor", recipient_email_id: "pending@example.com" }],
+    pending_invites: [
+      { invite_id: "inv-1", grant: "contributor", recipient_email_id: "pending@example.com" },
+    ],
   });
   mockInvite.mockResolvedValue({} as never);
 });
@@ -109,7 +121,13 @@ describe("CollaborateStage", () => {
   it("hides the invite form for a contributor -- accessibleDatapacks admits them, but only owner/maintainer can share", async () => {
     mockListMembers.mockResolvedValue({
       members: [
-        { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
+        {
+          user_id: "user-1",
+          is_owner: true,
+          user_name: "Owner User",
+          user_email_id: "owner@example.com",
+          grant: "maintainer",
+        },
         {
           user_id: "user-2",
           is_owner: false,

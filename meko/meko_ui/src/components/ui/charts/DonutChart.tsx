@@ -42,7 +42,15 @@ export function DonutChart({
   return (
     <div className="relative flex-shrink-0">
       <svg width="80" height="80" viewBox="0 0 80 80" className="text-foreground">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="currentColor" strokeWidth="10" className="text-muted" />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="10"
+          className="text-muted"
+        />
         {arcs.map((arc, i) => (
           <circle
             key={i}
@@ -57,7 +65,14 @@ export function DonutChart({
             style={{ transform: "rotate(-90deg)", transformOrigin: `${cx}px ${cy}px` }}
           />
         ))}
-        <text x={cx} y={cy + 4} textAnchor="middle" fontSize="12" fontWeight="700" fill="currentColor">
+        <text
+          x={cx}
+          y={cy + 4}
+          textAnchor="middle"
+          fontSize="12"
+          fontWeight="700"
+          fill="currentColor"
+        >
           {total.toLocaleString()}
         </text>
       </svg>

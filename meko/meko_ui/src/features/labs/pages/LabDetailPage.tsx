@@ -74,7 +74,9 @@ export default function LabDetailPage() {
             <span className="font-semibold text-foreground">{lab.chapters.length} chapters</span>
             <span aria-hidden>·</span>
             <span className="text-sm">{stageCount} steps</span>
-            <span aria-hidden className="text-sm">·</span>
+            <span aria-hidden className="text-sm">
+              ·
+            </span>
             <span className="text-sm">Nothing to install</span>
           </p>
 

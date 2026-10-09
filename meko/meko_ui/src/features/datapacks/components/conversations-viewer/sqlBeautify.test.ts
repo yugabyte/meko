@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { dedent, beautifyStatement } from "@/features/datapacks/components/conversations-viewer/sqlBeautify";
+import {
+  dedent,
+  beautifyStatement,
+} from "@/features/datapacks/components/conversations-viewer/sqlBeautify";
 
 describe("dedent", () => {
   it("strips the common leading indentation and trims", () => {

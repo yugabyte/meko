@@ -8,10 +8,7 @@ import type { PlanLimit } from "@/features/billing/constants/plans";
  * metric (memory ops, MCP calls) so plain counts (datapacks, seats) stay
  * un-suffixed.
  */
-export function formatLimitNumeric(
-  value: PlanLimit,
-  opts: { perMonth?: boolean } = {},
-): string {
+export function formatLimitNumeric(value: PlanLimit, opts: { perMonth?: boolean } = {}): string {
   if (value === "custom") return "Custom";
   if (value === "unlimited") return "Unlimited";
   return `${compactNumber(value)}${opts.perMonth ? "/mo" : ""}`;

@@ -12,20 +12,15 @@ import { LABEL_NAME_FONT } from "@/features/projects/projectsTypography";
 /** One fact. `mono` marks values that are identifiers rather than prose; the
  *  typeface it resolves to is projectsTypography's to decide, and today
  *  both are sans. */
-function FactRow({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function FactRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-2.5">
       <dt className="shrink-0 text-sm text-muted-foreground">{label}</dt>
       <dd
-        className={cn("min-w-0 truncate text-right text-sm text-foreground", mono && LABEL_NAME_FONT)}
+        className={cn(
+          "min-w-0 truncate text-right text-sm text-foreground",
+          mono && LABEL_NAME_FONT,
+        )}
       >
         {value}
       </dd>
@@ -46,8 +41,7 @@ export function ProjectFactsCard({
   // hardcoded "1.0" for every theme and nothing reads it back, so showing it
   // told the user a constant. Falls back to the stored key if the layout has
   // since been removed from the registry.
-  const layoutLabel =
-    themes.find((t) => t.key === project.theme_key)?.label ?? project.theme_key;
+  const layoutLabel = themes.find((t) => t.key === project.theme_key)?.label ?? project.theme_key;
 
   return (
     <Card className="border-border bg-card p-6">

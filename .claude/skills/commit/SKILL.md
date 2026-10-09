@@ -243,13 +243,13 @@ language it touches — same as the companions above, this is part of "landing
 complete". Run only the toolchains for the components in your staged set
 (Step 1).
 
-### Formatting (Go, Rust, Python)
+### Formatting (Go, Rust, Python, shell, TypeScript/JS/CSS)
 
-One script formats all three, with the pinned tool versions CI's required
+One script formats them all, with the pinned tool versions CI's required
 `Format` check uses (it runs the same script with `--check`):
 
 ```
-.github/scripts/format.sh go python    # the languages you touched; no args = all
+.github/scripts/format.sh go ts    # the languages you touched (go rust python shell ts); no args = all
 git add -u
 ```
 
@@ -257,7 +257,8 @@ Go's gofmt comes from the release in `meko/api_server/go.mod`, fetched once
 through `GOTOOLCHAIN` if your `go` is a different one, so a local run and CI
 format the same way. `main` is kept formatted by that check, so the script only
 rewrites what you changed. It exits 2 and says what to install when a tool is
-missing (`go`, `cargo` with rustfmt, or ruff 0.11.2 via uv or pip).
+missing (`go`, which also builds shfmt; `cargo` with rustfmt; ruff 0.11.2 via
+uv or pip; `npx`, for prettier).
 
 ### Go (`api_server`, `cli_app`, `meko-provisioner`, `docs`)
 

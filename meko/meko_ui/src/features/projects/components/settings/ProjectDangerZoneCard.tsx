@@ -15,10 +15,7 @@ import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import type { Datapack } from "@/lib/api/mekoApi";
 import type { Project, ProjectDatapackNode } from "@/lib/api/projectsApi";
-import {
-  useDeleteDatapackInTree,
-  useDeleteProject,
-} from "@/features/projects/hooks/useProjects";
+import { useDeleteDatapackInTree, useDeleteProject } from "@/features/projects/hooks/useProjects";
 import {
   DANGER_ZONE_BODY,
   DANGER_ZONE_TITLE,
@@ -177,8 +174,8 @@ export function ProjectDangerZoneCard({
         title="Delete a datapack?"
         description={
           <>
-            The datapack and everything in it are removed for good: its memories, its knowledge
-            and its history. Pick one, then type its name to confirm.
+            The datapack and everything in it are removed for good: its memories, its knowledge and
+            its history. Pick one, then type its name to confirm.
             {errorLine}
           </>
         }

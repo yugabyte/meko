@@ -50,12 +50,13 @@ export function LabStageNav({
 
       <div className="flex flex-col gap-3">
         {chapters.map((chapter, index) => {
-          const state: LabRailChapterState =
-            chapter.stages.every((stage) => completedStages.has(stage.id))
-              ? "done"
-              : index === chapterIndex
-                ? "active"
-                : "todo";
+          const state: LabRailChapterState = chapter.stages.every((stage) =>
+            completedStages.has(stage.id),
+          )
+            ? "done"
+            : index === chapterIndex
+              ? "active"
+              : "todo";
           return (
             <LabRailChapter
               key={chapter.id}

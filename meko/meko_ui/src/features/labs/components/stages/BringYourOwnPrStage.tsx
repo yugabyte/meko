@@ -22,7 +22,11 @@ import {
 } from "@/lib/api/githubApi";
 
 import type { ReviewAgentConfig } from "../demo-apps/ReviewAgentConfigPanel";
-import { PrReviewDemoApp, type PrReviewRunState, type PrSource } from "../demo-apps/PrReviewDemoApp";
+import {
+  PrReviewDemoApp,
+  type PrReviewRunState,
+  type PrSource,
+} from "../demo-apps/PrReviewDemoApp";
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { LabStageNeedsDeployment } from "../lab-runner/LabStageNeedsDeployment";
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
@@ -113,7 +117,9 @@ function BringYourOwnPrStageContent({
       ]);
       setPrSource({ title: summary.title, diff, htmlUrl: summary.htmlUrl || undefined });
     } catch (err) {
-      setFetchError(err instanceof GitHubApiError ? err.message : "Could not fetch that pull request.");
+      setFetchError(
+        err instanceof GitHubApiError ? err.message : "Could not fetch that pull request.",
+      );
     } finally {
       setFetching(false);
     }
@@ -142,7 +148,9 @@ function BringYourOwnPrStageContent({
               value={prRefInput}
               onChange={(e) => setPrRefInput(e.target.value)}
             />
-            <p className="mt-1 text-xs text-muted-foreground">Paste a PR link, or owner/repo#123.</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Paste a PR link, or owner/repo#123.
+            </p>
           </div>
           <div>
             <Label htmlFor="byoc-pr-token">GitHub personal access token</Label>

@@ -55,7 +55,11 @@ export function LabRailChapter({
       <div className="flex flex-col gap-0.5 pl-3.5">
         {chapter.stages.map((stage, index) => {
           const stepState: LabRailStepState =
-            stage.id === currentStageId ? "current" : completedStages.has(stage.id) ? "done" : "todo";
+            stage.id === currentStageId
+              ? "current"
+              : completedStages.has(stage.id)
+                ? "done"
+                : "todo";
           return (
             <LabRailStep
               key={stage.id}

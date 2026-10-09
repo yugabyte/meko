@@ -21,7 +21,10 @@ export function InlineErrorBanner({ children, action, className }: Props) {
       )}
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-700 dark:text-red-300" aria-hidden />
+        <AlertCircle
+          className="mt-0.5 h-4 w-4 shrink-0 text-red-700 dark:text-red-300"
+          aria-hidden
+        />
         <div className="min-w-0 leading-snug">{children}</div>
       </div>
       {action ? <div className="flex shrink-0 justify-end sm:pl-2">{action}</div> : null}

@@ -32,8 +32,8 @@ export function PlanPicker({ currentPlanId, busy, onUpgrade }: PlanPickerProps) 
       <header>
         <h2 className="text-lg font-semibold text-foreground">Choose a plan</h2>
         <p className="text-xs text-muted-foreground">
-          Each tier is a hard cap on the metrics shown above. Overage billed at
-          standard per-unit rates.
+          Each tier is a hard cap on the metrics shown above. Overage billed at standard per-unit
+          rates.
         </p>
       </header>
 

@@ -341,9 +341,7 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
       </span>
       <span
         className={
-          mono
-            ? "min-w-0 flex-1 break-all font-mono text-xs"
-            : "min-w-0 flex-1 break-words text-sm"
+          mono ? "min-w-0 flex-1 break-all font-mono text-xs" : "min-w-0 flex-1 break-words text-sm"
         }
       >
         {value}

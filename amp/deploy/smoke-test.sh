@@ -124,7 +124,8 @@ PROJ_NAME="proj-${SUFFIX}"
 
 ROOT_URL="http://127.0.0.1:${PF_PORT}"
 BASE="${ROOT_URL}/api/v1"
-PASS=0; FAIL=0
+PASS=0
+FAIL=0
 # The client address the controller should record for an endpoint, or "" when this
 # deployment does not publish endpoints on a plain ClusterIP Service — under
 # ENDPOINT_SERVICE_TYPE=NodePort or LoadBalancer the recorded address is
@@ -135,8 +136,14 @@ want_endpoint_addr() {
   [ "$type" = ClusterIP ] || return 0
   printf '%s' "yb-ep-$ep.$NS.svc.cluster.local:55433"
 }
-ok()  { printf '  \033[0;32mPASS\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
-bad() { printf '  \033[0;31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
+ok() {
+  printf '  \033[0;32mPASS\033[0m %s\n' "$*"
+  PASS=$((PASS + 1))
+}
+bad() {
+  printf '  \033[0;31mFAIL\033[0m %s\n' "$*"
+  FAIL=$((FAIL + 1))
+}
 hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
 # POST json and assign the created id to the named variable. On failure it
@@ -150,7 +157,7 @@ LAST_ERR=""
 post_id() {
   local __var="$1" url="$2" body="$3" out code
   out=$(curl -s -w '\n%{http_code}' --max-time 30 -X POST "$url" \
-        -H 'Content-Type: application/json' -d "$body" 2>&1) || true
+    -H 'Content-Type: application/json' -d "$body" 2>&1) || true
   code="${out##*$'\n'}"
   out="${out%$'\n'*}"
   if [ "$code" = 200 ] || [ "$code" = 201 ]; then
@@ -190,24 +197,35 @@ trap cleanup EXIT
 # poll_task <id> [timeout_iters] -> echoes terminal status; rc 0 iff succeeded
 poll_task() {
   local id="$1" max="${2:-210}" status
-  [ -z "$id" ] && { echo "no-task"; return 1; }   # guard: a non-202 create has no id to poll
-  for ((i=0; i<max; i++)); do
+  [ -z "$id" ] && {
+    echo "no-task"
+    return 1
+  } # guard: a non-202 create has no id to poll
+  for ((i = 0; i < max; i++)); do
     status=$(curl -sf "$BASE/tasks/$id" | jq -r '.status' 2>/dev/null)
     case "$status" in
-      succeeded) echo "$status"; return 0 ;;
-      failed)    echo "$status"; return 1 ;;
+    succeeded)
+      echo "$status"
+      return 0
+      ;;
+    failed)
+      echo "$status"
+      return 1
+      ;;
     esac
     sleep 2
   done
-  echo "timeout"; return 1
+  echo "timeout"
+  return 1
 }
 
 # create_task <METHOD> <path> [json-body] -> echoes "<http_code>|<location>|<task_id>"
 create_task() {
   local method="$1" path="$2" body="${3:-}" code loc tid body_file hdr_file
-  body_file=$(mktemp); hdr_file=$(mktemp)            # unique temp files (avoid CWE-377 races)
+  body_file=$(mktemp)
+  hdr_file=$(mktemp) # unique temp files (avoid CWE-377 races)
   code=$(curl -s -o "$body_file" -D "$hdr_file" -w '%{http_code}' \
-          -X "$method" "$BASE$path" ${body:+-H 'Content-Type: application/json' -d "$body"})
+    -X "$method" "$BASE$path" ${body:+-H 'Content-Type: application/json' -d "$body"})
   loc=$(grep -i '^location:' "$hdr_file" | tr -d '\r' | awk '{print $2}')
   tid=$(jq -r '.id // empty' "$body_file" 2>/dev/null)
   rm -f "$body_file" "$hdr_file"
@@ -228,7 +246,7 @@ psql_pod() {
 # once its container is Ready; empty on timeout.
 wait_ready_pod() {
   local ep="$1" pod=""
-  for ((i=0; i<60; i++)); do
+  for ((i = 0; i < 60; i++)); do
     pod=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$ep" | head -1)
     [ -n "$pod" ] && [ "$(kubectl -n "$NS" get "$pod" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ] && break
     sleep 3
@@ -239,11 +257,14 @@ wait_ready_pod() {
 # --- start: port-forward the controller API ---
 kubectl -n "$NS" port-forward svc/amp-controller "${PF_PORT}:8080" >/tmp/smoke-pf.log 2>&1 &
 PF_PID=$!
-for ((i=0; i<30; i++)); do curl -sf "$ROOT_URL/healthz" >/dev/null 2>&1 && break; sleep 1; done
+for ((i = 0; i < 30; i++)); do
+  curl -sf "$ROOT_URL/healthz" >/dev/null 2>&1 && break
+  sleep 1
+done
 
 hdr "health"
 curl -sf "$ROOT_URL/healthz" >/dev/null && ok "healthz 200" || bad "healthz"
-curl -sf "$ROOT_URL/readyz"  >/dev/null && ok "readyz 200"  || bad "readyz"
+curl -sf "$ROOT_URL/readyz" >/dev/null && ok "readyz 200" || bad "readyz"
 
 hdr "user + storage pool (synchronous 201)"
 post_id USER "$BASE/users" '{}'
@@ -252,14 +273,14 @@ post_id USER "$BASE/users" '{}'
 # creates it; every later run gets a 409 and looks the existing one up, which is
 # the normal path — not an error.
 post_id POOL "$BASE/storage-pools" \
-        "{\"name\":\"$POOL_NAME\",\"owner_user_id\":\"$USER\"}"
+  "{\"name\":\"$POOL_NAME\",\"owner_user_id\":\"$USER\"}"
 if [ -n "$POOL" ]; then
   ok "createStoragePool 201 ($POOL)"
 else
-  POOL=$(curl -sf "$BASE/storage-pools" \
-         | jq -r --arg n "$POOL_NAME" '.storage_pools[]|select(.name==$n)|.id' | head -1)
-  [ -n "$POOL" ] && ok "storage pool reused ($POOL)" \
-                 || bad "createStoragePool $LAST_ERR (and no existing $POOL_NAME to reuse)"
+  POOL=$(curl -sf "$BASE/storage-pools" |
+    jq -r --arg n "$POOL_NAME" '.storage_pools[]|select(.name==$n)|.id' | head -1)
+  [ -n "$POOL" ] && ok "storage pool reused ($POOL)" ||
+    bad "createStoragePool $LAST_ERR (and no existing $POOL_NAME to reuse)"
 fi
 
 hdr "createCluster -> 202 + Task + Location -> task succeeded -> materialized"
@@ -269,7 +290,8 @@ IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createCluster code=$code (want 202)"
 [[ "$loc" == /api/v1/tasks/* ]] && ok "Location: $loc" || bad "Location header: '$loc'"
 [ "$(curl -sf "$BASE/tasks/$tid" | jq -r .kind)" = create_cluster ] && ok "task kind=create_cluster" || bad "task kind"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_cluster succeeded" || bad "create_cluster task=$st"
+st=$(poll_task "$tid")
+[ "$st" = succeeded ] && ok "create_cluster succeeded" || bad "create_cluster task=$st"
 PROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r --arg n "$PROJ_NAME" '.clusters[]|select(.name==$n)|.id')
 DEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -r '.default_branch.branch_id')
 [ -n "$PROJ" ] && [ -n "$DEF" ] && ok "materialized proj=$PROJ default_branch=$DEF" || bad "cluster not materialized"
@@ -283,7 +305,8 @@ EP_NAME="smoke-writer"
 hdr "createEndpoint (read_write on default branch) -> task succeeded -> address + pod Ready"
 IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" "{\"name\":\"$EP_NAME\",\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\",\"tags\":{\"team\":\"endpoint\"}}")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createEndpoint code=$code"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint succeeded" || bad "create_endpoint task=$st"
+st=$(poll_task "$tid")
+[ "$st" = succeeded ] && ok "create_endpoint succeeded" || bad "create_endpoint task=$st"
 EP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" | jq -r '.endpoints[0].id')
 ADDR=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -r '.address')
 # On a ClusterIP deployment the recorded address must be the endpoint Service's
@@ -291,14 +314,14 @@ ADDR=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoint
 # reschedule, and the connection string the console handed a client dies with it.
 WANT_ADDR=$(want_endpoint_addr "$EP")
 if [ -n "$WANT_ADDR" ]; then
-  [ "$ADDR" = "$WANT_ADDR" ] && ok "endpoint address is the Service DNS: $ADDR" \
-    || bad "endpoint address $ADDR, want $WANT_ADDR"
+  [ "$ADDR" = "$WANT_ADDR" ] && ok "endpoint address is the Service DNS: $ADDR" ||
+    bad "endpoint address $ADDR, want $WANT_ADDR"
 else
-  [ -n "$ADDR" ] && [ "$ADDR" != null ] && ok "endpoint address recorded: $ADDR" \
-    || bad "endpoint address empty"
+  [ -n "$ADDR" ] && [ "$ADDR" != null ] && ok "endpoint address recorded: $ADDR" ||
+    bad "endpoint address empty"
 fi
 POD=""
-for ((i=0; i<60; i++)); do
+for ((i = 0; i < 60; i++)); do
   POD=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$EP" | head -1)
   [ -n "$POD" ] && [ "$(kubectl -n "$NS" get "$POD" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ] && break
   sleep 3
@@ -327,31 +350,31 @@ fi
 
 hdr "tags: the endpoint's objects carry its cluster's tags under its own"
 # Each resource reports only its own tags; the merge shows on the objects.
-[ "$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -cS '.tags')" = '{"smoke-cluster":"c","team":"cluster"}' ] \
-  && ok "cluster reports its tags" || bad "cluster tags: $(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -c '.tags')"
-[ "$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -cS '.tags')" = '{"team":"endpoint"}' ] \
-  && ok "endpoint reports only its own tags" || bad "endpoint tags: $(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -c '.tags')"
+[ "$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -cS '.tags')" = '{"smoke-cluster":"c","team":"cluster"}' ] &&
+  ok "cluster reports its tags" || bad "cluster tags: $(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -c '.tags')"
+[ "$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -cS '.tags')" = '{"team":"endpoint"}' ] &&
+  ok "endpoint reports only its own tags" || bad "endpoint tags: $(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -c '.tags')"
 for obj in "pod/$POD" "deployment/yb-ep-$EP" "service/yb-ep-$EP"; do
-  got=$(kubectl -n "$NS" get "$obj" -o json 2>/dev/null \
-        | jq -r '.metadata.labels | "\(.["smoke-cluster"] // "")/\(.team // "")"')
-  [ "$got" = "c/endpoint" ] && ok "$obj labelled smoke-cluster=c team=endpoint" \
-    || bad "$obj labels smoke-cluster/team = '$got', want 'c/endpoint'"
+  got=$(kubectl -n "$NS" get "$obj" -o json 2>/dev/null |
+    jq -r '.metadata.labels | "\(.["smoke-cluster"] // "")/\(.team // "")"')
+  [ "$got" = "c/endpoint" ] && ok "$obj labelled smoke-cluster=c team=endpoint" ||
+    bad "$obj labels smoke-cluster/team = '$got', want 'c/endpoint'"
 done
 got=$(kubectl -n "$NS" get "pod/$POD" -o json 2>/dev/null | jq -r '.metadata.labels |
   [.["amp.yugabyte.com/endpoint-id"], .["amp.yugabyte.com/branch-id"], .["amp.yugabyte.com/cluster-id"],
    .["amp.yugabyte.com/storage-pool-id"], .["amp.yugabyte.com/ep-type"]] | map(. // "") | join(" ")')
-[ "$got" = "$EP $DEF $PROJ $POOL read_write" ] && ok "pod carries its endpoint/branch/cluster/pool/role identity labels" \
-  || bad "pod identity labels = '$got', want '$EP $DEF $PROJ $POOL read_write'"
+[ "$got" = "$EP $DEF $PROJ $POOL read_write" ] && ok "pod carries its endpoint/branch/cluster/pool/role identity labels" ||
+  bad "pod identity labels = '$got', want '$EP $DEF $PROJ $POOL read_write'"
 got=$(kubectl -n "$NS" get "pod/$POD" -o json 2>/dev/null | jq -r '.metadata.annotations |
   [.["amp.yugabyte.com/storage-pool-name"], .["amp.yugabyte.com/cluster-name"],
    .["amp.yugabyte.com/branch-name"], .["amp.yugabyte.com/endpoint-name"]] | map(. // "") | join(" ")')
-[ "$got" = "$POOL_NAME $PROJ_NAME main $EP_NAME" ] && ok "pod carries its pool/cluster/branch/endpoint name annotations" \
-  || bad "pod name annotations = '$got', want '$POOL_NAME $PROJ_NAME main $EP_NAME'"
+[ "$got" = "$POOL_NAME $PROJ_NAME main $EP_NAME" ] && ok "pod carries its pool/cluster/branch/endpoint name annotations" ||
+  bad "pod name annotations = '$got', want '$POOL_NAME $PROJ_NAME main $EP_NAME'"
 # The selector must stay the chart's own: it is immutable, and the controller
 # finds the pod by app.kubernetes.io/instance.
 sel=$(kubectl -n "$NS" get "deployment/yb-ep-$EP" -o json 2>/dev/null | jq -c '.spec.selector.matchLabels | keys')
-[ "$sel" = '["app.kubernetes.io/instance","app.kubernetes.io/name"]' ] && ok "Deployment selector untouched" \
-  || bad "Deployment selector keys = $sel"
+[ "$sel" = '["app.kubernetes.io/instance","app.kubernetes.io/name"]' ] && ok "Deployment selector untouched" ||
+  bad "Deployment selector keys = $sel"
 
 hdr "kube-state-metrics: the endpoint pod's requests, identity labels and names are exported"
 # KSM's own /metrics, which proves the namespace scoping and the label allowlist.
@@ -365,29 +388,30 @@ if [ -z "$KSM_POD" ] && [ -z "$COMPUTE_CR" ]; then
 elif [ -z "$KSM_POD" ]; then
   bad "compute collector $COMPUTE_CR is deployed but no kube-state-metrics pod is"
 else
-  kubectl -n "$NS" wait --for=condition=Ready "pod/$KSM_POD" --timeout=120s >/dev/null 2>&1 \
-    && ok "kube-state-metrics pod Ready ($KSM_POD)" || bad "kube-state-metrics pod $KSM_POD not Ready"
+  kubectl -n "$NS" wait --for=condition=Ready "pod/$KSM_POD" --timeout=120s >/dev/null 2>&1 &&
+    ok "kube-state-metrics pod Ready ($KSM_POD)" || bad "kube-state-metrics pod $KSM_POD not Ready"
   ksm=$(kubectl get --raw "/api/v1/namespaces/$NS/pods/$KSM_POD:8080/proxy/metrics" 2>&1) || true
-  echo "$ksm" | grep '^kube_pod_container_resource_requests{' | grep "pod=\"$POD\"" | grep 'resource="cpu"' >/dev/null \
-    && ok "KSM exports the endpoint pod's CPU request" \
-    || bad "KSM has no kube_pod_container_resource_requests{resource=cpu} for $POD: $(echo "$ksm" | head -c 300)"
-  echo "$ksm" | grep '^kube_pod_labels{' | grep "pod=\"$POD\"" \
-    | grep "label_amp_yugabyte_com_endpoint_id=\"$EP\"" | grep "label_amp_yugabyte_com_storage_pool_id=\"$POOL\"" >/dev/null \
-    && ok "KSM exports the endpoint pod's identity labels on kube_pod_labels" \
-    || bad "KSM kube_pod_labels for $POD lacks endpoint_id=$EP / storage_pool_id=$POOL"
-  echo "$ksm" | grep '^kube_pod_annotations{' | grep "pod=\"$POD\"" \
-    | grep "annotation_amp_yugabyte_com_storage_pool_name=\"$POOL_NAME\"" \
-    | grep "annotation_amp_yugabyte_com_cluster_name=\"$PROJ_NAME\"" \
-    | grep "annotation_amp_yugabyte_com_branch_name=\"main\"" \
-    | grep "annotation_amp_yugabyte_com_endpoint_name=\"$EP_NAME\"" >/dev/null \
-    && ok "KSM exports the endpoint pod's names on kube_pod_annotations" \
-    || bad "KSM kube_pod_annotations for $POD lacks storage_pool_name=$POOL_NAME / cluster_name=$PROJ_NAME / branch_name=main / endpoint_name=$EP_NAME"
+  echo "$ksm" | grep '^kube_pod_container_resource_requests{' | grep "pod=\"$POD\"" | grep 'resource="cpu"' >/dev/null &&
+    ok "KSM exports the endpoint pod's CPU request" ||
+    bad "KSM has no kube_pod_container_resource_requests{resource=cpu} for $POD: $(echo "$ksm" | head -c 300)"
+  echo "$ksm" | grep '^kube_pod_labels{' | grep "pod=\"$POD\"" |
+    grep "label_amp_yugabyte_com_endpoint_id=\"$EP\"" | grep "label_amp_yugabyte_com_storage_pool_id=\"$POOL\"" >/dev/null &&
+    ok "KSM exports the endpoint pod's identity labels on kube_pod_labels" ||
+    bad "KSM kube_pod_labels for $POD lacks endpoint_id=$EP / storage_pool_id=$POOL"
+  echo "$ksm" | grep '^kube_pod_annotations{' | grep "pod=\"$POD\"" |
+    grep "annotation_amp_yugabyte_com_storage_pool_name=\"$POOL_NAME\"" |
+    grep "annotation_amp_yugabyte_com_cluster_name=\"$PROJ_NAME\"" |
+    grep "annotation_amp_yugabyte_com_branch_name=\"main\"" |
+    grep "annotation_amp_yugabyte_com_endpoint_name=\"$EP_NAME\"" >/dev/null &&
+    ok "KSM exports the endpoint pod's names on kube_pod_annotations" ||
+    bad "KSM kube_pod_annotations for $POD lacks storage_pool_name=$POOL_NAME / cluster_name=$PROJ_NAME / branch_name=main / endpoint_name=$EP_NAME"
 fi
 
 hdr "endpoint is USABLE: write + read real data via psql"
 # (a) loopback (pg_hba trusts loopback): full DDL/DML + CHECKPOINT (forces the
 #     writes through safekeeper -> pageserver -> YugabyteDB), then read back.
-out=$(psql_pod "$POD" 127.0.0.1 55433 <<'SQL' 2>&1
+out=$(
+  psql_pod "$POD" 127.0.0.1 55433 <<'SQL' 2>&1
 DROP TABLE IF EXISTS smoke;
 CREATE TABLE smoke (id serial PRIMARY KEY, k text NOT NULL, v int);
 INSERT INTO smoke (k,v) VALUES ('alpha',1),('beta',2),('gamma',3),('delta',4);
@@ -397,42 +421,43 @@ CHECKPOINT;
 SELECT count(*)||','||sum(v) FROM smoke;
 SQL
 )
-echo "$out" | grep -q '^3,24$' && ok "loopback CRUD + checkpoint + readback (3 rows, sum=24)" || bad "loopback data I/O (got: $(echo "$out"|tail -1))"
+echo "$out" | grep -q '^3,24$' && ok "loopback CRUD + checkpoint + readback (3 rows, sum=24)" || bad "loopback data I/O (got: $(echo "$out" | tail -1))"
 # (b) the recorded connection address routes to a live backend: the endpoint's Service
 #     has a ready endpoint (the compute pod). This proves the address the API hands a
 #     client points at a serving pod, without a flaky cross-pod psql (NodePort hairpin /
 #     DNS / lib-path differ by environment) — the loopback CRUD above already proves the
 #     compute serves real reads/writes through the storage stack.
 EPS=$(kubectl -n "$NS" get endpoints "yb-ep-$EP" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)
-[ -n "$EPS" ] && ok "recorded address $ADDR routes to a ready Service backend ($EPS)" \
-  || bad "endpoint Service has no ready backend for $ADDR"
+[ -n "$EPS" ] && ok "recorded address $ADDR routes to a ready Service backend ($EPS)" ||
+  bad "endpoint Service has no ready backend for $ADDR"
 # (c) pg_stat_statements is live without anyone asking for it: the chart preloads the
 #     library and compute_ctl creates the extension after start. It is what the
 #     exporter's statement collector and compute_ctl's /insights read. The create runs
 #     in a background task, so give it a few seconds rather than racing it.
 out=""
-for ((r=0; r<10; r++)); do
+for ((r = 0; r < 10; r++)); do
   out=$(psql_pod "$POD" 127.0.0.1 55433 <<<'SELECT count(*) > 0 FROM public.pg_stat_statements;' 2>&1)
   echo "$out" | grep -q '^t$' && break
   sleep 3
 done
-echo "$out" | grep -q '^t$' && ok "pg_stat_statements preloaded + created, tracking statements" \
-  || bad "pg_stat_statements not usable on a fresh endpoint (got: $(echo "$out"|tail -1))"
+echo "$out" | grep -q '^t$' && ok "pg_stat_statements preloaded + created, tracking statements" ||
+  bad "pg_stat_statements not usable on a fresh endpoint (got: $(echo "$out" | tail -1))"
 # (c') pgsentinel: the view must have rows, since a sampler that died at startup
 #      leaves it readable but empty. pg_sleep keeps this session active across two
 #      1 Hz ticks. Same CREATE EXTENSION retry as (c).
 out=""
-for ((r=0; r<10; r++)); do
-  out=$(psql_pod "$POD" 127.0.0.1 55433 <<'SQL' 2>&1
+for ((r = 0; r < 10; r++)); do
+  out=$(
+    psql_pod "$POD" 127.0.0.1 55433 <<'SQL' 2>&1
 SELECT pg_sleep(2);
 SELECT count(*) > 0 FROM public.pg_active_session_history;
 SQL
-)
+  )
   echo "$out" | tail -1 | grep -q '^t$' && break
   sleep 3
 done
-echo "$out" | tail -1 | grep -q '^t$' && ok "pgsentinel preloaded + created, sampler recording into active session history" \
-  || bad "pgsentinel not usable on a fresh endpoint (got: $(echo "$out"|tail -1))"
+echo "$out" | tail -1 | grep -q '^t$' && ok "pgsentinel preloaded + created, sampler recording into active session history" ||
+  bad "pgsentinel not usable on a fresh endpoint (got: $(echo "$out" | tail -1))"
 # (d) the shipped Postgres is a release build. `debug_assertions` reports whether it
 #     was configured --enable-cassert, which the image must never be: assertions plus
 #     the -O0 that comes with them are a large, silent slowdown, and nothing else here
@@ -450,7 +475,7 @@ asrt=$(psql_pod "$POD" 127.0.0.1 55433 <<<'SHOW debug_assertions;' 2>&1)
 if echo "$asrt" | grep -q '^off$'; then
   ok "shipped Postgres is a release build (debug_assertions=off)"
 else
-  bad "shipped Postgres has assertions enabled — an --enable-cassert build reached the image (debug_assertions: $(echo "$asrt"|tail -1))"
+  bad "shipped Postgres has assertions enabled — an --enable-cassert build reached the image (debug_assertions: $(echo "$asrt" | tail -1))"
 fi
 
 # (e) the password the create supplied is stored as a SCRAM verifier. This is the
@@ -464,9 +489,9 @@ fi
 #     have to be escaped in the grep pattern below rather than anchoring it.
 rolpw=$(psql_pod "$POD" 127.0.0.1 55433 \
   <<<"SELECT left(rolpassword, 13) FROM pg_authid WHERE rolname = 'cloud_admin';" 2>&1)
-echo "$rolpw" | grep -q '^SCRAM-SHA-256$' \
-  && ok "cloud_admin's stored verifier is SCRAM-SHA-256" \
-  || bad "cloud_admin's verifier is not SCRAM (got: $(echo "$rolpw"|tail -1)) — a malformed verifier is stored as the password itself"
+echo "$rolpw" | grep -q '^SCRAM-SHA-256$' &&
+  ok "cloud_admin's stored verifier is SCRAM-SHA-256" ||
+  bad "cloud_admin's verifier is not SCRAM (got: $(echo "$rolpw" | tail -1)) — a malformed verifier is stored as the password itself"
 
 # (f) and it actually authenticates: connect over TCP as a remote client would,
 #     with the plaintext the create was given. Loopback is `trust`, so PGPASSWORD
@@ -480,22 +505,23 @@ POD_IP=$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.status.podIP}' 2>/dev/nu
 authout=$(kubectl -n "$NS" exec -i "$POD" -- env PGPASSWORD="$EP_PASSWORD" \
   "$PSQL_BIN" "host=$POD_IP port=55433 user=cloud_admin dbname=postgres require_auth=scram-sha-256" \
   -tA -c 'SELECT 1;' 2>&1) || true
-echo "$authout" | grep -q '^1$' \
-  && ok "remote client authenticates with SCRAM (require_auth=scram-sha-256)" \
-  || bad "SCRAM authentication failed for cloud_admin: $(echo "$authout"|tail -1)"
+echo "$authout" | grep -q '^1$' &&
+  ok "remote client authenticates with SCRAM (require_auth=scram-sha-256)" ||
+  bad "SCRAM authentication failed for cloud_admin: $(echo "$authout" | tail -1)"
 
 hdr "createBranch (fork default) -> task succeeded"
 # The default fork-point resolution reads the parent writer's safekeeper flush_lsn;
 # that read can transiently 400 in the first seconds after the writer becomes Ready
 # (safekeeper HTTP not yet reachable via its Service). A real client retries; so do we.
 code=""
-for ((r=0; r<8; r++)); do
+for ((r = 0; r < 8; r++)); do
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches" "{\"name\":\"b1\",\"parent_branch_id\":\"$DEF\"}")
   [ "$code" = 202 ] && break
   sleep 5
 done
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createBranch code=$code"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "branch succeeded" || bad "branch task=$st"
+st=$(poll_task "$tid")
+[ "$st" = succeeded ] && ok "branch succeeded" || bad "branch task=$st"
 B1=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches" | jq -r '.branches[]|select(.name=="b1")|.branch_id')
 [ -n "$B1" ] && ok "fork b1 materialized ($B1)" || bad "fork b1 missing"
 
@@ -510,7 +536,8 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/tasks?status=bogus")
 hdr "duplicate cluster name -> task FAILS (not a synchronous 409)"
 IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" "{\"name\":\"$PROJ_NAME\"}")
 [ "$code" = 202 ] && ok "dup-name accepted 202" || bad "dup-name code=$code"
-st=$(poll_task "$tid" 30); [ "$st" = failed ] && ok "duplicate name -> task failed" || bad "dup name task=$st (want failed)"
+st=$(poll_task "$tid" 30)
+[ "$st" = failed ] && ok "duplicate name -> task failed" || bad "dup name task=$st (want failed)"
 
 hdr "delete a branch with a child fork -> 409 (no teardown)"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF")
@@ -519,15 +546,20 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/storage-pools/$PO
 hdr "deleteBranch b1 -> task succeeded -> gone"
 IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$PROJ/branches/$B1")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "deleteBranch code=$code"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "delete_branch succeeded" || bad "delete_branch task=$st"
+st=$(poll_task "$tid")
+[ "$st" = succeeded ] && ok "delete_branch succeeded" || bad "delete_branch task=$st"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$B1")" = 404 ] && ok "b1 gone (404)" || bad "b1 still present"
 
 hdr "deleteCluster cascade -> task succeeded -> cluster gone + endpoint retired"
 IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$PROJ")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "deleteCluster code=$code"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "delete_cluster cascade succeeded" || bad "delete_cluster task=$st"
+st=$(poll_task "$tid")
+[ "$st" = succeeded ] && ok "delete_cluster cascade succeeded" || bad "delete_cluster task=$st"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/clusters/$PROJ")" = 404 ] && ok "cluster gone (404)" || bad "cluster still present"
-for ((i=0; i<20; i++)); do [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && break; sleep 3; done
+for ((i = 0; i < 20; i++)); do
+  [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && break
+  sleep 3
+done
 [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && ok "endpoint instance retired" || bad "endpoint instance lingering"
 
 if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
@@ -538,7 +570,8 @@ if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
   # on the branch mounts the branch's set, so this exercises multi-extension
   # ImageVolume mounting (each extension is its own mount at /extensions/<name>).
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"extproj","extensions":["pgvector","age"]}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster created (extensions:[pgvector,age])" || bad "ext cluster task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "ext cluster created (extensions:[pgvector,age])" || bad "ext cluster task=$st"
   EPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="extproj")|.id')
   EDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext cluster materialized ($EPROJ / $EDEF)" || bad "ext cluster not materialized"
@@ -546,23 +579,25 @@ if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
   # The endpoint mounts the cluster's set without any per-endpoint opt-in.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(ext) code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
   EEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
   EADDR=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints/$EEP" | jq -r '.address // ""')
   EPOD=$(wait_ready_pod "$EEP")
   [ -n "$EPOD" ] && ok "ext endpoint pod Ready ($EPOD)" || bad "ext endpoint pod not Ready"
 
   # Both ImageVolumes are mounted, each at /extensions/<name> with its control file.
-  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
-    && ok "pgvector ImageVolume mounted (/extensions/pgvector)" || bad "pgvector ImageVolume not mounted"
-  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/age/share/postgresql/extension/age.control \
-    && ok "age ImageVolume mounted (/extensions/age)" || bad "age ImageVolume not mounted"
+  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control &&
+    ok "pgvector ImageVolume mounted (/extensions/pgvector)" || bad "pgvector ImageVolume not mounted"
+  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/age/share/postgresql/extension/age.control &&
+    ok "age ImageVolume mounted (/extensions/age)" || bad "age ImageVolume not mounted"
 
   # CREATE EXTENSION + store real vector data + a nearest-neighbour query that
   # exercises the type end-to-end (insert -> CHECKPOINT through the storage stack
   # -> ORDER BY <-> read back). The NN of [3,3,3] is [2,2,2] (id=2) at distance
   # sqrt(3) = 1.732; the literal <-> also sanity-checks the operator (5.196).
-  out=$(psql_pod "$EPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+  out=$(
+    psql_pod "$EPOD" 127.0.0.1 55433 <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS vector;
 DROP TABLE IF EXISTS items;
 CREATE TABLE items (id serial PRIMARY KEY, embedding vector(3));
@@ -572,16 +607,17 @@ SELECT id || '|' || round((embedding <-> '[3,3,3]')::numeric, 3)
   FROM items ORDER BY embedding <-> '[3,3,3]' LIMIT 1;
 SELECT round(('[1,2,3]'::vector <-> '[4,5,6]'::vector)::numeric, 3);
 SQL
-)
-  { echo "$out" | grep -q '^2|1.732$' && echo "$out" | grep -q '^5.196$'; } \
-    && ok "pgvector data I/O: NN([3,3,3])=id2 dist=1.732 + literal <-> =5.196" \
-    || bad "pgvector data query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+  )
+  { echo "$out" | grep -q '^2|1.732$' && echo "$out" | grep -q '^5.196$'; } &&
+    ok "pgvector data I/O: NN([3,3,3])=id2 dist=1.732 + literal <-> =5.196" ||
+    bad "pgvector data query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   # AGE (openCypher) on the SAME endpoint. Non-preload: load it per session with
   # LOAD 'age'. Create a graph, a cypher() CREATE that writes a vertex (through
   # the storage stack after CHECKPOINT), then a cypher() MATCH that reads the
   # property back — asserting the value ('ada') round-trips.
-  out=$(psql_pod "$EPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+  out=$(
+    psql_pod "$EPOD" 127.0.0.1 55433 <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS age;
 LOAD 'age';
 SET search_path = ag_catalog, "$user", public;
@@ -590,10 +626,10 @@ SELECT * FROM cypher('amp_age_probe', $$ CREATE (:Person {name: 'ada'}) $$) AS (
 CHECKPOINT;
 SELECT * FROM cypher('amp_age_probe', $$ MATCH (p:Person) RETURN p.name $$) AS (name agtype);
 SQL
-)
-  echo "$out" | grep -q '^"ada"$' \
-    && ok "age data I/O: LOAD 'age' + create_graph + cypher CREATE/MATCH round-trip (ada)" \
-    || bad "age cypher query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+  )
+  echo "$out" | grep -q '^"ada"$' &&
+    ok "age data I/O: LOAD 'age' + create_graph + cypher CREATE/MATCH round-trip (ada)" ||
+    bad "age cypher query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   hdr "externalized extensions: pg_cron opt-in preloads, CREATE EXTENSION, a scheduled job runs"
 
@@ -601,7 +637,8 @@ SQL
   # so the chart appends it to shared_preload_libraries and every endpoint comes
   # up with the scheduler running.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"cronproj","extensions":["pg_cron"]}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster created (extensions:[pg_cron])" || bad "pg_cron cluster task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "pg_cron cluster created (extensions:[pg_cron])" || bad "pg_cron cluster task=$st"
   CPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="cronproj")|.id')
   CDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$CPROJ" ] && [ -n "$CDEF" ] && ok "pg_cron cluster materialized ($CPROJ / $CDEF)" || bad "pg_cron cluster not materialized"
@@ -609,13 +646,14 @@ SQL
   # The endpoint mounts the cluster's pg_cron without any per-endpoint opt-in.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(pg_cron) code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(pg_cron) succeeded" || bad "create_endpoint(pg_cron) task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "create_endpoint(pg_cron) succeeded" || bad "create_endpoint(pg_cron) task=$st"
   CEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" | jq -r '.endpoints[0].id')
   CPOD=$(wait_ready_pod "$CEP")
   [ -n "$CPOD" ] && ok "pg_cron endpoint pod Ready ($CPOD)" || bad "pg_cron endpoint pod not Ready"
 
-  kubectl -n "$NS" exec "$CPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control \
-    && ok "pg_cron ImageVolume mounted (/extensions/pg_cron)" || bad "pg_cron ImageVolume not mounted"
+  kubectl -n "$NS" exec "$CPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control &&
+    ok "pg_cron ImageVolume mounted (/extensions/pg_cron)" || bad "pg_cron ImageVolume not mounted"
 
   # The preload entry must be present, else CREATE EXTENSION errors and no job runs.
   spl=$(psql_pod "$CPOD" 127.0.0.1 55433 <<<'SHOW shared_preload_libraries;' 2>&1)
@@ -630,23 +668,27 @@ SQL
   # job's write is visible here. Capture the jobid: cron.job_run_details is keyed
   # by jobid and has NO jobname column, and the cron.unschedule below drops the
   # cron.job row (so a name->jobid join wouldn't survive it either).
-  out=$(psql_pod "$CPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+  out=$(
+    psql_pod "$CPOD" 127.0.0.1 55433 <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 DROP TABLE IF EXISTS cron_marker;
 CREATE TABLE cron_marker (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now());
 SELECT 'JOBID:'||cron.schedule('amp_pgcron_probe', '5 seconds', $$INSERT INTO cron_marker DEFAULT VALUES$$);
 SQL
-)
+  )
   jobid=$(printf '%s\n' "$out" | sed -n 's/^JOBID:\([0-9]*\)$/\1/p')
-  [ -n "$jobid" ] \
-    && ok "CREATE EXTENSION pg_cron + cron.schedule (jobid=$jobid)" \
-    || bad "pg_cron CREATE EXTENSION / schedule failed (got: $(echo "$out" | tr '\n' ' '))"
+  [ -n "$jobid" ] &&
+    ok "CREATE EXTENSION pg_cron + cron.schedule (jobid=$jobid)" ||
+    bad "pg_cron CREATE EXTENSION / schedule failed (got: $(echo "$out" | tr '\n' ' '))"
 
   # Poll cron's own bookkeeping (by jobid) for a completed run.
   ran=0
-  for ((i=0; i<40; i++)); do
+  for ((i = 0; i < 40; i++)); do
     n=$(psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT count(*) FROM cron.job_run_details WHERE jobid=${jobid:-0} AND status='succeeded';" 2>/dev/null | tr -d '[:space:]')
-    if [ "${n:-0}" -gt 0 ] 2>/dev/null; then ran=1; break; fi
+    if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+      ran=1
+      break
+    fi
     sleep 3
   done
   if [ "$ran" = 1 ]; then
@@ -670,7 +712,8 @@ SQL
     echo "  KEEP set: leaving pg_cron cluster $CPROJ (endpoint pod $CPOD) up for inspection"
   else
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$CPROJ")
-    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster cascade deleted" || bad "pg_cron cluster delete task=$st"
+    st=$(poll_task "$tid")
+    [ "$st" = succeeded ] && ok "pg_cron cluster cascade deleted" || bad "pg_cron cluster delete task=$st"
   fi
 
   hdr "externalized extensions: hexabridge opt-in mounts, CREATE EXTENSION, Oracle-compat fn"
@@ -680,7 +723,8 @@ SQL
   # so the controller appends it to shared_preload_libraries; every endpoint on
   # the cluster comes up with the ImageVolume mounted and the library preloaded.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"hbproj","extensions":["hexabridge"]}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster created (extensions:[hexabridge])" || bad "hexabridge cluster task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "hexabridge cluster created (extensions:[hexabridge])" || bad "hexabridge cluster task=$st"
   HPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="hbproj")|.id')
   HDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$HPROJ" ] && [ -n "$HDEF" ] && ok "hexabridge cluster materialized ($HPROJ / $HDEF)" || bad "hexabridge cluster not materialized"
@@ -688,36 +732,39 @@ SQL
   # The endpoint mounts the cluster's hexabridge without any per-endpoint opt-in.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(hexabridge) code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge) succeeded" || bad "create_endpoint(hexabridge) task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "create_endpoint(hexabridge) succeeded" || bad "create_endpoint(hexabridge) task=$st"
   HEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" | jq -r '.endpoints[0].id')
   HPOD=$(wait_ready_pod "$HEP")
   [ -n "$HPOD" ] && ok "hexabridge endpoint pod Ready ($HPOD)" || bad "hexabridge endpoint pod not Ready"
 
   # The ImageVolume is mounted at /extensions/hexabridge with the control file.
-  kubectl -n "$NS" exec "$HPOD" -- test -f /extensions/hexabridge/share/postgresql/extension/hexabridge.control \
-    && ok "hexabridge ImageVolume mounted (/extensions/hexabridge)" || bad "hexabridge ImageVolume not mounted"
+  kubectl -n "$NS" exec "$HPOD" -- test -f /extensions/hexabridge/share/postgresql/extension/hexabridge.control &&
+    ok "hexabridge ImageVolume mounted (/extensions/hexabridge)" || bad "hexabridge ImageVolume not mounted"
 
   # CREATE EXTENSION (superuser-only; the smoke connection is the superuser) +
   # two deterministic Oracle-compat calls that exercise the loaded .so: nanvl
   # (returns the first arg when it is not NaN -> 1) and utl_raw over a cast
   # (length of the 2-byte raw for 'AB' -> 2). Both are IMMUTABLE/pure, so the
   # expected output is fixed.
-  out=$(psql_pod "$HPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+  out=$(
+    psql_pod "$HPOD" 127.0.0.1 55433 <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS hexabridge;
 SELECT 'NANVL:'||hexabridge.nanvl(1::float8, 2::float8);
 SELECT 'RAWLEN:'||utl_raw.length(utl_raw.cast_to_raw('AB'));
 SQL
-)
-  { echo "$out" | grep -q '^NANVL:1$' && echo "$out" | grep -q '^RAWLEN:2$'; } \
-    && ok "hexabridge CREATE EXTENSION + nanvl(1,2)=1 + utl_raw.length('AB')=2" \
-    || bad "hexabridge function checks failed (got: $(echo "$out" | tr '\n' ' '))"
+  )
+  { echo "$out" | grep -q '^NANVL:1$' && echo "$out" | grep -q '^RAWLEN:2$'; } &&
+    ok "hexabridge CREATE EXTENSION + nanvl(1,2)=1 + utl_raw.length('AB')=2" ||
+    bad "hexabridge function checks failed (got: $(echo "$out" | tr '\n' ' '))"
 
   # KEEP=1 leaves the hexabridge cluster/endpoint up for hands-on inspection.
   if [ "$KEEP" = "1" ]; then
     echo "  KEEP set: leaving hexabridge cluster $HPROJ (endpoint pod $HPOD) up for inspection"
   else
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$HPROJ")
-    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster cascade deleted" || bad "hexabridge cluster delete task=$st"
+    st=$(poll_task "$tid")
+    [ "$st" = succeeded ] && ok "hexabridge cluster cascade deleted" || bad "hexabridge cluster delete task=$st"
   fi
 
   hdr "sqlserver engine: seeds hexabridge_mssql, mounts it, T-SQL functions answer"
@@ -725,42 +772,46 @@ SQL
   # Through the engine rather than extensions:[...], so the bundle is covered on
   # a real cluster too. No preload: the mount alone makes it creatable.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"msproj","engine":"sqlserver"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "sqlserver cluster created (engine:sqlserver)" || bad "sqlserver cluster task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "sqlserver cluster created (engine:sqlserver)" || bad "sqlserver cluster task=$st"
   MPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="msproj")|.id')
   mcl=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$MPROJ")
   MDEF=$(echo "$mcl" | jq -r '.default_branch.branch_id')
-  [ "$(echo "$mcl" | jq -r '.engine')" = sqlserver ] && echo "$mcl" | jq -e '.extensions | index("hexabridge_mssql")' >/dev/null \
-    && ok "getCluster reports engine sqlserver + hexabridge_mssql seeded" || bad "sqlserver cluster engine/extensions wrong: $(echo "$mcl" | jq -c '{engine,extensions}')"
+  [ "$(echo "$mcl" | jq -r '.engine')" = sqlserver ] && echo "$mcl" | jq -e '.extensions | index("hexabridge_mssql")' >/dev/null &&
+    ok "getCluster reports engine sqlserver + hexabridge_mssql seeded" || bad "sqlserver cluster engine/extensions wrong: $(echo "$mcl" | jq -c '{engine,extensions}')"
 
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$MPROJ/branches/$MDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge_mssql) succeeded" || bad "create_endpoint(hexabridge_mssql) task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "create_endpoint(hexabridge_mssql) succeeded" || bad "create_endpoint(hexabridge_mssql) task=$st"
   MEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$MPROJ/branches/$MDEF/endpoints" | jq -r '.endpoints[0].id')
   MPOD=$(wait_ready_pod "$MEP")
   [ -n "$MPOD" ] && ok "hexabridge_mssql endpoint pod Ready ($MPOD)" || bad "hexabridge_mssql endpoint pod not Ready"
 
-  kubectl -n "$NS" exec "$MPOD" -- test -f /extensions/hexabridge_mssql/share/postgresql/extension/hexabridge_mssql.control \
-    && ok "hexabridge_mssql ImageVolume mounted (/extensions/hexabridge_mssql)" || bad "hexabridge_mssql ImageVolume not mounted"
+  kubectl -n "$NS" exec "$MPOD" -- test -f /extensions/hexabridge_mssql/share/postgresql/extension/hexabridge_mssql.control &&
+    ok "hexabridge_mssql ImageVolume mounted (/extensions/hexabridge_mssql)" || bad "hexabridge_mssql ImageVolume not mounted"
 
   # LEN ignores trailing blanks in T-SQL (3, where Postgres's length() says 5),
   # so it proves the sys.* function is the one answering.
-  out=$(psql_pod "$MPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+  out=$(
+    psql_pod "$MPOD" 127.0.0.1 55433 <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS hexabridge_mssql;
 SELECT 'INSTALLED:'||extversion||':'||extnamespace::regnamespace FROM pg_extension WHERE extname='hexabridge_mssql';
 SELECT 'CHARINDEX:'||sys.charindex('b', 'abc');
 SELECT 'LEN:'||sys.len('abc  ');
 SELECT 'STUFF:'||sys.stuff('abcdef', 2, 3, 'XY');
 SQL
-)
-  { echo "$out" | grep -q '^INSTALLED:0.1:sys$' && echo "$out" | grep -q '^CHARINDEX:2$' \
-    && echo "$out" | grep -q '^LEN:3$' && echo "$out" | grep -q '^STUFF:aXYef$'; } \
-    && ok "hexabridge_mssql CREATE EXTENSION (v0.1, schema sys) + charindex=2 + len('abc  ')=3 + stuff=aXYef" \
-    || bad "hexabridge_mssql function checks failed (got: $(echo "$out" | tr '\n' ' '))"
+  )
+  { echo "$out" | grep -q '^INSTALLED:0.1:sys$' && echo "$out" | grep -q '^CHARINDEX:2$' &&
+    echo "$out" | grep -q '^LEN:3$' && echo "$out" | grep -q '^STUFF:aXYef$'; } &&
+    ok "hexabridge_mssql CREATE EXTENSION (v0.1, schema sys) + charindex=2 + len('abc  ')=3 + stuff=aXYef" ||
+    bad "hexabridge_mssql function checks failed (got: $(echo "$out" | tr '\n' ' '))"
 
   if [ "$KEEP" = "1" ]; then
     echo "  KEEP set: leaving sqlserver cluster $MPROJ (endpoint pod $MPOD) up for inspection"
   else
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$MPROJ")
-    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "sqlserver cluster cascade deleted" || bad "sqlserver cluster delete task=$st"
+    st=$(poll_task "$tid")
+    [ "$st" = succeeded ] && ok "sqlserver cluster cascade deleted" || bad "sqlserver cluster delete task=$st"
   fi
 
   hdr "extension registry: an admin registers a third-party image, a branch mounts it"
@@ -797,17 +848,19 @@ SQL
     # third-party extension image.
     GISIMG=$(jq -r .image "$GISFIX")
     gis=$(curl -sf "$BASE/extensions" | jq -r '.extensions[]|select(.name=="postgis")|"\(.builtin)|\(.image)"')
-    [ "$gis" = "false|$GISIMG" ] \
-      && ok "listExtensions reports postgis as registered ($gis)" || bad "listExtensions postgis=$gis"
+    [ "$gis" = "false|$GISIMG" ] &&
+      ok "listExtensions reports postgis as registered ($gis)" || bad "listExtensions postgis=$gis"
 
     # And a cluster may now opt into it by name, exactly like a built-in.
     IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"gisproj","extensions":["postgis"]}')
-    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "cluster created with the registered extension" || bad "gis cluster task=$st"
+    st=$(poll_task "$tid")
+    [ "$st" = succeeded ] && ok "cluster created with the registered extension" || bad "gis cluster task=$st"
     GPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="gisproj")|.id')
     GDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$GPROJ" | jq -r '.default_branch.branch_id')
 
     IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
-    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(postgis) succeeded" || bad "create_endpoint(postgis) task=$st"
+    st=$(poll_task "$tid")
+    [ "$st" = succeeded ] && ok "create_endpoint(postgis) succeeded" || bad "create_endpoint(postgis) task=$st"
     GEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$GPROJ/branches/$GDEF/endpoints" | jq -r '.endpoints[0].id')
     GPOD=$(wait_ready_pod "$GEP")
     [ -n "$GPOD" ] && ok "postgis endpoint pod Ready ($GPOD)" || bad "postgis endpoint pod not Ready"
@@ -815,27 +868,28 @@ SQL
     # The registered layout reached the pod: the CNPG tree is share/extension,
     # not share/postgresql/extension, and the bundled libs and PROJ database are
     # things the endpoint image does not carry.
-    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/share/extension/postgis.control \
-      && ok "postgis ImageVolume mounted with the registered layout" || bad "postgis ImageVolume not mounted"
-    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/system/libgeos_c.so.1 \
-      && ok "bundled system libraries mounted (/extensions/postgis/system)" || bad "postgis system libs not mounted"
-    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/share/proj/proj.db \
-      && ok "PROJ database mounted (/extensions/postgis/share/proj)" || bad "postgis PROJ database not mounted"
+    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/share/extension/postgis.control &&
+      ok "postgis ImageVolume mounted with the registered layout" || bad "postgis ImageVolume not mounted"
+    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/system/libgeos_c.so.1 &&
+      ok "bundled system libraries mounted (/extensions/postgis/system)" || bad "postgis system libs not mounted"
+    kubectl -n "$NS" exec "$GPOD" -- test -f /extensions/postgis/share/proj/proj.db &&
+      ok "PROJ database mounted (/extensions/postgis/share/proj)" || bad "postgis PROJ database not mounted"
 
     # CREATE EXTENSION is the ABI-waiver assertion: reaching any geometry
     # function proves the stock-PG18 .so loaded. ST_Transform is the PROJ_DATA
     # assertion — 4326 -> 3857 sends longitude 180 to x = 20037508.34.
-    out=$(psql_pod "$GPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+    out=$(
+      psql_pod "$GPOD" 127.0.0.1 55433 <<'SQL' 2>&1
 CREATE EXTENSION IF NOT EXISTS postgis;
 SELECT 'VERSION:'||extversion FROM pg_extension WHERE extname='postgis';
 SELECT 'AREA:'||round(ST_Area(ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))'))::numeric, 3);
 SELECT 'MERCX:'||round(ST_X(ST_Transform(ST_SetSRID(ST_MakePoint(180, 0), 4326), 3857))::numeric, 2);
 SQL
-)
-    { echo "$out" | grep -q '^VERSION:3.6.2$' && echo "$out" | grep -q '^AREA:1.000$' \
-      && echo "$out" | grep -q '^MERCX:20037508.34$'; } \
-      && ok "postgis CREATE EXTENSION (v3.6.2) + ST_Area=1 + ST_Transform x=20037508.34" \
-      || bad "postgis checks failed (got: $(echo "$out" | tr '\n' ' '))"
+    )
+    { echo "$out" | grep -q '^VERSION:3.6.2$' && echo "$out" | grep -q '^AREA:1.000$' &&
+      echo "$out" | grep -q '^MERCX:20037508.34$'; } &&
+      ok "postgis CREATE EXTENSION (v3.6.2) + ST_Area=1 + ST_Transform x=20037508.34" ||
+      bad "postgis checks failed (got: $(echo "$out" | tr '\n' ' '))"
 
     # Deregistering it now must be refused: the branch above still opts in, and
     # dropping the row would strip the mount on its next deploy.
@@ -846,7 +900,8 @@ SQL
       echo "  KEEP set: leaving postgis cluster $GPROJ (endpoint pod $GPOD) up for inspection"
     else
       IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$GPROJ")
-      st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "postgis cluster cascade deleted" || bad "postgis cluster delete task=$st"
+      st=$(poll_task "$tid")
+      [ "$st" = succeeded ] && ok "postgis cluster cascade deleted" || bad "postgis cluster delete task=$st"
       # With nothing referencing it, the registration goes.
       code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/extensions/postgis?user_id=$GISADMIN")
       [ "$code" = 204 ] && ok "deregisterExtension once unused -> 204" || bad "deregister code=$code (want 204)"
@@ -864,19 +919,20 @@ SQL
   # endpoint is single-writer) — that createCluster does not cover.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/extensions" '{"extensions":["pg_cron"]}')
   [ "$code" = 202 ] && ok "addBranchExtensions 202" || bad "addBranchExtensions code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "add_branch_extensions succeeded" || bad "add_branch_extensions task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "add_branch_extensions succeeded" || bad "add_branch_extensions task=$st"
 
   # getBranch reports the unioned, sorted, de-duplicated set.
   exts=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF" | jq -r '(.extensions//[])|sort|join(",")')
-  [ "$exts" = "age,pg_cron,pgvector" ] && ok "getBranch reports unioned extensions ($exts)" \
-    || bad "getBranch extensions=$exts (want age,pg_cron,pgvector)"
+  [ "$exts" = "age,pg_cron,pgvector" ] && ok "getBranch reports unioned extensions ($exts)" ||
+    bad "getBranch extensions=$exts (want age,pg_cron,pgvector)"
 
   # The redeploy recreates the pod (new name after the helm upgrade); it comes
   # back Ready and now mounts pg_cron alongside the originals.
   EPOD=$(wait_ready_pod "$EEP")
   [ -n "$EPOD" ] && ok "endpoint redeployed and Ready ($EPOD)" || bad "endpoint not Ready after addBranchExtensions"
-  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control \
-    && ok "pg_cron ImageVolume mounted after addBranchExtensions" || bad "pg_cron ImageVolume not mounted after add"
+  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control &&
+    ok "pg_cron ImageVolume mounted after addBranchExtensions" || bad "pg_cron ImageVolume not mounted after add"
 
   # The redeploy replaced the pod. Adding an extension is a supported operation a
   # customer is invited to perform, so the connection string they already hold has
@@ -885,9 +941,9 @@ SQL
   # pod-scoped (CLOUDGA-36993).
   addr=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints/$EEP" | jq -r '.address // ""')
   want=$(want_endpoint_addr "$EEP")
-  [ -n "$EADDR" ] && [ "$addr" = "$EADDR" ] && { [ -z "$want" ] || [ "$addr" = "$want" ]; } \
-    && ok "endpoint address survived the redeploy ($addr)" \
-    || bad "endpoint address $addr after the redeploy (was $EADDR, want ${want:-it unchanged})"
+  [ -n "$EADDR" ] && [ "$addr" = "$EADDR" ] && { [ -z "$want" ] || [ "$addr" = "$want" ]; } &&
+    ok "endpoint address survived the redeploy ($addr)" ||
+    bad "endpoint address $addr after the redeploy (was $EADDR, want ${want:-it unchanged})"
 
   hdr "externalized extensions: a fork inherits its parent branch's opted-in set"
 
@@ -901,41 +957,45 @@ SQL
   FLSN=$(printf 'SELECT pg_current_wal_lsn();' | psql_pod "$EPOD" 127.0.0.1 55433 2>/dev/null | tr -d '[:space:]')
   [ -n "$FLSN" ] && ok "captured parent fork LSN ($FLSN)" || bad "could not capture parent fork LSN"
   code=""
-  for ((r=0; r<8; r++)); do
+  for ((r = 0; r < 8; r++)); do
     IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches" "{\"name\":\"extb1\",\"parent_branch_id\":\"$EDEF\",\"fork_point_lsn\":\"$FLSN\"}")
     [ "$code" = 202 ] && break
     sleep 5
   done
   [ "$code" = 202 ] && ok "ext fork extb1 accepted 202" || bad "ext fork code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext fork extb1 succeeded" || bad "ext fork task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "ext fork extb1 succeeded" || bad "ext fork task=$st"
   EB1=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches" | jq -r '.branches[]|select(.name=="extb1")|.branch_id')
   [ -n "$EB1" ] && ok "ext fork extb1 materialized ($EB1)" || bad "ext fork extb1 missing"
 
   # getBranch on the fork reports the inherited set (parent = age,pg_cron,pgvector).
   fexts=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1" | jq -r '(.extensions//[])|sort|join(",")')
-  [ "$fexts" = "age,pg_cron,pgvector" ] && ok "fork inherited the parent's set ($fexts)" \
-    || bad "fork extensions=$fexts (want age,pg_cron,pgvector)"
+  [ "$fexts" = "age,pg_cron,pgvector" ] && ok "fork inherited the parent's set ($fexts)" ||
+    bad "fork extensions=$fexts (want age,pg_cron,pgvector)"
 
   # A fresh endpoint on the fork mounts the inherited set with no opt-in.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
   [ "$code" = 202 ] && ok "fork createEndpoint 202" || bad "fork createEndpoint code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
   FEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')
   FPOD=$(wait_ready_pod "$FEP")
   [ -n "$FPOD" ] && ok "fork endpoint pod Ready ($FPOD)" || bad "fork endpoint pod not Ready"
-  kubectl -n "$NS" exec "$FPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
-    && ok "fork endpoint inherited pgvector mount" || bad "fork endpoint did NOT inherit pgvector"
+  kubectl -n "$NS" exec "$FPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control &&
+    ok "fork endpoint inherited pgvector mount" || bad "fork endpoint did NOT inherit pgvector"
 
   # Tear down the ext cluster (cascade retires all endpoints, drops branches).
   IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$EPROJ")
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster cascade deleted" || bad "ext cluster delete task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "ext cluster cascade deleted" || bad "ext cluster delete task=$st"
 
   hdr "documentdb engine: the gateway serves the wire protocol and logs in the default user"
 
   # engine:"documentdb" seeds documentdb + pgvector + pg_cron on the default
   # branch, and an endpoint that mounts documentdb renders the gateway sidecar.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"docproj","engine":"documentdb"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "documentdb cluster created (engine:documentdb)" || bad "documentdb cluster task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "documentdb cluster created (engine:documentdb)" || bad "documentdb cluster task=$st"
   DPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="docproj")|.id')
   DDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$DPROJ" ] && [ -n "$DDEF" ] && ok "documentdb cluster materialized ($DPROJ / $DDEF)" || bad "documentdb cluster not materialized"
@@ -946,7 +1006,8 @@ SQL
         + (if $cidrs == "" then {} else {allowed_cidrs: ($cidrs | split(","))} end))} end)')
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" "$dbody")
   [ "$code" = 202 ] && ok "createEndpoint 202 (connectivity=${SMOKE_DOCUMENTDB_CONNECTIVITY:-cluster_ip})" || bad "createEndpoint(documentdb) code=$code"
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(documentdb) succeeded" || bad "create_endpoint(documentdb) task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "create_endpoint(documentdb) succeeded" || bad "create_endpoint(documentdb) task=$st"
   DEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$DPROJ/branches/$DDEF/endpoints" | jq -r '.endpoints[0].id')
   DPOD=$(wait_ready_pod "$DEP")
   [ -n "$DPOD" ] && ok "documentdb endpoint pod Ready ($DPOD)" || bad "documentdb endpoint pod not Ready"
@@ -954,7 +1015,7 @@ SQL
   # wait_ready_pod reads only the first container. The gateway is a second
   # one, and a pod whose sidecar never came up would pass that check.
   gwready=""
-  for ((i=0; i<40; i++)); do
+  for ((i = 0; i < 40; i++)); do
     gwready=$(kubectl -n "$NS" get pod "$DPOD" -o jsonpath='{.status.containerStatuses[?(@.name=="documentdb-gateway")].ready}' 2>/dev/null)
     [ "$gwready" = true ] && break
     sleep 3
@@ -982,18 +1043,20 @@ SQL
     # An nlb_* address falls back to the in-cluster one when the load balancer
     # outruns the controller's wait, and this host cannot reach that.
     case "$eaddr" in
-      *.svc.cluster.local:*) bad "endpoint address $eaddr is the in-cluster fallback, not the $SMOKE_DOCUMENTDB_CONNECTIVITY one" ;;
-      *) [ -n "$daddr" ] && [ "$daddr" = "${eaddr%:*}:10260" ] \
-           && ok "documentdb_address = $daddr, the $SMOKE_DOCUMENTDB_CONNECTIVITY host on 10260" \
-           || bad "documentdb_address=$daddr (address=$eaddr, want its host on 10260)" ;;
+    *.svc.cluster.local:*) bad "endpoint address $eaddr is the in-cluster fallback, not the $SMOKE_DOCUMENTDB_CONNECTIVITY one" ;;
+    *) [ -n "$daddr" ] && [ "$daddr" = "${eaddr%:*}:10260" ] &&
+      ok "documentdb_address = $daddr, the $SMOKE_DOCUMENTDB_CONNECTIVITY host on 10260" ||
+      bad "documentdb_address=$daddr (address=$eaddr, want its host on 10260)" ;;
     esac
     case "$SMOKE_DOCUMENTDB_CONNECTIVITY" in
-      nlb_*)
-        lbport=$(kubectl -n "$NS" get svc "yb-ep-$DEP-lb" -o jsonpath='{.spec.ports[?(@.name=="documentdb")].port}' 2>/dev/null)
-        [ "$lbport" = 10260 ] && ok "the -lb Service publishes the gateway on 10260" || bad "the -lb Service has no documentdb port (got '$lbport')" ;;
-      ingress_*)
-        match=$(kubectl -n "$NS" get ingressroutetcp "yb-ep-$DEP-documentdb" -o jsonpath='{.spec.routes[0].match}' 2>/dev/null)
-        [ "$match" = "HostSNI(\`${daddr%:*}\`)" ] && ok "the gateway route matches $match on the shard" || bad "gateway route match='$match' (want HostSNI of ${daddr%:*})" ;;
+    nlb_*)
+      lbport=$(kubectl -n "$NS" get svc "yb-ep-$DEP-lb" -o jsonpath='{.spec.ports[?(@.name=="documentdb")].port}' 2>/dev/null)
+      [ "$lbport" = 10260 ] && ok "the -lb Service publishes the gateway on 10260" || bad "the -lb Service has no documentdb port (got '$lbport')"
+      ;;
+    ingress_*)
+      match=$(kubectl -n "$NS" get ingressroutetcp "yb-ep-$DEP-documentdb" -o jsonpath='{.spec.routes[0].match}' 2>/dev/null)
+      [ "$match" = "HostSNI(\`${daddr%:*}\`)" ] && ok "the gateway route matches $match on the shard" || bad "gateway route match='$match' (want HostSNI of ${daddr%:*})"
+      ;;
     esac
   else
     want=$(want_endpoint_addr "$DEP")
@@ -1010,9 +1073,9 @@ SQL
   out=$(kubectl -n "$NS" exec -i "$DPOD" -c endpoint -- \
     "$PSQL_BIN" -h 127.0.0.1 -p 55433 -U cloud_admin -d documentdb -tA -v ON_ERROR_STOP=1 \
     -c "SELECT 'EXT:'||extversion FROM pg_extension WHERE extname = 'documentdb'" 2>&1)
-  echo "$out" | grep -q '^EXT:0.116-0$' \
-    && ok "documentdb 0.116-0 created by compute_ctl in database documentdb" \
-    || bad "documentdb extension not in database documentdb (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+  echo "$out" | grep -q '^EXT:0.116-0$' &&
+    ok "documentdb 0.116-0 created by compute_ctl in database documentdb" ||
+    bad "documentdb extension not in database documentdb (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   # cluster_ip: the client reaches the gateway through a port-forward to the
   # endpoint's Service. Any other mode: straight at documentdb_address, by name,
@@ -1022,7 +1085,10 @@ SQL
   else
     kubectl -n "$NS" port-forward "svc/yb-ep-$DEP" "${GW_PF_PORT}:10260" >/tmp/smoke-gw-pf.log 2>&1 &
     GW_PF_PID=$!
-    for ((i=0; i<30; i++)); do (exec 3<>"/dev/tcp/127.0.0.1/$GW_PF_PORT") 2>/dev/null && break; sleep 1; done
+    for ((i = 0; i < 30; i++)); do
+      (exec 3<>"/dev/tcp/127.0.0.1/$GW_PF_PORT") 2>/dev/null && break
+      sleep 1
+    done
     GW_HOST=127.0.0.1 GW_PORT="$GW_PF_PORT"
   fi
 
@@ -1037,16 +1103,16 @@ SQL
   GW_DOCKER_ARGS=()
   GW_CA_FILE=""
   if [ "$COMPUTE_TLS" = issue ]; then
-    [ "$(jq -r '.required and .documentdb_verifiable and ((.ca_crt // "") | length > 0)' <<<"$ca")" = true ] \
-      && ok "GET .../ca: the gateway serves the compute's certificate, and here is its CA" \
-      || bad "GET .../ca under COMPUTE_TLS=issue (got: $ca)"
+    [ "$(jq -r '.required and .documentdb_verifiable and ((.ca_crt // "") | length > 0)' <<<"$ca")" = true ] &&
+      ok "GET .../ca: the gateway serves the compute's certificate, and here is its CA" ||
+      bad "GET .../ca under COMPUTE_TLS=issue (got: $ca)"
     # In cluster_ip the certificate names the Service only when the Service DNS
     # is included, and the address is that name only on a plain ClusterIP Service.
-    if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ] \
-       || { [ "$COMPUTE_TLS_SERVICE_DNS" = 1 ] && [ -n "$(want_endpoint_addr "$DEP")" ]; }; then
+    if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ] ||
+      { [ "$COMPUTE_TLS_SERVICE_DNS" = 1 ] && [ -n "$(want_endpoint_addr "$DEP")" ]; }; then
       GW_CA_FILE=$(mktemp)
       jq -r '.ca_crt' <<<"$ca" >"$GW_CA_FILE"
-      chmod 0644 "$GW_CA_FILE"   # a public certificate; the client image is not root
+      chmod 0644 "$GW_CA_FILE" # a public certificate; the client image is not root
       GW_TLS="tls=true&tlsCAFile=/tmp/ca.crt"
       GW_DOCKER_ARGS=(-v "$GW_CA_FILE:/tmp/ca.crt:ro")
       if [ -z "$SMOKE_DOCUMENTDB_CONNECTIVITY" ]; then
@@ -1055,9 +1121,9 @@ SQL
       fi
     fi
   elif [ "$COMPUTE_TLS" = disable ]; then
-    [ "$(jq -r '.documentdb_verifiable' <<<"$ca")" = false ] \
-      && ok "GET .../ca says the self-signed gateway cannot be verified" \
-      || bad "GET .../ca with compute TLS off (got: $ca)"
+    [ "$(jq -r '.documentdb_verifiable' <<<"$ca")" = false ] &&
+      ok "GET .../ca says the self-signed gateway cannot be verified" ||
+      bad "GET .../ca with compute TLS off (got: $ca)"
   fi
   gw_uri() {
     printf 'mongodb://cloud_admin:%s@%s:%s/?%s&directConnection=true&authMechanism=SCRAM-SHA-256&serverSelectionTimeoutMS=30000' \
@@ -1072,7 +1138,7 @@ SQL
   # A fresh load balancer's name can take minutes to resolve and to pass its
   # health checks, so an external address gets a grace period before the checks.
   if [ -n "$SMOKE_DOCUMENTDB_CONNECTIVITY" ]; then
-    for ((i=0; i<10; i++)); do
+    for ((i = 0; i < 10; i++)); do
       pymongo_run "$(gw_uri "$EP_PASSWORD")" <<'PY' | grep -q '^PING:1$' && break
 import os, pymongo
 print("PING:%d" % pymongo.MongoClient(os.environ["URI"]).admin.command("ping")["ok"])
@@ -1084,7 +1150,8 @@ PY
   # Every step goes client -> gateway -> documentdb on the compute (over the
   # pod's loopback) -> amp storage. The filter, sort, $inc and $group run in
   # documentdb, not in the driver.
-  out=$(pymongo_run "$(gw_uri "$EP_PASSWORD")" <<'PY'
+  out=$(
+    pymongo_run "$(gw_uri "$EP_PASSWORD")" <<'PY'
 import os, pymongo
 c = pymongo.MongoClient(os.environ["URI"])
 print("PING:%d" % c.admin.command("ping")["ok"])
@@ -1099,13 +1166,13 @@ print("AGG:t0=%d,t1=%d" % (agg["t0"], agg["t1"]))
 print("DELETE:%d" % coll.delete_one({"_id": 5}).deleted_count)
 print("COUNT:%d" % coll.count_documents({}))
 PY
-)
-  if echo "$out" | grep -q '^PING:1$' \
-     && echo "$out" | grep -q '^FIND:5,4,3$' \
-     && echo "$out" | grep -q '^UPDATE:1$' \
-     && echo "$out" | grep -q '^AGG:t0=6,t1=109$' \
-     && echo "$out" | grep -q '^DELETE:1$' \
-     && echo "$out" | grep -q '^COUNT:4$'; then
+  )
+  if echo "$out" | grep -q '^PING:1$' &&
+    echo "$out" | grep -q '^FIND:5,4,3$' &&
+    echo "$out" | grep -q '^UPDATE:1$' &&
+    echo "$out" | grep -q '^AGG:t0=6,t1=109$' &&
+    echo "$out" | grep -q '^DELETE:1$' &&
+    echo "$out" | grep -q '^COUNT:4$'; then
     ok "wire protocol as cloud_admin: SCRAM login + insert/index/find/update/aggregate/delete"
   else
     bad "wire-protocol round trip (got: $(echo "$out" | tail -4 | tr '\n' ' '))"
@@ -1113,16 +1180,18 @@ PY
 
   # The same documents, read back over SQL in the documentdb database after a
   # CHECKPOINT: what the gateway wrote is what the compute stored.
-  out=$(kubectl -n "$NS" exec -i "$DPOD" -c endpoint -- \
-    "$PSQL_BIN" -h 127.0.0.1 -p 55433 -U cloud_admin -d documentdb -tA -v ON_ERROR_STOP=1 <<'SQL' 2>&1
+  out=$(
+    kubectl -n "$NS" exec -i "$DPOD" -c endpoint -- \
+      "$PSQL_BIN" -h 127.0.0.1 -p 55433 -U cloud_admin -d documentdb -tA -v ON_ERROR_STOP=1 <<'SQL' 2>&1
 CHECKPOINT;
 SELECT 'ROWS:'||count(*) FROM documentdb_api.collection('amp_smoke', 'probe');
 SQL
-)
+  )
   echo "$out" | grep -q '^ROWS:4$' && ok "SQL reads the 4 documents the gateway wrote" || bad "SQL row count (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   # And the login is real: a wrong password is refused.
-  out=$(pymongo_run "$(gw_uri wrong-password)" <<'PY'
+  out=$(
+    pymongo_run "$(gw_uri wrong-password)" <<'PY'
 import os, pymongo
 from pymongo.errors import OperationFailure
 try:
@@ -1131,13 +1200,14 @@ try:
 except OperationFailure as e:
     print("AUTH:refused code=%s" % e.code)
 PY
-)
+  )
   echo "$out" | grep -q '^AUTH:refused' && ok "wrong password refused ($(echo "$out" | grep '^AUTH:' | tail -1))" || bad "wrong password not refused (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   # The round trip above ran with verification on. Without the CA the same name
   # must fail the handshake, or the driver was not verifying anything.
   if [ -n "$GW_CA_FILE" ]; then
-    out=$(pymongo_run "$(gw_uri "$EP_PASSWORD" "tls=true")" <<'PY'
+    out=$(
+      pymongo_run "$(gw_uri "$EP_PASSWORD" "tls=true")" <<'PY'
 import os, pymongo
 from pymongo.errors import ServerSelectionTimeoutError
 try:
@@ -1146,16 +1216,18 @@ try:
 except ServerSelectionTimeoutError as e:
     print("VERIFY:refused verify_failed=%s" % ("CERTIFICATE_VERIFY_FAILED" in str(e)))
 PY
-)
-    echo "$out" | grep -q '^VERIFY:refused verify_failed=True$' \
-      && ok "gateway certificate is CA-signed: verified with the endpoint's CA, refused without it" \
-      || bad "gateway accepted a client without the CA, or failed for another reason (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+    )
+    echo "$out" | grep -q '^VERIFY:refused verify_failed=True$' &&
+      ok "gateway certificate is CA-signed: verified with the endpoint's CA, refused without it" ||
+      bad "gateway accepted a client without the CA, or failed for another reason (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
     rm -f "$GW_CA_FILE"
   fi
 
-  [ -n "${GW_PF_PID:-}" ] && kill "$GW_PF_PID" 2>/dev/null; GW_PF_PID=""
+  [ -n "${GW_PF_PID:-}" ] && kill "$GW_PF_PID" 2>/dev/null
+  GW_PF_PID=""
   IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$DPROJ")
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "documentdb cluster cascade deleted" || bad "documentdb cluster delete task=$st"
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "documentdb cluster cascade deleted" || bad "documentdb cluster delete task=$st"
 fi
 
 printf '\n\033[1m================ RESULT: PASS=%d FAIL=%d ================\033[0m\n' "$PASS" "$FAIL"

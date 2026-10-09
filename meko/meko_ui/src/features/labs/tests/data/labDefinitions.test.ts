@@ -83,8 +83,6 @@ describe("LAB_DEFINITIONS", () => {
     }
   });
 
-
-
   it("every deployable lab has a non-empty demoApp.deployable.agentSlug", () => {
     for (const lab of LAB_DEFINITIONS) {
       if (lab.demoApp.deployable) {
@@ -98,5 +96,4 @@ describe("LAB_DEFINITIONS", () => {
     expect(getLabDefinition(first.id)).toBe(first);
     expect(getLabDefinition("does-not-exist")).toBeUndefined();
   });
-
 });

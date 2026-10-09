@@ -6,7 +6,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { ArrowLeftRight, ChevronLeft, ChevronRight, Loader2, AlertCircle, RefreshCw, Search, Trash2 } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
@@ -22,10 +31,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/hooks/use-toast";
 import { useFeatureFlag } from "@/lib/useFeatureFlag";
-import {
-  CONVERSATION_SOURCE,
-  datapackConversationsPathWithSource,
-} from "@/app/routes/paths";
+import { CONVERSATION_SOURCE, datapackConversationsPathWithSource } from "@/app/routes/paths";
 import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
 import { useMemoryReadOnlyList } from "./useMemoryReadOnlyList";
 import { PAGE_SIZE_OPTIONS } from "./useMemoryPromotion";
@@ -149,7 +155,11 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
         <div className="flex items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 ring-1 ring-blue-500/10">
-              <ArrowLeftRight className="h-5 w-5 text-blue-700 dark:text-blue-200" strokeWidth={1.75} aria-hidden />
+              <ArrowLeftRight
+                className="h-5 w-5 text-blue-700 dark:text-blue-200"
+                strokeWidth={1.75}
+                aria-hidden
+              />
             </div>
             <div className="min-w-0">
               <h3 className="text-base font-semibold tracking-tight text-foreground">
@@ -173,7 +183,9 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                   <span className="font-medium text-foreground">{datapackName}</span>.
                 </p>
               ) : (
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Loading memories…</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Loading memories…
+                </p>
               )}
             </div>
           </div>
@@ -222,7 +234,9 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
 
         {showPagination ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
-            <div>{total === 0 ? "0 memories" : `Showing ${rangeStart}–${rangeEnd} of ${total}`}</div>
+            <div>
+              {total === 0 ? "0 memories" : `Showing ${rangeStart}–${rangeEnd} of ${total}`}
+            </div>
             <div className="flex items-center gap-3">
               <label className="flex items-center gap-2">
                 <span>Per page</span>
@@ -329,7 +343,10 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                                     aria-label="Delete memory"
                                   >
                                     {deletingId === m.id ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+                                      <Loader2
+                                        className="h-3.5 w-3.5 animate-spin shrink-0"
+                                        aria-hidden
+                                      />
                                     ) : (
                                       <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
                                     )}

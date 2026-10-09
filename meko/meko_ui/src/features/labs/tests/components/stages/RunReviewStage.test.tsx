@@ -44,7 +44,9 @@ function fakeSession(
     deploymentMode: "shared" as const,
     selectDeploymentMode: vi.fn(),
     deployment: deploymentStatus
-      ? ({ id: "dep-1", status: deploymentStatus } as ReturnType<typeof useLabRunnerSession>["deployment"])
+      ? ({ id: "dep-1", status: deploymentStatus } as ReturnType<
+          typeof useLabRunnerSession
+        >["deployment"])
       : null,
     deploymentActive,
     ampClusterId: null,

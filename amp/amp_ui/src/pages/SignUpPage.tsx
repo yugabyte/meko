@@ -5,13 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthShell } from "@/auth/AuthShell";
@@ -85,10 +79,7 @@ export default function SignUpPage() {
           </form>
           <p className="mt-6 text-center text-sm text-muted-foreground">
             Already have an account?{" "}
-            <Link
-              to="/signin"
-              className="font-medium text-foreground underline underline-offset-4"
-            >
+            <Link to="/signin" className="font-medium text-foreground underline underline-offset-4">
               Sign in
             </Link>
           </p>

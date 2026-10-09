@@ -3,9 +3,16 @@ import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { confirmByocDeployment, getSharedDeployment, initByocDeployment } from "@/lib/api/deploymentsApi";
+import {
+  confirmByocDeployment,
+  getSharedDeployment,
+  initByocDeployment,
+} from "@/lib/api/deploymentsApi";
 import { useDeploymentStatus } from "@/features/labs/hooks/useDeployments";
-import type { DeploymentMode, useLabRunnerSession } from "@/features/labs/hooks/useLabRunnerSession";
+import type {
+  DeploymentMode,
+  useLabRunnerSession,
+} from "@/features/labs/hooks/useLabRunnerSession";
 import { DeployAgentPanel } from "@/features/labs/components/demo-apps/DeployAgentPanel";
 
 vi.mock("@/lib/api/deploymentsApi", () => ({
@@ -113,16 +120,23 @@ describe("DeployAgentPanel", () => {
 
     const roleArnInput = screen.getByLabelText("Role ARN");
     fireEvent.change(roleArnInput, { target: { value: "not-a-valid-arn" } });
-    expect((screen.getByRole("button", { name: "Deploy" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Deploy" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
 
     fireEvent.change(roleArnInput, {
       target: { value: "arn:aws:iam::123456789012:role/meko-agentcore-deploy" },
     });
-    expect((screen.getByRole("button", { name: "Deploy" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Deploy" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Deploy" }));
     await waitFor(() =>
-      expect(mockConfirmByoc).toHaveBeenCalledWith("dep-2", "arn:aws:iam::123456789012:role/meko-agentcore-deploy"),
+      expect(mockConfirmByoc).toHaveBeenCalledWith(
+        "dep-2",
+        "arn:aws:iam::123456789012:role/meko-agentcore-deploy",
+      ),
     );
   });
 
@@ -204,11 +218,15 @@ describe("DeployAgentPanel", () => {
   it("gates the dedicated card behind a paid tier, with an upgrade tooltip", () => {
     renderPanel({ agentSlug: "adlc-review-agent", agentDisplayName: "AgentK", userType: "free" });
 
-    const dedicatedCard = screen.getByText("Deploy your own dedicated AgentK").closest("[aria-disabled]");
+    const dedicatedCard = screen
+      .getByText("Deploy your own dedicated AgentK")
+      .closest("[aria-disabled]");
     expect(dedicatedCard?.getAttribute("aria-disabled")).toBe("true");
     // Disabled card exposes no clickable role -- selecting it is impossible
     // via keyboard/AT navigation, not just visually greyed out.
-    expect(screen.getByText("Deploy your own dedicated AgentK").closest('[role="button"]')).toBeNull();
+    expect(
+      screen.getByText("Deploy your own dedicated AgentK").closest('[role="button"]'),
+    ).toBeNull();
     // Still on the shared (default) view -- the gated card never activated.
     expect(screen.queryByText("Choose a runtime")).toBeNull();
   });

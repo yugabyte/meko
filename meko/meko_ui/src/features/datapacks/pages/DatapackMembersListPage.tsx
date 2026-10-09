@@ -167,9 +167,7 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
     // serialises role-changes to one in-flight, so restoring this
     // snapshot can't clobber a concurrent edit.
     const previousMembers = members;
-    setMembers((prev) =>
-      prev.map((m) => (m.user_id === userID ? { ...m, grant: newGrant } : m)),
-    );
+    setMembers((prev) => prev.map((m) => (m.user_id === userID ? { ...m, grant: newGrant } : m)));
     try {
       await updateDatapackMemberGrant(datapackId, userID, { grant: newGrant });
       toast({ title: "Role updated" });

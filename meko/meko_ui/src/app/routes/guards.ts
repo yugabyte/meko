@@ -33,12 +33,7 @@ export function isOnboardingRoute(location: string): boolean {
 }
 
 export function resolveGuardRedirect(input: GuardInput): string | null {
-  const {
-    location,
-    authLoading,
-    authenticated,
-    hasCompletedOnboarding,
-  } = input;
+  const { location, authLoading, authenticated, hasCompletedOnboarding } = input;
 
   if (authLoading) return null;
 
@@ -56,7 +51,6 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
     if (rt) return rt;
     return hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding;
   }
-
 
   if (authenticated && hasCompletedOnboarding && location === ROUTES.connect) {
     return ROUTES.connect;

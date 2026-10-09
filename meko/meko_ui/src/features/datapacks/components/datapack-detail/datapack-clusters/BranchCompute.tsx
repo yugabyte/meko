@@ -34,9 +34,10 @@ export function BranchCompute({
   // wizard (prefill within budget, memory at AMP's ratio, blank-CPU guard).
   const budget = useBudgetedCompute(datapackId);
   const { cpu, memory } = budget;
-  const [provisionError, setProvisionError] = useState<{ message: string; upgrade: boolean } | null>(
-    null,
-  );
+  const [provisionError, setProvisionError] = useState<{
+    message: string;
+    upgrade: boolean;
+  } | null>(null);
   const loadError = computeQuery.error
     ? getApiErrorMessage(computeQuery.error, "Failed to load compute.")
     : null;

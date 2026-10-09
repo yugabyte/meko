@@ -52,8 +52,10 @@ TXT_OWNER_ID="${TXT_OWNER_ID:-amp-${NS}-${FAMILY}}"
 SA_ANNOTATION="${SA_ANNOTATION:-}"
 CHART_VERSION="${CHART_VERSION:-1.23.0}"
 
-case "${FAMILY}" in internal|external) ;; *)
-  echo "!! FAMILY must be internal or external (got '${FAMILY}')" >&2; exit 1 ;;
+case "${FAMILY}" in internal | external) ;; *)
+  echo "!! FAMILY must be internal or external (got '${FAMILY}')" >&2
+  exit 1
+  ;;
 esac
 
 args=(
@@ -70,14 +72,15 @@ args=(
   --set "extraArgs={--zone-id-filter=${ZONE_ID}}"
 )
 case "${PROVIDER}" in
-  aws) ;;
-  google)
-    : "${GOOGLE_PROJECT:?GOOGLE_PROJECT is required for PROVIDER=google}"
-    args+=(--set "extraArgs={--zone-id-filter=${ZONE_ID},--google-project=${GOOGLE_PROJECT}}")
-    ;;
-  *)
-    echo "!! PROVIDER must be aws or google (got '${PROVIDER}'); see the external-dns chart for others" >&2
-    exit 1 ;;
+aws) ;;
+google)
+  : "${GOOGLE_PROJECT:?GOOGLE_PROJECT is required for PROVIDER=google}"
+  args+=(--set "extraArgs={--zone-id-filter=${ZONE_ID},--google-project=${GOOGLE_PROJECT}}")
+  ;;
+*)
+  echo "!! PROVIDER must be aws or google (got '${PROVIDER}'); see the external-dns chart for others" >&2
+  exit 1
+  ;;
 esac
 if [ -n "${SA_ANNOTATION}" ]; then
   # --set-string, and the dots in the key escaped: the key is an annotation name.

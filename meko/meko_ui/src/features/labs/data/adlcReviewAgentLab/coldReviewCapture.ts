@@ -15,7 +15,6 @@
 // "context sources available: none" is the lesson -- but it is labelled a
 // replay of a captured run, not dressed up as a live one.
 
-
 export const COLD_REVIEW_MODEL_LABEL = "AgentK · no datapack";
 
 /** One line of the agent's own trace. `at` is the elapsed time the capture

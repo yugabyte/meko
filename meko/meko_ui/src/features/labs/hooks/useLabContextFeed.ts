@@ -100,7 +100,10 @@ export function useLabContextFeed({
       const [kb, mem, promoted, convos, summary] = await Promise.allSettled([
         getKnowledgeBaseDocuments(datapackId, { page: 1, page_size: PAGE_SIZE, signal }),
         listMemories({ datapack_id: datapackId, page: 1, page_size: PAGE_SIZE }, { signal }),
-        listPromotedMemories({ datapack_id: datapackId, page: 1, page_size: PAGE_SIZE }, { signal }),
+        listPromotedMemories(
+          { datapack_id: datapackId, page: 1, page_size: PAGE_SIZE },
+          { signal },
+        ),
         listDatapackConversations(datapackId, { limit: PAGE_SIZE }, { signal }),
         getKnowledgeBaseSummary(datapackId, { signal }),
       ]);
@@ -116,8 +119,7 @@ export function useLabContextFeed({
         // The endpoint pages rather than counting, so this is "at least this
         // many". PAGE_SIZE is well above what a lab run produces, and the
         // gate only asks whether there is one at all.
-        conversationsTotal:
-          convos.status === "fulfilled" ? convos.value.conversations.length : 0,
+        conversationsTotal: convos.status === "fulfilled" ? convos.value.conversations.length : 0,
         chunksTotal: summary.status === "fulfilled" ? (summary.value.total_chunks ?? null) : null,
         chunkSize: summary.status === "fulfilled" ? (summary.value.chunk_size ?? null) : null,
         loading: false,

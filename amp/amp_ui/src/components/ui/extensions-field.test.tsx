@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import {
-  ExtensionsField,
-  BUNDLED_EXTENSIONS,
-} from "@/components/ui/extensions-field";
+import { ExtensionsField, BUNDLED_EXTENSIONS } from "@/components/ui/extensions-field";
 
 // ExtensionsField is a multi-select over whatever catalog it is handed, with one
 // twist: what is already enabled on the target is locked, because the API unions

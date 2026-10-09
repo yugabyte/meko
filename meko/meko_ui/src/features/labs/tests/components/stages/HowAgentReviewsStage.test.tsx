@@ -102,9 +102,7 @@ describe("HowAgentReviewsStage", () => {
   it("prices both sides off the datapack's real chunk count", async () => {
     renderStage();
     expect(
-      await screen.findByText(
-        new RegExp(`${TYPICAL_MATCHING_CHUNKS} of your ${KB_CHUNKS} chunks`),
-      ),
+      await screen.findByText(new RegExp(`${TYPICAL_MATCHING_CHUNKS} of your ${KB_CHUNKS} chunks`)),
     ).toBeTruthy();
     expect(screen.getByText(new RegExp(`all ${KB_CHUNKS} chunks ride along`))).toBeTruthy();
     // Twice: the strategy card and the frontier baseline card beside it,

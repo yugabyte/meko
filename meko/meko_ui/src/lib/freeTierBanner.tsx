@@ -36,13 +36,7 @@ import {
 /** Deep-link param PricingSection reads to scroll + flash a tier card. */
 export const HIGHLIGHT_TIER_PARAM = "highlightTier";
 
-export function TierLimitBanner({
-  kind,
-  className,
-}: {
-  kind: TierBannerKind;
-  className?: string;
-}) {
+export function TierLimitBanner({ kind, className }: { kind: TierBannerKind; className?: string }) {
   const { data: user } = useCurrentUser({ enabled: true });
   const { data: usage } = useAccountUsage();
   const target = resolveBannerTarget(user?.user_type);

@@ -92,8 +92,11 @@ PULL_SECRET_DOCKERCONFIGJSON="${PULL_SECRET_DOCKERCONFIGJSON:-}"
 # Local port for the transient register port-forward.
 YCP_PF_PORT="${YCP_PF_PORT:-18090}"
 
-say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
+die() {
+  printf '\033[1;31merror: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 # --- preflight ---
 say "preflight"
@@ -120,7 +123,7 @@ if [ -n "${PULL_SECRET}" ]; then
     # Route the config.json through a temp file rather than --from-literal so the
     # credential never lands in argv / a process listing.
     _dcj="$(mktemp)"
-    printf '%s' "${PULL_SECRET_DOCKERCONFIGJSON}" > "${_dcj}"
+    printf '%s' "${PULL_SECRET_DOCKERCONFIGJSON}" >"${_dcj}"
     kubectl -n "${NS}" create secret generic "${PULL_SECRET}" \
       --type=kubernetes.io/dockerconfigjson \
       --from-file=.dockerconfigjson="${_dcj}" \
@@ -160,8 +163,8 @@ say "control plane (Postgres + api_server --control-plane-mode)"
 # Scope envsubst to exactly our vars so the k8s $(DB_PASSWORD) refs pass through.
 NS="${NS}" YCP_IMAGE="${YCP_IMAGE}" YCP_ADMIN_KEY="${YCP_ADMIN_KEY}" YCP_IPS="${YCP_IPS}" YCP_PG_DATA_VOLUME="${YCP_PG_DATA_VOLUME}" \
   YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL}" \
-  envsubst '${NS} ${YCP_IMAGE} ${YCP_ADMIN_KEY} ${YCP_IPS} ${YCP_PG_DATA_VOLUME} ${YCP_BYOC_METRICS_URL}' < "${MANIFEST}" \
-  | kubectl apply -f -
+  envsubst '${NS} ${YCP_IMAGE} ${YCP_ADMIN_KEY} ${YCP_IPS} ${YCP_PG_DATA_VOLUME} ${YCP_BYOC_METRICS_URL}' <"${MANIFEST}" |
+  kubectl apply -f -
 
 # --- 3. wait for readiness ---
 say "waiting for control plane to be ready"
@@ -177,8 +180,11 @@ trap cleanup EXIT
 
 CP="http://127.0.0.1:${YCP_PF_PORT}"
 ready=0
-for ((i=0; i<60; i++)); do
-  if curl -sf "${CP}/api/v1/health" >/dev/null 2>&1; then ready=1; break; fi
+for ((i = 0; i < 60; i++)); do
+  if curl -sf "${CP}/api/v1/health" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
   sleep 1
 done
 [ "${ready}" = 1 ] || die "control plane /api/v1/health never came up (port-forward log: $(cat /tmp/ycp-up-pf.log 2>/dev/null))"
@@ -209,10 +215,10 @@ kubectl -n "${NS}" create secret generic "${YCP_AGENT_SECRET}" \
 # The agent's base URL carries the API base; agent routes hang off it as /agent/*.
 YCP_URL="http://meko-api-server.${NS}.svc.cluster.local/api/v1"
 say "control plane up — outputs"
-emit() {  # emit KEY VALUE  -> $GITHUB_ENV (if in Actions) + stdout
+emit() { # emit KEY VALUE  -> $GITHUB_ENV (if in Actions) + stdout
   local k="$1" v="$2"
   echo "   ${k}=${v}"
-  [ -n "${GITHUB_ENV:-}" ] && printf '%s=%s\n' "${k}" "${v}" >> "${GITHUB_ENV}"
+  [ -n "${GITHUB_ENV:-}" ] && printf '%s=%s\n' "${k}" "${v}" >>"${GITHUB_ENV}"
   return 0
 }
 # The admin key is a live credential; mask it in Actions logs.

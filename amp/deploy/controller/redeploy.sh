@@ -109,14 +109,14 @@ source "${SCRIPT_DIR}/../ecr-creds.sh"
 NS="${NS:-${AMP_NAMESPACE:-amp}}"
 PULL_SECRET="${PULL_SECRET:-pull-secret}"
 ECR="${ECR:-454529406029.dkr.ecr.us-west-2.amazonaws.com}"
-REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}}"  # for `aws ecr get-login-password`
+REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}}" # for `aws ecr get-login-password`
 # Default image tag = this build's version tag (release "v<VERSION>", or
 # "v<VERSION>-dev.<commit>[-dirty]" for a dev build; "latest" if VERSION is
 # absent) — centralised in scripts/version.sh. Override via CONTROLLER_TAG /
 # ENDPOINT_TAG; set RELEASE=1 for the clean release tag.
 _VERSION_TAG="$("${SCRIPT_DIR}/../../scripts/version.sh" image-tag 2>/dev/null || echo latest)"
-CONTROLLER_TAG="${CONTROLLER_TAG:-${_VERSION_TAG}}"   # amp/controller image tag
-ENDPOINT_TAG="${ENDPOINT_TAG:-${_VERSION_TAG}}"       # amp/endpoint image tag endpoints run
+CONTROLLER_TAG="${CONTROLLER_TAG:-${_VERSION_TAG}}" # amp/controller image tag
+ENDPOINT_TAG="${ENDPOINT_TAG:-${_VERSION_TAG}}"     # amp/endpoint image tag endpoints run
 # Backing YugabyteDB (reused; not created here).
 YB_HOST_PORTS="${YB_HOST_PORTS:-yb-tserver.${NS}.svc.cluster.local:5433}"
 DB_URL="${DB_URL:-postgres://yugabyte@yb-tserver.${NS}.svc.cluster.local:5433/yb_storage?sslmode=disable}"
@@ -195,12 +195,30 @@ CONTROLLER_NODEPORT="${CONTROLLER_NODEPORT:-}"
 # gives each endpoint a private VPC LB IP (uses LB_ANNOTATIONS).
 ENDPOINT_EXPOSE="${ENDPOINT_EXPOSE:-}"
 case "${ENDPOINT_EXPOSE}" in
-  clusterip)   ENDPOINT_SERVICE_TYPE="ClusterIP";    ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  nodeport)    ENDPOINT_SERVICE_TYPE="NodePort";     ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  internal-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}" ;;
-  external-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  "")          ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  *) echo "ERROR: ENDPOINT_EXPOSE must be clusterip|nodeport|internal-lb|external-lb, got '${ENDPOINT_EXPOSE}'" >&2; exit 1 ;;
+clusterip)
+  ENDPOINT_SERVICE_TYPE="ClusterIP"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+nodeport)
+  ENDPOINT_SERVICE_TYPE="NodePort"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+internal-lb)
+  ENDPOINT_SERVICE_TYPE="LoadBalancer"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}"
+  ;;
+external-lb)
+  ENDPOINT_SERVICE_TYPE="LoadBalancer"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+"")
+  ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+*)
+  echo "ERROR: ENDPOINT_EXPOSE must be clusterip|nodeport|internal-lb|external-lb, got '${ENDPOINT_EXPOSE}'" >&2
+  exit 1
+  ;;
 esac
 
 # Endpoint data volume: the storage class each endpoint's /data PVC is
@@ -258,11 +276,11 @@ UI_TAG="${UI_TAG:-${CONTROLLER_TAG}}"
 
 # Validate exposure mode early (the chart also validates, but fail fast here).
 case "${CONTROLLER_EXPOSE}" in
-  nodeport|internal-lb|external-lb|none) ;;
-  *)
-    echo "ERROR: invalid CONTROLLER_EXPOSE=${CONTROLLER_EXPOSE} (want nodeport|internal-lb|external-lb|none)" >&2
-    exit 1
-    ;;
+nodeport | internal-lb | external-lb | none) ;;
+*)
+  echo "ERROR: invalid CONTROLLER_EXPOSE=${CONTROLLER_EXPOSE} (want nodeport|internal-lb|external-lb|none)" >&2
+  exit 1
+  ;;
 esac
 
 # Full registry+repo (no tag) for the controller image and the endpoint image
@@ -343,7 +361,10 @@ HELM_SET_STRING=(
 HELM_VALUES_FILE=""
 # Keep the trap's final status truthy: a falsey last command in an EXIT trap
 # would clobber the script's own exit code.
-cleanup() { [ -n "${HELM_VALUES_FILE}" ] && rm -f "${HELM_VALUES_FILE}"; return 0; }
+cleanup() {
+  [ -n "${HELM_VALUES_FILE}" ] && rm -f "${HELM_VALUES_FILE}"
+  return 0
+}
 trap cleanup EXIT
 
 # emit_csv_list <indent> <csv>: print each "k=v" of the CSV as a quoted YAML list item.
@@ -422,13 +443,14 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
   # controller has been upgraded with ingress on — failing there leaves a
   # deployment whose API accepts the ingress_* modes with no shard to place them.
   case "${INGRESS_CLOUD}" in
-    aws|gcp|azure) ;;
-    *)
-      echo "!! INGRESS_ENABLED=true needs INGRESS_CLOUD=aws|gcp|azure (got '${INGRESS_CLOUD}')." >&2
-      echo "   Required for BOTH families: internal would otherwise default to" >&2
-      echo "   internet-facing, and external would get a classic load balancer" >&2
-      echo "   instead of the NLB this design needs." >&2
-      exit 1 ;;
+  aws | gcp | azure) ;;
+  *)
+    echo "!! INGRESS_ENABLED=true needs INGRESS_CLOUD=aws|gcp|azure (got '${INGRESS_CLOUD}')." >&2
+    echo "   Required for BOTH families: internal would otherwise default to" >&2
+    echo "   internet-facing, and external would get a classic load balancer" >&2
+    echo "   instead of the NLB this design needs." >&2
+    exit 1
+    ;;
   esac
   # The Traefik CRDs, vendored in the CONTROLLER chart's crds/ from
   # traefik-helm-chart v37.1.2 — that is the CHART's version series, not the
@@ -530,39 +552,39 @@ fi
 
 echo ">> amp controller is up. Access (API under /api/v1, explorer at /api/v1/docs):"
 case "${CONTROLLER_EXPOSE}" in
-  internal-lb|external-lb)
-    LBIP="$(kubectl -n "${NS}" get svc amp-controller-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-    if [ -n "${LBIP}" ]; then
-      echo "   ${CONTROLLER_EXPOSE} (API):  http://${LBIP}:8080"
-    else
-      echo "   ${CONTROLLER_EXPOSE} IP: still provisioning — check: kubectl -n ${NS} get svc amp-controller-lb -w"
-    fi
-    ;;
-  nodeport)
-    NP="$(kubectl -n "${NS}" get svc amp-controller-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
-    # Prefer an ExternalIP (matches the controller's own node-IP resolver), else InternalIP.
-    NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    echo "   NodePort (API):  http://<any-node-ip>:${NP:-<pending>}   (reachable at any node IP)"
-    [ -n "${NODEIP}" ] && [ -n "${NP}" ] && echo "      e.g.  http://${NODEIP}:${NP}"
-    ;;
+internal-lb | external-lb)
+  LBIP="$(kubectl -n "${NS}" get svc amp-controller-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+  if [ -n "${LBIP}" ]; then
+    echo "   ${CONTROLLER_EXPOSE} (API):  http://${LBIP}:8080"
+  else
+    echo "   ${CONTROLLER_EXPOSE} IP: still provisioning — check: kubectl -n ${NS} get svc amp-controller-lb -w"
+  fi
+  ;;
+nodeport)
+  NP="$(kubectl -n "${NS}" get svc amp-controller-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+  # Prefer an ExternalIP (matches the controller's own node-IP resolver), else InternalIP.
+  NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+  [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+  echo "   NodePort (API):  http://<any-node-ip>:${NP:-<pending>}   (reachable at any node IP)"
+  [ -n "${NODEIP}" ] && [ -n "${NP}" ] && echo "      e.g.  http://${NODEIP}:${NP}"
+  ;;
 esac
 echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller 8080:8080   then http://localhost:8080/api/v1/docs"
 if [ "${UI_ENABLED}" = "true" ]; then
   echo ">> amp_ui SPA is up (its own pod, proxies /api/ to the controller):"
   case "${CONTROLLER_EXPOSE}" in
-    internal-lb|external-lb)
-      UILBIP="$(kubectl -n "${NS}" get svc amp-controller-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-      if [ -n "${UILBIP}" ]; then
-        echo "   ${CONTROLLER_EXPOSE} (UI):  http://${UILBIP}"
-      else
-        echo "   ${CONTROLLER_EXPOSE} IP: still provisioning — check: kubectl -n ${NS} get svc amp-controller-ui-lb -w"
-      fi
-      ;;
-    nodeport)
-      UINP="$(kubectl -n "${NS}" get svc amp-controller-ui-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
-      echo "   NodePort (UI):  http://<any-node-ip>:${UINP:-<pending>}   (reachable at any node IP)"
-      ;;
+  internal-lb | external-lb)
+    UILBIP="$(kubectl -n "${NS}" get svc amp-controller-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+    if [ -n "${UILBIP}" ]; then
+      echo "   ${CONTROLLER_EXPOSE} (UI):  http://${UILBIP}"
+    else
+      echo "   ${CONTROLLER_EXPOSE} IP: still provisioning — check: kubectl -n ${NS} get svc amp-controller-ui-lb -w"
+    fi
+    ;;
+  nodeport)
+    UINP="$(kubectl -n "${NS}" get svc amp-controller-ui-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+    echo "   NodePort (UI):  http://<any-node-ip>:${UINP:-<pending>}   (reachable at any node IP)"
+    ;;
   esac
   echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller-ui 8081:80   then http://localhost:8081"
 fi

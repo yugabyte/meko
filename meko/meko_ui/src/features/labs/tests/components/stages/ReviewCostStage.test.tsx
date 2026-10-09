@@ -80,13 +80,7 @@ const RETRIEVED = {
 describe("ReviewCostStage", () => {
   it("sends the user back to the review rather than showing numbers nobody measured", () => {
     const onGoToRunReview = vi.fn();
-    renderStage(
-      <ReviewCostStage
-        run={null}
-        datapackId="dp-1"
-        onGoToRunReview={onGoToRunReview}
-      />,
-    );
+    renderStage(<ReviewCostStage run={null} datapackId="dp-1" onGoToRunReview={onGoToRunReview} />);
 
     fireEvent.click(screen.getByRole("button", { name: /go to run the review/i }));
     expect(onGoToRunReview).toHaveBeenCalled();
@@ -112,13 +106,7 @@ describe("ReviewCostStage", () => {
   });
 
   it("shows the chosen model's real token usage from the run", () => {
-    renderStage(
-      <ReviewCostStage
-        run={runWith()}
-        datapackId="dp-1"
-        onGoToRunReview={vi.fn()}
-      />,
-    );
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" onGoToRunReview={vi.fn()} />);
 
     // Twice now: the comparison tile quotes the same measured input the stat
     // grid does, which is the point of dropping the invented figure.
@@ -130,7 +118,9 @@ describe("ReviewCostStage", () => {
   it("shows real knowledgebase_search/memory_search retrieval counts from the run", () => {
     renderStage(
       <ReviewCostStage
-        run={runWith({ contextStats: { ...RETRIEVED, kb_chunks_retrieved: 10, kb_chunks_total: 70 } })}
+        run={runWith({
+          contextStats: { ...RETRIEVED, kb_chunks_retrieved: 10, kb_chunks_total: 70 },
+        })}
         datapackId="dp-1"
         onGoToRunReview={vi.fn()}
       />,
@@ -191,13 +181,7 @@ describe("ReviewCostStage", () => {
     // gen_reference_review.py's real output is pasted into the fixture --
     // dividing by a zero reference cost must not render a bogus "Infinity%"
     // or "NaN%" savings line.
-    renderStage(
-      <ReviewCostStage
-        run={runWith()}
-        datapackId="dp-1"
-        onGoToRunReview={vi.fn()}
-      />,
-    );
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" onGoToRunReview={vi.fn()} />);
 
     expect(screen.queryByText(/less, from this run/)).toBeNull();
   });
@@ -205,13 +189,7 @@ describe("ReviewCostStage", () => {
   // The datapack rollup is the half that outlives the session, so it gets its
   // own tab rather than sitting under this run's numbers.
   it("keeps the datapack's own analytics behind the Metrics tab", () => {
-    renderStage(
-      <ReviewCostStage
-        run={runWith()}
-        datapackId="dp-1"
-        onGoToRunReview={vi.fn()}
-      />,
-    );
+    renderStage(<ReviewCostStage run={runWith()} datapackId="dp-1" onGoToRunReview={vi.fn()} />);
     expect(screen.getByRole("tab", { name: "Cost" })).toBeTruthy();
     expect(screen.queryByText("Context Size - by token count")).toBeNull();
 

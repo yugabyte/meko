@@ -122,10 +122,7 @@ function ok<T>(data: T) {
   return { data, error: null };
 }
 
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express,
-): Promise<Server> {
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.get("/api/v1/datapacks", (_req, res) => {
     res.json(ok(datapacks));
   });
@@ -195,14 +192,14 @@ export async function registerRoutes(
     ];
     kbByDatapack[name] = req.body?.seed_knowledge_base
       ? [
-        {
-          rag_source_id: `kb_${Date.now()}`,
-          datapack_id: id,
-          knowledge_base_url: String(req.body.seed_knowledge_base),
-          created_at: createdAt,
-          updated_at: createdAt,
-        },
-      ]
+          {
+            rag_source_id: `kb_${Date.now()}`,
+            datapack_id: id,
+            knowledge_base_url: String(req.body.seed_knowledge_base),
+            created_at: createdAt,
+            updated_at: createdAt,
+          },
+        ]
       : [];
 
     shareStateByDatapack[name] = {
@@ -388,21 +385,13 @@ export async function registerRoutes(
       if (!validEmail.test(email)) {
         status = "invalid_email";
         message = "not a valid email address";
-      } else if (
-        st.members.some(
-          (m) => m.is_owner && m.user_email_id?.toLowerCase() === key,
-        )
-      ) {
+      } else if (st.members.some((m) => m.is_owner && m.user_email_id?.toLowerCase() === key)) {
         status = "is_owner";
         message = "cannot invite the datapack owner";
-      } else if (
-        st.members.some((m) => m.user_email_id?.toLowerCase() === key)
-      ) {
+      } else if (st.members.some((m) => m.user_email_id?.toLowerCase() === key)) {
         status = "already_member";
         message = "already has access to this datapack";
-      } else if (
-        st.pending.some((p) => p.recipient_email_id?.toLowerCase() === key)
-      ) {
+      } else if (st.pending.some((p) => p.recipient_email_id?.toLowerCase() === key)) {
         status = "invite_exists";
         message = "a pending invite already exists for this email";
       } else {

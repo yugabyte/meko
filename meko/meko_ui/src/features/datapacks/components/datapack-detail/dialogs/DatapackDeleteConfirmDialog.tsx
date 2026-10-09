@@ -52,8 +52,8 @@ export function DatapackDeleteConfirmDialog({
           <DialogTitle className="text-xl text-foreground">Delete datapack</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             Are you sure you want to delete{" "}
-            <span className="font-medium text-foreground">{datapackName}</span>? This cannot be undone and may remove
-            associated knowledge and access for this workspace.
+            <span className="font-medium text-foreground">{datapackName}</span>? This cannot be
+            undone and may remove associated knowledge and access for this workspace.
           </DialogDescription>
         </DialogHeader>
         {error ? (
@@ -62,10 +62,20 @@ export function DatapackDeleteConfirmDialog({
           </p>
         ) : null}
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={submitting}
+          >
             Cancel
           </Button>
-          <Button type="button" variant="destructive" onClick={() => void handleDelete()} disabled={submitting}>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => void handleDelete()}
+            disabled={submitting}
+          >
             {submitting ? "Deleting…" : "Delete"}
           </Button>
         </DialogFooter>

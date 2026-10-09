@@ -54,8 +54,7 @@ export function DeleteClusterDialog({
           onOpenChange(false);
           onDeleted?.();
         },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : msg.deleteClusterError),
+        onError: (err) => toast.error(err instanceof Error ? err.message : msg.deleteClusterError),
       },
     );
   }

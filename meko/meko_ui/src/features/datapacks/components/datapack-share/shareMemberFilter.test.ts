@@ -45,7 +45,11 @@ const contributor = member({
   user_name: "Cara Lopez",
   grant: DATAPACK_SHARE_GRANT_CONTRIBUTOR,
 });
-const viewer = member({ user_email_id: "dev@partner.io", user_name: "", grant: DATAPACK_SHARE_GRANT_VIEWER });
+const viewer = member({
+  user_email_id: "dev@partner.io",
+  user_name: "",
+  grant: DATAPACK_SHARE_GRANT_VIEWER,
+});
 const all = [owner, maintainer, contributor, viewer];
 
 const emails = (rows: DatapackOutgoingMember[]) => rows.map((r) => r.user_email_id);
@@ -78,14 +82,16 @@ describe("filterShareMembers", () => {
   });
 
   it("matches on email substring, case-insensitively", () => {
-    expect(emails(filterShareMembers(all, { query: "BO@", role: SHARE_MEMBER_ROLE_FILTER_ALL }))).toEqual([
-      "Bo@Yugabyte.com",
-    ]);
+    expect(
+      emails(filterShareMembers(all, { query: "BO@", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+    ).toEqual(["Bo@Yugabyte.com"]);
   });
 
   it("matches a whole domain, with or without the @", () => {
     expect(
-      emails(filterShareMembers(all, { query: "@yugabyte.com", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+      emails(
+        filterShareMembers(all, { query: "@yugabyte.com", role: SHARE_MEMBER_ROLE_FILTER_ALL }),
+      ),
     ).toEqual(["amiram@yugabyte.com", "Bo@Yugabyte.com"]);
     expect(
       emails(filterShareMembers(all, { query: "partner.io", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
@@ -93,33 +99,43 @@ describe("filterShareMembers", () => {
   });
 
   it("matches on display name", () => {
-    expect(emails(filterShareMembers(all, { query: "cara", role: SHARE_MEMBER_ROLE_FILTER_ALL }))).toEqual([
-      "cara@partner.io",
-    ]);
+    expect(
+      emails(filterShareMembers(all, { query: "cara", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+    ).toEqual(["cara@partner.io"]);
   });
 
   it("matches on role label", () => {
-    expect(emails(filterShareMembers(all, { query: "viewer", role: SHARE_MEMBER_ROLE_FILTER_ALL }))).toEqual([
-      "dev@partner.io",
-    ]);
+    expect(
+      emails(filterShareMembers(all, { query: "viewer", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+    ).toEqual(["dev@partner.io"]);
   });
 
   it("ANDs multiple whitespace-separated terms", () => {
     expect(
-      emails(filterShareMembers(all, { query: "yugabyte maintainer", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+      emails(
+        filterShareMembers(all, {
+          query: "yugabyte maintainer",
+          role: SHARE_MEMBER_ROLE_FILTER_ALL,
+        }),
+      ),
     ).toEqual(["Bo@Yugabyte.com"]);
     expect(
-      emails(filterShareMembers(all, { query: "yugabyte contributor", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+      emails(
+        filterShareMembers(all, {
+          query: "yugabyte contributor",
+          role: SHARE_MEMBER_ROLE_FILTER_ALL,
+        }),
+      ),
     ).toEqual([]);
   });
 
   it("filters by role, treating the owner row as owner not maintainer", () => {
-    expect(emails(filterShareMembers(all, { query: "", role: DATAPACK_SHARE_GRANT_OWNER }))).toEqual([
-      "amiram@yugabyte.com",
-    ]);
-    expect(emails(filterShareMembers(all, { query: "", role: DATAPACK_SHARE_GRANT_MAINTAINER }))).toEqual([
-      "Bo@Yugabyte.com",
-    ]);
+    expect(
+      emails(filterShareMembers(all, { query: "", role: DATAPACK_SHARE_GRANT_OWNER })),
+    ).toEqual(["amiram@yugabyte.com"]);
+    expect(
+      emails(filterShareMembers(all, { query: "", role: DATAPACK_SHARE_GRANT_MAINTAINER })),
+    ).toEqual(["Bo@Yugabyte.com"]);
   });
 
   it("combines query and role", () => {
@@ -129,17 +145,21 @@ describe("filterShareMembers", () => {
   });
 
   it("ignores surrounding whitespace in the query", () => {
-    expect(emails(filterShareMembers(all, { query: "   ", role: SHARE_MEMBER_ROLE_FILTER_ALL }))).toEqual(
-      emails(all),
-    );
+    expect(
+      emails(filterShareMembers(all, { query: "   ", role: SHARE_MEMBER_ROLE_FILTER_ALL })),
+    ).toEqual(emails(all));
   });
 });
 
 describe("isShareMemberFilterActive", () => {
   it("is false only for an untouched filter", () => {
     expect(isShareMemberFilterActive(EMPTY_SHARE_MEMBER_FILTER)).toBe(false);
-    expect(isShareMemberFilterActive({ query: "  ", role: SHARE_MEMBER_ROLE_FILTER_ALL })).toBe(false);
-    expect(isShareMemberFilterActive({ query: "a", role: SHARE_MEMBER_ROLE_FILTER_ALL })).toBe(true);
+    expect(isShareMemberFilterActive({ query: "  ", role: SHARE_MEMBER_ROLE_FILTER_ALL })).toBe(
+      false,
+    );
+    expect(isShareMemberFilterActive({ query: "a", role: SHARE_MEMBER_ROLE_FILTER_ALL })).toBe(
+      true,
+    );
     expect(isShareMemberFilterActive({ query: "", role: DATAPACK_SHARE_GRANT_VIEWER })).toBe(true);
   });
 });

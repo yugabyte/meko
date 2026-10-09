@@ -187,34 +187,31 @@ export default function SettingsPage() {
                     handed off to support, not a one-click destructive
                     action, so red would over-signal danger. */}
                 {byoc ? null : (
-                <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/40 pt-4">
-                  <div className="flex min-w-0 items-start gap-2.5">
-                    <Trash2
-                      className="mt-0.5 h-4 w-4 shrink-0 text-brand"
-                      aria-hidden
-                    />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-foreground">Delete account</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Deletion is handled by our support team.
-                      </p>
+                  <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/40 pt-4">
+                    <div className="flex min-w-0 items-start gap-2.5">
+                      <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground">Delete account</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Deletion is handled by our support team.
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  {/* Primary CTA. Uses the `default` Button variant
+                    {/* Primary CTA. Uses the `default` Button variant
                       (bg-primary / brand orange filled) — same pattern
                       as "Add Datapack" on the datapacks page and the
                       AWS-Marketplace "Upgrade" chip on the pricing
                       card. `hover:bg-primary/90` matches Add Datapack's
                       hover treatment for consistency. */}
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => setDeleteAccountDialogOpen(true)}
-                    className="shrink-0 gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
-                  >
-                    Request deletion
-                  </Button>
-                </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => setDeleteAccountDialogOpen(true)}
+                      className="shrink-0 gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                      Request deletion
+                    </Button>
+                  </div>
                 )}
               </section>
 
@@ -289,13 +286,14 @@ export default function SettingsPage() {
           </DialogHeader>
 
           <DialogDescription>
-            We handle account deletion through Yugabyte support so we can verify identity and
-            remove your datapacks, memories, and knowledge base together.
+            We handle account deletion through Yugabyte support so we can verify identity and remove
+            your datapacks, memories, and knowledge base together.
           </DialogDescription>
 
           <div className="rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
             <span className="font-medium text-foreground">Before you file the ticket:</span> mention
-            the email <span className="font-mono text-foreground">{user?.email || "on your account"}</span>{" "}
+            the email{" "}
+            <span className="font-mono text-foreground">{user?.email || "on your account"}</span>{" "}
             and your account ID so support can locate it faster.
           </div>
 

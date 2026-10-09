@@ -73,9 +73,9 @@ export function isDatapackCreatedWithinLast24Hours(iso: string | undefined | nul
   return Date.now() - t < TWENTY_FOUR_H_MS;
 }
 
-export function sortDatapacksByCreatedAtDesc<T extends { created_at?: string; datapack_id?: string }>(
-  items: readonly T[],
-): T[] {
+export function sortDatapacksByCreatedAtDesc<
+  T extends { created_at?: string; datapack_id?: string },
+>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => {
     const diff = datapackCreatedAtSortKey(b.created_at) - datapackCreatedAtSortKey(a.created_at);
     if (diff !== 0) return diff;

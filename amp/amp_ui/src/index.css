@@ -53,7 +53,7 @@
    *   - brand-fixed visuals that must look the same in any mode
    * For everything else, prefer the semantic tokens above.
    */
-  --color-meko-navy-50:  hsl(var(--meko-navy-50));
+  --color-meko-navy-50: hsl(var(--meko-navy-50));
   --color-meko-navy-100: hsl(var(--meko-navy-100));
   --color-meko-navy-200: hsl(var(--meko-navy-200));
   --color-meko-navy-600: hsl(var(--meko-navy-600));
@@ -84,19 +84,19 @@
    * ===================================================================== */
 
   /* Light end — light-mode surfaces (consumed in Phase 5). */
-  --meko-navy-50:  222 32% 97%;   /* #F6F8FC */
-  --meko-navy-100: 220 19% 93%;   /* #E8ECF2 */
-  --meko-navy-200: 220 13% 81%;   /* #C5CCD8 */
+  --meko-navy-50: 222 32% 97%; /* #F6F8FC */
+  --meko-navy-100: 220 19% 93%; /* #E8ECF2 */
+  --meko-navy-200: 220 13% 81%; /* #C5CCD8 */
 
   /* Mid scrollbar tones (theme-independent today). */
-  --meko-navy-600: 240 5% 30%;    /* scrollbar thumb hover */
-  --meko-navy-700: 240 5% 22%;    /* scrollbar thumb */
+  --meko-navy-600: 240 5% 30%; /* scrollbar thumb hover */
+  --meko-navy-700: 240 5% 22%; /* scrollbar thumb */
 
   /* Dark end — drives the dark theme. Neutral near-black (Console V6 look):
    * low-saturation charcoal, not the old blue-navy. */
-  --meko-navy-800: 240 5% 13%;    /* raised surfaces (cards, popovers) */
-  --meko-navy-900: 240 6% 9%;     /* base surfaces (page bg, inputs)   */
-  --meko-navy-950: 240 7% 6%;     /* deepest, app shell                */
+  --meko-navy-800: 240 5% 13%; /* raised surfaces (cards, popovers) */
+  --meko-navy-900: 240 6% 9%; /* base surfaces (page bg, inputs)   */
+  --meko-navy-950: 240 7% 6%; /* deepest, app shell                */
 
   /* =====================================================================
    * SEMANTIC TOKENS — what components consume. `:root` carries the
@@ -195,18 +195,18 @@
     @apply border-border;
   }
   :where(
-      button,
-      a[href],
-      [role="button"],
-      [role="menuitem"],
-      [role="tab"],
-      [role="switch"],
-      [role="checkbox"],
-      [role="radio"],
-      [role="link"],
-      summary,
-      label[for]
-    ):not(:disabled) {
+    button,
+    a[href],
+    [role="button"],
+    [role="menuitem"],
+    [role="tab"],
+    [role="switch"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="link"],
+    summary,
+    label[for]
+  ):not(:disabled) {
     cursor: pointer;
   }
 

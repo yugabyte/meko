@@ -36,7 +36,10 @@ describe("ReviewAgentConfigPanel", () => {
   it("toggling the knowledge-base switch flips only that field", () => {
     const onChange = renderPanel();
     fireEvent.click(screen.getAllByRole("switch")[0]);
-    expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_REVIEW_AGENT_CONFIG, useKnowledgeBase: false });
+    expect(onChange).toHaveBeenCalledWith({
+      ...DEFAULT_REVIEW_AGENT_CONFIG,
+      useKnowledgeBase: false,
+    });
   });
 
   it("toggling the memories switch flips only that field", () => {
@@ -51,7 +54,10 @@ describe("ReviewAgentConfigPanel", () => {
     fireEvent.change(screen.getByPlaceholderText(/pay extra attention/i), {
       target: { value: "Watch for N+1 queries." },
     });
-    expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_REVIEW_AGENT_CONFIG, focus: "Watch for N+1 queries." });
+    expect(onChange).toHaveBeenCalledWith({
+      ...DEFAULT_REVIEW_AGENT_CONFIG,
+      focus: "Watch for N+1 queries.",
+    });
   });
 
   it("caps the focus textarea at 300 characters", () => {
@@ -61,7 +67,7 @@ describe("ReviewAgentConfigPanel", () => {
     expect(textarea.maxLength).toBe(300);
   });
 
-  it("tone and strictness default to unset (\"Default\")", () => {
+  it('tone and strictness default to unset ("Default")', () => {
     renderPanel();
     openAdvanced();
     const triggers = screen.getAllByText("Default");

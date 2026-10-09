@@ -65,16 +65,16 @@ PG_TREE_BUILD_TYPE=$PROFILE
 # diverge from PG_TREE_BUILD_DIR here.
 # shellcheck disable=SC2034  # PG_TREE_BUILD_DIR is read by the sourcing script
 while IFS='=' read -r _key _val; do
-    case $_key in
-        POSTGRES_INSTALL_DIR) PG_TREE_INSTALL_DIR=$_val ;;
-        BUILD_DIR) PG_TREE_BUILD_DIR=$_val ;;
-    esac
+  case $_key in
+  POSTGRES_INSTALL_DIR) PG_TREE_INSTALL_DIR=$_val ;;
+  BUILD_DIR) PG_TREE_BUILD_DIR=$_val ;;
+  esac
 done <<<"$(env -u POSTGRES_INSTALL_DIR \
-    make -s -C "$REPO" print-pg-dirs "BUILD_TYPE=$PG_TREE_BUILD_TYPE")"
+  make -s -C "$REPO" print-pg-dirs "BUILD_TYPE=$PG_TREE_BUILD_TYPE")"
 unset _key _val
 [[ -n ${PG_TREE_INSTALL_DIR:-} && -n ${PG_TREE_BUILD_DIR:-} ]] || {
-    echo "pg_tree.sh: 'make print-pg-dirs' did not report both paths" >&2
-    exit 1
+  echo "pg_tree.sh: 'make print-pg-dirs' did not report both paths" >&2
+  exit 1
 }
 PG_TREE_INSTALL_VERSION_DIR="$PG_TREE_INSTALL_DIR/v18"
 export POSTGRES_DISTRIB_DIR="$PG_TREE_INSTALL_DIR"
@@ -86,9 +86,9 @@ export POSTGRES_DISTRIB_DIR="$PG_TREE_INSTALL_DIR"
 # every dependent on each alternation. Unset rather than left alone, so an
 # ambient value cannot point the build at a tree this run does not own.
 if [[ $PG_TREE_BUILD_TYPE == debug ]]; then
-    unset POSTGRES_INSTALL_DIR
+  unset POSTGRES_INSTALL_DIR
 else
-    export POSTGRES_INSTALL_DIR="$PG_TREE_INSTALL_DIR"
+  export POSTGRES_INSTALL_DIR="$PG_TREE_INSTALL_DIR"
 fi
 
 # Build it, or confirm the existing one is current. build.sh owns every
@@ -100,9 +100,9 @@ fi
 # `env -u PROFILE`: PostgreSQL's Makefile.global reads $PROFILE as profiling C
 # flags, and ours holds debug|release (see the extension build below).
 pg_tree_build() {
-    local flags=(--pg-only)
-    [[ $PG_TREE_BUILD_TYPE == release ]] && flags+=(--release)
-    env -u PROFILE "$REPO/build.sh" "${flags[@]}"
+  local flags=(--pg-only)
+  [[ $PG_TREE_BUILD_TYPE == release ]] && flags+=(--release)
+  env -u PROFILE "$REPO/build.sh" "${flags[@]}"
 }
 
 # Rebuild the yb_amp extension into that tree when its C sources changed. cargo
@@ -122,37 +122,37 @@ pg_tree_build() {
 # dependency tracking, since that install is configured --enable-depend, so there
 # the wipe is belt-and-braces rather than the only thing that would catch it.
 pg_tree_rebuild_ext_if_stale() {
-    local ext_stamp="$PG_TREE_BUILD_DIR/.yb_amp_ext.stamp"
-    # The stamp records the cargo profile, not just the time: the .so statically
-    # links libcommunicator.a, which follows $PROFILE. One build type per tree
-    # makes that agree by construction — but POSTGRES_INSTALL_DIR can be
-    # overridden to point both at one directory, and then a stale .so linked
-    # against the other profile's library would look fresh.
-    if pg_tree_has_pgxn_libs && [[ -f $ext_stamp ]] \
-        && [[ "$(cat "$ext_stamp" 2>/dev/null)" == "$PROFILE" ]] \
-        && [[ -z "$(find "$REPO/compute/pgxn" -type f \
-                \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \
-                   -o -name '*.sql' -o -name '*.control' \) \
-                -newer "$ext_stamp" -print -quit)" ]]; then
-        return 0
-    fi
-    echo ">>> compute extensions are stale (sources changed, a library is missing, or not yet built): clean-rebuilding" >&2
-    rm -rf "$PG_TREE_BUILD_DIR/pgxn-v18"
-    # BUILD_TYPE="$PROFILE" so the Rust half of the extension (libcommunicator.a,
-    # linked into the .so) follows the caller's profile like every other binary.
-    # It is passed as a make variable while PROFILE itself is stripped from the
-    # environment: PGXS reads $PROFILE as profiling C flags (Makefile.global:
-    # `ifdef PROFILE -> CFLAGS += $(PROFILE)`), which would land as a bogus C flag.
-    #
-    # BUILD_TYPE also installs into the tree resolved above. PG_INSTALL_CACHED=1
-    # keeps this make away from PostgreSQL itself: `yb-amp-pg-ext-v18` depends on
-    # `postgres-install-v18`, so without it this step would configure the tree —
-    # and so decide its build type — behind pg_tree_build's back, which is the
-    # ambiguity #1094 was.
-    env -u PROFILE PG_INSTALL_CACHED=1 make -C "$REPO" \
-        "BUILD_TYPE=$PROFILE" yb-amp-pg-ext-v18
-    mkdir -p "$PG_TREE_BUILD_DIR"
-    printf '%s\n' "$PROFILE" > "$ext_stamp"
+  local ext_stamp="$PG_TREE_BUILD_DIR/.yb_amp_ext.stamp"
+  # The stamp records the cargo profile, not just the time: the .so statically
+  # links libcommunicator.a, which follows $PROFILE. One build type per tree
+  # makes that agree by construction — but POSTGRES_INSTALL_DIR can be
+  # overridden to point both at one directory, and then a stale .so linked
+  # against the other profile's library would look fresh.
+  if pg_tree_has_pgxn_libs && [[ -f $ext_stamp ]] &&
+    [[ "$(cat "$ext_stamp" 2>/dev/null)" == "$PROFILE" ]] &&
+    [[ -z "$(find "$REPO/compute/pgxn" -type f \
+      \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \
+      -o -name '*.sql' -o -name '*.control' \) \
+      -newer "$ext_stamp" -print -quit)" ]]; then
+    return 0
+  fi
+  echo ">>> compute extensions are stale (sources changed, a library is missing, or not yet built): clean-rebuilding" >&2
+  rm -rf "$PG_TREE_BUILD_DIR/pgxn-v18"
+  # BUILD_TYPE="$PROFILE" so the Rust half of the extension (libcommunicator.a,
+  # linked into the .so) follows the caller's profile like every other binary.
+  # It is passed as a make variable while PROFILE itself is stripped from the
+  # environment: PGXS reads $PROFILE as profiling C flags (Makefile.global:
+  # `ifdef PROFILE -> CFLAGS += $(PROFILE)`), which would land as a bogus C flag.
+  #
+  # BUILD_TYPE also installs into the tree resolved above. PG_INSTALL_CACHED=1
+  # keeps this make away from PostgreSQL itself: `yb-amp-pg-ext-v18` depends on
+  # `postgres-install-v18`, so without it this step would configure the tree —
+  # and so decide its build type — behind pg_tree_build's back, which is the
+  # ambiguity #1094 was.
+  env -u PROFILE PG_INSTALL_CACHED=1 make -C "$REPO" \
+    "BUILD_TYPE=$PROFILE" yb-amp-pg-ext-v18
+  mkdir -p "$PG_TREE_BUILD_DIR"
+  printf '%s\n' "$PROFILE" >"$ext_stamp"
 }
 
 # The libraries yb-amp-pg-ext installs. Every compute preloads them (the
@@ -161,12 +161,12 @@ pg_tree_rebuild_ext_if_stale() {
 PG_TREE_PGXN_LIBS="yb_amp pgsentinel"
 
 pg_tree_has_pgxn_libs() {
-    local lib dlsuffix=.so
-    # PostgreSQL's DLSUFFIX (src/template/darwin).
-    [[ $(uname -s) == Darwin ]] && dlsuffix=.dylib
-    for lib in $PG_TREE_PGXN_LIBS; do
-        [[ -f $PG_TREE_INSTALL_VERSION_DIR/lib/postgresql/$lib$dlsuffix ]] || return 1
-    done
+  local lib dlsuffix=.so
+  # PostgreSQL's DLSUFFIX (src/template/darwin).
+  [[ $(uname -s) == Darwin ]] && dlsuffix=.dylib
+  for lib in $PG_TREE_PGXN_LIBS; do
+    [[ -f $PG_TREE_INSTALL_VERSION_DIR/lib/postgresql/$lib$dlsuffix ]] || return 1
+  done
 }
 
 # Report which PostgreSQL the run actually got. Cheap half of the fix above: a
@@ -175,20 +175,20 @@ pg_tree_has_pgxn_libs() {
 # the #1094 case, where leftover build state decided the type. `--release` asking
 # for a release PostgreSQL is a choice, so it is stated and allowed.
 pg_tree_report() {
-    local configure
-    configure=$("$PG_TREE_INSTALL_VERSION_DIR/bin/pg_config" --configure 2>/dev/null) || configure=""
-    if [[ $configure == *--enable-cassert* ]]; then
-        echo ">>> PostgreSQL: debug, assertions ON ($PG_TREE_INSTALL_VERSION_DIR)" >&2
-        return 0
-    fi
-    if [[ $PG_TREE_BUILD_TYPE == release ]]; then
-        echo ">>> PostgreSQL: release, assertions OFF — release profile ($PG_TREE_INSTALL_VERSION_DIR)" >&2
-        return 0
-    fi
-    cat >&2 <<EOF
+  local configure
+  configure=$("$PG_TREE_INSTALL_VERSION_DIR/bin/pg_config" --configure 2>/dev/null) || configure=""
+  if [[ $configure == *--enable-cassert* ]]; then
+    echo ">>> PostgreSQL: debug, assertions ON ($PG_TREE_INSTALL_VERSION_DIR)" >&2
+    return 0
+  fi
+  if [[ $PG_TREE_BUILD_TYPE == release ]]; then
+    echo ">>> PostgreSQL: release, assertions OFF — release profile ($PG_TREE_INSTALL_VERSION_DIR)" >&2
+    return 0
+  fi
+  cat >&2 <<EOF
 PostgreSQL at $PG_TREE_INSTALL_VERSION_DIR has assertions compiled out (or is not built),
 but this run asked for the debug tree. It will not run blind. Remove
 $PG_TREE_INSTALL_DIR and re-run to rebuild it.
 EOF
-    exit 1
+  exit 1
 }

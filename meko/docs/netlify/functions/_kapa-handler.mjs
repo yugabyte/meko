@@ -6,8 +6,8 @@
 // and pipe Kapa's U+241E-delimited response straight back to the browser as
 // SSE events. The browser never sees the API key.
 
-const KAPA_BASE = "https://api.kapa.ai/query/v1";
-const RECORD_SEPARATOR = "␞";
+const KAPA_BASE = 'https://api.kapa.ai/query/v1';
+const RECORD_SEPARATOR = '␞';
 
 /**
  * Core handler. Input is a plain { query, thread_id?, deep? } payload + env.
@@ -20,11 +20,11 @@ const RECORD_SEPARATOR = "␞";
 export async function handleKapaChat(payload, env) {
   const { query, thread_id, deep } = payload || {};
 
-  if (!query || typeof query !== "string" || !query.trim()) {
+  if (!query || typeof query !== 'string' || !query.trim()) {
     return {
       status: 400,
-      body: JSON.stringify({ error: "query is required" }),
-      contentType: "application/json",
+      body: JSON.stringify({ error: 'query is required' }),
+      contentType: 'application/json',
     };
   }
 
@@ -32,9 +32,9 @@ export async function handleKapaChat(payload, env) {
     return {
       status: 500,
       body: JSON.stringify({
-        error: "Server is not configured. Missing KAPA_API_KEY or KAPA_PROJECT_ID.",
+        error: 'Server is not configured. Missing KAPA_API_KEY or KAPA_PROJECT_ID.',
       }),
-      contentType: "application/json",
+      contentType: 'application/json',
     };
   }
 
@@ -53,7 +53,7 @@ export async function handleKapaChat(payload, env) {
     // the seemingly-natural `source_group_ids` is silently ignored and
     // returns unfiltered results. Confirmed against the kapa-discord-bot
     // build — do not "simplify" this field name.
-    const ids = env.KAPA_SOURCE_GROUP_IDS.split(",")
+    const ids = env.KAPA_SOURCE_GROUP_IDS.split(',')
       .map((s) => s.trim())
       .filter(Boolean);
     if (ids.length) body.source_group_ids_include = ids;
@@ -61,7 +61,7 @@ export async function handleKapaChat(payload, env) {
   if (deep) {
     // Kapa's chat API choices are "default" and "deep_thinking".
     // "ai-deep-research" is rejected with 400.
-    body.mode = "deep_thinking";
+    body.mode = 'deep_thinking';
   }
 
   // Cancelled when the browser drops the response. Aborting the fetch is what
@@ -70,10 +70,10 @@ export async function handleKapaChat(payload, env) {
   let upstream;
   try {
     upstream = await fetch(url, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "X-API-KEY": env.KAPA_API_KEY,
-        "Content-Type": "application/json",
+        'X-API-KEY': env.KAPA_API_KEY,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
       signal: abort.signal,
@@ -82,19 +82,19 @@ export async function handleKapaChat(payload, env) {
     return {
       status: 502,
       body: JSON.stringify({ error: `Upstream fetch failed: ${err.message}` }),
-      contentType: "application/json",
+      contentType: 'application/json',
     };
   }
 
   if (!upstream.ok || !upstream.body) {
-    const text = await upstream.text().catch(() => "");
+    const text = await upstream.text().catch(() => '');
     return {
       status: upstream.status || 502,
       body: JSON.stringify({
         error: `Kapa returned ${upstream.status}`,
         detail: text.slice(0, 500),
       }),
-      contentType: "application/json",
+      contentType: 'application/json',
     };
   }
 
@@ -106,7 +106,7 @@ export async function handleKapaChat(payload, env) {
     async start(controller) {
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
-      let buffer = "";
+      let buffer = '';
 
       const write = (obj) => {
         if (stopped) return;
@@ -128,7 +128,7 @@ export async function handleKapaChat(payload, env) {
             try {
               write(JSON.parse(raw));
             } catch {
-              write({ type: "raw", data: raw });
+              write({ type: 'raw', data: raw });
             }
           }
         }
@@ -137,10 +137,10 @@ export async function handleKapaChat(payload, env) {
           try {
             write(JSON.parse(tail));
           } catch {
-            write({ type: "raw", data: tail });
+            write({ type: 'raw', data: tail });
           }
         }
-        if (!stopped) controller.enqueue(encoder.encode("event: done\ndata: {}\n\n"));
+        if (!stopped) controller.enqueue(encoder.encode('event: done\ndata: {}\n\n'));
       } catch (err) {
         if (!stopped) {
           try {
@@ -172,6 +172,6 @@ export async function handleKapaChat(payload, env) {
   return {
     status: 200,
     body: sseStream,
-    contentType: "text/event-stream",
+    contentType: 'text/event-stream',
   };
 }

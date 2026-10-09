@@ -71,9 +71,7 @@ const cognito = new CognitoIdentityProviderClient({});
 // is rethrown so the sign-in fails loudly rather than silently re-stamping.
 async function userExists(userPoolId, username) {
   try {
-    await cognito.send(
-      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }),
-    );
+    await cognito.send(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }));
     return true;
   } catch (err) {
     if (err?.name === "UserNotFoundException") return false;

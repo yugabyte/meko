@@ -60,12 +60,13 @@ export function DatapackTile({
 
   // M-01: list endpoint does not enrich knowledge_count/memory_count (MEKO-653),
   // so m01Tokens is 0 until the backend fix lands. Badge is suppressed when 0.
-  const m01Tokens = ((dp.knowledge_count ?? 0) * 1000) + ((dp.memory_count ?? 0) * 200);
-  const m01Label = m01Tokens >= 1_000_000
-    ? `${(m01Tokens / 1_000_000).toFixed(1)}M ctx`
-    : m01Tokens >= 1_000
-      ? `${Math.round(m01Tokens / 1_000)}K ctx`
-      : `${m01Tokens} ctx`;
+  const m01Tokens = (dp.knowledge_count ?? 0) * 1000 + (dp.memory_count ?? 0) * 200;
+  const m01Label =
+    m01Tokens >= 1_000_000
+      ? `${(m01Tokens / 1_000_000).toFixed(1)}M ctx`
+      : m01Tokens >= 1_000
+        ? `${Math.round(m01Tokens / 1_000)}K ctx`
+        : `${m01Tokens} ctx`;
 
   return (
     <Card
@@ -111,10 +112,7 @@ export function DatapackTile({
               >
                 {dp.datapack_name}
               </h3>
-              <p
-                className="truncate text-xs leading-snug text-muted-foreground"
-                title={title}
-              >
+              <p className="truncate text-xs leading-snug text-muted-foreground" title={title}>
                 {preview}
               </p>
             </div>
@@ -128,7 +126,10 @@ export function DatapackTile({
             // well against the dark card background.
             <div className="flex items-center justify-between gap-2 rounded-lg border border-violet-500/30 bg-violet-100 dark:bg-violet-950/35 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2 text-xs text-violet-700 dark:text-violet-100/90">
-                <Share2 className="h-3.5 w-3.5 shrink-0 text-violet-700 dark:text-violet-300/90" aria-hidden />
+                <Share2
+                  className="h-3.5 w-3.5 shrink-0 text-violet-700 dark:text-violet-300/90"
+                  aria-hidden
+                />
                 <span className="min-w-0 leading-snug">
                   <span className="text-violet-700 dark:text-violet-200/80">Shared by </span>
                   <span
@@ -254,7 +255,9 @@ export function DatapackTile({
           <button
             type="button"
             disabled={!canShare}
-            title={canShare ? "Share this datapack" : "Owner or Maintainer access required to share"}
+            title={
+              canShare ? "Share this datapack" : "Owner or Maintainer access required to share"
+            }
             className={cn(
               "flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand",
               canShare

@@ -13,5 +13,8 @@ set -euo pipefail
 # at the expense of longer runtime. This script is used by developers, so, don't
 # do that here.
 
-CLIPPY_COMMON_ARGS="$( source .yb-amp_clippy_args; echo "$CLIPPY_COMMON_ARGS")"
+CLIPPY_COMMON_ARGS="$(
+  source .yb-amp_clippy_args
+  echo "$CLIPPY_COMMON_ARGS"
+)"
 exec cargo clippy --all-features $CLIPPY_COMMON_ARGS

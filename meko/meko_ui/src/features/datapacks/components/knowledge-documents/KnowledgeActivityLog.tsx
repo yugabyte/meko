@@ -140,9 +140,7 @@ export function KnowledgeActivityLog({
             onClick={() => void loadPage(nextCursor, true)}
             className="gap-1.5"
           >
-            {loading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            ) : null}
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
             Show more
           </Button>
         </div>
@@ -292,10 +290,7 @@ function RowIcon({
  *  full ISO timestamp for users who hover. */
 function RelTime({ label, title }: { label: string; title: string }) {
   return (
-    <span
-      className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground"
-      title={title}
-    >
+    <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground" title={title}>
       {label}
     </span>
   );

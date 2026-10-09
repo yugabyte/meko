@@ -127,7 +127,10 @@ export function EfficiencyTile({
           {emptyAction ? (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); emptyAction.onClick(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                emptyAction.onClick();
+              }}
               className={cn(
                 "w-fit rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
                 "border border-border hover:border-foreground/30",
@@ -171,10 +174,7 @@ export function EfficiencyTile({
                 {breakdown.title}
               </span>
               {breakdown.entries.map((entry) => (
-                <div
-                  key={entry.key}
-                  className="flex items-baseline justify-between gap-3 text-xs"
-                >
+                <div key={entry.key} className="flex items-baseline justify-between gap-3 text-xs">
                   <span className="truncate text-muted-foreground">{entry.label}</span>
                   <span className="shrink-0 tabular-nums text-foreground">
                     {entry.primary}

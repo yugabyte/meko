@@ -94,8 +94,14 @@ export function FileTypePdfIcon(props: IconProps) {
 export function FileTypeHtmlIcon(props: IconProps) {
   return (
     <BadgeIcon {...props}>
-      <polygon points="5.902 27.201 3.655 2 28.345 2 26.095 27.197 15.985 30 5.902 27.201" style={{ fill: "#e44f26" }} />
-      <polygon points="16 27.858 24.17 25.593 26.092 4.061 16 4.061 16 27.858" style={{ fill: "#f1662a" }} />
+      <polygon
+        points="5.902 27.201 3.655 2 28.345 2 26.095 27.197 15.985 30 5.902 27.201"
+        style={{ fill: "#e44f26" }}
+      />
+      <polygon
+        points="16 27.858 24.17 25.593 26.092 4.061 16 4.061 16 27.858"
+        style={{ fill: "#f1662a" }}
+      />
       <polygon
         points="16 13.407 11.91 13.407 11.628 10.242 16 10.242 16 7.151 15.989 7.151 8.25 7.151 8.324 7.981 9.083 16.498 16 16.498 16 13.407"
         style={{ fill: "#ebebeb" }}
@@ -178,9 +184,10 @@ export function FileTypeCsvIcon(props: IconProps) {
  *  TXT/CSV/Markdown use outline `currentColor` Tabler glyphs instead, since
  *  those badges read too flat at this size. Takes a file *extension*, not
  *  `document_type` -- extract it via `documentFileExtension` first. */
-export function fileTypeVisual(
-  extension?: string | null,
-): { Icon: ComponentType<SVGProps<SVGSVGElement>>; toneClass: string } {
+export function fileTypeVisual(extension?: string | null): {
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
+  toneClass: string;
+} {
   switch ((extension || "").toLowerCase()) {
     case ".pdf":
       return { Icon: FileTypePdfIcon, toneClass: "text-red-700 dark:text-red-400" };

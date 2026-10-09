@@ -26,6 +26,8 @@ export async function postToSlackChannel(
   });
   const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
   if (!res.ok || !data?.ok) {
-    throw new SlackApiError(data?.error || `Slack API request failed: ${res.status} ${res.statusText}`);
+    throw new SlackApiError(
+      data?.error || `Slack API request failed: ${res.status} ${res.statusText}`,
+    );
   }
 }

@@ -227,83 +227,83 @@ export default function Sidebar() {
         />
       ) : null}
 
-    <div
-      className={cn(
-        // `bg-background` keeps the sidebar continuous with the
-        // `<AppWorkspaceHeader>` (also `bg-background/95`) so the top
-        // bar and left rail read as one connected workspace chrome,
-        // separated from the main content only by the right border.
-        // In dark mode this resolves to navy-900 — matches the
-        // original design where the sidebar was the deepest surface.
-        // h-dvh tracks the dynamic viewport (shrinks for iOS keyboard);
-        // h-screen is the desktop fallback. Desktop reads identical
-        // height since dvh == vh outside mobile-keyboard states.
-        "flex-shrink-0 border-r border-border bg-background h-screen h-dvh flex flex-col transition-transform duration-300 relative",
-        // Mobile (< md): fixed off-canvas; slides in/out via translate.
-        // Width is the full 260px since icon-only mode doesn't apply on
-        // mobile (the hamburger handles "out of the way" instead).
-        "fixed inset-y-0 left-0 z-50 w-[260px]",
-        mobileOpen ? "translate-x-0" : "-translate-x-full",
-        // Desktop (>= md): static positioning, user-controlled collapse
-        // restores the original behavior. `md:transition-all` swaps the
-        // width-only transition back in once we leave mobile.
-        "md:static md:translate-x-0 md:z-auto md:transition-all",
-        isCollapsed ? "md:w-[68px]" : "md:w-[240px]",
-      )}
-    >
-      <Button
-        variant="ghost"
-        size="icon"
-        // The collapse toggle sits ON the sidebar's right edge —
-        // `bg-card` so it reads as a raised pill against both the
-        // sidebar (background) on its left and the page (also
-        // background) on its right.
-        //
-        // Icon choice: we deliberately use `PanelLeftClose` /
-        // `PanelLeftOpen` (lucide) instead of a bare ChevronLeft /
-        // ChevronRight. A standalone left chevron on a floating pill
-        // reads almost universally as a browser-style "back" button —
-        // users were clicking it expecting to navigate to the previous
-        // page. The panel icons literally show a left-rail sidebar with
-        // an inward/outward indicator, which matches the actual
-        // affordance and is the convention used by VS Code, Cursor,
-        // ChatGPT, etc.
-        // Hidden on mobile (< md): the collapsed state is forced by the
-        // viewport, not by user choice, so a toggle that can't actually
-        // expand would be misleading.
-        className="absolute -right-4 top-6 z-50 hidden h-8 w-8 rounded-full border border-border bg-card shadow-md hover:bg-muted text-muted-foreground hover:text-foreground md:flex"
-        onClick={() => setIsCollapsed(!isCollapsed)}
-        title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        aria-expanded={!isCollapsed}
-      >
-        {isCollapsed ? (
-          <PanelLeftOpen className="h-4 w-4" aria-hidden />
-        ) : (
-          <PanelLeftClose className="h-4 w-4" aria-hidden />
+      <div
+        className={cn(
+          // `bg-background` keeps the sidebar continuous with the
+          // `<AppWorkspaceHeader>` (also `bg-background/95`) so the top
+          // bar and left rail read as one connected workspace chrome,
+          // separated from the main content only by the right border.
+          // In dark mode this resolves to navy-900 — matches the
+          // original design where the sidebar was the deepest surface.
+          // h-dvh tracks the dynamic viewport (shrinks for iOS keyboard);
+          // h-screen is the desktop fallback. Desktop reads identical
+          // height since dvh == vh outside mobile-keyboard states.
+          "flex-shrink-0 border-r border-border bg-background h-screen h-dvh flex flex-col transition-transform duration-300 relative",
+          // Mobile (< md): fixed off-canvas; slides in/out via translate.
+          // Width is the full 260px since icon-only mode doesn't apply on
+          // mobile (the hamburger handles "out of the way" instead).
+          "fixed inset-y-0 left-0 z-50 w-[260px]",
+          mobileOpen ? "translate-x-0" : "-translate-x-full",
+          // Desktop (>= md): static positioning, user-controlled collapse
+          // restores the original behavior. `md:transition-all` swaps the
+          // width-only transition back in once we leave mobile.
+          "md:static md:translate-x-0 md:z-auto md:transition-all",
+          isCollapsed ? "md:w-[68px]" : "md:w-[240px]",
         )}
-      </Button>
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          // The collapse toggle sits ON the sidebar's right edge —
+          // `bg-card` so it reads as a raised pill against both the
+          // sidebar (background) on its left and the page (also
+          // background) on its right.
+          //
+          // Icon choice: we deliberately use `PanelLeftClose` /
+          // `PanelLeftOpen` (lucide) instead of a bare ChevronLeft /
+          // ChevronRight. A standalone left chevron on a floating pill
+          // reads almost universally as a browser-style "back" button —
+          // users were clicking it expecting to navigate to the previous
+          // page. The panel icons literally show a left-rail sidebar with
+          // an inward/outward indicator, which matches the actual
+          // affordance and is the convention used by VS Code, Cursor,
+          // ChatGPT, etc.
+          // Hidden on mobile (< md): the collapsed state is forced by the
+          // viewport, not by user choice, so a toggle that can't actually
+          // expand would be misleading.
+          className="absolute -right-4 top-6 z-50 hidden h-8 w-8 rounded-full border border-border bg-card shadow-md hover:bg-muted text-muted-foreground hover:text-foreground md:flex"
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!isCollapsed}
+        >
+          {isCollapsed ? (
+            <PanelLeftOpen className="h-4 w-4" aria-hidden />
+          ) : (
+            <PanelLeftClose className="h-4 w-4" aria-hidden />
+          )}
+        </Button>
 
-      <div className={cn("p-4 flex items-center", isCollapsed ? "justify-center px-0" : "")}>
-        {/* Clickable logo → /datapacks (the workspace "home"). Standard
+        <div className={cn("p-4 flex items-center", isCollapsed ? "justify-center px-0" : "")}>
+          {/* Clickable logo → /datapacks (the workspace "home"). Standard
             convention across web apps: top-left brand mark returns the
             user to their main surface. Wrapped as a single `Link` so
             both collapsed (favicon) and expanded (full logo) states get
             the same affordance with one source of truth. */}
-        <Link
-          to={ROUTES.datapacks}
-          className="inline-flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-foreground/40"
-          aria-label="Go to Datapacks"
-        >
-          {isCollapsed ? (
-            <img
-              src="/favicons/favicon-32x32-dark.png"
-              alt="meko"
-              className="w-8 h-8 animate-in fade-in"
-            />
-          ) : (
-            <>
-              {/*
+          <Link
+            to={ROUTES.datapacks}
+            className="inline-flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-foreground/40"
+            aria-label="Go to Datapacks"
+          >
+            {isCollapsed ? (
+              <img
+                src="/favicons/favicon-32x32-dark.png"
+                alt="meko"
+                className="w-8 h-8 animate-in fade-in"
+              />
+            ) : (
+              <>
+                {/*
                 Render both logo variants and toggle visibility on the
                 `.dark` class so the right one shows without a render
                 flicker on theme change. `meko-logo.svg` is white-on-
@@ -312,401 +312,398 @@ export default function Sidebar() {
                 variant is wired to `.dark` ancestor — see `index.css`'s
                 `@custom-variant dark` declaration.
               */}
-              <img
-                src="/Meko_Logo_Blk.svg"
-                alt="meko"
-                className="h-12 w-auto animate-in fade-in block dark:hidden"
-              />
-              <img
-                src="/meko-logo.svg"
-                alt="meko"
-                className="h-12 w-auto animate-in fade-in hidden dark:block"
-              />
-            </>
-          )}
-        </Link>
-      </div>
+                <img
+                  src="/Meko_Logo_Blk.svg"
+                  alt="meko"
+                  className="h-12 w-auto animate-in fade-in block dark:hidden"
+                />
+                <img
+                  src="/meko-logo.svg"
+                  alt="meko"
+                  className="h-12 w-auto animate-in fade-in hidden dark:block"
+                />
+              </>
+            )}
+          </Link>
+        </div>
 
-      <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-1 px-3">
-        {/* Top-level nav: Welcome and Connect are siblings (Connect was
+        <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-1 px-3">
+          {/* Top-level nav: Welcome and Connect are siblings (Connect was
             previously nested under Welcome — promoted so it's reachable
             in one click from any page, since it's the user's primary
             "how do I plug Meko into my agent?" surface). */}
-        {isCollapsed ? (
-          <>
-            <NavLink
-              to={ROUTES.onboarding}
-              onClick={expandSidebar}
-              className={cn(
-                "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
-                onOnboardingRoute
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              )}
-              title="Welcome"
-            >
-              <Sparkles className="h-5 w-5 shrink-0" />
-            </NavLink>
-            <NavLink
-              to={ROUTES.connect}
-              onClick={expandSidebar}
-              className={cn(
-                "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
-                onConnectRoute
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              )}
-              title="Connect"
-            >
-              <Download className="h-5 w-5 shrink-0" />
-            </NavLink>
-          </>
-        ) : (
-          <>
-            <NavLink
-              to={ROUTES.onboarding}
-              onClick={expandSidebar}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                onOnboardingRoute
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              )}
-            >
-              <Sparkles className="h-4 w-4 shrink-0" />
-              <span className="animate-in fade-in truncate">Welcome</span>
-            </NavLink>
-            <NavLink
-              to={ROUTES.connect}
-              onClick={expandSidebar}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                onConnectRoute
-                  ? "bg-foreground/10 text-foreground"
-                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-              )}
-            >
-              <Download className="h-4 w-4 shrink-0" />
-              <span className="animate-in fade-in truncate">Connect</span>
-            </NavLink>
-          </>
-        )}
-
-        <NavLink
-          to={ROUTES.workbenchLm}
-          className={cn(
-            "flex items-center rounded-md text-sm font-medium transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-            location.pathname === ROUTES.workbenchLm ||
-              location.pathname.startsWith(`${ROUTES.workbenchLm}/`)
-              ? "bg-foreground/10 text-foreground"
-              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-          )}
-          title={isCollapsed ? "WorkbenchLM" : undefined}
-        >
-          <PlayCircle className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">WorkbenchLM</span>}
-        </NavLink>
-
-        {showLabsNav ? (
-          <NavLink
-            to={ROUTES.labs}
-            className={cn(
-              "flex items-center rounded-md text-sm font-medium transition-colors",
-              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.labs || location.pathname.startsWith(`${ROUTES.labs}/`)
-                ? "bg-foreground/10 text-foreground"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-            )}
-            title={isCollapsed ? "Labs" : undefined}
-          >
-            <FlaskConical className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Labs</span>}
-          </NavLink>
-        ) : null}
-
-        {showProjectsNav ? (
-          <NavLink
-            to={ROUTES.projects}
-            className={cn(
-              "flex items-center rounded-md text-sm font-medium transition-colors",
-              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.projects ||
-                location.pathname.startsWith(`${ROUTES.projects}/`)
-                ? "bg-foreground/10 text-foreground"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-            )}
-            title={isCollapsed ? "Projects" : undefined}
-          >
-            <FolderTree className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Projects</span>}
-          </NavLink>
-        ) : null}
-
-        {/* Datapacks + children */}
-        {isCollapsed ? (
-          <NavLink
-            to={ROUTES.datapacks}
-            onClick={expandSidebar}
-            className={cn(
-              "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
-              isDatapacksSectionActive
-                ? "bg-foreground/10 text-foreground"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-            )}
-            title="Datapacks"
-          >
-            <Database className="w-5 h-5 shrink-0" />
-          </NavLink>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-stretch gap-0 rounded-md">
+          {isCollapsed ? (
+            <>
               <NavLink
-                to={ROUTES.datapacks}
+                to={ROUTES.onboarding}
                 onClick={expandSidebar}
                 className={cn(
-                  "flex flex-1 items-center gap-3 rounded-l-md px-3 py-2 text-sm font-medium transition-colors min-w-0",
-                  isDatapacksSectionActive
+                  "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
+                  onOnboardingRoute
+                    ? "bg-foreground/10 text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                )}
+                title="Welcome"
+              >
+                <Sparkles className="h-5 w-5 shrink-0" />
+              </NavLink>
+              <NavLink
+                to={ROUTES.connect}
+                onClick={expandSidebar}
+                className={cn(
+                  "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
+                  onConnectRoute
+                    ? "bg-foreground/10 text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                )}
+                title="Connect"
+              >
+                <Download className="h-5 w-5 shrink-0" />
+              </NavLink>
+            </>
+          ) : (
+            <>
+              <NavLink
+                to={ROUTES.onboarding}
+                onClick={expandSidebar}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  onOnboardingRoute
                     ? "bg-foreground/10 text-foreground"
                     : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                 )}
               >
-                <Database className="w-4 h-4 shrink-0" />
-                <span className="animate-in fade-in truncate">Datapacks</span>
+                <Sparkles className="h-4 w-4 shrink-0" />
+                <span className="animate-in fade-in truncate">Welcome</span>
               </NavLink>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
+              <NavLink
+                to={ROUTES.connect}
+                onClick={expandSidebar}
                 className={cn(
-                  "h-auto w-9 shrink-0 rounded-l-none rounded-r-md px-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                  isDatapacksSectionActive ? "text-foreground" : "",
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  onConnectRoute
+                    ? "bg-foreground/10 text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                 )}
-                aria-expanded={datapacksExpanded}
-                aria-label={datapacksExpanded ? "Collapse datapack list" : "Expand datapack list"}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setDatapacksExpanded((v) => !v);
-                }}
               >
-                {datapacksExpanded ? (
-                  <ChevronDown className="h-4 w-4 shrink-0" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 shrink-0" />
-                )}
-              </Button>
-            </div>
-            {datapacksExpanded ? (
-              <SidebarDatapackList
-                datapacks={datapackList}
-                activeDatapackId={activeDatapackId}
-              />
-            ) : null}
-          </div>
-        )}
+                <Download className="h-4 w-4 shrink-0" />
+                <span className="animate-in fade-in truncate">Connect</span>
+              </NavLink>
+            </>
+          )}
 
-        {/* Observe — hidden by default (featureFlags.observeNav). */}
-        {showObserveNav && (
           <NavLink
-            to={ROUTES.observeHub}
-            onClick={expandSidebar}
+            to={ROUTES.workbenchLm}
             className={cn(
               "flex items-center rounded-md text-sm font-medium transition-colors",
               isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.observeHub ||
-                location.pathname.startsWith(`${ROUTES.observeHub}/`)
+              location.pathname === ROUTES.workbenchLm ||
+                location.pathname.startsWith(`${ROUTES.workbenchLm}/`)
                 ? "bg-foreground/10 text-foreground"
                 : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
             )}
-            title={isCollapsed ? "Observe" : undefined}
+            title={isCollapsed ? "WorkbenchLM" : undefined}
           >
-            <Activity className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">Observe</span>}
+            <PlayCircle className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">WorkbenchLM</span>}
           </NavLink>
-        )}
 
-      </div>
+          {showLabsNav ? (
+            <NavLink
+              to={ROUTES.labs}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                location.pathname === ROUTES.labs || location.pathname.startsWith(`${ROUTES.labs}/`)
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "Labs" : undefined}
+            >
+              <FlaskConical className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">Labs</span>}
+            </NavLink>
+          ) : null}
 
-      {/* Account-scoped nav — Settings / Usage / Billing. Lives OUTSIDE the
+          {showProjectsNav ? (
+            <NavLink
+              to={ROUTES.projects}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                location.pathname === ROUTES.projects ||
+                  location.pathname.startsWith(`${ROUTES.projects}/`)
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "Projects" : undefined}
+            >
+              <FolderTree className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">Projects</span>}
+            </NavLink>
+          ) : null}
+
+          {/* Datapacks + children */}
+          {isCollapsed ? (
+            <NavLink
+              to={ROUTES.datapacks}
+              onClick={expandSidebar}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
+                isDatapacksSectionActive
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title="Datapacks"
+            >
+              <Database className="w-5 h-5 shrink-0" />
+            </NavLink>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              <div className="flex items-stretch gap-0 rounded-md">
+                <NavLink
+                  to={ROUTES.datapacks}
+                  onClick={expandSidebar}
+                  className={cn(
+                    "flex flex-1 items-center gap-3 rounded-l-md px-3 py-2 text-sm font-medium transition-colors min-w-0",
+                    isDatapacksSectionActive
+                      ? "bg-foreground/10 text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
+                >
+                  <Database className="w-4 h-4 shrink-0" />
+                  <span className="animate-in fade-in truncate">Datapacks</span>
+                </NavLink>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "h-auto w-9 shrink-0 rounded-l-none rounded-r-md px-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                    isDatapacksSectionActive ? "text-foreground" : "",
+                  )}
+                  aria-expanded={datapacksExpanded}
+                  aria-label={datapacksExpanded ? "Collapse datapack list" : "Expand datapack list"}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setDatapacksExpanded((v) => !v);
+                  }}
+                >
+                  {datapacksExpanded ? (
+                    <ChevronDown className="h-4 w-4 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0" />
+                  )}
+                </Button>
+              </div>
+              {datapacksExpanded ? (
+                <SidebarDatapackList datapacks={datapackList} activeDatapackId={activeDatapackId} />
+              ) : null}
+            </div>
+          )}
+
+          {/* Observe — hidden by default (featureFlags.observeNav). */}
+          {showObserveNav && (
+            <NavLink
+              to={ROUTES.observeHub}
+              onClick={expandSidebar}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                location.pathname === ROUTES.observeHub ||
+                  location.pathname.startsWith(`${ROUTES.observeHub}/`)
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "Observe" : undefined}
+            >
+              <Activity className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">Observe</span>}
+            </NavLink>
+          )}
+        </div>
+
+        {/* Account-scoped nav — Settings / Usage / Billing. Lives OUTSIDE the
           flex-1 scrollable region above so it stays visible even when a
           long Datapacks list wants more height than the viewport can
           give it (MEKO-737: users with many datapacks lost access to
           Settings — and their API keys with it — because the account
           group scrolled below the fold). Pinned alongside the Docs /
           Feedback / Sign out block below. */}
-      <div
-        className={cn(
-          "px-3 pt-2 border-t border-border/40 flex flex-col gap-0.5",
-          isCollapsed ? "items-center" : "",
-        )}
-      >
-        {/* Usage — live consumed-vs-cap tracker, promoted out of Settings
+        <div
+          className={cn(
+            "px-3 pt-2 border-t border-border/40 flex flex-col gap-0.5",
+            isCollapsed ? "items-center" : "",
+          )}
+        >
+          {/* Usage — live consumed-vs-cap tracker, promoted out of Settings
             so quota visibility is one click away. Sits above Settings. */}
-        <NavLink
-          to={ROUTES.usage}
-          onClick={expandSidebar}
-          className={cn(
-            "flex items-center rounded-md text-sm font-medium transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-            location.pathname === ROUTES.usage ||
-              location.pathname.startsWith(`${ROUTES.usage}/`)
-              ? "bg-foreground/10 text-foreground"
-              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-          )}
-          title={isCollapsed ? "Usage" : undefined}
-        >
-          <Gauge className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Usage</span>}
-        </NavLink>
-
-        <NavLink
-          to={ROUTES.settings}
-          onClick={expandSidebar}
-          className={cn(
-            "flex items-center rounded-md text-sm font-medium transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-            location.pathname === ROUTES.settings ||
-              location.pathname.startsWith(`${ROUTES.settings}/`)
-              ? "bg-foreground/10 text-foreground"
-              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-          )}
-          title={isCollapsed ? "Settings" : undefined}
-        >
-          <SettingsIcon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Settings</span>}
-        </NavLink>
-
-        {/* Plans & billing — pre-GA, gated behind ?showPaymentOptions=true
-            query-param unlock. Hidden by default; visible once the
-            flag has been latched in localStorage. The route itself
-            still mounts so direct URL navigation works for testers. */}
-        {showBillingNav ? (
           <NavLink
-            to={ROUTES.billing}
+            to={ROUTES.usage}
             onClick={expandSidebar}
             className={cn(
               "flex items-center rounded-md text-sm font-medium transition-colors",
               isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.billing ||
-                location.pathname.startsWith(`${ROUTES.billing}/`)
+              location.pathname === ROUTES.usage || location.pathname.startsWith(`${ROUTES.usage}/`)
                 ? "bg-foreground/10 text-foreground"
                 : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
             )}
-            title={isCollapsed ? "Plans & billing" : undefined}
+            title={isCollapsed ? "Usage" : undefined}
           >
-            <CreditCard className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && (
-              <span className="animate-in fade-in truncate">Plans &amp; billing</span>
-            )}
+            <Gauge className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">Usage</span>}
           </NavLink>
-        ) : null}
-      </div>
 
-      <div className="p-3 flex flex-col gap-1">
-        {/* Docs lives at the top of this group so first-time users have
+          <NavLink
+            to={ROUTES.settings}
+            onClick={expandSidebar}
+            className={cn(
+              "flex items-center rounded-md text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              location.pathname === ROUTES.settings ||
+                location.pathname.startsWith(`${ROUTES.settings}/`)
+                ? "bg-foreground/10 text-foreground"
+                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            )}
+            title={isCollapsed ? "Settings" : undefined}
+          >
+            <SettingsIcon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">Settings</span>}
+          </NavLink>
+
+          {/* Plans & billing — pre-GA, gated behind ?showPaymentOptions=true
+            query-param unlock. Hidden by default; visible once the
+            flag has been latched in localStorage. The route itself
+            still mounts so direct URL navigation works for testers. */}
+          {showBillingNav ? (
+            <NavLink
+              to={ROUTES.billing}
+              onClick={expandSidebar}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                location.pathname === ROUTES.billing ||
+                  location.pathname.startsWith(`${ROUTES.billing}/`)
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "Plans & billing" : undefined}
+            >
+              <CreditCard className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && (
+                <span className="animate-in fade-in truncate">Plans &amp; billing</span>
+              )}
+            </NavLink>
+          ) : null}
+        </div>
+
+        <div className="p-3 flex flex-col gap-1">
+          {/* Docs lives at the top of this group so first-time users have
             an obvious "I don't know what this product is — where do I read
             up?" exit. The subtle ring + the trailing ↗ both signal "this
             opens in a new tab and is your friend." */}
-        <a
-          href="https://docs.mekodata.ai/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={cn(
-            "group flex items-center rounded-md text-sm font-medium text-foreground ring-1 ring-border bg-foreground/[0.03] hover:bg-foreground/10 hover:ring-foreground/30 transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-          )}
-          title={isCollapsed ? "Read the docs" : undefined}
-          aria-label="Read the docs (opens in a new tab)"
-        >
-          <BookOpen className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} aria-hidden />
-          {!isCollapsed && (
-            <>
-              <span className="animate-in fade-in truncate">Read the docs</span>
-              <ArrowUpRight
-                className="ml-auto h-3.5 w-3.5 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity"
-                aria-hidden
-              />
-            </>
-          )}
-        </a>
-
-        {byoc ? null : (
-        <button
-          type="button"
-          className={cn(
-            "mt-2 flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-          )}
-          onClick={() => setFeedbackOpen(true)}
-          title={isCollapsed ? "Send feedback" : undefined}
-          aria-label="Send feedback"
-        >
-          <MessageSquare className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Feedback</span>}
-        </button>
-        )}
-
-        <a
-          href="https://discord.com/invite/GWcSST7GqZ"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={cn(
-            "group mt-2",
-            "flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-          )}
-          title={isCollapsed ? "Join us on Discord" : undefined}
-          aria-label="Join us on Discord"
-        >
-          <img
-            src="/discord-icon.svg"
-            alt=""
-            aria-hidden
-            // The SVG ships as solid white per the brand-icons
-            // convention (see CLAUDE.md). On a light page background
-            // that's invisible — `invert` flips white → black in light
-            // mode; `dark:invert-0` cancels the inversion in dark mode
-            // so the original white is preserved.
+          <a
+            href="https://docs.mekodata.ai/"
+            target="_blank"
+            rel="noopener noreferrer"
             className={cn(
-              "shrink-0 opacity-40 group-hover:opacity-100 transition-opacity invert dark:invert-0",
-              isCollapsed ? "w-5 h-5" : "w-4 h-4",
+              "group flex items-center rounded-md text-sm font-medium text-foreground ring-1 ring-border bg-foreground/[0.03] hover:bg-foreground/10 hover:ring-foreground/30 transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
             )}
-          />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Join us on Discord</span>}
-        </a>
+            title={isCollapsed ? "Read the docs" : undefined}
+            aria-label="Read the docs (opens in a new tab)"
+          >
+            <BookOpen className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} aria-hidden />
+            {!isCollapsed && (
+              <>
+                <span className="animate-in fade-in truncate">Read the docs</span>
+                <ArrowUpRight
+                  className="ml-auto h-3.5 w-3.5 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity"
+                  aria-hidden
+                />
+              </>
+            )}
+          </a>
 
-        {byoc ? null : (
-        <button
-          type="button"
-          className={cn(
-            "mt-1 flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+          {byoc ? null : (
+            <button
+              type="button"
+              className={cn(
+                "mt-2 flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              )}
+              onClick={() => setFeedbackOpen(true)}
+              title={isCollapsed ? "Send feedback" : undefined}
+              aria-label="Send feedback"
+            >
+              <MessageSquare className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">Feedback</span>}
+            </button>
           )}
-          onClick={() => setSignOutOpen(true)}
-          title={isCollapsed ? "Sign out" : undefined}
-        >
-          <LogOut className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Sign out</span>}
-        </button>
-        )}
+
+          <a
+            href="https://discord.com/invite/GWcSST7GqZ"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              "group mt-2",
+              "flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+            )}
+            title={isCollapsed ? "Join us on Discord" : undefined}
+            aria-label="Join us on Discord"
+          >
+            <img
+              src="/discord-icon.svg"
+              alt=""
+              aria-hidden
+              // The SVG ships as solid white per the brand-icons
+              // convention (see CLAUDE.md). On a light page background
+              // that's invisible — `invert` flips white → black in light
+              // mode; `dark:invert-0` cancels the inversion in dark mode
+              // so the original white is preserved.
+              className={cn(
+                "shrink-0 opacity-40 group-hover:opacity-100 transition-opacity invert dark:invert-0",
+                isCollapsed ? "w-5 h-5" : "w-4 h-4",
+              )}
+            />
+            {!isCollapsed && (
+              <span className="animate-in fade-in truncate">Join us on Discord</span>
+            )}
+          </a>
+
+          {byoc ? null : (
+            <button
+              type="button"
+              className={cn(
+                "mt-1 flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              )}
+              onClick={() => setSignOutOpen(true)}
+              title={isCollapsed ? "Sign out" : undefined}
+            >
+              <LogOut className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">Sign out</span>}
+            </button>
+          )}
+        </div>
+
+        <SignOutConfirmDialog
+          open={signOutOpen}
+          onOpenChange={setSignOutOpen}
+          onConfirm={handleLogout}
+        />
+
+        <FeedbackDialog
+          open={feedbackOpen}
+          onOpenChange={setFeedbackOpen}
+          userId={currentUser?.account_id ?? null}
+          email={currentUser?.email ?? null}
+          currentPath={location.pathname}
+          datapackId={activeDatapack?.id ?? null}
+          datapackName={activeDatapack?.name ?? null}
+        />
       </div>
-
-      <SignOutConfirmDialog
-        open={signOutOpen}
-        onOpenChange={setSignOutOpen}
-        onConfirm={handleLogout}
-      />
-
-      <FeedbackDialog
-        open={feedbackOpen}
-        onOpenChange={setFeedbackOpen}
-        userId={currentUser?.account_id ?? null}
-        email={currentUser?.email ?? null}
-        currentPath={location.pathname}
-        datapackId={activeDatapack?.id ?? null}
-        datapackName={activeDatapack?.name ?? null}
-      />
-    </div>
     </>
   );
 }

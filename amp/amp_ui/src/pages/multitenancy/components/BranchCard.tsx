@@ -75,36 +75,22 @@ export function BranchCard({
   }
 
   return (
-    <div
-      className={cn(
-        "rounded-lg border border-border bg-background/40 p-4",
-        !isRoot && "ml-6",
-      )}
-    >
+    <div className={cn("rounded-lg border border-border bg-background/40 p-4", !isRoot && "ml-6")}>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <Badge variant="outline" className="gap-1 font-mono">
           <GitBranch className="h-3 w-3" />
           {branch.name}
         </Badge>
         {isRoot ? (
-          <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-            source
-          </Badge>
+          <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">source</Badge>
         ) : (
-          <Badge className="bg-teal-500/15 text-teal-600 dark:text-teal-400">
-            fork
-          </Badge>
+          <Badge className="bg-teal-500/15 text-teal-600 dark:text-teal-400">fork</Badge>
         )}
-        <span className="font-mono text-xs text-muted-foreground">
-          pg {branch.pg_version}
-        </span>
-        <span className="font-mono text-xs text-muted-foreground">
-          {branch.branch_id}
-        </span>
+        <span className="font-mono text-xs text-muted-foreground">pg {branch.pg_version}</span>
+        <span className="font-mono text-xs text-muted-foreground">{branch.branch_id}</span>
         {parentName && (
           <span className="text-xs text-muted-foreground">
-            forked from{" "}
-            <span className="font-medium text-foreground">{parentName}</span>
+            forked from <span className="font-medium text-foreground">{parentName}</span>
             {branch.fork_lsn && (
               <>
                 {" "}
@@ -114,9 +100,7 @@ export function BranchCard({
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">
-            {formatDateTime(branch.created_at)}
-          </span>
+          <span className="text-xs text-muted-foreground">{formatDateTime(branch.created_at)}</span>
           <Button
             variant="ghost"
             size="sm"

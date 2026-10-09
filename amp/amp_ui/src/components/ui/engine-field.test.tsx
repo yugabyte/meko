@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import {
-  EngineField,
-  DB_ENGINES,
-  engineExtensions,
-} from "@/components/ui/engine-field";
+import { EngineField, DB_ENGINES, engineExtensions } from "@/components/ui/engine-field";
 import catalog from "@/config/extensions.json";
 
 // An engine is a named extension bundle the controller knows about. The

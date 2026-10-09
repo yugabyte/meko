@@ -171,9 +171,7 @@ export function FolderNameDialog({
                 rows={2}
                 disabled={mode === "rename" && !folderId}
               />
-              <p className="text-xs text-muted-foreground">
-                {FOLDER_DESCRIPTION_HINT}
-              </p>
+              <p className="text-xs text-muted-foreground">{FOLDER_DESCRIPTION_HINT}</p>
             </div>
 
             {error ? (

@@ -50,7 +50,11 @@ import {
   listMemories,
   type KBActivityLogItem,
 } from "@/lib/api/mekoApi";
-import { datapackKey, kbLatestActivityKey, kbSummaryKey } from "@/features/datapacks/lib/knowledgeQueryKeys";
+import {
+  datapackKey,
+  kbLatestActivityKey,
+  kbSummaryKey,
+} from "@/features/datapacks/lib/knowledgeQueryKeys";
 
 type Props = {
   datapackId: string;
@@ -157,11 +161,9 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
 
   // Deep-link intent: capture from location.state (modern internal jump)
   // or URL params (legacy/external link).
-  const highlightDocId =
-    (state?.highlightDocId || searchParams.get("highlightDocId")) ?? undefined;
+  const highlightDocId = (state?.highlightDocId || searchParams.get("highlightDocId")) ?? undefined;
   const flashFiles = state?.flashFiles || searchParams.get("flashFiles") === "1";
-  const promotedMemoryId =
-    (state?.promotedMemoryId || searchParams.get("promotedMemoryId")) ?? "";
+  const promotedMemoryId = (state?.promotedMemoryId || searchParams.get("promotedMemoryId")) ?? "";
 
   useEffect(() => {
     console.log(
@@ -332,10 +334,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
                   {filesCount}
                 </span>
               </TabsTrigger>
-              <TabsTrigger
-                value="promoted-memories"
-                className={UNDERLINE_TAB_TRIGGER_CLASS}
-              >
+              <TabsTrigger value="promoted-memories" className={UNDERLINE_TAB_TRIGGER_CLASS}>
                 <Sparkles className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />
                 Promoted memories
                 <span className="rounded-full bg-background/40 px-1.5 py-0.5 text-[10px] tabular-nums">

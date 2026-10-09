@@ -28,11 +28,7 @@ const CONVERSATION_PREVIEW_LIMIT = 3;
  *  session started any other way has none, and the opening prompt says more
  *  about the thread than "Untitled" does. */
 function conversationTitle(conversation: DatapackConversation): string {
-  return (
-    conversation.title?.trim() ||
-    conversation.first_message?.trim() ||
-    "New conversation"
-  );
+  return conversation.title?.trim() || conversation.first_message?.trim() || "New conversation";
 }
 
 /** Message count, and the memories Meko read out of the thread when there
@@ -73,7 +69,10 @@ export function LabContextPane({
   const indexedKnowledge = feed.knowledge.filter(
     (doc) => doc.status?.toUpperCase() === "COMPLETED",
   );
-  const newKnowledge = useNewlyAdded(indexedKnowledge.map((doc) => doc.id), feed.hasLoaded);
+  const newKnowledge = useNewlyAdded(
+    indexedKnowledge.map((doc) => doc.id),
+    feed.hasLoaded,
+  );
   const newMemories = useNewlyAdded(
     feed.memories.map((memory) => memory.id ?? ""),
     feed.hasLoaded,

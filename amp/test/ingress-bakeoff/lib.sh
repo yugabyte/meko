@@ -28,16 +28,19 @@ CERTS="$WORK/certs"
 # alongside the Gateway — so data-plane lookups need this, not `kn`.
 EG_NS="${BAKEOFF_EG_NS:-envoy-gateway-system}"
 
-k()   { kubectl --context "$CTX" "$@"; }
+k() { kubectl --context "$CTX" "$@"; }
 keg() { kubectl --context "$CTX" -n "$EG_NS" "$@"; }
 kn() { kubectl --context "$CTX" -n "$NS" "$@"; }
 
-say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
-ok()   { printf '   \033[32mPASS\033[0m %s\n' "$*"; }
-bad()  { printf '   \033[31mFAIL\033[0m %s\n' "$*"; }
+ok() { printf '   \033[32mPASS\033[0m %s\n' "$*"; }
+bad() { printf '   \033[31mFAIL\033[0m %s\n' "$*"; }
 warn() { printf '   \033[33m!\033[0m %s\n' "$*"; }
-die()  { printf '\n\033[31mabort:\033[0m %s\n' "$*" >&2; exit 1; }
+die() {
+  printf '\n\033[31mabort:\033[0m %s\n' "$*" >&2
+  exit 1
+}
 
 # Where results accumulate, one "tier|test|verdict|detail" line each.
 RESULTS="$WORK/results.psv"
@@ -76,7 +79,8 @@ gen_certs() {
     -subj "/CN=bakeoff-proxy-ca" 2>/dev/null
 
   for i in $(seq 0 $((BACKENDS - 1))); do
-    local cn; cn="$(sni_name "$i")"
+    local cn
+    cn="$(sni_name "$i")"
     openssl req -newkey rsa:2048 -nodes \
       -keyout "$CERTS/bk$i.key" -out "$CERTS/bk$i.csr" -subj "/CN=$cn" 2>/dev/null
     openssl x509 -req -in "$CERTS/bk$i.csr" -days 30 \
@@ -96,7 +100,8 @@ svc_ip() { kn get svc "$1" -o jsonpath='{.spec.clusterIP}'; }
 
 # psql from inside the cluster, against $1=host-header $2=ip $3=port, rest args.
 pg() {
-  local host="$1" addr="$2" port="$3"; shift 3
+  local host="$1" addr="$2" port="$3"
+  shift 3
   kn exec bakeoff-client -- env PGPASSWORD="$PGPASS" \
     psql "host=$host hostaddr=$addr port=$port user=postgres dbname=postgres $*" \
     -qtAX -c "SELECT current_setting('cluster_name')" 2>&1

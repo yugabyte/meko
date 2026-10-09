@@ -146,189 +146,190 @@ export default function SignUpPage() {
       <div className={outerCls}>
         {!awaitingCode && <SignUpMarketing />}
         <div className="w-full max-w-[560px] justify-self-center rounded-2xl border border-border bg-card p-8 shadow-sm lg:justify-self-end">
-        <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
-          {awaitingCode ? "Confirm your account" : "Sign up for Meko"}
-        </h1>
-        {searchParams.get("source") === "aws-marketplace" && !awaitingCode ? (
-          <div className="mb-4 rounded-lg border border-blue-500/30 bg-blue-500/[0.06] px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
-            You're finishing your AWS Marketplace subscription. Create your Meko account to unlock your Standard plan.
-          </div>
-        ) : null}
-        <form className="space-y-4" onSubmit={awaitingCode ? handleConfirm : handleSignup}>
-          {!awaitingCode ? (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  placeholder="Your first name"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  required
-                  className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-                />
-                <Input
-                  placeholder="Your last name"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  required
-                  className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
-              <Input
-                type="email"
-                autoComplete="username"
-                name="email"
-                aria-label="Email address"
-                inputMode="email"
-                autoCapitalize="none"
-                spellCheck={false}
-                enterKeyHint="next"
-                placeholder="Your email address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-              />
-              <div className="space-y-3">
-                <div className="relative">
-                  <Input
-                    id="signup-password"
-                    type={showPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    name="password"
-                    aria-label="Password"
-                    aria-describedby="signup-password-policy"
-                    enterKeyHint="go"
-                    placeholder="Create password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
-                  />
-                  <button
-                    type="button"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                    aria-pressed={showPassword}
-                    className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                    onClick={() => setShowPassword((value) => !value)}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-4 w-4" aria-hidden />
-                    ) : (
-                      <Eye className="h-4 w-4" aria-hidden />
-                    )}
-                  </button>
-                </div>
-                <div className="relative">
-                  <Input
-                    id="signup-confirm-password"
-                    type={showConfirmPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    name="confirmPassword"
-                    aria-label="Confirm password"
-                    aria-invalid={confirmMismatch}
-                    aria-describedby={confirmMismatch ? "signup-confirm-error" : undefined}
-                    enterKeyHint="go"
-                    placeholder="Confirm password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
-                  />
-                  <button
-                    type="button"
-                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
-                    aria-pressed={showConfirmPassword}
-                    className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-                    onClick={() => setShowConfirmPassword((value) => !value)}
-                  >
-                    {showConfirmPassword ? (
-                      <EyeOff className="h-4 w-4" aria-hidden />
-                    ) : (
-                      <Eye className="h-4 w-4" aria-hidden />
-                    )}
-                  </button>
-                </div>
-                {confirmMismatch ? (
-                  <p id="signup-confirm-error" className="text-sm text-red-600">
-                    Passwords don't match.
-                  </p>
-                ) : null}
-                <PasswordPolicyPanel id="signup-password-policy" password={password} />
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-sm text-muted-foreground">
-                Enter the confirmation code sent to <b>{email}</b>.
-              </p>
-              <Input
-                placeholder="6-digit confirmation code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-              />
-            </>
-          )}
-
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
-          <Button
-            type="submit"
-            className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
-            disabled={loading || (!awaitingCode && confirmMismatch)}
-          >
-            {awaitingCode
-              ? loading
-                ? "Please wait..."
-                : "Verify"
-              : loading
-                ? "Sending code..."
-                : "Continue"}
-          </Button>
-
-          {!awaitingCode ? (
-            <p className="text-center text-xs text-muted-foreground">
-              By clicking &ldquo;Continue&rdquo;, you are creating a Meko account, and you agree to
-              Yugabyte&apos;s{" "}
-              <a
-                href="https://mekodata.ai/early-access-terms-of-service/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-foreground"
-              >
-                Terms of Use
-              </a>
-              .
-            </p>
+          <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
+            {awaitingCode ? "Confirm your account" : "Sign up for Meko"}
+          </h1>
+          {searchParams.get("source") === "aws-marketplace" && !awaitingCode ? (
+            <div className="mb-4 rounded-lg border border-blue-500/30 bg-blue-500/[0.06] px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+              You're finishing your AWS Marketplace subscription. Create your Meko account to unlock
+              your Standard plan.
+            </div>
           ) : null}
-        </form>
+          <form className="space-y-4" onSubmit={awaitingCode ? handleConfirm : handleSignup}>
+            {!awaitingCode ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <Input
+                    placeholder="Your first name"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                    className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
+                  />
+                  <Input
+                    placeholder="Your last name"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                    className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+                <Input
+                  type="email"
+                  autoComplete="username"
+                  name="email"
+                  aria-label="Email address"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  enterKeyHint="next"
+                  placeholder="Your email address"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
+                />
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Input
+                      id="signup-password"
+                      type={showPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      name="password"
+                      aria-label="Password"
+                      aria-describedby="signup-password-policy"
+                      enterKeyHint="go"
+                      placeholder="Create password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
+                    />
+                    <button
+                      type="button"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showPassword}
+                      className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() => setShowPassword((value) => !value)}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" aria-hidden />
+                      ) : (
+                        <Eye className="h-4 w-4" aria-hidden />
+                      )}
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <Input
+                      id="signup-confirm-password"
+                      type={showConfirmPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      name="confirmPassword"
+                      aria-label="Confirm password"
+                      aria-invalid={confirmMismatch}
+                      aria-describedby={confirmMismatch ? "signup-confirm-error" : undefined}
+                      enterKeyHint="go"
+                      placeholder="Confirm password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
+                    />
+                    <button
+                      type="button"
+                      aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showConfirmPassword}
+                      className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() => setShowConfirmPassword((value) => !value)}
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="h-4 w-4" aria-hidden />
+                      ) : (
+                        <Eye className="h-4 w-4" aria-hidden />
+                      )}
+                    </button>
+                  </div>
+                  {confirmMismatch ? (
+                    <p id="signup-confirm-error" className="text-sm text-red-600">
+                      Passwords don't match.
+                    </p>
+                  ) : null}
+                  <PasswordPolicyPanel id="signup-password-policy" password={password} />
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Enter the confirmation code sent to <b>{email}</b>.
+                </p>
+                <Input
+                  placeholder="6-digit confirmation code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  required
+                  className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
+                />
+              </>
+            )}
 
-        {!awaitingCode ? (
-          <>
-            <p className="mt-5 text-center text-sm text-muted-foreground">
-              Already have an account?{" "}
-              <Link
-                to={
-                  // Carry return_to through so an existing AWS Marketplace
-                  // buyer who clicks "Sign in instead" still lands on
-                  // /marketplace/complete after auth. Uses ROUTES.signin
-                  // (not ROUTES.login) because /login → <Navigate to=/signin>
-                  // strips the query string.
-                  (() => {
-                    const rt = safeReturnTo(searchParams.get("return_to"));
-                    return rt
-                      ? `${ROUTES.signin}?return_to=${encodeURIComponent(rt)}`
-                      : ROUTES.signin;
-                  })()
-                }
-                className="font-medium text-brand hover:underline"
-              >
-                Sign in
-              </Link>
-            </p>
-          </>
-        ) : null}
+            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+            <Button
+              type="submit"
+              className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
+              disabled={loading || (!awaitingCode && confirmMismatch)}
+            >
+              {awaitingCode
+                ? loading
+                  ? "Please wait..."
+                  : "Verify"
+                : loading
+                  ? "Sending code..."
+                  : "Continue"}
+            </Button>
+
+            {!awaitingCode ? (
+              <p className="text-center text-xs text-muted-foreground">
+                By clicking &ldquo;Continue&rdquo;, you are creating a Meko account, and you agree
+                to Yugabyte&apos;s{" "}
+                <a
+                  href="https://mekodata.ai/early-access-terms-of-service/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  Terms of Use
+                </a>
+                .
+              </p>
+            ) : null}
+          </form>
+
+          {!awaitingCode ? (
+            <>
+              <p className="mt-5 text-center text-sm text-muted-foreground">
+                Already have an account?{" "}
+                <Link
+                  to={
+                    // Carry return_to through so an existing AWS Marketplace
+                    // buyer who clicks "Sign in instead" still lands on
+                    // /marketplace/complete after auth. Uses ROUTES.signin
+                    // (not ROUTES.login) because /login → <Navigate to=/signin>
+                    // strips the query string.
+                    (() => {
+                      const rt = safeReturnTo(searchParams.get("return_to"));
+                      return rt
+                        ? `${ROUTES.signin}?return_to=${encodeURIComponent(rt)}`
+                        : ROUTES.signin;
+                    })()
+                  }
+                  className="font-medium text-brand hover:underline"
+                >
+                  Sign in
+                </Link>
+              </p>
+            </>
+          ) : null}
         </div>
       </div>
     </AuthPageShell>

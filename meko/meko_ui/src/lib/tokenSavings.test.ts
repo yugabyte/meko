@@ -25,7 +25,9 @@ describe("tokensIfRaw", () => {
 
 describe("tokensSent", () => {
   it("is baseline minus saved", () => {
-    expect(tokensSent(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }))).toBe(4_000_000);
+    expect(tokensSent(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }))).toBe(
+      4_000_000,
+    );
   });
   it("never goes negative when saved exceeds baseline", () => {
     expect(tokensSent(summary({ total_requests: 1, total_tokens_saved: 999_999_999 }))).toBe(0);
@@ -34,21 +36,29 @@ describe("tokensSent", () => {
 
 describe("tokenBurnFraction / tokenBurnPercent", () => {
   it("is saved / baseline, clamped to 0..1", () => {
-    expect(tokenBurnFraction(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }))).toBeCloseTo(0.6);
-    expect(tokenBurnPercent(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }))).toBe(60);
+    expect(
+      tokenBurnFraction(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 })),
+    ).toBeCloseTo(0.6);
+    expect(tokenBurnPercent(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }))).toBe(
+      60,
+    );
   });
   it("returns 0 when there are no requests (divide-by-zero guard)", () => {
     expect(tokenBurnFraction(summary({ total_requests: 0, total_tokens_saved: 5000 }))).toBe(0);
     expect(tokenBurnPercent(summary())).toBe(0);
   });
   it("clamps an over-100% row to 1", () => {
-    expect(tokenBurnFraction(summary({ total_requests: 1, total_tokens_saved: 1_000_000 }))).toBe(1);
+    expect(tokenBurnFraction(summary({ total_requests: 1, total_tokens_saved: 1_000_000 }))).toBe(
+      1,
+    );
   });
 });
 
 describe("dollarsSavedByModel", () => {
   it("returns one entry per premier model, in order, matching the worked example", () => {
-    const rows = dollarsSavedByModel(summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }));
+    const rows = dollarsSavedByModel(
+      summary({ total_requests: 1000, total_tokens_saved: 6_000_000 }),
+    );
     expect(rows.map((r) => r.key)).toEqual(PREMIER_MODELS.map((m) => m.key));
     // (10M×15 − 4M×0.10)/1e6 = 149.6 for Opus (see module worked example).
     expect(rows[0].dollars).toBeCloseTo(149.6);

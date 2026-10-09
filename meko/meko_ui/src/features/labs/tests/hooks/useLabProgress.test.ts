@@ -11,7 +11,10 @@ const FIXTURE_STAGES: LabStage[] = [
   { id: "seed-context", title: "Seed context", summary: "" },
   { id: "run-review", title: "Run a review", summary: "" },
 ];
-const ONE_CHAPTER_LAB = { id: "test-lab", chapters: [{ id: "chapter-1", title: "Chapter", stages: FIXTURE_STAGES }] } as never;
+const ONE_CHAPTER_LAB = {
+  id: "test-lab",
+  chapters: [{ id: "chapter-1", title: "Chapter", stages: FIXTURE_STAGES }],
+} as never;
 
 describe("useLabProgress — single chapter", () => {
   it("starts at stage 0", () => {
@@ -46,21 +49,30 @@ describe("useLabProgress — single chapter", () => {
   });
 
   it("falls back to the start reading a pre-restructuring {chapterIndex, stepIndex} blob", () => {
-    localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ chapterIndex: 2, stepIndex: 1 }));
+    localStorage.setItem(
+      "meko:lab-progress:test-lab",
+      JSON.stringify({ chapterIndex: 2, stepIndex: 1 }),
+    );
     const { result } = renderHook(() => useLabProgress(ONE_CHAPTER_LAB));
     expect(result.current.chapterIndex).toBe(0);
     expect(result.current.stageIndex).toBe(0);
   });
 
   it("clamps a negative persisted stageIndex, instead of indexing off the front", () => {
-    localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ chapterIndex: 0, stageIndex: -1 }));
+    localStorage.setItem(
+      "meko:lab-progress:test-lab",
+      JSON.stringify({ chapterIndex: 0, stageIndex: -1 }),
+    );
     const { result } = renderHook(() => useLabProgress(ONE_CHAPTER_LAB));
     expect(result.current.stageIndex).toBe(0);
     expect(result.current.currentStage.id).toBe("create-datapack");
   });
 
   it("clamps an out-of-range persisted chapterIndex", () => {
-    localStorage.setItem("meko:lab-progress:test-lab", JSON.stringify({ chapterIndex: 5, stageIndex: 0 }));
+    localStorage.setItem(
+      "meko:lab-progress:test-lab",
+      JSON.stringify({ chapterIndex: 5, stageIndex: 0 }),
+    );
     const { result } = renderHook(() => useLabProgress(ONE_CHAPTER_LAB));
     expect(result.current.chapterIndex).toBe(0);
   });

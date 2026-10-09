@@ -9,14 +9,7 @@
 export const ADMIN_USERNAME = "admin";
 export const ADMIN_PASSWORD = "admin";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
 export type AmpUser = {
   email: string;
@@ -80,14 +73,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(next);
   }, []);
 
-  const signUp = useCallback(
-    async (name: string, email: string, _password: string) => {
-      const next: AmpUser = { email, name: name.trim() || nameFromEmail(email) };
-      persistUser(next);
-      setUser(next);
-    },
-    [],
-  );
+  const signUp = useCallback(async (name: string, email: string, _password: string) => {
+    const next: AmpUser = { email, name: name.trim() || nameFromEmail(email) };
+    persistUser(next);
+    setUser(next);
+  }, []);
 
   const signOut = useCallback(() => {
     persistUser(null);

@@ -78,7 +78,9 @@ export function MemoryBreakdownCard({
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             {SEGMENTS.filter((s) => s.key !== "pending" || pending > 0).map((s) => (
               <div key={s.key} className="flex items-center gap-1.5">
-                <div className={cn("h-2.5 w-2.5 shrink-0 rounded-full", CONTEXT_TONE[s.concept].fill)} />
+                <div
+                  className={cn("h-2.5 w-2.5 shrink-0 rounded-full", CONTEXT_TONE[s.concept].fill)}
+                />
                 <span className="text-xs text-muted-foreground">{s.label}</span>
                 <span className="text-xs font-semibold tabular-nums text-foreground">
                   {counts[s.key]}

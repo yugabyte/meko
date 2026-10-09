@@ -130,7 +130,7 @@ export const FEATURED_REVIEW = {
       severity: "major",
       path: "src/yb/yql/cql/ql/audit/audit_logger.cc",
       line: null,
-      body: "**The claim:** lines 495-496 say a dollar-quoted string is a \"non-string construct\" whose \"body can't be a password value\". That is false.\n\n**Why it fails:**\n- In `scanner_lex.l:679-698`, `$tag$…$tag$` returns `SCONST`.\n- `RoleOption: PASSWORD '=' Sconst` accepts it.\n- So `CREATE ROLE r WITH PASSWORD = $$secret$$` is valid.\n- This branch copies `$$secret$$` into the audit record verbatim, on both the success path and the failure path.",
+      body: '**The claim:** lines 495-496 say a dollar-quoted string is a "non-string construct" whose "body can\'t be a password value". That is false.\n\n**Why it fails:**\n- In `scanner_lex.l:679-698`, `$tag$…$tag$` returns `SCONST`.\n- `RoleOption: PASSWORD \'=\' Sconst` accepts it.\n- So `CREATE ROLE r WITH PASSWORD = $$secret$$` is valid.\n- This branch copies `$$secret$$` into the audit record verbatim, on both the success path and the failure path.',
       reply:
         "Right, the comment was wrong. Fixed in #34089: the password branch now takes any string constant after `=`, which covers `'...'`, `E'...'`, `U&'...'`, and `$tag$...$tag$`. I also corrected the loop comment.",
       replyAuthor: "ajcaldera1",
@@ -150,7 +150,7 @@ export const FEATURED_REVIEW = {
       severity: "minor",
       path: "src/yb/yql/cql/ql/ptree/pt_create_role.cc",
       line: 82,
-      body: "This validator is meant to accept only hashes that `bcrypt_checkpw` can verify, but some accepted hashes can never verify. Position 28 (the last salt character) and position 59 (the last checksum character) each carry fewer than 6 significant bits, and any base64 character is accepted there.\n\nThat gives the same \"role exists but can never authenticate\" result that the cost range check was added to prevent.",
+      body: 'This validator is meant to accept only hashes that `bcrypt_checkpw` can verify, but some accepted hashes can never verify. Position 28 (the last salt character) and position 59 (the last checksum character) each carry fewer than 6 significant bits, and any base64 character is accepted there.\n\nThat gives the same "role exists but can never authenticate" result that the cost range check was added to prevent.',
       reply:
         "Good catch -- fixed in `IsValidBcryptHash`. Rather than whitelisting the canonical characters, I validate the padding bits directly: the last salt character must have its low 4 bits zero, and the last checksum character its low 2 bits zero.",
       replyAuthor: "ajcaldera1",

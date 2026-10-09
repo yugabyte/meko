@@ -151,9 +151,7 @@ describe("ReviewFindingsStage", () => {
     okTrace();
     render(<ReviewFindingsStage run={runWith()} datapackId="dp-1" onGoToRunReview={vi.fn()} />);
 
-    expect(
-      await screen.findByText(/not which chunk produced which comment/i),
-    ).toBeTruthy();
+    expect(await screen.findByText(/not which chunk produced which comment/i)).toBeTruthy();
   });
 
   it("shows the flagged line of the diff, numbered in the file's own frame", async () => {

@@ -5,18 +5,10 @@
 // /memories — the promoted endpoint is datapack-scoped only (no user_id).
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  getApiErrorMessage,
-  listPromotedMemories,
-  type PromotedMemory,
-} from "@/lib/api/mekoApi";
+import { getApiErrorMessage, listPromotedMemories, type PromotedMemory } from "@/lib/api/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 
-export function usePromotedMemoryList({
-  datapackId,
-}: {
-  datapackId: string;
-}) {
+export function usePromotedMemoryList({ datapackId }: { datapackId: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [memories, setMemories] = useState<PromotedMemory[]>([]);

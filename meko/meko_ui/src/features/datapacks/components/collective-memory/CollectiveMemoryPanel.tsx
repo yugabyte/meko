@@ -49,10 +49,7 @@ import {
   isPostMem0V2,
   type PromotedMemory,
 } from "@/lib/api/mekoApi";
-import {
-  isDatapackGrantEligibleToShare,
-  type DatapackShareGrant,
-} from "@/lib/datapackShareGrants";
+import { isDatapackGrantEligibleToShare, type DatapackShareGrant } from "@/lib/datapackShareGrants";
 import { usePromotedMemoryList } from "./usePromotedMemoryList";
 import { PromotedMemoryCard } from "./PromotedMemoryCard";
 import { PromotedMemoryDeleteDialog } from "./PromotedMemoryDeleteDialog";
@@ -139,8 +136,7 @@ export function CollectiveMemoryPanel({
 
   // Single-flight delete state (mirrors MemoryReadOnlySummaryPanel).
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [pendingDeleteMemory, setPendingDeleteMemory] =
-    useState<PromotedMemory | null>(null);
+  const [pendingDeleteMemory, setPendingDeleteMemory] = useState<PromotedMemory | null>(null);
 
   const handleDelete = useCallback(
     async (memoryId: string) => {
@@ -262,12 +258,7 @@ export function CollectiveMemoryPanel({
               type="button"
               className="gap-2"
               onClick={() =>
-                navigate(
-                  datapackLearningsPathFrom(
-                    datapackName,
-                    LEARNINGS_SOURCE.sharedKnowledge,
-                  ),
-                )
+                navigate(datapackLearningsPathFrom(datapackName, LEARNINGS_SOURCE.sharedKnowledge))
               }
               title="Review pending mem0 candidates"
             >
@@ -357,8 +348,8 @@ export function CollectiveMemoryPanel({
 
       {memories.length === 0 && !loading && !error && listReady ? (
         <p className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-12 text-center text-sm text-muted-foreground">
-          No promoted memories yet. Promote session memories from the Memories tab to
-          populate this list.
+          No promoted memories yet. Promote session memories from the Memories tab to populate this
+          list.
         </p>
       ) : null}
 
@@ -427,7 +418,7 @@ export function CollectiveMemoryPanel({
                   />
                 </div>
               </li>
-            )
+            );
           })}
         </ul>
       ) : null}

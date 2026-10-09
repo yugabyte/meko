@@ -28,13 +28,18 @@ const FORMS = [
 function parseTitle(title) {
   const t = title || "";
   const prefix = t.match(PREFIX)[0];
-  const tags = [...prefix.matchAll(new RegExp(TAG, "g"))].map(x => x[1]);
+  const tags = [...prefix.matchAll(new RegExp(TAG, "g"))].map((x) => x[1]);
   const rest = t.slice(prefix.length);
   // A bracket right after the tags (or at the start) is a tag attempt.
   const next = rest.match(/^(\s*)(\[[^\]]*\])/);
   if (next && (!next[1] || tags.length)) {
-    if (!IS_TAG.test(next[2])) return { ok: false, tags, reason: `\`${next[2]}\` is not a ticket tag` };
-    return { ok: false, tags, reason: "several tags must be written back to back, with no space between them" };
+    if (!IS_TAG.test(next[2]))
+      return { ok: false, tags, reason: `\`${next[2]}\` is not a ticket tag` };
+    return {
+      ok: false,
+      tags,
+      reason: "several tags must be written back to back, with no space between them",
+    };
   }
   if (!tags.length) return { ok: false, tags, reason: "it does not start with a ticket tag" };
   if (!/^ \S/.test(rest)) {

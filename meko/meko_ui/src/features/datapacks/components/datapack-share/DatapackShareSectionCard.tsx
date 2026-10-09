@@ -31,7 +31,9 @@ export function DatapackShareSectionCard({
     >
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-4">
         <div className="flex min-w-0 items-center gap-2">
-          {icon ? <span className="shrink-0 text-muted-foreground [&_svg]:h-5 [&_svg]:w-5">{icon}</span> : null}
+          {icon ? (
+            <span className="shrink-0 text-muted-foreground [&_svg]:h-5 [&_svg]:w-5">{icon}</span>
+          ) : null}
           <h2 className="text-base font-semibold tracking-tight text-foreground">{title}</h2>
         </div>
         {trailing ? <div className="shrink-0">{trailing}</div> : null}

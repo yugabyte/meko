@@ -63,10 +63,7 @@ export function FolderTreePreview({
         {drawn.map((folder, i) => (
           <li
             key={`${folder}-${i}`}
-            className={cn(
-              "flex items-center gap-2",
-              i === pendingFolderIndex && "opacity-70",
-            )}
+            className={cn("flex items-center gap-2", i === pendingFolderIndex && "opacity-70")}
           >
             <FolderOpen
               className={cn(

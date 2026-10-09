@@ -51,8 +51,8 @@ export function ConfigureWizardSyncStep({
       <p className="text-sm text-muted-foreground">
         Stage knowledge files for this datapack ({KNOWLEDGE_UPLOAD_EXTENSIONS_HINT.toUpperCase()}
         {Number.isFinite(maxFileSizeMB) ? ` — up to ${maxFileSizeMB}MB each,` : " —"} up to{" "}
-        {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch). Conversations and skills use the same layout below and
-        will be available in a future release.
+        {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch). Conversations and skills use the same layout below
+        and will be available in a future release.
       </p>
       {syncFileWarning ? (
         <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-2 text-xs text-yellow-200">

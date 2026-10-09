@@ -42,10 +42,7 @@ export function BehindTheScenes({
             <li key={step.label} className="flex items-stretch gap-2">
               <div className="flex min-w-[8.5rem] flex-1 flex-col gap-1.5 rounded-md border border-border bg-card px-3 py-2.5">
                 <span
-                  className={cn(
-                    "flex h-6 w-6 items-center justify-center rounded-md",
-                    tone.soft,
-                  )}
+                  className={cn("flex h-6 w-6 items-center justify-center rounded-md", tone.soft)}
                 >
                   <Icon className={cn("h-3.5 w-3.5", tone.text)} aria-hidden />
                 </span>

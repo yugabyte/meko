@@ -16,22 +16,25 @@ if [[ $# -lt 2 ]]; then
   exit 1
 fi
 
-target="$1"; shift
+target="$1"
+shift
 source ~/benchmark/scripts/_env.sh "$target"
 source ~/benchmark/scripts/_metrics.sh
 
-declare -A W_SCALE=( [W1]=100 [W2]=100 [W3]=1500 [W4]=1500 )
-declare -A W_KIND=(  [W1]=-S  [W2]=""  [W3]=-S   [W4]=""  )
-declare -A W_LABEL=( [W1]="RO scale=100" [W2]="RW scale=100" [W3]="RO scale=1500" [W4]="RW scale=1500" )
+declare -A W_SCALE=([W1]=100 [W2]=100 [W3]=1500 [W4]=1500)
+declare -A W_KIND=([W1]=-S [W2]="" [W3]=-S [W4]="")
+declare -A W_LABEL=([W1]="RO scale=100" [W2]="RW scale=100" [W3]="RO scale=1500" [W4]="RW scale=1500")
 
 # Use one pgbench DB per scale so init can be skipped when re-running.
 db_for_scale() { echo "pgbench_s$1"; }
 
 ensure_init() {
-  local scale="$1" dbname; dbname=$(db_for_scale "$scale")
+  local scale="$1" dbname
+  dbname=$(db_for_scale "$scale")
   if $PSQL -d $PGDATABASE -tAc "SELECT 1 FROM pg_database WHERE datname='$dbname'" | grep -q 1; then
     # pgbench_branches has exactly `scale` rows.
-    local actual; actual=$($PSQL -d "$dbname" -tAc \
+    local actual
+    actual=$($PSQL -d "$dbname" -tAc \
       "SELECT count(*) FROM pgbench_branches" 2>/dev/null || echo 0)
     if [[ "$actual" == "$scale" ]]; then
       echo "[init] $dbname already at scale=$actual — reusing"

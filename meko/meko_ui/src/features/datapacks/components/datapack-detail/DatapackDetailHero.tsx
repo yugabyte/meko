@@ -66,7 +66,10 @@ function MetaItem({ label, children }: { label: string; children: React.ReactNod
 function ActiveStatusPill() {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/45 bg-emerald-500/10 dark:bg-emerald-950/45 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-emerald-700 dark:text-emerald-100/95">
-      <span className="size-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.65)]" aria-hidden />
+      <span
+        className="size-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.65)]"
+        aria-hidden
+      />
       active
     </span>
   );
@@ -132,7 +135,8 @@ export function DatapackDetailHero({
     return () => ro.disconnect();
   }, [trimmedDesc, descExpanded, showDescription]);
 
-  const accessLabel = datapackGrant != null ? formatDatapackShareGrantCamelCase(datapackGrant) : "-";
+  const accessLabel =
+    datapackGrant != null ? formatDatapackShareGrantCamelCase(datapackGrant) : "-";
 
   return (
     <>
@@ -150,10 +154,7 @@ export function DatapackDetailHero({
                 },
                 { label: datapackName },
               ]
-            : [
-                { label: "Datapacks", href: ROUTES.datapacks },
-                { label: datapackName },
-              ]
+            : [{ label: "Datapacks", href: ROUTES.datapacks }, { label: datapackName }]
         }
       />
 
@@ -272,7 +273,6 @@ export function DatapackDetailHero({
                   </MetaItem>
                 </>
               ) : null}
-
             </p>
           </div>
         </div>

@@ -25,9 +25,7 @@ const ARCHITECT_SUGGESTIONS = [
 
 // Illustrative chips — the platform's supported workloads / topologies. These
 // are platform capabilities, not per-tenant data, so they're static.
-const WORKLOAD_CHIPS = [
-  { label: "PostgreSQL", className: "text-brand border-brand/30" },
-];
+const WORKLOAD_CHIPS = [{ label: "PostgreSQL", className: "text-brand border-brand/30" }];
 
 export default function WelcomePage() {
   const navigate = useNavigate();
@@ -50,26 +48,20 @@ export default function WelcomePage() {
       {/* 1. Hero */}
       <section className="overflow-hidden rounded-2xl border border-border bg-card/40 p-8 md:p-10">
         <span className="inline-flex items-center gap-2 rounded-full border border-teal-500/40 px-3 py-1 text-xs font-semibold text-teal-600 dark:text-teal-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-teal-400" />
-          3 agents online · MCP endpoint active · 5 foundations
+          <span className="h-1.5 w-1.5 rounded-full bg-teal-400" />3 agents online · MCP endpoint
+          active · 5 foundations
         </span>
 
         <h1 className="mt-6 max-w-3xl text-4xl font-extrabold leading-tight tracking-tight text-foreground md:text-5xl">
-          A multitenant <span className="text-brand">PostgreSQL platform</span>{" "}
-          your agents can run.
+          A multitenant <span className="text-brand">PostgreSQL platform</span> your agents can run.
         </h1>
 
         <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
           Fully Postgres-compatible, distributed and resilient. Pick a storage{" "}
-          <span className="font-medium text-blue-500 dark:text-blue-400">
-            foundation
-          </span>
-          , carve out a{" "}
-          <span className="font-medium text-teal-600 dark:text-teal-400">
-            shared pool
-          </span>{" "}
-          for your team, then let the agents spin up, migrate and tune a whole
-          fleet of <span className="font-medium text-brand">clusters</span>.
+          <span className="font-medium text-blue-500 dark:text-blue-400">foundation</span>, carve
+          out a <span className="font-medium text-teal-600 dark:text-teal-400">shared pool</span>{" "}
+          for your team, then let the agents spin up, migrate and tune a whole fleet of{" "}
+          <span className="font-medium text-brand">clusters</span>.
         </p>
 
         {/* Illustrative Architect prompt box */}
@@ -79,8 +71,8 @@ export default function WelcomePage() {
             Architect agent
           </div>
           <p className="mt-3 text-sm text-muted-foreground">
-            e.g. In the Payments pool, create 24 tenant clusters multi-region
-            sync with pgvector enabled…
+            e.g. In the Payments pool, create 24 tenant clusters multi-region sync with pgvector
+            enabled…
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {ARCHITECT_SUGGESTIONS.map((s) => (
@@ -132,10 +124,7 @@ export default function WelcomePage() {
         >
           {myPools.length ? (
             myPools.slice(0, 5).map((p) => (
-              <Chip
-                key={p.id}
-                className="border-teal-500/30 text-teal-600 dark:text-teal-400"
-              >
+              <Chip key={p.id} className="border-teal-500/30 text-teal-600 dark:text-teal-400">
                 {p.name}
               </Chip>
             ))
@@ -165,10 +154,8 @@ export default function WelcomePage() {
             The agents
           </span>
           <span className="text-sm text-muted-foreground">
-            Every action also runs over{" "}
-            <span className="font-medium text-foreground">MCP</span> or the{" "}
-            <span className="font-medium text-foreground">REST API</span> — not
-            just the UI
+            Every action also runs over <span className="font-medium text-foreground">MCP</span> or
+            the <span className="font-medium text-foreground">REST API</span> — not just the UI
           </span>
         </div>
 
@@ -182,20 +169,9 @@ export default function WelcomePage() {
   );
 }
 
-function Chip({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
+function Chip({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <span
-      className={cn(
-        "rounded-md border px-2.5 py-0.5 text-xs font-medium",
-        className,
-      )}
-    >
+    <span className={cn("rounded-md border px-2.5 py-0.5 text-xs font-medium", className)}>
       {children}
     </span>
   );
@@ -205,9 +181,7 @@ function Connector({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-3 px-4">
       <span className="h-4 w-px bg-border" />
-      <span className="font-mono text-[11px] text-muted-foreground">
-        {label}
-      </span>
+      <span className="font-mono text-[11px] text-muted-foreground">{label}</span>
     </div>
   );
 }
@@ -246,34 +220,23 @@ function CascadeRow({
       <div className="flex flex-1 flex-wrap items-center gap-2">{children}</div>
 
       {meta && (
-        <div className="hidden font-mono text-xs text-muted-foreground lg:block">
-          {meta}
-        </div>
+        <div className="hidden font-mono text-xs text-muted-foreground lg:block">{meta}</div>
       )}
 
       <div className="ml-auto text-right">
         {count !== undefined ? (
           <div className="text-lg font-bold text-foreground">
-            {count}{" "}
-            <span className="text-sm font-normal text-muted-foreground">
-              {countUnit}
-            </span>
+            {count} <span className="text-sm font-normal text-muted-foreground">{countUnit}</span>
           </div>
         ) : (
-          <div className="max-w-[180px] text-xs text-muted-foreground">
-            {rightText}
-          </div>
+          <div className="max-w-[180px] text-xs text-muted-foreground">{rightText}</div>
         )}
       </div>
     </div>
   );
 }
 
-function AgentCard({
-  agent,
-}: {
-  agent: (typeof AGENT_PANELS)[keyof typeof AGENT_PANELS];
-}) {
+function AgentCard({ agent }: { agent: (typeof AGENT_PANELS)[keyof typeof AGENT_PANELS] }) {
   const { open } = useAgentPanel();
   const Icon = agent.icon;
   return (
@@ -292,28 +255,16 @@ function AgentCard({
       </div>
 
       <span
-        className={cn(
-          "flex h-11 w-11 items-center justify-center rounded-xl",
-          agent.tileClass,
-        )}
+        className={cn("flex h-11 w-11 items-center justify-center rounded-xl", agent.tileClass)}
       >
         <Icon className="h-5 w-5" />
       </span>
 
-      <h3 className="mt-4 text-lg font-semibold text-foreground">
-        {agent.name}
-      </h3>
-      <div
-        className={cn(
-          "text-xs font-semibold uppercase tracking-[0.1em]",
-          agent.labelClass,
-        )}
-      >
+      <h3 className="mt-4 text-lg font-semibold text-foreground">{agent.name}</h3>
+      <div className={cn("text-xs font-semibold uppercase tracking-[0.1em]", agent.labelClass)}>
         {agent.subtitle}
       </div>
-      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-        {agent.blurb}
-      </p>
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{agent.blurb}</p>
     </button>
   );
 }

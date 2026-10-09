@@ -72,6 +72,9 @@ export function resizeToast(
     case "unsupported":
       return { title: `Resized to ${size} via a restart (live resize unsupported)` };
     case "infeasible":
-      return { title: `Resize to ${size} isn't feasible on the current node`, variant: "destructive" };
+      return {
+        title: `Resize to ${size} isn't feasible on the current node`,
+        variant: "destructive",
+      };
   }
 }

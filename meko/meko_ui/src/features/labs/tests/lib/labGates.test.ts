@@ -34,7 +34,9 @@ describe("stagesSatisfiedByContext", () => {
   });
 
   it("satisfies the conversation lesson when the datapack already has a conversation", () => {
-    expect(stagesSatisfiedByContext(feed({ conversationsTotal: 1 }), null)).toContain("conversation");
+    expect(stagesSatisfiedByContext(feed({ conversationsTotal: 1 }), null)).toContain(
+      "conversation",
+    );
   });
 
   it("keeps the three independent — knowledge present doesn't unlock the others", () => {

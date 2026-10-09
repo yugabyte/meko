@@ -25,7 +25,10 @@ export function AnthropicReferenceCard() {
   if (!ANTHROPIC_REFERENCE_IS_POPULATED) {
     return (
       <div className="rounded-md border border-dashed border-violet-500/30 bg-violet-500/5 p-3 text-xs text-muted-foreground">
-        <Sparkles className="mr-1.5 inline-block h-3.5 w-3.5 text-violet-600 dark:text-violet-300" aria-hidden />
+        <Sparkles
+          className="mr-1.5 inline-block h-3.5 w-3.5 text-violet-600 dark:text-violet-300"
+          aria-hidden
+        />
         The {ANTHROPIC_REFERENCE_MODEL_LABEL} reference review hasn't been captured for this lab yet
         It'll show here for comparison once it has.
       </div>

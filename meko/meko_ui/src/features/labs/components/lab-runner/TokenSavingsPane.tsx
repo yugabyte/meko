@@ -36,7 +36,10 @@ export function TokenSavingsPane({ datapackId }: { datapackId: string | null }) 
               {isLoading || !datapackId ? "…" : headline}
             </span>
             <ChevronDown
-              className={cn("h-4 w-4 text-muted-foreground transition-transform", open && "rotate-180")}
+              className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform",
+                open && "rotate-180",
+              )}
               aria-hidden
             />
           </span>

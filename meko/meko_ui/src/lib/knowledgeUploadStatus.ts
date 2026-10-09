@@ -11,4 +11,5 @@ export const KNOWLEDGE_UPLOAD_STATUS = {
   ERROR: "error",
 } as const;
 
-export type KnowledgeUploadStatus = (typeof KNOWLEDGE_UPLOAD_STATUS)[keyof typeof KNOWLEDGE_UPLOAD_STATUS];
+export type KnowledgeUploadStatus =
+  (typeof KNOWLEDGE_UPLOAD_STATUS)[keyof typeof KNOWLEDGE_UPLOAD_STATUS];

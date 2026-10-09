@@ -32,7 +32,9 @@ export function LabRailStep({
       className={cn(
         "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
         state === "current" && "bg-primary/10 font-medium text-foreground",
-        state !== "current" && !disabled && "text-muted-foreground hover:bg-muted hover:text-foreground",
+        state !== "current" &&
+          !disabled &&
+          "text-muted-foreground hover:bg-muted hover:text-foreground",
         disabled && "cursor-default text-muted-foreground/50",
       )}
     >

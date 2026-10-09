@@ -47,7 +47,10 @@ export function DatapacksByWeekChart({ data, start, end, isLoading }: Props) {
   const counts = new Map((data ?? []).map((d) => [d.week_start, d.count]));
   const weeks =
     start && end
-      ? utcWeekKeys(start, end).map((key) => ({ week: weekLabel(key), count: counts.get(key) ?? 0 }))
+      ? utcWeekKeys(start, end).map((key) => ({
+          week: weekLabel(key),
+          count: counts.get(key) ?? 0,
+        }))
       : (data ?? []).map((d) => ({ week: weekLabel(d.week_start), count: d.count }));
 
   return (

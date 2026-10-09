@@ -225,11 +225,10 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
       const datapackId = selectedDatapack?.datapack_id;
       if (!datapackId || !conversationId) return;
       try {
-        const resp = await getDatapackConversation(
-          datapackId,
-          conversationId,
-          { messagesLimit: 100, messagesOffset: 0 },
-        );
+        const resp = await getDatapackConversation(datapackId, conversationId, {
+          messagesLimit: 100,
+          messagesOffset: 0,
+        });
         // Set the loaded id FIRST so the chat's useEffect that resets on
         // datapack/conversation changes sees the new value when it
         // processes the thread below.
@@ -548,9 +547,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
  * built-in close button; chat stays visible underneath while open
  * (Radix Dialog handles focus + scroll lock).
  */
-function MobileObservationSheet(
-  props: ComponentProps<typeof WorkbenchLMLiveObservationPanel>,
-) {
+function MobileObservationSheet(props: ComponentProps<typeof WorkbenchLMLiveObservationPanel>) {
   const isMobile = useIsMobile();
   if (!isMobile) return null;
   return (
@@ -565,10 +562,7 @@ function MobileObservationSheet(
           Memories
         </button>
       </SheetTrigger>
-      <SheetContent
-        side="bottom"
-        className="h-[85vh] overflow-y-auto p-0 sm:max-w-none"
-      >
+      <SheetContent side="bottom" className="h-[85vh] overflow-y-auto p-0 sm:max-w-none">
         <SheetTitle className="sr-only">Live observation panel</SheetTitle>
         <WorkbenchLMLiveObservationPanel {...props} />
       </SheetContent>

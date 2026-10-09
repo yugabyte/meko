@@ -18,7 +18,9 @@ const CLIENT_SECRET = process.env.ADMIN_COGNITO_CLIENT_SECRET ?? "";
 
 function secretHash(username: string): string | undefined {
   if (!CLIENT_SECRET) return undefined;
-  return createHmac("sha256", CLIENT_SECRET).update(username + CLIENT_ID).digest("base64");
+  return createHmac("sha256", CLIENT_SECRET)
+    .update(username + CLIENT_ID)
+    .digest("base64");
 }
 
 // In-memory cache: access token → { sub, email, expiresAt }
@@ -37,10 +39,7 @@ export type LoginResult =
   | { type: "success"; tokens: AuthenticationResultType }
   | { type: "new_password_required"; session: string; email: string };
 
-export async function loginWithCognito(
-  email: string,
-  password: string,
-): Promise<LoginResult> {
+export async function loginWithCognito(email: string, password: string): Promise<LoginResult> {
   if (!CLIENT_ID) throw new Error("ADMIN_COGNITO_CLIENT_ID is not configured");
 
   const hash = secretHash(email);
@@ -110,9 +109,7 @@ const verifier =
  *  the check that catches an admin who has since been disabled or deleted and a
  *  token killed by GlobalSignOut -- and it supplies the email, which an access
  *  token carries no claim for. */
-async function lookupUser(
-  token: string,
-): Promise<{ email: string } | "revoked" | "unavailable"> {
+async function lookupUser(token: string): Promise<{ email: string } | "revoked" | "unavailable"> {
   try {
     const resp = await client.send(new GetUserCommand({ AccessToken: token }));
     return { email: resp.UserAttributes?.find((a) => a.Name === "email")?.Value ?? "" };

@@ -186,9 +186,9 @@ function ShareWithAgentStageContent({
       {(error || shareError) && <p className="text-sm text-destructive">{shareError ?? error}</p>}
 
       <p className="text-xs text-muted-foreground">
-        Several humans and agents can hold this grant at once. Concurrent reads while someone edits are
-        fine: readers see the new version on their next query. Manage everyone on this datapack from its
-        own sharing page.
+        Several humans and agents can hold this grant at once. Concurrent reads while someone edits
+        are fine: readers see the new version on their next query. Manage everyone on this datapack
+        from its own sharing page.
       </p>
     </div>
   );

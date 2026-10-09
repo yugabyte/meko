@@ -18,29 +18,28 @@ export const SHARE_INVITE_ROLES: {
   description: string;
   icon: LucideIcon;
 }[] = [
-    {
-      id: DATAPACK_SHARE_GRANT_VIEWER,
-      label: "Viewer",
-      description: "Can view Knowledge, memories, conversations",
-      icon: Eye,
-    },
-    {
-      id: DATAPACK_SHARE_GRANT_CONTRIBUTOR,
-      label: "Contributor",
-      // Spells the viewer rights out rather than naming the role: a reader
-      // choosing between these should not have to look up what the level
-      // above or below them grants to understand this one.
-      description: "Can view Knowledge, memories and conversations, and can generate memories",
-      icon: Pencil,
-    },
-    {
-      id: DATAPACK_SHARE_GRANT_MAINTAINER,
-      label: "Maintainer",
-      description:
-        "Includes contributor rights and can generate collective memories and knowledge",
-      icon: Crown,
-    },
-  ];
+  {
+    id: DATAPACK_SHARE_GRANT_VIEWER,
+    label: "Viewer",
+    description: "Can view Knowledge, memories, conversations",
+    icon: Eye,
+  },
+  {
+    id: DATAPACK_SHARE_GRANT_CONTRIBUTOR,
+    label: "Contributor",
+    // Spells the viewer rights out rather than naming the role: a reader
+    // choosing between these should not have to look up what the level
+    // above or below them grants to understand this one.
+    description: "Can view Knowledge, memories and conversations, and can generate memories",
+    icon: Pencil,
+  },
+  {
+    id: DATAPACK_SHARE_GRANT_MAINTAINER,
+    label: "Maintainer",
+    description: "Includes contributor rights and can generate collective memories and knowledge",
+    icon: Crown,
+  },
+];
 
 /** Short label for chips and compact UI; falls back to raw grant if the API sends an unknown value. */
 export function shareGrantLabel(grant: DatapackShareGrant): string {

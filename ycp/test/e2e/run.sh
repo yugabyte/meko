@@ -57,7 +57,7 @@ PORT="${YCP_E2E_PORT:-18080}"
 TIMEOUT="${YCP_E2E_TIMEOUT:-300s}"
 # Its own slug -- the server derives the environment id as slug(name).
 ENV_NAME=e2e-cell
-ADMIN_KEY=e2eadminkey   # matches ycp-e2e-secrets in controlplane.yaml
+ADMIN_KEY=e2eadminkey # matches ycp-e2e-secrets in controlplane.yaml
 # The api key id the environment is bound to. An agent would authenticate with it as
 # YCP_DEV_API_KEY_ID -- there is no YBM here to mint a real key.
 API_KEY_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
@@ -77,7 +77,10 @@ REPO_DIR="$(cd "$YCP_DIR/.." && pwd)"
 MEKO_DIR="$REPO_DIR/meko"
 
 log() { printf '\n==> %s\n' "$*"; }
-die() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
+die() {
+  printf '\nFAIL: %s\n' "$*" >&2
+  exit 1
+}
 k() { kubectl --context "$CTX" "$@"; }
 
 for bin in kind kubectl curl python3; do
@@ -90,7 +93,10 @@ done
 ENGINE="${YCP_E2E_ENGINE:-}"
 if [ -z "$ENGINE" ]; then
   for e in docker podman; do
-    command -v "$e" >/dev/null 2>&1 && { ENGINE="$e"; break; }
+    command -v "$e" >/dev/null 2>&1 && {
+      ENGINE="$e"
+      break
+    }
   done
 fi
 [ -n "$ENGINE" ] || die "need docker or podman on PATH (or set YCP_E2E_ENGINE)"
@@ -115,7 +121,8 @@ fi
 # api() prefixes $BASE, so every call below is written as the route is declared
 # in the router and the subpath stays in one place.
 api() {
-  local method="$1" path="$2"; shift 2
+  local method="$1" path="$2"
+  shift 2
   curl -fsS -X "$method" "http://127.0.0.1:$PORT$BASE$path" \
     -H "X-Meko-Admin-Secret: $ADMIN_KEY" "$@"
 }
@@ -171,7 +178,7 @@ TMPDIR_E2E="$(mktemp -d "${TMPDIR:-/tmp}/ycp-e2e.XXXXXX")"
 # early exit (a stopped podman machine is the common one) cannot leak it.
 if [ "$ENGINE" = podman ] && [ -z "${REGISTRY_AUTH_FILE:-}" ]; then
   AUTH_FILE="$TMPDIR_E2E/auth.json"
-  printf '{"auths":{}}' > "$AUTH_FILE"
+  printf '{"auths":{}}' >"$AUTH_FILE"
   export REGISTRY_AUTH_FILE="$AUTH_FILE"
 fi
 
@@ -183,7 +190,7 @@ fi
 # binding, rendered the same way for the same reason.
 render() {
   out="$TMPDIR_E2E/$(basename "$1")"
-  sed -e "s|__BASE_PATH__|$BASE|g" -e "s|__API_KEY_ID__|$API_KEY_ID|g" "$1" > "$out"
+  sed -e "s|__BASE_PATH__|$BASE|g" -e "s|__API_KEY_ID__|$API_KEY_ID|g" "$1" >"$out"
   printf '%s' "$out"
 }
 
@@ -277,8 +284,8 @@ if [ -n "$BASE" ]; then
   # curl to finish writing first; growing the console by 6 KB made it deterministic.
   console="$(curl -fsS "http://127.0.0.1:$PORT$BASE/")"
   case "$console" in
-    *"Yugabyte Control Plane"*) ;;
-    *) die "GET $BASE/ did not serve the console HTML" ;;
+  *"Yugabyte Control Plane"*) ;;
+  *) die "GET $BASE/ did not serve the console HTML" ;;
   esac
   code="$(status_of "$BASE")"
   [ "$code" = "200" ] || die "GET $BASE (no trailing slash) returned $code, want 200"
@@ -435,8 +442,8 @@ hint_state="$(api GET /api/v1/environments/hint-check 2>/dev/null |
 want_url="reconcileAgent.ycpUrl=https://cloud.yugabyte.com/api/public/v1"
 want_url="$want_url/accounts/11111111-1111-1111-1111-111111111111/ycp"
 case "$stored_hint" in
-  *"$want_url"*) echo "    a stored agent_base_url is what the hint dials" ;;
-  *) die "hint-check's hint does not dial its stored agent base url: ${stored_hint:0:400}" ;;
+*"$want_url"*) echo "    a stored agent_base_url is what the hint dials" ;;
+*) die "hint-check's hint does not dial its stored agent base url: ${stored_hint:0:400}" ;;
 esac
 
 # 4d. A deregister is a state change, not a row delete, so hint-check's name is still

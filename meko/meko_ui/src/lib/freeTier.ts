@@ -215,8 +215,7 @@ export const SALES_CONTACT_URL = "https://share-na2.hsforms.com/16H0_N54LT0WVNmc
  *  button. Runtime var so ops can point at Limited vs Public listings
  *  per-deployment without a rebuild. Independent of the tile's
  *  visibility -- see STANDARD_TIER_ENABLED for that. */
-export const AWS_MARKETPLACE_LISTING_URL: string =
-  readRuntimeEnv("MEKO_AWS_MARKETPLACE_URL") ?? "";
+export const AWS_MARKETPLACE_LISTING_URL: string = readRuntimeEnv("MEKO_AWS_MARKETPLACE_URL") ?? "";
 
 /** Pre-GA gate for the Standard tier. When false the Settings page
  *  hides the Standard column entirely (2-card Free + Pro layout).

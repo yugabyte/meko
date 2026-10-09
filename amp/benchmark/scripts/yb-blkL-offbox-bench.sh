@@ -54,8 +54,8 @@ pq() { $PSQL -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$1" -v ON_ERROR_STOP=1 "
 log() { echo "[$(date +%T)] $*" | tee -a "$OUT/run.log"; }
 
 # PS timeline detail field extractor.
-ps_field() { curl -s --max-time 10 "http://$PS_HTTP/v1/tenant/$TENANT/timeline/$TIMELINE" 2>/dev/null \
-  | python3 -c "import sys,json;print(json.load(sys.stdin).get('$1','n/a'))" 2>/dev/null || echo n/a; }
+ps_field() { curl -s --max-time 10 "http://$PS_HTTP/v1/tenant/$TENANT/timeline/$TIMELINE" 2>/dev/null |
+  python3 -c "import sys,json;print(json.load(sys.stdin).get('$1','n/a'))" 2>/dev/null || echo n/a; }
 local_layer_bytes() { du -sb "$PS_TLDIR" 2>/dev/null | awk '{print $1}'; }
 
 log "=== BLKL-OFFBOX battery label=$LABEL out=$OUT (LAYERED pageserver, OFF-BOX, remote-read forced) ==="
@@ -66,8 +66,8 @@ PSSP=$(start_local_proc_sampler "$PSLOG" "pageserver -D /mnt/ps/pageserver_layer
 
 # ---- A. schema + load --------------------------------------------------------
 log "A. (re)create db + schema"
-pq postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 \
-  && pq postgres -c "DROP DATABASE $DBNAME"
+pq postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 &&
+  pq postgres -c "DROP DATABASE $DBNAME"
 pq postgres -c "CREATE DATABASE $DBNAME"
 pq "$DBNAME" -f "$HERE/sql/big-load-schema.sql"
 
@@ -78,15 +78,16 @@ log "A. load $ROWS rows (chunk=$CHUNK)"
 load_start=$(date +%s)
 lo=1
 while [ "$lo" -le "$ROWS" ]; do
-  hi=$(( lo + CHUNK - 1 )); [ "$hi" -gt "$ROWS" ] && hi=$ROWS
+  hi=$((lo + CHUNK - 1))
+  [ "$hi" -gt "$ROWS" ] && hi=$ROWS
   pq "$DBNAME" -qc "INSERT INTO big_table (id,cat,val,payload,ts)
     SELECT g,(g*7)%10000+1,g,repeat(md5(g::text),5)::bytea,now()
     FROM generate_series($lo,$hi) g;" >/dev/null
   log "   loaded $lo..$hi"
-  lo=$(( hi + 1 ))
+  lo=$((hi + 1))
 done
 load_end=$(date +%s)
-LOAD_SECS=$(( load_end - load_start ))
+LOAD_SECS=$((load_end - load_start))
 ROWCOUNT=$(pq "$DBNAME" -tAc "SELECT count(*) FROM big_table")
 HEAP=$(pq "$DBNAME" -tAc "SELECT pg_size_pretty(pg_total_relation_size('big_table'))")
 log "A. load done: $ROWCOUNT rows, total relation $HEAP, ${LOAD_SECS}s"
@@ -106,9 +107,13 @@ pq "$DBNAME" -c "CHECKPOINT;" >/dev/null 2>&1 || true
 # linger (testing checkpoint API is disabled in this build), so cap at ~2min and
 # proceed — the continuous evictor below cleans up whatever is uploaded.
 for i in $(seq 1 12); do
-  LAST=$(ps_field last_record_lsn); RC=$(ps_field remote_consistent_lsn)
+  LAST=$(ps_field last_record_lsn)
+  RC=$(ps_field remote_consistent_lsn)
   log "   drain check $i: last_record_lsn=$LAST remote_consistent_lsn=$RC"
-  [ "$LAST" = "$RC" ] && [ "$LAST" != "n/a" ] && { log "   drained."; break; }
+  [ "$LAST" = "$RC" ] && [ "$LAST" != "n/a" ] && {
+    log "   drained."
+    break
+  }
   sleep 10
 done
 
@@ -119,7 +124,7 @@ log "B. engine self-managed eviction (~1GiB cap); settle 30s then measure"
 sleep 30
 
 BLOBS=$(ybq "SELECT count(*) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
-BLOBS_DELTA=$(( BLOBS - BLOBS0 ))
+BLOBS_DELTA=$((BLOBS - BLOBS0))
 BLOB_BYTES=$(ybq "SELECT coalesce(sum(size_bytes),0) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
 BLOB_PRETTY=$(ybq "SELECT pg_size_pretty(coalesce(sum(size_bytes),0)) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
 PHYS=$(ps_field current_physical_size)
@@ -129,14 +134,21 @@ log "B. YB blobs=$BLOBS delta=$BLOBS_DELTA blob_bytes=$BLOB_BYTES ($BLOB_PRETTY)
 
 # ---- C. full-scan timing (NO PS restart) ------------------------------------
 log "C. full-scan timing (no PS restart)"
-timed() { local t0 t1; t0=$(date +%s.%N); pq "$DBNAME" -tAc "SELECT count(*),sum(val) FROM big_table" >/dev/null; t1=$(date +%s.%N); awk "BEGIN{printf \"%.2f\", $t1-$t0}"; }
+timed() {
+  local t0 t1
+  t0=$(date +%s.%N)
+  pq "$DBNAME" -tAc "SELECT count(*),sum(val) FROM big_table" >/dev/null
+  t1=$(date +%s.%N)
+  awk "BEGIN{printf \"%.2f\", $t1-$t0}"
+}
 DL_C0=$(dl_count)
 COLD=$(timed)
 DL_C1=$(dl_count)
 WARM=$(timed)
 DL_C2=$(dl_count)
 LOCAL_SCAN=$(local_layer_bytes)
-SCAN_DL_COLD=$(( DL_C1 - DL_C0 )); SCAN_DL_WARM=$(( DL_C2 - DL_C1 ))
+SCAN_DL_COLD=$((DL_C1 - DL_C0))
+SCAN_DL_WARM=$((DL_C2 - DL_C1))
 log "C. full-scan run1=${COLD}s (on-demand downloads=${SCAN_DL_COLD})  run2=${WARM}s (downloads=${SCAN_DL_WARM}); local layer bytes after scans=$LOCAL_SCAN"
 
 # ---- D. warm micro-battery ---------------------------------------------------
@@ -147,7 +159,7 @@ snapshot_pg_stat "$DBNAME" "$OUT/pgstat-start.txt"
 mark_timestamp "$OUT" START
 echo "### BATTERY-START $(date +%T)" >>"$PSLOG"
 
-declare -A GNAME=( [G1]=point-lookup [G2]=aggregate [G3]=range-scan [G4]=update [G5]=insert [G6]=delete )
+declare -A GNAME=([G1]=point-lookup [G2]=aggregate [G3]=range-scan [G4]=update [G5]=insert [G6]=delete)
 BATT="$OUT/battery.txt"
 : >"$BATT"
 DL_D0=$(dl_count)
@@ -159,23 +171,25 @@ for G in G1 G2 G3 G4 G5 G6; do
     -D rows="$ROWS" -f "$f" >/dev/null 2>&1
   log "D. $G ${GNAME[$G]} measured 600s"
   o=$($PGBENCH -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DBNAME" -n -c1 -j1 -T600 \
-      -D rows="$ROWS" -f "$f" 2>&1)
+    -D rows="$ROWS" -f "$f" 2>&1)
   lat=$(echo "$o" | awk '/latency average/{print $4}')
   tps=$(echo "$o" | awk '/^tps/{print $3}')
   cnt=$(echo "$o" | awk '/number of transactions actually processed/{print $NF}')
-  dlg=$(( $(dl_count) - dlg0 ))
+  dlg=$(($(dl_count) - dlg0))
   echo "$G ${GNAME[$G]} lat=${lat}ms tps=${tps} txns=${cnt} downloads=${dlg}" | tee -a "$BATT"
 done
 
 echo "### BATTERY-END $(date +%T)" >>"$PSLOG"
-DL_D1=$(dl_count); BATT_DL=$(( DL_D1 - DL_D0 ))
+DL_D1=$(dl_count)
+BATT_DL=$((DL_D1 - DL_D0))
 log "D. on-demand layer downloads DURING battery: $BATT_DL (if ~0, the 8GB RAM page_cache served reads, not YB)"
 mark_timestamp "$OUT" END
 snapshot_pg_stat "$DBNAME" "$OUT/pgstat-end.txt"
 stop_server_cpu_sampler "$SP"
 LOCAL_END=$(local_layer_bytes)
-kill "$PSSP" 2>/dev/null; wait "$PSSP" 2>/dev/null || true
-diff_pg_stat "$OUT/pgstat-start.txt" "$OUT/pgstat-end.txt" > "$OUT/pgstat-delta.txt" 2>&1
+kill "$PSSP" 2>/dev/null
+wait "$PSSP" 2>/dev/null || true
+diff_pg_stat "$OUT/pgstat-start.txt" "$OUT/pgstat-end.txt" >"$OUT/pgstat-delta.txt" 2>&1
 
 CPU_POSTGRES=$(awk -F'cpu=' '/postgres/{gsub(/%.*/,"",$2); s+=$2; n++} END{if(n)printf "%.1f", s/n}' "$CPULOG" 2>/dev/null)
 
@@ -240,7 +254,7 @@ log "E. writing $SUMMARY"
   echo '```'
   cat "$OUT/pgstat-delta.txt"
   echo '```'
-} > "$SUMMARY"
+} >"$SUMMARY"
 
 log "=== DONE label=$LABEL -> $SUMMARY ==="
 cat "$SUMMARY"

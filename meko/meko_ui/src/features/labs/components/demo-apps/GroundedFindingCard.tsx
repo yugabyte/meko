@@ -16,7 +16,11 @@ import { ContextCitation } from "./ContextCitation";
 import { InlineMarkdown } from "./InlineMarkdown";
 
 const SEVERITY: Record<ReviewFinding["severity"], { bar: string; badge: string; label: string }> = {
-  critical: { bar: "bg-destructive", badge: "border-destructive/40 text-destructive", label: "blocking" },
+  critical: {
+    bar: "bg-destructive",
+    badge: "border-destructive/40 text-destructive",
+    label: "blocking",
+  },
   major: { bar: "bg-warning", badge: "border-warning/40 text-warning", label: "major" },
   minor: { bar: "bg-border", badge: "border-border text-muted-foreground", label: "minor" },
 };
@@ -46,8 +50,7 @@ export function GroundedFindingCard({
   const excerpt = finding.location ? excerptForFinding(diffFiles, finding.location) : null;
   // Only the comments worth arguing with get their rules attached. A minor
   // nit grounded in a standards chunk reads as over-claiming.
-  const grounded =
-    finding.severity === "minor" ? [] : groundFinding(finding.comment, sources);
+  const grounded = finding.severity === "minor" ? [] : groundFinding(finding.comment, sources);
 
   return (
     <article className="flex overflow-hidden rounded-lg border border-border bg-card">

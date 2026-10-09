@@ -27,12 +27,7 @@ type Props = {
   onConfirm: (memoryId: string) => void;
 };
 
-export function PromotedMemoryDeleteDialog({
-  memory,
-  deleting,
-  onCancel,
-  onConfirm,
-}: Props) {
+export function PromotedMemoryDeleteDialog({ memory, deleting, onCancel, onConfirm }: Props) {
   return (
     <AlertDialog
       open={memory !== null}
@@ -46,8 +41,8 @@ export function PromotedMemoryDeleteDialog({
             Delete this collective memory?
           </AlertDialogTitle>
           <AlertDialogDescription className="text-muted-foreground">
-            This removes it from the datapack&apos;s shared knowledge and RAG
-            search will no longer return it.
+            This removes it from the datapack&apos;s shared knowledge and RAG search will no longer
+            return it.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {memory ? (

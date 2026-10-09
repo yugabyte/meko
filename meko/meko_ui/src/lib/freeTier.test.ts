@@ -4,11 +4,15 @@ import { describe, it, expect, vi } from "vitest";
 // runtime env at module import, so mock readRuntimeEnv to enable the quota;
 // unknown keys fall back to defaults (FREE_TIER_LIMITS).
 vi.mock("@/lib/runtimeEnv", () => ({
-  readRuntimeEnv: (name: string) =>
-    name === "MEKO_FREE_TIER_QUOTA_ENABLED" ? "true" : undefined,
+  readRuntimeEnv: (name: string) => (name === "MEKO_FREE_TIER_QUOTA_ENABLED" ? "true" : undefined),
 }));
 
-import { canDeployDedicatedAgent, isFreeTier, getFreeTierStatus, FREE_TIER_LIMITS } from "@/lib/freeTier";
+import {
+  canDeployDedicatedAgent,
+  isFreeTier,
+  getFreeTierStatus,
+  FREE_TIER_LIMITS,
+} from "@/lib/freeTier";
 import type { AccountUsage } from "@/lib/api/mekoApi";
 
 const usage = (over: Partial<AccountUsage> = {}): AccountUsage =>
@@ -119,8 +123,7 @@ describe("envInt canonical parsing", () => {
   it.each(cases)("parses %j", async (raw, expected) => {
     vi.resetModules();
     vi.doMock("@/lib/runtimeEnv", () => ({
-      readRuntimeEnv: (name: string) =>
-        name === "MEKO_FREE_TIER_DATAPACKS" ? raw : undefined,
+      readRuntimeEnv: (name: string) => (name === "MEKO_FREE_TIER_DATAPACKS" ? raw : undefined),
     }));
     const mod = await import("@/lib/freeTier");
     expect(mod.FREE_TIER_LIMITS.datapacks).toBe(expected);

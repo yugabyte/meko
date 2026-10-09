@@ -38,9 +38,7 @@ export function PageHeader({
             </span>
           )}
         </div>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-foreground">
-          {title}
-        </h1>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight text-foreground">{title}</h1>
         {description && (
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
             {description}
@@ -61,15 +59,8 @@ export function LoadingState({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-export function ErrorState({
-  error,
-  className,
-}: {
-  error: unknown;
-  className?: string;
-}) {
-  const message =
-    error instanceof Error ? error.message : "Something went wrong.";
+export function ErrorState({ error, className }: { error: unknown; className?: string }) {
+  const message = error instanceof Error ? error.message : "Something went wrong.";
   return (
     <div
       className={cn(

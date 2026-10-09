@@ -25,9 +25,7 @@ import { cn } from "@/lib/utils";
 const MARKDOWN_RENDER_CHARACTER_LIMIT = 150_000;
 const MemoizedReactMarkdown = memo(ReactMarkdown);
 
-const isTextElement = (
-  child: ReactNode,
-): child is ReactElement<{ className?: string }> =>
+const isTextElement = (child: ReactNode): child is ReactElement<{ className?: string }> =>
   isValidElement(child) &&
   typeof child.type === "string" &&
   ["p", "h1", "h2", "h3", "h4", "h5", "h6"].includes(child.type);
@@ -38,9 +36,9 @@ const transformListItemChildren = (children: ReactNode) =>
   Children.map(children, (child) =>
     isTextElement(child)
       ? createElement("span", {
-        ...child.props,
-        className: cn(child.props.className, "mb-1"),
-      })
+          ...child.props,
+          className: cn(child.props.className, "mb-1"),
+        })
       : child,
   );
 
@@ -55,28 +53,18 @@ export function MarkdownMessage({ text }: { text: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => (
-            <p className="mb-2 whitespace-pre-wrap leading-relaxed last:mb-0">
-              {children}
-            </p>
+            <p className="mb-2 whitespace-pre-wrap leading-relaxed last:mb-0">{children}</p>
           ),
           ul: ({ children }) => <ul className="mb-2 ml-5 list-disc">{children}</ul>,
-          ol: ({ children }) => (
-            <ol className="mb-2 ml-5 list-decimal">{children}</ol>
-          ),
+          ol: ({ children }) => <ol className="mb-2 ml-5 list-decimal">{children}</ol>,
           li: ({ children }) => (
             <li className="mt-1 leading-relaxed [&>ol]:pl-4 [&>p]:m-0 [&>p]:inline [&>ul]:pl-4">
               {transformListItemChildren(children)}
             </li>
           ),
-          h1: ({ children }) => (
-            <h1 className="mb-2 text-base font-semibold">{children}</h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="mb-2 text-[15px] font-semibold">{children}</h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="mb-1.5 text-sm font-semibold">{children}</h3>
-          ),
+          h1: ({ children }) => <h1 className="mb-2 text-base font-semibold">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-2 text-[15px] font-semibold">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-1.5 text-sm font-semibold">{children}</h3>,
           strong: ({ children }) => (
             <strong className="font-semibold text-foreground">{children}</strong>
           ),
@@ -118,9 +106,7 @@ export function MarkdownMessage({ text }: { text: string }) {
             </th>
           ),
           td: ({ children }) => (
-            <td className="border border-border/60 px-2 py-1 align-top">
-              {children}
-            </td>
+            <td className="border border-border/60 px-2 py-1 align-top">{children}</td>
           ),
         }}
       >

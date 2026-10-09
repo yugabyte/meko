@@ -174,12 +174,7 @@ function AppRouter() {
       // /signin directly (see resolveGuardRedirect), so whichever
       // navigation runs second doesn't drop the query.
       const returnTo = `${location.pathname}${location.search}`;
-      return (
-        <Navigate
-          to={`${ROUTES.signin}?return_to=${encodeURIComponent(returnTo)}`}
-          replace
-        />
-      );
+      return <Navigate to={`${ROUTES.signin}?return_to=${encodeURIComponent(returnTo)}`} replace />;
     }
     return <PublicRoutes />;
   }

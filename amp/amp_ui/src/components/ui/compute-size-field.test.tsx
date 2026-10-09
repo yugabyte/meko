@@ -22,9 +22,15 @@ describe("ComputeSizeField", () => {
 
   it("marks the preset matching the current value as selected", () => {
     const medium = DEFAULT_COMPUTE_PRESETS.find((p) => p.id === "medium")!;
-    render(<ComputeSizeField value={{ cpu: medium.cpu, memory: medium.memory }} onChange={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /medium/i }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: /small/i }).getAttribute("aria-pressed")).toBe("false");
+    render(
+      <ComputeSizeField value={{ cpu: medium.cpu, memory: medium.memory }} onChange={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: /medium/i }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /small/i }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
   });
 
   it("reveals cpu/memory inputs in Custom mode and emits typed values", () => {

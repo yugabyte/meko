@@ -37,7 +37,9 @@ export async function fetchPullRequestDiff(ref: ParsedPrRef, token: string): Pro
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new GitHubApiError(`GitHub API request failed: ${res.status} ${res.statusText} ${body}`.trim());
+    throw new GitHubApiError(
+      `GitHub API request failed: ${res.status} ${res.statusText} ${body}`.trim(),
+    );
   }
   return res.text();
 }
@@ -58,8 +60,13 @@ export async function fetchPullRequestSummary(
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new GitHubApiError(`GitHub API request failed: ${res.status} ${res.statusText} ${body}`.trim());
+    throw new GitHubApiError(
+      `GitHub API request failed: ${res.status} ${res.statusText} ${body}`.trim(),
+    );
   }
   const data = (await res.json()) as { title?: string; html_url?: string };
-  return { title: data.title ?? `${ref.owner}/${ref.repo}#${ref.number}`, htmlUrl: data.html_url ?? "" };
+  return {
+    title: data.title ?? `${ref.owner}/${ref.repo}#${ref.number}`,
+    htmlUrl: data.html_url ?? "",
+  };
 }

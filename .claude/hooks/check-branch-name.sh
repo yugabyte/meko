@@ -43,47 +43,69 @@ value_flags=' -o --push-option --receive-pack --exec --repo '
 # ambiguous and allows.
 SEP=$'\x01' RDR=$'\x02'
 tokenize() {
-    # NB: two statements — `local s=$1 n=${#s}` would expand ${#s} against the
-    # caller's `s`, not this one, since all words expand before `local` runs.
-    local s=$1
-    local n=${#s} i=0 c q='' cur='' held=0
-    TOKS=()
-    while [ "$i" -lt "$n" ]; do
-        c=${s:i:1}
-        if [ "$q" = "'" ]; then
-            if [ "$c" = "'" ]; then q=''; else cur+=$c; fi
-        elif [ "$q" = '"' ]; then
-            if [ "$c" = '"' ]; then q=''
-            elif [ "$c" = $'\\' ] && [ $((i+1)) -lt "$n" ]; then i=$((i+1)); cur+=${s:i:1}
-            else cur+=$c; fi
-        else
-            case $c in
-                "'"|'"') q=$c; held=1 ;;
-                $'\\') i=$((i+1)); cur+=${s:i:1}; held=1 ;;
-                ' '|$'\t')
-                    if [ -n "$cur" ] || [ "$held" -eq 1 ]; then TOKS+=("$cur"); cur=''; held=0; fi ;;
-                ';'|'&'|'|'|$'\n')
-                    if [ -n "$cur" ] || [ "$held" -eq 1 ]; then TOKS+=("$cur"); cur=''; held=0; fi
-                    TOKS+=("$SEP")
-                    # swallow a run of separator chars (&&, ||, ;;)
-                    while [ $((i+1)) -lt "$n" ]; do
-                        case ${s:i+1:1} in ';'|'&'|'|'|$'\n') i=$((i+1)) ;; *) break ;; esac
-                    done ;;
-                '>'|'<')
-                    if [ -n "$cur" ] || [ "$held" -eq 1 ]; then
-                        # A bare fd number (the `2` in `2>&1`) belongs to the
-                        # redirection, not to the argument list.
-                        case $cur in ''|*[!0-9]*) TOKS+=("$cur") ;; esac
-                        cur=''; held=0
-                    fi
-                    TOKS+=("$RDR") ;;
-                *) cur+=$c ;;
-            esac
+  # NB: two statements — `local s=$1 n=${#s}` would expand ${#s} against the
+  # caller's `s`, not this one, since all words expand before `local` runs.
+  local s=$1
+  local n=${#s} i=0 c q='' cur='' held=0
+  TOKS=()
+  while [ "$i" -lt "$n" ]; do
+    c=${s:i:1}
+    if [ "$q" = "'" ]; then
+      if [ "$c" = "'" ]; then q=''; else cur+=$c; fi
+    elif [ "$q" = '"' ]; then
+      if [ "$c" = '"' ]; then
+        q=''
+      elif [ "$c" = $'\\' ] && [ $((i + 1)) -lt "$n" ]; then
+        i=$((i + 1))
+        cur+=${s:i:1}
+      else cur+=$c; fi
+    else
+      case $c in
+      "'" | '"')
+        q=$c
+        held=1
+        ;;
+      $'\\')
+        i=$((i + 1))
+        cur+=${s:i:1}
+        held=1
+        ;;
+      ' ' | $'\t')
+        if [ -n "$cur" ] || [ "$held" -eq 1 ]; then
+          TOKS+=("$cur")
+          cur=''
+          held=0
         fi
-        i=$((i+1))
-    done
-    if [ -n "$cur" ] || [ "$held" -eq 1 ]; then TOKS+=("$cur"); fi
-    [ -z "$q" ]   # unterminated quote -> ambiguous
+        ;;
+      ';' | '&' | '|' | $'\n')
+        if [ -n "$cur" ] || [ "$held" -eq 1 ]; then
+          TOKS+=("$cur")
+          cur=''
+          held=0
+        fi
+        TOKS+=("$SEP")
+        # swallow a run of separator chars (&&, ||, ;;)
+        while [ $((i + 1)) -lt "$n" ]; do
+          case ${s:i+1:1} in ';' | '&' | '|' | $'\n') i=$((i + 1)) ;; *) break ;; esac
+        done
+        ;;
+      '>' | '<')
+        if [ -n "$cur" ] || [ "$held" -eq 1 ]; then
+          # A bare fd number (the `2` in `2>&1`) belongs to the
+          # redirection, not to the argument list.
+          case $cur in '' | *[!0-9]*) TOKS+=("$cur") ;; esac
+          cur=''
+          held=0
+        fi
+        TOKS+=("$RDR")
+        ;;
+      *) cur+=$c ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
+  if [ -n "$cur" ] || [ "$held" -eq 1 ]; then TOKS+=("$cur"); fi
+  [ -z "$q" ] # unterminated quote -> ambiguous
 }
 
 tokenize "$cmd" || exit 0
@@ -92,92 +114,108 @@ tokenize "$cmd" || exit 0
 bad=''
 stmt=()
 flush() {
-    local n=${#stmt[@]} i=0 j tok ref src dst deletion=0 skip=0 remote_seen=0 low
-    [ "$n" -gt 0 ] || return 0
+  local n=${#stmt[@]} i=0 j tok ref src dst deletion=0 skip=0 remote_seen=0 low
+  [ "$n" -gt 0 ] || return 0
 
-    # Command position: skip leading VAR=val assignments, then require the
-    # command itself to be git (`git`, `/usr/bin/git`). Scanning for `git`
-    # anywhere would misread `echo run git push origin fix/x` as a real push.
-    while [ "$i" -lt "$n" ] && [[ ${stmt[$i]} =~ $assign_re ]]; do i=$((i+1)); done
-    [ "$i" -lt "$n" ] || return 0
-    case "${stmt[$i]}" in git|*/git) ;; *) return 0 ;; esac
-    i=$((i+1))
+  # Command position: skip leading VAR=val assignments, then require the
+  # command itself to be git (`git`, `/usr/bin/git`). Scanning for `git`
+  # anywhere would misread `echo run git push origin fix/x` as a real push.
+  while [ "$i" -lt "$n" ] && [[ ${stmt[$i]} =~ $assign_re ]]; do i=$((i + 1)); done
+  [ "$i" -lt "$n" ] || return 0
+  case "${stmt[$i]}" in git | */git) ;; *) return 0 ;; esac
+  i=$((i + 1))
 
-    # Skip git's global options (-C/-c take a value) to reach the subcommand.
-    while [ "$i" -lt "$n" ]; do
-        case "${stmt[$i]}" in
-            -C|-c) i=$((i+2)) ;;
-            -*)    i=$((i+1)) ;;
-            *)     break ;;
-        esac
-    done
-    # Only act when the subcommand is exactly `push` — `git stash push` etc. are
-    # not our business.
-    [ "$i" -lt "$n" ] && [ "${stmt[$i]}" = push ] || return 0
-    i=$((i+1))
+  # Skip git's global options (-C/-c take a value) to reach the subcommand.
+  while [ "$i" -lt "$n" ]; do
+    case "${stmt[$i]}" in
+    -C | -c) i=$((i + 2)) ;;
+    -*) i=$((i + 1)) ;;
+    *) break ;;
+    esac
+  done
+  # Only act when the subcommand is exactly `push` — `git stash push` etc. are
+  # not our business.
+  [ "$i" -lt "$n" ] && [ "${stmt[$i]}" = push ] || return 0
+  i=$((i + 1))
 
-    # Pre-scan for a deletion flag: git accepts `--delete` after the refspec
-    # too, so encounter order can't be trusted.
-    for ((j=i; j<n; j++)); do
-        case "${stmt[$j]}" in
-            "$RDR") break ;;
-            --delete|-d) deletion=1; break ;;
-        esac
-    done
-    [ "$deletion" -eq 1 ] && return 0
+  # Pre-scan for a deletion flag: git accepts `--delete` after the refspec
+  # too, so encounter order can't be trusted.
+  for ((j = i; j < n; j++)); do
+    case "${stmt[$j]}" in
+    "$RDR") break ;;
+    --delete | -d)
+      deletion=1
+      break
+      ;;
+    esac
+  done
+  [ "$deletion" -eq 1 ] && return 0
 
-    while [ "$i" -lt "$n" ]; do
-        tok="${stmt[$i]}"; i=$((i+1))
-        [ "$tok" = "$RDR" ] && break
-        if [ "$skip" -eq 1 ]; then skip=0; continue; fi
-        case "$value_flags" in *" $tok "*) skip=1; continue ;; esac
-        case "$tok" in -*) continue ;; esac
-        if [ "$remote_seen" -eq 0 ]; then remote_seen=1; continue; fi  # remote name
-        ref=${tok#+}
-        case "$ref" in
-            *:*)
-                src=${ref%%:*} dst=${ref#*:}
-                { [ -z "$src" ] || [ -z "$dst" ]; } && continue  # ':branch' == delete
-                ref=$dst ;;
-        esac
-        # Tags are not branches — an explicit tag push is none of our business.
-        case "$ref" in refs/tags/*) continue ;; esac
-        ref=${ref#refs/heads/}
-        [ -n "$ref" ] || continue
-        # `git push -u origin HEAD` is what a first push looks like, and it
-        # names the current branch — resolve it so branch creation, the case
-        # this hook exists for, isn't trivially bypassed. Detached HEAD or a
-        # failed lookup falls open.
-        if [ "$ref" = HEAD ]; then
-            ref=$(git branch --show-current 2>/dev/null)
-            [ -n "$ref" ] || continue
-        fi
-        [[ $ref =~ $exempt_re ]] && continue
-        # A bare name that resolves to an existing tag is a tag push.
-        git show-ref --tags --verify --quiet "refs/tags/$ref" 2>/dev/null && continue
-        low=${ref,,}
-        if [[ $ref =~ $pattern_re ]] && ! [[ $low =~ $badprefix_re ]]; then
-            continue
-        fi
-        bad="$bad $ref"
-    done
+  while [ "$i" -lt "$n" ]; do
+    tok="${stmt[$i]}"
+    i=$((i + 1))
+    [ "$tok" = "$RDR" ] && break
+    if [ "$skip" -eq 1 ]; then
+      skip=0
+      continue
+    fi
+    case "$value_flags" in *" $tok "*)
+      skip=1
+      continue
+      ;;
+    esac
+    case "$tok" in -*) continue ;; esac
+    if [ "$remote_seen" -eq 0 ]; then
+      remote_seen=1
+      continue
+    fi # remote name
+    ref=${tok#+}
+    case "$ref" in
+    *:*)
+      src=${ref%%:*} dst=${ref#*:}
+      { [ -z "$src" ] || [ -z "$dst" ]; } && continue # ':branch' == delete
+      ref=$dst
+      ;;
+    esac
+    # Tags are not branches — an explicit tag push is none of our business.
+    case "$ref" in refs/tags/*) continue ;; esac
+    ref=${ref#refs/heads/}
+    [ -n "$ref" ] || continue
+    # `git push -u origin HEAD` is what a first push looks like, and it
+    # names the current branch — resolve it so branch creation, the case
+    # this hook exists for, isn't trivially bypassed. Detached HEAD or a
+    # failed lookup falls open.
+    if [ "$ref" = HEAD ]; then
+      ref=$(git branch --show-current 2>/dev/null)
+      [ -n "$ref" ] || continue
+    fi
+    [[ $ref =~ $exempt_re ]] && continue
+    # A bare name that resolves to an existing tag is a tag push.
+    git show-ref --tags --verify --quiet "refs/tags/$ref" 2>/dev/null && continue
+    low=${ref,,}
+    if [[ $ref =~ $pattern_re ]] && ! [[ $low =~ $badprefix_re ]]; then
+      continue
+    fi
+    bad="$bad $ref"
+  done
 }
 
 for tok in "${TOKS[@]}"; do
-    if [ "$tok" = "$SEP" ]; then
-        flush; stmt=()
-    else
-        stmt+=("$tok")
-    fi
+  if [ "$tok" = "$SEP" ]; then
+    flush
+    stmt=()
+  else
+    stmt+=("$tok")
+  fi
 done
 flush
 
 if [ -n "$bad" ]; then
-    echo "Blocked by branch-naming hook:$bad must match <alias>/<feature_name>" \
-         "or feature/<feature_name>, with an optional leading ticket number —" \
-         "e.g. hsunder/174-ingest-perf-hardening, feature/artifact-upload." \
-         "Type prefixes (fix/, feat/, chore/, docs/, ...) are not aliases." \
-         "Rename the branch before pushing. See AGENTS.md > Branch naming." >&2
-    exit 2
+  echo "Blocked by branch-naming hook:$bad must match <alias>/<feature_name>" \
+    "or feature/<feature_name>, with an optional leading ticket number —" \
+    "e.g. hsunder/174-ingest-perf-hardening, feature/artifact-upload." \
+    "Type prefixes (fix/, feat/, chore/, docs/, ...) are not aliases." \
+    "Rename the branch before pushing. See AGENTS.md > Branch naming." >&2
+  exit 2
 fi
 exit 0

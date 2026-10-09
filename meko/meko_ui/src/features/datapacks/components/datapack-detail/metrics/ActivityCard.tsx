@@ -75,7 +75,9 @@ export function ActivityCard({
           <div className="flex flex-wrap items-center gap-4">
             {ACTIVITY_SERIES.map((s) => (
               <div key={s.key} className="flex items-center gap-1.5">
-                <div className={cn("h-2 w-2 shrink-0 rounded-full", CONTEXT_TONE[s.concept].fill)} />
+                <div
+                  className={cn("h-2 w-2 shrink-0 rounded-full", CONTEXT_TONE[s.concept].fill)}
+                />
                 <span className="text-[10px] text-muted-foreground">{s.label}</span>
               </div>
             ))}

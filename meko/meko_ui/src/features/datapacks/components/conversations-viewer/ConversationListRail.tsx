@@ -12,13 +12,7 @@
 // paging in place (matches Slack/Linear-style channel rails).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AlertCircle,
-  Loader2,
-  MessageSquare,
-  Search,
-  User,
-} from "lucide-react";
+import { AlertCircle, Loader2, MessageSquare, Search, User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
@@ -219,9 +213,7 @@ export function ConversationListRail({
                   className={cn(
                     "block w-full cursor-pointer border-b border-border/60 px-4 py-3 text-left transition-colors",
                     "border-l-2",
-                    active
-                      ? "bg-input border-l-brand"
-                      : "border-l-transparent hover:bg-input",
+                    active ? "bg-input border-l-brand" : "border-l-transparent hover:bg-input",
                   )}
                   // Announce the conversation by its headline so screen-reader
                   // users hear what the row is about, not just the visible
@@ -229,10 +221,9 @@ export function ConversationListRail({
                   // payloads don't drown out the action verb.
                   aria-label={
                     c.title || c.first_message
-                      ? `Open conversation: ${headline.length > 80
-                        ? `${headline.slice(0, 80)}…`
-                        : headline
-                      }`
+                      ? `Open conversation: ${
+                          headline.length > 80 ? `${headline.slice(0, 80)}…` : headline
+                        }`
                       : `Open conversation ${c.id.slice(0, 8)}…`
                   }
                 >

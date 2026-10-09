@@ -50,7 +50,10 @@ export function ClusterRow({
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           )}
           <Database className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={db.name}>
+          <span
+            className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
+            title={db.name}
+          >
             {db.name}
           </span>
           <span className="shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">

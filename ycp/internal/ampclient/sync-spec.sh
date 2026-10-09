@@ -34,7 +34,7 @@ cp "$src" "$out/openapi_spec.yaml"
 # directory, so rewrite it to an absolute path rather than relying on either.
 # Always via $tmp — writing it back into $here would truncate the real config.
 cfg=$tmp/oapi-codegen.yaml
-sed "s#^output:.*#output: $out/ampclient.gen.go#" "$here/oapi-codegen.yaml" > "$cfg"
+sed "s#^output:.*#output: $out/ampclient.gen.go#" "$here/oapi-codegen.yaml" >"$cfg"
 
 # From the module, so the oapi-codegen pinned in ycp/go.mod is the one that runs.
 (cd "$root/ycp" && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen \

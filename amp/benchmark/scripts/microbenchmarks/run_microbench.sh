@@ -21,20 +21,20 @@ SQL="$SCRIPT_DIR/microbench.sql"
 PARSE="$SCRIPT_DIR/parse_results.py"
 
 if [[ -z "${PSQL:-}" ]]; then
-    if [[ -x "$SCRIPT_DIR/../../../pg_install-debug/v18/bin/psql" ]]; then
-        PSQL="$SCRIPT_DIR/../../../pg_install-debug/v18/bin/psql"
-    else
-        PSQL="psql"
-    fi
+  if [[ -x "$SCRIPT_DIR/../../../pg_install-debug/v18/bin/psql" ]]; then
+    PSQL="$SCRIPT_DIR/../../../pg_install-debug/v18/bin/psql"
+  else
+    PSQL="psql"
+  fi
 fi
 
 mkdir -p "$OUTDIR"
 for i in $(seq 1 "$RUNS"); do
-    out="$OUTDIR/run${i}.txt"
-    echo "##### RUN $i -> $out #####" >&2
-    "$PSQL" "$URL" -X -q -f "$SQL" 2>&1 \
-        | grep -E '^===|^Time:' \
-        > "$out"
+  out="$OUTDIR/run${i}.txt"
+  echo "##### RUN $i -> $out #####" >&2
+  "$PSQL" "$URL" -X -q -f "$SQL" 2>&1 |
+    grep -E '^===|^Time:' \
+      >"$out"
 done
 
 python3 "$PARSE" "$OUTDIR"/run*.txt

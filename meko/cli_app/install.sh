@@ -8,10 +8,10 @@ echo "🚀 Installing Yuga CLI..."
 echo ""
 
 # Check Go installation
-if ! command -v go &> /dev/null; then
-    echo "❌ Go is not installed. Please install Go 1.21 or higher."
-    echo "   Visit: https://golang.org/dl/"
-    exit 1
+if ! command -v go &>/dev/null; then
+  echo "❌ Go is not installed. Please install Go 1.21 or higher."
+  echo "   Visit: https://golang.org/dl/"
+  exit 1
 fi
 
 # Check Go version
@@ -19,8 +19,8 @@ GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
 REQUIRED_VERSION="1.21"
 
 if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$GO_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
-    echo "❌ Go version $REQUIRED_VERSION or higher is required. Found: $GO_VERSION"
-    exit 1
+  echo "❌ Go version $REQUIRED_VERSION or higher is required. Found: $GO_VERSION"
+  exit 1
 fi
 
 echo "✓ Go version: $GO_VERSION"

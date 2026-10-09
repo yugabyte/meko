@@ -39,7 +39,9 @@ function renderStage(ui: ReactElement) {
 }
 
 function fakeSession(datapackId: string | null) {
-  return { datapackId, datapackName: "my-pack" } as unknown as ReturnType<typeof useLabRunnerSession>;
+  return { datapackId, datapackName: "my-pack" } as unknown as ReturnType<
+    typeof useLabRunnerSession
+  >;
 }
 
 function completedRun(): PrReviewRunState {
@@ -89,7 +91,6 @@ describe("ReviewDashboardStage", () => {
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
 
-
   // The dashboard used to sum each conversation's `memories_added`, which
   // ignores a fact saved straight through /memory/add -- so it read 0 while
   // the context pane beside it read 7.
@@ -127,7 +128,9 @@ describe("ReviewDashboardStage", () => {
         onGoToCreateDatapack={vi.fn()}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/no reviews run in this session yet/i)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText(/no reviews run in this session yet/i)).toBeTruthy(),
+    );
   });
 
   it("shows this session's own runs with their real token counts", async () => {

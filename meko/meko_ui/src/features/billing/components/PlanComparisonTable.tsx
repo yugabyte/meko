@@ -3,16 +3,8 @@ import { ChevronDown, ChevronUp, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  COMPARE_GROUPS,
-  PLANS,
-  type PlanId,
-} from "@/features/billing/constants/plans";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { COMPARE_GROUPS, PLANS, type PlanId } from "@/features/billing/constants/plans";
 
 /**
  * "Compare every detail" section (screenshot 3). Collapsed by default

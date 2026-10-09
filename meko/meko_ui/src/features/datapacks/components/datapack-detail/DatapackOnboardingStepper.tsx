@@ -6,11 +6,7 @@ import type { NavigateFunction } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 import { isByocEnabled } from "@/lib/byoc";
-import {
-  datapackDetailUrlOpenConnect,
-  datapackKnowledgePath,
-  ROUTES,
-} from "@/app/routes/paths";
+import { datapackDetailUrlOpenConnect, datapackKnowledgePath, ROUTES } from "@/app/routes/paths";
 
 /** Accents are semantic tokens, not palette classes: loading documents is a
  *  knowledge action, Labs teaches the learning loop, and connecting an agent
@@ -85,7 +81,12 @@ export function DatapackOnboardingStepper({
       {isByocEnabled() ? null : (
         <>
           <span className="shrink-0 text-[10px] font-medium text-muted-foreground/60">or</span>
-          <StepChip label="Try Meko Labs" accent="learning" path={ROUTES.labs} navigate={navigate} />
+          <StepChip
+            label="Try Meko Labs"
+            accent="learning"
+            path={ROUTES.labs}
+            navigate={navigate}
+          />
         </>
       )}
     </div>

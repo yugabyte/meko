@@ -119,7 +119,9 @@ async function* streamInvoke(
     // api_server's own envelope error (auth/validation failures happen
     // before Invoke ever calls AWS) -- {"error": {"code", "message"}}.
     const text = await res.text();
-    throw new InvokeDeploymentError(extractEnvelopeErrorMessage(text) ?? `Request failed (${res.status})`);
+    throw new InvokeDeploymentError(
+      extractEnvelopeErrorMessage(text) ?? `Request failed (${res.status})`,
+    );
   }
 
   const reader = res.body.getReader();
@@ -138,7 +140,9 @@ async function* streamInvoke(
         const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
         if (!dataLine) continue;
         sawAnyFrame = true;
-        const event = JSON.parse(dataLine.slice(5).trim()) as ReviewStreamEvent | ReviewStreamErrorFrame;
+        const event = JSON.parse(dataLine.slice(5).trim()) as
+          | ReviewStreamEvent
+          | ReviewStreamErrorFrame;
         if ("error" in event) {
           throw new InvokeDeploymentError(formatStreamError(event));
         }
@@ -152,7 +156,9 @@ async function* streamInvoke(
     const dataLine = buffer.split("\n").find((line) => line.startsWith("data:"));
     if (dataLine) {
       try {
-        const event = JSON.parse(dataLine.slice(5).trim()) as ReviewStreamEvent | ReviewStreamErrorFrame;
+        const event = JSON.parse(dataLine.slice(5).trim()) as
+          | ReviewStreamEvent
+          | ReviewStreamErrorFrame;
         sawAnyFrame = true;
         buffer = "";
         if ("error" in event) {

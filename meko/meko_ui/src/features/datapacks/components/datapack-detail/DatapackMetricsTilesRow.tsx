@@ -43,7 +43,10 @@ export function DatapackMetricsTilesRow({
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-      <div className="cursor-pointer" onClick={() => onNavigateToMetric?.(METRIC_ANCHOR.contextSize)}>
+      <div
+        className="cursor-pointer"
+        onClick={() => onNavigateToMetric?.(METRIC_ANCHOR.contextSize)}
+      >
         <EfficiencyTile
           icon={<Database className="h-4 w-4" />}
           title="Context Size - by token count"

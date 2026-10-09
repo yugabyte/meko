@@ -56,9 +56,7 @@ export function kbDocumentStatusLabel(s: string): string {
   }
 }
 
-export function kbDocumentStatusTone(
-  s: string,
-): "muted" | "blue" | "yellow" | "green" | "red" {
+export function kbDocumentStatusTone(s: string): "muted" | "blue" | "yellow" | "green" | "red" {
   switch (s) {
     case KB_DOCUMENT_STATUS.COMPLETED:
       return "green";

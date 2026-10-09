@@ -18,7 +18,9 @@
 
 const URL = String.raw`https:\/\/yugabyte\.atlassian\.net\/browse\/[A-Z][A-Z0-9]+-\d+`;
 const REF = String.raw`(?:\[[A-Z][A-Z0-9]+-\d+\]\(${URL}\)|(?:${URL})|[A-Z][A-Z0-9]+-\d+)`;
-const CLOSE_LINE = new RegExp(String.raw`^\s*(?:[-*]\s+)?(?:Closes|Fixes|Resolves):?\s+(${REF}(?:\s*,\s*${REF}|\s+${REF})*)\s*\.?\s*$`);
+const CLOSE_LINE = new RegExp(
+  String.raw`^\s*(?:[-*]\s+)?(?:Closes|Fixes|Resolves):?\s+(${REF}(?:\s*,\s*${REF}|\s+${REF})*)\s*\.?\s*$`,
+);
 const KEY = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
 // The projects this closes, each with its workflow's global Done transition
@@ -55,23 +57,30 @@ async function jira(path, init = {}) {
       "Content-Type": "application/json",
     },
   });
-  if (!res.ok) throw new Error(`${init.method || "GET"} ${path}: ${res.status} ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`${init.method || "GET"} ${path}: ${res.status} ${await res.text()}`);
   return res.status === 204 ? null : res.json();
 }
 
 function mergeComment(pr) {
-  const text = t => ({ type: "text", text: t });
+  const text = (t) => ({ type: "text", text: t });
   return {
     type: "doc",
     version: 1,
-    content: [{
-      type: "paragraph",
-      content: [
-        text("Merged in "),
-        { type: "text", text: pr.html_url, marks: [{ type: "link", attrs: { href: pr.html_url } }] },
-        text(` (commit ${pr.merge_commit_sha.slice(0, 9)}): ${pr.title}`),
-      ],
-    }],
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          text("Merged in "),
+          {
+            type: "text",
+            text: pr.html_url,
+            marks: [{ type: "link", attrs: { href: pr.html_url } }],
+          },
+          text(` (commit ${pr.merge_commit_sha.slice(0, 9)}): ${pr.title}`),
+        ],
+      },
+    ],
   };
 }
 
@@ -98,8 +107,14 @@ async function run({ context, core }) {
         core.info(`${key}: already ${status.name}; left alone.`);
         continue;
       }
-      await jira(`/rest/api/3/issue/${key}/comment`, { method: "POST", body: JSON.stringify({ body: mergeComment(pr) }) });
-      await jira(`/rest/api/3/issue/${key}/transitions`, { method: "POST", body: JSON.stringify({ transition: { id: target.transition } }) });
+      await jira(`/rest/api/3/issue/${key}/comment`, {
+        method: "POST",
+        body: JSON.stringify({ body: mergeComment(pr) }),
+      });
+      await jira(`/rest/api/3/issue/${key}/transitions`, {
+        method: "POST",
+        body: JSON.stringify({ transition: { id: target.transition } }),
+      });
       core.info(`${key}: ${status.name} -> ${target.status}.`);
     } catch (e) {
       failed = true;

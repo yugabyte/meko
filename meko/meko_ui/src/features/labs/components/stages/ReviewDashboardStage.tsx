@@ -5,7 +5,15 @@
 // labelled as such rather than faked for earlier ones.
 
 import { Coins, Layers, MessageSquare, Zap } from "lucide-react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { StatTile } from "@/components/ui/stat-tile";
 import { dollarsSavedByModel, formatTokens } from "@/lib/tokenSavings";
@@ -38,12 +46,7 @@ export function ReviewDashboardStage({
   if (!session.datapackId) {
     return <LabStageNeedsDatapack onGoToCreateDatapack={onGoToCreateDatapack} />;
   }
-  return (
-    <ReviewDashboardStageContent
-      datapackId={session.datapackId}
-      sessionRuns={sessionRuns}
-    />
-  );
+  return <ReviewDashboardStageContent datapackId={session.datapackId} sessionRuns={sessionRuns} />;
 }
 
 function ReviewDashboardStageContent({
@@ -101,7 +104,12 @@ function ReviewDashboardStageContent({
             <LineChart data={chartData} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} className="text-muted-foreground" />
-              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} className="text-muted-foreground" width={32} />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fontSize: 11 }}
+                className="text-muted-foreground"
+                width={32}
+              />
               <Tooltip
                 contentStyle={{
                   backgroundColor: "hsl(var(--card))",
@@ -137,7 +145,9 @@ function ReviewDashboardStageContent({
 
       {byModel.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium text-foreground">What this datapack saved, by model</h3>
+          <h3 className="text-sm font-medium text-foreground">
+            What this datapack saved, by model
+          </h3>
           <div className="grid gap-3 sm:grid-cols-3">
             {byModel.map((entry) => (
               <StatTile

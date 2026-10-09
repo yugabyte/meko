@@ -33,9 +33,8 @@ export function folderContents(
 ): FolderPage {
   const inFolder = nodes.filter((n) => n.folder_id === folderId);
   const q = query.trim().toLowerCase();
-  const matches = q === ""
-    ? inFolder
-    : inFolder.filter((n) => n.datapack_name.toLowerCase().includes(q));
+  const matches =
+    q === "" ? inFolder : inFolder.filter((n) => n.datapack_name.toLowerCase().includes(q));
 
   const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
   const clamped = Math.min(Math.max(page, 1), pageCount);
@@ -68,7 +67,6 @@ export function addableDatapacks<T extends { datapack_id: string; datapack_name:
   const q = query.trim().toLowerCase();
   return owned.filter(
     (d) =>
-      !alreadyHere.has(d.datapack_id) &&
-      (q === "" || d.datapack_name.toLowerCase().includes(q)),
+      !alreadyHere.has(d.datapack_id) && (q === "" || d.datapack_name.toLowerCase().includes(q)),
   );
 }

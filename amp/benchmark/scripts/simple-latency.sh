@@ -15,7 +15,8 @@ if [[ $# -lt 1 ]]; then
   exit 1
 fi
 
-target="$1"; shift
+target="$1"
+shift
 source ~/benchmark/scripts/_env.sh "$target"
 source ~/benchmark/scripts/_metrics.sh
 
@@ -40,16 +41,16 @@ fi
 
 # Map test id -> SQL file + label.
 declare -A SQLFILE=(
-  [L1]=L1-heap-insert.sql   [L2]=L2-heap-update.sql   [L3]=L3-heap-delete.sql
-  [L4]=L4-pk-insert.sql     [L5]=L5-pk-update.sql     [L6]=L6-pk-delete.sql
-  [L7]=L7-pksi-insert.sql   [L8]=L8-pksi-update.sql   [L9]=L9-pksi-delete.sql
-  [L10]=L10-heap-select.sql [L11]=L11-pk-select.sql   [L12]=L12-pksi-select.sql
+  [L1]=L1-heap-insert.sql [L2]=L2-heap-update.sql [L3]=L3-heap-delete.sql
+  [L4]=L4-pk-insert.sql [L5]=L5-pk-update.sql [L6]=L6-pk-delete.sql
+  [L7]=L7-pksi-insert.sql [L8]=L8-pksi-update.sql [L9]=L9-pksi-delete.sql
+  [L10]=L10-heap-select.sql [L11]=L11-pk-select.sql [L12]=L12-pksi-select.sql
 )
 declare -A LABEL=(
-  [L1]="heap INSERT"       [L2]="heap UPDATE (seq scan)"   [L3]="heap DELETE (seq scan)"
-  [L4]="pk INSERT"         [L5]="pk UPDATE by PK"          [L6]="pk DELETE by PK"
-  [L7]="pk+si INSERT"      [L8]="pk+si UPDATE by skey"     [L9]="pk+si DELETE by skey"
-  [L10]="heap SELECT (seq scan)"   [L11]="pk SELECT by PK"  [L12]="pk+si SELECT by skey"
+  [L1]="heap INSERT" [L2]="heap UPDATE (seq scan)" [L3]="heap DELETE (seq scan)"
+  [L4]="pk INSERT" [L5]="pk UPDATE by PK" [L6]="pk DELETE by PK"
+  [L7]="pk+si INSERT" [L8]="pk+si UPDATE by skey" [L9]="pk+si DELETE by skey"
+  [L10]="heap SELECT (seq scan)" [L11]="pk SELECT by PK" [L12]="pk+si SELECT by skey"
 )
 
 # (Re)seed schema once at start.
@@ -76,7 +77,7 @@ for t in "${tests[@]}"; do
 
   # Per-test CPU + disk-IO sampler + off-box PS cpu/mem sampler (local on this box).
   cpu_pid=$(start_server_cpu_sampler "$outdir/${t}-server-cpu.log")
-  io_pid=$(start_server_io_sampler  "$outdir/${t}-server-io.log" nvme1n1)
+  io_pid=$(start_server_io_sampler "$outdir/${t}-server-io.log" nvme1n1)
   ps_pid=$(start_local_proc_sampler "$outdir/${t}-ps-cpu-mem.log" "pageserver -D /mnt/ps/endpoints/main/pageserver")
 
   # Warmup (5 s, discarded).
@@ -87,7 +88,7 @@ for t in "${tests[@]}"; do
   tpss=()
   for run in 1 2 3; do
     out=$($PGBENCH -n -c 1 -j 1 -T 30 -r -M prepared -f "$sql" \
-            -d $DBNAME -h $PGHOST -p $PGPORT -U $PGUSER 2>&1) || true
+      -d $DBNAME -h $PGHOST -p $PGPORT -U $PGUSER 2>&1) || true
     echo "=== $t run $run ===" >>"$log"
     echo "$out" >>"$log"
     echo "" >>"$log"
@@ -99,7 +100,7 @@ for t in "${tests[@]}"; do
     tpss+=("$tps")
   done
   stop_server_cpu_sampler "$cpu_pid"
-  stop_server_io_sampler  "$io_pid"
+  stop_server_io_sampler "$io_pid"
   stop_local_proc_sampler "$ps_pid"
   summarize_io_sampler "$outdir/${t}-server-io.log" >"$outdir/${t}-io-summary.txt" 2>&1
   summarize_proc_sampler "$outdir/${t}-ps-cpu-mem.log" >"$outdir/${t}-ps-cpu-mem-summary.txt" 2>&1

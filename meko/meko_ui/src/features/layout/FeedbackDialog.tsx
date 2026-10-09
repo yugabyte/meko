@@ -86,7 +86,6 @@ export function FeedbackDialog({
   const bodyTooLong = trimmedBody.length > MAX_FEEDBACK_LENGTH;
   const canSubmit = !!userId && !submitting && !bodyEmpty && !bodyTooLong;
 
-
   const handleSubmit = async () => {
     if (!userId || !canSubmit) return;
     setSubmitting(true);
@@ -193,9 +192,7 @@ export function FeedbackDialog({
             />
             <span>
               I agree to share my session context
-              {datapackName ? (
-                <span className="text-foreground/80"> ({datapackName})</span>
-              ) : null}
+              {datapackName ? <span className="text-foreground/80"> ({datapackName})</span> : null}
             </span>
           </label>
 
@@ -236,4 +233,3 @@ export function FeedbackDialog({
     </Dialog>
   );
 }
-

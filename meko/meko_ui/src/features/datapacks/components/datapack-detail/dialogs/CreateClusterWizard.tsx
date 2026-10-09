@@ -86,8 +86,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   );
 
   const trimmedName = name.trim();
-  const stepValid =
-    step === 0 ? Boolean(trimmedName) : step === 2 ? budget.valid : true;
+  const stepValid = step === 0 ? Boolean(trimmedName) : step === 2 ? budget.valid : true;
 
   const pickEngine = (id: string) => {
     setEngine(id);
@@ -137,8 +136,8 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
         <DialogHeader>
           <DialogTitle className="text-xl text-foreground">Create cluster</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            A cluster is one Postgres database on branchable storage, with a <code>main</code> branch
-            and a read-write endpoint to connect to.
+            A cluster is one Postgres database on branchable storage, with a <code>main</code>{" "}
+            branch and a read-write endpoint to connect to.
           </DialogDescription>
         </DialogHeader>
 
@@ -209,7 +208,9 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
               <p className="text-xs text-muted-foreground">
                 Enabled on the cluster's <code>main</code> branch — every compute on it mounts them.
                 Pick them now: they can't be changed after the cluster is created.
-                {fromEngine.length ? ` ${engineLabel(engine)} includes ${fromEngine.join(", ")}.` : ""}
+                {fromEngine.length
+                  ? ` ${engineLabel(engine)} includes ${fromEngine.join(", ")}.`
+                  : ""}
               </p>
               <div className="space-y-2">
                 {AMP_EXTENSIONS.map((x) => {
@@ -237,7 +238,9 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
                           // primary is the orange fill with navy text in BOTH themes (~6.9:1);
                           // brand-foreground is white in light mode (~2.74:1, fails WCAG AA —
                           // index.css:124-125), so it can't be used on an orange fill.
-                          on ? "border-primary bg-primary text-primary-foreground" : "border-border",
+                          on
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border",
                         )}
                         aria-hidden
                       >
@@ -301,7 +304,10 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
             <div className="rounded-lg border border-border">
               <ReviewRow k="Name" v={trimmedName || "—"} mono />
               <ReviewRow k="Engine" v={engineLabel(engine)} />
-              <ReviewRow k="Extensions" v={allExtensions.length ? allExtensions.join(", ") : "None"} />
+              <ReviewRow
+                k="Extensions"
+                v={allExtensions.length ? allExtensions.join(", ") : "None"}
+              />
               <ReviewRow k="Writer compute" v={`${cpu} vCPU · ${memory}`} mono />
             </div>
           ) : null}
@@ -345,7 +351,9 @@ function ReviewRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-2.5 text-sm last:border-b-0">
       <span className="text-muted-foreground">{k}</span>
-      <span className={mono ? "font-mono text-foreground" : "font-medium text-foreground"}>{v}</span>
+      <span className={mono ? "font-mono text-foreground" : "font-medium text-foreground"}>
+        {v}
+      </span>
     </div>
   );
 }

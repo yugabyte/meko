@@ -27,8 +27,8 @@ svc="$(kubectl -n "${UNIVERSE_NS}" get service -l "${TSERVER_SVC_LABELS}" \
 if [ -n "${svc}" ]; then
   # shellcheck disable=SC2016  # go-template syntax, not shell
   selector="$(kubectl -n "${UNIVERSE_NS}" get service "${svc}" \
-    -o go-template='{{range $k, $v := .spec.selector}}{{$k}}={{$v}},{{end}}' 2>/dev/null \
-    | sed 's/,$//')"
+    -o go-template='{{range $k, $v := .spec.selector}}{{$k}}={{$v}},{{end}}' 2>/dev/null |
+    sed 's/,$//')"
 fi
 
 for sel in "${selector}" "app.kubernetes.io/name=yb-tserver" "app=yb-tserver"; do

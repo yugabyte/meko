@@ -18,7 +18,8 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 // Matches any 36-char canonical UUID without pinning version/variant nibbles,
 // so newer schemes (e.g. UUIDv7) are accepted too. Mirrors the backend's
 // lenient uuid.Parse — this is a route-shape guard, not a strict RFC check.
-const UUID_PATH_SEGMENT_RE: RegExp = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATH_SEGMENT_RE: RegExp =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:datapack_id/edit`,

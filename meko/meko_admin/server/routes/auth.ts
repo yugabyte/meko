@@ -59,7 +59,9 @@ router.post("/new-password", async (req, res) => {
     const tokens = await completeNewPassword(email, newPassword, session, givenName, familyName);
     res.json({ accessToken: tokens.AccessToken, expiresIn: tokens.ExpiresIn });
   } catch (err: unknown) {
-    res.status(400).json({ error: (err as { message?: string })?.message ?? "Failed to set new password" });
+    res
+      .status(400)
+      .json({ error: (err as { message?: string })?.message ?? "Failed to set new password" });
   }
 });
 

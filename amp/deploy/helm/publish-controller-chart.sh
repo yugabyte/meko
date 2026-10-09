@@ -33,24 +33,36 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
 base="$(yq '.version' "${CHART_DIR}/Chart.yaml")"
-[[ "${base}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
-  || { echo "Chart.yaml version ${base} is not a plain major.minor.patch" >&2; exit 1; }
+[[ "${base}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] ||
+  {
+    echo "Chart.yaml version ${base} is not a plain major.minor.patch" >&2
+    exit 1
+  }
 next="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 sha="$(git -C "${SCRIPT_DIR}" rev-parse --short=12 HEAD)"
 pre="${next}-$(date -u +%Y%m%d%H%M%S).g${sha}"
 
-if (( ! DRY_RUN )); then
-  [[ -z "$(git -C "${SCRIPT_DIR}" status --porcelain)" ]] \
-    || { echo "refusing to publish a dirty tree" >&2; exit 1; }
+if ((!DRY_RUN)); then
+  [[ -z "$(git -C "${SCRIPT_DIR}" status --porcelain)" ]] ||
+    {
+      echo "refusing to publish a dirty tree" >&2
+      exit 1
+    }
   # CI checks out main detached, so GITHUB_REF is what names the branch there.
   branch="${GITHUB_REF:-refs/heads/$(git -C "${SCRIPT_DIR}" branch --show-current)}"
-  [[ "${branch}" == refs/heads/main ]] \
-    || { echo "refusing to publish from ${branch}; only main publishes" >&2; exit 1; }
+  [[ "${branch}" == refs/heads/main ]] ||
+    {
+      echo "refusing to publish from ${branch}; only main publishes" >&2
+      exit 1
+    }
 fi
 
 token="${QUAY_TOKEN:-${QUAY_AMP_TOKEN:-}}"
-if (( ! DRY_RUN )) && [[ -n "${token}" ]]; then
-  [[ "${token}" == *:* ]] || { echo "QUAY_TOKEN must be user:token" >&2; exit 1; }
+if ((!DRY_RUN)) && [[ -n "${token}" ]]; then
+  [[ "${token}" == *:* ]] || {
+    echo "QUAY_TOKEN must be user:token" >&2
+    exit 1
+  }
   printf '%s' "${token#*:}" | helm registry login quay.io -u "${token%%:*}" --password-stdin
 fi
 
@@ -66,7 +78,7 @@ tag_exists() {
 }
 
 versions=("${pre}")
-if (( DRY_RUN )); then
+if ((DRY_RUN)); then
   versions+=("${base}")
 elif ! tag_exists "${base}"; then
   versions+=("${base}")
@@ -74,7 +86,7 @@ fi
 
 for v in "${versions[@]}"; do
   helm package "${CHART_DIR}" --version "${v}" -d "${WORK}" >/dev/null
-  if (( DRY_RUN )); then
+  if ((DRY_RUN)); then
     echo "dry-run: would push ${CHART}-${v}.tgz to ${REGISTRY}"
   else
     helm push "${WORK}/${CHART}-${v}.tgz" "${REGISTRY}"

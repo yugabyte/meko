@@ -58,7 +58,13 @@ export function RunReviewAgainStage({
           lede="One more review, so the dashboard's per-session table has more than a single row to show."
         />
       </div>
-      <PrReviewDemoApp demoApp={demoApp} session={session} reviewConfig={reviewConfig} savedRun={savedRun} onRunChange={onRunChange} />
+      <PrReviewDemoApp
+        demoApp={demoApp}
+        session={session}
+        reviewConfig={reviewConfig}
+        savedRun={savedRun}
+        onRunChange={onRunChange}
+      />
     </div>
   );
 }

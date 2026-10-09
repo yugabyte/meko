@@ -74,8 +74,8 @@ export function NewBranchDialog({
           <DialogHeader>
             <DialogTitle className="text-xl text-foreground">New branch</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Forks a zero-copy clone from the parent branch. A fork point LSN is
-              required when the parent has no running compute.
+              Forks a zero-copy clone from the parent branch. A fork point LSN is required when the
+              parent has no running compute.
             </DialogDescription>
           </DialogHeader>
 
@@ -123,7 +123,12 @@ export function NewBranchDialog({
           ) : null}
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={createMut.isPending}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={createMut.isPending}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={createMut.isPending || !name.trim() || !parentId}>

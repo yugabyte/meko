@@ -19,7 +19,7 @@
 set -euo pipefail
 
 usage() {
-    cat <<'EOF'
+  cat <<'EOF'
 Usage: test/integration/controller/run-controller.sh [-n <count>] [-h|--help]
 
 Starts controller with the Docker endpoint provisioner and runs the controller integration suite
@@ -35,10 +35,13 @@ EOF
 
 ARGS=()
 for arg in "$@"; do
-    case "$arg" in
-        -h|--help) usage; exit 0 ;;
-        *) ARGS+=("$arg") ;;
-    esac
+  case "$arg" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *) ARGS+=("$arg") ;;
+  esac
 done
 
 # The amp tree root. Derived from this script's own location rather than
@@ -56,7 +59,10 @@ ENDPOINT_IMAGE=yb-amp/neon-endpoint:dev
 # hardcoding a bridge address. Override the container name with YB_CONTAINER.
 YB_CONTAINER=${YB_CONTAINER:-yugabyte}
 YB_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$YB_CONTAINER" 2>/dev/null)
-[ -n "$YB_IP" ] || { echo "error: could not resolve the IP of container '$YB_CONTAINER' (is it running?)" >&2; exit 1; }
+[ -n "$YB_IP" ] || {
+  echo "error: could not resolve the IP of container '$YB_CONTAINER' (is it running?)" >&2
+  exit 1
+}
 yb() { docker exec "$YB_CONTAINER" ysqlsh -h "$YB_IP" -p 5433 -U yugabyte -d yugabyte "$@"; }
 
 RUN_ID="$$_$(date +%s)"
@@ -72,13 +78,13 @@ DB="amp_integration_${RUN_ID}"
 AMP_HOST_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 
 cleanup() {
-    echo "==> teardown"
-    # endpoints controller launched (joined to our network) + the controller container itself
-    docker ps -aq --filter "network=${NET}" 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker rm -f "$AMP_NAME" >/dev/null 2>&1 || true
-    docker network rm "$NET" >/dev/null 2>&1 || true
-    yb -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB'" >/dev/null 2>&1 || true
-    yb -c "DROP DATABASE IF EXISTS \"$DB\"" >/dev/null 2>&1 || true
+  echo "==> teardown"
+  # endpoints controller launched (joined to our network) + the controller container itself
+  docker ps -aq --filter "network=${NET}" 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
+  docker rm -f "$AMP_NAME" >/dev/null 2>&1 || true
+  docker network rm "$NET" >/dev/null 2>&1 || true
+  yb -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB'" >/dev/null 2>&1 || true
+  yb -c "DROP DATABASE IF EXISTS \"$DB\"" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -88,9 +94,9 @@ echo "==> Building the controller image ($AMP_IMAGE)"
 DOCKER_BUILDKIT=1 docker build -t "$AMP_IMAGE" -f deploy/controller/Dockerfile .
 
 if ! docker image inspect "$ENDPOINT_IMAGE" >/dev/null 2>&1; then
-    echo "error: endpoint image $ENDPOINT_IMAGE not found. Build it with:" >&2
-    echo "  docker build -t $ENDPOINT_IMAGE -f deploy/endpoint/Dockerfile ." >&2
-    exit 1
+  echo "error: endpoint image $ENDPOINT_IMAGE not found. Build it with:" >&2
+  echo "  docker build -t $ENDPOINT_IMAGE -f deploy/endpoint/Dockerfile ." >&2
+  exit 1
 fi
 
 echo "==> Building the integration harness"
@@ -108,28 +114,30 @@ echo "==> Starting controller ($AMP_NAME) on port $AMP_HOST_PORT (docker runtime
 # The endpoint image supplies its own supervisor. Rebuild the image to pick up
 # supervisor changes — $ENDPOINT_IMAGE is not rebuilt by this script.
 docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
-    --user root \
-    -p "${AMP_HOST_PORT}:8080" \
-    --add-host host.docker.internal:host-gateway \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -e "AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/${DB}" \
-    -e AMP_LOG_FORMAT=text \
-    -e AMP_DEPLOY=true \
-    -e AMP_DEPLOY_DRIVER=docker \
-    -e AMP_DEPLOY_NETWORK="$NET" \
-    -e AMP_DEPLOY_ENDPOINT_IMAGE="$ENDPOINT_IMAGE" \
-    -e AMP_DEPLOY_EXTERNAL_HOST=127.0.0.1 \
-    -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
-    -e AMP_DEPLOY_YB_DBNAME="$DB" \
-    "$AMP_IMAGE" >/dev/null
+  --user root \
+  -p "${AMP_HOST_PORT}:8080" \
+  --add-host host.docker.internal:host-gateway \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e "AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/${DB}" \
+  -e AMP_LOG_FORMAT=text \
+  -e AMP_DEPLOY=true \
+  -e AMP_DEPLOY_DRIVER=docker \
+  -e AMP_DEPLOY_NETWORK="$NET" \
+  -e AMP_DEPLOY_ENDPOINT_IMAGE="$ENDPOINT_IMAGE" \
+  -e AMP_DEPLOY_EXTERNAL_HOST=127.0.0.1 \
+  -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
+  -e AMP_DEPLOY_YB_DBNAME="$DB" \
+  "$AMP_IMAGE" >/dev/null
 
 echo "==> Waiting for controller to be ready"
 for i in $(seq 1 60); do
-    if curl -sf -m2 "http://127.0.0.1:${AMP_HOST_PORT}/readyz" >/dev/null 2>&1; then break; fi
-    if ! docker ps -q --filter "name=$AMP_NAME" | grep -q .; then
-        echo "controller exited; logs:" >&2; docker logs "$AMP_NAME" 2>&1 | tail -30 >&2; exit 1
-    fi
-    sleep 1
+  if curl -sf -m2 "http://127.0.0.1:${AMP_HOST_PORT}/readyz" >/dev/null 2>&1; then break; fi
+  if ! docker ps -q --filter "name=$AMP_NAME" | grep -q .; then
+    echo "controller exited; logs:" >&2
+    docker logs "$AMP_NAME" 2>&1 | tail -30 >&2
+    exit 1
+  fi
+  sleep 1
 done
 
 echo "==> Running the controller-on-Docker suite"

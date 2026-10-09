@@ -24,9 +24,30 @@ const node = (over: Partial<ProjectDatapackNode>): ProjectDatapackNode => ({
 });
 
 const NODES = [
-  node({ datapack_id: "a", folder_id: "f1", memory_count: 10, awaiting_review_count: 3, promoted_count: 2, knowledge_count: 5 }),
-  node({ datapack_id: "b", folder_id: "f1", memory_count: 1, awaiting_review_count: 1, promoted_count: 0, knowledge_count: 0 }),
-  node({ datapack_id: "c", folder_id: "f2", memory_count: 4, awaiting_review_count: 0, promoted_count: 7, knowledge_count: 1 }),
+  node({
+    datapack_id: "a",
+    folder_id: "f1",
+    memory_count: 10,
+    awaiting_review_count: 3,
+    promoted_count: 2,
+    knowledge_count: 5,
+  }),
+  node({
+    datapack_id: "b",
+    folder_id: "f1",
+    memory_count: 1,
+    awaiting_review_count: 1,
+    promoted_count: 0,
+    knowledge_count: 0,
+  }),
+  node({
+    datapack_id: "c",
+    folder_id: "f2",
+    memory_count: 4,
+    awaiting_review_count: 0,
+    promoted_count: 7,
+    knowledge_count: 1,
+  }),
 ];
 
 describe("sumNodes", () => {

@@ -69,17 +69,17 @@ MEKO_UI_TAG="${MEKO_UI_TAG:-0.260912.0-59d52fac1}"
 # openai and adds the rag workers. Free-form so a caller can pass a values file of
 # their own, which is the same mechanism the install hint prints.
 EXTRA_VALUES="${EXTRA_VALUES:-}"
-CLOUD="${CLOUD:-gcp}"          # which cloud preset: gcp | aws
+CLOUD="${CLOUD:-gcp}" # which cloud preset: gcp | aws
 # Storage class for the control plane's bundled Postgres. Empty keeps the cloud
 # preset's (pd-ssd on GKE, gp2-csi on AWS); override for a cluster that has neither,
 # which the chart otherwise fails on by design rather than guessing.
 STORAGE_CLASS="${STORAGE_CLASS:-}"
-ENVPRESET="${ENVPRESET:-dev}"  # which env preset: dev | prod
+ENVPRESET="${ENVPRESET:-dev}" # which env preset: dev | prod
 DELETE=0
 # No default. Installing a data plane is an operator's decision — registering an
 # environment and attaching an agent to it are two deliberate acts, and a tool that
 # does both because it was run is a tool that installs an agent nobody asked for.
-STAGE=""                       # ycp | agent | all, chosen explicitly
+STAGE="" # ycp | agent | all, chosen explicitly
 ENV_NAME="${ENV_NAME:-}"
 # The chart moved into this repo (a179f8c2a1); MEKO_CHART overrides for a checkout
 # that still has it elsewhere.
@@ -90,8 +90,8 @@ ECR_REGION=us-east-2
 # Two registries, so two Secrets. The control plane still pulls the api-server from
 # ECR under the name values-gcp.yaml sets; the data plane is entirely on Quay under the
 # name values-byoc.yaml sets. Creating only one leaves the other stage unable to pull.
-PULL_SECRET=ecr-registry-creds        # control plane — values-gcp.yaml
-QUAY_PULL_SECRET=quay-registry-creds  # data plane — values-byoc.yaml
+PULL_SECRET=ecr-registry-creds       # control plane — values-gcp.yaml
+QUAY_PULL_SECRET=quay-registry-creds # data plane — values-byoc.yaml
 CREDS_SECRET=meko-data-plane
 ADMIN_KEY="${ADMIN_KEY:-}"
 PORT="${PORT:-18083}"
@@ -108,35 +108,92 @@ OWNER_LABEL=meko.dev/created-by=ycp-on-cluster
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --context)  CTX="$2"; shift 2 ;;
-    --ycp-ns)   YCP_NS="$2"; shift 2 ;;
-    --meko-ns)  MEKO_NS="$2"; shift 2 ;;
-    --tag)      TAG="$2"; shift 2 ;;
-    --cloud)    CLOUD="$2"; shift 2 ;;
-    --storage-class) STORAGE_CLASS="$2"; shift 2 ;;
-    --env)      ENVPRESET="$2"; shift 2 ;;
-    --env-name) ENV_NAME="$2"; shift 2 ;;
-    # Staged: bring the control plane up on its own, look at it, then attach a data
-    # plane. Both stages are idempotent, so --ycp-only followed by no flag at all is
-    # the same end state as one combined run.
-    --ycp-only)   STAGE=ycp; shift ;;
-    --agent-only) STAGE=agent; shift ;;
-    --all)        STAGE=all; shift ;;
-    --agent-tag)  AGENT_TAG="$2"; shift 2 ;;
-    # values-byoc-full.yaml selects the openai provider, so this without
-    # OPENAI_API_KEY fails the render rather than installing something that exits
-    # at startup.
-    --full)       EXTRA_VALUES="$EXTRA_VALUES -f $MEKO_CHART/values-byoc-full.yaml"; shift ;;
-    --ycp-image)  YCP_IMAGE="$2"; shift 2 ;;
-    --admin-key)  ADMIN_KEY="$2"; shift 2 ;;
-    --delete)   DELETE=1; shift ;;
-    -h|--help)  sed -n '2,46p' "$0"; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  --context)
+    CTX="$2"
+    shift 2
+    ;;
+  --ycp-ns)
+    YCP_NS="$2"
+    shift 2
+    ;;
+  --meko-ns)
+    MEKO_NS="$2"
+    shift 2
+    ;;
+  --tag)
+    TAG="$2"
+    shift 2
+    ;;
+  --cloud)
+    CLOUD="$2"
+    shift 2
+    ;;
+  --storage-class)
+    STORAGE_CLASS="$2"
+    shift 2
+    ;;
+  --env)
+    ENVPRESET="$2"
+    shift 2
+    ;;
+  --env-name)
+    ENV_NAME="$2"
+    shift 2
+    ;;
+  # Staged: bring the control plane up on its own, look at it, then attach a data
+  # plane. Both stages are idempotent, so --ycp-only followed by no flag at all is
+  # the same end state as one combined run.
+  --ycp-only)
+    STAGE=ycp
+    shift
+    ;;
+  --agent-only)
+    STAGE=agent
+    shift
+    ;;
+  --all)
+    STAGE=all
+    shift
+    ;;
+  --agent-tag)
+    AGENT_TAG="$2"
+    shift 2
+    ;;
+  # values-byoc-full.yaml selects the openai provider, so this without
+  # OPENAI_API_KEY fails the render rather than installing something that exits
+  # at startup.
+  --full)
+    EXTRA_VALUES="$EXTRA_VALUES -f $MEKO_CHART/values-byoc-full.yaml"
+    shift
+    ;;
+  --ycp-image)
+    YCP_IMAGE="$2"
+    shift 2
+    ;;
+  --admin-key)
+    ADMIN_KEY="$2"
+    shift 2
+    ;;
+  --delete)
+    DELETE=1
+    shift
+    ;;
+  -h | --help)
+    sed -n '2,46p' "$0"
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    exit 2
+    ;;
   esac
 done
 
 log() { printf '\n==> %s\n' "$*"; }
-die() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
+die() {
+  printf '\nFAIL: %s\n' "$*" >&2
+  exit 1
+}
 k() { kubectl --context "$CTX" "$@"; }
 h() { helm --kube-context "$CTX" "$@"; }
 
@@ -166,9 +223,18 @@ if [ "$DELETE" = "1" ]; then
   # removes the DATA plane only. Removing the control plane is --ycp-only --delete,
   # and both together is an explicit --all --delete.
   case "$STAGE" in
-    ycp)   DELETE_NS=("$YCP_NS"); scope="the control plane" ;;
-    all)   DELETE_NS=("$MEKO_NS" "$YCP_NS"); scope="both halves" ;;
-    *)     DELETE_NS=("$MEKO_NS"); scope="the data plane" ;;
+  ycp)
+    DELETE_NS=("$YCP_NS")
+    scope="the control plane"
+    ;;
+  all)
+    DELETE_NS=("$MEKO_NS" "$YCP_NS")
+    scope="both halves"
+    ;;
+  *)
+    DELETE_NS=("$MEKO_NS")
+    scope="the data plane"
+    ;;
   esac
   log "removing $scope from $CTX: ${DELETE_NS[*]}"
   for ns in "${DELETE_NS[@]}"; do
@@ -227,9 +293,9 @@ echo "    presets:    values-$CLOUD.yaml + values-$ENVPRESET.yaml"
 # Only the namespaces this stage needs: --ycp-only should not leave an empty `meko`
 # namespace behind for a data plane that may never be installed.
 case "$STAGE" in
-  ycp)   STAGE_NS=("$YCP_NS") ;;
-  agent) STAGE_NS=("$MEKO_NS") ;;
-  *)     STAGE_NS=("$YCP_NS" "$MEKO_NS") ;;
+ycp) STAGE_NS=("$YCP_NS") ;;
+agent) STAGE_NS=("$MEKO_NS") ;;
+*) STAGE_NS=("$YCP_NS" "$MEKO_NS") ;;
 esac
 
 for ns in "${STAGE_NS[@]}"; do
@@ -268,17 +334,17 @@ echo "    $PULL_SECRET (ECR tokens last ~12h; re-run this script to refresh)"
 echo "    $QUAY_PULL_SECRET (a robot token, no refresh needed)"
 
 if [ "$STAGE" = ycp ]; then
-  creds=()   # the data-plane credentials Secret lives with the agent, not here
+  creds=() # the data-plane credentials Secret lives with the agent, not here
 else
-creds=(--from-literal=placeholder=unused)
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-  creds=(--from-literal=OPENAI_API_KEY="$OPENAI_API_KEY")
-  echo "    $CREDS_SECRET with OPENAI_API_KEY"
-else
-  echo "    $CREDS_SECRET without OPENAI_API_KEY — the MCP server starts, and fails on the first embedding"
-fi
-k -n "$MEKO_NS" create secret generic "$CREDS_SECRET" "${creds[@]}" \
-  --dry-run=client -o yaml | k apply -f - >/dev/null
+  creds=(--from-literal=placeholder=unused)
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    creds=(--from-literal=OPENAI_API_KEY="$OPENAI_API_KEY")
+    echo "    $CREDS_SECRET with OPENAI_API_KEY"
+  else
+    echo "    $CREDS_SECRET without OPENAI_API_KEY — the MCP server starts, and fails on the first embedding"
+  fi
+  k -n "$MEKO_NS" create secret generic "$CREDS_SECRET" "${creds[@]}" \
+    --dry-run=client -o yaml | k apply -f - >/dev/null
 fi
 
 # ------------------------------------------------------------------- control plane
@@ -320,42 +386,44 @@ if [ "$STAGE" = agent ]; then
   meko-admin-api-key Secret in $YCP_NS (which is missing)."
   log "using the control plane already in $YCP_NS"
 else
-log "installing the control plane into $YCP_NS"
-# --ycp-image wins over --tag: a full ref carries its own registry, repository and
-# tag, and mixing the two would install the preset's registry with somebody else's
-# tag — an image reference that resolves to nothing, or worse, to the wrong thing.
-ycp_image_args=(--set-string "apiServer.image.tag=$TAG")
-if [ -n "$YCP_IMAGE" ]; then
-  ref="${YCP_IMAGE%:*}"; ycp_tag="${YCP_IMAGE##*:}"
-  [ "$ref" != "$YCP_IMAGE" ] || die "--ycp-image needs a tag: <registry>/<repository>:<tag>"
-  ycp_image_args=(
-    --set-string "apiServer.image.registry=${ref%%/*}"
-    --set-string "apiServer.image.repository=${ref#*/}"
-    --set-string "apiServer.image.tag=$ycp_tag"
-  )
-  echo "    control-plane image: $YCP_IMAGE"
-fi
-h upgrade --install "$YCP_NS" "$CHART" -n "$YCP_NS" \
-  -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-ycp.yaml" \
-  --set apiServer.namespace="$YCP_NS" \
-  --set controlPlaneDb.namespace="$YCP_NS" \
-  "${ycp_image_args[@]}" \
-  --set controlPlaneSecrets.enabled=true \
-  --set controlPlaneSecrets.dbPassword="$DB_PASSWORD" \
-  --set controlPlaneSecrets.adminApiKey="$ADMIN_KEY" \
-  --set controlPlaneSecrets.mcpInternalSecret="$MCP_INTERNAL" \
-  --set ecrCredentialRefresh.enabled=false \
-  ${STORAGE_CLASS:+--set global.storageClassName=$STORAGE_CLASS} \
-  --wait --timeout "$TIMEOUT" >/dev/null ||
-  die "the control-plane install failed (see: helm --kube-context $CTX -n $YCP_NS get all $YCP_NS)"
-k -n "$YCP_NS" rollout status deploy/meko-api-server --timeout="$TIMEOUT"
+  log "installing the control plane into $YCP_NS"
+  # --ycp-image wins over --tag: a full ref carries its own registry, repository and
+  # tag, and mixing the two would install the preset's registry with somebody else's
+  # tag — an image reference that resolves to nothing, or worse, to the wrong thing.
+  ycp_image_args=(--set-string "apiServer.image.tag=$TAG")
+  if [ -n "$YCP_IMAGE" ]; then
+    ref="${YCP_IMAGE%:*}"
+    ycp_tag="${YCP_IMAGE##*:}"
+    [ "$ref" != "$YCP_IMAGE" ] || die "--ycp-image needs a tag: <registry>/<repository>:<tag>"
+    ycp_image_args=(
+      --set-string "apiServer.image.registry=${ref%%/*}"
+      --set-string "apiServer.image.repository=${ref#*/}"
+      --set-string "apiServer.image.tag=$ycp_tag"
+    )
+    echo "    control-plane image: $YCP_IMAGE"
+  fi
+  h upgrade --install "$YCP_NS" "$CHART" -n "$YCP_NS" \
+    -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-ycp.yaml" \
+    --set apiServer.namespace="$YCP_NS" \
+    --set controlPlaneDb.namespace="$YCP_NS" \
+    "${ycp_image_args[@]}" \
+    --set controlPlaneSecrets.enabled=true \
+    --set controlPlaneSecrets.dbPassword="$DB_PASSWORD" \
+    --set controlPlaneSecrets.adminApiKey="$ADMIN_KEY" \
+    --set controlPlaneSecrets.mcpInternalSecret="$MCP_INTERNAL" \
+    --set ecrCredentialRefresh.enabled=false \
+    ${STORAGE_CLASS:+--set global.storageClassName=$STORAGE_CLASS} \
+    --wait --timeout "$TIMEOUT" >/dev/null ||
+    die "the control-plane install failed (see: helm --kube-context $CTX -n $YCP_NS get all $YCP_NS)"
+  k -n "$YCP_NS" rollout status deploy/meko-api-server --timeout="$TIMEOUT"
 fi
 
 log "port-forwarding the control plane"
 k -n "$YCP_NS" port-forward svc/meko-api-server-service "$PORT:80" >/dev/null 2>&1 &
 PF_PID=$!
 api() {
-  local method="$1" path="$2"; shift 2
+  local method="$1" path="$2"
+  shift 2
   curl -fsS -X "$method" "http://127.0.0.1:$PORT$path" -H "X-Meko-Admin-Secret: $ADMIN_KEY" "$@"
 }
 ready=""
@@ -368,7 +436,7 @@ done
 echo "    health -> $ready"
 
 if [ "$STAGE" = ycp ]; then
-cat <<EOF
+  cat <<EOF
 
 ==> PASS — YCP is running in $YCP_NS on $CTX.
 
@@ -455,7 +523,7 @@ log "waiting for the reconcile-agent to enroll"
 enrolled=""
 for _ in $(seq 1 60); do
   enrolled="$(k -n "$MEKO_NS" logs deploy/meko-reconcile-agent --tail=-1 2>/dev/null |
-                grep "enrolled env=" | tail -1 || true)"
+    grep "enrolled env=" | tail -1 || true)"
   [ -n "$enrolled" ] && break
   sleep 2
 done
@@ -481,8 +549,8 @@ for r in json.loads(e.get("resources") or "[]"):
   sleep 2
 done
 case "$converged" in
-  ready*) echo "    datapack smoke converged" ;;
-  *) die "the datapack never converged (last reported: ${converged:-nothing}).
+ready*) echo "    datapack smoke converged" ;;
+*) die "the datapack never converged (last reported: ${converged:-nothing}).
   kubectl --context $CTX -n $MEKO_NS logs -f deploy/meko-reconcile-agent" ;;
 esac
 

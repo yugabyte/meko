@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { groundFinding, overlapScore, type RetrievedSource } from "@/features/labs/lib/findingGrounding";
+import {
+  groundFinding,
+  overlapScore,
+  type RetrievedSource,
+} from "@/features/labs/lib/findingGrounding";
 
 const SOURCES: RetrievedSource[] = [
   {
@@ -22,9 +26,9 @@ const SOURCES: RetrievedSource[] = [
 
 describe("overlapScore", () => {
   it("stems, so a comment's verb reaches the rule's noun", () => {
-    expect(overlapScore("string-concatenating raw input", "built by concatenation")).toBeGreaterThan(
-      0,
-    );
+    expect(
+      overlapScore("string-concatenating raw input", "built by concatenation"),
+    ).toBeGreaterThan(0);
   });
 
   it("ignores stopwords, so two unrelated sentences do not pair", () => {
@@ -55,8 +59,8 @@ describe("groundFinding", () => {
   });
 
   it("caps how many sources one finding claims", () => {
-    expect(groundFinding("SQL injection query concatenation tenant", SOURCES, { limit: 1 })).toHaveLength(
-      1,
-    );
+    expect(
+      groundFinding("SQL injection query concatenation tenant", SOURCES, { limit: 1 }),
+    ).toHaveLength(1);
   });
 });

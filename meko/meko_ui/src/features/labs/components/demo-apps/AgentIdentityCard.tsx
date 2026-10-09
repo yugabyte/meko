@@ -63,12 +63,15 @@ export function AgentIdentityCard({
         </div>
 
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Reviews a diff against whatever context it can read, cites the rule behind every comment, and
-          stops at the guardrail you set.
+          Reviews a diff against whatever context it can read, cites the rule behind every comment,
+          and stops at the guardrail you set.
         </p>
 
         <dl className="mt-3">
-          <Row label="Runtime" value={region ? `AWS Bedrock AgentCore · ${region}` : "AWS Bedrock AgentCore"} />
+          <Row
+            label="Runtime"
+            value={region ? `AWS Bedrock AgentCore · ${region}` : "AWS Bedrock AgentCore"}
+          />
           <Row label="Agent ID" value={agentSlug} />
           <Row label="Reads context via" value="MCP" />
           <Row label="Context today" value={hasContext ? "1 datapack" : "none, 0 datapacks"} />

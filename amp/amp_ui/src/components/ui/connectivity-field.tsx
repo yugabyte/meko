@@ -13,10 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DEFAULT_ENDPOINT_CONNECTIVITY,
-  type EndpointConnectivityMode,
-} from "@/lib/api/types";
+import { DEFAULT_ENDPOINT_CONNECTIVITY, type EndpointConnectivityMode } from "@/lib/api/types";
 
 export type Connectivity = {
   mode: EndpointConnectivityMode;
@@ -78,9 +75,7 @@ export function ConnectivityField({
       <div className={cn("flex flex-col gap-1", !row && "space-y-1.5")}>
         <Label
           className={cn(
-            row
-              ? "text-[10px] uppercase tracking-wide text-muted-foreground"
-              : "text-xs",
+            row ? "text-[10px] uppercase tracking-wide text-muted-foreground" : "text-xs",
           )}
         >
           Connectivity
@@ -107,9 +102,7 @@ export function ConnectivityField({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(
-              Object.keys(CONNECTIVITY_LABELS) as EndpointConnectivityMode[]
-            ).map((m) => (
+            {(Object.keys(CONNECTIVITY_LABELS) as EndpointConnectivityMode[]).map((m) => (
               <SelectItem key={m} value={m}>
                 {CONNECTIVITY_LABELS[m]}
               </SelectItem>
@@ -123,9 +116,7 @@ export function ConnectivityField({
           <Label
             htmlFor="connectivity-cidrs"
             className={cn(
-              row
-                ? "text-[10px] uppercase tracking-wide text-muted-foreground"
-                : "text-xs",
+              row ? "text-[10px] uppercase tracking-wide text-muted-foreground" : "text-xs",
             )}
           >
             Allowed CIDRs
@@ -151,18 +142,17 @@ export function ConnectivityWarning({ value }: { value: Connectivity }) {
   if (value.mode === "ingress_external") {
     return (
       <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">
-        An external ingress shard puts Postgres on the public internet, with
-        password authentication as the only barrier. Per-endpoint allowlists are
-        not available on the shared modes yet — use NLB (external) for an
-        endpoint that needs one.
+        An external ingress shard puts Postgres on the public internet, with password authentication
+        as the only barrier. Per-endpoint allowlists are not available on the shared modes yet — use
+        NLB (external) for an endpoint that needs one.
       </p>
     );
   }
   if (value.mode !== "nlb_external" || value.allowedCidrs.trim()) return null;
   return (
     <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">
-      An external load balancer with no allowed CIDRs puts Postgres on the public
-      internet, with password authentication as the only barrier.
+      An external load balancer with no allowed CIDRs puts Postgres on the public internet, with
+      password authentication as the only barrier.
     </p>
   );
 }

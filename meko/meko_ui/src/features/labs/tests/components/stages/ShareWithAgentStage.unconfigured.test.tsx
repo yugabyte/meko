@@ -30,7 +30,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListMembers.mockResolvedValue({
     members: [
-      { user_id: "user-1", is_owner: true, user_name: "Owner User", user_email_id: "owner@example.com", grant: "maintainer" },
+      {
+        user_id: "user-1",
+        is_owner: true,
+        user_name: "Owner User",
+        user_email_id: "owner@example.com",
+        grant: "maintainer",
+      },
     ],
   });
   mockListOutgoingShares.mockResolvedValue({ pending_invites: [] });
@@ -43,7 +49,9 @@ describe("ShareWithAgentStage — no AgentK admin email configured", () => {
       datapackName: "test-datapack",
       currentUser: { account_id: "user-1", email: "owner@example.com" },
     } as unknown as ReturnType<typeof useLabRunnerSession>;
-    render(<ShareWithAgentStage session={session} onGoToCreateDatapack={vi.fn()} onComplete={vi.fn()} />);
+    render(
+      <ShareWithAgentStage session={session} onGoToCreateDatapack={vi.fn()} onComplete={vi.fn()} />,
+    );
 
     expect(screen.getByText(/isn't configured with an AgentK account/i)).toBeTruthy();
     // No share control at all -- a button that can only fail is worse than

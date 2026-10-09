@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 
 : "${YB_VOYAGER_MIGRATION_UUID:?YB_VOYAGER_MIGRATION_UUID is required}"
 : "${SOURCE_HOST:?SOURCE_HOST is required}"

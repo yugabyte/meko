@@ -29,12 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  ErrorState,
-  LoadingState,
-  PageContainer,
-  PageHeader,
-} from "@/components/data/Page";
+import { ErrorState, LoadingState, PageContainer, PageHeader } from "@/components/data/Page";
 import { useTasks } from "@/lib/api/queries";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import type { Task, TaskStatus } from "@/lib/api/types";
@@ -99,15 +94,11 @@ export default function TasksPage() {
         <div className="rounded-xl border bg-card text-card-foreground shadow">
           <div className="flex items-center gap-2 border-b border-border px-5 py-4">
             <h2 className="font-semibold">Tasks</h2>
-            <span className="text-sm text-muted-foreground">
-              {total} total
-            </span>
+            <span className="text-sm text-muted-foreground">{total} total</span>
           </div>
           {tasks.length === 0 ? (
             <div className="px-5 py-12 text-center text-sm text-muted-foreground">
-              {status === "all"
-                ? "No tasks yet."
-                : `No ${status} tasks.`}
+              {status === "all" ? "No tasks yet." : `No ${status} tasks.`}
             </div>
           ) : (
             <>
@@ -128,9 +119,7 @@ export default function TasksPage() {
                       <TableCell>
                         <StatusBadge status={task.status} />
                       </TableCell>
-                      <TableCell title={task.kind}>
-                        {taskKindLabel(task.kind)}
-                      </TableCell>
+                      <TableCell title={task.kind}>{taskKindLabel(task.kind)}</TableCell>
                       <TableCell>{clusterLabel(task)}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatDateTime(task.created_at)}
@@ -160,11 +149,7 @@ export default function TasksPage() {
                       <PaginationPrevious
                         href="#"
                         aria-disabled={!canPrev}
-                        className={
-                          canPrev
-                            ? "cursor-pointer"
-                            : "pointer-events-none opacity-50"
-                        }
+                        className={canPrev ? "cursor-pointer" : "pointer-events-none opacity-50"}
                         onClick={(e) => {
                           e.preventDefault();
                           if (canPrev) setOffset((o) => Math.max(0, o - PAGE_SIZE));
@@ -175,11 +160,7 @@ export default function TasksPage() {
                       <PaginationNext
                         href="#"
                         aria-disabled={!canNext}
-                        className={
-                          canNext
-                            ? "cursor-pointer"
-                            : "pointer-events-none opacity-50"
-                        }
+                        className={canNext ? "cursor-pointer" : "pointer-events-none opacity-50"}
                         onClick={(e) => {
                           e.preventDefault();
                           if (canNext) setOffset((o) => o + PAGE_SIZE);

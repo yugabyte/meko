@@ -16,11 +16,7 @@ import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/fileSize";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import { datapackArtifactsPath } from "@/app/routes/paths";
-import {
-  getApiErrorMessage,
-  listDatapackArtifacts,
-  type Artifact,
-} from "@/lib/api/mekoApi";
+import { getApiErrorMessage, listDatapackArtifacts, type Artifact } from "@/lib/api/mekoApi";
 import { HoverInfoBadge } from "@/components/ui/hover-info-badge";
 import { ARTIFACTS_TILE_HINT } from "@/features/datapacks/components/datapack-detail/datapackTileHints";
 
@@ -90,11 +86,11 @@ export function DatapackDetailArtifactsTile({ datapackId, className }: Props) {
             {error}
           </li>
         ) : loading && items.length === 0 ? (
-          <li className="px-2 py-4 text-center text-xs text-muted-foreground">Loading artifacts…</li>
-        ) : items.length === 0 ? (
           <li className="px-2 py-4 text-center text-xs text-muted-foreground">
-            No artifacts yet.
+            Loading artifacts…
           </li>
+        ) : items.length === 0 ? (
+          <li className="px-2 py-4 text-center text-xs text-muted-foreground">No artifacts yet.</li>
         ) : (
           items.map((a) => (
             <li key={a.artifact_id} className="flex items-start gap-3 px-2 py-2.5">

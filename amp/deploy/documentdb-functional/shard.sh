@@ -22,7 +22,11 @@ R=/results
 mkdir -p "$R"
 # The container outlives the run so run.sh can copy /results out: kubectl exec
 # cannot reach a completed pod. run.sh deletes the pod once it has them.
-finish() { echo "$1" > "$R/shard.rc"; touch "$R/done"; exec sleep 3600; }
+finish() {
+  echo "$1" >"$R/shard.rc"
+  touch "$R/done"
+  exec sleep 3600
+}
 
 python3 -c 'import gzip, shutil; shutil.copyfileobj(gzip.open("/gate/allowlist.yml.gz"), open("/tmp/allowlist.yml", "wb"))' || finish 2
 python3 "$G/amp_gate.py" /tmp/allowlist.yml "$G/exclusions.yml" documentdb "$R/allowlist.amp.yml" || finish 2
@@ -32,7 +36,10 @@ $GATE shard-allowlist --num-shards "$NUM_SHARDS" --shard-id "$SHARD" \
   --prefix documentdb_tests/ --output "$R/ids.txt" || finish 2
 # An empty slice would leave pytest with no positional arguments, and it would
 # then collect the whole upstream suite, engine-crashing files included.
-[ -s "$R/ids.txt" ] || { echo "shard $SHARD: empty allowlist slice" >&2; finish 2; }
+[ -s "$R/ids.txt" ] || {
+  echo "shard $SHARD: empty allowlist slice" >&2
+  finish 2
+}
 echo "shard $SHARD/$NUM_SHARDS: $(grep -c . "$R/ids.txt") allowlisted test(s)"
 
 cd /app || finish 2
@@ -42,20 +49,24 @@ pytest --rootdir documentdb_tests "@$R/ids.txt" \
   --engine-name documentdb --connection-string "$URI" \
   -n "$WORKERS" -q -p no:cacheprovider \
   --json-report --json-report-file="$R/report.json" \
-  --junitxml="$R/results.xml" > "$R/pytest.log" 2>&1
+  --junitxml="$R/results.xml" >"$R/pytest.log" 2>&1
 tail -5 "$R/pytest.log"
-[ -f "$R/report.json" ] || { echo "shard $SHARD: no report.json" >&2; finish 2; }
+[ -f "$R/report.json" ] || {
+  echo "shard $SHARD: no report.json" >&2
+  finish 2
+}
 
 $GATE gate-failures --report "$R/report.json" --output "$R/rerun_ids.txt"
-n=$(grep -c . "$R/rerun_ids.txt" 2>/dev/null); n=${n:-0}
+n=$(grep -c . "$R/rerun_ids.txt" 2>/dev/null)
+n=${n:-0}
 echo "shard $SHARD: $n non-pass after the parallel run"
 if [ "$n" -gt 0 ] && [ "$n" -le 200 ]; then
-  sed 's#^#documentdb_tests/#' "$R/rerun_ids.txt" > "$R/rerun_args.txt"
+  sed 's#^#documentdb_tests/#' "$R/rerun_ids.txt" >"$R/rerun_args.txt"
   sleep 20
   pytest --rootdir documentdb_tests "@$R/rerun_args.txt" \
     --engine-name documentdb --connection-string "$URI" \
     -p no:xdist --timeout=600 -q -p no:cacheprovider \
-    --json-report --json-report-file="$R/report_rerun.json" > "$R/pytest_rerun.log" 2>&1
+    --json-report --json-report-file="$R/report_rerun.json" >"$R/pytest_rerun.log" 2>&1
   tail -3 "$R/pytest_rerun.log"
   if [ -f "$R/report_rerun.json" ]; then
     $GATE merge-reports --base "$R/report.json" --overlay "$R/report_rerun.json" \

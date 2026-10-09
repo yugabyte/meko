@@ -18,10 +18,12 @@ export const kbFilesKeys = {
   // Partial key -- passing just this to invalidateQueries matches every
   // page/filter/page-size combination cached for the datapack.
   documentsAll: (datapackId: string) => ["kb-documents", datapackId] as const,
-  availableFilters: (datapackId: string, q: string) => ["kb-available-filters", datapackId, q] as const,
+  availableFilters: (datapackId: string, q: string) =>
+    ["kb-available-filters", datapackId, q] as const,
   availableFiltersAll: (datapackId: string) => ["kb-available-filters", datapackId] as const,
 };
 
 export const kbSummaryKey = (datapackId: string) => ["kb-summary", datapackId] as const;
-export const kbLatestActivityKey = (datapackId: string) => ["kb-activity-log-latest", datapackId] as const;
+export const kbLatestActivityKey = (datapackId: string) =>
+  ["kb-activity-log-latest", datapackId] as const;
 export const datapackKey = (datapackId: string) => ["datapack", datapackId] as const;

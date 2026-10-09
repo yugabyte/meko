@@ -43,20 +43,18 @@ export function WorkbenchLMSwitchConfirmDialog({
             Switch datapack?
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Switching to <span className="font-medium text-foreground">{targetDatapackName}</span> will end your
-            current chat session with{" "}
-            <span className="font-medium text-foreground">{currentDatapackName}</span>. The in-flight conversation
-            won't be resumable from WorkbenchLM after the switch (it stays available in Observe).
+            Switching to <span className="font-medium text-foreground">{targetDatapackName}</span>{" "}
+            will end your current chat session with{" "}
+            <span className="font-medium text-foreground">{currentDatapackName}</span>. The
+            in-flight conversation won't be resumable from WorkbenchLM after the switch (it stays
+            available in Observe).
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-0">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            onClick={onConfirm}
-          >
+          <Button type="button" onClick={onConfirm}>
             Switch datapack
           </Button>
         </DialogFooter>

@@ -34,11 +34,7 @@ export function formatLatencyLabel(latencyMs: number): string {
  */
 export function MemoryIcon({ className }: { className?: string }) {
   return (
-    <span
-      role="img"
-      aria-label="memory"
-      className={cn("inline-block leading-none", className)}
-    >
+    <span role="img" aria-label="memory" className={cn("inline-block leading-none", className)}>
       🧠
     </span>
   );

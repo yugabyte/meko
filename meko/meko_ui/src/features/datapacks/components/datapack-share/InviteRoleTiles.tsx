@@ -27,9 +27,7 @@ export type InviteRoleTilesProps = {
 export function InviteRoleTiles({ value, onChange, disabled, label }: InviteRoleTilesProps) {
   return (
     <div className="space-y-2">
-      {label ? (
-        <span className="text-xs font-medium text-foreground">{label}</span>
-      ) : null}
+      {label ? <span className="text-xs font-medium text-foreground">{label}</span> : null}
       <div className="grid gap-3 sm:grid-cols-3">
         {SHARE_INVITE_ROLES.map((r) => {
           const Icon = r.icon;

@@ -92,12 +92,20 @@ BRANCH_EXT="pgvector"
 # The file the extension's ImageVolume mounts, checked in the redeployed pod.
 BRANCH_EXT_FILE="/extensions/pgvector/share/postgresql/extension/vector.control"
 
-pass=0; fail=0
+pass=0
+fail=0
 hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-ok()  { printf '  \033[1;32mok\033[0m   %s\n' "$*"; pass=$((pass+1)); }
-bad() { printf '  \033[1;31mBAD\033[0m  %s\n' "$*"; fail=$((fail+1)); }
+ok() {
+  printf '  \033[1;32mok\033[0m   %s\n' "$*"
+  pass=$((pass + 1))
+}
+bad() {
+  printf '  \033[1;31mBAD\033[0m  %s\n' "$*"
+  fail=$((fail + 1))
+}
 
-AMP_PF_PID=""; YCP_PF_PID=""
+AMP_PF_PID=""
+YCP_PF_PID=""
 cleanup() {
   [ -n "$AMP_PF_PID" ] && kill "$AMP_PF_PID" 2>/dev/null
   [ -n "$YCP_PF_PID" ] && kill "$YCP_PF_PID" 2>/dev/null
@@ -111,14 +119,20 @@ YCP_PF_PID=$!
 kubectl -n "$NS" port-forward svc/amp-controller "${AMP_PF_PORT}:8080" >/tmp/rec-amp-pf.log 2>&1 &
 AMP_PF_PID=$!
 CP="http://127.0.0.1:${YCP_PF_PORT}/api/v1"
-for ((i=0; i<30; i++)); do curl -sf "$CP/health" >/dev/null 2>&1 && break; sleep 1; done
-for ((i=0; i<30; i++)); do curl -sf "http://127.0.0.1:${AMP_PF_PORT}/healthz" >/dev/null 2>&1 && break; sleep 1; done
+for ((i = 0; i < 30; i++)); do
+  curl -sf "$CP/health" >/dev/null 2>&1 && break
+  sleep 1
+done
+for ((i = 0; i < 30; i++)); do
+  curl -sf "http://127.0.0.1:${AMP_PF_PORT}/healthz" >/dev/null 2>&1 && break
+  sleep 1
+done
 curl -sf "$CP/health" >/dev/null 2>&1 && ok "control plane reachable" || bad "control plane /health unreachable"
 
 # admin GET of the environment as a compact JSON object (empty on miss).
 env_json() {
-  curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$CP/environments" \
-    | jq -c --arg id "$YCP_ENV_ID" '.data.items[]|select(.id==$id)' 2>/dev/null
+  curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$CP/environments" |
+    jq -c --arg id "$YCP_ENV_ID" '.data.items[]|select(.id==$id)' 2>/dev/null
 }
 # set_desired <resources-json-array> — replace the environment's desired state.
 set_desired() {
@@ -158,8 +172,10 @@ hdr "agent converges the tree and reports endpoint $EP_NAME READY"
 # Budget generously: agent tick + create_cluster task + endpoint pod deploy. The
 # smoke deploy forces a fast reconcile interval, so most of this is the endpoint
 # coming up.
-state=""; ep_state=""; kinds=""
-for ((i=0; i<60; i++)); do
+state=""
+ep_state=""
+kinds=""
+for ((i = 0; i < 60; i++)); do
   ej=$(env_json)
   state=$(printf '%s' "$ej" | jq -r '.state // empty' 2>/dev/null)
   ep_state=$(printf '%s' "$ej" | jq -r --arg n "$EP_NAME" \
@@ -169,18 +185,18 @@ for ((i=0; i<60; i++)); do
   sleep 5
 done
 
-[ "$ep_state" = ready ] && ok "endpoint $EP_NAME reported READY by the agent" \
-  || bad "endpoint $EP_NAME not READY (state='${ep_state:-none}', kinds seen: ${kinds:-none})"
-[ "$state" = READY ] && ok "environment $YCP_ENV_ID is READY" \
-  || bad "environment state=$state (want READY)"
+[ "$ep_state" = ready ] && ok "endpoint $EP_NAME reported READY by the agent" ||
+  bad "endpoint $EP_NAME not READY (state='${ep_state:-none}', kinds seen: ${kinds:-none})"
+[ "$state" = READY ] && ok "environment $YCP_ENV_ID is READY" ||
+  bad "environment state=$state (want READY)"
 case ",${kinds}," in
-  *,storage-pool,*) : ;;
-  *) bad "inventory missing storage-pool (kinds: ${kinds:-none})" ;;
+*,storage-pool,*) : ;;
+*) bad "inventory missing storage-pool (kinds: ${kinds:-none})" ;;
 esac
 for want in cluster branch endpoint; do
   case ",${kinds}," in
-    *,"$want",*) ok "inventory has $want" ;;
-    *) bad "inventory missing $want (kinds: ${kinds:-none})" ;;
+  *,"$want",*) ok "inventory has $want" ;;
+  *) bad "inventory missing $want (kinds: ${kinds:-none})" ;;
   esac
 done
 
@@ -204,17 +220,18 @@ ep_attr() {
 
 # A create stamps nothing: creates self-heal through presence, so they need no echo.
 gen0=$(ep_attr applied_generation)
-[ -z "$gen0" ] && ok "no applied_generation before any update (a create does not stamp)" \
-  || bad "applied_generation=$gen0 before any update, want none"
+[ -z "$gen0" ] && ok "no applied_generation before any update (a create does not stamp)" ||
+  bad "applied_generation=$gen0 before any update, want none"
 
 # The attr reaches the console only if it survives the heartbeat; the agent's own
 # tests stop at List. This endpoint declares no connectivity, so the reported mode
 # is the resolved default rather than nothing.
 conn=$(ep_attr connectivity_mode)
-[ "$conn" = cluster_ip ] && ok "endpoint attrs.connectivity_mode=cluster_ip" \
-  || bad "endpoint attrs.connectivity_mode='${conn:-none}', want cluster_ip"
+[ "$conn" = cluster_ip ] && ok "endpoint attrs.connectivity_mode=cluster_ip" ||
+  bad "endpoint attrs.connectivity_mode='${conn:-none}', want cluster_ip"
 
-cur_cpu=$(ep_attr cpu); cur_mem=$(ep_attr memory)
+cur_cpu=$(ep_attr cpu)
+cur_mem=$(ep_attr memory)
 if [ -z "$cur_cpu" ] || [ -z "$cur_mem" ]; then
   bad "endpoint reports no cpu/memory in the inventory (cpu='${cur_cpu:-}' memory='${cur_mem:-}')"
 else
@@ -224,26 +241,27 @@ else
     --arg cpu "$cur_cpu" --arg mem "$cur_mem" \
     '[ $r[] | if .kind=="endpoint" and .name==$n
               then .spec.resources={cpu:$cpu, memory:$mem} else . end ]')
-  set_desired "$RESIZED" && ok "desired state updated with the endpoint's own size" \
-    || bad "POST desired (resize) failed"
+  set_desired "$RESIZED" && ok "desired state updated with the endpoint's own size" ||
+    bad "POST desired (resize) failed"
   # Later edits build on this, not on the original: re-posting DESIRED would drop
   # the resources field again, which is another spec change and another resize.
   DESIRED="$RESIZED"
 
   gen=""
-  for ((i=0; i<60; i++)); do
+  for ((i = 0; i < 60; i++)); do
     gen=$(ep_attr applied_generation)
     [ -n "$gen" ] && [ "$gen" != 0 ] && break
     sleep 5
   done
-  [ -n "$gen" ] && [ "$gen" != 0 ] \
-    && ok "endpoint attrs.applied_generation=$gen (the task completed and stamped it)" \
-    || bad "endpoint attrs.applied_generation='${gen:-none}' — the resize task never stamped the row"
+  [ -n "$gen" ] && [ "$gen" != 0 ] &&
+    ok "endpoint attrs.applied_generation=$gen (the task completed and stamped it)" ||
+    bad "endpoint attrs.applied_generation='${gen:-none}' — the resize task never stamped the row"
 
   # And it settles: once the row confirms, the agent stops re-issuing, so the
   # resource reports plain "ready" rather than staying "updating" or degraded.
-  state=""; estate=""
-  for ((i=0; i<24; i++)); do
+  state=""
+  estate=""
+  for ((i = 0; i < 24; i++)); do
     ej=$(env_json)
     state=$(printf '%s' "$ej" | jq -r '.state // empty' 2>/dev/null)
     estate=$(printf '%s' "$ej" | jq -r --arg n "$EP_NAME" \
@@ -251,9 +269,9 @@ else
     [ "$state" = READY ] && [ "$estate" = ready ] && break
     sleep 5
   done
-  [ "$state" = READY ] && [ "$estate" = ready ] \
-    && ok "environment READY and endpoint state=ready after the update settled" \
-    || bad "environment=$state endpoint=$estate after the update (want READY/ready)"
+  [ "$state" = READY ] && [ "$estate" = ready ] &&
+    ok "environment READY and endpoint state=ready after the update settled" ||
+    bad "environment=$state endpoint=$estate after the update (want READY/ready)"
 fi
 
 # --- branch + endpoint settings ---
@@ -304,8 +322,8 @@ else
   if [ -n "$SET_POD" ]; then
     SET_UID_BEFORE=$(kubectl -n "$NS" get "pod/$SET_POD" -o jsonpath='{.metadata.uid}' 2>/dev/null)
   fi
-  [ -n "$SET_UID_BEFORE" ] && ok "endpoint pod uid before the settings edits ($SET_POD)" \
-    || bad "could not read the endpoint pod's uid before the settings edits"
+  [ -n "$SET_UID_BEFORE" ] && ok "endpoint pod uid before the settings edits ($SET_POD)" ||
+    bad "could not read the endpoint pod's uid before the settings edits"
 
   # branch pg_settings <- the baseline; endpoint pg_settings <- its own override.
   # work_mem is declared on BOTH with different values on purpose: they are
@@ -318,8 +336,8 @@ else
       | if .kind=="branch"   and .name==$b then .spec.pg_settings={statement_timeout:"30s", work_mem:"16MB"}
         elif .kind=="endpoint" and .name==$e then .spec.pg_settings={work_mem:"64MB"}
         else . end ]')
-  set_desired "$WITH_SETTINGS" && ok "desired state declares branch + endpoint pg_settings" \
-    || bad "POST desired (settings) failed"
+  set_desired "$WITH_SETTINGS" && ok "desired state declares branch + endpoint pg_settings" ||
+    bad "POST desired (settings) failed"
   DESIRED="$WITH_SETTINGS"
 
   # The branch is the load-bearing half. Its spec declares settings and nothing
@@ -327,24 +345,25 @@ else
   # synchronous, and its handler stamping the row is the only way this generation
   # can ever be recorded. Before #1246 it was never stamped, because a declared
   # pg_settings was drift and drift claims nothing.
-  bset=""; bgen=""
-  for ((i=0; i<36; i++)); do
+  bset=""
+  bgen=""
+  for ((i = 0; i < 36; i++)); do
     bj=$(curl -sf "$BRANCH_URL" 2>/dev/null)
     bset=$(printf '%s' "$bj" | jq -c '.pg_settings // empty' 2>/dev/null)
     bgen=$(printf '%s' "$bj" | jq -r '.ycp_generation // empty' 2>/dev/null)
     [ "$(printf '%s' "$bset" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] && break
     sleep 5
   done
-  [ "$(printf '%s' "$bset" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] \
-    && [ "$(printf '%s' "$bset" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
-    && ok "branch row carries the declared pg_settings (${bset})" \
-    || bad "branch pg_settings='${bset:-none}', want statement_timeout=30s and work_mem=16MB"
-  [ -n "$bgen" ] && [ "$bgen" != 0 ] && [ "$bgen" != null ] \
-    && ok "branch ycp_generation=$bgen — the synchronous PATCH stamped it with no task" \
-    || bad "branch ycp_generation='${bgen:-none}' — a settings-only spec never recorded its generation"
+  [ "$(printf '%s' "$bset" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] &&
+    [ "$(printf '%s' "$bset" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] &&
+    ok "branch row carries the declared pg_settings (${bset})" ||
+    bad "branch pg_settings='${bset:-none}', want statement_timeout=30s and work_mem=16MB"
+  [ -n "$bgen" ] && [ "$bgen" != 0 ] && [ "$bgen" != null ] &&
+    ok "branch ycp_generation=$bgen — the synchronous PATCH stamped it with no task" ||
+    bad "branch ycp_generation='${bgen:-none}' — a settings-only spec never recorded its generation"
 
   eset=""
-  for ((i=0; i<36; i++)); do
+  for ((i = 0; i < 36; i++)); do
     eset=$(curl -sf "$BRANCH_URL/endpoints/$SET_EP_ID" 2>/dev/null | jq -c '.pg_settings // empty' 2>/dev/null)
     [ "$(printf '%s' "$eset" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] && break
     sleep 5
@@ -357,9 +376,9 @@ else
   # Its own, not the branch's merged in: the agent writes each row from that
   # resource's spec, and an agent that compared against the merged view would read
   # a branch-supplied value as the endpoint's and never write it.
-  [ "$(printf '%s' "$eset" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] \
-    && ok "endpoint row did not absorb the branch's statement_timeout" \
-    || bad "endpoint pg_settings='${eset}' contains the branch's key — the rows were merged"
+  [ "$(printf '%s' "$eset" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] &&
+    ok "endpoint row did not absorb the branch's statement_timeout" ||
+    bad "endpoint pg_settings='${eset}' contains the branch's key — the rows were merged"
 
   # --- the same settings, read out of the inventory (meko#1295) ---
   #
@@ -368,32 +387,33 @@ else
   # the only place it can look: it has no second credentialed client against the
   # controller, and applied_generation says an update landed, not what it landed on.
   hdr "the inventory reports branch and endpoint settings"
-  bsattr=""; esattr=""
-  for ((i=0; i<36; i++)); do
+  bsattr=""
+  esattr=""
+  for ((i = 0; i < 36; i++)); do
     bsattr=$(inv_attr branch "$BRANCH_NAME" pg_settings)
     esattr=$(inv_attr endpoint "$EP_NAME" pg_settings)
-    [ "$(printf '%s' "$bsattr" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] \
-      && [ "$(printf '%s' "$esattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] && break
+    [ "$(printf '%s' "$bsattr" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] &&
+      [ "$(printf '%s' "$esattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] && break
     sleep 5
   done
-  [ "$(printf '%s' "$bsattr" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] \
-    && [ "$(printf '%s' "$bsattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
-    && ok "branch attrs.pg_settings matches the row (${bsattr})" \
-    || bad "branch attrs.pg_settings='${bsattr:-none}', want statement_timeout=30s and work_mem=16MB"
-  [ "$(printf '%s' "$esattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] \
-    && ok "endpoint attrs.pg_settings matches the row (${esattr})" \
-    || bad "endpoint attrs.pg_settings='${esattr:-none}', want work_mem=64MB"
+  [ "$(printf '%s' "$bsattr" | jq -r '.statement_timeout // empty' 2>/dev/null)" = "30s" ] &&
+    [ "$(printf '%s' "$bsattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] &&
+    ok "branch attrs.pg_settings matches the row (${bsattr})" ||
+    bad "branch attrs.pg_settings='${bsattr:-none}', want statement_timeout=30s and work_mem=16MB"
+  [ "$(printf '%s' "$esattr" | jq -r '.work_mem // empty' 2>/dev/null)" = "64MB" ] &&
+    ok "endpoint attrs.pg_settings matches the row (${esattr})" ||
+    bad "endpoint attrs.pg_settings='${esattr:-none}', want work_mem=64MB"
 
   # A surface nothing ever declared is present and empty, never absent: absence is
   # reserved for an agent too old to report settings at all, and a console reading
   # it as empty is the destructive save above.
   v=$(inv_attr branch "$BRANCH_NAME" write_token_settings)
-  [ "$v" = "{}" ] && ok "branch attrs.write_token_settings is present and empty" \
-    || bad "branch attrs.write_token_settings='${v:-absent}', want {} — an undeclared surface must not be omitted"
+  [ "$v" = "{}" ] && ok "branch attrs.write_token_settings is present and empty" ||
+    bad "branch attrs.write_token_settings='${v:-absent}', want {} — an undeclared surface must not be omitted"
   for a in pageserver_settings safekeeper_settings extended_config; do
     v=$(inv_attr endpoint "$EP_NAME" "$a")
-    [ "$v" = "{}" ] && ok "endpoint attrs.$a is present and empty" \
-      || bad "endpoint attrs.$a='${v:-absent}', want {} — an undeclared surface must not be omitted"
+    [ "$v" = "{}" ] && ok "endpoint attrs.$a is present and empty" ||
+      bad "endpoint attrs.$a='${v:-absent}', want {} — an undeclared surface must not be omitted"
   done
 
   # --- a declared surface owns the whole map ---
@@ -404,40 +424,40 @@ else
   hdr "dropping a key from a declared surface removes it from the row"
   DROPPED=$(jq -nc --argjson r "$DESIRED" --arg b "$BRANCH_PATH" \
     '[ $r[] | if .kind=="branch" and .name==$b then .spec.pg_settings={work_mem:"16MB"} else . end ]')
-  set_desired "$DROPPED" && ok "desired state drops statement_timeout, keeping work_mem" \
-    || bad "POST desired (dropped key) failed"
+  set_desired "$DROPPED" && ok "desired state drops statement_timeout, keeping work_mem" ||
+    bad "POST desired (dropped key) failed"
   DESIRED="$DROPPED"
 
   bset2=""
-  for ((i=0; i<36; i++)); do
+  for ((i = 0; i < 36; i++)); do
     bset2=$(curl -sf "$BRANCH_URL" 2>/dev/null | jq -c '.pg_settings // empty' 2>/dev/null)
     [ "$(printf '%s' "$bset2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] && break
     sleep 5
   done
-  [ "$(printf '%s' "$bset2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] \
-    && [ "$(printf '%s' "$bset2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
-    && ok "branch pg_settings is now exactly what the spec declares (${bset2})" \
-    || bad "branch pg_settings='${bset2:-none}', want only work_mem=16MB — the dropped key was not removed"
+  [ "$(printf '%s' "$bset2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] &&
+    [ "$(printf '%s' "$bset2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] &&
+    ok "branch pg_settings is now exactly what the spec declares (${bset2})" ||
+    bad "branch pg_settings='${bset2:-none}', want only work_mem=16MB — the dropped key was not removed"
 
   # The removal has to reach the inventory too, or a console re-reading it would
   # declare the stale key back on its next save.
   bsattr2=""
-  for ((i=0; i<36; i++)); do
+  for ((i = 0; i < 36; i++)); do
     bsattr2=$(inv_attr branch "$BRANCH_NAME" pg_settings)
     [ "$(printf '%s' "$bsattr2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] && break
     sleep 5
   done
-  [ "$(printf '%s' "$bsattr2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] \
-    && [ "$(printf '%s' "$bsattr2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] \
-    && ok "branch attrs.pg_settings dropped the key too (${bsattr2})" \
-    || bad "branch attrs.pg_settings='${bsattr2:-none}', want only work_mem=16MB"
+  [ "$(printf '%s' "$bsattr2" | jq -r 'has("statement_timeout")' 2>/dev/null)" = false ] &&
+    [ "$(printf '%s' "$bsattr2" | jq -r '.work_mem // empty' 2>/dev/null)" = "16MB" ] &&
+    ok "branch attrs.pg_settings dropped the key too (${bsattr2})" ||
+    bad "branch attrs.pg_settings='${bsattr2:-none}', want only work_mem=16MB"
 
   # The other end of SET_UID_BEFORE, now that every settings edit has landed.
   if [ -n "$SET_UID_BEFORE" ]; then
     suid_after=$(kubectl -n "$NS" get "pod/$SET_POD" -o jsonpath='{.metadata.uid}' 2>/dev/null)
-    [ "$suid_after" = "$SET_UID_BEFORE" ] \
-      && ok "endpoint pod was not replaced by the settings edits ($SET_POD)" \
-      || bad "endpoint pod replaced across the settings edits (uid $SET_UID_BEFORE -> ${suid_after:-gone}) — a settings edit must not redeploy compute"
+    [ "$suid_after" = "$SET_UID_BEFORE" ] &&
+      ok "endpoint pod was not replaced by the settings edits ($SET_POD)" ||
+      bad "endpoint pod replaced across the settings edits (uid $SET_UID_BEFORE -> ${suid_after:-gone}) — a settings edit must not redeploy compute"
   fi
 fi
 
@@ -462,15 +482,15 @@ else
   DESIRED="$WITH_EXT"
 
   exts=""
-  for ((i=0; i<60; i++)); do
+  for ((i = 0; i < 60; i++)); do
     exts=$(env_json | jq -r --arg n "$BRANCH_NAME" \
       '.resources[]?|select(.kind=="branch" and .name==$n)|.attrs.extensions // empty' 2>/dev/null | head -1)
     case ",${exts}," in *,"$BRANCH_EXT",*) break ;; esac
     sleep 5
   done
   case ",${exts}," in
-    *,"$BRANCH_EXT",*) ok "branch attrs.extensions has $BRANCH_EXT (${exts})" ;;
-    *) bad "branch attrs.extensions='${exts:-none}' (want it to include $BRANCH_EXT)" ;;
+  *,"$BRANCH_EXT",*) ok "branch attrs.extensions has $BRANCH_EXT (${exts})" ;;
+  *) bad "branch attrs.extensions='${exts:-none}' (want it to include $BRANCH_EXT)" ;;
   esac
 
   # The half the branch row cannot show. The add redeploys the endpoint (a new pod,
@@ -486,19 +506,19 @@ else
   hdr "endpoint $EP_NAME is redeployed Ready with $BRANCH_EXT mounted"
   if [ -n "$EP_ID" ]; then
     pod=""
-    for ((i=0; i<130; i++)); do
+    for ((i = 0; i < 130; i++)); do
       pod=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$EP_ID" | head -1)
       [ -n "$pod" ] && [ "$(kubectl -n "$NS" get "$pod" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ] && break
       pod=""
       sleep 5
     done
     pod="${pod#pod/}"
-    [ -n "$pod" ] && ok "endpoint pod Ready after the redeploy ($pod)" \
-      || bad "endpoint pod for $EP_ID never came back Ready after addBranchExtensions"
+    [ -n "$pod" ] && ok "endpoint pod Ready after the redeploy ($pod)" ||
+      bad "endpoint pod for $EP_ID never came back Ready after addBranchExtensions"
     if [ -n "$pod" ]; then
-      kubectl -n "$NS" exec "$pod" -- test -f "$BRANCH_EXT_FILE" 2>/dev/null \
-        && ok "$BRANCH_EXT ImageVolume mounted ($BRANCH_EXT_FILE)" \
-        || bad "$BRANCH_EXT not mounted in $pod — the redeploy did not take"
+      kubectl -n "$NS" exec "$pod" -- test -f "$BRANCH_EXT_FILE" 2>/dev/null &&
+        ok "$BRANCH_EXT ImageVolume mounted ($BRANCH_EXT_FILE)" ||
+        bad "$BRANCH_EXT not mounted in $pod — the redeploy did not take"
     fi
 
     # --- a generation bump that changes no extension must NOT bounce compute ---
@@ -526,25 +546,25 @@ else
       before_uid=$(kubectl -n "$NS" get "pod/$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
       before_gen=$(env_json | jq -r --arg n "$BRANCH_NAME" \
         '.resources[]?|select(.kind=="branch" and .name==$n)|.attrs.applied_generation // empty' 2>/dev/null | head -1)
-      [ -n "$before_uid" ] && ok "endpoint pod uid before the bump ($before_uid, branch generation ${before_gen:-none})" \
-        || bad "could not read the endpoint pod's uid"
+      [ -n "$before_uid" ] && ok "endpoint pod uid before the bump ($before_uid, branch generation ${before_gen:-none})" ||
+        bad "could not read the endpoint pod's uid"
 
       DUP_EXT=$(jq -nc --argjson r "$DESIRED" --arg n "${POOL_NAME}/${CLUSTER_NAME}/${BRANCH_NAME}" --arg ext "$BRANCH_EXT" \
         '[ $r[] | if .kind=="branch" and .name==$n then .spec.extensions=[$ext,$ext] else . end ]')
-      set_desired "$DUP_EXT" && ok "desired state re-declares $BRANCH_EXT (inert edit, bumps the generation)" \
-        || bad "POST desired (duplicate extension) failed"
+      set_desired "$DUP_EXT" && ok "desired state re-declares $BRANCH_EXT (inert edit, bumps the generation)" ||
+        bad "POST desired (duplicate extension) failed"
       DESIRED="$DUP_EXT"
 
       after_gen=""
-      for ((i=0; i<60; i++)); do
+      for ((i = 0; i < 60; i++)); do
         after_gen=$(env_json | jq -r --arg n "$BRANCH_NAME" \
           '.resources[]?|select(.kind=="branch" and .name==$n)|.attrs.applied_generation // empty' 2>/dev/null | head -1)
         [ -n "$after_gen" ] && [ "$after_gen" != "${before_gen:-}" ] && break
         sleep 5
       done
-      [ -n "$after_gen" ] && [ "$after_gen" != "${before_gen:-}" ] \
-        && ok "branch attrs.applied_generation advanced to $after_gen (the empty settings PATCH stamped it)" \
-        || bad "branch attrs.applied_generation='${after_gen:-none}' did not advance past '${before_gen:-none}'"
+      [ -n "$after_gen" ] && [ "$after_gen" != "${before_gen:-}" ] &&
+        ok "branch attrs.applied_generation advanced to $after_gen (the empty settings PATCH stamped it)" ||
+        bad "branch attrs.applied_generation='${after_gen:-none}' did not advance past '${before_gen:-none}'"
 
       after_uid=$(kubectl -n "$NS" get "pod/$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
       if [ "$after_uid" = "$before_uid" ]; then
@@ -553,7 +573,7 @@ else
         bad "endpoint pod restarted for an unchanged extension set (uid ${before_uid} -> ${after_uid:-gone}) — a no-delta bump bounced compute"
       fi
     fi
-fi
+  fi
 
 fi
 
@@ -573,16 +593,17 @@ tasks_json() {
 }
 
 # The agent relays on its heartbeat, so give it a few ticks to arrive.
-tj=""; total=0
-for ((i=0; i<24; i++)); do
+tj=""
+total=0
+for ((i = 0; i < 24; i++)); do
   tj=$(tasks_json)
   total=$(printf '%s' "$tj" | jq -r '.data.total // 0' 2>/dev/null)
   [ "${total:-0}" -gt 0 ] && break
   sleep 5
 done
-[ "${total:-0}" -gt 0 ] \
-  && ok "relayed task history has $total tasks" \
-  || bad "no tasks reached the control plane after 120s (the agent is not relaying the task log)"
+[ "${total:-0}" -gt 0 ] &&
+  ok "relayed task history has $total tasks" ||
+  bad "no tasks reached the control plane after 120s (the agent is not relaying the task log)"
 
 if [ "${total:-0}" -gt 0 ]; then
   # Every task the agent drove must carry a kind and a terminal status. A row with an
@@ -599,52 +620,52 @@ if [ "${total:-0}" -gt 0 ]; then
 
   # ycp_generation is what distinguishes a task YCP drove from one planned around it.
   driven=$(printf '%s' "$tj" | jq -r '[.data.items[]?|select(.ycp_generation != null)]|length' 2>/dev/null)
-  [ "${driven:-0}" -gt 0 ] \
-    && ok "$driven task(s) carry a ycp_generation (YCP-driven, not planned around the control plane)" \
-    || bad "no relayed task carries a ycp_generation"
+  [ "${driven:-0}" -gt 0 ] &&
+    ok "$driven task(s) carry a ycp_generation (YCP-driven, not planned around the control plane)" ||
+    bad "no relayed task carries a ycp_generation"
 
   # The status filter is the console's primary query. Everything here has finished, so
   # active must be empty while the unfiltered page is not -- which also proves the
   # filter is actually applied rather than ignored.
   active=$(tasks_json '?active=true' | jq -r '.data.total // -1' 2>/dev/null)
-  [ "${active:-1}" = 0 ] \
-    && ok "active=true is empty now that every task has finished" \
-    || bad "active=true returned ${active:-?} with no task in flight (the status filter is not applied)"
+  [ "${active:-1}" = 0 ] &&
+    ok "active=true is empty now that every task has finished" ||
+    bad "active=true returned ${active:-?} with no task in flight (the status filter is not applied)"
 
   succeeded=$(tasks_json '?status=succeeded' | jq -r '.data.total // 0' 2>/dev/null)
-  [ "${succeeded:-0}" -gt 0 ] \
-    && ok "status=succeeded returns $succeeded task(s) — success is persisted, not just observed in flight" \
-    || bad "status=succeeded is empty though $total tasks are recorded"
+  [ "${succeeded:-0}" -gt 0 ] &&
+    ok "status=succeeded returns $succeeded task(s) — success is persisted, not just observed in flight" ||
+    bad "status=succeeded is empty though $total tasks are recorded"
 
   # An unknown status is dropped, not rejected, so a stale console still gets results.
   bogus=$(tasks_json '?status=cancelled' | jq -r '.data.total // -1' 2>/dev/null)
-  [ "${bogus:-−1}" = "$total" ] \
-    && ok "an unrecognized status is dropped, not rejected (still $total)" \
-    || bad "status=cancelled returned ${bogus:-?}, want the unfiltered $total"
+  [ "${bogus:-−1}" = "$total" ] &&
+    ok "an unrecognized status is dropped, not rejected (still $total)" ||
+    bad "status=cancelled returned ${bogus:-?}, want the unfiltered $total"
 
   # One task in full, by id -- the console's detail drawer.
   tid=$(printf '%s' "$tj" | jq -r '.data.items[0].task_id // empty' 2>/dev/null)
   if [ -n "$tid" ]; then
     one=$(curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" \
       "$CP/environments/${YCP_ENV_ID}/tasks/${tid}" 2>/dev/null | jq -r '.data.task_id // empty' 2>/dev/null)
-    [ "$one" = "$tid" ] && ok "GET tasks/$tid returns that task" \
-      || bad "GET tasks/$tid returned '${one:-nothing}'"
+    [ "$one" = "$tid" ] && ok "GET tasks/$tid returns that task" ||
+      bad "GET tasks/$tid returned '${one:-nothing}'"
   fi
 
   # Staleness: the page carries the heartbeat, so a console can tell a task that has
   # not moved from an agent that has stopped talking.
   beat=$(printf '%s' "$tj" | jq -r '.data.last_heartbeat_at // empty' 2>/dev/null)
-  [ -n "$beat" ] && ok "the page reports last_heartbeat_at ($beat)" \
-    || bad "last_heartbeat_at is absent; staleness is indistinguishable from an idle environment"
+  [ -n "$beat" ] && ok "the page reports last_heartbeat_at ($beat)" ||
+    bad "last_heartbeat_at is absent; staleness is indistinguishable from an idle environment"
 
   # History must survive the agent restarting -- the control plane is the durable copy,
   # and the agent forgets what it relayed when its pod goes.
   if kubectl -n "$NS" rollout restart deploy/amp-reconcile-agent >/dev/null 2>&1; then
     kubectl -n "$NS" rollout status deploy/amp-reconcile-agent --timeout=180s >/dev/null 2>&1
     after=$(tasks_json | jq -r '.data.total // -1' 2>/dev/null)
-    [ "${after:-0}" -ge "$total" ] \
-      && ok "task history survived the agent restart ($total -> $after, no rows lost or duplicated)" \
-      || bad "task history shrank across the agent restart ($total -> ${after:-?})"
+    [ "${after:-0}" -ge "$total" ] &&
+      ok "task history survived the agent restart ($total -> $after, no rows lost or duplicated)" ||
+      bad "task history shrank across the agent restart ($total -> ${after:-?})"
   else
     printf '  \033[1;33mskip\033[0m task history across an agent restart (no amp-reconcile-agent deployment)\n'
   fi
@@ -676,16 +697,21 @@ WITH_LB=$(jq -nc --argjson r "$DESIRED" --arg pool "$POOL_NAME" --arg c "$LB_CLU
          {kind:"endpoint", name:$n,
           spec:{role:"read_write", password:$eppw,
                 connectivity:{mode:"nlb_internal", allowed_cidrs:["10.0.0.0/8"]}}} ]')
-set_desired "$WITH_LB" && ok "desired state declares $LB_EP (nlb_internal, allowed_cidrs [10.0.0.0/8])" \
-  || bad "POST desired ($LB_EP) failed"
+set_desired "$WITH_LB" && ok "desired state declares $LB_EP (nlb_internal, allowed_cidrs [10.0.0.0/8])" ||
+  bad "POST desired ($LB_EP) failed"
 # A load balancer is cloud-provisioned, so this waits longer than the writer did.
 lbs=""
-for ((i=0; i<120; i++)); do lbs=$(lb_state); [ "$lbs" = ready ] && break; sleep 5; done
+for ((i = 0; i < 120; i++)); do
+  lbs=$(lb_state)
+  [ "$lbs" = ready ] && break
+  sleep 5
+done
 if [ "$lbs" != ready ]; then
   bad "endpoint $LB_EP not READY (state='${lbs:-none}') — skipping the allowlist change"
 else
   ok "endpoint $LB_EP reported READY"
-  LB_EP_ID=$(lb_attr id); LB_ADDR=$(lb_attr address)
+  LB_EP_ID=$(lb_attr id)
+  LB_ADDR=$(lb_attr address)
   lb_pod=$(kubectl -n "$NS" get pods -l "app.kubernetes.io/instance=yb-ep-${LB_EP_ID}" \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   lb_uid=$(kubectl -n "$NS" get "pod/$lb_pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
@@ -694,37 +720,39 @@ else
   WIDENED=$(jq -nc --argjson r "$WITH_LB" --arg n "$LB_EP_PATH" \
     '[ $r[] | if .kind=="endpoint" and .name==$n
               then .spec.connectivity.allowed_cidrs=["10.0.0.0/8","192.0.2.10/32"] else . end ]')
-  set_desired "$WIDENED" && ok "desired state adds 192.0.2.10/32 to $LB_EP" \
-    || bad "POST desired (widen $LB_EP) failed"
+  set_desired "$WIDENED" && ok "desired state adds 192.0.2.10/32 to $LB_EP" ||
+    bad "POST desired (widen $LB_EP) failed"
   DESIRED="$WIDENED"
 
-  cidrs=""; gen=""
-  for ((i=0; i<60; i++)); do
-    cidrs=$(lb_attr connectivity_allowed_cidrs); gen=$(lb_attr applied_generation)
+  cidrs=""
+  gen=""
+  for ((i = 0; i < 60; i++)); do
+    cidrs=$(lb_attr connectivity_allowed_cidrs)
+    gen=$(lb_attr applied_generation)
     [ "$cidrs" = "10.0.0.0/8,192.0.2.10/32" ] && [ -n "$gen" ] && [ "$gen" != "$gen_before" ] && break
     sleep 5
   done
-  [ "$cidrs" = "10.0.0.0/8,192.0.2.10/32" ] \
-    && ok "inventory reports attrs.connectivity_allowed_cidrs=$cidrs" \
-    || bad "attrs.connectivity_allowed_cidrs='${cidrs:-none}' (state '$(lb_state)'), want 10.0.0.0/8,192.0.2.10/32"
-  [ -n "$gen" ] && [ "$gen" != "$gen_before" ] \
-    && ok "applied_generation advanced to $gen (the update task stamped it)" \
-    || bad "applied_generation='${gen:-none}' did not advance past '${gen_before:-none}'"
+  [ "$cidrs" = "10.0.0.0/8,192.0.2.10/32" ] &&
+    ok "inventory reports attrs.connectivity_allowed_cidrs=$cidrs" ||
+    bad "attrs.connectivity_allowed_cidrs='${cidrs:-none}' (state '$(lb_state)'), want 10.0.0.0/8,192.0.2.10/32"
+  [ -n "$gen" ] && [ "$gen" != "$gen_before" ] &&
+    ok "applied_generation advanced to $gen (the update task stamped it)" ||
+    bad "applied_generation='${gen:-none}' did not advance past '${gen_before:-none}'"
 
   ranges=$(kubectl -n "$NS" get "svc/yb-ep-${LB_EP_ID}-lb" \
     -o jsonpath='{.spec.loadBalancerSourceRanges[*]}' 2>/dev/null | tr ' ' '\n' | sort | paste -sd, -)
-  [ "$ranges" = "10.0.0.0/8,192.0.2.10/32" ] \
-    && ok "Service yb-ep-${LB_EP_ID}-lb carries loadBalancerSourceRanges $ranges" \
-    || bad "Service loadBalancerSourceRanges='${ranges:-none}', want 10.0.0.0/8,192.0.2.10/32"
+  [ "$ranges" = "10.0.0.0/8,192.0.2.10/32" ] &&
+    ok "Service yb-ep-${LB_EP_ID}-lb carries loadBalancerSourceRanges $ranges" ||
+    bad "Service loadBalancerSourceRanges='${ranges:-none}', want 10.0.0.0/8,192.0.2.10/32"
   now_uid=$(kubectl -n "$NS" get "pod/$lb_pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
-  [ -n "$lb_uid" ] && [ "$now_uid" = "$lb_uid" ] \
-    && ok "endpoint pod $lb_pod untouched by the allowlist change" \
-    || bad "endpoint pod changed on an allowlist change (uid '${lb_uid:-none}' -> '${now_uid:-none}')"
-  [ "$(lb_attr address)" = "$LB_ADDR" ] && ok "endpoint address unchanged ($LB_ADDR)" \
-    || bad "endpoint address moved from $LB_ADDR to $(lb_attr address)"
+  [ -n "$lb_uid" ] && [ "$now_uid" = "$lb_uid" ] &&
+    ok "endpoint pod $lb_pod untouched by the allowlist change" ||
+    bad "endpoint pod changed on an allowlist change (uid '${lb_uid:-none}' -> '${now_uid:-none}')"
+  [ "$(lb_attr address)" = "$LB_ADDR" ] && ok "endpoint address unchanged ($LB_ADDR)" ||
+    bad "endpoint address moved from $LB_ADDR to $(lb_attr address)"
   st=$(lb_state)
-  [ "$st" = ready ] && ok "$LB_EP settles back to ready, not drift" \
-    || bad "$LB_EP state='$st' after the allowlist change, want ready"
+  [ "$st" = ready ] && ok "$LB_EP settles back to ready, not drift" ||
+    bad "$LB_EP state='$st' after the allowlist change, want ready"
 fi
 
 # --- authoritative GC: withdraw the cluster subtree, keep the pool ---
@@ -733,15 +761,19 @@ KEEP_POOL=$(jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" \
   '[ {kind:"storage-pool", name:$pool, spec:{owner_user_id:$uid}} ]')
 set_desired "$KEEP_POOL" && ok "desired state reduced to the pool" || bad "POST desired (reduce) failed"
 
-gone=""; left=""
-for ((i=0; i<48; i++)); do
+gone=""
+left=""
+for ((i = 0; i < 48; i++)); do
   ej=$(env_json)
   left=$(printf '%s' "$ej" | jq -r '[.resources[]?|select(.kind=="cluster" or .kind=="endpoint")]|length' 2>/dev/null)
-  [ "${left:-1}" = 0 ] && { gone=1; break; }
+  [ "${left:-1}" = 0 ] && {
+    gone=1
+    break
+  }
   sleep 5
 done
-[ "$gone" = 1 ] && ok "agent deleted the cluster subtree (cascade)" \
-  || bad "cluster/endpoint still present after withdrawal (count=${left:-?})"
+[ "$gone" = 1 ] && ok "agent deleted the cluster subtree (cascade)" ||
+  bad "cluster/endpoint still present after withdrawal (count=${left:-?})"
 
 # --- telemetry actually flows -------------------------------------------------
 # The chart's preflight only WARNS (it exits 0 whatever it finds), and the control
@@ -763,12 +795,12 @@ hdr "byoc telemetry"
 # operator ever renames it this assertion fails loudly rather than silently passing.
 COLLECTOR_SVC="http://yb-amp-controller-controller-collector-monitoring.${NS}.svc.cluster.local:8888/metrics"
 sent=""
-for ((i=0; i<24; i++)); do
+for ((i = 0; i < 24; i++)); do
   kubectl -n "$NS" delete pod byoc-metrics-check --ignore-not-found >/dev/null 2>&1
   sent=$(kubectl -n "$NS" run byoc-metrics-check --rm -i --restart=Never --request-timeout=60s \
-           --image=curlimages/curl:8.11.1 --command -- \
-           sh -c "curl -sS --max-time 15 '$COLLECTOR_SVC' | awk '/^otelcol_exporter_sent_metric_points\{[^}]*exporter=\"otlphttp\/byoc\"/ {print \$2; exit}'" \
-         2>/dev/null | tr -dc '0-9.')
+    --image=curlimages/curl:8.11.1 --command -- \
+    sh -c "curl -sS --max-time 15 '$COLLECTOR_SVC' | awk '/^otelcol_exporter_sent_metric_points\{[^}]*exporter=\"otlphttp\/byoc\"/ {print \$2; exit}'" \
+    2>/dev/null | tr -dc '0-9.')
   [ -n "$sent" ] && [ "${sent%%.*}" -gt 0 ] 2>/dev/null && break
   sleep 10
 done
@@ -779,8 +811,8 @@ else
   # reaching the exporter (upstream) versus the door refusing what it has.
   kubectl -n "$NS" delete pod byoc-metrics-check --ignore-not-found >/dev/null 2>&1
   diag=$(kubectl -n "$NS" run byoc-metrics-check --rm -i --restart=Never --request-timeout=60s \
-           --image=curlimages/curl:8.11.1 --command -- \
-           sh -c "curl -sS --max-time 15 '$COLLECTOR_SVC' | grep -E 'otelcol_exporter_(send_failed_metric_points|queue_size)' | head -4" 2>/dev/null)
+    --image=curlimages/curl:8.11.1 --command -- \
+    sh -c "curl -sS --max-time 15 '$COLLECTOR_SVC' | grep -E 'otelcol_exporter_(send_failed_metric_points|queue_size)' | head -4" 2>/dev/null)
   bad "the byoc exporter never shipped a metric point (sent='${sent:-unset}'); exporter counters: ${diag:-unreadable}"
 fi
 

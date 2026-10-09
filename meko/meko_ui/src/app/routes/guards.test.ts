@@ -16,9 +16,7 @@ describe("resolveGuardRedirect — return_to round-trip", () => {
       ...DEFAULT,
       location: "/datapacks/3a2691ed-2afc-4259-bf50-63d9be9b4eaf",
     });
-    expect(redirect).toBe(
-      "/signin?return_to=%2Fdatapacks%2F3a2691ed-2afc-4259-bf50-63d9be9b4eaf",
-    );
+    expect(redirect).toBe("/signin?return_to=%2Fdatapacks%2F3a2691ed-2afc-4259-bf50-63d9be9b4eaf");
   });
 
   it("preserves the deep-link's own query string in return_to", () => {

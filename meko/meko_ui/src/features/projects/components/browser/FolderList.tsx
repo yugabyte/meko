@@ -14,10 +14,7 @@ import { TruncatedText } from "@/components/ui/truncated-text";
 import { LABEL_NAME_FONT } from "@/features/projects/projectsTypography";
 import { cn } from "@/lib/utils";
 import type { ProjectDatapackNode, ProjectFolder } from "@/lib/api/projectsApi";
-import {
-  isSameSelection,
-  type TreeSelection,
-} from "@/features/projects/lib/projectTree";
+import { isSameSelection, type TreeSelection } from "@/features/projects/lib/projectTree";
 import {
   ADD_FOLDER_LABEL,
   countLabel,
@@ -48,8 +45,7 @@ export function FolderList({
   learningsCount: number;
   className?: string;
 }) {
-  const countIn = (folderId: string) =>
-    datapacks.filter((d) => d.folder_id === folderId).length;
+  const countIn = (folderId: string) => datapacks.filter((d) => d.folder_id === folderId).length;
 
   return (
     <div className={cn("flex min-h-0 flex-col rounded-xl border border-border bg-card", className)}>
@@ -57,7 +53,13 @@ export function FolderList({
         <h2 className="truncate text-sm font-semibold text-foreground">Folders</h2>
         {/* Top right of the folder list, because this is the thing it adds to. */}
         {isOwner ? (
-          <Button type="button" variant="secondary" size="sm" className="gap-1.5" onClick={onAddFolder}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="gap-1.5"
+            onClick={onAddFolder}
+          >
             <Plus className="h-3.5 w-3.5" aria-hidden />
             {ADD_FOLDER_LABEL}
           </Button>

@@ -99,7 +99,11 @@ export function DeployAgentPanel({
         canDeployDedicated={canDeployDedicated}
       />
       {deploymentMode === "shared" ? (
-        <SharedAgentPanel agentSlug={agentSlug} agentDisplayName={agentDisplayName} sourceRepoUrl={sourceRepoUrl} />
+        <SharedAgentPanel
+          agentSlug={agentSlug}
+          agentDisplayName={agentDisplayName}
+          sourceRepoUrl={sourceRepoUrl}
+        />
       ) : (
         <DedicatedAgentPanel
           agentSlug={agentSlug}
@@ -149,7 +153,8 @@ function SharedAgentPanel({
         </p>
       ) : deployment ? (
         <p className="text-xs text-destructive">
-          The shared instance isn't available right now ({deployment.status}). Try deploying your own instead.
+          The shared instance isn't available right now ({deployment.status}). Try deploying your
+          own instead.
         </p>
       ) : (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -183,7 +188,9 @@ function DedicatedAgentPanel({
     return (
       <div className="flex flex-col gap-3 rounded-md border border-border p-4">
         <p className="text-sm font-medium">
-          {isTerminalFailure ? `Couldn't deploy ${agentDisplayName}` : `Deploying ${agentDisplayName}`}
+          {isTerminalFailure
+            ? `Couldn't deploy ${agentDisplayName}`
+            : `Deploying ${agentDisplayName}`}
         </p>
         <AboutAgent
           agentDisplayName={agentDisplayName}
@@ -207,7 +214,11 @@ function DedicatedAgentPanel({
         <p className="text-sm font-medium">Deploy {agentDisplayName}</p>
       </div>
 
-      <AboutAgent agentDisplayName={agentDisplayName} sourceRepoUrl={sourceRepoUrl} containerUri={null} />
+      <AboutAgent
+        agentDisplayName={agentDisplayName}
+        sourceRepoUrl={sourceRepoUrl}
+        containerUri={null}
+      />
 
       <div className="flex flex-col gap-3">
         <DeployStepHeading number={1} title="Choose a runtime" />

@@ -109,23 +109,38 @@ LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,
 # Resolve ENDPOINT_EXPOSE (friendly wrapper) into the endpoint Service type +
 # annotations. Unset => honor an explicit ENDPOINT_SERVICE_TYPE (back-compat).
 case "${ENDPOINT_EXPOSE}" in
-  clusterip)   ENDPOINT_SERVICE_TYPE="ClusterIP";    ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  nodeport)    ENDPOINT_SERVICE_TYPE="NodePort";     ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  internal-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}" ;;
-  external-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
-  "")
-    ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
-    if [ "${ENDPOINT_SERVICE_TYPE}" = "LoadBalancer" ]; then
-      ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}"
-    else
-      ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
-    fi
-    ;;
-  *) die "ENDPOINT_EXPOSE must be clusterip|nodeport|internal-lb|external-lb, got '${ENDPOINT_EXPOSE}'" ;;
+clusterip)
+  ENDPOINT_SERVICE_TYPE="ClusterIP"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+nodeport)
+  ENDPOINT_SERVICE_TYPE="NodePort"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+internal-lb)
+  ENDPOINT_SERVICE_TYPE="LoadBalancer"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}"
+  ;;
+external-lb)
+  ENDPOINT_SERVICE_TYPE="LoadBalancer"
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  ;;
+"")
+  ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
+  if [ "${ENDPOINT_SERVICE_TYPE}" = "LoadBalancer" ]; then
+    ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}"
+  else
+    ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+  fi
+  ;;
+*) die "ENDPOINT_EXPOSE must be clusterip|nodeport|internal-lb|external-lb, got '${ENDPOINT_EXPOSE}'" ;;
 esac
 
-say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
+die() {
+  printf '\033[1;31merror: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 # --- preflight ---
 say "preflight"
@@ -135,8 +150,8 @@ done
 CTX="$(kubectl config current-context 2>/dev/null || true)"
 [ -n "$CTX" ] || die "no kubectl context set"
 aws sts get-caller-identity >/dev/null 2>&1 || die "no usable AWS credentials (needed for ECR login)"
-case "${TLS}" in 0|1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
-case "${TLS_PERMISSIVE}" in 0|1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
+case "${TLS}" in 0 | 1) ;; *) die "TLS must be 0 or 1, got '${TLS}'" ;; esac
+case "${TLS_PERMISSIVE}" in 0 | 1) ;; *) die "TLS_PERMISSIVE must be 0 or 1, got '${TLS_PERMISSIVE}'" ;; esac
 echo "   kube-context : ${CTX}"
 echo "   namespace    : ${NS}"
 echo "   registry     : ${ECR}  (region ${REGION})"
@@ -161,14 +176,14 @@ ensure_pull_secret "${NS}" "${ECR}" "${PULL_SECRET}" "${REGION}"
 
 # --- 3. single-node YugabyteDB ---
 if [ "${TLS}" = "1" ]; then
-NS="${NS}" YB_CHART_VERSION="${YB_CHART_VERSION}" YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG}" \
-YB_STORAGE_SIZE="${YB_STORAGE_SIZE}" YB_STORAGE_CLASS="${YB_STORAGE_CLASS}" \
-YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" TLS_PERMISSIVE="${TLS_PERMISSIVE}" \
-TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
-  "${SCRIPT_DIR}/tls/yugabyte-tls.sh"
+  NS="${NS}" YB_CHART_VERSION="${YB_CHART_VERSION}" YB_CHART_IMAGE_TAG="${YB_CHART_IMAGE_TAG}" \
+    YB_STORAGE_SIZE="${YB_STORAGE_SIZE}" YB_STORAGE_CLASS="${YB_STORAGE_CLASS}" \
+    YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" TLS_PERMISSIVE="${TLS_PERMISSIVE}" \
+    TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
+    "${SCRIPT_DIR}/tls/yugabyte-tls.sh"
 else
-say "YugabyteDB (single-node yugabyted)"
-kubectl apply -f - <<YAML
+  say "YugabyteDB (single-node yugabyted)"
+  kubectl apply -f - <<YAML
 apiVersion: v1
 kind: Service
 metadata:
@@ -247,15 +262,15 @@ spec:
             storage: ${YB_STORAGE_SIZE}
 YAML
 
-echo ">> waiting for yugabyted to be ready (this can take a few minutes on first start)..."
-kubectl -n "${NS}" rollout status statefulset/yugabyted --timeout=900s
+  echo ">> waiting for yugabyted to be ready (this can take a few minutes on first start)..."
+  kubectl -n "${NS}" rollout status statefulset/yugabyted --timeout=900s
 
-# --- 4. the yb_storage database ---
-# The controller's db.Connect targets yb_storage at startup, so it must exist
-# before the controller rolls out. yugabyted binds YSQL to its advertise address
-# (the pod FQDN), so connect there rather than loopback.
-say "database yb_storage"
-kubectl -n "${NS}" exec -i yugabyted-0 -- bash -s <<'REMOTE'
+  # --- 4. the yb_storage database ---
+  # The controller's db.Connect targets yb_storage at startup, so it must exist
+  # before the controller rolls out. yugabyted binds YSQL to its advertise address
+  # (the pod FQDN), so connect there rather than loopback.
+  say "database yb_storage"
+  kubectl -n "${NS}" exec -i yugabyted-0 -- bash -s <<'REMOTE'
 set -euo pipefail
 H="$(hostname -f)"
 # Exactly "1" when the DB exists, empty when absent (-tA = tuples-only/unaligned).
@@ -310,27 +325,27 @@ if [ "${TLS}" = "1" ]; then
   ENDPOINT_YB_USER="${YB_STORAGE_ROLE}"
 fi
 NS="${NS}" \
-TLS="${TLS}" \
-TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" \
-TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}" \
-TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
-ENDPOINT_YB_USER="${ENDPOINT_YB_USER}" \
-PULL_SECRET="${PULL_SECRET}" \
-ECR="${ECR}" \
-REGION="${REGION}" \
-CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO}" \
-ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO}" \
-CONTROLLER_TAG="${CONTROLLER_TAG}" \
-ENDPOINT_TAG="${ENDPOINT_TAG}" \
-YB_HOST_PORTS="${YB_FQDN}:5433" \
-DB_URL="${DB_URL}" \
-CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE}" \
-ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE}" \
-ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS}" \
-ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS}" \
-ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE}" \
-ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR}" \
-LB_ANNOTATIONS="${LB_ANNOTATIONS}" \
+  TLS="${TLS}" \
+  TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" \
+  TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}" \
+  TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" \
+  ENDPOINT_YB_USER="${ENDPOINT_YB_USER}" \
+  PULL_SECRET="${PULL_SECRET}" \
+  ECR="${ECR}" \
+  REGION="${REGION}" \
+  CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO}" \
+  ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO}" \
+  CONTROLLER_TAG="${CONTROLLER_TAG}" \
+  ENDPOINT_TAG="${ENDPOINT_TAG}" \
+  YB_HOST_PORTS="${YB_FQDN}:5433" \
+  DB_URL="${DB_URL}" \
+  CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE}" \
+  ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE}" \
+  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS}" \
+  ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS}" \
+  ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE}" \
+  ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR}" \
+  LB_ANNOTATIONS="${LB_ANNOTATIONS}" \
   "${SCRIPT_DIR}/controller/redeploy.sh"
 
 # --- done ---
@@ -338,53 +353,53 @@ say "stack is up in namespace '${NS}'"
 echo
 echo "  Controller API  (REST API under /api/v1, explorer at /api/v1/docs):"
 case "${CONTROLLER_EXPOSE}" in
-  nodeport)
-    NP="$(kubectl -n "${NS}" get svc amp-controller-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
-    # Prefer an ExternalIP (matches the controller's own node-IP resolver), else InternalIP.
-    NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    if [ -n "${NODEIP}" ] && [ -n "${NP}" ]; then
-      echo "    http://${NODEIP}:${NP}   (NodePort — reachable at any node IP)"
-    else
-      echo "    NodePort still settling — check: kubectl -n ${NS} get svc amp-controller-np"
-    fi
-    ;;
-  internal-lb|external-lb)
-    LBIP="$(kubectl -n "${NS}" get svc amp-controller-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-    if [ -n "${LBIP}" ]; then
-      echo "    http://${LBIP}:8080   (${CONTROLLER_EXPOSE})"
-    else
-      echo "    ${CONTROLLER_EXPOSE} IP still provisioning — watch: kubectl -n ${NS} get svc amp-controller-lb -w"
-    fi
-    ;;
-  *)
-    echo "    (no external Service — port-forward only)"
-    ;;
+nodeport)
+  NP="$(kubectl -n "${NS}" get svc amp-controller-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+  # Prefer an ExternalIP (matches the controller's own node-IP resolver), else InternalIP.
+  NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+  [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+  if [ -n "${NODEIP}" ] && [ -n "${NP}" ]; then
+    echo "    http://${NODEIP}:${NP}   (NodePort — reachable at any node IP)"
+  else
+    echo "    NodePort still settling — check: kubectl -n ${NS} get svc amp-controller-np"
+  fi
+  ;;
+internal-lb | external-lb)
+  LBIP="$(kubectl -n "${NS}" get svc amp-controller-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+  if [ -n "${LBIP}" ]; then
+    echo "    http://${LBIP}:8080   (${CONTROLLER_EXPOSE})"
+  else
+    echo "    ${CONTROLLER_EXPOSE} IP still provisioning — watch: kubectl -n ${NS} get svc amp-controller-lb -w"
+  fi
+  ;;
+*)
+  echo "    (no external Service — port-forward only)"
+  ;;
 esac
 echo
 echo "  AMP UI  (amp_ui SPA, its own pod — proxies /api/ to the controller):"
 case "${CONTROLLER_EXPOSE}" in
-  nodeport)
-    UINP="$(kubectl -n "${NS}" get svc amp-controller-ui-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
-    NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
-    if [ -n "${NODEIP}" ] && [ -n "${UINP}" ]; then
-      echo "    http://${NODEIP}:${UINP}   (NodePort — reachable at any node IP)"
-    else
-      echo "    NodePort still settling — check: kubectl -n ${NS} get svc amp-controller-ui-np"
-    fi
-    ;;
-  internal-lb|external-lb)
-    UILBIP="$(kubectl -n "${NS}" get svc amp-controller-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-    if [ -n "${UILBIP}" ]; then
-      echo "    http://${UILBIP}   (${CONTROLLER_EXPOSE})"
-    else
-      echo "    ${CONTROLLER_EXPOSE} IP still provisioning — watch: kubectl -n ${NS} get svc amp-controller-ui-lb -w"
-    fi
-    ;;
-  *)
-    echo "    (no external Service — port-forward: kubectl -n ${NS} port-forward svc/amp-controller-ui 8081:80)"
-    ;;
+nodeport)
+  UINP="$(kubectl -n "${NS}" get svc amp-controller-ui-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+  NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+  [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+  if [ -n "${NODEIP}" ] && [ -n "${UINP}" ]; then
+    echo "    http://${NODEIP}:${UINP}   (NodePort — reachable at any node IP)"
+  else
+    echo "    NodePort still settling — check: kubectl -n ${NS} get svc amp-controller-ui-np"
+  fi
+  ;;
+internal-lb | external-lb)
+  UILBIP="$(kubectl -n "${NS}" get svc amp-controller-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+  if [ -n "${UILBIP}" ]; then
+    echo "    http://${UILBIP}   (${CONTROLLER_EXPOSE})"
+  else
+    echo "    ${CONTROLLER_EXPOSE} IP still provisioning — watch: kubectl -n ${NS} get svc amp-controller-ui-lb -w"
+  fi
+  ;;
+*)
+  echo "    (no external Service — port-forward: kubectl -n ${NS} port-forward svc/amp-controller-ui 8081:80)"
+  ;;
 esac
 echo
 echo "  From anywhere with kubectl access (works from outside the VPC too):"

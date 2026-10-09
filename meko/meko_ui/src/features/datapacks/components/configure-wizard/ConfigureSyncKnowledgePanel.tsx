@@ -48,7 +48,14 @@ export function ConfigureSyncKnowledgePanel({
   const [includedIds, setIncludedIds] = useState<Set<string>>(() => new Set());
   const [dragOver, setDragOver] = useState(false);
 
-  const idSignature = useMemo(() => items.map((i) => i.id).sort().join("\0"), [items]);
+  const idSignature = useMemo(
+    () =>
+      items
+        .map((i) => i.id)
+        .sort()
+        .join("\0"),
+    [items],
+  );
 
   useEffect(() => {
     setIncludedIds(new Set(items.map((i) => i.id)));
@@ -146,7 +153,9 @@ export function ConfigureSyncKnowledgePanel({
           )}
         >
           <Upload className="h-8 w-8 text-emerald-400" strokeWidth={1.5} aria-hidden />
-          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-200">Drop files or click to upload</p>
+          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-200">
+            Drop files or click to upload
+          </p>
           <p className="text-[11px] text-muted-foreground">{extensionsHint}</p>
         </div>
       </div>
@@ -160,121 +169,132 @@ export function ConfigureSyncKnowledgePanel({
             Detected in project
           </p>
           <ul className="mt-2 space-y-1.5">
-          {items.length === 0 ? (
-            <li className="rounded-md border border-border/50 bg-background/30 px-3 py-6 text-center text-xs text-muted-foreground">
-              No files yet — add files above.
-            </li>
-          ) : (
-            items.map((it) => {
-              const short =
-                it.kind === "file" && it.file
-                  ? (() => {
-                      const s = it.uploadStatus;
-                      if (!s || s === KNOWLEDGE_UPLOAD_STATUS.PENDING) return "Not uploaded";
-                      if (s === KNOWLEDGE_UPLOAD_STATUS.UPLOADING)
-                        return `Uploading${it.uploadProgress != null ? ` ${it.uploadProgress.toFixed(1)}%` : "…"}`;
-                      if (s === KNOWLEDGE_UPLOAD_STATUS.DONE) return it.uploadNote ?? "Uploaded";
-                      if (s === KNOWLEDGE_UPLOAD_STATUS.SKIPPED) return it.uploadNote ?? "Skipped";
-                      if (s === KNOWLEDGE_UPLOAD_STATUS.ERROR) return "Upload failed";
-                      return null;
-                    })()
-                  : null;
-              const failed = it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR;
-              const detail = failed && it.uploadError ? it.uploadError : short ?? undefined;
-              const sizeLabel =
-                it.kind === "file" ? formatFileSize(it.file?.size ?? it.sizeBytes ?? 0) : "—";
-              const canToggle = it.kind === "file" && isPendingOrError(it);
-              const checked = includedIds.has(it.id);
+            {items.length === 0 ? (
+              <li className="rounded-md border border-border/50 bg-background/30 px-3 py-6 text-center text-xs text-muted-foreground">
+                No files yet — add files above.
+              </li>
+            ) : (
+              items.map((it) => {
+                const short =
+                  it.kind === "file" && it.file
+                    ? (() => {
+                        const s = it.uploadStatus;
+                        if (!s || s === KNOWLEDGE_UPLOAD_STATUS.PENDING) return "Not uploaded";
+                        if (s === KNOWLEDGE_UPLOAD_STATUS.UPLOADING)
+                          return `Uploading${it.uploadProgress != null ? ` ${it.uploadProgress.toFixed(1)}%` : "…"}`;
+                        if (s === KNOWLEDGE_UPLOAD_STATUS.DONE) return it.uploadNote ?? "Uploaded";
+                        if (s === KNOWLEDGE_UPLOAD_STATUS.SKIPPED)
+                          return it.uploadNote ?? "Skipped";
+                        if (s === KNOWLEDGE_UPLOAD_STATUS.ERROR) return "Upload failed";
+                        return null;
+                      })()
+                    : null;
+                const failed =
+                  it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR;
+                const detail = failed && it.uploadError ? it.uploadError : (short ?? undefined);
+                const sizeLabel =
+                  it.kind === "file" ? formatFileSize(it.file?.size ?? it.sizeBytes ?? 0) : "—";
+                const canToggle = it.kind === "file" && isPendingOrError(it);
+                const checked = includedIds.has(it.id);
 
-              return (
-                <li
-                  key={it.id}
-                  className={cn(
-                    "rounded-lg border p-2.5",
-                    failed
-                      ? "border-border/55 bg-muted/15 ring-1 ring-inset ring-destructive/20"
-                      : "border-border/50 bg-background/35",
-                  )}
-                >
-                  <div className="flex gap-2.5">
-                    <div className="pt-0.5">
-                      {canToggle ? (
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={() => toggleInclude(it.id)}
-                          aria-label={`Include ${it.label}`}
-                        />
-                      ) : (
-                        <Checkbox
-                          checked
-                          disabled
-                          className="opacity-70"
-                          aria-label={`${it.label} locked`}
-                        />
-                      )}
-                    </div>
-                    <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="truncate text-xs font-medium text-foreground" title={it.label}>
-                          {it.label}
-                        </p>
-                        {!failed ? (
-                          <button
-                            type="button"
-                            className="shrink-0 text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                            onClick={() => onRemove(it.id)}
-                          >
-                            Remove
-                          </button>
-                        ) : null}
+                return (
+                  <li
+                    key={it.id}
+                    className={cn(
+                      "rounded-lg border p-2.5",
+                      failed
+                        ? "border-border/55 bg-muted/15 ring-1 ring-inset ring-destructive/20"
+                        : "border-border/50 bg-background/35",
+                    )}
+                  >
+                    <div className="flex gap-2.5">
+                      <div className="pt-0.5">
+                        {canToggle ? (
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleInclude(it.id)}
+                            aria-label={`Include ${it.label}`}
+                          />
+                        ) : (
+                          <Checkbox
+                            checked
+                            disabled
+                            className="opacity-70"
+                            aria-label={`${it.label} locked`}
+                          />
+                        )}
                       </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
-                        <span className="tabular-nums text-muted-foreground">{sizeLabel}</span>
-                        {short ? (
-                          failed && detail ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="cursor-default font-medium text-destructive/95" tabIndex={0}>
-                                  {short}
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-xs text-xs">
-                                {detail}
-                              </TooltipContent>
-                            </Tooltip>
-                          ) : (
-                            <span className="text-muted-foreground/90">{short}</span>
-                          )
-                        ) : null}
-                      </div>
-                      {failed ? (
-                        <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-7 border-border/70 text-xs text-foreground hover:bg-muted/60"
-                            disabled={knowledgeUploading}
-                            onClick={() => onRetryKnowledgeUpload(it.id)}
+                      <FileText
+                        className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                        aria-hidden
+                      />
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <p
+                            className="truncate text-xs font-medium text-foreground"
+                            title={it.label}
                           >
-                            Try again
-                          </Button>
-                          <button
-                            type="button"
-                            className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                            onClick={() => onRemove(it.id)}
-                          >
-                            Remove
-                          </button>
+                            {it.label}
+                          </p>
+                          {!failed ? (
+                            <button
+                              type="button"
+                              className="shrink-0 text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                              onClick={() => onRemove(it.id)}
+                            >
+                              Remove
+                            </button>
+                          ) : null}
                         </div>
-                      ) : null}
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
+                          <span className="tabular-nums text-muted-foreground">{sizeLabel}</span>
+                          {short ? (
+                            failed && detail ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    className="cursor-default font-medium text-destructive/95"
+                                    tabIndex={0}
+                                  >
+                                    {short}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs text-xs">
+                                  {detail}
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <span className="text-muted-foreground/90">{short}</span>
+                            )
+                          ) : null}
+                        </div>
+                        {failed ? (
+                          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 border-border/70 text-xs text-foreground hover:bg-muted/60"
+                              disabled={knowledgeUploading}
+                              onClick={() => onRetryKnowledgeUpload(it.id)}
+                            >
+                              Try again
+                            </Button>
+                            <button
+                              type="button"
+                              className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                              onClick={() => onRemove(it.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              );
-            })
-          )}
+                  </li>
+                );
+              })
+            )}
           </ul>
 
           {hasKnowledgeUploadErrors ? (
@@ -284,8 +304,10 @@ export function ConfigureSyncKnowledgePanel({
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive/75" aria-hidden />
               <span>
-                Some uploads failed. Use <span className="font-medium text-foreground">Try again</span> on a row, then{" "}
-                <span className="font-medium text-foreground">Upload files</span>, or remove and re-add the file.
+                Some uploads failed. Use{" "}
+                <span className="font-medium text-foreground">Try again</span> on a row, then{" "}
+                <span className="font-medium text-foreground">Upload files</span>, or remove and
+                re-add the file.
               </span>
             </div>
           ) : null}
@@ -312,7 +334,11 @@ export function ConfigureSyncKnowledgePanel({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex w-full justify-center sm:justify-start">
-                  <button type="button" disabled className="cursor-not-allowed text-sm text-muted-foreground/50">
+                  <button
+                    type="button"
+                    disabled
+                    className="cursor-not-allowed text-sm text-muted-foreground/50"
+                  >
                     + Add URL or external source
                   </button>
                 </span>

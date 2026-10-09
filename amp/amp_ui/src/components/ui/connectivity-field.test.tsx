@@ -36,10 +36,7 @@ describe("ConnectivityField", () => {
     expect(screen.queryByLabelText(/allowed cidrs/i)).toBeNull();
 
     rerender(
-      <ConnectivityField
-        value={{ mode: "nlb_internal", allowedCidrs: "" }}
-        onChange={vi.fn()}
-      />,
+      <ConnectivityField value={{ mode: "nlb_internal", allowedCidrs: "" }} onChange={vi.fn()} />,
     );
     expect(screen.getByLabelText(/allowed cidrs/i)).toBeTruthy();
   });
@@ -86,19 +83,13 @@ describe("ConnectivityWarning", () => {
   // nlb_external there is no entry that would narrow it.
   it("warns on ingress_external even with CIDRs typed", () => {
     render(
-      <ConnectivityWarning
-        value={{ mode: "ingress_external", allowedCidrs: "10.0.0.0/8" }}
-      />,
+      <ConnectivityWarning value={{ mode: "ingress_external", allowedCidrs: "10.0.0.0/8" }} />,
     );
     expect(screen.getByText(/public internet/i)).toBeTruthy();
   });
 
   it("stays quiet on an internal ingress shard", () => {
-    render(
-      <ConnectivityWarning
-        value={{ mode: "ingress_internal", allowedCidrs: "" }}
-      />,
-    );
+    render(<ConnectivityWarning value={{ mode: "ingress_internal", allowedCidrs: "" }} />);
     expect(screen.queryByText(/public internet/i)).toBeNull();
   });
 });

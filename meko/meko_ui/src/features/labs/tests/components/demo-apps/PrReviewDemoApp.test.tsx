@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { invokeDeployment, invokeSharedDeployment, type ReviewStreamEvent } from "@/lib/api/deploymentInvokeApi";
+import {
+  invokeDeployment,
+  invokeSharedDeployment,
+  type ReviewStreamEvent,
+} from "@/lib/api/deploymentInvokeApi";
 import type { useLabRunnerSession } from "@/features/labs/hooks/useLabRunnerSession";
 import type { LabDemoAppConfig } from "@/features/labs/types";
-import { MODEL_LABELS, MODEL_OPTIONS } from "@/features/labs/components/demo-apps/ReviewAgentConfigPanel";
+import {
+  MODEL_LABELS,
+  MODEL_OPTIONS,
+} from "@/features/labs/components/demo-apps/ReviewAgentConfigPanel";
 import { DEFAULT_REVIEW_AGENT_CONFIG } from "@/features/labs/components/demo-apps/ReviewAgentConfigPanel";
 import { PrReviewDemoApp } from "@/features/labs/components/demo-apps/PrReviewDemoApp";
 
@@ -42,7 +49,10 @@ const DEMO_APP: LabDemoAppConfig = { kind: "pr-review-chat", agentDisplayName: "
 const DEMO_APP_WITH_DEPLOYABLE: LabDemoAppConfig = {
   kind: "pr-review-chat",
   agentDisplayName: "AgentK",
-  deployable: { agentSlug: "adlc-review-agent", sourceRepoUrl: "https://github.com/yugabyte/canned-agents" },
+  deployable: {
+    agentSlug: "adlc-review-agent",
+    sourceRepoUrl: "https://github.com/yugabyte/canned-agents",
+  },
 };
 
 function fakeSession(
@@ -78,7 +88,9 @@ function fakeSession(
     clearDeployment: vi.fn(),
     deploymentMode: "dedicated" as const,
     selectDeploymentMode: vi.fn(),
-    deployment: { id: "dep-1", status: "active" } as ReturnType<typeof useLabRunnerSession>["deployment"],
+    deployment: { id: "dep-1", status: "active" } as ReturnType<
+      typeof useLabRunnerSession
+    >["deployment"],
     deploymentActive: true,
     ampClusterId: null,
     ampBranchId: null,
@@ -97,14 +109,26 @@ beforeEach(() => {
 
 describe("PrReviewDemoApp guided-customization wiring", () => {
   it("shows the config panel and Run review button immediately, before running anything", () => {
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     expect(screen.getByRole("button", { name: /run review/i })).toBeTruthy();
     expect(mockInvokeDeployment).not.toHaveBeenCalled();
   });
 
   it("shows no diff preview before running when using the bundled sample (it has its own earlier stage)", () => {
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
     expect(screen.queryByText(/view on github/i)).toBeNull();
   });
 
@@ -145,7 +169,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   });
 
   it("defaults both switches on and sends them, plus the default model, with the sample diff run", async () => {
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -160,11 +190,14 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     expect(payload.model).toBe(MODEL_OPTIONS[0].value);
   });
 
-
-
-
   it("shows no usage line when the deployed image predates this feature (no usage on done)", async () => {
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -224,11 +257,19 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         {
           type: "done",
           review: "**CRITICAL** — SQL injection.",
-          findings: [{ severity: "critical", location: "api/spend.py:16", comment: "SQL injection." }],
+          findings: [
+            { severity: "critical", location: "api/spend.py:16", comment: "SQL injection." },
+          ],
         },
       ]),
     );
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -253,7 +294,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: "Looks fine, no issues." },
       ]),
     );
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -319,7 +366,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: malformed, findings: [] },
       ]),
     );
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -344,11 +397,19 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: "Sure, here's my review: looks fine!", findings: [] },
       ]),
     );
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
-    await waitFor(() => expect(screen.getByText("Sure, here's my review: looks fine!")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("Sure, here's my review: looks fine!")).toBeTruthy(),
+    );
     expect(screen.queryByText(/no issues found/i)).toBeNull();
   });
 
@@ -362,7 +423,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         { type: "done", review: "No issues found.", findings: [] },
       ]),
     );
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -370,7 +437,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   });
 
   it("never renders a Deploy panel, even for a deployable lab, even after a review completes", async () => {
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP_WITH_DEPLOYABLE} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP_WITH_DEPLOYABLE}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
     await waitFor(() => expect(mockInvokeDeployment).toHaveBeenCalledTimes(1));
@@ -380,7 +453,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
   });
 
   it("sends a follow-up question against the same conversation once the review is done", async () => {
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
     await waitFor(() => expect(screen.getByText("Looks good.")).toBeTruthy());
@@ -430,7 +509,13 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
     }
     mockInvokeDeployment.mockReturnValue(hangingStream());
 
-    const { unmount } = render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} />);
+    const { unmount } = render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
     await waitFor(() => expect(mockInvokeDeployment).toHaveBeenCalledTimes(1));
@@ -444,7 +529,14 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
 
   it("reports the completed review's results via onRunChange", async () => {
     const onRunChange = vi.fn();
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} onRunChange={onRunChange} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        onRunChange={onRunChange}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /run review/i }));
 
@@ -464,7 +556,11 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
         reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession()}
-        prSource={{ title: "Fix the thing", diff: "diff --git a/x b/x\n", htmlUrl: "https://github.com/acme/widgets/pull/42" }}
+        prSource={{
+          title: "Fix the thing",
+          diff: "diff --git a/x b/x\n",
+          htmlUrl: "https://github.com/acme/widgets/pull/42",
+        }}
         onRunChange={onRunChange}
       />,
     );
@@ -498,7 +594,14 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
       sendError: null,
       durationMs: null,
     };
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        savedRun={savedRun}
+      />,
+    );
 
     // The pre-review config panel/Run review button must NOT reappear --
     // this is what "navigate away and back" needs to avoid, since it would
@@ -532,7 +635,14 @@ describe("PrReviewDemoApp guided-customization wiring", () => {
       durationMs: null,
     };
     // No `prSource` prop passed -- exactly the remounted-after-navigation case.
-    render(<PrReviewDemoApp reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG} demoApp={DEMO_APP} session={fakeSession()} savedRun={savedRun} />);
+    render(
+      <PrReviewDemoApp
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        demoApp={DEMO_APP}
+        session={fakeSession()}
+        savedRun={savedRun}
+      />,
+    );
 
     expect(screen.queryByText("Sample PR")).toBeNull();
     const link = screen.getByRole("link", { name: /view on github/i }) as HTMLAnchorElement;

@@ -39,13 +39,34 @@ image="amp-build-tools"
 tag="v2"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --push) push=true; shift ;;
-    --registry) registry="${2:?--registry needs a value}"; shift 2 ;;
-    --image) image="${2:?--image needs a value}"; shift 2 ;;
-    --tag) tag="${2:?--tag needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
-    -*) echo "unknown flag: $1" >&2; exit 2 ;;
-    *) echo "unexpected argument: $1" >&2; exit 2 ;;
+  --push)
+    push=true
+    shift
+    ;;
+  --registry)
+    registry="${2:?--registry needs a value}"
+    shift 2
+    ;;
+  --image)
+    image="${2:?--image needs a value}"
+    shift 2
+    ;;
+  --tag)
+    tag="${2:?--tag needs a value}"
+    shift 2
+    ;;
+  -h | --help)
+    sed -n '2,29p' "$0"
+    exit 0
+    ;;
+  -*)
+    echo "unknown flag: $1" >&2
+    exit 2
+    ;;
+  *)
+    echo "unexpected argument: $1" >&2
+    exit 2
+    ;;
   esac
 done
 

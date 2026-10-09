@@ -153,9 +153,7 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
               >
                 <KeyRound className="h-3 w-3" aria-hidden />
                 <span className="font-medium">{k.name}</span>
-                <code className="font-mono text-foreground/85">
-                  {k.token_prefix}…
-                </code>
+                <code className="font-mono text-foreground/85">{k.token_prefix}…</code>
               </Badge>
             </li>
           ))}

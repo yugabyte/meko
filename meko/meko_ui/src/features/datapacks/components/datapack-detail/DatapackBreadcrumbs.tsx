@@ -24,11 +24,12 @@ export function DatapackBreadcrumbs({ items, className }: Props) {
     >
       {items.map((item, index) => (
         <Fragment key={`${item.label}-${index}`}>
-          {index > 0 ? (
-            <ChevronRight className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
-          ) : null}
+          {index > 0 ? <ChevronRight className="h-4 w-4 shrink-0 opacity-60" aria-hidden /> : null}
           {item.href ? (
-            <Link to={item.href} className="hover:text-foreground transition-colors truncate max-w-[12rem] sm:max-w-none">
+            <Link
+              to={item.href}
+              className="hover:text-foreground transition-colors truncate max-w-[12rem] sm:max-w-none"
+            >
               {item.label}
             </Link>
           ) : (

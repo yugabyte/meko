@@ -57,17 +57,23 @@ export function isDatapackGrantEligibleToEdit(dp: { grant?: DatapackShareGrant |
   return userGrant === DATAPACK_SHARE_GRANT_OWNER;
 }
 
-export function isDatapackGrantEligibleToDelete(dp: { grant?: DatapackShareGrant | null }): boolean {
+export function isDatapackGrantEligibleToDelete(dp: {
+  grant?: DatapackShareGrant | null;
+}): boolean {
   const userGrant = dp.grant;
   return userGrant === DATAPACK_SHARE_GRANT_OWNER;
 }
 
-export function isDatapackGrantEligibleToAddKnowledgeBase(dp: { grant?: DatapackShareGrant | null }): boolean {
+export function isDatapackGrantEligibleToAddKnowledgeBase(dp: {
+  grant?: DatapackShareGrant | null;
+}): boolean {
   const userGrant = dp.grant;
   return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
 }
 
-export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: { grant?: DatapackShareGrant | null }): boolean {
+export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: {
+  grant?: DatapackShareGrant | null;
+}): boolean {
   const userGrant = dp.grant;
   return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
 }
@@ -79,9 +85,9 @@ export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: { grant?: 
  * is read-only — letting a viewer "chat" would fail on the first turn
  * with a permission error from MCP.
  */
-export function isDatapackGrantEligibleForWorkbenchLM(
-  dp: { grant?: DatapackShareGrant | null },
-): boolean {
+export function isDatapackGrantEligibleForWorkbenchLM(dp: {
+  grant?: DatapackShareGrant | null;
+}): boolean {
   const userGrant = dp.grant;
   return (
     userGrant === DATAPACK_SHARE_GRANT_OWNER ||

@@ -124,7 +124,6 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
                   {project.owner_name || "you"}
                 </p>
               </div>
-
             </div>
 
             {/* On its own line rather than prefixed to the counts above,
@@ -136,11 +135,7 @@ export default function ProjectDetailPage({ projectId }: { projectId: string }) 
               </p>
             ) : null}
 
-            <Tabs
-              value={tab}
-              onValueChange={(v) => setTab(v as ProjectTab)}
-              className="space-y-6"
-            >
+            <Tabs value={tab} onValueChange={(v) => setTab(v as ProjectTab)} className="space-y-6">
               <TabsList>
                 <TabsTrigger value="folders">{PROJECT_TAB_FOLDERS}</TabsTrigger>
                 <TabsTrigger value="activity">{PROJECT_TAB_ACTIVITY}</TabsTrigger>

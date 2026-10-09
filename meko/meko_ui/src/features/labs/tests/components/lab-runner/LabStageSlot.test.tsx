@@ -20,12 +20,16 @@ function stubReviewStage({
 }) {
   return (
     <div>
-      <button onClick={() => onRunChange?.({ reviewText: "Looks good." })}>simulate review complete</button>
+      <button onClick={() => onRunChange?.({ reviewText: "Looks good." })}>
+        simulate review complete
+      </button>
       <div data-testid="review-text">{savedRun?.reviewText ?? "(none)"}</div>
     </div>
   );
 }
-vi.mock("@/features/labs/components/demo-apps/PrReviewDemoApp", () => ({ PrReviewDemoApp: stubReviewStage }));
+vi.mock("@/features/labs/components/demo-apps/PrReviewDemoApp", () => ({
+  PrReviewDemoApp: stubReviewStage,
+}));
 // Chapter 4's review now lives inside MakeItYoursStage, which also reads a
 // datapack rollup over the network -- stubbed to the same review shim so
 // these stay tests of LabStageSlot's own state.
@@ -58,13 +62,19 @@ const MAKE_IT_YOURS_STAGE: LabStage = {
 const LAB = {
   id: "adlc-review-agent",
   demoApp: { kind: "pr-review-chat", agentDisplayName: "AgentK" },
-  chapters: [{ id: "c1", title: "Chapter", summary: "", stages: [GUARDRAIL_STAGE, RUN_REVIEW_STAGE] }],
+  chapters: [
+    { id: "c1", title: "Chapter", summary: "", stages: [GUARDRAIL_STAGE, RUN_REVIEW_STAGE] },
+  ],
 } as unknown as LabDefinition;
 
-const SESSION = { datapackId: "dp-1", deploymentActive: true } as unknown as ReturnType<typeof useLabRunnerSession>;
+const SESSION = { datapackId: "dp-1", deploymentActive: true } as unknown as ReturnType<
+  typeof useLabRunnerSession
+>;
 
 function fakeSession(datapackId: string): ReturnType<typeof useLabRunnerSession> {
-  return { datapackId, deploymentActive: true } as unknown as ReturnType<typeof useLabRunnerSession>;
+  return { datapackId, deploymentActive: true } as unknown as ReturnType<
+    typeof useLabRunnerSession
+  >;
 }
 
 function fakeProgress(stage: LabStage): ReturnType<typeof useLabProgress> {
@@ -91,25 +101,55 @@ afterEach(cleanup);
 
 describe("LabStageSlot", () => {
   it("keeps a completed review's results after navigating to another stage and back", () => {
-    const { rerender } = render(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
+    const { rerender } = render(
+      <LabStageSlot
+        lab={LAB}
+        session={SESSION}
+        progress={fakeProgress(RUN_REVIEW_STAGE)}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
+    );
 
     expect(screen.getByTestId("review-text").textContent).toBe("(none)");
     fireEvent.click(screen.getByText("simulate review complete"));
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
 
     // Navigate away -- PrReviewDemoApp's mock unmounts entirely.
-    rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(GUARDRAIL_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
+    rerender(
+      <LabStageSlot
+        lab={LAB}
+        session={SESSION}
+        progress={fakeProgress(GUARDRAIL_STAGE)}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
+    );
     expect(screen.queryByTestId("review-text")).toBeNull();
 
     // Navigate back -- the same LabStageSlot instance re-passes its own
     // reviewRun state back in as savedRun, so the result is still there.
-    rerender(<LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress(RUN_REVIEW_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
+    rerender(
+      <LabStageSlot
+        lab={LAB}
+        session={SESSION}
+        progress={fakeProgress(RUN_REVIEW_STAGE)}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
+    );
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
   });
 
   it("clears Chapter 4's byocReviewRun once session.datapackId actually changes", () => {
     const { rerender } = render(
-      <LabStageSlot lab={LAB} session={fakeSession("dp-1")} progress={fakeProgress(MAKE_IT_YOURS_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />,
+      <LabStageSlot
+        lab={LAB}
+        session={fakeSession("dp-1")}
+        progress={fakeProgress(MAKE_IT_YOURS_STAGE)}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
     );
     fireEvent.click(screen.getByText("simulate review complete"));
     expect(screen.getByTestId("review-text").textContent).toBe("Looks good.");
@@ -117,7 +157,15 @@ describe("LabStageSlot", () => {
     // Chapter 4's own choose-datapack-again stage can change session.datapackId
     // mid-chapter -- a review run against the OLD datapack must not keep
     // showing (and blocking the fetch form) once the datapack switches.
-    rerender(<LabStageSlot lab={LAB} session={fakeSession("dp-2")} progress={fakeProgress(MAKE_IT_YOURS_STAGE)} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />);
+    rerender(
+      <LabStageSlot
+        lab={LAB}
+        session={fakeSession("dp-2")}
+        progress={fakeProgress(MAKE_IT_YOURS_STAGE)}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
+    );
     expect(screen.getByTestId("review-text").textContent).toBe("(none)");
   });
 });

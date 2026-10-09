@@ -73,7 +73,11 @@ export async function uploadFileToS3(
     xhr.upload.onload = () => {
       clearTimeout(stallTimer);
       stallTimer = setTimeout(() => {
-        reject(new Error(`Upload response timed out (no response for ${UPLOAD_RESPONSE_TIMEOUT_MS / 1000}s)`));
+        reject(
+          new Error(
+            `Upload response timed out (no response for ${UPLOAD_RESPONSE_TIMEOUT_MS / 1000}s)`,
+          ),
+        );
         xhr.abort();
       }, UPLOAD_RESPONSE_TIMEOUT_MS);
     };
@@ -104,8 +108,7 @@ export async function uploadFileToS3(
       });
       reject(
         new Error(
-          `Could not reach the upload server at ${safeOrigin(url)}. ` +
-            `Please contact support.`,
+          `Could not reach the upload server at ${safeOrigin(url)}. ` + `Please contact support.`,
         ),
       );
     };

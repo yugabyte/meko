@@ -14,7 +14,13 @@ import { useState, type ReactNode } from "react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -116,7 +122,12 @@ function ToggleChip({
           : "border-border bg-muted/40 text-muted-foreground",
       )}
     >
-      <span className={cn("h-1.5 w-1.5 flex-none rounded-full", checked ? "bg-primary" : "bg-muted-foreground/50")} />
+      <span
+        className={cn(
+          "h-1.5 w-1.5 flex-none rounded-full",
+          checked ? "bg-primary" : "bg-muted-foreground/50",
+        )}
+      />
       {children}
     </button>
   );
@@ -146,47 +157,47 @@ export function ReviewAgentConfigPanel({
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border p-4">
       {!hideTools && (
-      <div className="flex flex-wrap items-center gap-2">
-        <ToggleChip
-          id="review-agent-use-kb"
-          checked={value.useKnowledgeBase}
-          onCheckedChange={(checked) => onChange({ ...value, useKnowledgeBase: checked })}
-        >
-          <code className="font-mono">knowledgebase_search</code>
-        </ToggleChip>
-        <ToggleChip
-          id="review-agent-use-memories"
-          checked={value.useMemories}
-          onCheckedChange={(checked) => onChange({ ...value, useMemories: checked })}
-        >
-          <code className="font-mono">memory_search</code>
-        </ToggleChip>
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ToggleChip
+            id="review-agent-use-kb"
+            checked={value.useKnowledgeBase}
+            onCheckedChange={(checked) => onChange({ ...value, useKnowledgeBase: checked })}
+          >
+            <code className="font-mono">knowledgebase_search</code>
+          </ToggleChip>
+          <ToggleChip
+            id="review-agent-use-memories"
+            checked={value.useMemories}
+            onCheckedChange={(checked) => onChange({ ...value, useMemories: checked })}
+          >
+            <code className="font-mono">memory_search</code>
+          </ToggleChip>
+        </div>
       )}
 
       {!hideModel && (
-      <div>
-        <Label htmlFor="review-agent-model">Model</Label>
-        <Select
-          value={value.model}
-          onValueChange={(v) => onChange({ ...value, model: v as SlmModelId })}
-        >
-          <SelectTrigger id="review-agent-model">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {MODEL_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Reviewed with a smaller model, grounded in the same context, to compare against
-          Claude's reference review above.
-        </p>
-      </div>
+        <div>
+          <Label htmlFor="review-agent-model">Model</Label>
+          <Select
+            value={value.model}
+            onValueChange={(v) => onChange({ ...value, model: v as SlmModelId })}
+          >
+            <SelectTrigger id="review-agent-model">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODEL_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Reviewed with a smaller model, grounded in the same context, to compare against Claude's
+            reference review above.
+          </p>
+        </div>
       )}
 
       <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
@@ -199,7 +210,9 @@ export function ReviewAgentConfigPanel({
               <Label htmlFor="review-agent-tone">Tone</Label>
               <Select
                 value={value.tone ?? UNSET}
-                onValueChange={(v) => onChange({ ...value, tone: v === UNSET ? undefined : (v as ReviewTone) })}
+                onValueChange={(v) =>
+                  onChange({ ...value, tone: v === UNSET ? undefined : (v as ReviewTone) })
+                }
               >
                 <SelectTrigger id="review-agent-tone">
                   <SelectValue />
@@ -219,7 +232,10 @@ export function ReviewAgentConfigPanel({
               <Select
                 value={value.strictness ?? UNSET}
                 onValueChange={(v) =>
-                  onChange({ ...value, strictness: v === UNSET ? undefined : (v as ReviewStrictness) })
+                  onChange({
+                    ...value,
+                    strictness: v === UNSET ? undefined : (v as ReviewStrictness),
+                  })
                 }
               >
                 <SelectTrigger id="review-agent-strictness">
@@ -251,8 +267,8 @@ export function ReviewAgentConfigPanel({
               onChange={(e) => onChange({ ...value, focus: e.target.value })}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              Treated as advisory context, not new instructions. {agentDisplayName} still follows its
-              review rules.
+              Treated as advisory context, not new instructions. {agentDisplayName} still follows
+              its review rules.
             </p>
           </div>
         </CollapsibleContent>

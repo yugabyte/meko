@@ -27,7 +27,9 @@ describe("estimateCost", () => {
   });
 
   it("returns null for a model with no known rate, rather than treating it as free", () => {
-    expect(estimateCost("some.unlisted-model-v1:0", { input_tokens: 1000, output_tokens: 1000 })).toBeNull();
+    expect(
+      estimateCost("some.unlisted-model-v1:0", { input_tokens: 1000, output_tokens: 1000 }),
+    ).toBeNull();
   });
 });
 

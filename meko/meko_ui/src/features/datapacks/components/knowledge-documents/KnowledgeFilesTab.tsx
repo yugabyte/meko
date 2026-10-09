@@ -153,7 +153,9 @@ export function KnowledgeFilesTab({
       {/* Always mounted, hidden via CSS -- collapsing used to unmount
           FileUpload and lose staged files. `key` still remounts on
           datapack switch so state doesn't leak across datapacks. */}
-      <section className={cn("rounded-xl border border-border bg-card p-6", !uploadOpen && "hidden")}>
+      <section
+        className={cn("rounded-xl border border-border bg-card p-6", !uploadOpen && "hidden")}
+      >
         <FileUpload
           key={datapackId}
           datapackName={datapackName}
@@ -328,10 +330,7 @@ function SummaryCard({
  *  and the "Heaviest source: …" sentence so we can render them on
  *  separate lines. Falls back gracefully when the heaviest part isn't
  *  present (no files, or no doc has chunks). */
-function splitSummary(
-  raw: string,
-  heaviestSourceName: string | null,
-): [string, string] {
+function splitSummary(raw: string, heaviestSourceName: string | null): [string, string] {
   if (!raw) return ["", ""];
   const idx = raw.indexOf("Heaviest source:");
   if (idx < 0) return [raw, ""];

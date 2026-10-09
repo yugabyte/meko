@@ -28,7 +28,6 @@ import { isValidMemory } from "@/lib/compute";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeInstance } from "./ComputeInstance";
 
-
 export function EndpointsSection({
   poolId,
   clusterId,
@@ -93,8 +92,7 @@ export function EndpointsSection({
           toast.success(msg.provisionSuccess(endpoint.role.replace("_", "-")));
           setPassword("");
         },
-        onError: (err) =>
-          toast.error(err instanceof Error ? err.message : msg.provisionError),
+        onError: (err) => toast.error(err instanceof Error ? err.message : msg.provisionError),
       },
     );
   }
@@ -137,7 +135,10 @@ export function EndpointsSection({
           </SelectContent>
         </Select>
         <div className="flex flex-col gap-1">
-          <Label htmlFor="ep-cpu" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          <Label
+            htmlFor="ep-cpu"
+            className="text-[10px] uppercase tracking-wide text-muted-foreground"
+          >
             CPU
           </Label>
           <Input
@@ -149,7 +150,10 @@ export function EndpointsSection({
           />
         </div>
         <div className="flex flex-col gap-1">
-          <Label htmlFor="ep-memory" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          <Label
+            htmlFor="ep-memory"
+            className="text-[10px] uppercase tracking-wide text-muted-foreground"
+          >
             Memory
           </Label>
           <Input
@@ -162,25 +166,28 @@ export function EndpointsSection({
             className="h-8 w-24 font-mono text-xs"
           />
         </div>
-{/* Roles live in the branch's catalog, which every endpoint on it shares,
+        {/* Roles live in the branch's catalog, which every endpoint on it shares,
             so only the writer creates one — the controller rejects these on a
             read-only endpoint rather than rotating the writer's credential. */}
         {role === "read_write" && (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="ep-password" className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Password
-              </Label>
-              <Input
-                id="ep-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="required"
-                title={msg.passwordHint}
-                aria-invalid={!passwordValid}
-                className="h-8 w-32 font-mono text-xs"
-              />
-            </div>
+          <div className="flex flex-col gap-1">
+            <Label
+              htmlFor="ep-password"
+              className="text-[10px] uppercase tracking-wide text-muted-foreground"
+            >
+              Password
+            </Label>
+            <Input
+              id="ep-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="required"
+              title={msg.passwordHint}
+              aria-invalid={!passwordValid}
+              className="h-8 w-32 font-mono text-xs"
+            />
+          </div>
         )}
         <ConnectivityField value={connectivity} onChange={setConnectivity} layout="row" />
         <Button

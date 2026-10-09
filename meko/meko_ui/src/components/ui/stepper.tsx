@@ -25,7 +25,8 @@ export function Stepper({
               <div
                 className={cn(
                   "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold transition-colors",
-                  done && "border-emerald-500/80 bg-emerald-500/20 text-emerald-700 dark:text-emerald-200",
+                  done &&
+                    "border-emerald-500/80 bg-emerald-500/20 text-emerald-700 dark:text-emerald-200",
                   active && !done && "border-brand bg-brand/20 text-brand",
                   !active && !done && "border-border bg-muted/40 text-muted-foreground",
                 )}

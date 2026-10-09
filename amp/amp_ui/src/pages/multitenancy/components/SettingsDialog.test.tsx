@@ -41,11 +41,7 @@ function saveAndReply(result: unknown): string {
   return String(toastSuccess.mock.calls.at(-1)?.[0]);
 }
 
-function view(props: {
-  open?: boolean;
-  endpointId?: string;
-  stored?: Record<string, unknown>;
-}) {
+function view(props: { open?: boolean; endpointId?: string; stored?: Record<string, unknown> }) {
   return (
     <QueryClientProvider client={new QueryClient()}>
       <SettingsDialog
@@ -134,7 +130,7 @@ describe("SettingsDialog", () => {
       stored: {
         pageserver_settings: {
           "tenant_config.enable_gc": true,
-          "yb_payload_compression": "none",
+          yb_payload_compression: "none",
         },
       },
     });
@@ -158,9 +154,7 @@ describe("SettingsDialog", () => {
     fireEvent.change(valueBox("pageserver_settings"), { target: { value: "false" } });
     save();
     expect(
-      updateEndpoint.mock.calls[0][0].settings.pageserver_settings[
-        "tenant_config.enable_gc"
-      ],
+      updateEndpoint.mock.calls[0][0].settings.pageserver_settings["tenant_config.enable_gc"],
     ).toBe(false);
   });
 

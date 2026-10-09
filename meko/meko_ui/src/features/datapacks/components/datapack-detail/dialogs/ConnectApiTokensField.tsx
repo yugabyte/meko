@@ -69,7 +69,10 @@ export function ConnectApiTokensField({
                 key={t.id}
                 className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2"
               >
-                <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-700 dark:text-blue-300" aria-hidden />
+                <KeyRound
+                  className="h-3.5 w-3.5 shrink-0 text-blue-700 dark:text-blue-300"
+                  aria-hidden
+                />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-foreground">{t.name}</div>
                   <code className="block min-w-0 truncate font-mono text-[11px] text-muted-foreground">

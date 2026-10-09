@@ -22,11 +22,15 @@ describe("DeploymentModeChooser", () => {
 
   it("renders the dedicated card as disabled, with no clickable role, when not allowed", () => {
     const onSelect = vi.fn();
-    render(<DeploymentModeChooser selected="shared" onSelect={onSelect} canDeployDedicated={false} />);
+    render(
+      <DeploymentModeChooser selected="shared" onSelect={onSelect} canDeployDedicated={false} />,
+    );
 
     const card = screen.getByText("Deploy your own dedicated AgentK").closest("[aria-disabled]");
     expect(card?.getAttribute("aria-disabled")).toBe("true");
-    expect(screen.getByText("Deploy your own dedicated AgentK").closest('[role="button"]')).toBeNull();
+    expect(
+      screen.getByText("Deploy your own dedicated AgentK").closest('[role="button"]'),
+    ).toBeNull();
 
     fireEvent.click(screen.getByText("Deploy your own dedicated AgentK"));
     expect(onSelect).not.toHaveBeenCalled();

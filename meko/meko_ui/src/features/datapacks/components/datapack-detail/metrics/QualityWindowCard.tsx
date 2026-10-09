@@ -98,7 +98,9 @@ export function QualityWindowCard({
             color={contextColorVar("memory")}
             pill={windowUsed != null ? CONTEXT_WINDOW_LABEL : undefined}
             tooltip={`Avg tokens sent to Claude per query as a share of the 128K context window. Lower is better — Meko keeps this small so your LLM has room for the conversation.${
-              avgTokensSent != null ? ` Current avg: ~${formatTokens(avgTokensSent)} tokens/query.` : ""
+              avgTokensSent != null
+                ? ` Current avg: ~${formatTokens(avgTokensSent)} tokens/query.`
+                : ""
             }`}
           />
         </div>

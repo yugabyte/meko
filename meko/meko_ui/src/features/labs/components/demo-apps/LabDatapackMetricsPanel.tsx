@@ -22,9 +22,7 @@ export function LabDatapackMetricsPanel({ datapackId }: { datapackId: string | n
 
   if (!datapackId) {
     return (
-      <p className="text-xs text-muted-foreground">
-        Pick a datapack to see what it has built up.
-      </p>
+      <p className="text-xs text-muted-foreground">Pick a datapack to see what it has built up.</p>
     );
   }
 

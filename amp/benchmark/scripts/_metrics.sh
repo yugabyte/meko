@@ -38,16 +38,16 @@ stop_server_cpu_sampler() {
 # (default "bin/pageserver"). Returns sampler PID. RSS is reported in MB.
 start_local_proc_sampler() {
   local outfile="$1" pat="${2:-bin/pageserver}"
-  ( while true; do
-      ts=$(date +%T)
-      for pid in $(pgrep -f "$pat"); do
-        # %cpu is instantaneous-since-last-top; rss is in KB from ps.
-        read -r cpu rss cmd < <(ps -o %cpu=,rss=,comm= -p "$pid" 2>/dev/null)
-        [[ -n "$rss" ]] && printf '%s pid=%-6s cpu=%5s%%  rss=%6.1fMB  %s\n' \
-          "$ts" "$pid" "$cpu" "$(awk "BEGIN{print $rss/1024}")" "$cmd"
-      done
-      sleep 3
-    done ) >"$outfile" 2>&1 &
+  (while true; do
+    ts=$(date +%T)
+    for pid in $(pgrep -f "$pat"); do
+      # %cpu is instantaneous-since-last-top; rss is in KB from ps.
+      read -r cpu rss cmd < <(ps -o %cpu=,rss=,comm= -p "$pid" 2>/dev/null)
+      [[ -n "$rss" ]] && printf '%s pid=%-6s cpu=%5s%%  rss=%6.1fMB  %s\n' \
+        "$ts" "$pid" "$cpu" "$(awk "BEGIN{print $rss/1024}")" "$cmd"
+    done
+    sleep 3
+  done) >"$outfile" 2>&1 &
   echo $!
 }
 
@@ -83,9 +83,9 @@ summarize_proc_sampler() {
 # can see whether backpressure engaged during a run.
 snapshot_ps_metrics() {
   local outfile="$1"
-  curl -s "http://172.151.20.28:9988/metrics" 2>/dev/null \
-    | grep -E 'pagewriter_backpressure_waits_total|pagewriter_unflushed_bytes|materializer_queue_depth' \
-    >"$outfile" 2>&1 || echo "(metrics fetch failed)" >"$outfile"
+  curl -s "http://172.151.20.28:9988/metrics" 2>/dev/null |
+    grep -E 'pagewriter_backpressure_waits_total|pagewriter_unflushed_bytes|materializer_queue_depth' \
+      >"$outfile" 2>&1 || echo "(metrics fetch failed)" >"$outfile"
 }
 
 # Start a server-side disk IOPS/throughput sampler via iostat. Only meaningful

@@ -73,11 +73,23 @@ function fakeProgress() {
 describe("LabStageSlot run-state callbacks", () => {
   it("hands PrReviewDemoApp the same onRunChange across re-renders", () => {
     const { rerender } = render(
-      <LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress()} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />,
+      <LabStageSlot
+        lab={LAB}
+        session={SESSION}
+        progress={fakeProgress()}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
     );
     expect(screen.getByTestId("demo")).toBeTruthy();
     rerender(
-      <LabStageSlot lab={LAB} session={SESSION} progress={fakeProgress()} contextFeed={EMPTY_FEED} onEndLab={vi.fn()} />,
+      <LabStageSlot
+        lab={LAB}
+        session={SESSION}
+        progress={fakeProgress()}
+        contextFeed={EMPTY_FEED}
+        onEndLab={vi.fn()}
+      />,
     );
     // One identity across both renders. Two means the effect above re-fires
     // on every parent render, which is the render loop.

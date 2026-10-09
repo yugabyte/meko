@@ -8,12 +8,12 @@
 # environment. A missing pin is an error: under `set -e` the assignment above
 # fails, rather than defaulting to an empty image.
 amp_version() {
-    local file value
-    file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/versions.txt"
-    value=$(sed -n "s/^$1=//p" "$file")
-    if [ -z "$value" ]; then
-        echo "amp_version: no $1 in $file" >&2
-        return 1
-    fi
-    printf '%s\n' "$value"
+  local file value
+  file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/versions.txt"
+  value=$(sed -n "s/^$1=//p" "$file")
+  if [ -z "$value" ]; then
+    echo "amp_version: no $1 in $file" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }

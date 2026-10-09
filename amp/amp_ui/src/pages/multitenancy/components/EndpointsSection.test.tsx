@@ -1,11 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import {
-  render,
-  screen,
-  cleanup,
-  fireEvent,
-  waitFor as waitForRTL,
-} from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor as waitForRTL } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Endpoint } from "@/lib/api/types";
 

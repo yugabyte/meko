@@ -27,14 +27,17 @@ WANT_TAG="v2"
 
 rc=0
 pass() { echo "  ✓ $1"; }
-fail() { echo "  ✗ $1"; rc=1; }
+fail() {
+  echo "  ✗ $1"
+  rc=1
+}
 
 # --- stub docker -------------------------------------------------------------
 # A fake `docker` that appends its argv (one space-joined line per call) to
 # $DOCKER_LOG and exits 0, so build.sh runs to completion without a daemon.
 stub_dir="$(mktemp -d)"
 trap 'rm -rf "$stub_dir"' EXIT
-cat > "$stub_dir/docker" <<'STUB'
+cat >"$stub_dir/docker" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 exit 0
@@ -45,7 +48,7 @@ chmod +x "$stub_dir/docker"
 # Sets globals: RUN_RC (exit code) and RUN_LOG (path to the docker command log).
 run_build() {
   RUN_LOG="$stub_dir/log.$RANDOM"
-  : > "$RUN_LOG"
+  : >"$RUN_LOG"
   set +e
   DOCKER_LOG="$RUN_LOG" PATH="$stub_dir:$PATH" bash "$build_sh" "$@" >/dev/null 2>&1
   RUN_RC=$?
@@ -100,8 +103,13 @@ arg_default() { grep -m1 "^ARG $2=" "$1" | sed "s/^ARG $2=//"; }
 
 check_consumer() {
   local label="$1" file="$2" r i t
-  if [ ! -f "$file" ]; then fail "$label: missing $file"; return; fi
-  r="$(arg_default "$file" REPOSITORY)"; i="$(arg_default "$file" IMAGE)"; t="$(arg_default "$file" TAG)"
+  if [ ! -f "$file" ]; then
+    fail "$label: missing $file"
+    return
+  fi
+  r="$(arg_default "$file" REPOSITORY)"
+  i="$(arg_default "$file" IMAGE)"
+  t="$(arg_default "$file" TAG)"
   if [ "$r" = "$WANT_REGISTRY" ] && [ "$i" = "$WANT_IMAGE" ] && [ "$t" = "$WANT_TAG" ]; then
     pass "$label: $r/$i:$t"
   else
@@ -109,13 +117,15 @@ check_consumer() {
   fi
 }
 
-check_consumer "root Dockerfile"      "$amp_root/Dockerfile"
-check_consumer "endpoint Dockerfile"  "$amp_root/deploy/endpoint/Dockerfile"
+check_consumer "root Dockerfile" "$amp_root/Dockerfile"
+check_consumer "endpoint Dockerfile" "$amp_root/deploy/endpoint/Dockerfile"
 check_consumer "pg18-build Dockerfile" "$amp_root/deploy/extensions/pg18-build.Dockerfile"
 
 # build.sh's own defaults (registry="..."/image="..."/tag="...").
 sh_default() { grep -m1 "^$2=" "$1" | sed -E "s/^$2=\"?([^\"]*)\"?.*/\1/"; }
-sr="$(sh_default "$build_sh" registry)"; si="$(sh_default "$build_sh" image)"; st="$(sh_default "$build_sh" tag)"
+sr="$(sh_default "$build_sh" registry)"
+si="$(sh_default "$build_sh" image)"
+st="$(sh_default "$build_sh" tag)"
 if [ "$sr" = "$WANT_REGISTRY" ] && [ "$si" = "$WANT_IMAGE" ] && [ "$st" = "$WANT_TAG" ]; then
   pass "build.sh defaults: $sr/$si:$st"
 else

@@ -75,11 +75,7 @@ export function downloadChat(opts: DownloadArgs): void {
   const url = URL.createObjectURL(blob);
 
   // Filename: meko-chat-<safe-datapack>-<YYYY-MM-DD-HHmm>.txt
-  const stamp = new Date()
-    .toISOString()
-    .slice(0, 16)
-    .replace("T", "-")
-    .replace(":", "");
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
   const safeName = (opts.datapackName ?? "workbench-lm").replace(/[^a-zA-Z0-9_-]/g, "_");
   const filename = `meko-chat-${safeName}-${stamp}.txt`;
 

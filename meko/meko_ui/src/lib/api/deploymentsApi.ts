@@ -7,7 +7,13 @@ import { request } from "@/lib/api/mekoApi";
 
 export type DeploymentRuntime = "agentcore" | "vercel" | "lyzr";
 export type DeploymentAccountMode = "managed" | "byoc";
-export type DeploymentStatus = "pending" | "deploying" | "active" | "failed" | "deleting" | "deleted";
+export type DeploymentStatus =
+  | "pending"
+  | "deploying"
+  | "active"
+  | "failed"
+  | "deleting"
+  | "deleted";
 
 export type Deployment = {
   id: string;
@@ -58,6 +64,14 @@ export async function getDeployment(id: string, options: { signal?: AbortSignal 
  *  agent_slug. Looked up server-side from an operator-maintained table, not
  *  the caller's own account. 404s when this agent has no shared instance
  *  configured yet. */
-export async function getSharedDeployment(agentSlug: string, options: { signal?: AbortSignal } = {}) {
-  return request<Deployment>(`/deployments/shared/${encodeURIComponent(agentSlug)}`, "GET", undefined, options);
+export async function getSharedDeployment(
+  agentSlug: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<Deployment>(
+    `/deployments/shared/${encodeURIComponent(agentSlug)}`,
+    "GET",
+    undefined,
+    options,
+  );
 }

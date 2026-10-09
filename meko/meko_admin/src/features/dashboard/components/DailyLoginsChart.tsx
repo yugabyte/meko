@@ -1,12 +1,4 @@
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { format, parseISO } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,11 +27,7 @@ export function DailyLoginsChart({ data, isLoading }: Props) {
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-              <XAxis
-                dataKey="label"
-                tick={{ fontSize: 11 }}
-                className="text-muted-foreground"
-              />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} className="text-muted-foreground" />
               <YAxis
                 allowDecimals={false}
                 tick={{ fontSize: 11 }}
@@ -54,12 +42,7 @@ export function DailyLoginsChart({ data, isLoading }: Props) {
                 }}
                 cursor={{ fill: "hsl(var(--accent))" }}
               />
-              <Bar
-                dataKey="count"
-                name="Logins"
-                fill="hsl(var(--primary))"
-                radius={[3, 3, 0, 0]}
-              />
+              <Bar dataKey="count" name="Logins" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         )}

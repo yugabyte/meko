@@ -9,17 +9,18 @@ import {
   scopedProjects,
 } from "@/features/projects/lib/scopeProjects";
 
-const project = (id: string): Project =>
-  ({ project_id: id, project_name: id }) as Project;
+const project = (id: string): Project => ({ project_id: id, project_name: id }) as Project;
 
 const owned = [project("mine-a"), project("mine-b")];
 const shared = [project("theirs")];
 
 describe("scopedProjects", () => {
   it("shows both lists on All, owned first", () => {
-    expect(scopedProjects(owned, shared, PROJECT_SCOPE.all).map((c) => c.project_id)).toEqual(
-      ["mine-a", "mine-b", "theirs"],
-    );
+    expect(scopedProjects(owned, shared, PROJECT_SCOPE.all).map((c) => c.project_id)).toEqual([
+      "mine-a",
+      "mine-b",
+      "theirs",
+    ]);
   });
 
   it("narrows to one list on the other two tabs", () => {

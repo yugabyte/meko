@@ -89,7 +89,10 @@ export function ConversationStage({
           unchanged Memories count and concluding nothing happened. */}
       {turn && waiting && (
         <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-4">
-          <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-context-conversation" aria-hidden />
+          <MessageSquare
+            className="mt-0.5 h-4 w-4 shrink-0 text-context-conversation"
+            aria-hidden
+          />
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">
               Meko is reading that for anything worth keeping

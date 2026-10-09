@@ -15,10 +15,9 @@ describe("useNewlyAdded", () => {
   // baseline taken from that first render recorded nothing, so every row
   // looked new the moment the data landed, on every refresh.
   it("takes no baseline until the feed has loaded", () => {
-    const { result, rerender } = renderHook(
-      ({ ids, ready }) => useNewlyAdded(ids, ready),
-      { initialProps: { ids: [] as string[], ready: false } },
-    );
+    const { result, rerender } = renderHook(({ ids, ready }) => useNewlyAdded(ids, ready), {
+      initialProps: { ids: [] as string[], ready: false },
+    });
 
     // The fetch resolves: rows appear, but they were already there.
     rerender({ ids: ["a", "b"], ready: true });
@@ -26,10 +25,9 @@ describe("useNewlyAdded", () => {
   });
 
   it("flashes only what appeared after that baseline", () => {
-    const { result, rerender } = renderHook(
-      ({ ids, ready }) => useNewlyAdded(ids, ready),
-      { initialProps: { ids: [] as string[], ready: false } },
-    );
+    const { result, rerender } = renderHook(({ ids, ready }) => useNewlyAdded(ids, ready), {
+      initialProps: { ids: [] as string[], ready: false },
+    });
     rerender({ ids: ["a"], ready: true });
 
     rerender({ ids: ["a", "b"], ready: true });
@@ -37,10 +35,9 @@ describe("useNewlyAdded", () => {
   });
 
   it("stops flashing after the highlight window", () => {
-    const { result, rerender } = renderHook(
-      ({ ids, ready }) => useNewlyAdded(ids, ready),
-      { initialProps: { ids: [] as string[], ready: false } },
-    );
+    const { result, rerender } = renderHook(({ ids, ready }) => useNewlyAdded(ids, ready), {
+      initialProps: { ids: [] as string[], ready: false },
+    });
     rerender({ ids: ["a"], ready: true });
     rerender({ ids: ["a", "b"], ready: true });
     expect(result.current.size).toBe(1);
@@ -54,10 +51,9 @@ describe("useNewlyAdded", () => {
   // Switching datapack sends the feed back to EMPTY. Keeping the old
   // baseline would light up the whole of the next datapack.
   it("drops its baseline when the feed goes unloaded again", () => {
-    const { result, rerender } = renderHook(
-      ({ ids, ready }) => useNewlyAdded(ids, ready),
-      { initialProps: { ids: [] as string[], ready: false } },
-    );
+    const { result, rerender } = renderHook(({ ids, ready }) => useNewlyAdded(ids, ready), {
+      initialProps: { ids: [] as string[], ready: false },
+    });
     rerender({ ids: ["a"], ready: true });
 
     rerender({ ids: [], ready: false });

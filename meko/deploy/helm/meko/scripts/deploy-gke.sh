@@ -132,7 +132,9 @@ mk meko-langfuse langfuse-secrets \
   --from-literal=LANGFUSE_INIT_USER_PASSWORD="$LANGFUSE_INIT_USER_PASSWORD"
 
 # Deploy-time overrides: point DBs at the in-cluster YB, no LBs, rag on default pool.
-OVR="$(mktemp)"; trap 'rm -f "$OVR"' EXIT; cat > "$OVR" <<EOF
+OVR="$(mktemp)"
+trap 'rm -f "$OVR"' EXIT
+cat >"$OVR" <<EOF
 createNamespaces: false
 ecrCredentialRefresh: { enabled: false }
 ingress: { className: none }
@@ -177,7 +179,8 @@ log "Waiting for the UI internal LoadBalancer IP"
 LB_IP=""
 for i in $(seq 1 20); do
   LB_IP="$($K -n "$NS" get svc meko-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-  [ -n "$LB_IP" ] && break; sleep 12
+  [ -n "$LB_IP" ] && break
+  sleep 12
 done
 
 cat <<EOF

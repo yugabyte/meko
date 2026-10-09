@@ -72,7 +72,8 @@ if [[ $# -lt 1 ]]; then
   echo "Usage: $0 ybAmp4 [create|run|sweep|clean]" >&2
   exit 1
 fi
-target="$1"; shift
+target="$1"
+shift
 phase="${1:-run}"
 
 source ~/benchmark/scripts/_env.sh "$target"
@@ -83,7 +84,7 @@ CONNS="${CONNS:-100}"
 DURATION="${DURATION:-90}"
 BATCH="${BATCH:-10}"
 FPW="${FPW:-on}"
-JOBS="${JOBS:-$(( CONNS < $(nproc) ? CONNS : $(nproc) ))}"
+JOBS="${JOBS:-$((CONNS < $(nproc) ? CONNS : $(nproc)))}"
 DB="$PGDATABASE"
 TBL=walstress
 
@@ -120,13 +121,15 @@ set_fpw() {
     psql_t "ALTER SYSTEM SET full_page_writes = $want;" >/dev/null
     psql_t "SELECT pg_reload_conf();" >/dev/null
     sleep 1
-    local now; now=$(psql_t "show full_page_writes;")
+    local now
+    now=$(psql_t "show full_page_writes;")
     [[ "$now" == "$want" ]] || { echo "[WalStress] WARN: full_page_writes is '$now', expected '$want'"; }
   fi
 }
 restore_fpw() {
   [[ -n "$FPW_ORIG" ]] || return 0
-  local cur; cur=$(psql_t "show full_page_writes;" 2>/dev/null || echo "")
+  local cur
+  cur=$(psql_t "show full_page_writes;" 2>/dev/null || echo "")
   if [[ -n "$cur" && "$cur" != "$FPW_ORIG" ]]; then
     echo "[WalStress] restoring full_page_writes -> $FPW_ORIG"
     psql_t "ALTER SYSTEM SET full_page_writes = $FPW_ORIG;" >/dev/null 2>&1 || true
@@ -138,8 +141,9 @@ trap restore_fpw EXIT
 
 # Generate the pgbench script: BATCH single-row UPDATEs per transaction.
 gen_script() {
-  local f="$1"; : >"$f"
-  for ((i=0;i<BATCH;i++)); do
+  local f="$1"
+  : >"$f"
+  for ((i = 0; i < BATCH; i++)); do
     printf '\\set id random(1, :rows)\nUPDATE %s SET v = v + 1 WHERE id = :id;\n' "$TBL" >>"$f"
   done
 }
@@ -152,18 +156,19 @@ wal_snapshot() {
           FROM pg_stat_wal;" 2>/dev/null
 }
 sk_flush_lsn() {
-  timeout 15 $SSH ec2-user@"$PGHOST" "curl -s $SK_HTTP" 2>/dev/null \
-    | awk '/^safekeeper_flush_lsn/{print $2; exit}'
+  timeout 15 $SSH ec2-user@"$PGHOST" "curl -s $SK_HTTP" 2>/dev/null |
+    awk '/^safekeeper_flush_lsn/{print $2; exit}'
 }
 ps_getpage_count() {
-  timeout 15 curl -s "$PS_HTTP" 2>/dev/null \
-    | awk '/get_page_at_lsn/ && /smgr_query_seconds_count/{print $2; exit}'
+  timeout 15 curl -s "$PS_HTTP" 2>/dev/null |
+    awk '/get_page_at_lsn/ && /smgr_query_seconds_count/{print $2; exit}'
 }
 
 one_run() {
   local conns="$1" outdir="$2"
   mkdir -p "$outdir"
-  local script="$outdir/walstress.sql"; gen_script "$script"
+  local script="$outdir/walstress.sql"
+  gen_script "$script"
 
   prewarm
   timeout 120 $PSQL -d "$DB" -c "CHECKPOINT;" >/dev/null 2>&1 || true
@@ -173,14 +178,18 @@ one_run() {
   ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-rss.log" pageserver)
 
   local w0 w1 gp0 gp1 skf0 skf1
-  w0=$(wal_snapshot); gp0=$(ps_getpage_count); skf0=$(sk_flush_lsn)
+  w0=$(wal_snapshot)
+  gp0=$(ps_getpage_count)
+  skf0=$(sk_flush_lsn)
 
   echo "[WalStress] run conns=$conns jobs=$JOBS batch=$BATCH dur=${DURATION}s fpw=$FPW ..."
-  timeout $((DURATION+120)) $PGBENCH -n -f "$script" -D rows="$ROWS" \
+  timeout $((DURATION + 120)) $PGBENCH -n -f "$script" -D rows="$ROWS" \
     -c "$conns" -j "$JOBS" -T "$DURATION" -P 10 \
     -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" "$DB" 2>&1 | tee "$outdir/pgbench.log" || true
 
-  w1=$(wal_snapshot); gp1=$(ps_getpage_count); skf1=$(sk_flush_lsn)
+  w1=$(wal_snapshot)
+  gp1=$(ps_getpage_count)
+  skf1=$(sk_flush_lsn)
   stop_server_cpu_sampler "$cpu_pid"
   stop_local_proc_sampler "$ps_pid"
 
@@ -208,30 +217,44 @@ PY
   echo "--- compute CPU (postgres total, of 400%) / safekeeper ---"
   awk '/^--- /{if(h){s+=c;n++;if(c>mx)mx=c}c=0;h=1;next}/postgres/{for(i=1;i<NF;i++)if($i=="cpu="){v=$(i+1);gsub(/%/,"",v);c+=v}}END{if(h){s+=c;n++;if(c>mx)mx=c}if(n)printf "postgres avg=%.1f%% peak=%.1f%%\n",s/n,mx}' "$outdir/server-cpu.log" 2>/dev/null
   awk '/safekeeper$/{for(i=1;i<NF;i++)if($i=="cpu="){v=$(i+1);gsub(/%/,"",v);s+=v;n++}}END{if(n)printf "safekeeper avg=%.1f%%\n",s/n}' "$outdir/server-cpu.log" 2>/dev/null
-  echo "--- pageserver CPU/RSS ---"; summarize_proc_sampler "$outdir/ps-cpu-rss.log"
+  echo "--- pageserver CPU/RSS ---"
+  summarize_proc_sampler "$outdir/ps-cpu-rss.log"
 }
 
 case "$phase" in
-  create) build_table; prewarm ;;
-  clean)  psql_t "DROP TABLE IF EXISTS $TBL;"; echo "[WalStress] dropped $TBL" ;;
-  run)
-    set_fpw "$FPW"
-    ts=$(date -u +%Y%m%d-%H%M)
-    out=~/benchmark/results/${ts}-${target}-WalStress-c${CONNS}-fpw${FPW}
-    one_run "$CONNS" "$out"
-    echo "[WalStress] results -> $out"
-    ;;
-  sweep)
-    set_fpw "$FPW"
-    ts=$(date -u +%Y%m%d-%H%M)
-    base=~/benchmark/results/${ts}-${target}-WalStress-sweep-fpw${FPW}
-    mkdir -p "$base"
-    for c in ${SWEEP:-50 100 200 300}; do one_run "$c" "$base/c${c}"; echo; done
-    echo "=== SWEEP SUMMARY (fpw=$FPW) ==="
-    { for c in ${SWEEP:-50 100 200 300}; do
-        printf "c=%-4s " "$c"; grep -h "WAL bytes/s" "$base/c${c}/wal-summary.txt" 2>/dev/null
-      done; } | tee "$base/sweep-summary.txt"
-    echo "[WalStress] sweep results -> $base"
-    ;;
-  *) echo "unknown phase: $phase" >&2; exit 1 ;;
+create)
+  build_table
+  prewarm
+  ;;
+clean)
+  psql_t "DROP TABLE IF EXISTS $TBL;"
+  echo "[WalStress] dropped $TBL"
+  ;;
+run)
+  set_fpw "$FPW"
+  ts=$(date -u +%Y%m%d-%H%M)
+  out=~/benchmark/results/${ts}-${target}-WalStress-c${CONNS}-fpw${FPW}
+  one_run "$CONNS" "$out"
+  echo "[WalStress] results -> $out"
+  ;;
+sweep)
+  set_fpw "$FPW"
+  ts=$(date -u +%Y%m%d-%H%M)
+  base=~/benchmark/results/${ts}-${target}-WalStress-sweep-fpw${FPW}
+  mkdir -p "$base"
+  for c in ${SWEEP:-50 100 200 300}; do
+    one_run "$c" "$base/c${c}"
+    echo
+  done
+  echo "=== SWEEP SUMMARY (fpw=$FPW) ==="
+  { for c in ${SWEEP:-50 100 200 300}; do
+    printf "c=%-4s " "$c"
+    grep -h "WAL bytes/s" "$base/c${c}/wal-summary.txt" 2>/dev/null
+  done; } | tee "$base/sweep-summary.txt"
+  echo "[WalStress] sweep results -> $base"
+  ;;
+*)
+  echo "unknown phase: $phase" >&2
+  exit 1
+  ;;
 esac

@@ -90,7 +90,9 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
               </Button>
             }
           >
-            <p className="font-medium text-red-700 dark:text-red-100">Could not fetch member and invite details</p>
+            <p className="font-medium text-red-700 dark:text-red-100">
+              Could not fetch member and invite details
+            </p>
             <p className="mt-1 text-xs font-normal text-red-700 dark:text-red-200/85">{error}</p>
           </InlineErrorBanner>
         ) : null}
@@ -118,7 +120,10 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
                 </TabsList>
               </CardHeader>
               <CardContent className="p-6 pt-6">
-                <TabsContent value="humans" className="mt-0 outline-none focus-visible:outline-none">
+                <TabsContent
+                  value="humans"
+                  className="mt-0 outline-none focus-visible:outline-none"
+                >
                   <InviteHumansSection
                     datapackId={datapackId}
                     currentUserEmail={currentUser?.email}

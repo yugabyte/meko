@@ -103,7 +103,10 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
         notifyDatapacksListChanged(`share-accepted:${invite.datapack_name || invite.invite_id}`);
       }
       toast({
-        title: user_action === "accept" ? INCOMING_SHARE_TOAST_ACCEPTED_TITLE : INCOMING_SHARE_TOAST_DECLINED_TITLE,
+        title:
+          user_action === "accept"
+            ? INCOMING_SHARE_TOAST_ACCEPTED_TITLE
+            : INCOMING_SHARE_TOAST_DECLINED_TITLE,
       });
       // Re-sync from the server so the badge count reflects BE truth
       // (and the row doesn't pop back on next mount if the BE is still
@@ -148,18 +151,28 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(22rem,calc(100vw-2rem))] p-0" sideOffset={8}>
         <div className="border-b border-border px-3 py-2">
-          <p className="text-sm font-semibold text-foreground">{INCOMING_SHARE_NOTIFICATION_TITLE}</p>
+          <p className="text-sm font-semibold text-foreground">
+            {INCOMING_SHARE_NOTIFICATION_TITLE}
+          </p>
         </div>
         <div className="max-h-[min(24rem,70vh)] overflow-y-auto p-2">
           {loading ? (
-            <p className="px-2 py-6 text-center text-sm text-muted-foreground">{INCOMING_SHARE_NOTIFICATION_LOADING}</p>
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+              {INCOMING_SHARE_NOTIFICATION_LOADING}
+            </p>
           ) : invites.length === 0 ? (
-            <p className="px-2 py-6 text-center text-sm text-muted-foreground">{INCOMING_SHARE_NOTIFICATION_EMPTY}</p>
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+              {INCOMING_SHARE_NOTIFICATION_EMPTY}
+            </p>
           ) : (
             <ul className="space-y-2">
               {invites.map((inv) => {
                 const grantLabel = shareGrantLabel(inv.grant);
-                const line = formatIncomingShareInviteMessage(inv.owner_name, grantLabel, inv.datapack_name);
+                const line = formatIncomingShareInviteMessage(
+                  inv.owner_name,
+                  grantLabel,
+                  inv.datapack_name,
+                );
                 const rowBusy = busy?.inviteId === inv.invite_id;
                 const acceptBusy = rowBusy && busy?.action === "accept";
                 const declineBusy = rowBusy && busy?.action === "decline";

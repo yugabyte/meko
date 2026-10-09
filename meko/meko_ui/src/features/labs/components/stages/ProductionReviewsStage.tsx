@@ -6,7 +6,17 @@
 // first to make sense of the second. Every figure is a dated snapshot, never
 // a live poll -- see productionSnapshot.ts.
 
-import { Activity, Boxes, Coins, ExternalLink, FileText, Flame, Layers, Sparkles, ThumbsUp } from "lucide-react";
+import {
+  Activity,
+  Boxes,
+  Coins,
+  ExternalLink,
+  FileText,
+  Flame,
+  Layers,
+  Sparkles,
+  ThumbsUp,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { StatTile } from "@/components/ui/stat-tile";
@@ -136,8 +146,8 @@ export function ProductionReviewsStage() {
           The {P.guidelinesInContext.toLocaleString()} guidelines are the knowledge base you loaded
           in Chapter 1, and the {P.learningsApplied} learnings applied are findings written back the
           way you wrote yours back in Chapter 3. At ${P.costPerPrUsd} a pull request against the
-          cost of a reviewer-hour, that context is what makes reviewing every one of them
-          affordable instead of sampling. Nothing here is a mechanism you haven't already used.
+          cost of a reviewer-hour, that context is what makes reviewing every one of them affordable
+          instead of sampling. Nothing here is a mechanism you haven't already used.
         </p>
       </section>
     </div>

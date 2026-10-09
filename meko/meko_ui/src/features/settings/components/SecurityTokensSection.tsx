@@ -8,13 +8,7 @@
 // other rows (matters once a user is near the 10-token cap).
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import {
-  AlertCircle,
-  KeyRound,
-  Loader2,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, KeyRound, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -26,12 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -51,7 +40,8 @@ import { MekoTokenCreateDialog } from "./MekoTokenCreateDialog";
 
 const STATUS_TONE: Record<MekoTokenStatus, string> = {
   [MEKO_TOKEN_STATUS.active]: "border-brand/40 bg-brand/10 text-brand",
-  [MEKO_TOKEN_STATUS.expired]: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200",
+  [MEKO_TOKEN_STATUS.expired]:
+    "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200",
   [MEKO_TOKEN_STATUS.revoked]: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200",
 };
 
@@ -132,7 +122,8 @@ export function SecurityTokensSection() {
           <div>
             <h2 className="text-sm font-semibold text-foreground">API Keys</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Personal access tokens for connecting MCP clients (Claude, Cursor, …) to your datapacks.{" "}
+              Personal access tokens for connecting MCP clients (Claude, Cursor, …) to your
+              datapacks.{" "}
               <span className="text-foreground/80">
                 {activeCount} of {MEKO_TOKEN_MAX_COUNT} active
               </span>
@@ -166,7 +157,8 @@ export function SecurityTokensSection() {
                 </TooltipTrigger>
                 {atCap ? (
                   <TooltipContent side="top" className="max-w-[260px] text-center">
-                    You've reached the {MEKO_TOKEN_MAX_COUNT}-key limit. Revoke an unused key to generate a new one.
+                    You've reached the {MEKO_TOKEN_MAX_COUNT}-key limit. Revoke an unused key to
+                    generate a new one.
                   </TooltipContent>
                 ) : null}
               </Tooltip>
@@ -219,8 +211,8 @@ export function SecurityTokensSection() {
               {pendingToken ? (
                 <>
                   Any MCP client using <span className="text-foreground">{pendingToken.name}</span>{" "}
-                  (<span className="font-mono text-xs">{pendingToken.token_prefix}…</span>) will stop
-                  working immediately. This cannot be undone.
+                  (<span className="font-mono text-xs">{pendingToken.token_prefix}…</span>) will
+                  stop working immediately. This cannot be undone.
                 </>
               ) : (
                 <>This action cannot be undone.</>

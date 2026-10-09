@@ -49,27 +49,23 @@ export function ProjectExplainerPanel({ example }: { example?: Project }) {
           <div className="min-w-0 max-w-2xl space-y-3">
             <p className="text-sm leading-relaxed text-muted-foreground">
               A group of datapacks that serve one outcome, arranged in folders. A project holds
-              folders, a folder holds datapacks, and that is the whole shape: folders do not nest.
-              A datapack belongs to at most one project.
+              folders, a folder holds datapacks, and that is the whole shape: folders do not nest. A
+              datapack belongs to at most one project.
             </p>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground">What folders are for:</span> keeping
-              the datapacks that do similar work together, so you can see at a glance which parts
-              of the outcome have context behind them and which do not. Datapacks in no project
-              keep working exactly as they do today.
+              <span className="font-medium text-foreground">What folders are for:</span> keeping the
+              datapacks that do similar work together, so you can see at a glance which parts of the
+              outcome have context behind them and which do not. Datapacks in no project keep
+              working exactly as they do today.
             </p>
           </div>
 
           <FolderTreePreview
             label={example ? "Your project" : "Example"}
             name={example?.project_name ?? SAMPLE.name}
-            folders={
-              example?.folder_names?.length ? example.folder_names : SAMPLE.folders
-            }
+            folders={example?.folder_names?.length ? example.folder_names : SAMPLE.folders}
             footer={
-              example
-                ? countLabel(example.datapack_count, "datapack")
-                : "datapacks in each folder"
+              example ? countLabel(example.datapack_count, "datapack") : "datapacks in each folder"
             }
             className="lg:w-72"
           />

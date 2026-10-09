@@ -38,8 +38,8 @@ log "=== BLK battery label=$LABEL out=$OUT ==="
 
 # ---- A. schema + load --------------------------------------------------------
 log "A. (re)create db + schema"
-pq postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 \
-  && pq postgres -c "DROP DATABASE $DBNAME"
+pq postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1 &&
+  pq postgres -c "DROP DATABASE $DBNAME"
 pq postgres -c "CREATE DATABASE $DBNAME"
 pq "$DBNAME" -f "$HERE/sql/big-load-schema.sql"
 
@@ -47,15 +47,16 @@ log "A. load $ROWS rows (chunk=$CHUNK)"
 load_start=$(date +%s)
 lo=1
 while [ "$lo" -le "$ROWS" ]; do
-  hi=$(( lo + CHUNK - 1 )); [ "$hi" -gt "$ROWS" ] && hi=$ROWS
+  hi=$((lo + CHUNK - 1))
+  [ "$hi" -gt "$ROWS" ] && hi=$ROWS
   pq "$DBNAME" -qc "INSERT INTO big_table (id,cat,val,payload,ts)
     SELECT g,(g*7)%10000+1,g,repeat(md5(g::text),5)::bytea,now()
     FROM generate_series($lo,$hi) g;" >/dev/null
   log "   loaded $lo..$hi"
-  lo=$(( hi + 1 ))
+  lo=$((hi + 1))
 done
 load_end=$(date +%s)
-LOAD_SECS=$(( load_end - load_start ))
+LOAD_SECS=$((load_end - load_start))
 ROWCOUNT=$(pq "$DBNAME" -tAc "SELECT count(*) FROM big_table")
 HEAP=$(pq "$DBNAME" -tAc "SELECT pg_size_pretty(pg_total_relation_size('big_table'))")
 log "A. load done: $ROWCOUNT rows, total relation $HEAP, ${LOAD_SECS}s"
@@ -75,7 +76,7 @@ for i in $(seq 1 360); do
   fi
   sleep 5
 done
-DRAIN_SECS=$(( $(date +%s) - drain_start ))
+DRAIN_SECS=$(($(date +%s) - drain_start))
 PHYS_SIZE=$PHYS
 log "B. drain wait ${DRAIN_SECS}s, physical_size=$PHYS_SIZE"
 
@@ -85,7 +86,13 @@ log "B. drain wait ${DRAIN_SECS}s, physical_size=$PHYS_SIZE"
 # a buffer-cold full scan instead: SB=100MB + LFC off means the 1.27 GB table
 # cannot be cached, so each scan re-fetches pages from the PS regardless.
 log "C. full-scan timing (no PS restart)"
-timed() { local t0 t1; t0=$(date +%s.%N); pq "$DBNAME" -tAc "SELECT count(*),sum(val) FROM big_table" >/dev/null; t1=$(date +%s.%N); awk "BEGIN{printf \"%.2f\", $t1-$t0}"; }
+timed() {
+  local t0 t1
+  t0=$(date +%s.%N)
+  pq "$DBNAME" -tAc "SELECT count(*),sum(val) FROM big_table" >/dev/null
+  t1=$(date +%s.%N)
+  awk "BEGIN{printf \"%.2f\", $t1-$t0}"
+}
 COLD=$(timed)
 WARM=$(timed)
 log "C. full-scan run1=${COLD}s  run2=${WARM}s"
@@ -97,7 +104,7 @@ SP=$(start_server_cpu_sampler "$CPULOG")
 snapshot_pg_stat "$DBNAME" "$OUT/pgstat-start.txt"
 mark_timestamp "$OUT" START
 
-declare -A GNAME=( [G1]=point-lookup [G2]=aggregate [G3]=range-scan [G4]=update [G5]=insert [G6]=delete )
+declare -A GNAME=([G1]=point-lookup [G2]=aggregate [G3]=range-scan [G4]=update [G5]=insert [G6]=delete)
 BATT="$OUT/battery.txt"
 : >"$BATT"
 for G in G1 G2 G3 G4 G5 G6; do
@@ -107,7 +114,7 @@ for G in G1 G2 G3 G4 G5 G6; do
     -D rows="$ROWS" -f "$f" >/dev/null 2>&1
   log "D. $G ${GNAME[$G]} measured 600s"
   o=$($PGBENCH -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DBNAME" -n -c1 -j1 -T600 \
-      -D rows="$ROWS" -f "$f" 2>&1)
+    -D rows="$ROWS" -f "$f" 2>&1)
   lat=$(echo "$o" | awk '/latency average/{print $4}')
   tps=$(echo "$o" | awk '/^tps/{print $3}')
   cnt=$(echo "$o" | awk '/number of transactions actually processed/{print $NF}')
@@ -117,7 +124,7 @@ done
 mark_timestamp "$OUT" END
 snapshot_pg_stat "$DBNAME" "$OUT/pgstat-end.txt"
 stop_server_cpu_sampler "$SP"
-diff_pg_stat "$OUT/pgstat-start.txt" "$OUT/pgstat-end.txt" > "$OUT/pgstat-delta.txt" 2>&1
+diff_pg_stat "$OUT/pgstat-start.txt" "$OUT/pgstat-end.txt" >"$OUT/pgstat-delta.txt" 2>&1
 
 # compute-CPU average for postgres + the avg system busy
 CPU_POSTGRES=$(awk -F'cpu=' '/postgres/{gsub(/%.*/,"",$2); s+=$2; n++} END{if(n)printf "%.1f", s/n}' "$CPULOG" 2>/dev/null)
@@ -157,7 +164,7 @@ log "E. writing $SUMMARY"
   echo '```'
   cat "$OUT/pgstat-delta.txt"
   echo '```'
-} > "$SUMMARY"
+} >"$SUMMARY"
 
 log "=== DONE label=$LABEL -> $SUMMARY ==="
 cat "$SUMMARY"

@@ -39,9 +39,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
       />
 
       <header className="relative z-10 flex items-center justify-between px-6 py-5 sm:px-8">
-        <span className="text-2xl font-bold tracking-tight sm:text-3xl">
-          AMP
-        </span>
+        <span className="text-2xl font-bold tracking-tight sm:text-3xl">AMP</span>
         <ThemeToggle />
       </header>
 

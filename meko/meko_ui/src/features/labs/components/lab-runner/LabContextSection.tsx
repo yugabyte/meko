@@ -39,7 +39,9 @@ export function LabContextSection({
   return (
     <section className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <h4 className={cn("text-xs font-semibold uppercase tracking-wide", KIND_TEXT[kind])}>{label}</h4>
+        <h4 className={cn("text-xs font-semibold uppercase tracking-wide", KIND_TEXT[kind])}>
+          {label}
+        </h4>
         <span className="tabular-nums text-xs text-muted-foreground">{count}</span>
       </div>
       {count === 0 ? (
@@ -77,7 +79,10 @@ export function LabContextRow({
         flash ? "bg-primary/15 ring-1 ring-primary/50" : "bg-card",
       )}
     >
-      <i aria-hidden className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", KIND_MARKER[kind])} />
+      <i
+        aria-hidden
+        className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", KIND_MARKER[kind])}
+      />
       <div className="min-w-0 flex-1">
         <p className="line-clamp-2 text-xs text-foreground">{title}</p>
         {meta && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{meta}</p>}

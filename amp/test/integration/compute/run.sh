@@ -18,7 +18,7 @@
 set -euo pipefail
 
 usage() {
-    cat <<'EOF'
+  cat <<'EOF'
 Usage: test/integration/compute/run.sh [options] [selection]
 
 Selection (default: unit then fast):
@@ -95,12 +95,15 @@ cd "$REPO"
 PROFILE=debug
 ARGS=()
 for arg in "$@"; do
-    case "$arg" in
-        -h|--help) usage; exit 0 ;;
-        --release) PROFILE=release ;;
-        --no-fail-stop) export INTEGRATION_NO_FAIL_STOP=1 ;;
-        *) ARGS+=("$arg") ;;  # forwarded to the harness (selection, -n, …)
-    esac
+  case "$arg" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  --release) PROFILE=release ;;
+  --no-fail-stop) export INTEGRATION_NO_FAIL_STOP=1 ;;
+  *) ARGS+=("$arg") ;; # forwarded to the harness (selection, -n, …)
+  esac
 done
 
 # Build the harness and every binary it drives. Debug by default (per
@@ -125,13 +128,13 @@ done
 # `pkg/feature` form scopes it to the pageserver crate only; untriggered
 # failpoints cost a single atomic load per site.
 CLUSTER_BINS=(
-    --bin pageserver
-    --bin safekeeper
-    --bin compute-ctl
-    # yb_amp_local runs each endpoint's three daemons under this, the same
-    # binary that is PID 1 of a deployed endpoint pod. Without it `endpoint
-    # start` fails on a missing executable.
-    --bin endpoint-supervisor
+  --bin pageserver
+  --bin safekeeper
+  --bin compute-ctl
+  # yb_amp_local runs each endpoint's three daemons under this, the same
+  # binary that is PID 1 of a deployed endpoint pod. Without it `endpoint
+  # start` fails on a missing executable.
+  --bin endpoint-supervisor
 )
 TOOL_BINS=(--bin dump-pages --bin dump-wals --bin reset-consistent-lsn)
 
@@ -141,13 +144,13 @@ TOOL_BINS=(--bin dump-pages --bin dump-wals --bin reset-consistent-lsn)
 _yb_host="${YB_HOST:-127.0.0.1}"
 _yb_port="${YB_PORT:-5433}"
 if ! timeout 5 bash -c ": <>/dev/tcp/${_yb_host}/${_yb_port}" 2>/dev/null; then
-    cat >&2 <<EOF
+  cat >&2 <<EOF
 run.sh: no YugabyteDB reachable at ${_yb_host}:${_yb_port}.
 The integration harness needs one running — it does not start it for you. Either:
   * start the CI-matched image:  scripts/yb-local.sh start
   * point at an existing YB:      YB_HOST=<host> YB_PORT=<port> $0 ...
 EOF
-    exit 1
+  exit 1
 fi
 
 # The upstream pg_regress suite has its own driver (own cluster, own schedule, no
@@ -157,12 +160,12 @@ fi
 # rest of the arguments forwarded (an option only this script knows, e.g. -n, comes
 # back as the driver's "unknown arg" error rather than being ignored).
 if [[ " ${ARGS[*]-} " == *" pg_regress "* ]]; then
-    _forward=()
-    for _arg in ${ARGS[0]+"${ARGS[@]}"}; do
-        [[ $_arg == pg_regress ]] || _forward+=("$_arg")
-    done
-    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pg_regress.sh" \
-        "--$PROFILE" ${_forward[0]+"${_forward[@]}"}
+  _forward=()
+  for _arg in ${ARGS[0]+"${ARGS[@]}"}; do
+    [[ $_arg == pg_regress ]] || _forward+=("$_arg")
+  done
+  exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pg_regress.sh" \
+    "--$PROFILE" ${_forward[0]+"${_forward[@]}"}
 fi
 
 # The pageserver and safekeeper link against the prebuilt `libyb_thin_client.so`
@@ -204,30 +207,30 @@ pg_tree_report
 # Failpoints are inert unless configured, so the binary
 # behaves identically to the production build otherwise.
 if [[ $PROFILE == release ]]; then
-    cargo build --release --features pageserver/testing,safekeeper/testing \
-        --bin integration_tests \
-        "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
-    export YB_AMP=${YB_AMP:-$REPO/target/release/yb_amp_local}
-    BIN=$REPO/target/release/integration_tests
-    _PROFILE_DIR=release
+  cargo build --release --features pageserver/testing,safekeeper/testing \
+    --bin integration_tests \
+    "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
+  export YB_AMP=${YB_AMP:-$REPO/target/release/yb_amp_local}
+  BIN=$REPO/target/release/integration_tests
+  _PROFILE_DIR=release
 else
-    cargo build --features pageserver/testing,safekeeper/testing \
-        --bin integration_tests \
-        "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
-    BIN=$REPO/target/debug/integration_tests
-    _PROFILE_DIR=debug
+  cargo build --features pageserver/testing,safekeeper/testing \
+    --bin integration_tests \
+    "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
+  BIN=$REPO/target/debug/integration_tests
+  _PROFILE_DIR=debug
 fi
 
 # The controller is a Go binary (not a cargo target). yb_amp_local spawns it
 # from beside itself (target/<profile>/controller), so build it into the same
 # directory the cargo binaries land in.
-( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
+(cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller)
 
 # The yb_amp_local launcher is also a Go binary now (was the Rust control_plane
 # crate). Build it into the same target/<profile>/ dir the cargo binaries land in,
 # so the harness (YB_AMP / target/<profile>/yb_amp_local) and the launcher's own
 # next-to-itself controller lookup both resolve.
-( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
+(cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local)
 
 # Rebuild the yb_amp Postgres extension when its C sources changed — see
 # pg_tree.sh for why cargo does not build it and why the rebuild is clean.
@@ -257,8 +260,11 @@ export YB_DBNAME="${YB_DBNAME:-yb_storage_integration_${RUN_ID}}"
 # ephemeral DB mid-run.
 mkdir -p "$YB_AMP_REPO_DIR"
 exec {RUN_LOCK_FD}>"${YB_AMP_REPO_DIR}.lock"
-flock -n "$RUN_LOCK_FD" \
-    || { echo "run.sh: $YB_AMP_REPO_DIR is locked by another run; aborting" >&2; exit 1; }
+flock -n "$RUN_LOCK_FD" ||
+  {
+    echo "run.sh: $YB_AMP_REPO_DIR is locked by another run; aborting" >&2
+    exit 1
+  }
 
 # Reap orphans left by runs that are no longer alive (compute postgres that
 # outlived a hung `endpoint stop`, or anything from a SIGKILL'd/OOM'd run)
@@ -273,13 +279,13 @@ bash "$REPO/test/integration/compute/reap.sh" "$REPO/.integration-tests" "$YB_AM
 # bypass Drop (Ctrl-C, kill, hangup). clean.sh is scoped to this run via the
 # env above, so it never touches a concurrent run or a dev .yb_amp cluster.
 cleanup() {
-    trap - INT TERM HUP
-    echo >&2
-    echo "run.sh: signalled — tearing down this run's integration cluster (db=$YB_DBNAME)" >&2
-    if [ -n "${HARNESS_PID:-}" ]; then kill "$HARNESS_PID" 2>/dev/null || true; fi
-    YB_HOST="${YB_HOST:-127.0.0.1}" YB_PORT="${YB_PORT:-5433}" \
-        bash "$REPO/test/integration/compute/clean.sh" >/dev/null 2>&1 || true
-    exit 130
+  trap - INT TERM HUP
+  echo >&2
+  echo "run.sh: signalled — tearing down this run's integration cluster (db=$YB_DBNAME)" >&2
+  if [ -n "${HARNESS_PID:-}" ]; then kill "$HARNESS_PID" 2>/dev/null || true; fi
+  YB_HOST="${YB_HOST:-127.0.0.1}" YB_PORT="${YB_PORT:-5433}" \
+    bash "$REPO/test/integration/compute/clean.sh" >/dev/null 2>&1 || true
+  exit 130
 }
 trap cleanup INT TERM HUP
 
@@ -288,7 +294,10 @@ trap cleanup INT TERM HUP
 # the harness nor any cluster process it spawns (compute_ctl -> postgres, …)
 # inherits it. Otherwise an orphaned postgres would keep the lock held and
 # reap.sh could never tell the run had died.
-( exec {RUN_LOCK_FD}>&-; exec "$BIN" ${ARGS[@]+"${ARGS[@]}"} ) &
+(
+  exec {RUN_LOCK_FD}>&-
+  exec "$BIN" ${ARGS[@]+"${ARGS[@]}"}
+) &
 HARNESS_PID=$!
 wait "$HARNESS_PID" || EXIT_CODE=$?
 exit "${EXIT_CODE:-0}"

@@ -11,7 +11,7 @@ import {
   logout,
   PROVISION_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_CACHE_KEY,
-  AUTH_LOGOUT_EVENT
+  AUTH_LOGOUT_EVENT,
 } from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
@@ -120,9 +120,7 @@ export default function CompleteNewPasswordPage() {
   };
 
   const confirmPasswordMismatch =
-    confirmPasswordTouched &&
-    confirmPassword.length > 0 &&
-    newPassword !== confirmPassword;
+    confirmPasswordTouched && confirmPassword.length > 0 && newPassword !== confirmPassword;
 
   return (
     <AuthPageShell>
@@ -133,9 +131,7 @@ export default function CompleteNewPasswordPage() {
         <h1 className="mb-2 text-center text-3xl font-semibold text-foreground">
           Complete account setup
         </h1>
-        <p className="mb-6 text-center text-sm text-muted-foreground">
-          {email}
-        </p>
+        <p className="mb-6 text-center text-sm text-muted-foreground">{email}</p>
 
         <form className="space-y-4" onSubmit={(ev) => void handleSubmit(ev)}>
           <div className="space-y-2">
@@ -168,10 +164,7 @@ export default function CompleteNewPasswordPage() {
                 )}
               </button>
             </div>
-            <PasswordPolicyPanel
-              id="complete-password-policy"
-              password={newPassword}
-            />
+            <PasswordPolicyPanel id="complete-password-policy" password={newPassword} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="cnp-confirm" className="text-muted-foreground">
@@ -189,9 +182,7 @@ export default function CompleteNewPasswordPage() {
               onBlur={() => setConfirmPasswordTouched(true)}
               autoComplete="new-password"
               aria-describedby={
-                confirmPasswordMismatch
-                  ? "cnp-confirm-help cnp-confirm-error"
-                  : "cnp-confirm-help"
+                confirmPasswordMismatch ? "cnp-confirm-help cnp-confirm-error" : "cnp-confirm-help"
               }
               aria-invalid={confirmPasswordMismatch}
               required
@@ -201,10 +192,7 @@ export default function CompleteNewPasswordPage() {
               Re-enter your new password. It must match exactly.
             </p>
             {confirmPasswordMismatch ? (
-              <p
-                id="cnp-confirm-error"
-                className="text-xs text-red-600 dark:text-red-300"
-              >
+              <p id="cnp-confirm-error" className="text-xs text-red-600 dark:text-red-300">
                 {passwordMismatchMessage}
               </p>
             ) : null}

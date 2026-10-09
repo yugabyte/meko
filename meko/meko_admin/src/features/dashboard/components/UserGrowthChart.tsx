@@ -1,12 +1,4 @@
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { format, parseISO } from "date-fns";
 import { Users } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,9 +20,7 @@ export function UserGrowthChart({ data, totalUsers, isLoading }: Props) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium">
-          New User Registrations (last 30 days)
-        </CardTitle>
+        <CardTitle className="text-sm font-medium">New User Registrations (last 30 days)</CardTitle>
         <div className="flex items-center gap-1.5 text-muted-foreground">
           <Users className="h-4 w-4" />
           {isLoading ? (
@@ -73,12 +63,7 @@ export function UserGrowthChart({ data, totalUsers, isLoading }: Props) {
                 }}
                 cursor={{ fill: "hsl(var(--accent))" }}
               />
-              <Bar
-                dataKey="count"
-                name="New users"
-                fill="hsl(217 91% 60%)"
-                radius={[3, 3, 0, 0]}
-              />
+              <Bar dataKey="count" name="New users" fill="hsl(217 91% 60%)" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         )}

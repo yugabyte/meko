@@ -13,7 +13,7 @@ const POINTS = [
   },
   {
     title: "Memory is for facts, not rows",
-    body: "Meko's memory store holds discrete facts and preferences. Great for \"remember this\", wrong for \"average cost per model\".",
+    body: 'Meko\'s memory store holds discrete facts and preferences. Great for "remember this", wrong for "average cost per model".',
   },
   {
     title: "Your own runs, not a sample",
@@ -40,8 +40,9 @@ export function DashboardIntroStage() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        One honest gap: a review's own tokens, cost and findings aren't persisted anywhere yet, so the
-        dashboard's per-run table covers this session only. Everything else on it is read back from Meko.
+        One honest gap: a review's own tokens, cost and findings aren't persisted anywhere yet, so
+        the dashboard's per-run table covers this session only. Everything else on it is read back
+        from Meko.
       </p>
     </div>
   );

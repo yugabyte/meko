@@ -17,7 +17,9 @@ export function ShareComingSoonPlaceholder({ blurredPreview, "aria-label": ariaL
     >
       {blurredPreview ? (
         /* Decorative only — no interaction until the real feature ships. */
-        <div className="pointer-events-none select-none px-4 py-5 blur-[3px] opacity-60">{blurredPreview}</div>
+        <div className="pointer-events-none select-none px-4 py-5 blur-[3px] opacity-60">
+          {blurredPreview}
+        </div>
       ) : null}
 
       <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[2px]">

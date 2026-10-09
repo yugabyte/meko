@@ -19,7 +19,13 @@ import { AlertCircle, Database, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ampCoreLimitMessage } from "@/lib/api/ampApi";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
@@ -125,8 +131,8 @@ function CreateAmpClusterStageContent({
         <h2 className="text-lg font-semibold text-foreground">Create an AMP cluster</h2>
       </div>
       <p className="text-sm text-muted-foreground">
-        A cluster is one real Postgres database, with a <code>main</code> branch and a
-        read-write endpoint, provisioned for this datapack in under a minute.
+        A cluster is one real Postgres database, with a <code>main</code> branch and a read-write
+        endpoint, provisioned for this datapack in under a minute.
       </p>
 
       {session.ampClusterId ? (
@@ -171,7 +177,10 @@ function CreateAmpClusterStageContent({
                 </TooltipContent>
               </Tooltip>
             ) : (
-              <Button onClick={() => void handleCreate()} disabled={!name.trim() || createMut.isPending}>
+              <Button
+                onClick={() => void handleCreate()}
+                disabled={!name.trim() || createMut.isPending}
+              >
                 {createMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
                 {createMut.isPending ? "Creating…" : "Create cluster"}
               </Button>
@@ -196,9 +205,7 @@ function CreateAmpClusterStageContent({
               disabled={isLoading}
             >
               <SelectTrigger id="select-amp-cluster" className="flex-1" aria-label="Select cluster">
-                <SelectValue
-                  placeholder={isLoading ? "Loading clusters…" : "Select a cluster"}
-                />
+                <SelectValue placeholder={isLoading ? "Loading clusters…" : "Select a cluster"} />
               </SelectTrigger>
               <SelectContent>
                 {(clusters ?? []).map((cluster) => (

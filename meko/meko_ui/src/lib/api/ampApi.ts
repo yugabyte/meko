@@ -64,7 +64,11 @@ export const AMP_CORE_LIMIT_CODES = [
  *  message (which already names the tier to move to); otherwise null. Lets a
  *  surface render an "Upgrade → settings" deeplink instead of a raw error. */
 export function ampCoreLimitMessage(e: unknown): string | null {
-  if (isMekoApiRequestError(e) && e.code && (AMP_CORE_LIMIT_CODES as readonly string[]).includes(e.code)) {
+  if (
+    isMekoApiRequestError(e) &&
+    e.code &&
+    (AMP_CORE_LIMIT_CODES as readonly string[]).includes(e.code)
+  ) {
     return e.message;
   }
   return null;
@@ -160,7 +164,12 @@ export async function ampListBranches(
   clusterId: string,
   options: RouteOptions = {},
 ) {
-  return request<AmpBranch[]>(`${clusterRoute(datapackId, clusterId)}/branches`, "GET", undefined, options);
+  return request<AmpBranch[]>(
+    `${clusterRoute(datapackId, clusterId)}/branches`,
+    "GET",
+    undefined,
+    options,
+  );
 }
 
 /** POST a new branch (fork). fork_point_lsn is required when the parent has no
@@ -183,7 +192,12 @@ export async function ampListCompute(
   branchId: string,
   options: RouteOptions = {},
 ) {
-  return request<AmpCompute[]>(branchComputeRoute(datapackId, clusterId, branchId), "GET", undefined, options);
+  return request<AmpCompute[]>(
+    branchComputeRoute(datapackId, clusterId, branchId),
+    "GET",
+    undefined,
+    options,
+  );
 }
 
 /** POST to provision a compute instance on a branch. `cpu`/`memory` are

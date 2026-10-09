@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 export type Theme = "light" | "dark";
 

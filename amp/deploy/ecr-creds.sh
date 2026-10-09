@@ -27,9 +27,13 @@ resolve_ecr_creds() {
     # Tolerate the common shapes: `aws iam create-access-key` ({.AccessKey.*}), a
     # flat {AccessKeyId,SecretAccessKey}, or {aws_access_key_id,aws_secret_access_key}.
     AWS_ACCESS_KEY_ID="$(jq -re '.AccessKey.AccessKeyId // .AccessKeyId // .aws_access_key_id' "${AWS_BOT_JSON}")" || {
-      echo "ERROR: could not read an access key id from ${AWS_BOT_JSON}" >&2; return 1; }
+      echo "ERROR: could not read an access key id from ${AWS_BOT_JSON}" >&2
+      return 1
+    }
     AWS_SECRET_ACCESS_KEY="$(jq -re '.AccessKey.SecretAccessKey // .SecretAccessKey // .aws_secret_access_key' "${AWS_BOT_JSON}")" || {
-      echo "ERROR: could not read a secret access key from ${AWS_BOT_JSON}" >&2; return 1; }
+      echo "ERROR: could not read a secret access key from ${AWS_BOT_JSON}" >&2
+      return 1
+    }
     export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
     return 0
   fi

@@ -1,9 +1,11 @@
 name: Format
 
 # The repo's one formatting gate: .github/scripts/format.sh --check, which runs
-# gofmt on every tracked .go file, `cargo fmt --check` on the amp Rust workspace
-# and `ruff format --diff` on every tracked .py file. The steps before it only
-# install the pinned tools. Nothing needs a build, so the job takes about a minute.
+# gofmt on every tracked .go file, `cargo fmt --check` on the amp Rust workspace,
+# `ruff format --diff` on every tracked .py file, shfmt on every shell script and
+# prettier on every .ts/.tsx/.js/.jsx/.mjs/.cjs/.css/.scss file. The steps before
+# it only install the pinned tools; format.sh fetches ruff, shfmt and prettier at
+# the versions it pins. Nothing needs a build, so the job takes a minute or two.
 #
 # A required check of the `main-branch` ruleset, by its job name: keep the
 # name, and never add a `paths:` filter — a workflow that doesn't run never
@@ -44,6 +46,11 @@ jobs:
 
       # format.sh runs ruff through uvx at the version it pins.
       - uses: astral-sh/setup-uv@v7
+
+      # ...and prettier through npx.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
 
       - name: Check formatting
         run: .github/scripts/format.sh --check

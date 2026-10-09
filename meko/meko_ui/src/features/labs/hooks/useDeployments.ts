@@ -29,7 +29,8 @@ export function useInitByocDeployment() {
 export function useConfirmByocDeployment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { id: string; roleArn: string }) => confirmByocDeployment(vars.id, vars.roleArn),
+    mutationFn: (vars: { id: string; roleArn: string }) =>
+      confirmByocDeployment(vars.id, vars.roleArn),
     onSuccess: (deployment) => qc.setQueryData(deploymentKeys.detail(deployment.id), deployment),
   });
 }

@@ -6,11 +6,15 @@ import { documentdbTrust, documentdbURI } from "./endpointTls";
 // differs for each.
 describe("documentdbTrust", () => {
   it("reads the shapes of the /ca answer", () => {
-    expect(documentdbTrust({ required: true, documentdb_verifiable: true, ca_crt: "pem" })).toBe("ca_file");
+    expect(documentdbTrust({ required: true, documentdb_verifiable: true, ca_crt: "pem" })).toBe(
+      "ca_file",
+    );
     expect(documentdbTrust({ required: false, documentdb_verifiable: true })).toBe("system");
     expect(documentdbTrust({ required: false, documentdb_verifiable: false })).toBe("unverified");
     // Postgres has a CA-signed certificate, but this gateway still self-signs.
-    expect(documentdbTrust({ required: true, documentdb_verifiable: false, ca_crt: "pem" })).toBe("unverified");
+    expect(documentdbTrust({ required: true, documentdb_verifiable: false, ca_crt: "pem" })).toBe(
+      "unverified",
+    );
   });
 
   // Such a controller always rendered the gateway self-signing; its `required`

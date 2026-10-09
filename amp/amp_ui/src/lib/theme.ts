@@ -11,13 +11,7 @@
 // `text-foreground`, etc.) resolve via those CSS variables, so flipping
 // the class is the only mechanism we need to re-theme the whole app.
 
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 /** Two-mode theme. We don't currently support an explicit "system" mode
  *  separate from light/dark — first-load picks based on OS preference

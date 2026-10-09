@@ -196,8 +196,7 @@ export function ConversationThreadPane({
     if (!deepLinkPending || !targetMemoryId || loading) return;
     const target = messages.find(
       (m) =>
-        m.memory_ids?.includes(targetMemoryId) ||
-        m.promoted_memory_ids?.includes(targetMemoryId),
+        m.memory_ids?.includes(targetMemoryId) || m.promoted_memory_ids?.includes(targetMemoryId),
     );
     if (target) {
       revealDeepLinkTarget(target.message_id);
@@ -293,49 +292,43 @@ export function ConversationThreadPane({
         {messages.map((m) => {
           const isTarget = shimmeringMessageId === m.message_id;
           return (
-          <div
-            key={m.message_id}
-            ref={(el) => {
-              msgElRefs.current[m.message_id] = el;
-            }}
-            data-deeplink-target={isTarget ? "true" : undefined}
-            // Pulsing amber halo signals "this is the turn that produced
-            // the memory you clicked on". Scroll margin keeps it clear of
-            // the sticky thread header when `scrollIntoView` centers it.
-            // Background + padding are baked in so the entrance is purely
-            // additive (no layout shift on highlight start/end).
-            className={cn(
-              "scroll-mt-24 rounded-xl px-3 py-2 -mx-3 transition-colors duration-300",
-              isTarget && "bg-amber-500/[0.04] dark:bg-amber-400/[0.06]",
-            )}
-            style={
-              isTarget
-                ? { animation: "meko-deeplink-pulse 1.4s ease-in-out 2" }
-                : undefined
-            }
-          >
-            <ThreadTurn
-              message={m}
-              now={now}
-              onOpenTrace={() => onOpenTrace(m.message_id)}
-              onOpenTraceWithMemoryShimmer={
-                onOpenTraceWithMemoryShimmer
-                  ? () => onOpenTraceWithMemoryShimmer(m.message_id)
-                  : undefined
-              }
-              onViewTraceSpan={
-                onViewTraceSpan
-                  ? (spanId) => onViewTraceSpan(m.message_id, spanId)
-                  : undefined
-              }
-              isShimmering={shimmeringMessageId === m.message_id}
-              datapackId={datapackId}
-              datapackName={datapackName}
-              userEmail={userEmail}
-              conversationId={conversationId}
-              langfuseProjectId={langfuseProjectId}
-            />
-          </div>
+            <div
+              key={m.message_id}
+              ref={(el) => {
+                msgElRefs.current[m.message_id] = el;
+              }}
+              data-deeplink-target={isTarget ? "true" : undefined}
+              // Pulsing amber halo signals "this is the turn that produced
+              // the memory you clicked on". Scroll margin keeps it clear of
+              // the sticky thread header when `scrollIntoView` centers it.
+              // Background + padding are baked in so the entrance is purely
+              // additive (no layout shift on highlight start/end).
+              className={cn(
+                "scroll-mt-24 rounded-xl px-3 py-2 -mx-3 transition-colors duration-300",
+                isTarget && "bg-amber-500/[0.04] dark:bg-amber-400/[0.06]",
+              )}
+              style={isTarget ? { animation: "meko-deeplink-pulse 1.4s ease-in-out 2" } : undefined}
+            >
+              <ThreadTurn
+                message={m}
+                now={now}
+                onOpenTrace={() => onOpenTrace(m.message_id)}
+                onOpenTraceWithMemoryShimmer={
+                  onOpenTraceWithMemoryShimmer
+                    ? () => onOpenTraceWithMemoryShimmer(m.message_id)
+                    : undefined
+                }
+                onViewTraceSpan={
+                  onViewTraceSpan ? (spanId) => onViewTraceSpan(m.message_id, spanId) : undefined
+                }
+                isShimmering={shimmeringMessageId === m.message_id}
+                datapackId={datapackId}
+                datapackName={datapackName}
+                userEmail={userEmail}
+                conversationId={conversationId}
+                langfuseProjectId={langfuseProjectId}
+              />
+            </div>
           );
         })}
       </div>

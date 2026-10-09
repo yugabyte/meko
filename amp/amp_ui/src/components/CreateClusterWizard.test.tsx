@@ -1,11 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import {
-  render,
-  screen,
-  cleanup,
-  fireEvent,
-  waitFor as waitForRTL,
-} from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor as waitForRTL } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import type { StoragePool, Task } from "@/lib/api/types";
@@ -133,10 +127,14 @@ describe("CreateClusterWizard", () => {
     }
     // On Compute now, with the password blank.
     await waitFor(() => expect(screen.getByLabelText(/^password$/i)).toBeTruthy());
-    expect((screen.getByRole("button", { name: /next/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /next/i }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
 
     fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: PASSWORD } });
-    expect((screen.getByRole("button", { name: /next/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: /next/i }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   // A blank username still means "take the controller's default"; "" is a 400.

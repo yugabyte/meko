@@ -130,8 +130,8 @@ export function NewProjectDialog({
           <DialogHeader>
             <DialogTitle>{NEW_PROJECT_LABEL}</DialogTitle>
             <DialogDescription>
-              Pick a layout to start with. Its folders are created now, and you can add, rename
-              or remove them later.
+              Pick a layout to start with. Its folders are created now, and you can add, rename or
+              remove them later.
             </DialogDescription>
           </DialogHeader>
 
@@ -206,10 +206,7 @@ export function NewProjectDialog({
                 swapping silently, which is the whole reason the picker lost
                 its three description blocks: the drawing says it faster. */}
             {selectedTheme ? (
-              <div
-                key={themeKey}
-                className="animate-in fade-in slide-in-from-top-1 duration-200"
-              >
+              <div key={themeKey} className="animate-in fade-in slide-in-from-top-1 duration-200">
                 <FolderTreePreview
                   label="You will get"
                   name={previewName}
@@ -217,9 +214,7 @@ export function NewProjectDialog({
                   footer="datapacks you file into each folder"
                   pendingFolderIndex={needsFolderName ? 0 : undefined}
                 />
-                <p className="mt-3 text-sm text-foreground">
-                  {confirmQuestion}
-                </p>
+                <p className="mt-3 text-sm text-foreground">{confirmQuestion}</p>
               </div>
             ) : null}
 

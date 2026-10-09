@@ -6,12 +6,7 @@
 import type { ReactNode } from "react";
 
 import { formatTokens } from "@/lib/tokenSavings";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MiniSparkline } from "@/components/ui/charts/MiniSparkline";
 import type { ActivityPoint } from "@/components/ui/charts/chartSeries";
 

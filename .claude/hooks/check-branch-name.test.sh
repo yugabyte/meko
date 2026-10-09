@@ -12,17 +12,17 @@ HOOK=.claude/hooks/check-branch-name.sh
 pass=0 fail=0
 
 check() { # check <expected: allow|block> <command>
-    local want=$1 cmd=$2 got rc
-    printf '%s' "$cmd" | jq -Rs '{tool_name:"Bash",tool_input:{command:.}}' \
-        | bash "$HOOK" >/dev/null 2>&1
-    rc=$?
-    [ "$rc" -eq 0 ] && got=allow || got=block
-    if [ "$got" = "$want" ]; then
-        pass=$((pass+1))
-    else
-        fail=$((fail+1))
-        printf 'FAIL  want=%-5s got=%-5s  %s\n' "$want" "$got" "$cmd"
-    fi
+  local want=$1 cmd=$2 got rc
+  printf '%s' "$cmd" | jq -Rs '{tool_name:"Bash",tool_input:{command:.}}' |
+    bash "$HOOK" >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 0 ] && got=allow || got=block
+  if [ "$got" = "$want" ]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    printf 'FAIL  want=%-5s got=%-5s  %s\n' "$want" "$got" "$cmd"
+  fi
 }
 
 # --- conforming branch names -> allow --------------------------------------

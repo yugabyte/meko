@@ -123,7 +123,8 @@ describe("parseBulkShareEmails", () => {
   });
 
   it("round-trips the exported members CSV shape", () => {
-    const exported = 'email,name,role,is_owner\r\nana@x.com,Ana,Owner,true\r\n"bo@x.com","Doe, Bo",Viewer,false\r\n';
+    const exported =
+      'email,name,role,is_owner\r\nana@x.com,Ana,Owner,true\r\n"bo@x.com","Doe, Bo",Viewer,false\r\n';
     expect(parseBulkShareEmails(exported).emails).toEqual(["ana@x.com", "bo@x.com"]);
   });
 

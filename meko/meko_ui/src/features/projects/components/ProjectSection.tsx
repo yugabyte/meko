@@ -13,10 +13,7 @@ import { CreateTile } from "@/components/ui/create-tile";
 import type { ProjectMatch } from "@/features/projects/lib/filterProjects";
 import type { Project } from "@/lib/api/projectsApi";
 import { ProjectCard } from "@/features/projects/components/ProjectCard";
-import {
-  PROJECT_SCOPE,
-  type ProjectScope,
-} from "@/features/projects/lib/scopeProjects";
+import { PROJECT_SCOPE, type ProjectScope } from "@/features/projects/lib/scopeProjects";
 import {
   PROJECTS_SEARCH_PLACEHOLDER,
   NEW_PROJECT_LABEL,

@@ -47,35 +47,35 @@ log() { printf '==> %s\n' "$*"; }
 # re-run after a partial failure copies only what is missing and a repeat run is a
 # no-op rather than a re-push.
 quay_has_tag() {
-    local token
-    token=$(curl -sf --max-time 30 -u "$QUAY_USER:$QUAY_TOKEN" \
-        "https://quay.io/v2/auth?service=quay.io&scope=repository:${QUAY_NS#quay.io/}/${DST_REPO}:pull" \
-        | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    [ -n "$token" ] || return 1
-    curl -sf --max-time 30 -o /dev/null -H "Authorization: Bearer $token" \
-        -H 'Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json' \
-        "https://quay.io/v2/${QUAY_NS#quay.io/}/${DST_REPO}/manifests/${TAG}"
+  local token
+  token=$(curl -sf --max-time 30 -u "$QUAY_USER:$QUAY_TOKEN" \
+    "https://quay.io/v2/auth?service=quay.io&scope=repository:${QUAY_NS#quay.io/}/${DST_REPO}:pull" |
+    sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  [ -n "$token" ] || return 1
+  curl -sf --max-time 30 -o /dev/null -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json' \
+    "https://quay.io/v2/${QUAY_NS#quay.io/}/${DST_REPO}/manifests/${TAG}"
 }
 
 log "source: $SRC"
 log "target: $DST"
 
 if [ "$PUSH" != "1" ]; then
-    log "PUSH=0 — resolved only, nothing copied"
-    exit 0
+  log "PUSH=0 — resolved only, nothing copied"
+  exit 0
 fi
 
 : "${QUAY_USER:?QUAY_USER is required to push}"
 : "${QUAY_TOKEN:?QUAY_TOKEN is required to push}"
 
 if quay_has_tag; then
-    log "$DST already exists — nothing to do"
-    exit 0
+  log "$DST already exists — nothing to do"
+  exit 0
 fi
 
 log "logging in to ECR ($ECR_REGION)"
-aws ecr get-login-password --region "$ECR_REGION" \
-    | "$DOCKER" login "$ECR_REGISTRY" -u AWS --password-stdin
+aws ecr get-login-password --region "$ECR_REGION" |
+  "$DOCKER" login "$ECR_REGISTRY" -u AWS --password-stdin
 
 log "logging in to quay.io as $QUAY_USER"
 printf '%s' "$QUAY_TOKEN" | "$DOCKER" login quay.io -u "$QUAY_USER" --password-stdin

@@ -9,11 +9,19 @@ import { useBranches } from "@/features/datapacks/hooks/useAmpClusters";
 import { BranchCard } from "./BranchCard";
 import { NewBranchDialog } from "./NewBranchDialog";
 
-export function ClusterBranches({ datapackId, clusterId }: { datapackId: string; clusterId: string }) {
+export function ClusterBranches({
+  datapackId,
+  clusterId,
+}: {
+  datapackId: string;
+  clusterId: string;
+}) {
   const branchesQuery = useBranches(datapackId, clusterId);
   const branches = useMemo(() => branchesQuery.data ?? [], [branchesQuery.data]);
   const loading = branchesQuery.isLoading;
-  const error = branchesQuery.error ? getApiErrorMessage(branchesQuery.error, "Failed to load branches.") : null;
+  const error = branchesQuery.error
+    ? getApiErrorMessage(branchesQuery.error, "Failed to load branches.")
+    : null;
   const [newBranchOpen, setNewBranchOpen] = useState(false);
 
   const ordered = useMemo(() => {
@@ -51,7 +59,12 @@ export function ClusterBranches({ datapackId, clusterId }: { datapackId: string;
       ) : (
         <div className="flex flex-col gap-2">
           {ordered.map((branch) => (
-            <BranchCard key={branch.branch_id} datapackId={datapackId} clusterId={clusterId} branch={branch} />
+            <BranchCard
+              key={branch.branch_id}
+              datapackId={datapackId}
+              clusterId={clusterId}
+              branch={branch}
+            />
           ))}
         </div>
       )}

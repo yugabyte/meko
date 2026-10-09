@@ -4,24 +4,11 @@
 // deep-link.
 
 import { useEffect, useRef, useState } from "react";
-import {
-  Check,
-  Clock,
-  Copy,
-  Cpu,
-  Database,
-  ExternalLink,
-  Hash,
-  Zap,
-} from "lucide-react";
+import { Check, Clock, Copy, Cpu, Database, ExternalLink, Hash, Zap } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "./helpers";
 
 import type { DbBreakdownEntry } from "./helpers";
@@ -83,10 +70,7 @@ export function DecisionTraceHeader({
       ) : (
         <span className="block space-y-0.5">
           {dbBreakdown.map((b) => (
-            <span
-              key={b.name}
-              className="flex items-center justify-between gap-3"
-            >
+            <span key={b.name} className="flex items-center justify-between gap-3">
               <code className="font-mono text-[10px] text-blue-800 dark:text-blue-100/90">
                 {b.prettyName}
               </code>
@@ -192,19 +176,14 @@ function HeaderChip({
 }) {
   const chip = (
     <span
-      className={cn(
-        "inline-flex items-center gap-1 tabular-nums",
-        tooltip ? "cursor-help" : null,
-      )}
+      className={cn("inline-flex items-center gap-1 tabular-nums", tooltip ? "cursor-help" : null)}
     >
       {icon}
       <span className="font-mono text-foreground/90">{value}</span>
       <span
         className={cn(
           "text-muted-foreground",
-          tooltip
-            ? "border-b border-dashed border-muted-foreground/40"
-            : null,
+          tooltip ? "border-b border-dashed border-muted-foreground/40" : null,
         )}
       >
         {label}

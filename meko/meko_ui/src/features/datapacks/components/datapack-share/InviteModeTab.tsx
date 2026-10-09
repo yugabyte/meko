@@ -23,7 +23,8 @@ const inviteTabTriggerClass = cn(
 export type InviteModeTabTone = "brand" | "violet";
 
 const TONE_ACTIVE_CLASS: Record<InviteModeTabTone, string> = {
-  brand: "data-[state=active]:border-b-brand data-[state=active]:bg-brand/10 data-[state=active]:text-foreground",
+  brand:
+    "data-[state=active]:border-b-brand data-[state=active]:bg-brand/10 data-[state=active]:text-foreground",
   violet:
     "data-[state=active]:border-b-violet-500 data-[state=active]:bg-violet-100 dark:data-[state=active]:bg-violet-950/20 data-[state=active]:text-foreground",
 };

@@ -51,8 +51,11 @@ DB_NS="${DB_NS:-$NS}"
 # The sidecar container name is the OpenTelemetry Operator's, not ours.
 SIDECAR="otc-container"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-ok()   { echo "ok: $*"; }
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+ok() { echo "ok: $*"; }
 
 # 1. The destination. Until this is Ready with a resourceUUID the operator does
 #    not reconcile the universe's telemetry section at all, so a failure here
@@ -65,7 +68,7 @@ LIST_RC=$?
 # CRD, a denied read or the wrong namespace all read as "nothing declared" and
 # the whole smoke no-ops green.
 if [ "$LIST_RC" -ne 0 ]; then
-  fail "cannot list TelemetryProviders in $NS: $(tr -d '\n' < "$LIST_ERR"). That is not the same as none being declared — the CRD may be absent, or this context may not be allowed to read them."
+  fail "cannot list TelemetryProviders in $NS: $(tr -d '\n' <"$LIST_ERR"). That is not the same as none being declared — the CRD may be absent, or this context may not be allowed to read them."
 fi
 rm -f "$LIST_ERR"
 if [ -z "$PROVIDERS" ]; then
@@ -94,21 +97,24 @@ done
 yb_pods() {
   local sels sel out
   case "$1" in
-    master)  sels="app.kubernetes.io/name=yb-master app=yb-master" ;;
-    tserver) sels="app.kubernetes.io/name=yb-tserver app=yb-tserver" ;;
-    *) return 1 ;;
+  master) sels="app.kubernetes.io/name=yb-master app=yb-master" ;;
+  tserver) sels="app.kubernetes.io/name=yb-tserver app=yb-tserver" ;;
+  *) return 1 ;;
   esac
   for sel in $sels; do
     out="$(kubectl -n "$DB_NS" get pods -l "$sel" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"
-    if [ -n "$out" ]; then echo "$out"; return 0; fi
+    if [ -n "$out" ]; then
+      echo "$out"
+      return 0
+    fi
   done
   return 1
 }
 
 has_sidecar() {
   kubectl -n "$DB_NS" get pod "$1" \
-    -o jsonpath='{.spec.containers[*].name}{" "}{.spec.initContainers[*].name}' 2>/dev/null \
-    | tr ' ' '\n' | grep -qx "$SIDECAR"
+    -o jsonpath='{.spec.containers[*].name}{" "}{.spec.initContainers[*].name}' 2>/dev/null |
+    tr ' ' '\n' | grep -qx "$SIDECAR"
 }
 
 MASTER_PODS="$(yb_pods master)" || fail "no yb-master pods in namespace $DB_NS"
@@ -163,8 +169,8 @@ TSERVER_POD="$(echo "$TSERVER_PODS" | awk '{print $1}')"
 # to still be starting. Without this, step 4 execs into a pod that has no
 # container yet, finds :8888 unreadable and downgrades itself to a warning:
 # the export leg would go unchecked exactly when it was newest.
-kubectl -n "$DB_NS" wait --for=condition=Ready "pod/$TSERVER_POD" --timeout=5m >/dev/null 2>&1 \
-  || fail "$TSERVER_POD has a $SIDECAR in its spec but never became Ready; the collector cannot be read. $(kubectl -n "$DB_NS" get pod "$TSERVER_POD" -o jsonpath='{.status.phase}: {range .status.containerStatuses[*]}{.name}={.ready} {end}' 2>/dev/null)"
+kubectl -n "$DB_NS" wait --for=condition=Ready "pod/$TSERVER_POD" --timeout=5m >/dev/null 2>&1 ||
+  fail "$TSERVER_POD has a $SIDECAR in its spec but never became Ready; the collector cannot be read. $(kubectl -n "$DB_NS" get pod "$TSERVER_POD" -o jsonpath='{.status.phase}: {range .status.containerStatuses[*]}{.name}={.ready} {end}' 2>/dev/null)"
 
 # 3. What YBA actually generated.
 #
@@ -183,18 +189,22 @@ if [ -z "$CONFIG" ]; then
   # on, the master's. Pick by content rather than by name: the name is derived
   # from a helm fullname this script has no way to predict.
   for c in $(kubectl -n "$DB_NS" get opentelemetrycollectors.opentelemetry.io \
-               -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
     body="$(kubectl -n "$DB_NS" get opentelemetrycollector "$c" -o jsonpath='{.spec.config}' 2>/dev/null)"
     case "$body" in
-      *tserver_export*) CONFIG="$body"; CONFIG_SRC="OpenTelemetryCollector/$c"; break ;;
+    *tserver_export*)
+      CONFIG="$body"
+      CONFIG_SRC="OpenTelemetryCollector/$c"
+      break
+      ;;
     esac
   done
 fi
 [ -n "$CONFIG" ] || fail "cannot read the collector config for $TSERVER_POD: the $SIDECAR carries no OTEL_CONFIG and no OpenTelemetryCollector in $DB_NS has a tserver config. Without it there is no way to tell what the collector was told to collect."
 
 want_in_config() {
-  printf '%s\n' "$CONFIG" | grep -q -- "$1" \
-    || fail "the collector config ($CONFIG_SRC) does not mention '$1' ($2)"
+  printf '%s\n' "$CONFIG" | grep -q -- "$1" ||
+    fail "the collector config ($CONFIG_SRC) does not mention '$1' ($2)"
 }
 want_in_config "prometheus" "no prometheus receiver: nothing is being scraped"
 # Two, not three: this config came from the tserver pod, and master runs its own
@@ -212,8 +222,8 @@ if printf '%s\n' "$CONFIG" | grep -q -- "cql_export"; then
 fi
 ok "collector config ($CONFIG_SRC) scrapes tserver + YSQL with the collection level applied"
 
-printf '%s\n' "$CONFIG" | grep -q -- "environment_id" \
-  || fail "the generated config carries no environment_id tag; the series would reach the store unattributable"
+printf '%s\n' "$CONFIG" | grep -q -- "environment_id" ||
+  fail "the generated config carries no environment_id tag; the series would reach the store unattributable"
 ok "generated config stamps the environment identity"
 
 # 4. Producing AND shipping. Both counters, because they fail differently: a
@@ -246,12 +256,18 @@ done
 
 PF_LOG="$(mktemp)"
 PF_PID=""
-close_tunnel() { [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null; PF_PID=""; }
-cleanup() { close_tunnel; rm -f "$PF_LOG"; }
+close_tunnel() {
+  [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null
+  PF_PID=""
+}
+cleanup() {
+  close_tunnel
+  rm -f "$PF_LOG"
+}
 trap cleanup EXIT
 
 open_tunnel() {
-  : > "$PF_LOG"
+  : >"$PF_LOG"
   kubectl -n "$DB_NS" port-forward "pod/$TSERVER_POD" ":$1" >"$PF_LOG" 2>&1 &
   PF_PID=$!
   PF_PORT=""
@@ -267,7 +283,7 @@ open_tunnel() {
 # A sum of no lines and a sum of zero are the same number, so emptiness is
 # carried separately: awk prints nothing at all when it saw no metrics page.
 sum_metric() {
-  awk -v pat="$2" '$0 ~ pat {s += $NF; seen = 1} END {if (seen) printf "%d", s}' <<< "$1"
+  awk -v pat="$2" '$0 ~ pat {s += $NF; seen = 1} END {if (seen) printf "%d", s}' <<<"$1"
 }
 
 # Polled, because the collector may have only just come up and the jobs are on a
@@ -279,7 +295,10 @@ for _ in $(seq 1 12); do
   for p in $PORTS; do
     if open_tunnel "$p"; then
       METRICS="$(curl -sf --max-time 10 "http://127.0.0.1:$PF_PORT/metrics" 2>/dev/null)"
-      if [ -n "$METRICS" ]; then TELEMETRY_PORT="$p"; break; fi
+      if [ -n "$METRICS" ]; then
+        TELEMETRY_PORT="$p"
+        break
+      fi
     fi
     close_tunnel
   done
@@ -295,7 +314,7 @@ if [ -z "$METRICS" ]; then
   # only step that proves it, so a run that cannot read the counters has
   # verified nothing that matters.
   kubectl -n "$DB_NS" logs "$TSERVER_POD" -c "$SIDECAR" --tail=15 >&2 2>/dev/null || true
-  fail "the collector in $TSERVER_POD serves nothing on any of [$PORTS] over port-forward, so whether anything is being shipped is unknown. The last attempt said: $(tr '\n' ' ' < "$PF_LOG"). A refused connection on every candidate means the internal telemetry reader is somewhere else — read service.telemetry.metrics.readers in the config above."
+  fail "the collector in $TSERVER_POD serves nothing on any of [$PORTS] over port-forward, so whether anything is being shipped is unknown. The last attempt said: $(tr '\n' ' ' <"$PF_LOG"). A refused connection on every candidate means the internal telemetry reader is somewhere else — read service.telemetry.metrics.readers in the config above."
 else
   accepted="$(sum_metric "$METRICS" "^otelcol_receiver_accepted_metric_points")"
   sent="$(sum_metric "$METRICS" "^otelcol_exporter_sent_metric_points")"

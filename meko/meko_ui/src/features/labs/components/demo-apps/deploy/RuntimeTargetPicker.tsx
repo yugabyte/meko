@@ -11,7 +11,12 @@ import { cn } from "@/lib/utils";
 
 export type RuntimeTargetId = "bedrock-agentcore" | "vercel" | "lyzr";
 
-const RUNTIME_TARGETS: { id: RuntimeTargetId; label: string; description: string; enabled: boolean }[] = [
+const RUNTIME_TARGETS: {
+  id: RuntimeTargetId;
+  label: string;
+  description: string;
+  enabled: boolean;
+}[] = [
   {
     id: "bedrock-agentcore",
     label: "AWS Bedrock AgentCore",

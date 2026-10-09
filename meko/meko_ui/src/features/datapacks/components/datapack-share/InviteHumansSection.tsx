@@ -91,10 +91,7 @@ export function InviteHumansSection({
   );
   const selfSkipped = parse.emails.length - emails.length > 0;
   const overCap = emails.length > DATAPACK_BULK_SHARE_MAX_EMAILS;
-  const summary = useMemo(
-    () => (results ? summarizeBulkShareResults(results) : null),
-    [results],
-  );
+  const summary = useMemo(() => (results ? summarizeBulkShareResults(results) : null), [results]);
 
   const handleTextChange = (next: string) => {
     setText(next);
@@ -149,7 +146,9 @@ export function InviteHumansSection({
     }
     toast({
       title:
-        rolled.invited > 0 ? `Invited ${rolled.invited} of ${rolled.total}` : "No new invites needed",
+        rolled.invited > 0
+          ? `Invited ${rolled.invited} of ${rolled.total}`
+          : "No new invites needed",
       description:
         rolled.failed > 0
           ? `${rolled.unchanged} already had access · ${rolled.failed} could not be processed.`
@@ -197,9 +196,7 @@ export function InviteHumansSection({
         title: emails.length === 1 ? "Invite failed" : "Bulk invite failed",
         description: getApiErrorMessage(
           err,
-          emails.length === 1
-            ? "Could not send invite."
-            : "Could not grant access to this list.",
+          emails.length === 1 ? "Could not send invite." : "Could not grant access to this list.",
         ),
       });
     } finally {
@@ -226,14 +223,12 @@ export function InviteHumansSection({
       <WarningBanner>
         <p className="font-medium">Bulk sharing isn&apos;t available on this server yet</p>
         <p className="mt-1 text-xs font-normal">
-          This deployment doesn&apos;t expose the bulk-share endpoint. Invite people one at a time
-          — the input still works with a single address until it&apos;s enabled.
+          This deployment doesn&apos;t expose the bulk-share endpoint. Invite people one at a time —
+          the input still works with a single address until it&apos;s enabled.
         </p>
         <div className="mt-3">
           <Button type="button" variant="outline" size="sm" onClick={continueWithOne}>
-            {emails[0]
-              ? `Continue with ${emails[0]}`
-              : "Start over with one address"}
+            {emails[0] ? `Continue with ${emails[0]}` : "Start over with one address"}
           </Button>
         </div>
       </WarningBanner>
@@ -251,8 +246,8 @@ export function InviteHumansSection({
   return (
     <div className="space-y-5">
       <p className="text-sm text-muted-foreground">
-        Grant a role to one person or a whole team. Type an address, paste a list, or upload a CSV
-        — commas, semicolons, new lines, and a header row all work. Re-inviting someone who already
+        Grant a role to one person or a whole team. Type an address, paste a list, or upload a CSV —
+        commas, semicolons, new lines, and a header row all work. Re-inviting someone who already
         has access is a no-op.
       </p>
 
@@ -291,9 +286,7 @@ export function InviteHumansSection({
         </Button>
       </div>
 
-      {summary && results ? (
-        <BulkInviteResultsPanel results={results} summary={summary} />
-      ) : null}
+      {summary && results ? <BulkInviteResultsPanel results={results} summary={summary} /> : null}
     </div>
   );
 }

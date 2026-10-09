@@ -37,7 +37,10 @@ export function XRayPane({ trace }: { trace: LessonTrace | null }) {
             )}
           </span>
           <ChevronDown
-            className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+            className={cn(
+              "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
             aria-hidden
           />
         </button>
@@ -46,7 +49,8 @@ export function XRayPane({ trace }: { trace: LessonTrace | null }) {
         <div className="px-4 pb-3">
           {!trace ? (
             <p className="text-xs text-muted-foreground">
-              Nothing recorded in this browser yet. The calls a lesson makes appear here as you complete it.
+              Nothing recorded in this browser yet. The calls a lesson makes appear here as you
+              complete it.
             </p>
           ) : (
             <ul className="max-h-[300px] space-y-1.5 overflow-y-auto">
@@ -58,16 +62,25 @@ export function XRayPane({ trace }: { trace: LessonTrace | null }) {
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span
-                        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_TONE[call.status])}
+                        className={cn(
+                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                          STATUS_TONE[call.status],
+                        )}
                         aria-hidden
                       />
-                      <code className="truncate text-xs font-medium text-foreground">{call.name}</code>
+                      <code className="truncate text-xs font-medium text-foreground">
+                        {call.name}
+                      </code>
                     </div>
                     {call.detail && (
-                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{call.detail}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                        {call.detail}
+                      </p>
                     )}
                   </div>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{call.durationMs}ms</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {call.durationMs}ms
+                  </span>
                 </li>
               ))}
             </ul>

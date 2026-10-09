@@ -4,10 +4,7 @@
 //
 // Address validity is delegated to parseSingleInviteEmail so the single-invite
 // field and the bulk flow can never disagree about what an email looks like.
-import type {
-  DatapackBulkShareResult,
-  DatapackBulkShareStatus,
-} from "@/lib/api/mekoApi";
+import type { DatapackBulkShareResult, DatapackBulkShareStatus } from "@/lib/api/mekoApi";
 import { parseSingleInviteEmail } from "@/features/datapacks/components/datapack-share/shareInviteEmail";
 
 /**
@@ -85,12 +82,14 @@ function isHeaderRow(cells: string[]): boolean {
 
 /** Candidate tokens in a cell: a cell may itself hold `a@x.com; b@x.com` or space-separated addresses. */
 function cellTokens(cell: string): string[] {
-  return cell
-    .split(/[;\s]+/)
-    .map((t) => t.trim())
-    // Strip `<a@x.com>` / `"Name" <a@x.com>` wrappers and trailing punctuation.
-    .map((t) => t.replace(/^[<("']+/, "").replace(/[>)"',.]+$/, ""))
-    .filter((t) => t.length > 0);
+  return (
+    cell
+      .split(/[;\s]+/)
+      .map((t) => t.trim())
+      // Strip `<a@x.com>` / `"Name" <a@x.com>` wrappers and trailing punctuation.
+      .map((t) => t.replace(/^[<("']+/, "").replace(/[>)"',.]+$/, ""))
+      .filter((t) => t.length > 0)
+  );
 }
 
 export type BulkShareEmailParse = {
@@ -222,7 +221,9 @@ export function describeBulkShareParse(parse: BulkShareEmailParse): string {
     parts.push(`${parse.duplicateCount} duplicate${parse.duplicateCount === 1 ? "" : "s"} removed`);
   }
   if (parse.skippedRows.length > 0) {
-    parts.push(`${parse.skippedRows.length} row${parse.skippedRows.length === 1 ? "" : "s"} skipped`);
+    parts.push(
+      `${parse.skippedRows.length} row${parse.skippedRows.length === 1 ? "" : "s"} skipped`,
+    );
   }
   return parts.join(" · ");
 }
@@ -244,7 +245,11 @@ const STATUS_PRESENTATION: Record<
     detail: "No Meko account yet — they must sign up to accept.",
   },
   already_member: { label: "Already a member", tone: "neutral", detail: "Already has access." },
-  invite_exists: { label: "Invite pending", tone: "neutral", detail: "An invite is already pending." },
+  invite_exists: {
+    label: "Invite pending",
+    tone: "neutral",
+    detail: "An invite is already pending.",
+  },
   is_owner: { label: "Owner", tone: "neutral", detail: "Owns this datapack." },
   invalid_email: { label: "Invalid email", tone: "error", detail: "Not a valid email address." },
   error: { label: "Failed", tone: "error", detail: "Could not be processed." },

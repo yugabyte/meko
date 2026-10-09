@@ -2,8 +2,7 @@ const MIN_DATAPACK_NAME_LENGTH = 3;
 const MAX_DATAPACK_NAME_LENGTH = 60;
 const htmlRegex = /<[^>]*>/;
 
-export const DATAPACK_NAME_REQUIREMENTS =
-  "Use 3-60 characters and do not include HTML tags.";
+export const DATAPACK_NAME_REQUIREMENTS = "Use 3-60 characters and do not include HTML tags.";
 
 export function validateDatapackName(name: string): string | null {
   const trimmed = name.trim();

@@ -5,12 +5,7 @@
 // no utility class — pass a token reference (`contextColorVar(...)`,
 // `qualityColorVar(...)`), never a hex, so both modes track the theme.
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export function ArcGauge({
   value,

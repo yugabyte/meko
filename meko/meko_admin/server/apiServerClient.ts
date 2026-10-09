@@ -33,10 +33,17 @@ export async function apiServerSend<T>(
 
   const resp = await fetch(url, {
     method,
-    headers: { "X-Meko-Admin-Secret": ADMIN_SECRET, "Content-Type": "application/json", ...(extraHeaders ?? {}) },
+    headers: {
+      "X-Meko-Admin-Secret": ADMIN_SECRET,
+      "Content-Type": "application/json",
+      ...(extraHeaders ?? {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const payload = (await resp.json().catch(() => ({}))) as { data?: T; error?: { message?: string } };
+  const payload = (await resp.json().catch(() => ({}))) as {
+    data?: T;
+    error?: { message?: string };
+  };
   if (!resp.ok) {
     throw new Error(payload.error?.message ?? `api_server ${resp.status} for ${path}`);
   }

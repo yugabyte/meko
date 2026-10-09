@@ -82,15 +82,42 @@ registry_override=""
 declare -a only=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --push) push=true; shift ;;
-    --no-base-push) no_base_push=true; shift ;;
-    --base-only) base_only=true; shift ;;
-    --cache) cache=true; shift ;;
-    --force) force=true; shift ;;
-    --registry) registry_override="${2:?--registry needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 0 ;;
-    -*) echo "unknown flag: $1" >&2; exit 2 ;;
-    *) only+=("$1"); shift ;;
+  --push)
+    push=true
+    shift
+    ;;
+  --no-base-push)
+    no_base_push=true
+    shift
+    ;;
+  --base-only)
+    base_only=true
+    shift
+    ;;
+  --cache)
+    cache=true
+    shift
+    ;;
+  --force)
+    force=true
+    shift
+    ;;
+  --registry)
+    registry_override="${2:?--registry needs a value}"
+    shift 2
+    ;;
+  -h | --help)
+    sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'
+    exit 0
+    ;;
+  -*)
+    echo "unknown flag: $1" >&2
+    exit 2
+    ;;
+  *)
+    only+=("$1")
+    shift
+    ;;
   esac
 done
 
@@ -144,14 +171,16 @@ for e in m.get("extensions", []):
 PY
 }
 
-registry=""; base_image=""; pg_tag=""
+registry=""
+base_image=""
+pg_tag=""
 declare -a ext_rows=()
 while IFS=$'\x1f' read -r tag rest; do
   case "$tag" in
-    REGISTRY)   registry="$rest" ;;
-    BASE_IMAGE) base_image="$rest" ;;
-    PG_TAG)     pg_tag="$rest" ;;
-    EXT)        ext_rows+=("$rest") ;;
+  REGISTRY) registry="$rest" ;;
+  BASE_IMAGE) base_image="$rest" ;;
+  PG_TAG) pg_tag="$rest" ;;
+  EXT) ext_rows+=("$rest") ;;
   esac
 done < <(read_manifest)
 
@@ -191,11 +220,15 @@ elif $push && $no_base_push; then
   echo ">> skipping base push (--no-base-push); it is built locally only"
 fi
 
-$base_only && { echo "base-only: done"; exit 0; }
+$base_only && {
+  echo "base-only: done"
+  exit 0
+}
 
 want() {
   [[ ${#only[@]} -eq 0 ]] && return 0
-  local n; for n in "${only[@]}"; do [[ "$n" == "$1" ]] && return 0; done
+  local n
+  for n in "${only[@]}"; do [[ "$n" == "$1" ]] && return 0; done
   return 1
 }
 
@@ -228,10 +261,14 @@ recipe_of() {
   local img="$1" labels
   if $push; then
     labels=$(docker buildx imagetools inspect "$img" --format '{{ json .Image.Config.Labels }}') || {
-      echo "error: cannot read the labels of ${img}" >&2; return 1; }
+      echo "error: cannot read the labels of ${img}" >&2
+      return 1
+    }
   else
     labels=$(docker image inspect "$img" --format '{{ json .Config.Labels }}') || {
-      echo "error: cannot read the labels of ${img}" >&2; return 1; }
+      echo "error: cannot read the labels of ${img}" >&2
+      return 1
+    }
   fi
   python3 -c 'import json, sys; print((json.loads(sys.argv[1] or "null") or {}).get(sys.argv[2], ""))' \
     "${labels:-null}" "$RECIPE_LABEL"

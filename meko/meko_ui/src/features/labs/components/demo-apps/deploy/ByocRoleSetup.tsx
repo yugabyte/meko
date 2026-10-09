@@ -30,12 +30,20 @@ function CopyableBlock({ label, value }: { label: string; value: string }) {
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
         <Label>{label}</Label>
-        <Button type="button" variant="ghost" size="sm" onClick={handleCopy} className="h-6 gap-1 px-2 text-xs">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={handleCopy}
+          className="h-6 gap-1 px-2 text-xs"
+        >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           Copy
         </Button>
       </div>
-      <pre className="max-h-48 overflow-auto rounded-md border border-border bg-muted/30 p-2 text-xs">{value}</pre>
+      <pre className="max-h-48 overflow-auto rounded-md border border-border bg-muted/30 p-2 text-xs">
+        {value}
+      </pre>
     </div>
   );
 }
@@ -70,8 +78,8 @@ export function ByocRoleSetup({
     return (
       <div className="flex flex-col gap-3 rounded-md border border-border p-4">
         <p className="text-sm text-muted-foreground">
-          We&apos;ll generate a trust-policy template and a one-time ID to paste into an IAM role in your own
-          AWS account. Meko never sees or stores your AWS credentials.
+          We&apos;ll generate a trust-policy template and a one-time ID to paste into an IAM role in
+          your own AWS account. Meko never sees or stores your AWS credentials.
         </p>
         <Button onClick={handleGenerate} disabled={initMutation.isPending} className="self-start">
           {initMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -80,7 +88,9 @@ export function ByocRoleSetup({
         {initMutation.isError && (
           <p className="flex items-center gap-1.5 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" />
-            {initMutation.error instanceof Error ? initMutation.error.message : "Failed to start BYOC setup."}
+            {initMutation.error instanceof Error
+              ? initMutation.error.message
+              : "Failed to start BYOC setup."}
           </p>
         )}
       </div>
@@ -97,8 +107,8 @@ export function ByocRoleSetup({
           <li>Paste the trust policy below as its trust relationship.</li>
           <li>
             Attach permissions for ECR pull, CloudWatch Logs, bedrock:InvokeModel, and
-            bedrock-agentcore:InvokeAgentRuntime (the last one lets Meko invoke your deployed agent when you run a
-            review).
+            bedrock-agentcore:InvokeAgentRuntime (the last one lets Meko invoke your deployed agent
+            when you run a review).
           </li>
           <li>Copy the resulting role&apos;s ARN for the next step.</li>
         </ol>
@@ -122,10 +132,16 @@ export function ByocRoleSetup({
           onChange={(e) => setRoleArnInput(e.target.value)}
         />
         {roleArnInput.trim().length > 0 && !roleArnValid && (
-          <p className="mt-1 text-xs text-destructive">Expected an IAM role ARN, e.g. arn:aws:iam::123456789012:role/name.</p>
+          <p className="mt-1 text-xs text-destructive">
+            Expected an IAM role ARN, e.g. arn:aws:iam::123456789012:role/name.
+          </p>
         )}
       </div>
-      <Button onClick={handleConfirm} disabled={!roleArnValid || confirmMutation.isPending} className="self-start">
+      <Button
+        onClick={handleConfirm}
+        disabled={!roleArnValid || confirmMutation.isPending}
+        className="self-start"
+      >
         {confirmMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
         Deploy
       </Button>

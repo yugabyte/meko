@@ -122,9 +122,7 @@ export function reviewCost(
   return {
     inputTokens,
     outputTokens: OUTPUT_TOKENS,
-    dollars: rate
-      ? (inputTokens * rate.input + OUTPUT_TOKENS * rate.output) / 1_000_000
-      : null,
+    dollars: rate ? (inputTokens * rate.input + OUTPUT_TOKENS * rate.output) / 1_000_000 : null,
     // Without the datapack the agent has the document but not your team's
     // memories, and nothing tying a comment to a rule — which is what
     // Chapter 1's cold run demonstrated.

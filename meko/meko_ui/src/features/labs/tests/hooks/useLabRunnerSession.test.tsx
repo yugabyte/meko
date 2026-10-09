@@ -14,7 +14,9 @@ vi.mock("@/lib/api/mekoApi", () => ({
 }));
 
 vi.mock("@/hooks/useCurrentUser", () => ({
-  useCurrentUser: () => ({ data: { account_id: "user-1", email: "me@example.com", user_type: "free" } }),
+  useCurrentUser: () => ({
+    data: { account_id: "user-1", email: "me@example.com", user_type: "free" },
+  }),
 }));
 
 vi.mock("@/hooks/useAccountUsage", () => ({

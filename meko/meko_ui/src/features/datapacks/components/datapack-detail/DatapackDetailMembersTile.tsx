@@ -22,7 +22,9 @@ const PREVIEW_LIMIT = 3;
 function sortMembersForDisplay(members: DatapackOutgoingMember[]): DatapackOutgoingMember[] {
   const owners = members.filter((m) => m.is_owner);
   const rest = members.filter((m) => !m.is_owner);
-  rest.sort((a, b) => (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" }));
+  rest.sort((a, b) =>
+    (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" }),
+  );
   return [...owners, ...rest];
 }
 
@@ -98,12 +100,14 @@ export function DatapackDetailMembersTile({
             {count}
           </span>
         </div>
-        {canShare && <Link
-          to={datapackSharePath(datapackId)}
-          className="shrink-0 text-xs font-medium text-brand hover:underline"
-        >
-          Share →
-        </Link>}
+        {canShare && (
+          <Link
+            to={datapackSharePath(datapackId)}
+            className="shrink-0 text-xs font-medium text-brand hover:underline"
+          >
+            Share →
+          </Link>
+        )}
       </div>
       <ul className="flex flex-col divide-y divide-border px-2 py-1">
         {membersListStatus === "loading" ? (
@@ -113,7 +117,9 @@ export function DatapackDetailMembersTile({
             Could not load members. You need owner or maintainer access to view the roster.
           </li>
         ) : ordered.length === 0 ? (
-          <li className="px-2 py-4 text-center text-xs text-muted-foreground">No members to display.</li>
+          <li className="px-2 py-4 text-center text-xs text-muted-foreground">
+            No members to display.
+          </li>
         ) : (
           preview.map((m) => {
             const primaryName = outgoingMemberDisplayName(m);
@@ -142,7 +148,9 @@ export function DatapackDetailMembersTile({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
-                      <div className="truncate text-sm font-medium text-foreground">{primaryName}</div>
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {primaryName}
+                      </div>
                       {isYou ? (
                         <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                           You
@@ -154,7 +162,10 @@ export function DatapackDetailMembersTile({
                       <span>Owner</span>
                     </div>
                     {showEmailBelow ? (
-                      <div className="mt-1 truncate text-[11px] text-muted-foreground/90" title={email}>
+                      <div
+                        className="mt-1 truncate text-[11px] text-muted-foreground/90"
+                        title={email}
+                      >
                         {email}
                       </div>
                     ) : null}
@@ -186,7 +197,9 @@ export function DatapackDetailMembersTile({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
-                    <div className="truncate text-sm font-medium text-foreground">{primaryName}</div>
+                    <div className="truncate text-sm font-medium text-foreground">
+                      {primaryName}
+                    </div>
                     {isYou ? (
                       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                         You
@@ -196,7 +209,10 @@ export function DatapackDetailMembersTile({
                   <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                     {roleRow && RoleIcon ? (
                       <>
-                        <RoleIcon className={cn("h-3 w-3 shrink-0", roleRow.iconClassName)} aria-hidden />
+                        <RoleIcon
+                          className={cn("h-3 w-3 shrink-0", roleRow.iconClassName)}
+                          aria-hidden
+                        />
                         <span>{roleRow.label}</span>
                       </>
                     ) : (
@@ -204,7 +220,10 @@ export function DatapackDetailMembersTile({
                     )}
                   </div>
                   {showEmailBelow ? (
-                    <div className="mt-1 truncate text-[11px] text-muted-foreground/90" title={email}>
+                    <div
+                      className="mt-1 truncate text-[11px] text-muted-foreground/90"
+                      title={email}
+                    >
                       {email}
                     </div>
                   ) : null}

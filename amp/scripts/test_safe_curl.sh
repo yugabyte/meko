@@ -24,16 +24,23 @@ checksum="$here/safe_curl.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-pass=0; fail=0
-ok()  { echo "  ✓ $*"; pass=$((pass + 1)); }
-bad() { echo "  ✗ $*"; fail=$((fail + 1)); }
+pass=0
+fail=0
+ok() {
+  echo "  ✓ $*"
+  pass=$((pass + 1))
+}
+bad() {
+  echo "  ✗ $*"
+  fail=$((fail + 1))
+}
 
 # --- fake curl: serves $work/served/<basename of the URL>. When a file named
 # <basename>.first exists, the FIRST request is served that instead (then the
 # marker is dropped), which is how a transient mismatch is staged. Every call is
 # counted in $work/curl.calls.
 mkdir -p "$work/bin" "$work/served"
-cat > "$work/bin/curl" <<'STUB'
+cat >"$work/bin/curl" <<'STUB'
 #!/bin/sh
 out="" url=""
 while [ $# -gt 0 ]; do
@@ -56,17 +63,17 @@ chmod +x "$work/bin/curl"
 export WORK="$work" PATH="$work/bin:$PATH"
 
 sha() { sha256sum "$1" | cut -d' ' -f1; }
-printf 'good bytes\n' > "$work/served/good.tgz"
-printf 'other bytes\n' > "$work/served/changed.tgz"
-printf 'tampered\n' > "$work/tampered"
+printf 'good bytes\n' >"$work/served/good.tgz"
+printf 'other bytes\n' >"$work/served/changed.tgz"
+printf 'tampered\n' >"$work/tampered"
 GOOD=https://example.test/dl/good.tgz
 CHANGED=https://example.test/dl/changed.tgz
 NEW=https://example.test/dl/new.tgz
-printf 'new bytes\n' > "$work/served/new.tgz"
+printf 'new bytes\n' >"$work/served/new.tgz"
 
 manifest="$work/downloads_checksum.txt"
 write_manifest() {
-  cat > "$manifest" <<EOF
+  cat >"$manifest" <<EOF
 # test manifest
 $(sha "$work/served/good.tgz")  $GOOD
 $(sha "$work/tampered")  $CHANGED
@@ -74,7 +81,7 @@ EOF
 }
 run() { DOWNLOADS_CHECKSUM_FILE="$manifest" sh "$checksum" "$@"; }
 calls() { grep -c . "$work/curl.calls" 2>/dev/null || echo 0; }
-reset_calls() { : > "$work/curl.calls"; }
+reset_calls() { : >"$work/curl.calls"; }
 
 echo "safe_curl.sh:"
 write_manifest
@@ -82,8 +89,9 @@ write_manifest
 # check
 run check 2>/dev/null && ok "check: a valid manifest passes" || bad "check: valid manifest rejected"
 for broken in "ABC  $GOOD" "$(sha "$work/served/good.tgz")  http://example.test/x" \
-              "$(sha "$work/served/good.tgz")  $GOOD"; do
-  cp "$manifest" "$work/broken.txt"; echo "$broken" >> "$work/broken.txt"
+  "$(sha "$work/served/good.tgz")  $GOOD"; do
+  cp "$manifest" "$work/broken.txt"
+  echo "$broken" >>"$work/broken.txt"
   if DOWNLOADS_CHECKSUM_FILE="$work/broken.txt" sh "$checksum" check 2>/dev/null; then
     bad "check: accepted '$broken'"
   else
@@ -103,23 +111,23 @@ fi
 # fetch, unpinned
 rm -f "$work/out"
 err=$(run fetch "$NEW" "$work/out" 2>&1) && bad "fetch: an unpinned URL succeeded" || ok "fetch: an unpinned URL fails"
-echo "$err" | grep -qF "$(sha "$work/served/new.tgz")  $NEW" \
-  && ok "fetch: it prints the exact line to add" || bad "fetch: no line to add in: $err"
-[ ! -e "$work/out" ] && [ ! -e "$work/out.part" ] && ok "fetch: nothing left behind for an unpinned URL" \
-  || bad "fetch: an unpinned URL left a file"
+echo "$err" | grep -qF "$(sha "$work/served/new.tgz")  $NEW" &&
+  ok "fetch: it prints the exact line to add" || bad "fetch: no line to add in: $err"
+[ ! -e "$work/out" ] && [ ! -e "$work/out.part" ] && ok "fetch: nothing left behind for an unpinned URL" ||
+  bad "fetch: an unpinned URL left a file"
 
 # fetch, persistent mismatch: three attempts, then fail
 reset_calls
 run fetch "$CHANGED" "$work/out" 2>/dev/null && bad "fetch: a mismatch succeeded" || ok "fetch: a mismatch fails"
 [ "$(calls)" = 3 ] && ok "fetch: it tried three times" || bad "fetch: tried $(calls) times, want 3"
-[ ! -e "$work/out" ] && [ ! -e "$work/out.part" ] && ok "fetch: nothing left behind on a mismatch" \
-  || bad "fetch: a mismatch left a file"
+[ ! -e "$work/out" ] && [ ! -e "$work/out.part" ] && ok "fetch: nothing left behind on a mismatch" ||
+  bad "fetch: a mismatch left a file"
 
 # fetch, transient mismatch: bad bytes first, then the pinned ones
 reset_calls
 cp "$work/tampered" "$work/served/good.tgz.first"
-run fetch "$GOOD" "$work/out" 2>/dev/null && cmp -s "$work/out" "$work/served/good.tgz" \
-  && ok "fetch: a transient mismatch recovers on a later attempt" || bad "fetch: did not recover from a transient mismatch"
+run fetch "$GOOD" "$work/out" 2>/dev/null && cmp -s "$work/out" "$work/served/good.tgz" &&
+  ok "fetch: a transient mismatch recovers on a later attempt" || bad "fetch: did not recover from a transient mismatch"
 [ "$(calls)" = 2 ] && ok "fetch: recovered on the second attempt" || bad "fetch: took $(calls) attempts, want 2"
 
 # verify / lookup
@@ -131,17 +139,17 @@ run lookup "$NEW" 2>/dev/null && bad "lookup: an unpinned URL succeeded" || ok "
 
 # add
 before=$(cat "$manifest")
-run add "$GOOD" 2>/dev/null && [ "$(cat "$manifest")" = "$before" ] \
-  && ok "add: an unchanged pin is a no-op" || bad "add: an unchanged pin changed the manifest"
+run add "$GOOD" 2>/dev/null && [ "$(cat "$manifest")" = "$before" ] &&
+  ok "add: an unchanged pin is a no-op" || bad "add: an unchanged pin changed the manifest"
 run add "$CHANGED" 2>/dev/null && bad "add: re-pinned a changed file" || ok "add: refuses a pin whose file changed"
 [ "$(cat "$manifest")" = "$before" ] && ok "add: the refused pin left the manifest alone" || bad "add: the manifest changed on refusal"
 run add "http://example.test/dl/new.tgz" 2>/dev/null && bad "add: pinned an http URL" || ok "add: refuses http"
-run add "$NEW" 2>/dev/null && [ "$(run lookup "$NEW" 2>/dev/null)" = "$(sha "$work/served/new.tgz")" ] \
-  && ok "add: a new URL is pinned" || bad "add: a new URL was not pinned"
+run add "$NEW" 2>/dev/null && [ "$(run lookup "$NEW" 2>/dev/null)" = "$(sha "$work/served/new.tgz")" ] &&
+  ok "add: a new URL is pinned" || bad "add: a new URL was not pinned"
 run check 2>/dev/null && ok "add: the manifest is still valid after it" || bad "add: left an invalid manifest"
 
 echo
-if (( fail > 0 )); then
+if ((fail > 0)); then
   echo "FAIL: $fail of $((pass + fail)) checks failed"
   exit 1
 fi

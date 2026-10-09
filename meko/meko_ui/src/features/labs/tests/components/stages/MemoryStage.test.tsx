@@ -40,10 +40,11 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("MemoryStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
-    render(<MemoryStage session={fakeSession({ datapackId: null })} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <MemoryStage session={fakeSession({ datapackId: null })} onGoToCreateDatapack={vi.fn()} />,
+    );
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
-
 
   it("Save memory is disabled until text is entered", () => {
     render(<MemoryStage session={fakeSession()} onGoToCreateDatapack={vi.fn()} />);
@@ -98,7 +99,9 @@ describe("MemoryStage", () => {
   it("shows an error message when addMemory fails, and still records a (failed) X-Ray call", async () => {
     mockAddMemory.mockRejectedValueOnce(new Error("quota exceeded"));
     const recordLessonTrace = vi.fn();
-    render(<MemoryStage session={fakeSession({ recordLessonTrace })} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <MemoryStage session={fakeSession({ recordLessonTrace })} onGoToCreateDatapack={vi.fn()} />,
+    );
 
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "hi" } });
     fireEvent.click(screen.getByRole("button", { name: "Save memory" }));
@@ -106,7 +109,9 @@ describe("MemoryStage", () => {
     expect(await screen.findByText("quota exceeded")).toBeTruthy();
     expect(recordLessonTrace).toHaveBeenCalledWith({
       lessonTitle: "Add a memory",
-      calls: [expect.objectContaining({ name: "memory_add", status: "error", detail: "quota exceeded" })],
+      calls: [
+        expect.objectContaining({ name: "memory_add", status: "error", detail: "quota exceeded" }),
+      ],
     });
   });
 });

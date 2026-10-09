@@ -35,7 +35,7 @@ import {
   isDatapackGrantEligibleToAddKnowledgeBase,
   isDatapackGrantEligibleToDelete,
   isDatapackGrantEligibleToEdit,
-  isDatapackGrantEligibleToShare
+  isDatapackGrantEligibleToShare,
 } from "@/lib/datapackShareGrants";
 import {
   DatapackOutgoingMember,
@@ -57,10 +57,16 @@ import {
 import { kbFilesKeys, kbSummaryKey } from "@/features/datapacks/lib/knowledgeQueryKeys";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { toast } from "@/hooks/use-toast";
-import { formatDatapackCreatedDayUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
+import {
+  formatDatapackCreatedDayUtc,
+  isDatapackCreatedWithinLast24Hours,
+} from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
-import { DatapackMetricsSection, DatapackMetricsTilesRow } from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
+import {
+  DatapackMetricsSection,
+  DatapackMetricsTilesRow,
+} from "@/features/datapacks/components/datapack-detail/DatapackMetricsSection";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailClustersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailClustersTile";
@@ -92,7 +98,10 @@ import {
   MOVE_TO_PROJECT_LABEL,
 } from "@/features/projects/projectsCopy";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
-import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
+import {
+  DATAPACK_DETAIL_TAB,
+  type DatapackDetailTab,
+} from "@/features/datapacks/components/datapack-detail/types";
 
 type Props = {
   datapackId: string;
@@ -194,7 +203,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const displayDatapackName = datapack?.datapack_name ?? "";
 
   // Only the owner should provision project keys; null = not yet loaded.
-  const isOwner = datapack !== null ? (datapackGrant === null || datapackGrant === "owner") : null;
+  const isOwner = datapack !== null ? datapackGrant === null || datapackGrant === "owner" : null;
 
   // Where this datapack is filed. One cached request shared with the Datapacks
   // page and the sidebar, and not issued at all with the feature off.
@@ -204,8 +213,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const [isFileIntoOpen, setIsFileIntoOpen] = useState(false);
   // Only on a datapack shared WITH you: on your own, naming the owner tells
   // you your own name.
-  const sharedOwnerName =
-    isOwner === false ? (datapack?.datapack_owner_name || null) : null;
+  const sharedOwnerName = isOwner === false ? datapack?.datapack_owner_name || null : null;
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(displayDatapackName, routeDatapackId, isOwner);
 
   useEffect(() => {
@@ -233,10 +241,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
         }
       } catch (e) {
         if (!cancelled) {
-          if (
-            isMekoApiRequestError(e) &&
-            (e.httpStatus === 404 || e.code === "NOT_FOUND")
-          ) {
+          if (isMekoApiRequestError(e) && (e.httpStatus === 404 || e.code === "NOT_FOUND")) {
             toast({
               title: "Datapack no longer available",
               description: `Datapack "${displayDatapackName}" was deleted or your access was removed.`,
@@ -266,7 +271,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
         if (ac.signal.aborted) return;
         setConversationsCount(res.count ?? 0);
       })
-      .catch(() => { });
+      .catch(() => {});
     return () => {
       ac.abort();
     };
@@ -290,7 +295,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
         const next = { ...readProvisionStatusCache(), [datapackId]: details };
         writeProvisionStatusCache(next);
       })
-      .catch(() => { });
+      .catch(() => {});
     return () => {
       ac.abort();
     };
@@ -344,9 +349,12 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
     queryFn: ({ signal }) => getKnowledgeBaseSummary(routeDatapackId, { signal }),
     staleTime: 10_000,
   });
-  const knowledgeFileCount = knowledgeSummaryQuery.data ? knowledgeSummaryQuery.data.total_files ?? 0 : null;
+  const knowledgeFileCount = knowledgeSummaryQuery.data
+    ? (knowledgeSummaryQuery.data.total_files ?? 0)
+    : null;
   const knowledgeTotalCount = knowledgeSummaryQuery.data
-    ? (knowledgeSummaryQuery.data.total_files ?? 0) + (knowledgeSummaryQuery.data.promoted_memories_count ?? 0)
+    ? (knowledgeSummaryQuery.data.total_files ?? 0) +
+      (knowledgeSummaryQuery.data.promoted_memories_count ?? 0)
     : null;
 
   useEffect(() => {
@@ -400,7 +408,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
     isDatapackGrantEligibleToDelete({ grant: datapackGrant });
   const showActionsDropdownDangerSeparator =
     isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) &&
-    (isDatapackGrantEligibleToEdit({ grant: datapackGrant }) || isDatapackGrantEligibleToDelete({ grant: datapackGrant }));
+    (isDatapackGrantEligibleToEdit({ grant: datapackGrant }) ||
+      isDatapackGrantEligibleToDelete({ grant: datapackGrant }));
 
   const handleDeleteConfirm = async () => {
     const { message } = await deleteDatapack(routeDatapackId, {});
@@ -420,9 +429,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           aren't stretched apart on a 375px viewport; desktop restores
           the original `space-y-8` and `pt-6 pl-1 pr-1` look. */}
       <main className="flex-1 px-3 pt-4 pb-3 max-w-7xl mx-auto w-full space-y-5 md:px-1 md:pt-6 md:space-y-8">
-        {freeTier.hasHitKbStorageFileSize ? (
-          <FreeTierLimitBanner kind="kbStorage" />
-        ) : null}
+        {freeTier.hasHitKbStorageFileSize ? <FreeTierLimitBanner kind="kbStorage" /> : null}
 
         {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = Share (if eligible), upload dialog, settings menu (maintainer/owner only).
             Connect used to live up here but has been demoted to the body-level
@@ -458,12 +465,13 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 datapackId={routeDatapackId}
                 open={isUploadOpen}
                 onOpenChange={setIsUploadOpen}
-
                 callerUserId={currentUser?.account_id ?? null}
                 datapackGrant={datapackGrant}
                 onKnowledgeBaseCreated={() => {
                   void qc.invalidateQueries({ queryKey: kbSummaryKey(routeDatapackId) });
-                  void qc.invalidateQueries({ queryKey: kbFilesKeys.documentsAll(routeDatapackId) });
+                  void qc.invalidateQueries({
+                    queryKey: kbFilesKeys.documentsAll(routeDatapackId),
+                  });
                 }}
               />
               <DatapackConnectDialog
@@ -481,19 +489,19 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
               />
               {/* Only with the feature on, so a workspace without Projects never
           builds this dialog's queries. */}
-      {projectsEnabled && datapack ? (
-        <FileIntoProjectDialog
-          open={isFileIntoOpen}
-          onOpenChange={setIsFileIntoOpen}
-          datapack={datapack}
-          title={projectPath ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
-          confirmLabel={projectPath ? "Move here" : "Add here"}
-          successTitle={projectPath ? DATAPACK_MOVED_TOAST : undefined}
-          defaultProjectId={projectPath?.project_id}
-        />
-      ) : null}
+              {projectsEnabled && datapack ? (
+                <FileIntoProjectDialog
+                  open={isFileIntoOpen}
+                  onOpenChange={setIsFileIntoOpen}
+                  datapack={datapack}
+                  title={projectPath ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
+                  confirmLabel={projectPath ? "Move here" : "Add here"}
+                  successTitle={projectPath ? DATAPACK_MOVED_TOAST : undefined}
+                  defaultProjectId={projectPath?.project_id}
+                />
+              ) : null}
 
-      <DatapackDeleteConfirmDialog
+              <DatapackDeleteConfirmDialog
                 open={isDeleteOpen}
                 onOpenChange={setIsDeleteOpen}
                 datapackName={displayDatapackName}
@@ -519,7 +527,10 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                       <Settings className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-[14rem] bg-card border-border text-foreground">
+                  <DropdownMenuContent
+                    align="end"
+                    className="min-w-[14rem] bg-card border-border text-foreground"
+                  >
                     {/* Open in WorkbenchLM: first item (what you most want
                         to DO with the datapack), gated on the same grant
                         check WorkbenchLM itself uses so viewers never see
@@ -559,7 +570,9 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         ) : null}
                       </DropdownMenuItem>
                     )}
-                    {showActionsDropdownDangerSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
+                    {showActionsDropdownDangerSeparator ? (
+                      <DropdownMenuSeparator className="bg-border" />
+                    ) : null}
                     {projectsEnabled && isOwner ? (
                       <DropdownMenuItem
                         className="gap-2 cursor-pointer focus:bg-muted/20"
@@ -569,24 +582,28 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         {projectPath ? MOVE_TO_PROJECT_LABEL : ADD_TO_PROJECT_LABEL}
                       </DropdownMenuItem>
                     ) : null}
-                    {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem
-                      className="gap-2 cursor-pointer focus:bg-muted/20"
-                      onSelect={() => navigate(datapackConfigurePath(routeDatapackId))}
-                    >
-                      <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                      Edit {displayDatapackName}
-                    </DropdownMenuItem>}
-                    {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && <DropdownMenuItem
-                      className="gap-2 cursor-pointer text-red-700 dark:text-red-300 focus:bg-red-950/40 focus:text-red-700 dark:text-red-200"
-                      // disabled={isDefaultDatapack}
-                      // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
-                      onSelect={() => {
-                        if (!isDefaultDatapack) setIsDeleteOpen(true);
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                      Delete {displayDatapackName}
-                    </DropdownMenuItem>}
+                    {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && (
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer focus:bg-muted/20"
+                        onSelect={() => navigate(datapackConfigurePath(routeDatapackId))}
+                      >
+                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                        Edit {displayDatapackName}
+                      </DropdownMenuItem>
+                    )}
+                    {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && (
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer text-red-700 dark:text-red-300 focus:bg-red-950/40 focus:text-red-700 dark:text-red-200"
+                        // disabled={isDefaultDatapack}
+                        // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
+                        onSelect={() => {
+                          if (!isDefaultDatapack) setIsDeleteOpen(true);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                        Delete {displayDatapackName}
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
@@ -598,8 +615,12 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList variant="segmented" className="mb-6">
-            <TabsTrigger value="overview" variant="segmented">Overview</TabsTrigger>
-            <TabsTrigger value="analytics" variant="segmented">Analytics</TabsTrigger>
+            <TabsTrigger value="overview" variant="segmented">
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="analytics" variant="segmented">
+              Analytics
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6 mt-0">
@@ -612,7 +633,9 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
               onNavigateToMetric={(sectionId) => {
                 setActiveTab("analytics");
                 setTimeout(() => {
-                  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  document
+                    .getElementById(sectionId)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }, 50);
               }}
             />
@@ -628,9 +651,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
               knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
               onSelectSection={handlePipelineSelect}
               onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
-              onCreateCluster={
-                isAmpEnabled() ? () => setIsCreateClusterOpen(true) : undefined
-              }
+              onCreateCluster={isAmpEnabled() ? () => setIsCreateClusterOpen(true) : undefined}
               statusLoading={statusLoading}
             />
 
@@ -658,14 +679,17 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
                 onOpenConnect={() => setIsConnectOpen(true)}
               />
-              {isAmpEnabled() ? (
-                <DatapackDetailClustersTile datapackId={routeDatapackId} />
-              ) : null}
+              {isAmpEnabled() ? <DatapackDetailClustersTile datapackId={routeDatapackId} /> : null}
               <DatapackDetailArtifactsTile datapackId={routeDatapackId} />
             </div>
           </TabsContent>
 
-          <TabsContent value="analytics" className="mt-0" forceMount hidden={activeTab !== "analytics"}>
+          <TabsContent
+            value="analytics"
+            className="mt-0"
+            forceMount
+            hidden={activeTab !== "analytics"}
+          >
             <DatapackMetricsSection
               datapackId={datapack?.datapack_id ?? null}
               knowledgeCount={datapack?.knowledge_count ?? 0}

@@ -5,10 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Datapack } from "@/lib/api/mekoApi";
 import type { ProjectDetail } from "@/lib/api/projectsApi";
 import type { DatapackPathMap } from "@/lib/api/projectsApi";
-import {
-  PROJECT_SELECTION,
-  type TreeSelection,
-} from "@/features/projects/lib/projectTree";
+import { PROJECT_SELECTION, type TreeSelection } from "@/features/projects/lib/projectTree";
 import { FolderNameDialog } from "@/features/projects/components/FolderNameDialog";
 import { AddDatapacksDialog } from "@/features/projects/components/browser/AddDatapacksDialog";
 import { SplitPaneLayout } from "@/features/projects/components/browser/layouts/SplitPaneLayout";

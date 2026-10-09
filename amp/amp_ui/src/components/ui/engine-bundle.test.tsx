@@ -15,7 +15,9 @@ describe("engine bundles in the extensions picker", () => {
   });
 
   it("the postgres bundle leaves everything unchecked and free", () => {
-    render(<ExtensionsField value={[]} onChange={vi.fn()} enabled={engineExtensions("postgres")} />);
+    render(
+      <ExtensionsField value={[]} onChange={vi.fn()} enabled={engineExtensions("postgres")} />,
+    );
     for (const n of ["documentdb", "pgvector", "pg_cron"]) {
       const b = screen.getByRole("checkbox", { name: n });
       expect(b.getAttribute("aria-checked")).toBe("false");
@@ -25,7 +27,9 @@ describe("engine bundles in the extensions picker", () => {
 
   it("the documentdb bundle renders its three checked AND locked", () => {
     const onChange = vi.fn();
-    render(<ExtensionsField value={[]} onChange={onChange} enabled={engineExtensions("documentdb")} />);
+    render(
+      <ExtensionsField value={[]} onChange={onChange} enabled={engineExtensions("documentdb")} />,
+    );
     for (const n of ["documentdb", "pgvector", "pg_cron"]) {
       const b = screen.getByRole("checkbox", { name: n });
       expect(b.getAttribute("aria-checked")).toBe("true");

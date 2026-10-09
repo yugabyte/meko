@@ -18,7 +18,15 @@ function fraction(retrieved: number, total: number | null): number | null {
   return retrieved / total;
 }
 
-function ContextBarRow({ label, value, frac }: { label: ReactNode; value: string; frac: number | null }) {
+function ContextBarRow({
+  label,
+  value,
+  frac,
+}: {
+  label: ReactNode;
+  value: string;
+  frac: number | null;
+}) {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-3 text-xs text-muted-foreground">

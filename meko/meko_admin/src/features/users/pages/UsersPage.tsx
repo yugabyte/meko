@@ -26,11 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import {
   Pagination,
   PaginationContent,
@@ -341,9 +337,7 @@ export function UsersPage() {
               <PaginationItem>
                 <PaginationPrevious
                   aria-disabled={currentPage <= 1}
-                  className={
-                    currentPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"
-                  }
+                  className={currentPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
                   onClick={() => setPage(Math.max(1, currentPage - 1))}
                 />
               </PaginationItem>
@@ -368,7 +362,8 @@ export function UsersPage() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Change {pending?.user.email} to {pending ? LABEL[pending.tier] ?? pending.tier : ""}?
+              Change {pending?.user.email} to {pending ? (LABEL[pending.tier] ?? pending.tier) : ""}
+              ?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This overrides the user's plan immediately.

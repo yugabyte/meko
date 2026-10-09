@@ -47,7 +47,10 @@ BUNDLE_NAME="amp-ca-bundle"
 TRUST_LABEL="amp.yugabyte.com/trust"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+die() {
+  printf '\033[1;31merror: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 for bin in kubectl helm; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not found on PATH"
@@ -58,10 +61,13 @@ crd_present() { kubectl get crd "$1" >/dev/null 2>&1; }
 want_install() {
   # $1 = mode, $2 = crd
   case "$1" in
-    1) return 0 ;;
-    0) crd_present "$2" || die "$2 is absent and installation is disabled"; return 1 ;;
-    auto) ! crd_present "$2" ;;
-    *) die "invalid install mode '$1' (want auto|1|0)" ;;
+  1) return 0 ;;
+  0)
+    crd_present "$2" || die "$2 is absent and installation is disabled"
+    return 1
+    ;;
+  auto) ! crd_present "$2" ;;
+  *) die "invalid install mode '$1' (want auto|1|0)" ;;
   esac
 }
 
@@ -82,10 +88,10 @@ else
   # failure because an existing cert-manager is not this script's to reconfigure
   # — but the leak is real, so say so.
   if ! kubectl -n "${CERT_MANAGER_NS}" get deploy cert-manager \
-      -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null \
-      | grep -q 'enable-certificate-owner-ref'; then
+    -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null |
+    grep -q 'enable-certificate-owner-ref'; then
     echo "   note: cert-manager runs without --enable-certificate-owner-ref;" \
-         "certificate Secrets outlive their Certificates unless the owner deletes them"
+      "certificate Secrets outlive their Certificates unless the owner deletes them"
   fi
 fi
 kubectl -n "${CERT_MANAGER_NS}" rollout status deploy/cert-manager-webhook --timeout=180s >/dev/null
@@ -164,7 +170,7 @@ spec:
 YAML
   kubectl -n "${CERT_MANAGER_NS}" wait certificate/"${ROOT_CA_NAME}" --for=condition=Ready --timeout=180s >/dev/null
   kubectl wait clusterissuer/amp-ca --for=condition=Ready --timeout=60s >/dev/null
-  kubectl -n "${CERT_MANAGER_NS}" get secret "${ROOT_CA_NAME}" -o jsonpath='{.data.ca\.crt}' | base64 -d > "${CA_PEM}"
+  kubectl -n "${CERT_MANAGER_NS}" get secret "${ROOT_CA_NAME}" -o jsonpath='{.data.ca\.crt}' | base64 -d >"${CA_PEM}"
 else
   say "issuer ${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME} (${TLS_ISSUER_GROUP}, bring-your-own)"
   if [ -n "${TLS_CA_FILE}" ]; then
@@ -174,14 +180,14 @@ else
     # A CA issuer names its Secret; the CA chain to trust is its tls.crt (or
     # ca.crt when the issuer's CA is itself an intermediate with a chain).
     case "${TLS_ISSUER_KIND}" in
-      ClusterIssuer) secret="$(kubectl get clusterissuer "${TLS_ISSUER_NAME}" -o jsonpath='{.spec.ca.secretName}' 2>/dev/null || true)" ;;
-      Issuer)        secret="$(kubectl -n "${CERT_MANAGER_NS}" get issuer "${TLS_ISSUER_NAME}" -o jsonpath='{.spec.ca.secretName}' 2>/dev/null || true)" ;;
-      *)             secret="" ;;
+    ClusterIssuer) secret="$(kubectl get clusterissuer "${TLS_ISSUER_NAME}" -o jsonpath='{.spec.ca.secretName}' 2>/dev/null || true)" ;;
+    Issuer) secret="$(kubectl -n "${CERT_MANAGER_NS}" get issuer "${TLS_ISSUER_NAME}" -o jsonpath='{.spec.ca.secretName}' 2>/dev/null || true)" ;;
+    *) secret="" ;;
     esac
     [ -n "${secret}" ] || die "cannot derive the CA to trust from ${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME}; pass TLS_CA_FILE"
-    kubectl -n "${CERT_MANAGER_NS}" get secret "${secret}" -o jsonpath='{.data.ca\.crt}' | base64 -d > "${CA_PEM}" || true
+    kubectl -n "${CERT_MANAGER_NS}" get secret "${secret}" -o jsonpath='{.data.ca\.crt}' | base64 -d >"${CA_PEM}" || true
     if ! grep -q 'BEGIN CERTIFICATE' "${CA_PEM}"; then
-      kubectl -n "${CERT_MANAGER_NS}" get secret "${secret}" -o jsonpath='{.data.tls\.crt}' | base64 -d > "${CA_PEM}"
+      kubectl -n "${CERT_MANAGER_NS}" get secret "${secret}" -o jsonpath='{.data.tls\.crt}' | base64 -d >"${CA_PEM}"
     fi
   fi
 fi
@@ -196,14 +202,14 @@ fingerprint() {
   if command -v openssl >/dev/null 2>&1; then
     openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2
   else
-    tr -d '\n' < "$1"
+    tr -d '\n' <"$1"
   fi
 }
 existing="$(kubectl -n "${CERT_MANAGER_NS}" get configmap "${ROOTS_CONFIGMAP}" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)"
 ROOTS_PEM="$(mktemp)"
 trap 'rm -f "${CA_PEM}" "${ROOTS_PEM}"' EXIT
 if [ -n "${existing}" ]; then
-  printf '%s\n' "${existing}" > "${ROOTS_PEM}"
+  printf '%s\n' "${existing}" >"${ROOTS_PEM}"
   new_fp="$(fingerprint "${CA_PEM}")"
   have=0
   # Walk the existing bundle one certificate at a time.
@@ -217,7 +223,7 @@ if [ -n "${existing}" ]; then
     echo "   root already in ${ROOTS_CONFIGMAP}"
   else
     echo "   appending a new root to ${ROOTS_CONFIGMAP} (both roots are trusted until the old one is removed)"
-    cat "${CA_PEM}" >> "${ROOTS_PEM}"
+    cat "${CA_PEM}" >>"${ROOTS_PEM}"
   fi
 else
   cp "${CA_PEM}" "${ROOTS_PEM}"
@@ -252,8 +258,8 @@ for ns in ${TLS_TRUST_NAMESPACES}; do
     kubectl -n "${ns}" get configmap "${BUNDLE_NAME}" >/dev/null 2>&1 && break
     sleep 2
   done
-  kubectl -n "${ns}" get configmap "${BUNDLE_NAME}" >/dev/null 2>&1 \
-    || die "trust-manager did not sync ${BUNDLE_NAME} into ${ns}"
+  kubectl -n "${ns}" get configmap "${BUNDLE_NAME}" >/dev/null 2>&1 ||
+    die "trust-manager did not sync ${BUNDLE_NAME} into ${ns}"
   echo "   ${BUNDLE_NAME} present"
 done
 

@@ -81,10 +81,14 @@ const SAMPLE = "We always write a test before fixing a bug, not after.";
 
 describe("ConversationStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
-    render(<ConversationStage session={fakeSession({ datapackId: null })} onGoToCreateDatapack={vi.fn()} />);
+    render(
+      <ConversationStage
+        session={fakeSession({ datapackId: null })}
+        onGoToCreateDatapack={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/choose or create a datapack first/i)).toBeTruthy();
   });
-
 
   // The lesson is what Meko does with a conversation, not what you can type
   // into one: a free-text box invites a sentence that extracts nothing, and
@@ -106,7 +110,10 @@ describe("ConversationStage", () => {
   it("sending a chat message calls postChat with no persona, and bumps the refresh tick", async () => {
     const bumpRefreshTick = vi.fn();
     render(
-      <ConversationStage session={fakeSession({ bumpRefreshTick })} onGoToCreateDatapack={vi.fn()} />,
+      <ConversationStage
+        session={fakeSession({ bumpRefreshTick })}
+        onGoToCreateDatapack={vi.fn()}
+      />,
     );
 
     fireEvent.click(screen.getByText(SAMPLE));
@@ -123,7 +130,10 @@ describe("ConversationStage", () => {
   it("records the turn's real MCP tool calls for X-Ray", async () => {
     const recordLessonTrace = vi.fn();
     render(
-      <ConversationStage session={fakeSession({ recordLessonTrace })} onGoToCreateDatapack={vi.fn()} />,
+      <ConversationStage
+        session={fakeSession({ recordLessonTrace })}
+        onGoToCreateDatapack={vi.fn()}
+      />,
     );
 
     fireEvent.click(screen.getByText(SAMPLE));
@@ -138,7 +148,6 @@ describe("ConversationStage", () => {
     });
   });
 });
-
 
 // What the lesson claims -- "Meko reads the conversation and writes the memory
 // itself" -- is only visible if the extracted memory reaches the screen.
@@ -168,8 +177,6 @@ describe("ConversationStage extracted memories", () => {
 
   it("lands the lesson's point once a memory exists", async () => {
     await sendATurn();
-    expect(
-      await screen.findByText(/the trace remembers which sentence produced it/i),
-    ).toBeTruthy();
+    expect(await screen.findByText(/the trace remembers which sentence produced it/i)).toBeTruthy();
   });
 });

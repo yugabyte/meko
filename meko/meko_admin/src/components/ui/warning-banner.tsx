@@ -24,12 +24,7 @@ type Props = React.HTMLAttributes<HTMLDivElement> & {
 /** Amber-tinted soft warning. Always block-level; aligns icon and
  *  children on the start so multi-line copy wraps cleanly under the
  *  text rather than the icon. */
-export function WarningBanner({
-  className,
-  hideIcon = false,
-  children,
-  ...rest
-}: Props) {
+export function WarningBanner({ className, hideIcon = false, children, ...rest }: Props) {
   return (
     <div
       role="alert"
@@ -40,7 +35,10 @@ export function WarningBanner({
       {...rest}
     >
       {!hideIcon ? (
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden />
+        <AlertTriangle
+          className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300"
+          aria-hidden
+        />
       ) : null}
       <div className="min-w-0 flex-1 leading-relaxed">{children}</div>
     </div>

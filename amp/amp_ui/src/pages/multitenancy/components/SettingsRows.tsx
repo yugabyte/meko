@@ -36,8 +36,7 @@ export function rowsOf(obj: unknown): Row[] {
     .map(([key, v]) => ({
       key,
       value: String(v),
-      storedKind:
-        typeof v === "number" ? "number" : typeof v === "boolean" ? "boolean" : "string",
+      storedKind: typeof v === "number" ? "number" : typeof v === "boolean" ? "boolean" : "string",
     }));
 }
 
@@ -75,7 +74,9 @@ export type RowsError =
 export function objectOf(
   rows: Row[],
   kind: ValueKind,
-): { ok: true; value: Record<string, string | number | boolean> } | { ok: false; error: RowsError } {
+):
+  | { ok: true; value: Record<string, string | number | boolean> }
+  | { ok: false; error: RowsError } {
   const out: Record<string, string | number | boolean> = {};
   for (const row of rows) {
     const key = row.key.trim();

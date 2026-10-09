@@ -16,12 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -117,7 +112,11 @@ export default function MemoryPromotionPanel({
                   used by `<MemoryReadOnlySummaryPanel>`'s header icon —
                   hard-coded `text-white` rendered as greyed-out white on
                   the light purple tint in light mode. */}
-              <ArrowLeftRight className="h-5 w-5 text-context-learning" strokeWidth={1.75} aria-hidden />
+              <ArrowLeftRight
+                className="h-5 w-5 text-context-learning"
+                strokeWidth={1.75}
+                aria-hidden
+              />
             </div>
             <div className="min-w-0">
               <h3 className="text-base font-semibold tracking-tight text-foreground">
@@ -142,15 +141,17 @@ export default function MemoryPromotionPanel({
                   <span className="font-semibold text-foreground">
                     {"these"} {patternCount === 1 ? "pattern" : "patterns"}
                   </span>{" "}
-                  that might be worth promoting to shared knowledge (Ko). Review each one — approved ones
-                  become visible to every agent in this datapack.
+                  that might be worth promoting to shared knowledge (Ko). Review each one — approved
+                  ones become visible to every agent in this datapack.
                 </p>
               ) : accountError ? (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   Account could not be loaded for promotions. Details appear below.
                 </p>
               ) : (
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Loading session summary…</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Loading session summary…
+                </p>
               )}
             </div>
           </div>
@@ -199,31 +200,31 @@ export default function MemoryPromotionPanel({
                     : `Select all selectable on this page (${selectableIds.length}${total > memories.length ? ` of ${total}` : ""})`}
               </span>
             </label>
-            {<Button
-              className="gap-2 bg-context-learning-soft text-context-learning hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110"
-              onClick={() => void promote()}
-              disabled={promoting || selected.size < 2 || !isPromotionAllowed}
-            >
-              {promoting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <ArrowUpToLine className="w-4 h-4" />
-              )}
-              {promoting
-                ? "Promoting..."
-                : selected.size > 1
-                  ? `Promote to Knowledge (${selected.size})`
-                  : "Promote to Knowledge"}
-            </Button>}
+            {
+              <Button
+                className="gap-2 bg-context-learning-soft text-context-learning hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110"
+                onClick={() => void promote()}
+                disabled={promoting || selected.size < 2 || !isPromotionAllowed}
+              >
+                {promoting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ArrowUpToLine className="w-4 h-4" />
+                )}
+                {promoting
+                  ? "Promoting..."
+                  : selected.size > 1
+                    ? `Promote to Knowledge (${selected.size})`
+                    : "Promote to Knowledge"}
+              </Button>
+            }
             <Button
               variant="outline"
               className="gap-2"
               onClick={() => void keep()}
               disabled={promoting || selected.size < 2}
             >
-              {selected.size > 1
-                ? `Keep as memory (${selected.size})`
-                : "Keep as memory"}
+              {selected.size > 1 ? `Keep as memory (${selected.size})` : "Keep as memory"}
             </Button>
           </div>
         )}
@@ -251,14 +252,9 @@ export default function MemoryPromotionPanel({
         {lastOutcome && (
           <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-4 py-2 text-xs text-success">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
-            Promoted {lastOutcome.attempted} selected · {lastOutcome.inserted} inserted · {lastOutcome.updated}{" "}
-            updated
-            {lastOutcome.notFound > 0 && (
-              <>
-                {" "}
-                · {lastOutcome.notFound} skipped
-              </>
-            )}
+            Promoted {lastOutcome.attempted} selected · {lastOutcome.inserted} inserted ·{" "}
+            {lastOutcome.updated} updated
+            {lastOutcome.notFound > 0 && <> · {lastOutcome.notFound} skipped</>}
           </div>
         )}
 
@@ -328,8 +324,7 @@ export default function MemoryPromotionPanel({
                 // while their intent is the bulk action. The top "Promote to
                 // Knowledge (N)" button is the only path in that mode.
                 const multiSelectActive = selected.size >= 2;
-                const rowPromoteDisabled =
-                  promoting || !isPromotionAllowed || multiSelectActive;
+                const rowPromoteDisabled = promoting || !isPromotionAllowed || multiSelectActive;
                 return (
                   <li
                     key={m.id}
@@ -346,7 +341,9 @@ export default function MemoryPromotionPanel({
                       // to ~10px → one-char-per-line wrap.
                       // Desktop (md+): original single-row layout.
                       "flex flex-col gap-3 rounded-lg border bg-card px-4 py-3 md:flex-row md:items-start",
-                      checked ? "border-context-learning/50 bg-context-learning/5" : "border-border",
+                      checked
+                        ? "border-context-learning/50 bg-context-learning/5"
+                        : "border-border",
                     )}
                   >
                     {/* Group checkbox + body so they stay on row 1
@@ -375,7 +372,10 @@ export default function MemoryPromotionPanel({
                               disabled={rowPromoteDisabled}
                             >
                               {promoting && promotingId === m.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+                                <Loader2
+                                  className="h-3.5 w-3.5 animate-spin shrink-0"
+                                  aria-hidden
+                                />
                               ) : (
                                 <ArrowUpToLine className="h-3.5 w-3.5 shrink-0" aria-hidden />
                               )}
@@ -384,10 +384,13 @@ export default function MemoryPromotionPanel({
                           </span>
                         </TooltipTrigger>
                         {!isPromotionAllowed ? (
-                          <TooltipContent side="top">You don't have permission to promote to knowledge</TooltipContent>
+                          <TooltipContent side="top">
+                            You don't have permission to promote to knowledge
+                          </TooltipContent>
                         ) : multiSelectActive ? (
                           <TooltipContent side="top">
-                            Multiple rows selected — use the “Promote to Knowledge ({selected.size})” button above.
+                            Multiple rows selected — use the “Promote to Knowledge ({selected.size}
+                            )” button above.
                           </TooltipContent>
                         ) : null}
                       </Tooltip>
@@ -408,11 +411,13 @@ export default function MemoryPromotionPanel({
                         </TooltipTrigger>
                         {multiSelectActive ? (
                           <TooltipContent side="top">
-                            Multiple rows selected — use the “Keep as memory ({selected.size})” button above.
+                            Multiple rows selected — use the “Keep as memory ({selected.size})”
+                            button above.
                           </TooltipContent>
                         ) : (
                           <TooltipContent side="top">
-                            Mark this memory as kept; it drops off the Learnings list but stays in Memories.
+                            Mark this memory as kept; it drops off the Learnings list but stays in
+                            Memories.
                           </TooltipContent>
                         )}
                       </Tooltip>
@@ -420,7 +425,6 @@ export default function MemoryPromotionPanel({
                   </li>
                 );
               })}
-
             </ul>
           </>
         )}

@@ -32,7 +32,9 @@ function ConversationsComingSoonMock() {
         aria-hidden
       >
         <Upload className="h-7 w-7 text-blue-400" strokeWidth={1.5} />
-        <p className="text-sm font-medium text-blue-700 dark:text-blue-200">Drop transcripts or click to upload</p>
+        <p className="text-sm font-medium text-blue-700 dark:text-blue-200">
+          Drop transcripts or click to upload
+        </p>
         <p className="text-[11px] text-muted-foreground">json, jsonl, md</p>
       </div>
       <div>
@@ -44,7 +46,9 @@ function ConversationsComingSoonMock() {
             {(["Total", "Avg msgs", "Span"] as const).map((label) => (
               <div key={label} className="space-y-1">
                 <div className="mx-auto h-5 w-10 rounded bg-muted/60" />
-                <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+                <p className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {label}
+                </p>
               </div>
             ))}
           </div>
@@ -76,7 +80,9 @@ function SkillsComingSoonMock() {
         aria-hidden
       >
         <Upload className="h-7 w-7 text-purple-400" strokeWidth={1.5} />
-        <p className="text-sm font-medium text-purple-700 dark:text-purple-200">Drop skill .md files or click to upload</p>
+        <p className="text-sm font-medium text-purple-700 dark:text-purple-200">
+          Drop skill .md files or click to upload
+        </p>
         <p className="text-[11px] text-muted-foreground">md only · e.g. CLAUDE.md</p>
       </div>
       <div>

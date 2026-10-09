@@ -256,8 +256,7 @@ function buildConnectorOauthSteps(tool: ClientTool): InstallStep[] {
     },
     {
       title: "Authorize",
-      description:
-        `Once the Meko MCP server URL is configured in ${tool.label}, authorize it to use the MCP tools. Your tool opens a browser tab, you sign in to Meko, and the token is stored automatically.`,
+      description: `Once the Meko MCP server URL is configured in ${tool.label}, authorize it to use the MCP tools. Your tool opens a browser tab, you sign in to Meko, and the token is stored automatically.`,
     },
   ];
 }

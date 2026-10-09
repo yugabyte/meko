@@ -119,8 +119,7 @@ export function ReviewRunSummary({
           {stats && stats.kb_chunks_retrieved > 0 && stats.kb_chunks_total != null
             ? `It asked for ${stats.kb_chunks_retrieved} of your ${stats.kb_chunks_total} chunks instead of reading all of them`
             : "It asked the datapack for what this diff needed instead of carrying the whole document"}
-          {structured ? ", and found what the cold run missed." : "."}{" "}
-          Read the findings next.
+          {structured ? ", and found what the cold run missed." : "."} Read the findings next.
         </WarningBanner>
       )}
     </div>

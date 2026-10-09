@@ -79,10 +79,7 @@ export function GuardrailStage({ agentDisplayName }: { agentDisplayName: string 
       <Collapsible open={riskOpen} onOpenChange={setRiskOpen}>
         <div className="overflow-hidden rounded-lg border border-destructive/40 bg-destructive/[0.04]">
           <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 px-4 py-3 text-left"
-            >
+            <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left">
               <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" aria-hidden />
               <span className="flex-1 text-sm font-semibold text-foreground">
                 What handing over too early looks like

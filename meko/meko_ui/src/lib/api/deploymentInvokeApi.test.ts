@@ -63,7 +63,9 @@ describe("invokeDeployment", () => {
   });
 
   it("sends the deployment id and body to the invoke endpoint", async () => {
-    vi.mocked(fetch).mockResolvedValue(fakeStreamingResponse(['data: {"type":"done","review":"ok"}\n\n']));
+    vi.mocked(fetch).mockResolvedValue(
+      fakeStreamingResponse(['data: {"type":"done","review":"ok"}\n\n']),
+    );
 
     await collect(invokeDeployment("dep-1", { pr_title: "x" }));
 
@@ -74,7 +76,11 @@ describe("invokeDeployment", () => {
   });
 
   it("throws on a non-2xx response, extracting api_server's error envelope", async () => {
-    vi.mocked(fetch).mockResolvedValue(fakeErrorResponse(400, { error: { code: "VALIDATION_ERROR", message: "deployment not active" } }));
+    vi.mocked(fetch).mockResolvedValue(
+      fakeErrorResponse(400, {
+        error: { code: "VALIDATION_ERROR", message: "deployment not active" },
+      }),
+    );
 
     await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow("deployment not active");
   });
@@ -97,19 +103,27 @@ describe("invokeDeployment", () => {
   });
 
   it("falls back to parsing a plain (non-SSE) JSON error body from a stale deployed image", async () => {
-    vi.mocked(fetch).mockResolvedValue(fakeStreamingResponse(['{"error": "Missing required field: datapack_id"}']));
+    vi.mocked(fetch).mockResolvedValue(
+      fakeStreamingResponse(['{"error": "Missing required field: datapack_id"}']),
+    );
 
-    await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow("Missing required field: datapack_id");
+    await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow(
+      "Missing required field: datapack_id",
+    );
   });
 
   it("throws a clear error on a plain (non-SSE) success-shaped body instead of silently yielding nothing", async () => {
     vi.mocked(fetch).mockResolvedValue(fakeStreamingResponse(['{"review": "looks good"}']));
 
-    await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow(/doesn't support streaming/);
+    await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow(
+      /doesn't support streaming/,
+    );
   });
 
   it("notifies auth-expired on a 401 before throwing", async () => {
-    vi.mocked(fetch).mockResolvedValue(fakeErrorResponse(401, { error: { message: "Session expired" } }));
+    vi.mocked(fetch).mockResolvedValue(
+      fakeErrorResponse(401, { error: { message: "Session expired" } }),
+    );
 
     await expect(collect(invokeDeployment("dep-1", {}))).rejects.toThrow("Session expired");
     expect(mockNotifyAuthExpired).toHaveBeenCalledTimes(1);
@@ -132,7 +146,9 @@ describe("invokeDeployment", () => {
 
   it("silently drops a genuinely truncated final frame instead of throwing", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      fakeStreamingResponse(['data: {"type":"meta","conversation_id":"conv-1"}\n\ndata: {"type":"done","rev']),
+      fakeStreamingResponse([
+        'data: {"type":"meta","conversation_id":"conv-1"}\n\ndata: {"type":"done","rev',
+      ]),
     );
 
     const events = await collect(invokeDeployment("dep-1", {}));
@@ -141,7 +157,9 @@ describe("invokeDeployment", () => {
   });
 
   it("cancels the reader once the stream completes normally", async () => {
-    vi.mocked(fetch).mockResolvedValue(fakeStreamingResponse(['data: {"type":"done","review":"ok"}\n\n']));
+    vi.mocked(fetch).mockResolvedValue(
+      fakeStreamingResponse(['data: {"type":"done","review":"ok"}\n\n']),
+    );
     const cancelSpy = vi.spyOn(ReadableStreamDefaultReader.prototype, "cancel");
 
     await collect(invokeDeployment("dep-1", {}));

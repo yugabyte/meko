@@ -107,7 +107,10 @@ export function DeploymentModeChooser({
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex">
-                <Card className="pointer-events-none w-full select-none p-4 opacity-70" aria-disabled="true">
+                <Card
+                  className="pointer-events-none w-full select-none p-4 opacity-70"
+                  aria-disabled="true"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">Deploy your own dedicated AgentK</p>
                     <Badge variant="outline">Standard tier</Badge>
@@ -118,7 +121,9 @@ export function DeploymentModeChooser({
                 </Card>
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top">Upgrade to Standard to deploy your own dedicated instance.</TooltipContent>
+            <TooltipContent side="top">
+              Upgrade to Standard to deploy your own dedicated instance.
+            </TooltipContent>
           </Tooltip>
         )}
       </div>

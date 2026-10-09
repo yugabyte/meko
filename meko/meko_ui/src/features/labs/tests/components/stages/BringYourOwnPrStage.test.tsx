@@ -34,7 +34,10 @@ const mockFetchDiff = vi.mocked(fetchPullRequestDiff);
 
 const DEMO_APP: LabDemoAppConfig = { kind: "pr-review-chat", agentDisplayName: "AgentK" };
 
-function fakeSession(datapackId: string | null, deploymentActive = false): ReturnType<typeof useLabRunnerSession> {
+function fakeSession(
+  datapackId: string | null,
+  deploymentActive = false,
+): ReturnType<typeof useLabRunnerSession> {
   return {
     datapackId,
     deploymentActive,
@@ -48,7 +51,7 @@ describe("BringYourOwnPrStage", () => {
   it("shows the degrade prompt when no datapack is selected", () => {
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession(null)}
         onGoToCreateDatapack={vi.fn()}
@@ -61,7 +64,7 @@ describe("BringYourOwnPrStage", () => {
   it("shows the deployment-needed prompt when a datapack is set but no deployment is active", () => {
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", false)}
         onGoToCreateDatapack={vi.fn()}
@@ -74,7 +77,7 @@ describe("BringYourOwnPrStage", () => {
   it("shows the fetch form, not PrReviewDemoApp, before a PR has been fetched", () => {
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
@@ -88,14 +91,16 @@ describe("BringYourOwnPrStage", () => {
   it("rejects a malformed PR reference before ever calling the GitHub client", async () => {
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
         onGoToDeployAgent={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repo/pull/123"), { target: { value: "not-a-valid-ref" } });
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repo/pull/123"), {
+      target: { value: "not-a-valid-ref" },
+    });
     fireEvent.change(screen.getByPlaceholderText("ghp_…"), { target: { value: "tok" } });
     fireEvent.click(screen.getByRole("button", { name: /fetch pr/i }));
 
@@ -105,18 +110,22 @@ describe("BringYourOwnPrStage", () => {
   });
 
   it("shows the GitHub client's error message when the fetch fails", async () => {
-    mockFetchSummary.mockRejectedValue(new GitHubApiError("GitHub API request failed: 404 Not Found"));
+    mockFetchSummary.mockRejectedValue(
+      new GitHubApiError("GitHub API request failed: 404 Not Found"),
+    );
     mockFetchDiff.mockRejectedValue(new GitHubApiError("GitHub API request failed: 404 Not Found"));
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
         onGoToDeployAgent={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repo/pull/123"), { target: { value: "acme/widgets#42" } });
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repo/pull/123"), {
+      target: { value: "acme/widgets#42" },
+    });
     fireEvent.change(screen.getByPlaceholderText("ghp_…"), { target: { value: "tok" } });
     fireEvent.click(screen.getByRole("button", { name: /fetch pr/i }));
 
@@ -125,18 +134,23 @@ describe("BringYourOwnPrStage", () => {
   });
 
   it("fetches the PR then renders PrReviewDemoApp with it as prSource", async () => {
-    mockFetchSummary.mockResolvedValue({ title: "Fix the thing", htmlUrl: "https://github.com/acme/widgets/pull/42" });
+    mockFetchSummary.mockResolvedValue({
+      title: "Fix the thing",
+      htmlUrl: "https://github.com/acme/widgets/pull/42",
+    });
     mockFetchDiff.mockResolvedValue("diff --git a/x b/x\n+fixed\n");
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}
         onGoToDeployAgent={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repo/pull/123"), { target: { value: "acme/widgets#42" } });
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repo/pull/123"), {
+      target: { value: "acme/widgets#42" },
+    });
     fireEvent.change(screen.getByPlaceholderText("ghp_…"), { target: { value: "tok" } });
     fireEvent.click(screen.getByRole("button", { name: /fetch pr/i }));
 
@@ -153,7 +167,7 @@ describe("BringYourOwnPrStage", () => {
     const savedRun = { diffContent: "diff --git a/x b/x\n" } as never;
     render(
       <BringYourOwnPrStage
-      reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
+        reviewConfig={DEFAULT_REVIEW_AGENT_CONFIG}
         demoApp={DEMO_APP}
         session={fakeSession("dp-1", true)}
         onGoToCreateDatapack={vi.fn()}

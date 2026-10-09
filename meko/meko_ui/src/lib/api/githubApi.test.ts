@@ -34,7 +34,11 @@ describe("parsePrRef", () => {
   });
 
   it("tolerates surrounding whitespace", () => {
-    expect(parsePrRef("  acme/widgets#42  ")).toEqual({ owner: "acme", repo: "widgets", number: 42 });
+    expect(parsePrRef("  acme/widgets#42  ")).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      number: 42,
+    });
   });
 
   it("returns null for anything else", () => {

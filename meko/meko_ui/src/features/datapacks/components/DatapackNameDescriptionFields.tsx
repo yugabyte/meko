@@ -32,7 +32,12 @@ export function DatapackNameDescriptionFields({
   className,
 }: DatapackNameDescriptionFieldsProps) {
   return (
-    <div className={cn("space-y-6 rounded-xl border border-border bg-card/40 p-6 shadow-sm", className)}>
+    <div
+      className={cn(
+        "space-y-6 rounded-xl border border-border bg-card/40 p-6 shadow-sm",
+        className,
+      )}
+    >
       <div className="flex flex-col gap-3">
         <Label htmlFor={nameInputId}>Name</Label>
         <Input

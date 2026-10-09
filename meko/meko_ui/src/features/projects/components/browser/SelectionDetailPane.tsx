@@ -140,9 +140,7 @@ export function SelectionDetailPane({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {body ? (
-          <p className="mb-3 text-sm leading-relaxed text-muted-foreground">{body}</p>
-        ) : null}
+        {body ? <p className="mb-3 text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
         <dl className="divide-y divide-border">
           {rows.map((row) => (
             <div key={row.label} className="flex items-baseline justify-between gap-4 py-2.5">

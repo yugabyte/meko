@@ -605,10 +605,7 @@ export function TraceDrawer({
 
 // Deep-link to the knowledge page's Promoted memories tab, targeting a
 // specific promoted memory so the page can scroll to + shimmer it.
-function buildPromotedKBHref(
-  datapackId: string,
-  memoryId: string | undefined,
-): string {
+function buildPromotedKBHref(datapackId: string, memoryId: string | undefined): string {
   const base = datapackKnowledgePath(datapackId);
   const sep = base.includes("?") ? "&" : "?";
   const params = new URLSearchParams({ tab: "promoted-memories" });

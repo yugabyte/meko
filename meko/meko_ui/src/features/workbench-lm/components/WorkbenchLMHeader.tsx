@@ -48,8 +48,7 @@ export function WorkbenchLMHeader({
   // too. Returns null when the ID is stale (parent's auto-select will
   // fix it on the next render).
   const selectedDatapackName =
-    accessibleDatapacks.find((dp) => dp.datapack_id === selectedDatapackId)?.datapack_name ??
-    null;
+    accessibleDatapacks.find((dp) => dp.datapack_id === selectedDatapackId)?.datapack_name ?? null;
 
   // Map every accessible datapack to a Combobox option. Role goes in the
   // label as a text suffix (e.g. "name · OWNER") so Combobox's search
@@ -118,11 +117,13 @@ export function WorkbenchLMHeader({
         A sandbox to see Meko save and recall memory. Meko itself is the data layer your own AI
         tools connect to.
       </p>
-      <p className="truncate text-xs text-muted-foreground" title={selectedDatapackName ?? undefined}>
+      <p
+        className="truncate text-xs text-muted-foreground"
+        title={selectedDatapackName ?? undefined}
+      >
         {selectedDatapackName ? (
           <>
-            Datapack:{" "}
-            <span className="font-medium text-foreground">{selectedDatapackName}</span>
+            Datapack: <span className="font-medium text-foreground">{selectedDatapackName}</span>
           </>
         ) : (
           "Pick a datapack to start exploring."

@@ -44,10 +44,12 @@ Then run the checks for those components. Each exits non-zero and prints the
 offenders when something is wrong:
 
 ```
-# Go, Rust, Python — the ones this branch touches, so a toolchain you don't need
-# can't block the push. CI's required `Format` check runs all three.
+# Formatting — the languages this branch touches, so a toolchain you don't need
+# can't block the push. CI's required `Format` check runs all of them.
 langs=$(git diff --name-only --diff-filter=d origin/main..HEAD |
-  sed -nE 's/.*\.go$/go/p; s/.*\.rs$/rust/p; s/.*\.py$/python/p' | sort -u)
+  sed -nE 's/.*\.go$/go/p; s/.*\.rs$/rust/p; s/.*\.py$/python/p; s/.*\.sh$/shell/p;
+    s/.*\.(ts|tsx|js|jsx|mjs|cjs|css|scss)$/ts/p; s#(^|.*/)[^/.]+$#shell#p' | sort -u)
+# (no extension -> shell: format.sh also formats scripts it finds by shebang)
 [ -z "$langs" ] || .github/scripts/format.sh --check $langs
 
 # TypeScript — if meko/meko_ui/ or meko/meko_admin/ changed

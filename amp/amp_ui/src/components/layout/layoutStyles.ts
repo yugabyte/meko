@@ -39,8 +39,7 @@ export const layoutStyles = {
   navItem:
     "group relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
   navItemActive: "bg-sidebar-accent text-sidebar-accent-foreground",
-  navItemInactive:
-    "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+  navItemInactive: "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
   navIcon: "h-[18px] w-[18px] shrink-0",
   navLabel: "truncate",
   navBadge:
@@ -66,11 +65,9 @@ export const layoutStyles = {
   userMeta: "truncate text-xs text-muted-foreground",
 
   /* ---- Header ---- */
-  header:
-    "flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background px-4 sm:px-6",
+  header: "flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background px-4 sm:px-6",
   searchWrap: "relative mx-auto hidden w-full max-w-xl md:block",
-  searchIcon:
-    "pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand",
+  searchIcon: "pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-brand",
   // `border-border` + `bg-card` override the Input default (`border-input`
   // + transparent), which is invisible against the header in dark mode.
   // This gives the field a clear box in both light and dark.

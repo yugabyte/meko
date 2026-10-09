@@ -61,7 +61,9 @@ export default function DatapackLearningsPage({ datapackId }: Props) {
         const d = await getDatapack(datapackId, {});
         if (!cancelled) {
           setDatapack(d);
-          setIsPromotionAllowed(isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: d.grant }));
+          setIsPromotionAllowed(
+            isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: d.grant }),
+          );
         }
       } catch (e) {
         if (!cancelled) {
@@ -93,15 +95,20 @@ export default function DatapackLearningsPage({ datapackId }: Props) {
             </h1>
           </div>
           <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
-            Review agent memories for <span className="text-foreground/90">{displayDatapackName}</span> and promote them
-            into the knowledge base.
+            Review agent memories for{" "}
+            <span className="text-foreground/90">{displayDatapackName}</span> and promote them into
+            the knowledge base.
           </p>
         </div>
 
         {statusError ? <WarningBanner>{statusError}</WarningBanner> : null}
 
         {datapack?.datapack_id ? (
-          <MemoryPromotionPanel datapackName={displayDatapackName} datapackId={datapack.datapack_id} isPromotionAllowed={isPromotionAllowed} />
+          <MemoryPromotionPanel
+            datapackName={displayDatapackName}
+            datapackId={datapack.datapack_id}
+            isPromotionAllowed={isPromotionAllowed}
+          />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
             {statusLoading ? "Loading datapack…" : "Datapack not available."}

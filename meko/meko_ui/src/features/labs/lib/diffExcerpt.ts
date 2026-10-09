@@ -24,7 +24,10 @@ const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 /** Strips git's `a/` / `b/` prefix and any leading slash, so the two sides of
  *  a comparison are spelled the same way. */
 function normalizePath(path: string): string {
-  return path.replace(/^[ab]\//, "").replace(/^\/+/, "").trim();
+  return path
+    .replace(/^[ab]\//, "")
+    .replace(/^\/+/, "")
+    .trim();
 }
 
 export function parseUnifiedDiff(diff: string): DiffFile[] {
@@ -133,7 +136,9 @@ export function excerptForFinding(
 
   return {
     path: file.path,
-    lines: file.lines.filter((l) => l.lineNumber !== null && l.lineNumber >= from && l.lineNumber <= to),
+    lines: file.lines.filter(
+      (l) => l.lineNumber !== null && l.lineNumber >= from && l.lineNumber <= to,
+    ),
     highlightStart,
     highlightEnd,
   };

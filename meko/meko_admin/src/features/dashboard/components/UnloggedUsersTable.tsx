@@ -27,11 +27,11 @@ export function UnloggedUsersTable({ users, isLoading }: Props) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-sm font-medium">
-          Users with no login
-        </CardTitle>
+        <CardTitle className="text-sm font-medium">Users with no login</CardTitle>
         {!isLoading && users !== undefined && (
-          <span className="text-xs text-muted-foreground">{users.length} user{users.length !== 1 ? "s" : ""}</span>
+          <span className="text-xs text-muted-foreground">
+            {users.length} user{users.length !== 1 ? "s" : ""}
+          </span>
         )}
       </CardHeader>
       <CardContent>
@@ -68,9 +68,7 @@ export function UnloggedUsersTable({ users, isLoading }: Props) {
                       <Badge variant={meta.variant}>{meta.label}</Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {u.createdAt
-                        ? format(parseISO(u.createdAt), "MMM d, yyyy")
-                        : "—"}
+                      {u.createdAt ? format(parseISO(u.createdAt), "MMM d, yyyy") : "—"}
                     </TableCell>
                   </TableRow>
                 );

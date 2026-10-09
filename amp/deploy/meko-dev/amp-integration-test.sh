@@ -14,50 +14,72 @@ PGBIN="${PGBIN:-$(command -v psql || echo /opt/homebrew/opt/postgresql@16/bin/ps
 K="kubectl --context $KCTX -n $NS"
 API_PF_PORT="${API_PF_PORT:-18080}"
 PG_PF_PORT="${PG_PF_PORT:-15433}"
-EP_PASSWORD="${EP_PASSWORD:-cloud_admin}"   # set on the endpoint at create; the controller requires one for read_write
+EP_PASSWORD="${EP_PASSWORD:-cloud_admin}" # set on the endpoint at create; the controller requires one for read_write
 API="http://127.0.0.1:${API_PF_PORT}/api/v1"
 RUN="itest-$(date +%s)"
 PF_PIDS=()
 POOL="" PROJ="" BR="" EP="" EP_POD="" PGV=""
 FAIL=0
 
-log(){ printf '\033[1m[itest]\033[0m %s\n' "$*"; }
-err(){ printf '\033[31m[itest FAIL]\033[0m %s\n' "$*"; FAIL=1; }
-ok(){  printf '\033[32m[itest OK]\033[0m %s\n' "$*"; }
+log() { printf '\033[1m[itest]\033[0m %s\n' "$*"; }
+err() {
+  printf '\033[31m[itest FAIL]\033[0m %s\n' "$*"
+  FAIL=1
+}
+ok() { printf '\033[32m[itest OK]\033[0m %s\n' "$*"; }
 
-cleanup(){
+cleanup() {
   log "cleanup ($RUN)"
-  [ -n "$EP" ]   && curl -s -X DELETE "$API/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints/$EP" >/dev/null 2>&1 && log "  deleted endpoint $EP"
+  [ -n "$EP" ] && curl -s -X DELETE "$API/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints/$EP" >/dev/null 2>&1 && log "  deleted endpoint $EP"
   [ -n "$PROJ" ] && curl -s -X DELETE "$API/storage-pools/$POOL/clusters/$PROJ" >/dev/null 2>&1 && log "  deleted cluster $PROJ"
   for p in "${PF_PIDS[@]:-}"; do kill "$p" 2>/dev/null; done
 }
 trap cleanup EXIT
 
 # --- preflight ---
-command -v "$PGBIN" >/dev/null 2>&1 || { err "psql not found (set PGBIN)"; exit 1; }
-$K get deploy amp-controller >/dev/null 2>&1 || { err "amp-controller not found in $NS ($KCTX)"; exit 1; }
+command -v "$PGBIN" >/dev/null 2>&1 || {
+  err "psql not found (set PGBIN)"
+  exit 1
+}
+$K get deploy amp-controller >/dev/null 2>&1 || {
+  err "amp-controller not found in $NS ($KCTX)"
+  exit 1
+}
 log "controller image: $($K get deploy amp-controller -o jsonpath='{.spec.template.spec.containers[0].image}')"
 
 # --- port-forward the controller API ---
 $K port-forward deploy/amp-controller "${API_PF_PORT}:8080" >/tmp/itest-api-pf.log 2>&1 &
-PF_PIDS+=($!); sleep 4
-curl -sf "http://127.0.0.1:${API_PF_PORT}/healthz" >/dev/null || { err "controller API not reachable"; exit 1; }
+PF_PIDS+=($!)
+sleep 4
+curl -sf "http://127.0.0.1:${API_PF_PORT}/healthz" >/dev/null || {
+  err "controller API not reachable"
+  exit 1
+}
 ok "controller API reachable"
 
 # --- pick a storage pool (reuse first; pools have no delete API) ---
 POOL=$(curl -s "$API/storage-pools" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["storage_pools"][0]["id"] if d.get("count") else "")')
-[ -n "$POOL" ] || { err "no storage pool exists (create one first)"; exit 1; }
+[ -n "$POOL" ] || {
+  err "no storage pool exists (create one first)"
+  exit 1
+}
 log "using storage pool $POOL"
 
 # --- create cluster (async: returns a task; default 'main' branch created by it) ---
 RESP=$(curl -s -X POST "$API/storage-pools/$POOL/clusters" -H 'Content-Type: application/json' -d "{\"name\":\"$RUN\"}")
 PROJ=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("cluster_id",""))')
 TASK=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))')
-[ -n "$PROJ" ] || { err "createCluster failed: $RESP"; exit 1; }
+[ -n "$PROJ" ] || {
+  err "createCluster failed: $RESP"
+  exit 1
+}
 for i in $(seq 1 30); do
   ST=$(curl -s "$API/tasks/$TASK" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("status",""))' 2>/dev/null)
   [ "$ST" = succeeded ] && break
-  [ "$ST" = failed ] && { err "create_cluster task failed"; exit 1; }
+  [ "$ST" = failed ] && {
+    err "create_cluster task failed"
+    exit 1
+  }
   sleep 3
 done
 read BR PGV < <(curl -s "$API/storage-pools/$POOL/clusters/$PROJ/branches" | python3 -c '
@@ -65,7 +87,10 @@ import json,sys
 d=json.load(sys.stdin); a=d.get("branches", d if isinstance(d,list) else [])
 b=next((x for x in a if x.get("is_default")), a[0] if a else {})
 print(b.get("branch_id",""), b.get("pg_version",""))')
-[ -n "$BR" ] || { err "no branch found for cluster $PROJ"; exit 1; }
+[ -n "$BR" ] || {
+  err "no branch found for cluster $PROJ"
+  exit 1
+}
 ok "cluster $PROJ  branch $BR  (branch pg_version=$PGV)"
 [ "$PGV" = "18" ] || err "expected branch pg_version 18, got $PGV"
 
@@ -73,7 +98,10 @@ ok "cluster $PROJ  branch $BR  (branch pg_version=$PGV)"
 RESP=$(curl -s -X POST "$API/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints" \
   -H 'Content-Type: application/json' -d "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
 EP=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("target_ref",""))')
-[ -n "$EP" ] || { err "createEndpoint produced no endpoint: $RESP"; exit 1; }
+[ -n "$EP" ] || {
+  err "createEndpoint produced no endpoint: $RESP"
+  exit 1
+}
 ok "endpoint $EP (provisioning)"
 
 # --- wait for the endpoint pod to be Ready ---
@@ -82,17 +110,25 @@ for i in $(seq 1 40); do
   EP_POD=$($K get pods -o name 2>/dev/null | grep "yb-ep-$EP" | head -1 | cut -d/ -f2)
   if [ -n "$EP_POD" ]; then
     R=$($K get pod "$EP_POD" -o jsonpath='{range .status.containerStatuses[*]}{.ready}{"\n"}{end}' 2>/dev/null)
-    tot=$(echo "$R" | grep -c .); rdy=$(echo "$R" | grep -c true)
+    tot=$(echo "$R" | grep -c .)
+    rdy=$(echo "$R" | grep -c true)
     echo "  $(date +%T) $EP_POD ready=$rdy/$tot"
-    [ "$tot" -gt 0 ] && [ "$rdy" = "$tot" ] && { ok "endpoint pod Ready ($rdy/$tot)"; break; }
+    [ "$tot" -gt 0 ] && [ "$rdy" = "$tot" ] && {
+      ok "endpoint pod Ready ($rdy/$tot)"
+      break
+    }
   else echo "  $(date +%T) pod not created yet"; fi
   sleep 12
 done
-[ -n "$EP_POD" ] || { err "endpoint pod never appeared"; exit 1; }
+[ -n "$EP_POD" ] || {
+  err "endpoint pod never appeared"
+  exit 1
+}
 
 # --- connect to the compute via port-forward and assert PG18 + write/read ---
 $K port-forward "pod/$EP_POD" "$PG_PF_PORT":55433 >/tmp/itest-pg-pf.log 2>&1 &
-PF_PIDS+=($!); sleep 4
+PF_PIDS+=($!)
+sleep 4
 export PGPASSWORD="$EP_PASSWORD"
 CONN="host=127.0.0.1 port=$PG_PF_PORT user=cloud_admin dbname=postgres sslmode=prefer connect_timeout=15"
 VER=$($PGBIN "$CONN" -tAc "show server_version" 2>/tmp/itest-pg.err)

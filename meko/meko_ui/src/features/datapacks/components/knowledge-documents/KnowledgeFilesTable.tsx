@@ -7,15 +7,7 @@
 // drifting apart. `compact` trims the grid down to File + Status only,
 // for a narrower container that can't fit the full 7-column layout.
 
-import {
-  Children,
-  memo,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { Children, memo, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -446,7 +438,9 @@ export function FilesTable({
         <span aria-hidden />
         <span>File</span>
         {compact ? (
-          showChunks ? <span>Chunks</span> : null
+          showChunks ? (
+            <span>Chunks</span>
+          ) : null
         ) : (
           <>
             <span>Size</span>
@@ -679,7 +673,9 @@ function PendingFileRow({
           </span>
         </span>
         {compact ? (
-          showChunks ? <span className="self-center text-sm text-muted-foreground">—</span> : null
+          showChunks ? (
+            <span className="self-center text-sm text-muted-foreground">—</span>
+          ) : null
         ) : (
           <>
             <span className="self-center text-sm text-muted-foreground">—</span>
@@ -705,13 +701,7 @@ function PendingFileRow({
  *  lets a screen reader pick up the same "still going" signal.
  *  `status` decides live vs. final, so callers never have to duplicate
  *  the COMPLETED/FAILED check themselves. */
-function ChunksValue({
-  chunks,
-  status,
-}: {
-  chunks: number | null | undefined;
-  status: string;
-}) {
+function ChunksValue({ chunks, status }: { chunks: number | null | undefined; status: string }) {
   const isLive = status !== KB_DOCUMENT_STATUS.COMPLETED && status !== KB_DOCUMENT_STATUS.FAILED;
 
   // Hooks must run on every render regardless of `status` -- this component
@@ -792,7 +782,8 @@ function ChunksValue({
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-[280px] text-center">
-        Still counting: this climbs live while the file is being chunked and isn't final until processing completes.
+        Still counting: this climbs live while the file is being chunked and isn't final until
+        processing completes.
       </TooltipContent>
     </Tooltip>
   );
@@ -845,15 +836,15 @@ const FileRow = memo(function FileRow({
 
   const fullName = doc.document_name?.trim() || "—";
   const displayName = documentNameLastSegment(fullName).replace(/^\d+_/, "");
-  const { Icon: FileTypeIcon, toneClass: iconTone } = fileTypeVisual(documentFileExtension(fullName));
+  const { Icon: FileTypeIcon, toneClass: iconTone } = fileTypeVisual(
+    documentFileExtension(fullName),
+  );
   const chunks = doc.chunks_processed;
   // Prefer S3 upload time; fall back to pipeline completion for legacy docs.
   const uploadTimestamp = doc.uploaded_at ?? doc.completed_at;
   const uploadedRel = uploadTimestamp ? formatRelativeTime(uploadTimestamp, now) : "—";
   const rawChecksum = doc.document_checksum?.replace(/^"+|"+$/g, "") ?? "";
-  const md5 = rawChecksum
-    ? `${rawChecksum.slice(0, 8)}…${rawChecksum.slice(-4)}`
-    : "—";
+  const md5 = rawChecksum ? `${rawChecksum.slice(0, 8)}…${rawChecksum.slice(-4)}` : "—";
 
   // Compact rows without `showChunks` (the main datapack page's preview
   // tile) aren't expandable -- there's no room for the detail panel, and
@@ -1129,11 +1120,7 @@ function FileRowActions({
   datapackGrant: string | null;
   onDocumentDeleted: (documentId: string) => void;
 }) {
-  const canDelete = canDeleteKBDocumentClient(
-    datapackGrant,
-    callerUserId,
-    doc.uploaded_by_user_id,
-  );
+  const canDelete = canDeleteKBDocumentClient(datapackGrant, callerUserId, doc.uploaded_by_user_id);
   // Shown-but-disabled rather than hidden while indexing: hiding it looks
   // identical to "you don't have permission to delete this", and the row
   // is polling, so the button comes alive on its own once the file lands
@@ -1200,7 +1187,10 @@ function RemoveFromKBAction({
     <button
       type="button"
       disabled={Boolean(disabledReason)}
-      onClick={() => { setError(null); setOpen(true); }}
+      onClick={() => {
+        setError(null);
+        setOpen(true);
+      }}
       className={cn(
         "inline-flex items-center gap-1.5 text-xs font-medium text-red-700 dark:text-red-300",
         disabledReason
@@ -1229,7 +1219,12 @@ function RemoveFromKBAction({
         trigger
       )}
 
-      <Dialog open={open} onOpenChange={(v) => { if (!busy) setOpen(v); }}>
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          if (!busy) setOpen(v);
+        }}
+      >
         <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-xl text-foreground">Remove file</DialogTitle>
@@ -1250,15 +1245,12 @@ function RemoveFromKBAction({
             {fileLabel}
           </p>
           {error ? (
-            <p className="text-sm text-red-700 dark:text-red-300" role="alert">{error}</p>
+            <p className="text-sm text-red-700 dark:text-red-300" role="alert">
+              {error}
+            </p>
           ) : null}
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setOpen(false)}
-              disabled={busy}
-            >
+            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
               Cancel
             </Button>
             <Button

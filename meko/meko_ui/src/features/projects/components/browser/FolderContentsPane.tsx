@@ -21,10 +21,7 @@ import {
   OPEN_DATAPACK_LABEL,
   ADD_A_DATAPACK_LABEL,
 } from "@/features/projects/projectsCopy";
-import {
-  DATAPACK_NAME_FONT,
-  LABEL_NAME_FONT,
-} from "@/features/projects/projectsTypography";
+import { DATAPACK_NAME_FONT, LABEL_NAME_FONT } from "@/features/projects/projectsTypography";
 
 export function FolderContentsPane({
   folder,
@@ -52,12 +49,12 @@ export function FolderContentsPane({
   className?: string;
 }) {
   const nowMs = useNowMs();
-  const { rows, matchCount, pageCount, page: current } = folderContents(
-    datapacks,
-    folder.folder_id,
-    query,
-    page,
-  );
+  const {
+    rows,
+    matchCount,
+    pageCount,
+    page: current,
+  } = folderContents(datapacks, folder.folder_id, query, page);
   // Search only earns its space once there is more than a screenful.
   const showSearch = datapacks.filter((d) => d.folder_id === folder.folder_id).length > 5;
 
@@ -140,7 +137,11 @@ export function FolderContentsPane({
                   <div className="min-w-0 flex-1">
                     <TruncatedText
                       text={d.datapack_name}
-                      className={cn("text-sm text-foreground", DATAPACK_NAME_FONT, selected && "font-medium")}
+                      className={cn(
+                        "text-sm text-foreground",
+                        DATAPACK_NAME_FONT,
+                        selected && "font-medium",
+                      )}
                     />
                     <p className="truncate text-xs text-muted-foreground">
                       {countLabel(d.memory_count, "memory", "memories")} ·{" "}

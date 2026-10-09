@@ -88,9 +88,13 @@ export function DatapackDetailAgentsTile({ datapackId, className }: Props) {
         {status === "loading" ? (
           <li className="px-2 py-4 text-center text-xs text-muted-foreground">Loading agents…</li>
         ) : status === "error" ? (
-          <li className="px-2 py-4 text-center text-xs leading-relaxed text-muted-foreground">{errorMessage}</li>
+          <li className="px-2 py-4 text-center text-xs leading-relaxed text-muted-foreground">
+            {errorMessage}
+          </li>
         ) : preview.length === 0 ? (
-          <li className="px-2 py-4 text-center text-xs text-muted-foreground">No agents linked yet.</li>
+          <li className="px-2 py-4 text-center text-xs text-muted-foreground">
+            No agents linked yet.
+          </li>
         ) : (
           preview.map((a) => {
             const row = a as Agent & { id?: string; agent_name?: string };

@@ -32,7 +32,10 @@ export function ProjectFolderChips({
       {visible.map((folder) => (
         <span
           key={folder}
-          className={cn("rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground", LABEL_NAME_FONT)}
+          className={cn(
+            "rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground",
+            LABEL_NAME_FONT,
+          )}
         >
           {folder}
         </span>

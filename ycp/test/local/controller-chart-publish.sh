@@ -48,21 +48,36 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 CHART_DIR="${REPO_ROOT}/amp/deploy/helm/yb-amp-controller"
 
 pass=0 fail=0
-ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; pass=$((pass+1)); }
-bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
-hdr()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
+ok() {
+  printf '  \033[32mok\033[0m   %s\n' "$*"
+  pass=$((pass + 1))
+}
+bad() {
+  printf '  \033[31mFAIL\033[0m %s\n' "$*"
+  fail=$((fail + 1))
+}
+hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
 hdr "preconditions"
 for bin in helm aws curl; do
-  command -v "$bin" >/dev/null && ok "$bin present" || { bad "$bin missing"; exit 1; }
+  command -v "$bin" >/dev/null && ok "$bin present" || {
+    bad "$bin missing"
+    exit 1
+  }
 done
-[ -f "${CHART_DIR}/Chart.yaml" ] && ok "chart at ${CHART_DIR}" || { bad "no chart at ${CHART_DIR}"; exit 1; }
-aws sts get-caller-identity >/dev/null 2>&1 \
-  && ok "aws credentials resolve (AWS_PROFILE=${AWS_PROFILE})" \
-  || { bad "aws credentials do not resolve for AWS_PROFILE=${AWS_PROFILE}"; exit 1; }
+[ -f "${CHART_DIR}/Chart.yaml" ] && ok "chart at ${CHART_DIR}" || {
+  bad "no chart at ${CHART_DIR}"
+  exit 1
+}
+aws sts get-caller-identity >/dev/null 2>&1 &&
+  ok "aws credentials resolve (AWS_PROFILE=${AWS_PROFILE})" ||
+  {
+    bad "aws credentials do not resolve for AWS_PROFILE=${AWS_PROFILE}"
+    exit 1
+  }
 
 # helm lint first: publishing a chart that does not render wastes the round trip,
 # and a broken chart reaches the agent as an upgrade that fails on the cluster.
@@ -70,7 +85,8 @@ hdr "lint"
 if helm lint "${CHART_DIR}" >"${WORK}/lint.log" 2>&1; then
   ok "helm lint clean"
 else
-  bad "helm lint failed"; sed 's/^/    /' "${WORK}/lint.log"
+  bad "helm lint failed"
+  sed 's/^/    /' "${WORK}/lint.log"
 fi
 
 published=()
@@ -80,22 +96,29 @@ for v in ${CHART_VERSIONS}; do
   # --version` selects, and appVersion is the image tag the chart falls back to,
   # so a package whose two disagree deploys something other than it claims.
   if helm package "${CHART_DIR}" --version "${v}" --app-version "${v}" \
-       --destination "${WORK}" >"${WORK}/pkg-${v}.log" 2>&1; then
+    --destination "${WORK}" >"${WORK}/pkg-${v}.log" 2>&1; then
     ok "packaged ${v}"
   else
-    bad "helm package ${v} failed"; sed 's/^/    /' "${WORK}/pkg-${v}.log"; continue
+    bad "helm package ${v} failed"
+    sed 's/^/    /' "${WORK}/pkg-${v}.log"
+    continue
   fi
 
   tgz="${WORK}/yb-amp-controller-${v}.tgz"
-  [ -s "${tgz}" ] && ok "$(basename "${tgz}") is non-empty" || { bad "no tarball for ${v}"; continue; }
+  [ -s "${tgz}" ] && ok "$(basename "${tgz}") is non-empty" || {
+    bad "no tarball for ${v}"
+    continue
+  }
 
   # text/plain would make some clients treat it as text; helm does not care, but a
   # browser download of a mislabelled .tgz is a confusing way to find out.
   if aws s3 cp "${tgz}" "s3://${BUCKET}/${PREFIX}/" \
-       --content-type application/gzip >"${WORK}/up-${v}.log" 2>&1; then
+    --content-type application/gzip >"${WORK}/up-${v}.log" 2>&1; then
     ok "uploaded to s3://${BUCKET}/${PREFIX}/"
   else
-    bad "upload of ${v} failed"; sed 's/^/    /' "${WORK}/up-${v}.log"; continue
+    bad "upload of ${v} failed"
+    sed 's/^/    /' "${WORK}/up-${v}.log"
+    continue
   fi
   published+=("${v}")
 done
@@ -124,18 +147,20 @@ for v in "${published[@]}"; do
   # The assertions that matter: helm itself resolving the URL, not just curl.
   if helm show chart "${url}" >"${WORK}/show-${v}.txt" 2>&1; then
     got=$(awk '/^version:/{print $2}' "${WORK}/show-${v}.txt")
-    [ "${got}" = "${v}" ] && ok "helm show chart reports version ${got}" \
-                          || bad "helm show chart reports ${got}, want ${v}"
+    [ "${got}" = "${v}" ] && ok "helm show chart reports version ${got}" ||
+      bad "helm show chart reports ${got}, want ${v}"
   else
-    bad "helm show chart ${url} failed"; sed 's/^/    /' "${WORK}/show-${v}.txt"
+    bad "helm show chart ${url} failed"
+    sed 's/^/    /' "${WORK}/show-${v}.txt"
   fi
 
   if helm template rel "${url}" --set agent.enabled=true --set agent.envName=e \
-       --set agent.ycpUrl=https://ycp.example.com/api/v1 \
-       >"${WORK}/tpl-${v}.yaml" 2>&1; then
+    --set agent.ycpUrl=https://ycp.example.com/api/v1 \
+    >"${WORK}/tpl-${v}.yaml" 2>&1; then
     ok "helm template renders from the URL"
   else
-    bad "helm template from ${url} failed"; sed 's/^/    /' "${WORK}/tpl-${v}.yaml"
+    bad "helm template from ${url} failed"
+    sed 's/^/    /' "${WORK}/tpl-${v}.yaml"
   fi
 done
 

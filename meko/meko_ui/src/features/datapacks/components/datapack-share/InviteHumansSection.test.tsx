@@ -41,11 +41,7 @@ vi.mock("@/lib/telemetry/rudderstack", () => ({
   identifyThenTrack: vi.fn(),
 }));
 
-import {
-  bulkShareDatapack,
-  inviteDatapackShare,
-  MekoApiRequestError,
-} from "@/lib/api/mekoApi";
+import { bulkShareDatapack, inviteDatapackShare, MekoApiRequestError } from "@/lib/api/mekoApi";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
 import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 
@@ -155,24 +151,15 @@ describe("InviteHumansSection", () => {
     // NO code envelope. That's what isApiEndpointMissingError now
     // uses to distinguish route-missing from a legitimate
     // RequireDatapackAccess NOT_FOUND (which does carry code).
-    bulkMock.mockRejectedValue(
-      new MekoApiRequestError("Not Found", { httpStatus: 404 }),
-    );
+    bulkMock.mockRejectedValue(new MekoApiRequestError("Not Found", { httpStatus: 404 }));
 
-    render(
-      <InviteHumansSection
-        datapackId="dp-1"
-        onInvitesSent={() => Promise.resolve()}
-      />,
-    );
+    render(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
 
     // Trigger the bulk path with 2 addresses.
     typeAndSubmit(["a@x.com", "b@x.com"]);
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/bulk sharing isn.?t available on this server yet/i),
-      ).toBeDefined();
+      expect(screen.getByText(/bulk sharing isn.?t available on this server yet/i)).toBeDefined();
     });
 
     // Textarea is gone; the whole form is replaced by the notice.
@@ -191,18 +178,13 @@ describe("InviteHumansSection", () => {
     // — which is the wrong operator-facing conclusion. Now it must
     // surface as a normal error toast, keeping the form intact.
     bulkMock.mockRejectedValue(
-      new MekoApiRequestError("datapack \"dp-1\" not found", {
+      new MekoApiRequestError('datapack "dp-1" not found', {
         code: "NOT_FOUND",
         httpStatus: 404,
       }),
     );
 
-    render(
-      <InviteHumansSection
-        datapackId="dp-1"
-        onInvitesSent={() => Promise.resolve()}
-      />,
-    );
+    render(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
 
     typeAndSubmit(["a@x.com", "b@x.com"]);
 
@@ -212,9 +194,7 @@ describe("InviteHumansSection", () => {
     });
 
     // The tab is NOT swapped out.
-    expect(
-      screen.queryByText(/bulk sharing isn.?t available on this server yet/i),
-    ).toBeNull();
+    expect(screen.queryByText(/bulk sharing isn.?t available on this server yet/i)).toBeNull();
     // The form is still there.
     expect(screen.getByLabelText(/email addresses/i)).toBeDefined();
   });
@@ -249,12 +229,7 @@ describe("InviteHumansSection", () => {
   });
 
   it("keeps the submit button disabled while there are no valid addresses", () => {
-    render(
-      <InviteHumansSection
-        datapackId="dp-1"
-        onInvitesSent={() => Promise.resolve()}
-      />,
-    );
+    render(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
 
     const submit = screen.getByRole("button", { name: /send|invite/i });
     // Empty textarea → button disabled.

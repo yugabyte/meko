@@ -23,11 +23,7 @@ export function caFileName(endpointId: string): string {
 }
 
 /** The gateway always speaks TLS; the trust answer decides the rest. */
-export function documentdbURI(
-  address: string,
-  endpointId: string,
-  trust: DocumentdbTrust,
-): string {
+export function documentdbURI(address: string, endpointId: string, trust: DocumentdbTrust): string {
   const base = `mongodb://${address}/?tls=true`;
   switch (trust) {
     case "ca_file":
@@ -40,9 +36,7 @@ export function documentdbURI(
 }
 
 export function downloadCaFile(endpointId: string, pem: string): void {
-  const url = URL.createObjectURL(
-    new Blob([pem], { type: "application/x-pem-file" }),
-  );
+  const url = URL.createObjectURL(new Blob([pem], { type: "application/x-pem-file" }));
   const a = document.createElement("a");
   a.href = url;
   a.download = caFileName(endpointId);

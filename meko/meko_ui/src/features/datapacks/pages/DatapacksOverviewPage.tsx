@@ -515,9 +515,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           isLoading={isLoading}
           currentUser={currentUser}
           onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.datapack_id))}
-          onConnectDatapack={(dp) =>
-            navigate(datapackDetailUrlOpenConnect(dp.datapack_id))
-          }
+          onConnectDatapack={(dp) => navigate(datapackDetailUrlOpenConnect(dp.datapack_id))}
           onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_id))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
           showProjects={projectsEnabled}

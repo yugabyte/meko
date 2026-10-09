@@ -155,9 +155,10 @@ export function filterFilesForKnowledgeUploadBatch(
     );
   }
   if (skippedLimit > 0) {
-    warningParts.push(`${skippedLimit} skipped (${KNOWLEDGE_UPLOAD_MAX_BATCH} files already in progress)`);
+    warningParts.push(
+      `${skippedLimit} skipped (${KNOWLEDGE_UPLOAD_MAX_BATCH} files already in progress)`,
+    );
   }
 
   return { accepted, warningParts };
 }
-

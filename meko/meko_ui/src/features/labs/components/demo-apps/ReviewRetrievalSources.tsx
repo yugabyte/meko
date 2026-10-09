@@ -35,7 +35,8 @@ export function ReviewRetrievalSources({
   if (kbHits.length === 0 && memoryHits.length === 0) {
     return (
       <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-        This review matched nothing in your datapack, so every comment above is the model on its own.
+        This review matched nothing in your datapack, so every comment above is the model on its
+        own.
       </p>
     );
   }

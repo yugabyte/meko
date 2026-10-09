@@ -1,7 +1,4 @@
-import {
-  CloudWatchClient,
-  GetMetricStatisticsCommand,
-} from "@aws-sdk/client-cloudwatch";
+import { CloudWatchClient, GetMetricStatisticsCommand } from "@aws-sdk/client-cloudwatch";
 import { format, subDays, startOfDay } from "date-fns";
 
 const client = new CloudWatchClient({

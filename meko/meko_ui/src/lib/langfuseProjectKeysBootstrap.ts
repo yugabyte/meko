@@ -39,14 +39,19 @@ export function clearLangfuseProjectKeysCache(): void {
 
 /** Same naming rule as legacy Datapacks: default / tech-preview packs get Langfuse JIT keys. */
 export function isTechPreviewDefaultDatapackName(name: string): boolean {
-  return name === DEFAULT_ACCOUNT_DATAPACK_NAME || name.startsWith(`${DEFAULT_ACCOUNT_DATAPACK_NAME}_`);
+  return (
+    name === DEFAULT_ACCOUNT_DATAPACK_NAME || name.startsWith(`${DEFAULT_ACCOUNT_DATAPACK_NAME}_`)
+  );
 }
 
 /**
  * Best-effort POST …/langfuse/project-keys for tech-preview default packs, with a
  * per-id sessionStorage TTL so we do not hammer the API. Errors are console-only.
  */
-export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: string, datapackId: string): void {
+export function scheduleEnsureLangfuseProjectKeysForDatapack(
+  datapackName: string,
+  datapackId: string,
+): void {
   if (!datapackName.trim() || !isTechPreviewDefaultDatapackName(datapackName)) {
     return;
   }

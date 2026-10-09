@@ -47,7 +47,12 @@ test("rejects tags separated by a space", () => {
 });
 
 test("requires one space and a title after the tags", () => {
-  for (const title of ["[AMP-55]", "[AMP-55] ", "[AMP-55]compute: x", "[AMP-55]  compute: two spaces"]) {
+  for (const title of [
+    "[AMP-55]",
+    "[AMP-55] ",
+    "[AMP-55]compute: x",
+    "[AMP-55]  compute: two spaces",
+  ]) {
     const r = parseTitle(title);
     assert.equal(r.ok, false, title);
     assert.match(r.reason, /one space and the title/, title);
@@ -71,8 +76,10 @@ test("names a bracket that is not a tag, after valid tags too", () => {
 
 function fakeCore() {
   const core = { failed: null, infos: [] };
-  core.info = m => core.infos.push(m);
-  core.setFailed = m => { core.failed = m; };
+  core.info = (m) => core.infos.push(m);
+  core.setFailed = (m) => {
+    core.failed = m;
+  };
   return core;
 }
 

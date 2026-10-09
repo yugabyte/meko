@@ -16,10 +16,7 @@ import {
   PROJECT_FILTER_UNFILED,
   filterDatapacksByProject,
 } from "@/features/projects/lib/filterDatapacksByProject";
-import {
-  OWNED,
-  SHARED,
-} from "@/features/datapacks/components/datapacks-list/datapackTileLabels";
+import { OWNED, SHARED } from "@/features/datapacks/components/datapacks-list/datapackTileLabels";
 import { DatapackTile } from "@/features/datapacks/components/datapacks-list/DatapackTile";
 import { CreateTile } from "@/components/ui/create-tile";
 
@@ -84,9 +81,7 @@ export default function DatapacksTilesSection({
   // ownership keeps the scope counts consistent with what the grid shows.
   const scoped = useMemo(
     () =>
-      showProjects
-        ? filterDatapacksByProject(datapacks, datapackPaths, projectFilter)
-        : datapacks,
+      showProjects ? filterDatapacksByProject(datapacks, datapackPaths, projectFilter) : datapacks,
     [showProjects, datapacks, datapackPaths, projectFilter],
   );
 

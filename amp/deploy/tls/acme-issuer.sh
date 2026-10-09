@@ -66,16 +66,19 @@ GCP_PROJECT="${GCP_PROJECT:-}"
 SECRET_NAME="${SECRET_NAME:-amp-endpoints-wildcard-tls}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+die() {
+  printf '\033[1;31merror: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 command -v kubectl >/dev/null 2>&1 || die "kubectl not found on PATH"
-kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1 \
-  || die "cert-manager is not installed; run deploy/tls/trust-root.sh first"
+kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1 ||
+  die "cert-manager is not installed; run deploy/tls/trust-root.sh first"
 
 case "${ACME_ENV}" in
-  staging) ACME_SERVER="https://acme-staging-v02.api.letsencrypt.org/directory" ;;
-  prod)    ACME_SERVER="https://acme-v02.api.letsencrypt.org/directory" ;;
-  *)       die "ACME_ENV must be staging or prod, got '${ACME_ENV}'" ;;
+staging) ACME_SERVER="https://acme-staging-v02.api.letsencrypt.org/directory" ;;
+prod) ACME_SERVER="https://acme-v02.api.letsencrypt.org/directory" ;;
+*) die "ACME_ENV must be staging or prod, got '${ACME_ENV}'" ;;
 esac
 ISSUER_NAME="${ISSUER_NAME:-amp-acme-${ACME_ENV}}"
 
@@ -83,22 +86,22 @@ ISSUER_NAME="${ISSUER_NAME:-amp-acme-${ACME_ENV}}"
 # that item's depth. A `- ` list entry under `solvers:` must be indented at least
 # as far as the key, which is why the item starts at six spaces and this at eight.
 case "${DNS_PROVIDER}" in
-  route53)
-    solver="        dns01:
+route53)
+  solver="        dns01:
           route53:
             region: ${AWS_REGION}"
-    [ -n "${AWS_HOSTED_ZONE_ID}" ] && solver="${solver}
+  [ -n "${AWS_HOSTED_ZONE_ID}" ] && solver="${solver}
             hostedZoneID: ${AWS_HOSTED_ZONE_ID}"
-    [ -n "${AWS_ROLE_ARN}" ] && solver="${solver}
+  [ -n "${AWS_ROLE_ARN}" ] && solver="${solver}
             role: ${AWS_ROLE_ARN}"
-    ;;
-  cloud-dns)
-    [ -n "${GCP_PROJECT}" ] || die "DNS_PROVIDER=cloud-dns needs GCP_PROJECT"
-    solver="        dns01:
+  ;;
+cloud-dns)
+  [ -n "${GCP_PROJECT}" ] || die "DNS_PROVIDER=cloud-dns needs GCP_PROJECT"
+  solver="        dns01:
           cloudDNS:
             project: ${GCP_PROJECT}"
-    ;;
-  *) die "DNS_PROVIDER must be route53 or cloud-dns, got '${DNS_PROVIDER}'" ;;
+  ;;
+*) die "DNS_PROVIDER must be route53 or cloud-dns, got '${DNS_PROVIDER}'" ;;
 esac
 
 say "ClusterIssuer ${ISSUER_NAME} (Let's Encrypt ${ACME_ENV}, DNS-01 via ${DNS_PROVIDER})"
@@ -122,8 +125,8 @@ spec:
             - "${ZONE}"
 ${solver}
 YAML
-kubectl wait clusterissuer/"${ISSUER_NAME}" --for=condition=Ready --timeout=120s >/dev/null \
-  || die "the issuer did not register with Let's Encrypt; check its status and cert-manager's log"
+kubectl wait clusterissuer/"${ISSUER_NAME}" --for=condition=Ready --timeout=120s >/dev/null ||
+  die "the issuer did not register with Let's Encrypt; check its status and cert-manager's log"
 
 if [ "${ISSUE_WILDCARD}" != "1" ]; then
   say "done (issuer only)"
@@ -176,8 +179,8 @@ YAML
 # Minutes, not seconds: a DNS-01 order waits for the TXT record to propagate and
 # for Let's Encrypt to see it.
 say "waiting for issuance (DNS-01 propagation; several minutes is normal)"
-kubectl -n "${NS}" wait certificate/amp-endpoints-wildcard --for=condition=Ready --timeout=900s \
-  || die "issuance did not complete; kubectl -n ${NS} describe certificate amp-endpoints-wildcard"
+kubectl -n "${NS}" wait certificate/amp-endpoints-wildcard --for=condition=Ready --timeout=900s ||
+  die "issuance did not complete; kubectl -n ${NS} describe certificate amp-endpoints-wildcard"
 
 say "done"
 cat <<EOF

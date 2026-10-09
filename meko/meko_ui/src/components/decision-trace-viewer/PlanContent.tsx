@@ -14,12 +14,7 @@
 import { Brain, Cpu, Hash, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "@/components/markdown-message";
-import {
-  ACCENT_BADGE,
-  ACCENT_BORDER,
-  ACCENT_TEXT,
-  type AccentKey,
-} from "./PhaseAccordion";
+import { ACCENT_BADGE, ACCENT_BORDER, ACCENT_TEXT, type AccentKey } from "./PhaseAccordion";
 
 export function PlanContent({
   reasoning,
@@ -48,11 +43,13 @@ export function PlanContent({
           emptyHint="No reasoning captured for this turn"
           hasContent={hasReasoning}
         >
-          <div className={cn(
-            "rounded-md border px-3 py-2 text-[12px] italic leading-relaxed whitespace-pre-wrap",
-            ACCENT_BORDER[accent],
-            "bg-background/40 text-foreground/90",
-          )}>
+          <div
+            className={cn(
+              "rounded-md border px-3 py-2 text-[12px] italic leading-relaxed whitespace-pre-wrap",
+              ACCENT_BORDER[accent],
+              "bg-background/40 text-foreground/90",
+            )}
+          >
             <MarkdownMessage text={reasoning} />
           </div>
         </PlanPane>
@@ -67,11 +64,13 @@ export function PlanContent({
           emptyHint="No plan recorded for this turn"
           hasContent={hasPlan}
         >
-          <ol className={cn(
-            "rounded-md border px-3 py-2 space-y-1.5",
-            ACCENT_BORDER[accent],
-            "bg-background/40",
-          )}>
+          <ol
+            className={cn(
+              "rounded-md border px-3 py-2 space-y-1.5",
+              ACCENT_BORDER[accent],
+              "bg-background/40",
+            )}
+          >
             {plan.map((step, i) => (
               <li
                 key={`${i}-${step.slice(0, 16)}`}
@@ -101,12 +100,8 @@ export function PlanContent({
           )}
         >
           <Cpu className="h-3 w-3 text-purple-600 dark:text-purple-300" aria-hidden />
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Model
-          </span>
-          <span className="font-mono text-[11px] text-foreground/90">
-            {model}
-          </span>
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Model</span>
+          <span className="font-mono text-[11px] text-foreground/90">{model}</span>
         </div>
       ) : null}
     </div>
@@ -136,19 +131,25 @@ function PlanPane({
 }) {
   return (
     <div className={cn("rounded-md border", ACCENT_BORDER[accent], "bg-background/20")}>
-      <div className={cn(
-        "flex flex-wrap items-center gap-2 border-b px-2.5 py-1.5",
-        ACCENT_BORDER[accent],
-      )}>
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-2 border-b px-2.5 py-1.5",
+          ACCENT_BORDER[accent],
+        )}
+      >
         {icon}
-        <span className={cn("text-[10.5px] font-medium uppercase tracking-wide", ACCENT_TEXT[accent])}>
+        <span
+          className={cn("text-[10.5px] font-medium uppercase tracking-wide", ACCENT_TEXT[accent])}
+        >
           {label}
         </span>
         {countBadge ? (
-          <span className={cn(
-            "rounded border px-1.5 py-px font-mono text-[9.5px] tabular-nums",
-            ACCENT_BADGE[accent],
-          )}>
+          <span
+            className={cn(
+              "rounded border px-1.5 py-px font-mono text-[9.5px] tabular-nums",
+              ACCENT_BADGE[accent],
+            )}
+          >
             {countBadge}
           </span>
         ) : null}
@@ -163,9 +164,7 @@ function PlanPane({
         {hasContent ? (
           children
         ) : (
-          <div className="px-1 py-1 text-[11px] italic text-muted-foreground">
-            {emptyHint}
-          </div>
+          <div className="px-1 py-1 text-[11px] italic text-muted-foreground">{emptyHint}</div>
         )}
       </div>
     </div>

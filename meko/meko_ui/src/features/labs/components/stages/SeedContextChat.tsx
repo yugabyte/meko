@@ -9,7 +9,11 @@ import { useCallback, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/markdown-message";
-import { getInferenceGatewayErrorMessage, postChat, type ProcessingStep } from "@/lib/inferenceGateway";
+import {
+  getInferenceGatewayErrorMessage,
+  postChat,
+  type ProcessingStep,
+} from "@/lib/inferenceGateway";
 import { ChatInput } from "@/features/workbench-lm/components/workbench-lm-chat/ChatInput";
 import type { Message } from "@/features/workbench-lm/components/workbench-lm-chat/types";
 
@@ -67,7 +71,12 @@ export function SeedContextChat({
         setConversationId(res.conversation_id);
         setMessages((prev) => [
           ...prev,
-          { id: crypto.randomUUID(), role: "assistant", content: res.message, langfuseMessageId: res.message_id },
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: res.message,
+            langfuseMessageId: res.message_id,
+          },
         ]);
         onTurnComplete(res.processing_steps ?? [], res.conversation_id);
       } catch (err) {
@@ -84,8 +93,8 @@ export function SeedContextChat({
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {messages.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Tell Meko about your team's conventions, past incidents, anything worth remembering. Every
-            message here runs through the same memory pipeline the review chat uses.
+            Tell Meko about your team's conventions, past incidents, anything worth remembering.
+            Every message here runs through the same memory pipeline the review chat uses.
           </p>
         )}
         {messages.map((m) => (

@@ -35,7 +35,10 @@ YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
 YB_DBNAME=${YB_DBNAME:-yb_storage}
 
-step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
+step() {
+  echo
+  printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"
+}
 
 step "Stop integration cluster processes (scoped — leaves a developer's .yb_amp cluster alone)"
 # Every kill is anchored to THIS run's repo dir (`$YB_AMP_REPO_DIR`, a
@@ -59,13 +62,13 @@ sleep 2
 # half-dead listener (the duplicate-endpoint check reads it as "running").
 COMPUTE_PORT=${COMPUTE_PORT:-55432}
 for _ in $(seq 1 20); do
-    ss -ltn 2>/dev/null | grep -q ":${COMPUTE_PORT}\b" || break
-    sleep 0.5
+  ss -ltn 2>/dev/null | grep -q ":${COMPUTE_PORT}\b" || break
+  sleep 0.5
 done
 
 step "Drop $YB_DBNAME"
 PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
-    -c "DROP DATABASE IF EXISTS \"$YB_DBNAME\" WITH (FORCE)" >/dev/null
+  -c "DROP DATABASE IF EXISTS \"$YB_DBNAME\" WITH (FORCE)" >/dev/null
 
 # On a failed run the harness sets INTEGRATION_KEEP_LOGS=1: the cluster is stopped
 # and the db dropped above, but this run's *.log files (harness +
@@ -74,16 +77,16 @@ PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
 # sockets, config, ...) is dropped. Otherwise remove the whole run dir so the
 # next init starts fresh.
 if [ "${INTEGRATION_KEEP_LOGS:-}" = 1 ]; then
-    step "Keep *.log and *.walredo under $YB_AMP_REPO_DIR; remove the rest"
-    # `.walredo` dumps are `record_and_log`'s copy of an input walredo could not
-    # apply — the one artifact that says *what* it choked on. Poisoned draws no
-    # longer write them, so whatever survives a failed run is a genuine failure
-    # worth keeping alongside the logs.
-    find "$YB_AMP_REPO_DIR" -type f ! -name '*.log' ! -name '*.walredo' -delete 2>/dev/null || true
-    find "$YB_AMP_REPO_DIR" -depth -type d -empty -delete 2>/dev/null || true
+  step "Keep *.log and *.walredo under $YB_AMP_REPO_DIR; remove the rest"
+  # `.walredo` dumps are `record_and_log`'s copy of an input walredo could not
+  # apply — the one artifact that says *what* it choked on. Poisoned draws no
+  # longer write them, so whatever survives a failed run is a genuine failure
+  # worth keeping alongside the logs.
+  find "$YB_AMP_REPO_DIR" -type f ! -name '*.log' ! -name '*.walredo' -delete 2>/dev/null || true
+  find "$YB_AMP_REPO_DIR" -depth -type d -empty -delete 2>/dev/null || true
 else
-    step "Remove $YB_AMP_REPO_DIR"
-    rm -rf "$YB_AMP_REPO_DIR"
+  step "Remove $YB_AMP_REPO_DIR"
+  rm -rf "$YB_AMP_REPO_DIR"
 fi
 
 echo "clean."

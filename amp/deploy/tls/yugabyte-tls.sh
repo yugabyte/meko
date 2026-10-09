@@ -49,11 +49,14 @@ YB_CERT_ROLLOUT_IMAGE="${YB_CERT_ROLLOUT_IMAGE:-alpine/k8s:1.33.4}"
 YB_CERT_ROLLOUT_SCHEDULE="${YB_CERT_ROLLOUT_SCHEDULE:-17 * * * *}"
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
-die() { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+die() {
+  printf '\033[1;31merror: %s\033[0m\n' "$*" >&2
+  exit 1
+}
 
 say "trust root (cert-manager, trust-manager, ${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
 TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" \
-TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" TLS_TRUST_NAMESPACES="${NS}" \
+  TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" TLS_TRUST_NAMESPACES="${NS}" \
   "${SCRIPT_DIR}/trust-root.sh"
 TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}"
 
@@ -74,11 +77,11 @@ if [ "${TLS_PERMISSIVE}" = "1" ]; then
   TLS_INSECURE=true
 fi
 case "${TLS_ISSUER_KIND}" in
-  ClusterIssuer) YB_ISSUER_YAML="    useClusterIssuer: true
+ClusterIssuer) YB_ISSUER_YAML="    useClusterIssuer: true
     clusterIssuer: ${TLS_ISSUER_NAME}" ;;
-  Issuer)        YB_ISSUER_YAML="    useClusterIssuer: false
+Issuer) YB_ISSUER_YAML="    useClusterIssuer: false
     issuer: ${TLS_ISSUER_NAME}" ;;
-  *)             YB_ISSUER_YAML="    useCustomIssuer: true
+*) YB_ISSUER_YAML="    useCustomIssuer: true
     customIssuer:
       kind: ${TLS_ISSUER_KIND}
       name: ${TLS_ISSUER_NAME}
@@ -136,7 +139,7 @@ ${YB_ISSUER_YAML}
     key: ""
 YAML
 YB_HELM_ARGS=(upgrade --install "${YB_RELEASE}" yugabytedb/yugabyte --version "${YB_CHART_VERSION}"
-              -n "${NS}" -f "${YB_VALUES_FILE}" --wait --timeout 20m)
+  -n "${NS}" -f "${YB_VALUES_FILE}" --wait --timeout 20m)
 [ -n "${YB_CHART_IMAGE_TAG}" ] && YB_HELM_ARGS+=(--set "Image.tag=${YB_CHART_IMAGE_TAG}")
 echo ">> helm ${YB_HELM_ARGS[*]}"
 helm "${YB_HELM_ARGS[@]}"
@@ -300,13 +303,13 @@ REMOTE
 # database from the foundation spec and would otherwise have no role at all.
 _ns="${NS}"
 UNIVERSE_NS="${_ns}" NS="${_ns}" YB_HOST_PORTS="${YB_FQDN}:5433" \
-YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_DATABASE="yb_storage" YB_EXEC_POD="yb-tserver-0" \
+  YB_STORAGE_ROLE="${YB_STORAGE_ROLE}" YB_DATABASE="yb_storage" YB_EXEC_POD="yb-tserver-0" \
   "$(dirname "${BASH_SOURCE[0]}")/yb-storage-role.sh"
 
 echo
 if [ "${TLS_PERMISSIVE}" = "1" ]; then
   echo "YugabyteDB: ${YB_FQDN}:5433 (YSQL, TLS), tserver RPC on 9100 (TLS) — permissive:" \
-       "plaintext is still accepted and client certificates are not required"
+    "plaintext is still accepted and client certificates are not required"
 else
   echo "YugabyteDB: ${YB_FQDN}:5433 (YSQL, TLS), tserver RPC on 9100 (TLS, client certs required)"
 fi

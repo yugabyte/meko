@@ -147,12 +147,7 @@ export function ReviewFindingsStage({
 
       <div className="flex flex-col gap-4">
         {sorted.map((finding, i) => (
-          <GroundedFindingCard
-            key={i}
-            finding={finding}
-            diffFiles={diffFiles}
-            sources={sources}
-          />
+          <GroundedFindingCard key={i} finding={finding} diffFiles={diffFiles} sources={sources} />
         ))}
       </div>
 

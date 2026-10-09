@@ -22,12 +22,7 @@ type Props = {
   lastActivityAt?: string | null;
 };
 
-export function KnowledgeSummaryHeader({
-  datapackName,
-  summary,
-  loading,
-  lastActivityAt,
-}: Props) {
+export function KnowledgeSummaryHeader({ datapackName, summary, loading, lastActivityAt }: Props) {
   // One tick-per-minute timer shared across this subtree so the
   // "Last activity" cell stays current. Cheap.
   const now = useNowMs();
@@ -67,9 +62,8 @@ function TitleRow({ datapackName }: { datapackName: string }) {
         </span>
       </div>
       <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-        Knowledge base for{" "}
-        <span className="font-medium text-foreground/90">{datapackName}</span>. Visible to every
-        agent attached to this datapack.
+        Knowledge base for <span className="font-medium text-foreground/90">{datapackName}</span>.
+        Visible to every agent attached to this datapack.
       </p>
     </div>
   );

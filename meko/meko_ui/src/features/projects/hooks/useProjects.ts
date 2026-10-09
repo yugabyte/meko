@@ -4,10 +4,7 @@
 // sidebar, the list and a detail page never disagree about the same tree.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  DATAPACKS_LIST_UPDATED_EVENT,
-  deleteDatapack,
-} from "@/lib/api/mekoApi";
+import { DATAPACKS_LIST_UPDATED_EVENT, deleteDatapack } from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { DATAPACKS_QUERY_KEY } from "@/features/datapacks/hooks/useDatapacks";
 import {

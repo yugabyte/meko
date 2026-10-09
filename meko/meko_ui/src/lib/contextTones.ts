@@ -7,12 +7,7 @@
 /** The five things Meko stores context as. Ordered as the pipeline reads:
  *  a conversation yields memories, a memory is promoted to a learning, and
  *  a learning the team accepts becomes collective. */
-export type ContextConcept =
-  | "conversation"
-  | "memory"
-  | "learning"
-  | "knowledge"
-  | "collective";
+export type ContextConcept = "conversation" | "memory" | "learning" | "knowledge" | "collective";
 
 /** Tailwind utilities for a concept's marker/fill, soft background and text.
  *  Class names are written out in full rather than interpolated — Tailwind

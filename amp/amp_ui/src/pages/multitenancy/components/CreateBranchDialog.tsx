@@ -78,10 +78,7 @@ export function CreateBranchDialog({
           setForkLsn("");
           onOpenChange(false);
         },
-        onError: (err) =>
-          toast.error(
-            err instanceof Error ? err.message : msg.branchCreateError,
-          ),
+        onError: (err) => toast.error(err instanceof Error ? err.message : msg.branchCreateError),
       },
     );
   }
@@ -131,17 +128,12 @@ export function CreateBranchDialog({
                 onChange={(e) => setForkLsn(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Required when the parent branch has no running endpoint to read
-                its latest LSN from.
+                Required when the parent branch has no running endpoint to read its latest LSN from.
               </p>
             </div>
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button

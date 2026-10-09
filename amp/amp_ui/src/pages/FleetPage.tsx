@@ -16,18 +16,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  ErrorState,
-  LoadingState,
-  PageContainer,
-  PageHeader,
-} from "@/components/data/Page";
-import {
-  useCurrentUser,
-  useFleet,
-  useStoragePools,
-  type FleetRow,
-} from "@/lib/api/queries";
+import { ErrorState, LoadingState, PageContainer, PageHeader } from "@/components/data/Page";
+import { useCurrentUser, useFleet, useStoragePools, type FleetRow } from "@/lib/api/queries";
 import { formatDateTime } from "@/lib/format";
 import { CreateClusterWizard } from "@/components/CreateClusterWizard";
 import { DeleteClusterDialog } from "@/pages/multitenancy/components/DeleteClusterDialog";
@@ -60,10 +50,7 @@ export default function FleetPage() {
   // arrives from a Shared pool tile or clicks a tab). Empty = "All".
   const activePool = searchParams.get("pool") ?? "";
   const rows = useMemo(
-    () =>
-      activePool
-        ? fleet.rows.filter((r) => r.pool.name === activePool)
-        : fleet.rows,
+    () => (activePool ? fleet.rows.filter((r) => r.pool.name === activePool) : fleet.rows),
     [fleet.rows, activePool],
   );
   const selectTab = (name: string) =>
@@ -82,10 +69,9 @@ export default function FleetPage() {
         title="Your cluster fleet"
         description={
           <>
-            {fleet.rows.length} cluster{fleet.rows.length === 1 ? "" : "s"}{" "}
-            across {myPools.length} shared pool
-            {myPools.length === 1 ? "" : "s"} — every cluster provisioned inside
-            your pools.
+            {fleet.rows.length} cluster{fleet.rows.length === 1 ? "" : "s"} across {myPools.length}{" "}
+            shared pool
+            {myPools.length === 1 ? "" : "s"} — every cluster provisioned inside your pools.
           </>
         }
         action={
@@ -172,12 +158,8 @@ export default function FleetPage() {
                             <Database className="h-4 w-4" />
                           </div>
                           <div className="min-w-0 text-center">
-                            <p className="truncate font-medium text-foreground">
-                              {cluster.name}
-                            </p>
-                            <p className="font-mono text-xs text-muted-foreground">
-                              {cluster.id}
-                            </p>
+                            <p className="truncate font-medium text-foreground">{cluster.name}</p>
+                            <p className="font-mono text-xs text-muted-foreground">{cluster.id}</p>
                           </div>
                         </div>
                       </TableCell>
@@ -236,11 +218,7 @@ export default function FleetPage() {
         </>
       )}
 
-      <CreateClusterWizard
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        pools={myPools}
-      />
+      <CreateClusterWizard open={dialogOpen} onOpenChange={setDialogOpen} pools={myPools} />
 
       {/* Mounted per-target so the type-to-confirm input resets each open. The
           delete cascade invalidates the cluster list, so the fleet refetches. */}
@@ -267,4 +245,3 @@ function StatCard({ label, value }: { label: string; value: number }) {
     </div>
   );
 }
-

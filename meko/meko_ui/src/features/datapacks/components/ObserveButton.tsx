@@ -43,12 +43,7 @@ export function ObserveButton({ projectId, sessionId, onClick }: Props) {
             browser tab, not an in-app navigation. Same-origin link so the
             Observe Hub still loads fast from cache.
           */}
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer noopener"
-            onClick={onClick}
-          >
+          <a href={href} target="_blank" rel="noreferrer noopener" onClick={onClick}>
             <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden />
             Observe
           </a>

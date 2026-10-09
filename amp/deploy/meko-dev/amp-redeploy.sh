@@ -9,21 +9,30 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NS="${NS:-amp-dev}"; KCTX="${KCTX:-meko-dev-eks}"
+NS="${NS:-amp-dev}"
+KCTX="${KCTX:-meko-dev-eks}"
 ECR="${ECR:-454529406029.dkr.ecr.us-west-2.amazonaws.com}"
-TAG="${TAG:-}"; AWS_REGION="${AWS_REGION:-us-west-2}"
+TAG="${TAG:-}"
+AWS_REGION="${AWS_REGION:-us-west-2}"
 # chart ships in this repo, one level up from deploy/meko-dev/
 CHART="${CHART:-$HERE/../helm/yb-amp-controller}"
 REL="${REL:-yb-amp-controller}"
 # external YB universe (auth disabled: passwordless yugabyte)
 YB_HOSTPORTS="${YB_HOSTPORTS:-ybamp2-db-dfac-yb-tservers.yb-dev-amp2-db.svc.cluster.local:5433}"
-YB_NS="${YB_NS:-yb-dev-amp2-db}"; YB_DB="${YB_DB:-yb_storage}"
+YB_NS="${YB_NS:-yb-dev-amp2-db}"
+YB_DB="${YB_DB:-yb_storage}"
 CONFIRM="${CONFIRM:-no}"
 K="kubectl --context $KCTX -n $NS"
-log(){ printf '\033[1m[redeploy]\033[0m %s\n' "$*"; }
-guard(){ [ "$CONFIRM" = yes ] || { log "SKIP (set CONFIRM=yes): $*"; return 1; }; }
+log() { printf '\033[1m[redeploy]\033[0m %s\n' "$*"; }
+guard() { [ "$CONFIRM" = yes ] || {
+  log "SKIP (set CONFIRM=yes): $*"
+  return 1
+}; }
 
-[ -n "$TAG" ] || { log "ERROR: set TAG=<image tag> (applied to controller/endpoint/mcp/ui)"; exit 2; }
+[ -n "$TAG" ] || {
+  log "ERROR: set TAG=<image tag> (applied to controller/endpoint/mcp/ui)"
+  exit 2
+}
 
 # 1. Re-mint ECR pull secret (token ~12h)
 log "1. re-mint pull secret"
@@ -49,7 +58,7 @@ fi
 # 4. helm upgrade the control plane -> TAG + universe, preserving all other values
 log "4. helm upgrade control plane -> $TAG @ $YB_HOSTPORTS"
 if guard "helm upgrade"; then
-  helm --kube-context "$KCTX" -n "$NS" get values "$REL" -o yaml > /tmp/amp-vals.yaml
+  helm --kube-context "$KCTX" -n "$NS" get values "$REL" -o yaml >/tmp/amp-vals.yaml
   python3 - "$TAG" "$YB_HOSTPORTS" "$YB_DB" <<'PY'
 import re,sys
 tag,hp,db=sys.argv[1],sys.argv[2],sys.argv[3]
@@ -92,7 +101,8 @@ fi
 # 7. verify tailnet URLs + OTel CRs preserved
 log "7. verify preserved: tailnet hostnames + OTel CRs"
 for s in amp-controller amp-controller-mcp amp-controller-ui; do
-  echo -n "   $s -> "; $K get svc "$s" -o jsonpath='{.metadata.annotations.tailscale\.com/hostname}{"\n"}' 2>/dev/null
+  echo -n "   $s -> "
+  $K get svc "$s" -o jsonpath='{.metadata.annotations.tailscale\.com/hostname}{"\n"}' 2>/dev/null
 done
 $K get opentelemetrycollectors 2>/dev/null
 

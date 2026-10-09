@@ -1,11 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import {
-  render,
-  screen,
-  cleanup,
-  fireEvent,
-  waitFor as waitForRTL,
-} from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor as waitForRTL } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { StoragePool } from "@/lib/api/types";
@@ -34,9 +28,7 @@ vi.mock("@/lib/api/resources", async (importActual) => {
   };
 });
 
-const { default: SharedPoolsPage, PoolCard, RenamePoolDialog } = await import(
-  "./SharedPoolsPage"
-);
+const { default: SharedPoolsPage, PoolCard, RenamePoolDialog } = await import("./SharedPoolsPage");
 
 afterEach(() => {
   cleanup();
@@ -73,9 +65,7 @@ describe("SharedPoolsPage cluster counts", () => {
   it("enables delete for a pool the fleet reports no clusters for", async () => {
     listClusters.mockResolvedValue({ clusters: [], total: 0, count: 0 });
     const item = await openPageMenu();
-    await waitFor(() =>
-      expect(item.getAttribute("aria-disabled")).not.toBe("true"),
-    );
+    await waitFor(() => expect(item.getAttribute("aria-disabled")).not.toBe("true"));
     expect(screen.getByText("0")).toBeTruthy();
   });
 
@@ -110,13 +100,12 @@ describe("PoolCard", () => {
         onDelete={vi.fn()}
       />,
     );
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: /actions for payments-bu/i }),
-      { key: "Enter" },
+    fireEvent.keyDown(screen.getByRole("button", { name: /actions for payments-bu/i }), {
+      key: "Enter",
+    });
+    expect(screen.getByRole("menuitem", { name: /delete/i }).getAttribute("aria-disabled")).toBe(
+      "true",
     );
-    expect(
-      screen.getByRole("menuitem", { name: /delete/i }).getAttribute("aria-disabled"),
-    ).toBe("true");
   });
 });
 

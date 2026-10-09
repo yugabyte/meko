@@ -35,7 +35,14 @@ export function TierSplitChart({ free, pro, isLoading }: Props) {
         ) : (
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
-              <Pie data={data} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                innerRadius={50}
+                outerRadius={80}
+                paddingAngle={2}
+              >
                 {data.map((_, i) => (
                   <Cell key={i} fill={COLORS[i]} />
                 ))}

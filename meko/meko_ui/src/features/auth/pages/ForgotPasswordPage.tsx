@@ -16,8 +16,7 @@ import {
   PasswordPolicyPanel,
 } from "@/features/auth/components/PasswordPolicyPanel";
 
-const passwordMismatchMessage =
-  "New password and confirmation do not match.";
+const passwordMismatchMessage = "New password and confirmation do not match.";
 
 /** Matches HTML5-style email; server still validates. */
 function isValidEmailFormat(value: string): boolean {
@@ -26,10 +25,7 @@ function isValidEmailFormat(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 }
 
-function validateNewPasswords(
-  newPassword: string,
-  confirm: string,
-): string | null {
+function validateNewPasswords(newPassword: string, confirm: string): string | null {
   const policyError = getPasswordPolicyError(newPassword);
   if (policyError) return policyError;
   if (newPassword !== confirm) {
@@ -107,9 +103,7 @@ export default function ForgotPasswordPage() {
   };
 
   const confirmPasswordMismatch =
-    confirmPasswordTouched &&
-    confirmPassword.length > 0 &&
-    newPassword !== confirmPassword;
+    confirmPasswordTouched && confirmPassword.length > 0 && newPassword !== confirmPassword;
 
   return (
     <AuthPageShell>
@@ -176,7 +170,10 @@ export default function ForgotPasswordPage() {
         </div>
 
         {showActivationSection && codeSent ? (
-          <form className="mt-6 space-y-4 border-t border-border pt-6" onSubmit={handleUpdatePassword}>
+          <form
+            className="mt-6 space-y-4 border-t border-border pt-6"
+            onSubmit={handleUpdatePassword}
+          >
             <p className="text-sm text-muted-foreground">
               Enter the code from your email, then choose a new password.
             </p>
@@ -236,14 +233,8 @@ export default function ForgotPasswordPage() {
                 aria-invalid={confirmPasswordMismatch}
                 className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
-              <PasswordPolicyPanel
-                id="reset-password-policy"
-                password={newPassword}
-              />
-              <p
-                id="reset-confirm-password-help"
-                className="text-xs text-muted-foreground"
-              >
+              <PasswordPolicyPanel id="reset-password-policy" password={newPassword} />
+              <p id="reset-confirm-password-help" className="text-xs text-muted-foreground">
                 Re-enter your new password. It must match exactly.
               </p>
               {confirmPasswordMismatch ? (

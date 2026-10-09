@@ -10,13 +10,15 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { WarningBanner } from "@/components/ui/warning-banner";
 import {
-  createDatapack,
-  getApiErrorMessage,
-  getDatapackProvisionStatus,
-} from "@/lib/api/mekoApi";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { WarningBanner } from "@/components/ui/warning-banner";
+import { createDatapack, getApiErrorMessage, getDatapackProvisionStatus } from "@/lib/api/mekoApi";
 import { addMemory, getInferenceGatewayErrorMessage } from "@/lib/inferenceGateway";
 
 import type { useLabRunnerSession } from "../../hooks/useLabRunnerSession";
@@ -92,7 +94,8 @@ export function SaveFindingsStage({
       // Its own MCP key: the lab datapack's token doesn't grant access here.
       const provision = await getDatapackProvisionStatus(targetId);
       const token = provision.mcp_api_key;
-      if (!token) throw new Error("That datapack isn't ready to write to yet. Try again in a moment.");
+      if (!token)
+        throw new Error("That datapack isn't ready to write to yet. Try again in a moment.");
 
       for (const finding of findings) {
         await addMemory({ text: findingLine(finding), user_token: token, datapack_id: targetId });
@@ -108,7 +111,12 @@ export function SaveFindingsStage({
             durationMs: 0,
             status: destination === "existing" || nameAlreadyExists ? "skipped" : "ok",
           },
-          { name: "memory_add", durationMs: 0, status: "ok", detail: `${findings.length} findings` },
+          {
+            name: "memory_add",
+            durationMs: 0,
+            status: "ok",
+            detail: `${findings.length} findings`,
+          },
         ],
       });
     } catch (err) {
@@ -132,7 +140,8 @@ export function SaveFindingsStage({
 
       {findings.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          The review didn't return structured findings, so there's nothing to write here. Continue when you're ready.
+          The review didn't return structured findings, so there's nothing to write here. Continue
+          when you're ready.
         </p>
       ) : (
         <>
@@ -187,10 +196,14 @@ export function SaveFindingsStage({
 
           <div className="rounded-lg border border-border bg-card p-4 font-mono text-xs">
             <div className="text-foreground">
-              {destination === "new" ? trimmedName || SUGGESTED_NAME : (session.accessibleDatapacks.find((dp) => dp.datapack_id === existingId)?.datapack_name ?? "…")}
+              {destination === "new"
+                ? trimmedName || SUGGESTED_NAME
+                : (session.accessibleDatapacks.find((dp) => dp.datapack_id === existingId)
+                    ?.datapack_name ?? "…")}
             </div>
             <div className="mt-1 pl-4 text-muted-foreground">
-              └─ review findings · {writtenTo ? `${findings.length} written by agentk` : `${findings.length} to write`}
+              └─ review findings ·{" "}
+              {writtenTo ? `${findings.length} written by agentk` : `${findings.length} to write`}
             </div>
           </div>
         </>

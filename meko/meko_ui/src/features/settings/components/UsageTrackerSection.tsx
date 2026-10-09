@@ -153,7 +153,11 @@ export function UsageTrackerSection() {
   // affecting the other gate-check callers (WorkbenchLM chat, KB
   // upload, Add datapack) that read from cache to stay snappy.
   const enabled = FREE_TIER_QUOTA_ENABLED && limits != null;
-  const { data: usage, isLoading, error } = useAccountUsage({
+  const {
+    data: usage,
+    isLoading,
+    error,
+  } = useAccountUsage({
     enabled,
     refetchOnMount: "always",
   });
@@ -228,11 +232,7 @@ function UsageRow({
     : nearLimit
       ? "text-amber-600 dark:text-amber-400"
       : "text-muted-foreground";
-  const barFill = overLimit
-    ? "bg-red-500"
-    : nearLimit
-      ? "bg-amber-500"
-      : "bg-brand";
+  const barFill = overLimit ? "bg-red-500" : nearLimit ? "bg-amber-500" : "bg-brand";
 
   return (
     <li>

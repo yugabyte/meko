@@ -36,10 +36,17 @@ usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"
 
 for arg in "$@"; do
   case "$arg" in
-    --no-push) PUSH=0 ;;
-    --no-latest) LATEST=0 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+  --no-push) PUSH=0 ;;
+  --no-latest) LATEST=0 ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $arg" >&2
+    usage >&2
+    exit 2
+    ;;
   esac
 done
 
@@ -59,9 +66,11 @@ if [ "$PUSH" = "1" ]; then
     exit 1
   fi
   if [ -n "${QUAY_USER:-}" ]; then
-    quay_user="$QUAY_USER"; quay_pass="$token"
+    quay_user="$QUAY_USER"
+    quay_pass="$token"
   elif printf '%s' "$token" | grep -q ':'; then
-    quay_user="${token%%:*}"; quay_pass="${token#*:}"
+    quay_user="${token%%:*}"
+    quay_pass="${token#*:}"
   else
     echo "QUAY_TOKEN has no username: set QUAY_USER, or give QUAY_TOKEN as user:token" >&2
     exit 1

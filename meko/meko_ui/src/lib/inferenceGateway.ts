@@ -266,10 +266,7 @@ export async function addMemory(body: MemoryAddRequest): Promise<MemoryAddRespon
  * gateway. FastAPI surfaces structured errors via `{ detail: "..." }` (raised
  * with `HTTPException`); fall back to status / network messages otherwise.
  */
-export function getInferenceGatewayErrorMessage(
-  err: unknown,
-  fallback = "Chat failed.",
-): string {
+export function getInferenceGatewayErrorMessage(err: unknown, fallback = "Chat failed."): string {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail;
     if (typeof detail === "string" && detail.trim()) {

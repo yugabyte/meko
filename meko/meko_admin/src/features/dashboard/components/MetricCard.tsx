@@ -33,9 +33,7 @@ export function MetricCard({
   return (
     <Card className={cn("", className)}>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {title}
-        </CardTitle>
+        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
         <Icon className={cn("h-4 w-4", accentClassName ?? "text-muted-foreground")} />
       </CardHeader>
       <CardContent>
@@ -46,9 +44,7 @@ export function MetricCard({
             {value !== undefined ? formatNumber(value) : "—"}
           </p>
         )}
-        {description && (
-          <p className="text-xs text-muted-foreground mt-1">{description}</p>
-        )}
+        {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
       </CardContent>
     </Card>
   );

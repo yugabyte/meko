@@ -7,13 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /** Generic compact value tag. */
-export function ValueTag({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function ValueTag({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <Badge variant="outline" className={cn("font-mono text-[10px]", className)}>
       {children}

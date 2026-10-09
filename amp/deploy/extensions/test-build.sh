@@ -33,14 +33,29 @@ do_docker=false
 name="pgvector"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --docker) do_docker=true; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
-    -*) echo "unknown flag: $1" >&2; exit 2 ;;
-    *) name="$1"; shift ;;
+  --docker)
+    do_docker=true
+    shift
+    ;;
+  -h | --help)
+    sed -n '2,24p' "$0"
+    exit 0
+    ;;
+  -*)
+    echo "unknown flag: $1" >&2
+    exit 2
+    ;;
+  *)
+    name="$1"
+    shift
+    ;;
   esac
 done
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
 
 echo ">> static: bash -n"
 bash -n "$here/build.sh"
@@ -197,7 +212,8 @@ command -v docker >/dev/null 2>&1 || fail "--docker requires docker on PATH"
 # Read the version + control basename for NAME (the control need not equal the
 # package name — pgvector ships "vector"), so we know the image tag and the
 # files to expect.
-read -r tag control library < <(python3 - "$manifest" "$name" <<'PY'
+read -r tag control library < <(
+  python3 - "$manifest" "$name" <<'PY'
 import sys, yaml
 with open(sys.argv[1]) as f:
     m = yaml.safe_load(f)
@@ -236,7 +252,7 @@ tree="$(docker export "$cid" | tar -tf -)"
 # libraries that field names instead, or this fails on a correctly built image.
 want=("share/postgresql/extension/${control}.control")
 if [ -n "$library" ]; then
-  IFS=',' read -ra libs <<< "$library"
+  IFS=',' read -ra libs <<<"$library"
   for l in "${libs[@]}"; do want+=("lib/postgresql/${l}.so"); done
 else
   want+=("lib/postgresql/${control}.so")

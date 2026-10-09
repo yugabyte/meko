@@ -94,8 +94,8 @@ export default function BillingPage() {
             <div className="min-w-0">
               <h1 className="text-base font-medium text-foreground">Plans &amp; billing</h1>
               <p className="text-xs text-muted-foreground">
-                Your workspace plan, current usage, and invoices. Upgrades take effect
-                immediately and are prorated.
+                Your workspace plan, current usage, and invoices. Upgrades take effect immediately
+                and are prorated.
               </p>
             </div>
           </div>

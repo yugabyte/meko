@@ -41,7 +41,6 @@ type Props = {
 // useParams() read here returns {} because no parent route names
 // the segment.
 export default function DatapackArtifactsPage({ datapackId }: Props) {
-
   // Datapack metadata (name) — same lightweight fetch other detail
   // pages use so the breadcrumb has a display name.
   const [datapack, setDatapack] = useState<Datapack | null>(null);
@@ -130,9 +129,7 @@ export default function DatapackArtifactsPage({ datapackId }: Props) {
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            ...(displayName
-              ? [{ label: displayName, href: datapackDetailPath(datapackId) }]
-              : []),
+            ...(displayName ? [{ label: displayName, href: datapackDetailPath(datapackId) }] : []),
             { label: "Artifacts" },
           ]}
         />
@@ -233,7 +230,12 @@ export default function DatapackArtifactsPage({ datapackId }: Props) {
               </div>
               <ul className="divide-y divide-border">
                 {items.map((a) => (
-                  <ArtifactRow key={a.artifact_id} artifact={a} datapackId={datapackId} nowMs={nowMs} />
+                  <ArtifactRow
+                    key={a.artifact_id}
+                    artifact={a}
+                    datapackId={datapackId}
+                    nowMs={nowMs}
+                  />
                 ))}
               </ul>
             </>
@@ -270,4 +272,3 @@ export default function DatapackArtifactsPage({ datapackId }: Props) {
     </div>
   );
 }
-

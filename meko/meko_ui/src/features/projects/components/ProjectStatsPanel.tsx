@@ -110,7 +110,7 @@ function fileTypeHint(byType: Record<string, number>): string | undefined {
 
 /** `text/markdown` reads as `markdown` in a hint that has room for one word. */
 function shortType(mime: string): string {
-  const tail = mime.includes("/") ? mime.split("/").pop() ?? mime : mime;
+  const tail = mime.includes("/") ? (mime.split("/").pop() ?? mime) : mime;
   return tail.replace(/^x-/, "");
 }
 

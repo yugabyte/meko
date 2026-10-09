@@ -58,28 +58,28 @@ SKIP_DIR="${2:-${YB_AMP_REPO_DIR:-}}"
 # `.run.lock` for runs started by an older run.sh; a run with neither is
 # legacy/dead.
 run_is_dead() {
-    local lock="$1.lock"
-    [ -e "$lock" ] || lock="$1/.run.lock"
-    [ -e "$lock" ] || return 0           # no lock -> legacy/dead
-    flock -n "$lock" -c true 2>/dev/null  # 0 = acquired -> dead; 1 = held -> alive
+  local lock="$1.lock"
+  [ -e "$lock" ] || lock="$1/.run.lock"
+  [ -e "$lock" ] || return 0           # no lock -> legacy/dead
+  flock -n "$lock" -c true 2>/dev/null # 0 = acquired -> dead; 1 = held -> alive
 }
 
 shopt -s nullglob
 reaped=0
 for dir in "$TEST_DIR"/run_*; do
-    [ -d "$dir" ] || continue
-    [ "$dir" = "$SKIP_DIR" ] && continue
+  [ -d "$dir" ] || continue
+  [ "$dir" = "$SKIP_DIR" ] && continue
 
-    run_is_dead "$dir" || continue        # live run -> leave it alone
+  run_is_dead "$dir" || continue # live run -> leave it alone
 
-    # Dead run. Kill anything still anchored to its dir (compute postgres
-    # that outlived `endpoint stop`, or a whole SIGKILL'd stack). Scoped to
-    # this dir's argv, so nothing outside this run is touched.
-    if pgrep -f -- "$dir" >/dev/null 2>&1; then
-        echo "reap.sh: reaping orphan processes from dead run $(basename "$dir")" >&2
-        pkill -9 -f -- "$dir" 2>/dev/null || true
-        reaped=$((reaped + 1))
-    fi
+  # Dead run. Kill anything still anchored to its dir (compute postgres
+  # that outlived `endpoint stop`, or a whole SIGKILL'd stack). Scoped to
+  # this dir's argv, so nothing outside this run is touched.
+  if pgrep -f -- "$dir" >/dev/null 2>&1; then
+    echo "reap.sh: reaping orphan processes from dead run $(basename "$dir")" >&2
+    pkill -9 -f -- "$dir" 2>/dev/null || true
+    reaped=$((reaped + 1))
+  fi
 done
 
 [ "$reaped" -gt 0 ] && echo "reap.sh: reaped $reaped dead run(s)" >&2
@@ -89,9 +89,9 @@ done
 # with a missing dir is a LIVE run inside its setup clean-and-recreate
 # window — leave it alone.
 for lock in "$TEST_DIR"/run_*.lock; do
-    dir="${lock%.lock}"
-    [ -d "$dir" ] && continue
-    flock -n "$lock" -c true 2>/dev/null && rm -f "$lock"
+  dir="${lock%.lock}"
+  [ -d "$dir" ] && continue
+  flock -n "$lock" -c true 2>/dev/null && rm -f "$lock"
 done
 
 # Drop ephemeral YB databases left by dead runs. Each run's DB is
@@ -111,44 +111,44 @@ done
 #     drops a DB out from under it (the bug that caused "terminating
 #     connection due to administrator command" mid-run).
 # Best-effort: silently skip if psql or YB is unreachable.
-CROSS_REAP_GRACE_SECS=$(( 2 * 24 * 60 * 60 ))   # 2 days
+CROSS_REAP_GRACE_SECS=$((2 * 24 * 60 * 60)) # 2 days
 YB_HOST="${YB_HOST:-127.0.0.1}"
 YB_PORT="${YB_PORT:-5433}"
 SKIP_DB="${YB_DBNAME:-}"
 yb() { PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -tAc "$1" 2>/dev/null; }
 if command -v psql >/dev/null 2>&1; then
-    now=$(date +%s)
-    dropped=0
-    for db in $(yb "SELECT datname FROM pg_database WHERE datname LIKE 'yb_storage_integration_%'"); do
-        [ "$db" = "$SKIP_DB" ] && continue
-        id="${db#yb_storage_integration_}"          # <epoch>_<pid>
-        dir="$TEST_DIR/run_${id}"
-        if [ -d "$dir" ]; then
-            # Our own run: reap as soon as it is dead.
-            run_is_dead "$dir" || continue  # live run -> keep its DB
-        else
-            # Foreign / dir-GC'd run: reap only by create date, past the
-            # cross-worktree grace period.
-            created="${id%%_*}"
-            case "$created" in
-                ''|*[!0-9]*) continue ;;    # unparseable epoch -> leave it
-            esac
-            [ $(( now - created )) -ge "$CROSS_REAP_GRACE_SECS" ] || continue
-        fi
-        # Kill any orphan process still bound to this dead run's DB before we
-        # drop it. The dir-based pass above misses the controller
-        # (no run-dir in its argv) and every process of a dir-GC'd run; the
-        # run-unique DB name catches them. Gated by the same dead-run rules as
-        # the DROP, and the DB name embeds <epoch>_<pid>, so it can't
-        # false-match an unrelated process or a live run's controller.
-        if pgrep -f -- "$db" >/dev/null 2>&1; then
-            echo "reap.sh: killing orphan process(es) bound to dead-run DB $db" >&2
-            pkill -9 -f -- "$db" 2>/dev/null || true
-        fi
-        echo "reap.sh: dropping ephemeral DB of dead run: $db" >&2
-        yb "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" >/dev/null
-        dropped=$((dropped + 1))
-    done
-    [ "$dropped" -gt 0 ] && echo "reap.sh: dropped $dropped dead-run DB(s)" >&2
+  now=$(date +%s)
+  dropped=0
+  for db in $(yb "SELECT datname FROM pg_database WHERE datname LIKE 'yb_storage_integration_%'"); do
+    [ "$db" = "$SKIP_DB" ] && continue
+    id="${db#yb_storage_integration_}" # <epoch>_<pid>
+    dir="$TEST_DIR/run_${id}"
+    if [ -d "$dir" ]; then
+      # Our own run: reap as soon as it is dead.
+      run_is_dead "$dir" || continue # live run -> keep its DB
+    else
+      # Foreign / dir-GC'd run: reap only by create date, past the
+      # cross-worktree grace period.
+      created="${id%%_*}"
+      case "$created" in
+      '' | *[!0-9]*) continue ;; # unparseable epoch -> leave it
+      esac
+      [ $((now - created)) -ge "$CROSS_REAP_GRACE_SECS" ] || continue
+    fi
+    # Kill any orphan process still bound to this dead run's DB before we
+    # drop it. The dir-based pass above misses the controller
+    # (no run-dir in its argv) and every process of a dir-GC'd run; the
+    # run-unique DB name catches them. Gated by the same dead-run rules as
+    # the DROP, and the DB name embeds <epoch>_<pid>, so it can't
+    # false-match an unrelated process or a live run's controller.
+    if pgrep -f -- "$db" >/dev/null 2>&1; then
+      echo "reap.sh: killing orphan process(es) bound to dead-run DB $db" >&2
+      pkill -9 -f -- "$db" 2>/dev/null || true
+    fi
+    echo "reap.sh: dropping ephemeral DB of dead run: $db" >&2
+    yb "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" >/dev/null
+    dropped=$((dropped + 1))
+  done
+  [ "$dropped" -gt 0 ] && echo "reap.sh: dropped $dropped dead-run DB(s)" >&2
 fi
 exit 0

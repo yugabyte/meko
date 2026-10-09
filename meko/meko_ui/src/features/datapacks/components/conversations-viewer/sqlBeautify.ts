@@ -16,18 +16,36 @@ export function dedent(text: string): string {
   const lines = text.replace(/\t/g, "  ").split("\n");
   const indents = lines
     .filter((l) => l.trim().length > 0)
-    .map((l) => (l.match(/^ */)?.[0].length ?? 0));
+    .map((l) => l.match(/^ */)?.[0].length ?? 0);
   const min = indents.length ? Math.min(...indents) : 0;
-  return lines.map((l) => l.slice(min)).join("\n").trim();
+  return lines
+    .map((l) => l.slice(min))
+    .join("\n")
+    .trim();
 }
 
 // Top-level SQL clauses that start a new line. Multi-word entries are
 // matched with flexible whitespace. Ordered so longer phrases win.
 const SQL_CLAUSES = [
-  "WITH", "SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY", "HAVING",
-  "LIMIT", "OFFSET", "INSERT INTO", "VALUES", "UPDATE", "SET",
-  "DELETE FROM", "RETURNING", "ON CONFLICT DO UPDATE", "ON CONFLICT",
-  "UNION ALL", "UNION",
+  "WITH",
+  "SELECT",
+  "FROM",
+  "WHERE",
+  "GROUP BY",
+  "ORDER BY",
+  "HAVING",
+  "LIMIT",
+  "OFFSET",
+  "INSERT INTO",
+  "VALUES",
+  "UPDATE",
+  "SET",
+  "DELETE FROM",
+  "RETURNING",
+  "ON CONFLICT DO UPDATE",
+  "ON CONFLICT",
+  "UNION ALL",
+  "UNION",
 ];
 
 /**

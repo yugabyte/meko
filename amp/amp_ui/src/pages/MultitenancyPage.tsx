@@ -16,18 +16,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  ErrorState,
-  LoadingState,
-  PageContainer,
-  PageHeader,
-} from "@/components/data/Page";
-import {
-  useBranches,
-  useCurrentUser,
-  useClusters,
-  useStoragePools,
-} from "@/lib/api/queries";
+import { ErrorState, LoadingState, PageContainer, PageHeader } from "@/components/data/Page";
+import { useBranches, useCurrentUser, useClusters, useStoragePools } from "@/lib/api/queries";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { BranchTree } from "./multitenancy/components/BranchTree";
 import { CreateBranchDialog } from "./multitenancy/components/CreateBranchDialog";
@@ -168,7 +158,9 @@ export default function MultitenancyPage() {
                 { k: "Branches", v: String(branches.data.length) },
               ].map(({ k, v, mono }) => (
                 <div key={k} className="bg-card p-3">
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{k}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {k}
+                  </div>
                   {/* A uuid is 36 chars: sized to fit the tile on one line at
                       the 4-column breakpoint, and wrapping rather than
                       truncating below it. */}
@@ -196,11 +188,7 @@ export default function MultitenancyPage() {
             ) : branches.isLoading ? (
               <LoadingState label="Loading branches…" />
             ) : (
-              <BranchTree
-                poolId={poolId}
-                clusterId={clusterId}
-                branches={branches.data ?? []}
-              />
+              <BranchTree poolId={poolId} clusterId={clusterId} branches={branches.data ?? []} />
             )}
           </div>
         </>

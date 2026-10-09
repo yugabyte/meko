@@ -56,7 +56,11 @@ export function KbDocsByTypeChart({ data, isLoading }: Props) {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(200, rows.length * 40)}>
-            <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 40, left: 0, bottom: 0 }}>
+            <BarChart
+              data={rows}
+              layout="vertical"
+              margin={{ top: 4, right: 40, left: 0, bottom: 0 }}
+            >
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
               <XAxis
                 type="number"

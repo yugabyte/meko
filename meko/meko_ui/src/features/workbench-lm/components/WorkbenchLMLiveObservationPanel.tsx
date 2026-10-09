@@ -138,10 +138,7 @@ export function WorkbenchLMLiveObservationPanel({
 
   // Effective tick passed to each section: either source bumps will
   // trigger their refetch effects.
-  const effectiveTick = useMemo(
-    () => refreshTick + autoTick,
-    [refreshTick, autoTick],
-  );
+  const effectiveTick = useMemo(() => refreshTick + autoTick, [refreshTick, autoTick]);
 
   return (
     <aside
@@ -197,7 +194,7 @@ export function WorkbenchLMLiveObservationPanel({
       {layout === "columns" ? (
         <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-border/50 overflow-y-auto sm:grid-cols-2 sm:divide-x sm:divide-y-0">
           <div className="flex min-h-0 flex-col px-4" data-testid="private-memory-column">
-            <div style={{ marginTop: '16px' }}>
+            <div style={{ marginTop: "16px" }}>
               <LearningsSection
                 datapackId={datapackId}
                 datapackGrant={datapackGrant}
@@ -210,24 +207,21 @@ export function WorkbenchLMLiveObservationPanel({
             className="flex min-h-0 flex-col divide-y divide-border/50 px-4"
             data-testid="shared-side-column"
           >
-            <div style={{ marginTop: '16px' }}>
+            <div style={{ marginTop: "16px" }}>
               <CollectiveMemorySection
                 datapackId={datapackId}
                 datapackGrant={datapackGrant}
                 refreshTick={effectiveTick}
               />
             </div>
-            <div style={{ marginTop: '16px' }}>
-              <SharedKnowledgeSection
-                datapackId={datapackId}
-                refreshTick={effectiveTick}
-              />
+            <div style={{ marginTop: "16px" }}>
+              <SharedKnowledgeSection datapackId={datapackId} refreshTick={effectiveTick} />
             </div>
           </div>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col divide-y divide-border/50 overflow-y-auto px-4">
-          <div style={{ marginTop: '16px' }}>
+          <div style={{ marginTop: "16px" }}>
             <LearningsSection
               datapackId={datapackId}
               datapackGrant={datapackGrant}
@@ -239,7 +233,7 @@ export function WorkbenchLMLiveObservationPanel({
               onPromoted={() => setAutoTick((t) => t + 1)}
             />
           </div>
-          <div style={{ marginTop: '16px' }}>
+          <div style={{ marginTop: "16px" }}>
             <CollectiveMemorySection
               datapackId={datapackId}
               datapackGrant={datapackGrant}
@@ -303,11 +297,7 @@ function SectionShell({
           )}
         </button>
       </div>
-      {error ? (
-        <p className="text-xs text-red-400">{error}</p>
-      ) : (
-        children
-      )}
+      {error ? <p className="text-xs text-red-400">{error}</p> : children}
     </section>
   );
 }
@@ -329,8 +319,7 @@ const MEMORY_TONE = {
     "bg-gradient-to-br from-purple-50 via-card to-card " +
     "dark:from-purple-950/65 dark:via-[#141228] dark:to-meko-navy-950",
   text: "text-purple-700 dark:text-purple-200/95",
-  badge:
-    "border border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-200",
+  badge: "border border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-200",
 };
 
 function LearningsSection({
@@ -612,8 +601,7 @@ const COLLECTIVE_TONE = {
     "bg-gradient-to-br from-sky-50 via-card to-card " +
     "dark:from-sky-950/65 dark:via-[#0e1c2a] dark:to-meko-navy-950",
   text: "text-sky-700 dark:text-sky-200/95",
-  badge:
-    "border border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-200",
+  badge: "border border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-200",
 };
 
 function CollectiveMemorySection({
@@ -784,8 +772,7 @@ const KNOWLEDGE_TONE = {
     "bg-gradient-to-br from-emerald-50 via-card to-card " +
     "dark:from-emerald-950/65 dark:via-[#0e2420] dark:to-meko-navy-950",
   text: "text-emerald-700 dark:text-emerald-200/95",
-  badge:
-    "border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+  badge: "border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
 };
 
 // Matches KnowledgeFilesTable.tsx's StatusBadge tone map exactly, so a

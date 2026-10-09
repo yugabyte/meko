@@ -30,7 +30,9 @@ export function LabChoiceCard({
       aria-pressed={selected}
       className={cn(
         "flex flex-col gap-2 rounded-lg border p-4 text-left transition-colors",
-        selected ? "border-primary bg-primary/5" : "border-border bg-card hover:border-muted-foreground/40",
+        selected
+          ? "border-primary bg-primary/5"
+          : "border-border bg-card hover:border-muted-foreground/40",
       )}
     >
       <span className="flex items-center gap-2">

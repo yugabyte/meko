@@ -55,7 +55,10 @@ const nodes: ProjectDatapackNode[] = NAMES.map((name, i) => ({
 }));
 
 // Deletable only when owned, which the card filters on.
-const owned = NAMES.map((name, i) => ({ datapack_id: `dp-${i}`, datapack_name: name })) as Datapack[];
+const owned = NAMES.map((name, i) => ({
+  datapack_id: `dp-${i}`,
+  datapack_name: name,
+})) as Datapack[];
 
 function openDeleteDatapackDialog() {
   render(

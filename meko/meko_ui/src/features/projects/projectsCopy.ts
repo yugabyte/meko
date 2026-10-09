@@ -18,8 +18,7 @@ export const SCOPE_TAB_SHARED = "Shared with me";
 export const PROJECTS_SEARCH_PLACEHOLDER = "Search projects...";
 
 /** The create tile that ends the grid. */
-export const NEW_PROJECT_TILE_BODY =
-  "Group datapacks into folders around one outcome";
+export const NEW_PROJECT_TILE_BODY = "Group datapacks into folders around one outcome";
 
 /** An example name per layout, used as the Name field's placeholder and as
  *  the name drawn in the preview before the user types one. Keyed on
@@ -142,8 +141,7 @@ export const NEW_FOLDER_LABEL = "New Folder";
 /** Says why the description is worth filling in, since it is optional and the
  *  payoff is later: search has to pick a folder, and a name alone rarely says
  *  what belongs in one. */
-export const FOLDER_DESCRIPTION_HINT =
-  "Helps you and your agents pick the right folder later.";
+export const FOLDER_DESCRIPTION_HINT = "Helps you and your agents pick the right folder later.";
 export const RENAME_FOLDER_LABEL = "Rename folder";
 /** The folder-contents pane's own button. "Add a datapack" rather than
  *  "File into": from inside a folder, adding to it is the plain reading. */

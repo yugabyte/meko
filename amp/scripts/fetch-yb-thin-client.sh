@@ -46,13 +46,16 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 shim_dir="$repo_root/compute/libs/yb_thin_client/shim"
-ver=$(tr -d '[:space:]' < "$shim_dir/VERSION")
-commit=$(tr -d '[:space:]' < "$shim_dir/COMMIT")
+ver=$(tr -d '[:space:]' <"$shim_dir/VERSION")
+commit=$(tr -d '[:space:]' <"$shim_dir/COMMIT")
 
 case "$(uname -m)" in
-  x86_64 | amd64) arch=x86_64 ;;
-  aarch64 | arm64) arch=aarch64 ;;
-  *) echo "fetch-yb-thin-client: unsupported arch $(uname -m)" >&2; exit 1 ;;
+x86_64 | amd64) arch=x86_64 ;;
+aarch64 | arm64) arch=aarch64 ;;
+*)
+  echo "fetch-yb-thin-client: unsupported arch $(uname -m)" >&2
+  exit 1
+  ;;
 esac
 
 public_base=https://s3.us-west-2.amazonaws.com/downloads.yugabyte.com/yb_thin_client
@@ -87,7 +90,10 @@ mkdir -p "$cache"
 if [ ! -s "$cache/$tarball" ]; then
   echo "fetch-yb-thin-client: downloading $base/$tarball" >&2
   curl -fSL --retry 3 --retry-delay 2 -o "$cache/$tarball.part" "$base/$tarball" >&2
-  verify "$cache/$tarball.part" || { rm -f "$cache/$tarball.part"; exit 1; }
+  verify "$cache/$tarball.part" || {
+    rm -f "$cache/$tarball.part"
+    exit 1
+  }
   mv "$cache/$tarball.part" "$cache/$tarball"
 else
   # A cached tarball is re-verified before it is extracted: a tarball is only
@@ -105,7 +111,7 @@ rm -rf "$staging"
 mkdir -p "$staging"
 tar xzf "$cache/$tarball" -C "$staging"
 # Written only here, after the tarball above matched its pin.
-printf '%s\n' "$pin" > "$staging/.verified"
+printf '%s\n' "$pin" >"$staging/.verified"
 rm -rf "$extract"
 mv "$staging" "$extract"
 

@@ -102,11 +102,7 @@ export function AddDatapacksDialog({
     }
     const first = results.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
     const message = getApiErrorMessage(first?.reason, TOAST_RETRY_DESCRIPTION);
-    setError(
-      added > 0
-        ? `${added} added, ${failed} failed. ${message}`
-        : message,
-    );
+    setError(added > 0 ? `${added} added, ${failed} failed. ${message}` : message);
     toast({
       variant: "destructive",
       title: PROJECT_TOASTS.datapackFiled.fail,
@@ -163,7 +159,12 @@ export function AddDatapacksDialog({
                       />
                       <Database className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                       <span className="min-w-0 flex-1">
-                        <span className={cn("block truncate text-sm text-foreground", DATAPACK_NAME_FONT)}>
+                        <span
+                          className={cn(
+                            "block truncate text-sm text-foreground",
+                            DATAPACK_NAME_FONT,
+                          )}
+                        >
                           {d.datapack_name}
                         </span>
                         {here ? (
@@ -192,7 +193,11 @@ export function AddDatapacksDialog({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" disabled={picked.size === 0 || busy} onClick={() => void handleAdd()}>
+          <Button
+            type="button"
+            disabled={picked.size === 0 || busy}
+            onClick={() => void handleAdd()}
+          >
             {busy ? "Adding…" : `Add ${picked.size || ""}`.trim()}
           </Button>
         </DialogFooter>

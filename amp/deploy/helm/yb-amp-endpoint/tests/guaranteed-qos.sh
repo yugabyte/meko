@@ -27,7 +27,8 @@ containers() {
 }
 
 check() {
-  local desc="$1"; shift
+  local desc="$1"
+  shift
   local fail=0 rows name reqc limc reqm limm
   rows="$(containers "$@")"
   if [ -z "$rows" ]; then
@@ -36,14 +37,14 @@ check() {
   fi
   while IFS='|' read -r name reqc limc reqm limm; do
     [ -z "$name" ] && continue
-    if [ "$reqc" = MISSING ] || [ "$limc" = MISSING ] || [ "$reqm" = MISSING ] || [ "$limm" = MISSING ] \
-       || [ "$reqc" != "$limc" ] || [ "$reqm" != "$limm" ]; then
+    if [ "$reqc" = MISSING ] || [ "$limc" = MISSING ] || [ "$reqm" = MISSING ] || [ "$limm" = MISSING ] ||
+      [ "$reqc" != "$limc" ] || [ "$reqm" != "$limm" ]; then
       echo "  ✗ [$desc] container '$name': requests(cpu=$reqc, mem=$reqm) != limits(cpu=$limc, mem=$limm)"
       fail=1
     else
       echo "  ✓ [$desc] container '$name': cpu=$reqc memory=$reqm (request == limit)"
     fi
-  done <<< "$rows"
+  done <<<"$rows"
   return "$fail"
 }
 

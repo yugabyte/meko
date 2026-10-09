@@ -30,7 +30,9 @@ describe("AnthropicReferenceCard", () => {
     vi.doMock("@/features/labs/data/adlcReviewAgentLab/anthropicReferenceReview", () => ({
       ANTHROPIC_REFERENCE_MODEL_LABEL: "Claude Sonnet 4.5",
       ANTHROPIC_REFERENCE_IS_POPULATED: true,
-      ANTHROPIC_REFERENCE_FINDINGS: [{ severity: "critical", location: "api/spend.py:16", comment: "SQL injection." }],
+      ANTHROPIC_REFERENCE_FINDINGS: [
+        { severity: "critical", location: "api/spend.py:16", comment: "SQL injection." },
+      ],
       ANTHROPIC_REFERENCE_INPUT_TOKENS: 1500,
       ANTHROPIC_REFERENCE_OUTPUT_TOKENS: 300,
       ANTHROPIC_REFERENCE_CONTEXT_STATS: {
@@ -42,10 +44,13 @@ describe("AnthropicReferenceCard", () => {
         memoryTokensEstimated: 0,
       },
     }));
-    const { AnthropicReferenceCard: MockedCard } = await import("@/features/labs/components/demo-apps/AnthropicReferenceCard");
+    const { AnthropicReferenceCard: MockedCard } =
+      await import("@/features/labs/components/demo-apps/AnthropicReferenceCard");
     render(<MockedCard />);
 
-    expect(screen.getAllByText(new RegExp(ANTHROPIC_REFERENCE_MODEL_LABEL)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(new RegExp(ANTHROPIC_REFERENCE_MODEL_LABEL)).length).toBeGreaterThan(
+      0,
+    );
     expect(screen.getByText("SQL injection.")).toBeTruthy();
     expect(screen.getByText(/1500 in/)).toBeTruthy();
     expect(screen.getByText(/300 out/)).toBeTruthy();

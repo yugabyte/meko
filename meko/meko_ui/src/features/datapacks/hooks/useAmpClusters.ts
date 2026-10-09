@@ -97,7 +97,11 @@ export function useDeleteCluster(datapackId: string) {
   });
 }
 
-export function useBranches(datapackId: string, clusterId: string, options?: { enabled?: boolean }) {
+export function useBranches(
+  datapackId: string,
+  clusterId: string,
+  options?: { enabled?: boolean },
+) {
   return useQuery<AmpBranch[]>({
     queryKey: ampKeys.branches(datapackId, clusterId),
     queryFn: ({ signal }) => ampListBranches(datapackId, clusterId, { signal }),

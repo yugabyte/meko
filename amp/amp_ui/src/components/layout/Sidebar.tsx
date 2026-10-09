@@ -15,12 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/auth/AuthContext";
-import {
-  AGENT_NAV,
-  PLATFORM_MODEL,
-  WORKSPACE_NAV,
-  type NavItem,
-} from "./navConfig";
+import { AGENT_NAV, PLATFORM_MODEL, WORKSPACE_NAV, type NavItem } from "./navConfig";
 import { useAgentPanel } from "./AgentPanel";
 import { layoutStyles as s } from "./layoutStyles";
 
@@ -56,9 +51,7 @@ function NavRow({ item }: { item: NavItem }) {
   return (
     <NavLink
       to={item.to!}
-      className={({ isActive }) =>
-        cn(s.navItem, isActive ? s.navItemActive : s.navItemInactive)
-      }
+      className={({ isActive }) => cn(s.navItem, isActive ? s.navItemActive : s.navItemInactive)}
     >
       <NavRowInner item={item} />
     </NavLink>
@@ -133,13 +126,9 @@ export function Sidebar() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" className={s.userRow}>
-              <span className={s.userAvatar}>
-                {user ? initials(user.name) : "?"}
-              </span>
+              <span className={s.userAvatar}>{user ? initials(user.name) : "?"}</span>
               <span className="min-w-0 flex-1">
-                <span className={cn(s.userName, "block")}>
-                  {user?.name ?? "Guest"}
-                </span>
+                <span className={cn(s.userName, "block")}>{user?.name ?? "Guest"}</span>
                 <span className={cn(s.userMeta, "block")}>{user?.email}</span>
               </span>
             </button>

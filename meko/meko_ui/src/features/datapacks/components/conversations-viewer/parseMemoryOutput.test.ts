@@ -18,7 +18,9 @@ describe("parseMemoryOutput", () => {
   });
 
   it("extracts memories from a mem0 { results: [{ memory }] } shape", () => {
-    const raw = JSON.stringify({ results: [{ memory: "likes tea" }, { memory: " coffee " }, { memory: "" }] });
+    const raw = JSON.stringify({
+      results: [{ memory: "likes tea" }, { memory: " coffee " }, { memory: "" }],
+    });
     expect(parseMemoryOutput(raw)).toEqual(["likes tea", "coffee"]);
   });
 

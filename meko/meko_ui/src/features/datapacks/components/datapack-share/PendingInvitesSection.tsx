@@ -10,7 +10,10 @@ import {
   revokeDatapackInvite,
   type DatapackOutgoingPendingInvite,
 } from "@/lib/api/mekoApi";
-import { shareGrantDescription, shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
+import {
+  shareGrantDescription,
+  shareGrantLabel,
+} from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 
 type Props = {
   datapackId: string;

@@ -92,7 +92,11 @@ export function ComputeInstance({
       toast({ title: `Unprovisioned ${roleLabel} compute` });
       setConfirmDelete(false);
     } catch (e) {
-      toast({ title: "Unprovision failed", description: getApiErrorMessage(e, "Failed to unprovision compute."), variant: "destructive" });
+      toast({
+        title: "Unprovision failed",
+        description: getApiErrorMessage(e, "Failed to unprovision compute."),
+        variant: "destructive",
+      });
     }
   };
 
@@ -108,7 +112,9 @@ export function ComputeInstance({
             <span className="w-12 shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               primary
             </span>
-            <span className="min-w-0 break-all font-mono text-xs">{ep.address || "provisioning…"}</span>
+            <span className="min-w-0 break-all font-mono text-xs">
+              {ep.address || "provisioning…"}
+            </span>
             <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
               {roleLabel}
             </span>
@@ -205,21 +211,29 @@ export function ComputeInstance({
             onClick={() => void handleCopy()}
             aria-label="Copy psql command"
           >
-            {copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+            {copied ? (
+              <Check className="h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <Copy className="h-3.5 w-3.5" aria-hidden />
+            )}
           </Button>
         </div>
       ) : null}
 
-      <AlertDialog open={confirmDelete} onOpenChange={(o) => !o && !deleteMut.isPending && setConfirmDelete(false)}>
+      <AlertDialog
+        open={confirmDelete}
+        onOpenChange={(o) => !o && !deleteMut.isPending && setConfirmDelete(false)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Unprovision this {roleLabel} compute on <span className="font-mono">{branchName}</span>?
+              Unprovision this {roleLabel} compute on{" "}
+              <span className="font-mono">{branchName}</span>?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This tears down the running compute instance on branch{" "}
-              <span className="font-mono">{branchName}</span>. The branch and its data are untouched.
-              You can re-provision compute later.
+              <span className="font-mono">{branchName}</span>. The branch and its data are
+              untouched. You can re-provision compute later.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -265,7 +265,8 @@ export function useLabRunnerSession(lab: LabDefinition) {
   // (default -- no deploy wait), or one the user deploys themselves.
   // Persisted per lab, same pattern as datapackId/deploymentId above.
   const [deploymentMode, setDeploymentModeState] = useState<DeploymentMode>(
-    () => (getLocalItem(selectedDeploymentModeStorageKey(lab.id)) as DeploymentMode | null) ?? "shared",
+    () =>
+      (getLocalItem(selectedDeploymentModeStorageKey(lab.id)) as DeploymentMode | null) ?? "shared",
   );
   const selectDeploymentMode = useCallback(
     (mode: DeploymentMode) => {
@@ -330,7 +331,8 @@ export function useLabRunnerSession(lab: LabDefinition) {
     sharedAgentSlug,
     deploymentMode === "shared" && sharedAgentSlug !== null,
   );
-  const deployment = deploymentMode === "shared" ? (sharedDeployment ?? null) : (dedicatedDeployment ?? null);
+  const deployment =
+    deploymentMode === "shared" ? (sharedDeployment ?? null) : (dedicatedDeployment ?? null);
   const deploymentActive = deployment?.status === "active";
 
   return useMemo(

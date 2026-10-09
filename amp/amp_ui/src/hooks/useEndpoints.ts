@@ -87,9 +87,7 @@ export function useCreateEndpoint() {
           ? {
               connectivity: {
                 mode: input.connectivity,
-                ...(input.allowedCidrs?.length
-                  ? { allowed_cidrs: input.allowedCidrs }
-                  : {}),
+                ...(input.allowedCidrs?.length ? { allowed_cidrs: input.allowedCidrs } : {}),
               },
             }
           : {}),

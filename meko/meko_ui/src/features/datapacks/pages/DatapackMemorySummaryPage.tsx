@@ -64,7 +64,8 @@ export default function DatapackMemorySummaryPage({ datapackId }: Props) {
             </h1>
           </div>
           <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            All session memories for <span className="text-foreground/90">{displayDatapackName}</span> (read-only).
+            All session memories for{" "}
+            <span className="text-foreground/90">{displayDatapackName}</span> (read-only).
           </p>
         </div>
 

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { SAMPLE_DIFF_CONTENT } from "@/features/labs/data/adlcReviewAgentLab/sampleDiff";
-import { excerptForFinding, parseFindingLocation, parseUnifiedDiff } from "@/features/labs/lib/diffExcerpt";
+import {
+  excerptForFinding,
+  parseFindingLocation,
+  parseUnifiedDiff,
+} from "@/features/labs/lib/diffExcerpt";
 
 describe("parseUnifiedDiff", () => {
   it("numbers lines from the hunk header, in the new file's frame", () => {
@@ -15,13 +19,9 @@ describe("parseUnifiedDiff", () => {
   });
 
   it("gives a removed line no new-file number, and does not advance the count", () => {
-    const diff = [
-      "diff --git a/x.py b/x.py",
-      "@@ -1,3 +1,3 @@",
-      " keep",
-      "-gone",
-      "+added",
-    ].join("\n");
+    const diff = ["diff --git a/x.py b/x.py", "@@ -1,3 +1,3 @@", " keep", "-gone", "+added"].join(
+      "\n",
+    );
     const [file] = parseUnifiedDiff(diff);
     expect(file.lines.map((l) => [l.kind, l.lineNumber])).toEqual([
       ["context", 1],

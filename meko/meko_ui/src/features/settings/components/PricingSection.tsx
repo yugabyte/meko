@@ -22,12 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -57,7 +52,10 @@ const TIER_ROWS: ReadonlyArray<Row> = [
   { label: KB_STORAGE_LIMIT_LABEL, values: { free: "100 MB", standard: "5 GB", pro: "Custom" } },
   { label: "Max KB file size", values: { free: "5 MB", standard: "50 MB", pro: "Custom" } },
   { label: "Support", values: { free: "Community", standard: "Email", pro: "Priority" } },
-  { label: "Decision trace", values: { free: "Supported", standard: "Supported", pro: "Supported" } },
+  {
+    label: "Decision trace",
+    values: { free: "Supported", standard: "Supported", pro: "Supported" },
+  },
   { label: "On-prem deployment", values: { free: null, standard: null, pro: null } },
   { label: "Custom integrations", values: { free: null, standard: null, pro: "Included" } },
   { label: "SSO", values: { free: null, standard: null, pro: "Included" } },
@@ -519,12 +517,7 @@ function PurchaseChip({
 
   if (href) {
     return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cn(base, enabledCls)}
-      >
+      <a href={href} target="_blank" rel="noopener noreferrer" className={cn(base, enabledCls)}>
         {body}
       </a>
     );
@@ -566,8 +559,8 @@ function UpgradeToStandardDialog({
 
         <ol className="ml-5 list-decimal space-y-2 text-sm text-foreground">
           <li>
-            We'll open the Meko listing on AWS Marketplace. Sign in with the AWS account you want
-            to bill.
+            We'll open the Meko listing on AWS Marketplace. Sign in with the AWS account you want to
+            bill.
           </li>
           <li>Accept the contract to subscribe.</li>
           <li>
@@ -579,8 +572,8 @@ function UpgradeToStandardDialog({
         </ol>
 
         <p className="text-xs text-muted-foreground">
-          You can close and reopen this dialog if you need to. Your Meko session stays signed in
-          in this tab.
+          You can close and reopen this dialog if you need to. Your Meko session stays signed in in
+          this tab.
         </p>
 
         <DialogFooter className="gap-2 sm:justify-end">
@@ -596,4 +589,3 @@ function UpgradeToStandardDialog({
     </Dialog>
   );
 }
-

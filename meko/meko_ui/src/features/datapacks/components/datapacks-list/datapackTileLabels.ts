@@ -3,10 +3,7 @@
 // one importing the other.
 
 import type { CurrentUser, Datapack } from "@/lib/api/mekoApi";
-import {
-  formatDatapackShareGrantCamelCase,
-  isDatapackShareGrant,
-} from "@/lib/datapackShareGrants";
+import { formatDatapackShareGrantCamelCase, isDatapackShareGrant } from "@/lib/datapackShareGrants";
 
 /** Tile variants. `shared` tints the card and adds the "Shared by" strip. */
 export const OWNED = "owned";

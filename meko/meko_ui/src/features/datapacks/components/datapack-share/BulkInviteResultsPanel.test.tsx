@@ -20,9 +20,7 @@ import type { DatapackBulkShareResult } from "@/lib/api/mekoApi";
 afterEach(cleanup);
 
 function panel(results: DatapackBulkShareResult[]) {
-  return (
-    <BulkInviteResultsPanel results={results} summary={summarizeBulkShareResults(results)} />
-  );
+  return <BulkInviteResultsPanel results={results} summary={summarizeBulkShareResults(results)} />;
 }
 
 /** Locate a table row by the email in column 1. */
@@ -38,7 +36,11 @@ describe("BulkInviteResultsPanel", () => {
     render(
       panel([
         { email: "a@x.com", status: "invited", invite_id: "inv-1" },
-        { email: "b@x.com", status: "already_member", message: "already has access to this datapack" },
+        {
+          email: "b@x.com",
+          status: "already_member",
+          message: "already has access to this datapack",
+        },
         { email: "c@x.com", status: "invalid_email", message: "not a valid email address" },
       ]),
     );
@@ -92,7 +94,11 @@ describe("BulkInviteResultsPanel", () => {
   it("renders only the status label in the visible cell (message is in the title, not the DOM text)", () => {
     render(
       panel([
-        { email: "frank@x.com", status: "already_member", message: "already has access to this datapack" },
+        {
+          email: "frank@x.com",
+          status: "already_member",
+          message: "already has access to this datapack",
+        },
       ]),
     );
 
@@ -126,11 +132,7 @@ describe("BulkInviteResultsPanel", () => {
     // Server de-duplicates case-insensitively, so N inputs can return
     // fewer than N rows. The panel just reflects what came back;
     // there should never be two rows with the same email string.
-    render(
-      panel([
-        { email: "unique@x.com", status: "invited", invite_id: "i1" },
-      ]),
-    );
+    render(panel([{ email: "unique@x.com", status: "invited", invite_id: "i1" }]));
 
     const email = screen.getAllByText("unique@x.com");
     expect(email).toHaveLength(1);

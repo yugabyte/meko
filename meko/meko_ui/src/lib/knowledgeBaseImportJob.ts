@@ -34,8 +34,7 @@ async function pollUntilKbSettled(datapackId: string): Promise<void> {
       const sources = status.source_statuses ?? [];
       const details = status.pipeline_details ?? [];
 
-      const sourcesReady =
-        sources.length > 0 && sources.every((s) => s.status === "COMPLETED");
+      const sourcesReady = sources.length > 0 && sources.every((s) => s.status === "COMPLETED");
       const allDocsDone =
         details.length > 0 &&
         details.every((d) => d.document_status === "COMPLETED" || d.document_status === "FAILED");

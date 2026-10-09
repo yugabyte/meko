@@ -78,7 +78,14 @@ describe("WorkbenchLMLiveObservationPanel — memory delete is behind enableMemo
   // the flag is the only thing deciding whether the button renders.
   beforeEach(() => {
     mockListMemories.mockResolvedValue({
-      memories: [{ id: "m-1", data: "Raj likes pencil", user_id: "user-1", created_at: new Date().toISOString() }],
+      memories: [
+        {
+          id: "m-1",
+          data: "Raj likes pencil",
+          user_id: "user-1",
+          created_at: new Date().toISOString(),
+        },
+      ],
       total: 1,
     } as never);
   });
@@ -140,7 +147,13 @@ describe("WorkbenchLMLiveObservationPanel — columns layout (Labs CONTEXT panel
       status: "COMPLETED",
       chunks_processed: 12,
     };
-    mockGetKbDocs.mockResolvedValue({ items: [doc], total: 1, page: 1, page_size: 5, has_more: false });
+    mockGetKbDocs.mockResolvedValue({
+      items: [doc],
+      total: 1,
+      page: 1,
+      page_size: 5,
+      has_more: false,
+    });
     renderPanel({ datapackId: "dp-1", datapackName: "Test", layout: "columns" });
     expect(await screen.findByText("coding-standards.md")).toBeTruthy();
     expect(screen.getByText("12 chunks")).toBeTruthy();

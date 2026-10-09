@@ -203,9 +203,7 @@ function StageShell({
           >
             {title}
           </span>
-          {delta ? (
-            <span className="text-xs font-medium text-context-memory">{delta}</span>
-          ) : null}
+          {delta ? <span className="text-xs font-medium text-context-memory">{delta}</span> : null}
         </div>
       </div>
       {loading ? (
@@ -432,29 +430,33 @@ export function CollectiveLearningPipeline({
           <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:gap-0">
             {showConversations ? (
               <>
-              <StageShell
-                tone={DATAPACK_DETAIL_TAB.conversations}
-                eyebrow=""
-                title="Conversations"
-                value={conversationsCount}
-                delta=""
-                subtitle=""
-                titleIcon={
-                  <MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />
-                }
-                // No `titleClassName` override — inherits `text-foreground`
-                // so the Conversations title carries the same visual weight
-                // as the four accent-coloured ones beside it.
-                loading={statusLoading}
-                loadingLabel="Loading conversations count"
-                onSelect={
-                  onSelectSection
-                    ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations)
-                    : undefined
-                }
-              />
+                <StageShell
+                  tone={DATAPACK_DETAIL_TAB.conversations}
+                  eyebrow=""
+                  title="Conversations"
+                  value={conversationsCount}
+                  delta=""
+                  subtitle=""
+                  titleIcon={
+                    <MessageSquare
+                      className="h-4 w-4 text-foreground"
+                      strokeWidth={2}
+                      aria-hidden
+                    />
+                  }
+                  // No `titleClassName` override — inherits `text-foreground`
+                  // so the Conversations title carries the same visual weight
+                  // as the four accent-coloured ones beside it.
+                  loading={statusLoading}
+                  loadingLabel="Loading conversations count"
+                  onSelect={
+                    onSelectSection
+                      ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations)
+                      : undefined
+                  }
+                />
 
-              <FlowArrow label="extract" />
+                <FlowArrow label="extract" />
               </>
             ) : null}
 
@@ -494,36 +496,36 @@ export function CollectiveLearningPipeline({
                   promotions-review surface, and a permanently disabled CTA
                   reads as broken rather than as absent. */}
               {onSelectSection ? (
-              <Button
-                type="button"
-                size="sm"
-                // Subtle in light, saturated in dark: a soft learning-tint
-                // pill with dark accent text so it doesn't shout against
-                // the already-tinted tile, then the full accent as the CTA
-                // fill on the dark gradient. Same pattern as the other
-                // "promote" CTAs (`Promote to Ko`, `Promote to Knowledge`).
-                // `min-w-0 whitespace-normal h-auto py-2 leading-tight`
-                // lets "Review N promotions →" wrap onto two lines inside
-                // the tile when the viewport is narrow, instead of
-                // overflowing the tile's border (shadcn Button defaults
-                // to `whitespace-nowrap` + fixed height, which is what
-                // pushed the text out the sides at narrow widths).
-                className="w-full min-w-0 whitespace-normal h-auto py-2 leading-tight border-0 bg-context-learning-soft text-xs font-semibold text-context-learning shadow-md transition hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110 disabled:opacity-60"
-                disabled={learningsCountLoading}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectSection?.(DATAPACK_DETAIL_TAB.learnings);
-                }}
-              >
-                {learningsCountLoading ? (
-                  <span className="inline-flex items-center justify-center gap-2">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
-                    Loading…
-                  </span>
-                ) : (
-                  reviewLabel
-                )}
-              </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  // Subtle in light, saturated in dark: a soft learning-tint
+                  // pill with dark accent text so it doesn't shout against
+                  // the already-tinted tile, then the full accent as the CTA
+                  // fill on the dark gradient. Same pattern as the other
+                  // "promote" CTAs (`Promote to Ko`, `Promote to Knowledge`).
+                  // `min-w-0 whitespace-normal h-auto py-2 leading-tight`
+                  // lets "Review N promotions →" wrap onto two lines inside
+                  // the tile when the viewport is narrow, instead of
+                  // overflowing the tile's border (shadcn Button defaults
+                  // to `whitespace-nowrap` + fixed height, which is what
+                  // pushed the text out the sides at narrow widths).
+                  className="w-full min-w-0 whitespace-normal h-auto py-2 leading-tight border-0 bg-context-learning-soft text-xs font-semibold text-context-learning shadow-md transition hover:brightness-95 dark:bg-context-learning dark:text-meko-navy-950 dark:hover:brightness-110 disabled:opacity-60"
+                  disabled={learningsCountLoading}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectSection?.(DATAPACK_DETAIL_TAB.learnings);
+                  }}
+                >
+                  {learningsCountLoading ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+                      Loading…
+                    </span>
+                  ) : (
+                    reviewLabel
+                  )}
+                </Button>
               ) : null}
             </StageShell>
 
@@ -598,50 +600,50 @@ export function CollectiveLearningPipeline({
             need one datapack to target. */}
         {onUploadKnowledgeFiles || onCreateCluster ? (
           <div className="border-t border-border/55 bg-input/25 px-4 py-3 sm:px-6">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {onCreateCluster ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {onCreateCluster ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 border-border/80 bg-background/40 text-foreground hover:bg-muted/30"
+                  onClick={() => onCreateCluster()}
+                >
+                  <Database className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+                  Create cluster
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="gap-2 border-border/80 bg-background/40 text-foreground hover:bg-muted/30"
-                onClick={() => onCreateCluster()}
+                onClick={() => onUploadKnowledgeFiles?.()}
               >
-                <Database className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-                Create cluster
+                <Upload className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+                Upload knowledge files
               </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-2 border-border/80 bg-background/40 text-foreground hover:bg-muted/30"
-              onClick={() => onUploadKnowledgeFiles?.()}
-            >
-              <Upload className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-              Upload knowledge files
-            </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled
-                    className="gap-2 border-border/80 bg-background/30 opacity-70"
-                    aria-label="Tune thresholds (coming soon)"
-                  >
-                    <Settings className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-                    Tune thresholds
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-[14rem]">
-                Coming soon
-              </TooltipContent>
-            </Tooltip>
-          </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled
+                      className="gap-2 border-border/80 bg-background/30 opacity-70"
+                      aria-label="Tune thresholds (coming soon)"
+                    >
+                      <Settings className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+                      Tune thresholds
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[14rem]">
+                  Coming soon
+                </TooltipContent>
+              </Tooltip>
+            </div>
           </div>
         ) : null}
       </section>

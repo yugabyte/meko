@@ -46,7 +46,11 @@ export default function DatapackPanelPagination({
   const noun = total === 1 ? itemNoun.singular : itemNoun.plural;
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
-      <div>{total === 0 ? `0 ${itemNoun.plural}` : `Showing ${rangeStart}–${rangeEnd} of ${total} ${noun}`}</div>
+      <div>
+        {total === 0
+          ? `0 ${itemNoun.plural}`
+          : `Showing ${rangeStart}–${rangeEnd} of ${total} ${noun}`}
+      </div>
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-2">
           <span>Per page</span>

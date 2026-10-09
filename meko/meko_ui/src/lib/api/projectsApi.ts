@@ -220,12 +220,7 @@ export async function renameProjectFolder(
   body: { folder_name: string; folder_description?: string },
   options: RouteOptions = {},
 ): Promise<{ folder_id: string }> {
-  return request<{ folder_id: string }>(
-    folderRoute(projectId, folderId),
-    "PATCH",
-    body,
-    options,
-  );
+  return request<{ folder_id: string }>(folderRoute(projectId, folderId), "PATCH", body, options);
 }
 
 export async function deleteProjectFolder(
@@ -268,12 +263,7 @@ export async function unplaceDatapack(
   datapackId: string,
   options: RouteOptions = {},
 ): Promise<{ datapack_id: string }> {
-  return request<{ datapack_id: string }>(
-    placementRoute(datapackId),
-    "DELETE",
-    undefined,
-    options,
-  );
+  return request<{ datapack_id: string }>(placementRoute(datapackId), "DELETE", undefined, options);
 }
 
 /** One page of the project's activity feed: file uploads and memory
@@ -307,10 +297,5 @@ export async function getProjectStats(
   projectId: string,
   options: RouteOptions = {},
 ): Promise<ProjectStats> {
-  return request<ProjectStats>(
-    `${projectRoute(projectId)}/stats`,
-    "GET",
-    undefined,
-    options,
-  );
+  return request<ProjectStats>(`${projectRoute(projectId)}/stats`, "GET", undefined, options);
 }

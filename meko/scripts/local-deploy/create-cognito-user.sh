@@ -23,11 +23,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 
-GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; YEL=$'\033[0;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
-info()  { printf "${CYAN}▸${NC} %s\n" "$*"; }
-ok()    { printf "${GREEN}✓${NC} %s\n" "$*"; }
-warn()  { printf "${YEL}⚠${NC} %s\n" "$*"; }
-die()   { printf "${RED}✗${NC} %s\n" "$*" >&2; exit 1; }
+GREEN=$'\033[0;32m'
+RED=$'\033[0;31m'
+YEL=$'\033[0;33m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
+info() { printf "${CYAN}▸${NC} %s\n" "$*"; }
+ok() { printf "${GREEN}✓${NC} %s\n" "$*"; }
+warn() { printf "${YEL}⚠${NC} %s\n" "$*"; }
+die() {
+  printf "${RED}✗${NC} %s\n" "$*" >&2
+  exit 1
+}
 
 # Pull pool/region defaults from .env if present (don't clobber the environment).
 POOL_ID="${COGNITO_POOL_ID:-}"
@@ -42,19 +49,37 @@ PASSWORD=""
 PROFILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --email)    EMAIL="$2"; shift 2 ;;
-    --password) PASSWORD="$2"; shift 2 ;;
-    --pool-id)  POOL_ID="$2"; shift 2 ;;
-    --region)   REGION="$2"; shift 2 ;;
-    --profile)  PROFILE="$2"; shift 2 ;;
-    -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
-    *) die "unknown flag: $1 (see --help)" ;;
+  --email)
+    EMAIL="$2"
+    shift 2
+    ;;
+  --password)
+    PASSWORD="$2"
+    shift 2
+    ;;
+  --pool-id)
+    POOL_ID="$2"
+    shift 2
+    ;;
+  --region)
+    REGION="$2"
+    shift 2
+    ;;
+  --profile)
+    PROFILE="$2"
+    shift 2
+    ;;
+  -h | --help)
+    sed -n '2,18p' "$0"
+    exit 0
+    ;;
+  *) die "unknown flag: $1 (see --help)" ;;
   esac
 done
 
 command -v aws >/dev/null 2>&1 || die "aws CLI not found on PATH (install + configure it for the mekodata-dev account)"
 [ -n "${POOL_ID}" ] || die "no Cognito pool id (set COGNITO_POOL_ID in .env or pass --pool-id)"
-[ -n "${REGION}" ]  || die "no AWS region (set COGNITO_REGION in .env or pass --region)"
+[ -n "${REGION}" ] || die "no AWS region (set COGNITO_REGION in .env or pass --region)"
 
 # Every aws call carries --profile when one was given.
 AWS_ARGS=()
@@ -67,10 +92,15 @@ if ! sts_err="$(aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} sts get-caller-identity 2>&1
   die "not authenticated to AWS (error above). Log in to the mekodata-dev account first (e.g. 'aws sso login --profile <profile>' then pass --profile, or export env creds incl. AWS_SESSION_TOKEN for ASIA… keys), then re-run."
 fi
 
-[ -n "${EMAIL}" ] || { printf "${CYAN}▸${NC} email: "; read -r EMAIL; }
+[ -n "${EMAIL}" ] || {
+  printf "${CYAN}▸${NC} email: "
+  read -r EMAIL
+}
 [ -n "${EMAIL}" ] || die "email is required"
 if [ -z "${PASSWORD}" ]; then
-  printf "${CYAN}▸${NC} permanent password: "; read -rs PASSWORD; printf "\n"
+  printf "${CYAN}▸${NC} permanent password: "
+  read -rs PASSWORD
+  printf "\n"
 fi
 [ -n "${PASSWORD}" ] || die "password is required"
 

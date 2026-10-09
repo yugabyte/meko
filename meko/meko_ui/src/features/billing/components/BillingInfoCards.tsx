@@ -43,9 +43,11 @@ export function BillingInfoCards() {
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <p>
           <span className="font-medium text-foreground">Soft caps with predictable overage.</span>{" "}
-          Paid plans never hard-stop production traffic. You&apos;re notified at 80% and 100% of your
-          limit; overage is billed at per-unit rates (e.g.{" "}
-          <code className="rounded bg-foreground/5 px-1 py-0.5 font-mono text-[10px]">$0.50 / 1K memory ops</code>
+          Paid plans never hard-stop production traffic. You&apos;re notified at 80% and 100% of
+          your limit; overage is billed at per-unit rates (e.g.{" "}
+          <code className="rounded bg-foreground/5 px-1 py-0.5 font-mono text-[10px]">
+            $0.50 / 1K memory ops
+          </code>
           ) or you can set a hard cap to throttle requests once exceeded.
         </p>
       </Card>
@@ -89,10 +91,7 @@ function InfoCard({
       </div>
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
       <p className="text-xs leading-relaxed text-muted-foreground">{body}</p>
-      <a
-        href={href}
-        className={`inline-flex items-center gap-1 text-xs font-medium ${linkClass}`}
-      >
+      <a href={href} className={`inline-flex items-center gap-1 text-xs font-medium ${linkClass}`}>
         {linkLabel} <span aria-hidden>→</span>
       </a>
     </Card>

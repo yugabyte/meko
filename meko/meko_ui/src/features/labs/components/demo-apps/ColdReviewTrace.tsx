@@ -55,7 +55,9 @@ export function ColdReviewTrace({
       {lines.slice(0, shown).map((line) => (
         <div key={line.at + line.text} className="flex gap-4">
           <span className="w-10 shrink-0 tabular-nums text-muted-foreground">{line.at}</span>
-          <span className={cn("min-w-0 flex-1", line.tone ? TONE_CLASS[line.tone] : "text-foreground")}>
+          <span
+            className={cn("min-w-0 flex-1", line.tone ? TONE_CLASS[line.tone] : "text-foreground")}
+          >
             {line.text}
           </span>
         </div>

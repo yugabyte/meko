@@ -1,11 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useCallback,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import axios from "axios";
 import { queryClient } from "@/lib/queryClient";
 
@@ -19,7 +12,13 @@ type AuthContextValue = {
   user: AuthUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
-  completeNewPassword: (email: string, newPassword: string, session: string, givenName: string, familyName: string) => Promise<void>;
+  completeNewPassword: (
+    email: string,
+    newPassword: string,
+    session: string,
+    givenName: string,
+    familyName: string,
+  ) => Promise<void>;
   logout: () => void;
 };
 
@@ -81,7 +80,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const completeNewPassword = useCallback(
-    async (email: string, newPassword: string, session: string, givenName: string, familyName: string) => {
+    async (
+      email: string,
+      newPassword: string,
+      session: string,
+      givenName: string,
+      familyName: string,
+    ) => {
       const { data } = await authHttp.post<{ accessToken: string; expiresIn: number }>(
         "/new-password",
         { email, newPassword, session, givenName, familyName },

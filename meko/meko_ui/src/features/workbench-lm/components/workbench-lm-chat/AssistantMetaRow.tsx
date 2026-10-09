@@ -6,10 +6,7 @@
 import { useState } from "react";
 import { Activity, Check, Clock, Copy, Cpu, RefreshCw } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import {
-  MemoryIcon,
-  formatLatencyLabel,
-} from "@/components/conversation-telemetry";
+import { MemoryIcon, formatLatencyLabel } from "@/components/conversation-telemetry";
 
 export function AssistantMetaRow({
   text,
@@ -79,8 +76,8 @@ export function AssistantMetaRow({
       {hasMemories ? (
         <span className="inline-flex items-center gap-1">
           <MemoryIcon className="text-[13px]" />
-          {memoriesExtracted!.toLocaleString()}{" "}
-          {memoriesExtracted === 1 ? "memory" : "memories"} extracted
+          {memoriesExtracted!.toLocaleString()} {memoriesExtracted === 1 ? "memory" : "memories"}{" "}
+          extracted
         </span>
       ) : null}
       {hasLlmCalls ? (
