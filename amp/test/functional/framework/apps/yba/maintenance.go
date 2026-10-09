@@ -313,25 +313,65 @@ func PreviousReleaseTrain(version string) string {
 	return fmt.Sprintf("%d.2", year-1)
 }
 
-// The configure-then-edit flow is required: a hand-built payload that skips
-// /universe_configure leaves placementInfo stale, and YBA then either rejects
-// the edit or moves the wrong node.
 func (c *Client) EditUniverseNodes(ctx context.Context, universeID string, numNodes int) (TaskRef, error) {
 	if numNodes <= 0 {
 		return TaskRef{}, fmt.Errorf("edit universe %s: num nodes must be positive, got %d", universeID, numNodes)
 	}
+	ref, err := c.editUniverse(ctx, universeID, func(params map[string]any) error {
+		return setPrimaryNumNodes(params, numNodes)
+	})
+	if err != nil {
+		return TaskRef{}, fmt.Errorf("edit universe %s to %d nodes: %w", universeID, numNodes, err)
+	}
+	c.log("yba: editing universe %s to %d nodes (task %s)", universeID, numNodes, ref.TaskUUID)
+	return ref, nil
+}
+
+// GrowUniverseVolumes raises the primary cluster's tserver volume size by
+// addGB. Changing nothing but the size is what makes YBA expand a Kubernetes
+// universe's PVCs in place instead of planning a full move.
+func (c *Client) GrowUniverseVolumes(ctx context.Context, universeID string, addGB int) (from, to int, ref TaskRef, err error) {
+	if addGB <= 0 {
+		return 0, 0, TaskRef{}, fmt.Errorf("grow universe %s volumes: the increase must be positive, got %d GB", universeID, addGB)
+	}
+	ref, err = c.editUniverse(ctx, universeID, func(params map[string]any) error {
+		from, to, err = growPrimaryVolumeSize(params, addGB)
+		return err
+	})
+	if err != nil {
+		return 0, 0, TaskRef{}, fmt.Errorf("grow universe %s volumes by %d GB: %w", universeID, addGB, err)
+	}
+	c.log("yba: growing universe %s tserver volumes %d -> %d GB (task %s)", universeID, from, to, ref.TaskUUID)
+	return from, to, ref, nil
+}
+
+func (c *Client) GrowUniverseVolumesAndWait(ctx context.Context, universeID string, addGB int, timeout time.Duration) (from, to int, err error) {
+	from, to, ref, err := c.GrowUniverseVolumes(ctx, universeID, addGB)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := c.waitUpgradeTask(ctx, fmt.Sprintf("grow volumes to %d GB", to), ref); err != nil {
+		return from, to, err
+	}
+	return from, to, c.WaitUniverseReady(ctx, universeID, timeout)
+}
+
+// The configure-then-edit flow is required: a hand-built payload that skips
+// /universe_configure leaves placementInfo stale, and YBA then either rejects
+// the edit or moves the wrong node.
+func (c *Client) editUniverse(ctx context.Context, universeID string, mutate func(params map[string]any) error) (TaskRef, error) {
 	var raw struct {
 		UniverseDetails map[string]any `json:"universeDetails"`
 	}
 	if _, err := c.doJSON(ctx, http.MethodGet, c.custURL("/universes/"+universeID), nil, &raw); err != nil {
-		return TaskRef{}, fmt.Errorf("read universe %s: %w", universeID, err)
+		return TaskRef{}, fmt.Errorf("read universe: %w", err)
 	}
 	params := raw.UniverseDetails
 	if params == nil {
-		return TaskRef{}, fmt.Errorf("universe %s reports no universeDetails", universeID)
+		return TaskRef{}, fmt.Errorf("the universe reports no universeDetails")
 	}
-	if err := setPrimaryNumNodes(params, numNodes); err != nil {
-		return TaskRef{}, fmt.Errorf("edit universe %s: %w", universeID, err)
+	if err := mutate(params); err != nil {
+		return TaskRef{}, err
 	}
 	params["universeUUID"] = universeID
 	params["clusterOperation"] = "EDIT"
@@ -342,13 +382,12 @@ func (c *Client) EditUniverseNodes(ctx context.Context, universeID string, numNo
 
 	var configured map[string]any
 	if _, err := c.doJSON(ctx, http.MethodPost, c.custURL("/universe_configure"), params, &configured); err != nil {
-		return TaskRef{}, fmt.Errorf("configure universe %s for %d nodes: %w", universeID, numNodes, err)
+		return TaskRef{}, fmt.Errorf("configure: %w", err)
 	}
 	var out TaskRef
 	if _, err := c.doJSON(ctx, http.MethodPut, c.custURL("/universes/"+universeID), configured, &out); err != nil {
-		return TaskRef{}, fmt.Errorf("edit universe %s to %d nodes: %w", universeID, numNodes, err)
+		return TaskRef{}, fmt.Errorf("submit: %w", err)
 	}
-	c.log("yba: editing universe %s to %d nodes (task %s)", universeID, numNodes, out.TaskUUID)
 	return out, nil
 }
 
@@ -368,9 +407,18 @@ func (c *Client) EditUniverseNodesAndWait(ctx context.Context, universeID string
 // The primary cluster is the one carrying the tservers amp writes through. An
 // async read replica has its own count and must not be touched.
 func setPrimaryNumNodes(params map[string]any, numNodes int) error {
+	ui, err := primaryUserIntent(params)
+	if err != nil {
+		return err
+	}
+	ui["numNodes"] = numNodes
+	return nil
+}
+
+func primaryUserIntent(params map[string]any) (map[string]any, error) {
 	clusters, ok := params["clusters"].([]any)
 	if !ok || len(clusters) == 0 {
-		return fmt.Errorf("no clusters in the universe details")
+		return nil, fmt.Errorf("no clusters in the universe details")
 	}
 	for _, raw := range clusters {
 		cl, ok := raw.(map[string]any)
@@ -382,10 +430,27 @@ func setPrimaryNumNodes(params map[string]any, numNodes int) error {
 		}
 		ui, ok := cl["userIntent"].(map[string]any)
 		if !ok {
-			return fmt.Errorf("the primary cluster has no userIntent")
+			return nil, fmt.Errorf("the primary cluster has no userIntent")
 		}
-		ui["numNodes"] = numNodes
-		return nil
+		return ui, nil
 	}
-	return fmt.Errorf("no primary cluster among the %d clusters", len(clusters))
+	return nil, fmt.Errorf("no primary cluster among the %d clusters", len(clusters))
+}
+
+func growPrimaryVolumeSize(params map[string]any, addGB int) (from, to int, err error) {
+	ui, err := primaryUserIntent(params)
+	if err != nil {
+		return 0, 0, err
+	}
+	dev, ok := ui["deviceInfo"].(map[string]any)
+	if !ok {
+		return 0, 0, fmt.Errorf("the primary cluster's userIntent has no deviceInfo")
+	}
+	size, ok := dev["volumeSize"].(float64)
+	if !ok || size <= 0 {
+		return 0, 0, fmt.Errorf("the primary cluster's deviceInfo has no volumeSize (%v)", dev["volumeSize"])
+	}
+	from, to = int(size), int(size)+addGB
+	dev["volumeSize"] = to
+	return from, to, nil
 }

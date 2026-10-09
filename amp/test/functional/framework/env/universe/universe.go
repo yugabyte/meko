@@ -1431,7 +1431,12 @@ type YBAMaintainer interface {
 	// when the YBA's catalog does not already carry it.
 	EnsureReleaseAvailable(ctx context.Context, version, arch string, k8s bool) error
 	EditUniverseNodesAndWait(ctx context.Context, universeID string, numNodes int, timeout time.Duration) error
+	GrowUniverseVolumesAndWait(ctx context.Context, universeID string, addGB int, timeout time.Duration) (from, to int, err error)
 }
+
+// OwnsUniverse is false for an attached universe: this run did not create it,
+// so a change to its shape would outlive the run.
+func (e *Env) OwnsUniverse() bool { return e.mode != ModeAttachYBA && e.mode != ModeAttachAddress }
 
 // YBAUniverse exposes the YBA control plane behind this env and the universe it
 // manages. Both YBA modes qualify: attach_yba points at an existing universe,

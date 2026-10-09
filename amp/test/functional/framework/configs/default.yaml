@@ -1685,8 +1685,9 @@ stress:
   # backing_disk_full: fills every backing data disk to within a few MiB, writes
   # through amp, and holds each statement to erroring or committing inside
   # stall_limit. A COMMIT parked forever on a full backing (meko#727 signature)
-  # is the failure; once the disks are freed writes must resume and every
-  # acknowledged row must be present.
+  # is the failure. Every endpoint must then lose its write token, and once the
+  # volumes are grown writes must resume and every acknowledged row must be
+  # present.
   backing_disk_full:
     tenants: 2
     baseline_duration: "20s"
@@ -1694,16 +1695,30 @@ stress:
     fault_duration: "90s"
     # stall_limit is how long one INSERT may take before it counts as hung.
     stall_limit: "60s"
+    # full_stall_limit is the same while the disks are full. A COMMIT parks until
+    # the endpoint's lease runs out: up to YB's 60s free-space recheck on the
+    # registry's node, plus the 15s lease, plus the shutdown.
+    full_stall_limit: "2m"
     # keep_free_mib is what the filler leaves on each data disk.
     keep_free_mib: 16
     # fill is "all" (every backing pod, the write path has nowhere to go) or
     # "one" (a single pod, RF should absorb it and writes must keep flowing).
     fill: "all"
     settle_timeout: "10m"
-    resume_duration: "30s"
+    # resume_duration is the write load after the disks were expanded.
+    resume_duration: "2m"
     payload_bytes: 256
-    # A tenant endpoint or other pod going down while the disks are full is a
-    # product failure (meko#1110), not environment damage.
+    # token_loss_timeout bounds the wait for every endpoint to lose its write
+    # token to the refused renewal. YB re-checks free space every 60s at most.
+    token_loss_timeout: "5m"
+    # expand_gb is what the tserver volumes grow by. Writes resume only once free
+    # space clears YB's floor of max(3000 MB, 5% of the disk).
+    expand_gb: 50
+    expand_timeout: "30m"
+    # A pod other than the backing and the tenant endpoints going down while the
+    # disks are full is a product failure, not environment damage. Tenant
+    # endpoints lose their write-token lease by design (meko#1558) and are held
+    # to recovering instead (meko#1110).
     non_target_restart_is_failure: true
   # commit_durability: journals every commit's acknowledgement per id under faults,
   # then holds storage to the EXACT acked set. A count check cannot do this: a lost

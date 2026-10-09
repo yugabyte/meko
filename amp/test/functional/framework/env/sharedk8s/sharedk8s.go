@@ -1580,6 +1580,14 @@ func (e *Env) YBAUniverse() (universe.YBAMaintainer, string) {
 	return u.YBAUniverse()
 }
 
+// OwnsUniverse is true unless the backing is a universe this run attached to.
+func (e *Env) OwnsUniverse() bool {
+	if u, ok := e.backingUniverseEnv().(interface{ OwnsUniverse() bool }); ok {
+		return u.OwnsUniverse()
+	}
+	return true
+}
+
 // KubeUniverse locates the backing universe's namespace, for a caller that needs
 // to run something beside it. Empty when the backing is not a kubernetes
 // universe.

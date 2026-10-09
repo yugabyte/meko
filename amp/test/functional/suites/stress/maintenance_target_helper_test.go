@@ -52,6 +52,10 @@ func (f *fakeYBAMaintainer) EditUniverseNodesAndWait(_ context.Context, _ string
 	return f.actionErr
 }
 
+func (f *fakeYBAMaintainer) GrowUniverseVolumesAndWait(context.Context, string, int, time.Duration) (int, int, error) {
+	return 0, 0, f.actionErr
+}
+
 func (f *fakeYBAMaintainer) GetUniverse(context.Context, string) (yba.Universe, error) {
 	return f.universe, f.getErr
 }

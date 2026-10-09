@@ -1525,6 +1525,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.backing_disk_full.tenants":       2,
 		"stress.backing_disk_full.keep_free_mib": 16,
 		"stress.backing_disk_full.payload_bytes": 256,
+		"stress.backing_disk_full.expand_gb":     50,
 	}
 	for key, want := range diskFullInts {
 		if got := cfg.GetInt(key, -1); got != want {
@@ -1532,11 +1533,14 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 	diskFullDurations := map[string]time.Duration{
-		"stress.backing_disk_full.baseline_duration": 20 * time.Second,
-		"stress.backing_disk_full.fault_duration":    90 * time.Second,
-		"stress.backing_disk_full.stall_limit":       60 * time.Second,
-		"stress.backing_disk_full.settle_timeout":    10 * time.Minute,
-		"stress.backing_disk_full.resume_duration":   30 * time.Second,
+		"stress.backing_disk_full.baseline_duration":  20 * time.Second,
+		"stress.backing_disk_full.fault_duration":     90 * time.Second,
+		"stress.backing_disk_full.stall_limit":        60 * time.Second,
+		"stress.backing_disk_full.settle_timeout":     10 * time.Minute,
+		"stress.backing_disk_full.resume_duration":    2 * time.Minute,
+		"stress.backing_disk_full.full_stall_limit":   2 * time.Minute,
+		"stress.backing_disk_full.token_loss_timeout": 5 * time.Minute,
+		"stress.backing_disk_full.expand_timeout":     30 * time.Minute,
 	}
 	for key, want := range diskFullDurations {
 		if got := cfg.GetDuration(key, -1); got != want {

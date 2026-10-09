@@ -21,7 +21,8 @@ untagged and run on demand — see the Perf bullet):
   lease and resumed),
   `bulk_load_kill` (one large write killed mid-flight) and
   `backing_disk_full` (the backing's data disks filled, every INSERT held to an
-  answer, then freed), `sqlancer` (SQLancer's logic-bug oracles on a quiet
+  answer and every endpoint to losing its write token, then the volumes grown
+  and amp held to recovering), `sqlancer` (SQLancer's logic-bug oracles on a quiet
   stack), plus the two `suites/features` tests below: twenty-two in all.
   Every `suites/stress` test that drives amp runs on a stack of its own
   (`Shape: DedicatedStack`: its own YugabyteDB and amp control plane, torn
