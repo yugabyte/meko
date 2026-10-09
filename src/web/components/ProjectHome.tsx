@@ -32,7 +32,6 @@ export function ProjectHomeView({
   onMove,
   mekoWebUrl,
   mekoConfigured,
-  sharing,
   onMenu,
   onBack,
   onError,
@@ -45,8 +44,6 @@ export function ProjectHomeView({
   mekoWebUrl: string | null;
   /** Meko is on (a key is set). */
   mekoConfigured: boolean;
-  /** AgentK can share datapacks through Meko's API (Meko on, its API URL known). */
-  sharing: boolean;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
@@ -72,8 +69,6 @@ export function ProjectHomeView({
   const cantShare = !!dedicated?.grant && dedicated.grant !== 'owner' && dedicated.grant !== 'maintainer';
   /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
   const [sharers, setSharers] = useState<string[] | null>(null);
-  // Sharing the project is sharing its dedicated datapack, which needs Meko's API URL.
-  const noApi = !!dedicated && mekoConfigured && !sharing && !cantShare;
   const share = () => {
     if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add your Meko API key to turn it on.' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
@@ -82,15 +77,13 @@ export function ProjectHomeView({
       const person = (name: string | null, email: string | null) => (name && email ? `${name} (${email})` : (name ?? email ?? ''));
       setSharers(owner ? [`its owner, ${person(dedicated.ownerName, dedicated.ownerEmail)}`] : []);
       // Meko lists the maintainers.
-      if (sharing) {
-        api
-          .datapackPeople(dedicated.id)
-          .then((p) => {
-            const maintainers = p.members.filter((m) => m.grant === 'maintainer').map((m) => person(m.name || null, m.email || null));
-            if (maintainers.length) setSharers((cur) => [...(cur ?? []), `a maintainer: ${maintainers.join(', ')}`]);
-          })
-          .catch(() => undefined);
-      }
+      api
+        .datapackPeople(dedicated.id)
+        .then((p) => {
+          const maintainers = p.members.filter((m) => m.grant === 'maintainer').map((m) => person(m.name || null, m.email || null));
+          if (maintainers.length) setSharers((cur) => [...(cur ?? []), `a maintainer: ${maintainers.join(', ')}`]);
+        })
+        .catch(() => undefined);
     } else setDialog({ kind: 'share' });
   };
 
@@ -128,8 +121,7 @@ export function ProjectHomeView({
         <span className="mono muted small home-repo">
           {project.repoPath} · {project.defaultBranch}
         </span>
-        {/* Off only without Meko's API URL; the note below says why. */}
-        <button className="btn small home-share" disabled={noApi} onClick={share}>
+        <button className="btn small home-share" onClick={share}>
           Share
         </button>
       </header>
@@ -145,7 +137,6 @@ export function ProjectHomeView({
           </button>
         </div>
       )}
-      {noApi && <p className="hint home-share-note">To share this project, set Meko’s web app URL on the Meko tab in Settings.</p>}
       <div className="home-scroll">
         {mekoConfigured && project.datapacks.length > 0 && <SearchBox projectId={project.id} />}
         {loadError && <p className="error-text">{loadError}</p>}

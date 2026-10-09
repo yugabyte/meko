@@ -440,11 +440,6 @@ function MekoTab({ status }: { status: MekoStatus }) {
           {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
           {status.configured && <span className="hint">A new URL or key is checked with Meko when you save it.</span>}
         </div>
-        <div className="meko-status-row">
-          <span>Sharing</span>
-          <span className={cx('tag', !status.sharing && 'shared')}>{status.sharing ? 'on' : 'off'}</span>
-          {status.configured && !status.sharing && <span className="hint">Needs Meko’s API URL: set the web app or API URL above.</span>}
-        </div>
         {status.configured && (
           <div className="meko-status-row">
             <span>Claude Code</span>

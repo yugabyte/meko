@@ -827,7 +827,8 @@ never pushes the rest of the page down.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
 datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with
-no web app or API URL set) it's off, with a note to set the web app URL on the Meko tab. With Meko
+no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL on
+the Meko tab (the tab warns about it too). With Meko
 off it asks for a Meko API key first (**Add a Meko API key**), and for a project without a
 dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
 maintainer. See [Sharing a project](#sharing-a-project).
@@ -1541,9 +1542,10 @@ Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET �
 `POST …/invite/:id/resend`, `DELETE …/invite/:id`, `GET /datapacks/incoming-shares`,
 `POST /datapacks/invite-action`) are REST, not MCP. `src/server/mekoapi.ts` calls them with the
 same API key (a Meko personal access token), at `[meko] api_url` (by default the web app URL plus
-`/api/v1`). `AppState.meko.sharing` is true when Meko is on and that API URL is known; it's worked
-out from the config, not by asking Meko. Without an API URL the share routes answer 409, saying to
-set the web app URL. Meko's own refusals of a share call (a bad email, an invite already pending,
+`/api/v1`). AgentK can share when Meko is on and that API URL is known (`resolveMekoApiUrl()`, from
+the config, not by asking Meko); the state sent to the browser doesn't carry it. Without an API URL
+the share routes answer 409, saying to set the web app URL, and the invite sync skips Meko's
+invites. Meko's own refusals of a share call (a bad email, an invite already pending,
 no permission) come back with their status and message; a refused key (401) is a 502 that says to
 check the key on the Meko tab; anything else is a 502. The invite sync keeps asking every five
 minutes, but logs a failure to list the invites waiting (a refused key, say) once, until the error
@@ -1556,8 +1558,8 @@ or API URL changes or a sync works.
 | A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). |
 
 **Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
-reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and AgentK
-can share (`AppState.meko.sharing`). It opens the Share dialog with a **Reviewers on the
+reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko
+is on. It opens the Share dialog with a **Reviewers on the
 project's open PRs** section above the email form: for each open PR of the project's running sessions (in PR & Review or Merge & Close),
 each in its own session's repo, the people asked to review and the people who have reviewed,
 without bots, the PR's author or you, and the teams asked (whose members are invited by email);

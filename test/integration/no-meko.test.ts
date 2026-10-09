@@ -37,7 +37,7 @@ describe('projects without a datapack, and without Meko', () => {
   it('turns Meko off: sessions get no datapack, and datapacks are refused with a reason', async () => {
     const withDp = await env.core.projects.create({ repoPath: env.repo, name: 'Has', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/has' } });
     await turnMekoOff();
-    expect(env.core.mekoStatus).toMatchObject({ configured: false, sharing: false });
+    expect(env.core.mekoStatus).toMatchObject({ configured: false });
     const s = await env.core.sessions.create(withDp.id, { name: 'Work', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
     const argv = join(env.fakeDir, 'argv.jsonl');
@@ -139,7 +139,7 @@ describe('projects without a datapack, and without Meko', () => {
 
       expect((await call('PUT', '/api/settings', { meko: { enabled: false } })).json().meko.enabled).toBe(false);
       const state = (await call('GET', '/api/state')).json();
-      expect(state.meko).toMatchObject({ configured: false, sharing: false });
+      expect(state.meko).toMatchObject({ configured: false });
       expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [], closed: [] });
       expect((await call('GET', '/api/meko/datapacks')).json()).toEqual([]);
 

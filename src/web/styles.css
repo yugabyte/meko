@@ -2178,11 +2178,6 @@ div[id^='dak-mermaid-'] .label {
 .home-share-banner {
   border-bottom: 1px solid var(--rule);
 }
-.home-share-note {
-  margin: 0;
-  padding: 6px 20px;
-  border-bottom: 1px solid var(--rule);
-}
 /* A project without a dedicated datapack: what to do about it. */
 .dp-none {
   display: flex;
@@ -4202,9 +4197,6 @@ div[id^='dak-mermaid-'] .label {
   }
   .home-hd h1 {
     font-size: 1.3rem;
-  }
-  .home-share-note {
-    padding: 6px 12px;
   }
   .home-scroll {
     padding: 12px 12px 32px;

@@ -76,9 +76,8 @@ export class InviteService {
    * finishes "AgentK can't …".
    */
   requireSharing(what: string): void {
-    const m = this.core.mekoStatus;
-    if (!m.configured) throw new HttpError(409, `Meko is off, so AgentK can't ${what}. Add a Meko API key on the Meko tab in Settings.`);
-    if (!m.sharing) throw new HttpError(409, `Meko's API URL isn't known, so AgentK can't ${what}. Set the web app URL on the Meko tab in Settings.`);
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko is off, so AgentK can't ${what}. Add a Meko API key on the Meko tab in Settings.`);
+    if (!resolveMekoApiUrl(this.core.config)) throw new HttpError(409, `Meko's API URL isn't known, so AgentK can't ${what}. Set the web app URL on the Meko tab in Settings.`);
   }
 
   /**
@@ -165,9 +164,10 @@ export class InviteService {
     const list = listed && listed.stamp === gen ? listed.rows : await this.core.meko.listDatapacks();
     const self = list.find((d) => d.grant === 'owner' && d.ownerUserId)?.ownerUserId ?? null;
     let incoming: IncomingShare[] | null = null;
-    if (this.core.mekoStatus.sharing) {
+    const apiUrl = resolveMekoApiUrl(this.core.config);
+    if (apiUrl) {
       incoming = await this.api.incomingShares().catch((e) => {
-        const why = `${resolveMekoApiUrl(this.core.config)}: ${errMsg(e)}`;
+        const why = `${apiUrl}: ${errMsg(e)}`;
         if (why !== this.incomingError) this.core.log.warn("couldn't list the datapack invites waiting in Meko (logged once until it changes)", why);
         this.incomingError = why;
         return null;
