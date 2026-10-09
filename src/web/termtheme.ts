@@ -107,22 +107,35 @@ export function currentTermTheme(): TermTheme {
 
 const listeners = new Set<(theme: TermTheme) => void>();
 let watching = false;
+/** The theme last applied; an app theme change that doesn't change it calls no listener. */
+let last: TermTheme | null = null;
 
 function apply() {
   const theme = currentTermTheme();
+  if (theme === last) return;
+  last = theme;
   const root = document.documentElement;
   if (theme === 'light') root.setAttribute('data-term-theme', 'light');
   else root.removeAttribute('data-term-theme');
   for (const l of listeners) l(theme);
 }
 
-/** Keeps `data-term-theme` and every listener current, following the app's theme for "app". */
+/**
+ * Keeps `data-term-theme` and every listener current, following the app's theme for "app" and a
+ * choice made in another tab of this browser (a `storage` event, which only other tabs get).
+ */
 export function watchTermTheme(): void {
   if (watching) return;
   watching = true;
   apply();
   new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   matchMedia(DARK_QUERY).addEventListener('change', apply);
+  window.addEventListener('storage', (e) => {
+    // A null key is the whole storage cleared.
+    if (e.key !== KEY && e.key !== null) return;
+    chosen = parseTermThemePref(e.key === null ? null : e.newValue);
+    apply();
+  });
 }
 
 /** Calls `l` with the terminal theme whenever it changes; returns the unsubscribe. */

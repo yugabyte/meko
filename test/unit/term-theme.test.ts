@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseTermThemePref, resolveTermTheme, termOptions, type TermTheme } from '../../src/web/termtheme.js';
 
 /** WCAG contrast ratio between two #rrggbb colors. */
@@ -32,10 +32,12 @@ describe('terminal colors', () => {
   });
 
   it('keeps every ANSI color readable on its background', () => {
-    const names = ['foreground', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan'] as const;
+    const names = ['foreground', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'] as const;
     for (const mode of ['dark', 'light'] as TermTheme[]) {
       const { theme } = termOptions(mode);
       for (const n of names) expect(contrast(theme[n]!, theme.background!), `${mode} ${n}`).toBeGreaterThanOrEqual(3);
+      // Black on dark is a shade of the background, as in other dark themes; on light it's text.
+      if (mode === 'light') expect(contrast(theme.black!, theme.background!), 'light black').toBeGreaterThanOrEqual(3);
       // White on light is a gray, still visible.
       expect(contrast(theme.white!, theme.background!), `${mode} white`).toBeGreaterThanOrEqual(mode === 'light' ? 3 : 7);
     }
@@ -64,5 +66,73 @@ describe('terminal colors', () => {
     const html = readFileSync(new URL('../../src/web/index.html', import.meta.url), 'utf8');
     expect(html).toContain("localStorage.getItem('ak-term-theme')");
     expect(html).toContain("tt === 'light' || (tt === 'app' && !dark)");
+  });
+});
+
+describe('watching the terminal colors', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  /** A page with the app theme in `data-theme` and the system dark; returns hooks to drive it. */
+  function page(stored: string | null) {
+    const attrs = new Map<string, string>();
+    let mutated = () => {};
+    let storage: (e: { key: string | null; newValue: string | null }) => void = () => {};
+    vi.stubGlobal('document', {
+      documentElement: {
+        getAttribute: (k: string) => attrs.get(k) ?? null,
+        setAttribute: (k: string, v: string) => {
+          attrs.set(k, v);
+          if (k === 'data-theme') mutated();
+        },
+        removeAttribute: (k: string) => {
+          attrs.delete(k);
+          if (k === 'data-theme') mutated();
+        },
+      },
+    });
+    vi.stubGlobal('MutationObserver', class {
+      constructor(cb: () => void) {
+        mutated = cb;
+      }
+      observe() {}
+    });
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {} }));
+    vi.stubGlobal('localStorage', { getItem: () => stored, setItem() {}, removeItem() {} });
+    vi.stubGlobal('window', { addEventListener: (_t: string, cb: typeof storage) => (storage = cb) });
+    return { attrs, storage: (key: string | null, newValue: string | null) => storage({ key, newValue }) };
+  }
+
+  it('calls listeners only when the terminal theme changes', async () => {
+    const p = page('app');
+    const tt = await import('../../src/web/termtheme.js');
+    const seen: TermTheme[] = [];
+    tt.onTermTheme((t) => seen.push(t));
+    tt.watchTermTheme();
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.documentElement.setAttribute('data-theme', 'light');
+    expect(seen).toEqual(['dark', 'light']);
+    expect(p.attrs.get('data-term-theme')).toBe('light');
+  });
+
+  it('follows a choice made in another tab', async () => {
+    const p = page(null);
+    const tt = await import('../../src/web/termtheme.js');
+    const seen: TermTheme[] = [];
+    tt.onTermTheme((t) => seen.push(t));
+    tt.watchTermTheme();
+    p.storage('ak-other', 'light');
+    expect(seen).toEqual(['dark']);
+    p.storage('ak-term-theme', 'light');
+    expect(tt.termThemePref()).toBe('light');
+    expect(p.attrs.get('data-term-theme')).toBe('light');
+    // Storage cleared: back to the default.
+    p.storage(null, null);
+    expect(tt.termThemePref()).toBe('dark');
+    expect(p.attrs.has('data-term-theme')).toBe(false);
+    expect(seen).toEqual(['dark', 'light', 'dark']);
   });
 });
