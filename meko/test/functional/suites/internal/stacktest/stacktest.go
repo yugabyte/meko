@@ -84,7 +84,7 @@ func HasLangfuseProject(t *core.T, stack k8senv.Stack, id string) (bool, error) 
 // Universes is a set of extra universes the test creates in its body. They are
 // removed after the test, and until then they are in the reap plan.
 func Universes(t *core.T) *k8senv.Universes {
-	u := ClusterEnv(t).Universes(t.ResourceSuffix())
+	u := Env(t).Universes(t.ResourceSuffix())
 	t.OnTeardown(u.Teardown)
 	return u
 }

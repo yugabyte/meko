@@ -1,9 +1,11 @@
 // Package k8s is the environment provider that builds meko stacks on a
 // Kubernetes cluster. A SingleStack test shares one run-scoped stack in
 // mekoqa-st-<run>, each DedicatedStack test gets a stack of its own in
-// mekoqa-ds-<run>-<n> that is built and torn down with it, and a Remote test
-// attaches to a deployment by URL. With env.k8s.namespace set the run attaches
-// to a stack that already runs there and builds nothing.
+// mekoqa-ds-<run>-<n> that is built and torn down with it, a Remote test
+// attaches to a deployment by URL, and a ClusterOnly test gets no stack, only
+// the cluster and the database provider to build its own. With
+// env.k8s.namespace set the run attaches to a stack that already runs there and
+// builds nothing.
 //
 // Every stack is one mekostack.App. This package decides which namespace a test
 // gets, when the stack is built and who tears it down.
@@ -395,6 +397,8 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		env := p.newEnv(ctx, app, true)
 		env.backing = bk
 		return env, nil
+	case core.ClusterOnly:
+		return &Env{provider: p}, nil
 	case core.Remote:
 		if p.cfg.RemoteURL == "" {
 			return nil, &core.UnsupportedShapeError{Provider: "k8s", Shape: core.Remote, Why: "env.k8s.remote_url is not set"}

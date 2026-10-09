@@ -292,32 +292,23 @@ available), distinct from a genuine all-pass.`,
 			// Self-building providers stand their run-scoped stack up ONCE here,
 			// before the scheduler starts, so the first test's short provision
 			// deadline does not have to absorb the whole bring-up. A failed bring-up
-			// tears down what it created and fails the run.
+			// tears down what it created and fails the tests on that stack.
 			// Wired before Prepare: the run's stack is built there, and an abort
 			// during that bring-up must still leave a plan the janitor can follow.
 			if reapPlan == "" && outDir != "" {
 				reapPlan = filepath.Join(outDir, "reap-plan.json")
 			}
-			planLog := func(f string, a ...any) { fmt.Fprintf(c.ErrOrStderr(), f+"\n", a...) }
-			wirePlan := func(p core.EnvProvider) {
-				writeReapPlan(reapPlan, p, planLog)
-				if sp, ok := p.(interface{ OnReapPlanChange(func()) }); ok {
-					sp.OnReapPlanChange(func() { writeReapPlan(reapPlan, p, planLog) })
-				}
-			}
-			wirePlan(provider)
+			plans := &reapPlans{path: reapPlan, logf: func(f string, a ...any) { fmt.Fprintf(c.ErrOrStderr(), f+"\n", a...) }}
+			plans.wire(provider)
 
-			var prepErr error
-			if !allDedicated(tests) {
-				provider, prepErr = prepareProvider(c.Context(), provider, cfg, func() (core.EnvProvider, error) {
-					p, _, err := buildProvider(name, cfg, secrets, masker, detected)
-					if err == nil {
-						wirePlan(p)
-					}
-					return p, err
-				})
-				opts.Provider = provider
-			}
+			provider, failed, prepErr := prepareSharedStack(c.Context(), tests, provider, cfg, !setupOnly, func() (core.EnvProvider, error) {
+				p, _, err := buildProvider(name, cfg, secrets, masker, detected)
+				if err == nil {
+					plans.wire(p)
+				}
+				return p, err
+			})
+			opts.Provider, opts.SharedStackFailed = provider, failed
 			if prepErr != nil {
 				// No environment means no test body can run, but the run must
 				// still say so per test. Every selected test reports env_failed
@@ -362,7 +353,7 @@ available), distinct from a genuine all-pass.`,
 				if err := closer.Close(); err != nil {
 					fmt.Fprintf(c.ErrOrStderr(), "warning: teardown: %v\n", err)
 				}
-				writeReapPlan(reapPlan, opts.Provider, func(f string, a ...any) { fmt.Fprintf(c.ErrOrStderr(), f+"\n", a...) })
+				plans.write()
 			}
 			var reporterDropped int64
 			if reporter != nil {
@@ -417,15 +408,42 @@ available), distinct from a genuine all-pass.`,
 
 // prepareProvider stands a self-building provider's stack up before the
 // scheduler starts, REBUILDING it per retry, never reuse a half-built one.
-// allDedicated: every selected test brings its own stack, so the run-scoped one
-// would stand for nothing but its own bring-up and teardown.
-func allDedicated(tests []core.Test) bool {
+// prepareSharedStack stands the run-scoped stack up when a selected test uses
+// it. If it never comes up and offStack allows, the tests off it go on with a
+// freshly built provider and failed carries the reason for the tests on it.
+func prepareSharedStack(ctx context.Context, tests []core.Test, provider core.EnvProvider, cfg *core.Config, offStack bool, rebuild func() (core.EnvProvider, error)) (_ core.EnvProvider, failed string, _ error) {
+	// With no test on it the stack would stand for nothing but its own
+	// bring-up and teardown.
+	if !anyOnSharedStack(tests) {
+		return provider, "", nil
+	}
+	provider, err := prepareProvider(ctx, provider, cfg, rebuild)
+	if err == nil || !offStack || allOnSharedStack(tests) {
+		return provider, "", err
+	}
+	fresh, rerr := rebuild()
+	if rerr != nil {
+		return provider, "", err
+	}
+	return fresh, "environment prepare failed: " + err.Error(), nil
+}
+
+func anyOnSharedStack(tests []core.Test) bool {
 	for _, t := range tests {
-		if !t.Env.Dedicated() {
+		if !t.Env.OffSharedStack() {
+			return true
+		}
+	}
+	return false
+}
+
+func allOnSharedStack(tests []core.Test) bool {
+	for _, t := range tests {
+		if t.Env.OffSharedStack() {
 			return false
 		}
 	}
-	return len(tests) > 0
+	return true
 }
 
 func prepareProvider(ctx context.Context, provider core.EnvProvider, cfg *core.Config, rebuild func() (core.EnvProvider, error)) (core.EnvProvider, error) {

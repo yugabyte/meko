@@ -31,7 +31,7 @@ func init() {
 		Category:   core.Functional,
 		Tags:       tags("upgrade"),
 		OwningTeam: core.TeamPlatform,
-		Env:        core.EnvSpec{Sharing: core.Shared, Shape: core.SingleStack, ClusterSlots: 1},
+		Env:        core.EnvSpec{Sharing: core.Exclusive, Shape: core.ClusterOnly, ClusterSlots: 1},
 		Timeout:    90 * time.Minute,
 		Description: "Install the release before the run's (upgrade.from overrides it) from its own chart and images, seed datapacks, an agent, " +
 			"a PAT and a conversation, then helm upgrade in place to the run's chart and images while polling the API. The data, the PAT and " +
@@ -48,7 +48,7 @@ type seeded struct {
 }
 
 func previousRelease(t *core.T) error {
-	shared := stacktest.ClusterEnv(t)
+	cluster := stacktest.Env(t)
 	cfg := t.Options
 	target := cfg.GetString("env.mekostack.image_version", "")
 	chart, err := mekostack.ResolveChart(cfg.GetString("env.mekostack.chart", ""))
@@ -88,7 +88,7 @@ func previousRelease(t *core.T) error {
 	var teardown func() error
 	if err := t.Step("install_from", func(*core.StepHandle) error {
 		var err error
-		env, teardown, err = shared.BuildStack(t, map[string]string{
+		env, teardown, err = cluster.BuildStack(t, map[string]string{
 			"env.mekostack.chart":         fromChart,
 			"env.mekostack.image_version": fromImage,
 			// Released charts run langfuse's migrations only against their own database.

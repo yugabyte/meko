@@ -311,8 +311,11 @@ func (s *scheduler) noteInfraOutcome(ctx context.Context, test core.Test, res *c
 }
 
 func (s *scheduler) failIfInfraPoisoned(test core.Test) *core.Result {
-	if test.Env.Dedicated() {
+	if test.Env.OffSharedStack() {
 		return nil
+	}
+	if s.opts.SharedStackFailed != "" {
+		return core.ReportResult(test, s.opts.RunOptions, core.StatusEnvFailed, s.opts.SharedStackFailed)
 	}
 	s.poisonMu.Lock()
 	by, err := s.poisonBy, s.poisonErr
@@ -335,6 +338,20 @@ func (s *scheduler) runShared(ctx context.Context, idxs []int) {
 			s.results[i] = s.noProviderResult(s.tests[i])
 		}
 		return
+	}
+
+	if s.opts.SharedStackFailed != "" {
+		runnable := idxs[:0:0]
+		for _, i := range idxs {
+			if res := s.failIfInfraPoisoned(s.tests[i]); res != nil {
+				s.results[i] = res
+				continue
+			}
+			runnable = append(runnable, i)
+		}
+		if idxs = runnable; len(idxs) == 0 {
+			return
+		}
 	}
 
 	queue := make(chan int, len(idxs))

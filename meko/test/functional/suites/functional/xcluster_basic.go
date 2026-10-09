@@ -11,7 +11,7 @@ import (
 func init() {
 	core.Register(core.Test{
 		Name: "functional/xcluster_basic", Suite: "functional", Category: core.Functional, Tags: tags("universe"), OwningTeam: core.TeamPlatform, Unguarded: true,
-		Env: env(), Timeout: 40 * time.Minute,
+		Env: clusterOnly(), Timeout: 40 * time.Minute,
 		Description: "Two universes, xCluster replication of one database from the first to the second, a table created and a row written on the source, and the row read on the target.",
 		Params:      []string{"db"},
 		Run:         xclusterBasic,

@@ -12,7 +12,7 @@ import (
 func init() {
 	core.Register(core.Test{
 		Name: "functional/read_replica_basic", Suite: "functional", Category: core.Functional, Tags: tags("universe"), OwningTeam: core.TeamPlatform, Unguarded: true,
-		Env: env(), Timeout: 40 * time.Minute,
+		Env: clusterOnly(), Timeout: 40 * time.Minute,
 		Description: "A universe gets a read replica cluster, a row written on the primary is read from the replica's node, and removing the replica leaves the primary serving.",
 		Params:      []string{"db"},
 		Run:         readReplicaBasic,

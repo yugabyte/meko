@@ -28,7 +28,7 @@ what the test needs.
 
 | Suite | Put it here when | Typical `EnvSpec` | Category, tags |
 |---|---|---|---|
-| `functional` | it checks product behaviour on the shared stack: a feature, a fault, an upgrade, a universe | `Shared`, `SingleStack`. Add `FaultsSharedInfra: true` to fault the stack, `ClusterSlots: 1` to move it between releases | `Functional`, `tags()`, which is `regression` and `nightly`. Pass an area to add one: `tags("upgrade")` |
+| `functional` | it checks product behaviour on the shared stack: a feature, a fault, an upgrade, a universe | `Shared`, `SingleStack`. Add `FaultsSharedInfra: true` to fault the stack. A test that uses nothing of the shared stack, building its own universes or stack, is `Exclusive`, `ClusterOnly`, so a failed shared stack does not block it. Add `ClusterSlots: 1` to move it between releases | `Functional`, `tags()`, which is `regression` and `nightly`. Pass an area to add one: `tags("upgrade")` |
 | `stress` | it loads a stack for a long time | `Exclusive`, `DedicatedStack`, `ClusterSlots: 1` | `Stress`, `stress` |
 | `perf` | it records latency and throughput | `Exclusive`, `DedicatedStack`, `ClusterSlots: 1` | `Perf`, `perf` |
 

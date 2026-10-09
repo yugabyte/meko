@@ -18,7 +18,7 @@ import (
 // t.Env.(*k8s.Env) and use the api client, an MCP client for a PAT, and kubectl.
 type Env struct {
 	provider  *Provider
-	app       Stack // nil for a Remote environment
+	app       Stack // nil for a Remote or ClusterOnly environment
 	owned     bool  // a dedicated stack, torn down with the test
 	backing   *backing
 	api       *mekoapi.Client

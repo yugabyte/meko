@@ -196,6 +196,51 @@ func TestSchedulerExclusiveEnvFailByLabel(t *testing.T) {
 	}
 }
 
+func TestSchedulerFailedSharedStackBlocksOnlyItsTests(t *testing.T) {
+	const reason = "environment prepare failed: migrations wedged"
+	ran := map[string]bool{}
+	var mu sync.Mutex
+	body := func(name string) func(*core.T) error {
+		return func(*core.T) error {
+			mu.Lock()
+			ran[name] = true
+			mu.Unlock()
+			return nil
+		}
+	}
+	offStack := func(name string, sharing core.Sharing, shape core.Shape) core.Test {
+		return core.Test{Name: name, Suite: "s", Category: core.Functional,
+			Env: core.EnvSpec{Sharing: sharing, Shape: shape}, Run: body(name)}
+	}
+	tests := []core.Test{
+		sharedTest("on_stack", body("on_stack")),
+		exclusiveTest("on_stack_exclusive", body("on_stack_exclusive")),
+		offStack("cluster_only", core.Exclusive, core.ClusterOnly),
+		offStack("remote", core.Shared, core.Remote),
+	}
+	_, results := sched.Run(context.Background(), tests, sched.Options{
+		RunOptions: core.RunOptions{
+			Parallel: 4, Seed: core.NewRunSeed(9, true), Provider: &fake.Provider{},
+			SharedStackFailed: reason,
+		},
+		Capacity:          4,
+		PerEnvParallelism: 4,
+	})
+	for _, r := range results[:2] {
+		if r.Status != core.StatusEnvFailed || r.ErrorSummary != reason {
+			t.Errorf("%s = %s %q, want env_failed %q", r.TestName, r.Status, r.ErrorSummary, reason)
+		}
+	}
+	for _, r := range results[2:] {
+		if r.Status != core.StatusPassed {
+			t.Errorf("%s = %s, want passed", r.TestName, r.Status)
+		}
+	}
+	if ran["on_stack"] || ran["on_stack_exclusive"] {
+		t.Errorf("a test on the failed stack ran its body: %v", ran)
+	}
+}
+
 func TestSchedulerNoProviderSkips(t *testing.T) {
 	tests := []core.Test{
 		sharedTest("a", func(*core.T) error { return nil }),

@@ -26,6 +26,19 @@ func TestRegistryAddAndDuplicate(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsASharedClusterOnlyTest(t *testing.T) {
+	r := core.NewRegistry()
+	tc := mkTest("functional/a", "functional")
+	tc.Env = core.EnvSpec{Sharing: core.Shared, Shape: core.ClusterOnly}
+	if err := r.Add(tc); err == nil {
+		t.Errorf("a Shared ClusterOnly test would hand its co-tenants an environment with no stack")
+	}
+	tc.Env.Sharing = core.Exclusive
+	if err := r.Add(tc); err != nil {
+		t.Errorf("add an Exclusive ClusterOnly test: %v", err)
+	}
+}
+
 func TestRegistryFilter(t *testing.T) {
 	r := core.NewRegistry()
 	_ = r.Add(mkTest("functional/branch", "functional", "smoke"))

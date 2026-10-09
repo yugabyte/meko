@@ -35,6 +35,7 @@ const (
 	SingleStack    Shape = iota // the run's shared meko stack
 	DedicatedStack              // a whole stack per test
 	Remote                      // attach to an existing deployment by URL
+	ClusterOnly                 // the cluster and database provider, no stack: the test builds what it uses
 )
 
 func (s Shape) String() string {
@@ -45,6 +46,8 @@ func (s Shape) String() string {
 		return "dedicated_stack"
 	case Remote:
 		return "remote"
+	case ClusterOnly:
+		return "cluster_only"
 	default:
 		return "unknown"
 	}
@@ -98,6 +101,8 @@ type EnvSpec struct {
 // Dedicated reports a test that owns its whole stack, so nothing it does can
 // reach another test and the shared-infra gate does not apply to it.
 func (s EnvSpec) Dedicated() bool { return s.Shape == DedicatedStack }
+
+func (s EnvSpec) OffSharedStack() bool { return s.Shape != SingleStack }
 
 // FaultsShared is FaultsSharedInfra as it matters to the scheduler: a test that
 // faults infrastructure only it uses faults nothing shared.

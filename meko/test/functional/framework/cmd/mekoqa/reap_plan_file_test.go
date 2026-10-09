@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/yugabyte/meko/meko/test/functional/framework/env/fake"
 	"github.com/yugabyte/meko/meko/test/functional/framework/env/reap"
 )
 
@@ -62,5 +63,43 @@ func TestReapPlanFileRemovedWhenNothingIsLiveAnymore(t *testing.T) {
 	writeReapPlan(path, planned{nil}, func(string, ...any) {})
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("the plan still names a stack that was torn down")
+	}
+}
+
+type plannedProvider struct {
+	*fake.Provider
+	plan *reap.Plan
+}
+
+func (p *plannedProvider) ReapPlan() *reap.Plan { return p.plan }
+
+// A provider closed after a failed bring-up can leave its stack behind. The
+// provider built to carry on must not erase that from the file.
+func TestReapPlansKeepWhatAClosedProviderLeft(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reap-plan.json")
+	plans := &reapPlans{path: path, logf: func(string, ...any) {}}
+	old := &plannedProvider{Provider: &fake.Provider{}, plan: &reap.Plan{Namespaces: []reap.NSReap{{Kind: reap.KindYBK8s, Namespace: "mekoqa-st-a"}}}}
+	plans.wire(old)
+	plans.wire(&plannedProvider{Provider: &fake.Provider{}})
+	plans.write()
+
+	got, err := loadReapPlanFile(path)
+	if err != nil {
+		t.Fatalf("the rebuilt provider dropped the plan file: %v", err)
+	}
+	if len(got.Namespaces) != 1 || got.Namespaces[0].Namespace != "mekoqa-st-a" {
+		t.Errorf("plan = %+v, want the closed provider's mekoqa-st-a", got.Namespaces)
+	}
+}
+
+func TestReapPlansDropTheFileWhenTheClosedProviderCleanedUp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reap-plan.json")
+	plans := &reapPlans{path: path, logf: func(string, ...any) {}}
+	old := &plannedProvider{Provider: &fake.Provider{}, plan: &reap.Plan{Namespaces: []reap.NSReap{{Kind: reap.KindYBK8s, Namespace: "mekoqa-st-a"}}}}
+	plans.wire(old)
+	old.plan = nil
+	plans.wire(&plannedProvider{Provider: &fake.Provider{}})
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the plan still names a stack its provider tore down")
 	}
 }

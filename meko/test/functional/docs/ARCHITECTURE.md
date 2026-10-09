@@ -102,7 +102,8 @@ A test declares `EnvSpec{Sharing, Shape}`.
 
 - `Shape` says what environment it needs. `SingleStack` is the run's shared stack,
   `DedicatedStack` is a whole stack of its own, `Remote` is an existing deployment attached by
-  URL.
+  URL, `ClusterOnly` is the cluster and the database provider with no stack, for a test that
+  builds everything it uses.
 - `Sharing` says whether it may share. `Shared` tests pack onto one environment, up to
   `sched.per_env_parallelism` (4) at a time. `Exclusive` tests each take their own.
 
@@ -111,6 +112,11 @@ A test declares `EnvSpec{Sharing, Shape}`.
 | `SingleStack` | `mekoqa-st-<run>`, one per run, built on first use | `functional` |
 | `DedicatedStack` | `mekoqa-ds-<run>-<n>`, built and deleted with the test | `stress`, `perf` |
 | `Remote` | none, attached by `env.k8s.remote_url` | smoke tests against a deployed portal |
+| `ClusterOnly` | none of its own, the test builds universes or stacks | `functional` upgrade, xcluster, read replica |
+
+When the shared stack never comes up, only the `SingleStack` tests report `env_failed`. Every
+other shape still runs, and none of them builds the shared stack when it is all a run selects.
+A `ClusterOnly` test must be `Exclusive`.
 
 `-o env.stack=dedicated` moves every `SingleStack` test onto a stack of its own for one run,
 which rules out cross-test interference. `-o env.stack=shared` does the opposite.

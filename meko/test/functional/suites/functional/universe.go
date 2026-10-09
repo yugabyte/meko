@@ -15,6 +15,10 @@ func env() core.EnvSpec {
 	return core.EnvSpec{Sharing: core.Shared, Shape: core.SingleStack}
 }
 
+func clusterOnly() core.EnvSpec {
+	return core.EnvSpec{Sharing: core.Exclusive, Shape: core.ClusterOnly}
+}
+
 // need returns u as capability T, or skips the test with why the provider cannot.
 func need[T any](t *core.T, u universe.Universe) T {
 	c, err := universe.Capability[T](u)

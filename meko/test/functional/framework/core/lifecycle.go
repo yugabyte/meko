@@ -27,6 +27,9 @@ type RunOptions struct {
 	// cleanly with this reason instead of reporting env_failed, used when no
 	// real environment is configured (e.g. "env provider k8s is not implemented yet").
 	ProviderUnavailableReason string
+	// SharedStackFailed is why the run's shared stack never came up. Every test
+	// on it reports env_failed with this, and tests off it still run.
+	SharedStackFailed string
 	// Attempt places this execution in a retry chain; zero → newResult stamps 1.
 	Attempt AttemptInfo
 	// Set by whoever provisioned: RunOne for an exclusive environment, the
@@ -109,7 +112,7 @@ func ReportEnvFailedRun(tests []Test, opts RunOptions, reason string) (RunSummar
 		_ = opts.Sink.RunStarted(RunInfo{
 			Seed:      opts.Seed.Value(),
 			Total:     len(tests),
-			Parallel:  1,
+			Parallel:  max(opts.Parallel, 1),
 			StartedAt: started,
 		})
 	}
@@ -509,9 +512,9 @@ func shouldCollect(mode string, failed bool) bool {
 
 // attestSharedInfraGone: a verdict reached on a deleted control plane is not one.
 func attestSharedInfraGone(test Test, prov EnvProvider) (string, bool) {
-	// Only the shared stack: a dedicated test runs in its own namespace, which
+	// Only the shared stack: a test off it runs in namespaces of its own, which
 	// this answers nothing about.
-	if test.Env.Dedicated() || !ProviderSharesInfra(prov) {
+	if test.Env.OffSharedStack() || !ProviderSharesInfra(prov) {
 		return "", false
 	}
 	c, ok := prov.(SharedInfraGoneChecker)

@@ -61,6 +61,74 @@ func writeReapPlan(path string, provider any, logf func(string, ...any)) {
 }
 
 // dropReapPlan removes the file after a teardown that succeeded.
+// reapPlans keeps one run's plan file across provider rebuilds. A provider
+// closed after a failed bring-up can leave something behind, and that stays in
+// the file beside the live provider's plan.
+type reapPlans struct {
+	path string
+	logf func(string, ...any)
+
+	mu   sync.Mutex
+	cur  core.EnvProvider
+	left *reap.Plan
+}
+
+func (r *reapPlans) wire(p core.EnvProvider) {
+	r.mu.Lock()
+	if old, ok := r.cur.(planProvider); ok && r.cur != p {
+		r.left = mergePlans(r.left, old.ReapPlan())
+	}
+	r.cur = p
+	r.mu.Unlock()
+	r.write()
+	if sp, ok := p.(interface{ OnReapPlanChange(func()) }); ok {
+		sp.OnReapPlanChange(r.write)
+	}
+}
+
+func (r *reapPlans) write() {
+	r.mu.Lock()
+	p, left := r.cur, r.left
+	r.mu.Unlock()
+	if left.Empty() {
+		writeReapPlan(r.path, p, r.logf)
+		return
+	}
+	writeReapPlan(r.path, planFunc(func() *reap.Plan {
+		var live *reap.Plan
+		if pp, ok := p.(planProvider); ok {
+			live = pp.ReapPlan()
+		}
+		return mergePlans(left, live)
+	}), r.logf)
+}
+
+type planFunc func() *reap.Plan
+
+func (f planFunc) ReapPlan() *reap.Plan { return f() }
+
+func mergePlans(plans ...*reap.Plan) *reap.Plan {
+	out := &reap.Plan{}
+	seen := map[[3]string]bool{}
+	for _, p := range plans {
+		if p == nil {
+			continue
+		}
+		out.AddCloud(p.Cloud)
+		for i := range p.Clouds {
+			out.AddCloud(&p.Clouds[i])
+		}
+		for _, ns := range p.Namespaces {
+			key := [3]string{ns.Kind, ns.KubeContext, ns.Namespace}
+			if !seen[key] {
+				seen[key] = true
+				out.Namespaces = append(out.Namespaces, ns)
+			}
+		}
+	}
+	return out
+}
+
 func dropReapPlan(path string) {
 	if path != "" {
 		_ = os.Remove(path)

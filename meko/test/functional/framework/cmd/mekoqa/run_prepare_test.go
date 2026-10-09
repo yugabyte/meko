@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
@@ -98,5 +100,54 @@ func TestPrepareProviderPassesThroughWithoutPrepare(t *testing.T) {
 	})
 	if err != nil || got != core.EnvProvider(p) {
 		t.Errorf("prepare = (%T, %v), want the same provider and no error", got, err)
+	}
+}
+
+func stackTests(shapes ...core.Shape) []core.Test {
+	var out []core.Test
+	for i, s := range shapes {
+		out = append(out, core.Test{Name: fmt.Sprintf("t%d", i), Env: core.EnvSpec{Sharing: core.Exclusive, Shape: s}})
+	}
+	return out
+}
+
+func TestPrepareSharedStackFallsBackForOffStackTests(t *testing.T) {
+	failed := &preparingProvider{Provider: &fake.Provider{}, err: errors.New("Dirty database version 1. Fix and force version.")}
+	fresh := &preparingProvider{Provider: &fake.Provider{}}
+	got, reason, err := prepareSharedStack(context.Background(), stackTests(core.SingleStack, core.ClusterOnly), failed, zeroBackoff(t), true,
+		func() (core.EnvProvider, error) { return fresh, nil })
+	if err != nil {
+		t.Fatalf("prepare = %v, want the run to go on", err)
+	}
+	if got != core.EnvProvider(fresh) || fresh.prepare != 0 {
+		t.Errorf("got %T prepared %d times, want the fresh provider, never prepared", got, fresh.prepare)
+	}
+	if !strings.Contains(reason, "Dirty database version 1") {
+		t.Errorf("reason = %q, want the prepare error", reason)
+	}
+}
+
+func TestPrepareSharedStackFailsWhenEveryTestNeedsIt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tests    []core.Test
+		offStack bool
+	}{
+		"all on the stack": {stackTests(core.SingleStack, core.SingleStack), true},
+		"setup only":       {stackTests(core.SingleStack, core.ClusterOnly), false},
+	} {
+		p := &preparingProvider{Provider: &fake.Provider{}, err: errors.New("ImagePullBackOff")}
+		_, reason, err := prepareSharedStack(context.Background(), tc.tests, p, zeroBackoff(t), tc.offStack,
+			func() (core.EnvProvider, error) { t.Fatalf("%s: must not rebuild", name); return nil, nil })
+		if err == nil || reason != "" {
+			t.Errorf("%s: (%q, %v), want the prepare error", name, reason, err)
+		}
+	}
+}
+
+func TestPrepareSharedStackSkippedWithNoTestOnIt(t *testing.T) {
+	p := &preparingProvider{Provider: &fake.Provider{}}
+	if _, _, err := prepareSharedStack(context.Background(), stackTests(core.ClusterOnly, core.DedicatedStack, core.Remote), p, zeroBackoff(t), true,
+		func() (core.EnvProvider, error) { return nil, nil }); err != nil || p.prepare != 0 {
+		t.Errorf("prepared %d times (%v), want no shared stack", p.prepare, err)
 	}
 }

@@ -124,6 +124,12 @@ func (r *Registry) Add(t Test) error {
 			return fmt.Errorf("test %q has invalid owning team %q", t.Name, t.OwningTeam)
 		}
 	}
+	if t.Env.Shape == ClusterOnly && t.Env.Sharing == Shared {
+		// The scheduler provisions one environment per shared group from the
+		// first test it pulls, so a ClusterOnly test would hand its co-tenants
+		// an environment with no stack.
+		return fmt.Errorf("test %q: a ClusterOnly test must be Exclusive", t.Name)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, dup := r.tests[t.Name]; dup {

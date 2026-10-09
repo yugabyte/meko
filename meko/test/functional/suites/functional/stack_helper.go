@@ -2,7 +2,8 @@
 // regression). They share the run's stack, and each creates and deletes only its
 // own resources, named with t.ResourceSuffix(). The universe tests build their own
 // universes on the run's db.provider and skip with the reason when it cannot do
-// what they need.
+// what they need. Tests that use nothing of the run's stack declare ClusterOnly,
+// so a stack that never comes up does not block them.
 package functional
 
 import (
