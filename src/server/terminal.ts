@@ -1,19 +1,20 @@
-import { homedir } from 'node:os';
-import pty from 'node-pty';
 import type { WebSocket } from 'ws';
 import type { TermClientMessage, TermServerMessage } from '../shared/types.js';
 import type { Core } from './core.js';
+import type { HostStream } from './hostclient.js';
+import { clampCols, clampRows } from './host/protocol.js';
 import { errMsg } from './log.js';
 
-/** Unsent output past which the pty is paused until the browser catches up. */
+/** Unsent output past which the host stream is paused until the browser catches up. */
 const MAX_BUFFERED = 1024 * 1024;
-const clampCols = (n: number) => Math.max(20, Math.min(500, Math.floor(n)));
-const clampRows = (n: number) => Math.max(5, Math.min(300, Math.floor(n)));
+
+const sizeOf = (v: unknown, clamp: (n: number) => number): number | undefined =>
+  v !== undefined && v !== '' && Number.isFinite(Number(v)) ? clamp(Number(v)) : undefined;
 
 /**
- * Bridges one browser terminal to a tmux session: a pty running
- * `tmux attach` per viewer. Closing the socket kills only the attach client,
- * never Claude. `size` is the browser's terminal size from the socket URL, if it sent one.
+ * Bridges one browser terminal to a session's pane in the session host: an attach stream per
+ * viewer. Closing the socket ends only that stream, never Claude. `size` is the browser's
+ * terminal size from the socket URL, if it sent one: the pane takes it, as the newest viewer's.
  */
 export function attachTerminal(core: Core, ws: WebSocket, sessionId: string, size: { cols?: unknown; rows?: unknown } = {}): void {
   const send = (m: TermServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
@@ -31,58 +32,24 @@ export function attachTerminal(core: Core, ws: WebSocket, sessionId: string, siz
     return;
   }
 
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== 'TMUX' && k !== 'TMUX_PANE') env[k] = v;
-  env.TERM = 'xterm-256color';
-  env.COLORTERM = 'truecolor';
-
-  let term: pty.IPty;
-  try {
-    term = pty.spawn(core.tmux.binary, core.tmux.attachArgs(row.tmux_name), {
-      name: 'xterm-256color',
-      // Start at the browser's size when it sent one, so a reconnect doesn't resize the window
-      // to a default and back (tmux sizes a window to its smallest client).
-      cols: Number.isFinite(Number(size.cols)) && size.cols !== '' ? clampCols(Number(size.cols)) : 120,
-      rows: Number.isFinite(Number(size.rows)) && size.rows !== '' ? clampRows(Number(size.rows)) : 36,
-      cwd: homedir(),
-      env,
-    });
-  } catch (e) {
-    send({ type: 'error', error: `Couldn't attach: ${errMsg(e)}`, retry: true });
-    ws.close();
-    return;
-  }
-
+  let stream: HostStream | null = null;
+  let closed = false;
+  // Input that came before the stream was open.
+  const early: TermClientMessage[] = [];
   // Coalesce output into ~16ms frames so bursts don't become thousands of messages.
-  let pending: string[] = [];
+  let pending: Buffer[] = [];
   let flushTimer: NodeJS.Timeout | null = null;
   let drainTimer: NodeJS.Timeout | null = null;
-  const flush = () => {
-    flushTimer = null;
-    if (!pending.length || ws.readyState !== ws.OPEN) return;
-    ws.send(Buffer.from(pending.join(''), 'utf8'), { binary: true });
-    pending = [];
-    // A browser that can't keep up: stop reading from `tmux attach` until it drains, so output
-    // doesn't pile up in memory. tmux copes with a slow client (and redraws), Claude never waits.
-    if (ws.bufferedAmount > MAX_BUFFERED && !drainTimer) {
-      term.pause();
-      drainTimer = setInterval(() => {
-        if (ws.readyState === ws.OPEN && ws.bufferedAmount > MAX_BUFFERED / 4) return;
-        clearInterval(drainTimer!);
-        drainTimer = null;
-        term.resume();
-      }, 50);
+
+  const handle = (m: TermClientMessage) => {
+    if (!stream) {
+      early.push(m);
+      return;
     }
+    if (m.type === 'input' && typeof m.data === 'string') stream.write(m.data);
+    else if (m.type === 'resize' && Number.isFinite(m.cols) && Number.isFinite(m.rows)) stream.resize(clampCols(m.cols), clampRows(m.rows));
+    else if (m.type === 'active') stream.active();
   };
-  term.onData((d) => {
-    pending.push(d);
-    flushTimer ??= setTimeout(flush, 16);
-  });
-  term.onExit(() => {
-    flush();
-    send({ type: 'exit', reason: 'detached' });
-    ws.close();
-  });
 
   ws.on('message', (raw, isBinary) => {
     if (isBinary) return;
@@ -94,22 +61,60 @@ export function attachTerminal(core: Core, ws: WebSocket, sessionId: string, siz
     }
     // A throw in this listener would take the whole server down: accept only well-formed messages.
     if (!m || typeof m !== 'object') return;
-    if (m.type === 'input' && typeof m.data === 'string') term.write(m.data);
-    else if (m.type === 'resize' && Number.isFinite(m.cols) && Number.isFinite(m.rows)) {
-      try {
-        term.resize(clampCols(m.cols), clampRows(m.rows));
-      } catch {
-        /* pty already gone */
-      }
-    }
+    handle(m);
   });
   ws.on('close', () => {
+    closed = true;
     if (flushTimer) clearTimeout(flushTimer);
     if (drainTimer) clearInterval(drainTimer);
-    try {
-      term.kill();
-    } catch {
-      /* already exited */
-    }
+    stream?.close();
   });
+
+  const flush = () => {
+    flushTimer = null;
+    if (!pending.length || ws.readyState !== ws.OPEN || !stream) return;
+    ws.send(Buffer.concat(pending), { binary: true });
+    pending = [];
+    // A browser that can't keep up: stop reading from the host until it drains, so output
+    // doesn't pile up here. The host sends a fresh screen once it catches up; Claude never waits.
+    if (ws.bufferedAmount > MAX_BUFFERED && !drainTimer) {
+      const s = stream;
+      s.pause();
+      drainTimer = setInterval(() => {
+        if (ws.readyState === ws.OPEN && ws.bufferedAmount > MAX_BUFFERED / 4) return;
+        clearInterval(drainTimer!);
+        drainTimer = null;
+        s.resume();
+      }, 50);
+    }
+  };
+
+  core.host
+    .attach(row.tmux_name, { cols: sizeOf(size.cols, clampCols), rows: sizeOf(size.rows, clampRows) })
+    .then(
+      (s) => {
+        if (closed) {
+          s.close();
+          return;
+        }
+        stream = s;
+        s.onData((d) => {
+          pending.push(d);
+          flushTimer ??= setTimeout(flush, 16);
+        });
+        s.onControl((m) => {
+          if (m.type === 'size') send({ type: 'size', cols: m.cols, rows: m.rows, active: m.active });
+        });
+        s.onClose(() => {
+          flush();
+          send({ type: 'exit', reason: 'detached' });
+          ws.close();
+        });
+        for (const m of early.splice(0)) handle(m);
+      },
+      (e: unknown) => {
+        send({ type: 'error', error: `Couldn't attach: ${errMsg(e)}`, retry: true });
+        ws.close();
+      },
+    );
 }

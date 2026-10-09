@@ -7,7 +7,7 @@ import {
   writeModFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
-import { tmuxName } from '../../src/server/tmux.js';
+import { paneName } from '../../src/server/hostclient.js';
 import { tempDir } from '../helpers.js';
 
 describe('the hooks settings file', () => {
@@ -39,10 +39,10 @@ describe('loginShellCommand', () => {
   });
 });
 
-describe('tmuxName', () => {
+describe('paneName', () => {
   it('keeps two projects on one repo apart', () => {
-    expect(tmuxName('api', 'v2-fix')).not.toBe(tmuxName('api-v2', 'fix'));
-    expect(tmuxName('demo.repo', 'a:b')).toBe('ak-demo-repo--a-b');
+    expect(paneName('api', 'v2-fix')).not.toBe(paneName('api-v2', 'fix'));
+    expect(paneName('demo.repo', 'a:b')).toBe('ak-demo-repo--a-b');
   });
 });
 

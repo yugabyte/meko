@@ -17,7 +17,7 @@ from a browser.
 | Topic | Decision |
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
-| Process host | tmux on a dedicated socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. |
+| Process host | AgentK's own session host (`agent-k-local host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
 | Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL or start a new one there. |
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
@@ -29,7 +29,7 @@ from a browser.
 | Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with Meko searched for the design and decisions behind it. It posts to GitHub only when the user says. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
 | Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
-| Existing tmux sessions | Not adopted. Only sessions created by AgentK Local are shown. |
+| Other terminal sessions | Not adopted. Only sessions created by AgentK Local are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts, with an estimate of what Meko searches saved. |
 | Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK Local team runs as a separate service. On by default; one checkbox in Settings → Account turns it off. |
@@ -42,9 +42,9 @@ from a browser.
 
 ## Architecture
 
-There are three long-lived pieces on the host: the web server, the tmux server that owns every
+There are three long-lived pieces on the host: the web server, the session host that owns every
 Claude process, and the state directory at `~/.agent-k-local`. The server is stateless enough to
-be killed at any time. tmux and the on-disk state are what carry your work.
+be killed at any time. The session host and the on-disk state are what carry your work.
 
 ```mermaid
 flowchart LR
@@ -54,7 +54,7 @@ flowchart LR
   subgraph Host["Devserver (headless) or your Mac"]
     S["AgentK Local server<br/>HTTPS :7777"]
     H["hook.sock<br/>unix socket"]
-    T["tmux server<br/>own service (systemd or launchd)"]
+    T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
     C2["claude in worktree B"]
     ST[("~/.agent-k-local<br/>state, certs, app versions")]
@@ -63,9 +63,9 @@ flowchart LR
   M["Meko MCP"]
   GH["GitHub Releases"]
   B -- "HTTPS + WebSocket, cookie auth" --> S
-  S -- "node-pty runs tmux attach" --> T
-  T --> C1
-  T --> C2
+  S -- "host.sock: requests, attach streams" --> T
+  T -- "pty" --> C1
+  T -- "pty" --> C2
   C1 -- "Claude hooks" --> H
   C2 -- "Claude hooks" --> H
   H --> S
@@ -75,10 +75,41 @@ flowchart LR
   U -- "poll, download, verify" --> GH
 ```
 
-**Terminal path.** When you open a tab, the browser opens a WebSocket. The server spawns
-`tmux -L agentk attach -t ak-…` in a pty and pipes it through. Closing the tab kills only that pty,
-and Claude keeps running. tmux has no prefix key, so Ctrl+B reaches Claude Code and tmux's own
-commands can't be typed from the terminal.
+**Terminal path.** When you open a tab, the browser opens a WebSocket, and the server attaches
+it to the session's pane in the session host over `host.sock`. The host sends the screen as it is
+now first (a full reset, then the screen, its scrollback and the terminal modes, from a headless
+xterm it keeps for every pane), then the output as it comes. Closing the tab ends only that
+attach, and Claude keeps running. The host interprets no keys: everything typed, Ctrl+B included,
+reaches Claude Code.
+
+**The session host** (`src/server/host/`) runs each session's launcher in a pty with node-pty
+(`TERM=xterm-256color`, `COLORTERM=truecolor`), and keeps a pane whose process exited, with its
+exit status, until it is started again or ended. It answers the program's terminal queries
+(device attributes, cursor position, colors) itself from its headless xterm, so Claude gets one
+answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
+real terminal's with `agent-k-local attach`). Sessions don't inherit this install's `AK_HOME`,
+`AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
+as live only once its program has started. It listens only on
+`host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
+one JSON request per connection: `hello`, `list`, `spawn` (never over a live pane), `kill`,
+`write`, `paste` (a bracketed paste when Claude turned that on, then Enter after 300 ms; pastes to
+one pane go one at a time), `capture` (the visible screen as text), `stop`, and `attach`, which
+turns the connection into frames both ways (`src/server/host/protocol.ts`). One host runs per home:
+it holds the home's host lease, `host.lock`, for as long as it runs (beaten every 10 seconds, as
+`server.lock` is for the server), so a second host refuses to start (exit 75) even when the first is
+only slow to answer; one that lost its lease (it stalled for longer than 45 seconds) ends its panes
+and exits. On the server's side, only "nothing listening on the socket" means no host: a timeout or
+a garbled answer skips that reconcile tick instead, and starts of a host never run two at once. It
+writes `run/host.json` (pid, version, app directory, protocol) when it starts.
+
+**Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just
+attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
+viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
+used themselves. When the active viewer leaves, the one used most recently before it takes over.
+
+**From a terminal.** `agent-k-local attach <name>` shows a session's terminal in the one you run it
+in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no
+name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 
 **Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file.
 The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
@@ -164,8 +195,8 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 - the transcript row is a plain user message (it adds an `origin` naming the plugin), and the
   `UserPromptSubmit` and `Stop` hooks fire as for a typed prompt, so status and usage work as before.
 
-Without a live link the prompt is typed into the terminal as before (tmux bracketed paste, then
-Enter). A prompt is never sent both ways:
+Without a live link the prompt is typed into the terminal as before (the session host's bracketed
+paste, then Enter). A prompt is never sent both ways:
 
 - once handed to the mod, a send that isn't acked within 5 seconds fails, as a failed paste does,
   and the caller keeps the prompt queued; a late ack gets 410, so the mod never runs it;
@@ -299,7 +330,7 @@ Session states, shown with a dot in the rail and on each tab:
 
 **Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
-changes: the branch, worktree, tmux session and Meko agent id were named from it once, at the start,
+changes: the branch, worktree, pane and Meko agent id were named from it once, at the start,
 and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
 empty, longer than 100 characters or hold control characters. The project's activity notes the
 rename, the session's Meko conversation is retitled in the background (`conversation_update`, in
@@ -706,9 +737,10 @@ session or project home, create a session, or move or rename the one on screen; 
 in the accent colour and project names in bold, so they don't read as commands. On Linux and
 Windows these use Ctrl, so the terminal
 doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
-it has focus. To copy from the terminal, drag across the text: tmux selects it and sends it as
-OSC 52, which the page puts on the clipboard. Shift-drag (Option-drag on a Mac) selects in the
-browser instead, and then `Ctrl+C` (`⌘C`) copies rather than interrupting Claude. Clipboard access
+it has focus. To copy from the terminal, drag across the text and press `Ctrl+C` (`⌘C`), which
+copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
+full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
+instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
 
 To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
@@ -808,12 +840,12 @@ the row, an image key picks images for Claude and closes the row once they're pi
 box (it grows with its text to about a fifth of the visible screen, then scrolls) whose text goes
 in as one bracketed paste (with any Escape characters removed), then any held images (see
 Keyboard; images pasted into the box are held above it), then Enter; Send works with images alone,
-and if the terminal isn't connected, the text and images stay. Swiping scrolls through mouse-wheel reports, which tmux hands to Claude Code (it
-runs full screen and takes the mouse). The steps are sent together once a frame, a flick keeps
+and if the terminal isn't connected, the text and images stay. Swiping scrolls through mouse-wheel reports to Claude Code while it has the mouse
+(it runs full screen), and through the terminal's own scrollback otherwise. The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
 its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
-selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches tmux
+selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches Claude
 as a mouse click meanwhile. Tapping the terminal only brings up the keyboard in
 typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
 adjustable in the ⋯ sheet and remembered per browser.
@@ -937,12 +969,12 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then `tmux -L agentk new -d -s ak-<proj>--<slug> -c <worktree>` running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
-| Open tab | Spawns a pty on `tmux attach`, one per viewer. The terminal is resized to fit the browser. tmux 2.7 draws a window at its smallest viewer's size, so a phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
-| Close tab | Kills the pty only. tmux and Claude keep running. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| Open tab | Attaches to the pane in the session host, one attach per viewer. The pane takes the size of the viewer that attached or was used last (see Sizing above). A phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, so it holds no connections it doesn't show, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
+| Close tab | Ends that attach only. The session host and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
-| Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
-| Discard | Chosen in Archive's confirmation step. First runs the [learn step](#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
+| Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise ends the session's pane. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
+| Discard | Chosen in Archive's confirmation step. First runs the [learn step](#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then ends the session's pane, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
 | Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](#open-project)). |
 
 ```sql
@@ -960,7 +992,8 @@ CREATE TABLE project_events (  -- closes and reopens, for the usage stats (a reo
   project_id TEXT REFERENCES projects, kind TEXT CHECK (kind IN ('closed','reopened')), at INTEGER);
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, name TEXT,
-  claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT, tmux_name TEXT,
+  claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT,
+  tmux_name TEXT,                 -- the pane's name in the session host (named when panes were tmux sessions)
   repo_path TEXT,                 -- the repo's real path: the project's, or another one picked in Advanced
   branch_reused INTEGER,          -- 1: the branch existed when the session started
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
@@ -1035,7 +1068,7 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
   controls.
 
 `config.toml` holds host settings: the listen address and port, the server's name, TLS paths, repo folders, the update
-channel, the Meko URL and key (only when typed at install), transcript capture, the tmux socket, the
+channel, the Meko URL and key (only when typed at install), transcript capture, the
 `claude` command, the database path, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
 keep an unused one, update channel, server name, resolving merge conflicts) there too. The server reads the file at
@@ -1147,7 +1180,7 @@ stateDiagram-v2
 | 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running, AgentK's review to come), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
-| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when **Don't save learnings** beside the button was checked), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
+| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when **Don't save learnings** beside the button was checked), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the session's pane, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
   **Request another round**, which posts `/agentk review` (**Request AgentK review** before AgentK
@@ -1913,8 +1946,8 @@ reports.
 **What's in it** (`src/server/callhome.ts`, `buildReport`):
 
 - *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
-  hosts sharing a home count once), the version and update channel, platform, CPU, Node, tmux and
-  Claude Code versions (`tmux -V`, `claude --version`; `''` when they can't be read; our version or
+  hosts sharing a home count once), the version and update channel, platform, CPU, Node and
+  Claude Code versions (`claude --version`; `''` when it can't be read; our version or
   Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
   cut to its leading numbers, else `0.0.0`), local or remote access, the service manager, whether Meko is on (and where its key comes from, and the
   sharing: `api` when AgentK can share through Meko's API, `none` when Meko is off or its API URL
@@ -2041,7 +2074,8 @@ their own copy.
   (up to 8 times), so a slow link whose snapshots take longer still gets through; a quick answer
   to a ping sets them back (`src/web/events.ts`). A browser
   that falls behind doesn't make the server buffer without limit: its terminal stops reading from
-  `tmux attach` until it catches up (tmux copes with a slow client), and it skips state snapshots
+  the session host until it catches up (the host skips a viewer that stops reading and sends it the
+  screen afresh once it does; Claude never waits on a viewer), and it skips state snapshots
   until it has drained, then gets the current one.
 - **TLS is mandatory.** Any address other than localhost requires HTTPS. You can point it at your
   own certificate from the corp CA, or let it generate a self-signed pair; `agent-k-local status`
@@ -2064,27 +2098,57 @@ their own copy.
 Two systemd user units run with lingering enabled, so they start at boot without anyone logging
 in:
 
-- `agent-k-local-tmux.service` owns the tmux server on socket `agentk`. It is never restarted by
-  updates.
+- `agent-k-local-host.service` runs the session host (`agent-k-local host`). It is never
+  restarted by updates or reinstalls.
 - `agent-k-local.service` is the web server, with `Restart=always`. Updates restart only this unit.
 
-Keeping tmux in its own unit is the key point. If tmux were a child of the server's unit, systemd
-would kill every Claude session on each update.
+Keeping the session host in its own unit is the key point. If it were a child of the server's unit,
+systemd would kill every Claude session on each update. The server never starts a host of its own
+while the host service is installed (it reports the service as down), nor while it runs as a
+service itself without the host's (it says to run `agent-k-local install`); without services (a
+source checkout, `--no-service`) it starts one detached, in its own process group.
+
+**The host keeps its version.** A running host keeps the code it started with across updates:
+restarting it ends every Claude (the server's recovery resumes them). So the updater never deletes
+the version directory `run/host.json` names (node-pty runs a helper from it on macOS), and the
+server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one has to be
+restarted (`agent-k-local host restart`), which the server's log says. `agent-k-local host stop`
+ends every session in the host, and refuses while the server for this home runs: it would start
+the host again at once and resume them all. With the server stopped, they resume when it starts.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
-(`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….tmux.plist`), with `RunAtLoad`
+(`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….host.plist`), with `RunAtLoad`
 and `KeepAlive`. They start when you log in, not at boot: Claude Code keeps its login in the
 Keychain, which is only unlocked during a desktop login, so the installer refuses to run without
-one. launchd wants a job's main process to stay in the foreground, so the tmux job runs `tmux -D`
-(tmux 3.2 or newer), which also keeps running with no sessions; the server adds the `_ak`
-keepalive session with `tmux -N`, which never starts a second server. The server job sets
-`AbandonProcessGroup`, so stopping it never takes a tmux down with it. Both jobs set
-`LANG=en_US.UTF-8`, because launchd sets no locale and tmux clients need a UTF-8 one. Updates
+one. The host runs in the foreground, as launchd wants. Both jobs set
+`LANG=en_US.UTF-8`, because launchd sets no locale and Claude needs a UTF-8 one. Updates
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
-back; reinstalling never reloads a loaded tmux job.
+back; reinstalling never reloads a loaded host job.
 
-All of this sits behind one interface in `src/server/service.ts` (install, start, state, remove,
-boot check), with a systemd and a launchd implementation picked by platform.
+**Moving off tmux.** Versions before the session host ran every Claude in tmux (socket `agentk`,
+or `[tmux] socket`), in a tmux service. The updater swaps the app but never writes service files,
+so on its first start a version with the session host adds the host service itself (`addHost`,
+which never restarts the server) and starts the host. Only once a host answers, and before binding
+the hook socket, does it end this home's sessions still in tmux (only panes named by its own
+`state.db`) and wait for their Claudes to exit; until then recovery waits too, so the sessions keep
+running in tmux and none runs twice (a host that comes up later is found by the reconcile tick).
+Recovery resumes them all in the host with `claude --resume`, auto-continuing the turns it cut off
+(the usual guards apply). The tmux service is removed once the update is final
+(`update-pending.json` gone) and no other home has AgentK sessions on its tmux server (removing the
+service ends that server, and its socket is shared by every home on the account). A rollback to a
+version without the host finds the tmux service still there, and the launcher first runs
+`agent-k-local host retire`: it removes the host service, ending every Claude in it, so they resume
+in tmux, none runs twice, and nothing keeps restarting a host that version can't run. To go back to
+such a version by hand, run `agent-k-local uninstall` (it removes both services, ending the
+sessions, and keeps your state), then install that version with `--version`. Without a tmux
+service, a tmux server left with no AgentK sessions is ended at once. This code (`legacytmux.ts`)
+goes after 2026-10-14.
+
+All of this sits behind one interface in `src/server/service.ts` (install, add or remove the host,
+start, restart, state, remove, boot check, removing the old tmux service), with a systemd and a
+launchd implementation picked by platform. `servicesFor(home)` uses the installed services only
+when their `AK_HOME` is exactly this home, so a dev server or a second home never acts on another
+install's services.
 
 ### One server per home
 
@@ -2116,24 +2180,24 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 | Event | What survives | What happens |
 |---|---|---|
 | A phone's page goes to the background, or its network changes | Everything | The server drops the page's sockets once they stop answering its pings. When the page is shown again, it pings its events socket and opens a new one if there's no answer, so it shows the current state instead of the one it had when it was hidden. After 30 seconds or more hidden, it also lets go of its terminals and reconnects the ones on screen, even if the phone kept its timers from running. |
-| Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the running tmux sessions, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](#releases-and-auto-update)). |
+| Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the session host's panes, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](#releases-and-auto-update)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
-| tmux crash | Worktrees, transcripts, state | The unit restarts tmux, and the server relaunches every session with `desired: running` using `claude --resume`. |
+| Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`. |
 | Host reboot or crash | Worktrees, transcripts, state | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
 
 ```mermaid
 sequenceDiagram
   participant SD as systemd user
-  participant T as tmux unit
+  participant T as host unit
   participant S as server
   participant C as claude
   SD->>T: start at boot (linger)
   SD->>S: start
   S->>S: open state.db
-  S->>T: list sessions
+  S->>T: list panes
   loop each session with desired = running and no pane (not one still being created, launched or stopped)
     S->>S: verify worktree, recreate from its branch (or origin/branch) if missing; fail if the branch is gone
-    S->>T: new-session in worktree
+    S->>T: spawn pane in worktree
     alt session was mid-turn
       T->>C: claude --resume session-id "continue prompt"
     else idle or waiting on you
@@ -2158,14 +2222,14 @@ comes back. **Auto-continue is on by default**, with guards:
   auto-continue off.
 - **Failed restarts back off.** If a session can't be restarted (for example, its worktree can't
   be recreated), it shows *exited* with the reason and is retried every 5 minutes; if its branch
-  is gone, it waits for you to resume or discard it. A tmux error other than "no server running"
-  skips that check rather than being read as every pane being gone, and a live pane is never
+  is gone, it waits for you to resume or discard it. A session host error other than "no host
+  running" skips that check rather than being read as every pane being gone, and a live pane is never
   replaced.
 
 ## Releases and auto-update
 
 - **CI (on every PR).** Typecheck, lint and unit tests, on Linux and macOS. Integration tests run
-  against real tmux and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
+  against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once CI and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
@@ -2197,7 +2261,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #     (launchd). Updates are offered in the app, and `agent-k-local install` redoes the setup.
 #     --reinstall, --deps-only, a --version other than the installed one, or options for
 #     `agent-k-local install` (other than --non-interactive) go on
-#  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, curl, gh and Claude Code; offers to
+#  1. checks for git, curl, gh and Claude Code; offers to
 #     install whatever is missing (it shows the commands and asks first): brew on macOS, the
 #     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
 #     from its GitHub release (checksum-verified) into ~/.local/bin, and Claude Code with
@@ -2246,7 +2310,7 @@ The "Updated to" notice shows from the new version's first boot, without waiting
 check.
 
 The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance
-window, because they never touch tmux.
+window, because they never touch the session host.
 
 **Open pages reload themselves.** The server stamps its version into every page it serves
 (`<meta name="ak-version">`, and the page is sent with `Cache-Control: no-cache`). When a page's
@@ -2269,19 +2333,19 @@ first version the server reports counts as the page's.
 | Server | Node 22 + TypeScript, Fastify, `ws`, `node-pty` | node-pty builds on the target host. Using one language across server and web keeps it simple. |
 | Web | Vite + React, xterm.js with the fit and web-links addons | xterm.js is the standard browser terminal. React handles the rail, tabs and dialogs. |
 | State | SQLite via the built-in `node:sqlite`, WAL, `user_version` migrations | A synchronous API suits a single-writer server, and it needs no native module. |
-| Processes | tmux on a private socket, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS) | tmux keeps sessions alive when the server restarts, and you can still attach from iTerm. |
+| Processes | AgentK's session host (Node and node-pty, with a headless xterm per pane), in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS) | It keeps sessions alive when the server restarts, with nothing to install beyond what AgentK ships, and you can still attach from iTerm. |
 | Integrations | Meko MCP over HTTP (optional) and its REST API for sharing, Claude Code hooks, git worktrees | Meko holds projects' datapacks when it's on. The hooks and git are thin adapters. |
 | Release | GitHub Actions, date-based versions, artifact attestations | Versioning and supply-chain checks with no extra tooling. |
 
-*Escape hatch:* `ssh host -t tmux -L agentk attach -t ak-billing-api--fix-retry-backoff` attaches
-to any session from iTerm.
+*Escape hatch:* `ssh host -t agent-k-local attach fix-retry-backoff` attaches to any session from
+iTerm (`Ctrl+\` detaches).
 
 ## Milestones
 
 - **M0 · Repo.** Git repo, the commit skill without agent attribution, CLAUDE.md, a license, the CI
   skeleton, and publishing to GitHub.
 - **M1 · Core.** The server with login and TLS, a Meko connection check, the New project repo
-  picker with a mandatory dedicated datapack, worktree-backed sessions in tmux launched with the
+  picker with a mandatory dedicated datapack, worktree-backed sessions (then in tmux) launched with the
   Meko env vars, and the browser terminal, rail and tabs. Folder trust for worktrees is handled
   automatically.
 - **M2 · Status and durability.** Hooks drive the badges and notifications. The two systemd units,

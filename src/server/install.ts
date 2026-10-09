@@ -20,7 +20,7 @@ import {
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
 import { hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
-import { writeTmuxConf } from './tmux.js';
+import { SessionHost } from './hostclient.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
@@ -145,8 +145,6 @@ export function serviceFailure(svc: ServiceManager, message: string, logsDir: st
 
 /** Installs and (re)starts both background services. Returns false when skipped. */
 function installServices(paths: Paths): boolean {
-  const tmux = which('tmux');
-  if (!tmux) throw new InstallError('tmux was not found on PATH.');
   const svc = hostServices();
   if (!svc) throw new InstallError(`background services aren't supported on ${process.platform}; rerun with --no-service to skip the service setup.`);
   svc.preflight();
@@ -156,7 +154,7 @@ function installServices(paths: Paths): boolean {
   }
   mkdirSync(paths.logs, { recursive: true }); // launchd opens its log files before starting a job
   try {
-    svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, TMUX: tmux, HOST: hostname() }));
+    svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
   } catch (e) {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
     throw e;
@@ -427,10 +425,7 @@ export async function runInstall(args: string[]): Promise<void> {
     const tls = await loadTls(paths, cfg);
     if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
 
-    // 5. tmux config
-    writeTmuxConf(paths);
-
-    // 6. Services
+    // 5. Services
     ui.section('Services');
     if (!isLoopback(cfg.server.bind) && macFirewallOn()) {
       ui.note('The macOS firewall is on. If other devices (like your phone) can\'t connect, allow incoming connections for');
@@ -449,7 +444,7 @@ export async function runInstall(args: string[]): Promise<void> {
       }
     }
 
-    // 7. Setup link and next steps
+    // 6. Setup link and next steps
     const handle = openDb(db);
     try {
       const scheme = tls ? 'https' : 'http';
@@ -606,6 +601,8 @@ export async function runUninstall(args: string[]): Promise<void> {
       svc.remove();
       say('Services removed.');
     }
+    // A session host started without a service (--no-service) ends with its sessions too.
+    await new SessionHost(paths, { services: () => null }).stop().catch(() => undefined);
     const link = join(homedir(), '.local', 'bin', 'agent-k-local');
     try {
       unlinkSync(link);

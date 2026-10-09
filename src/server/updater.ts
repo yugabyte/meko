@@ -585,6 +585,10 @@ export class Updater {
     } catch {
       // no current link
     }
+    // A running session host keeps the version it started from: node-pty runs its helper from
+    // there, and the host keeps running across updates.
+    const host = hostVersionDir(this.deps.paths);
+    if (host) running.add(host);
     const removed = versionsToPrune(names, running, from);
     for (const v of removed) {
       try {
@@ -640,5 +644,17 @@ export class Updater {
     if (this.isRunning(pending.to) && pending.from && !this.isRunning(pending.from)) {
       this.deps.log(`Updated from ${pending.from} to ${this.deps.version}`);
     }
+  }
+}
+
+/** The app version directory the running session host started from (run/host.json), if any. */
+export function hostVersionDir(paths: Paths): string | null {
+  try {
+    const st = JSON.parse(readFileSync(paths.hostState, 'utf8')) as { appDir?: unknown; version?: unknown; pid?: unknown };
+    if (typeof st.pid === 'number') process.kill(st.pid, 0);
+    if (typeof st.appDir === 'string' && st.appDir) return basename(st.appDir);
+    return typeof st.version === 'string' ? st.version : null;
+  } catch {
+    return null;
   }
 }

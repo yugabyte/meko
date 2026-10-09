@@ -1,8 +1,8 @@
 // Copying terminal text to the browser clipboard.
 
 /**
- * The text of an OSC 52 "set clipboard" sequence (`<targets>;<base64>`), which tmux sends
- * when you select with the mouse. Null for queries (`?`), clears and malformed data.
+ * The text of an OSC 52 "set clipboard" sequence (`<targets>;<base64>`), which a program in the
+ * terminal sends to copy text (Claude Code does, for a selection it makes itself). Null for queries (`?`), clears and malformed data.
  */
 export function decodeOsc52(data: string): string | null {
   const i = data.indexOf(';');

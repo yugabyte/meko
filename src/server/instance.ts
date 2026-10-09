@@ -91,6 +91,12 @@ function held(l: Lease, deps: InstanceDeps): boolean {
   return l.pid !== deps.pid && deps.alive(l.pid);
 }
 
+/** The lease when another live process holds it (a server on this home, running here or elsewhere), else null. */
+export function heldLease(file: string, deps: InstanceDeps = defaultDeps()): Lease | null {
+  const l = readLease(file);
+  return l && held(l, deps) ? l : null;
+}
+
 /** Throws InstanceBusyError when a live server holds the home's lease (for `install`, which mustn't run beside it on another host). */
 export function assertFree(file: string, home: string, deps: InstanceDeps = defaultDeps()): void {
   const l = readLease(file);

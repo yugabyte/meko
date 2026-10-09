@@ -283,6 +283,14 @@ export function Banners({
 
   return (
     <div className="banners">
+      {state.sessionHost?.outdated && (
+        <div className="banner warn" role="alert">
+          <span className="banner-text">
+            The session host on {state.serverName} runs version {state.sessionHost.version}, too old for this version of AgentK
+            Local, so sessions can’t start. Run agent-k-local host restart there: running sessions restart and resume.
+          </span>
+        </div>
+      )}
       {conn === 'closed' && (
         <div className="banner warn">
           <span>

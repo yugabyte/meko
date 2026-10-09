@@ -98,8 +98,8 @@ export function pastePath(path: string, bracketed: boolean): string {
 }
 
 /**
- * One mouse-wheel step at a cell (1-based), as an SGR mouse report (tmux turns SGR reporting on
- * with `mouse on`). Coordinates are clamped to the terminal.
+ * One mouse-wheel step at a cell (1-based), as an SGR mouse report (sent only while the program
+ * tracks the mouse; Claude Code turns SGR reporting on with it). Coordinates are clamped to the terminal.
  */
 export function wheelReport(up: boolean, col: number, row: number, cols: number, rows: number): string {
   const clamp = (v: number, max: number) => Math.min(Math.max(1, Math.round(v)), Math.max(1, max));
@@ -156,3 +156,5 @@ export const FONT_MAX = 16;
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
 }
+
+export { isTerminalReport } from '../shared/termreports';

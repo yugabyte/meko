@@ -5,7 +5,7 @@ should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and
 
 AgentK Local is a self-hosted web workbench for Claude Code. A project is an effort on a feature
 or product, worked on in a git repo. Each task is a session with its own git worktree and a
-tmux-hosted Claude process. A task runs on Explore → Design → Code → PR & Review → Merge & Close,
+Claude process held by AgentK's session host. A task runs on Explore → Design → Code → PR & Review → Merge & Close,
 starting at Explore, Design or Code (the user picks), and a Review a PR session (someone else's PR,
 with AgentK assisting the reviewer) stays in one Reviewing PR stage. The user can move a task
 between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (Meko is optional). The design
@@ -31,10 +31,10 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | Path | What it is |
 |---|---|
 | `src/shared/types.ts` | The API contract: every REST route, WebSocket message and shared type. Change it first. |
-| `src/server/cli.ts` | Entry point: `serve`, `install`, `uninstall`, `setup-link`, `status`, `logs`, `selftest`, `version`. |
-| `src/server/core.ts` | Wires config, db, tmux, Meko and the services; timers; `state()` snapshot for the UI. |
+| `src/server/cli.ts` | Entry point: `serve`, `host` (`host stop`, `host restart`, and `host retire` for the launcher's rollback), `attach`, `install`, `uninstall`, `setup-link`, `status`, `logs`, `selftest`, `version`. |
+| `src/server/core.ts` | Wires config, db, the session host, Meko and the services (adding the host service for a server that updated itself); timers; `state()` snapshot for the UI. |
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
-| `src/server/sessions.ts` | Session lifecycle in tmux: create (`begin` answers once the row is in; the worktree and launch follow, and a worktree that can't be made is a failed start; a task on an existing branch or an open PR, a fork's included, works on that branch as it is), launch, hook-driven status, submitting prompts (through AgentK's mod while it's live, else typed into the terminal), recovery and auto-continue, archive. |
+| `src/server/sessions.ts` | Session lifecycle in the session host: create (`begin` answers once the row is in; the worktree and launch follow, and a worktree that can't be made is a failed start; a task on an existing branch or an open PR, a fork's included, works on that branch as it is), launch, hook-driven status, submitting prompts (through AgentK's mod while it's live, else typed into the terminal), recovery and auto-continue, archive. |
 | `src/server/lifecycle.ts` | Stages and gates, moves by hand between stages, GitHub polling, the review watchers (by reviewer mode), the merge-conflict watcher (`[pr] resolve_conflicts`, also in Settings → General) and CI-fix watcher with their prompt queue, queued gates (Open PR after this turn, Merge when ready: `sessions.queued_gate`), Merge & Close (merge, then cleanup), and a Review a PR session's watch on its PR (new commits, merged or closed) and Update to latest. |
 | `src/server/prreview.ts` | Review a PR and sharing with reviewers: the PRs a review can start on (found on GitHub by the project's datapack ids, in any repo, each matched to a local clone, a fork first), cloning a PR's repo, and who reviews the project's open PRs (with emails remembered per GitHub login). A review's create path (fetching `refs/pull/<n>/head`, a review branch with no upstream) is in `sessions.ts`, its git helpers in `git.ts`. |
 | `src/shared/stages.ts` | The rules for moving a session by hand: where a task can move, what can't be moved, where the move dialog starts, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. |
@@ -50,7 +50,11 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/limits.ts` | Plan usage limits (5-hour and weekly) from status line reports and AgentK's mod's `session.measure` readings: parsing, merging, expiry, and the latest reading kept in `kv`. |
 | `src/server/hooks.ts` | Unix-socket receiver for Claude Code hook events, the edit guard's decisions, the SessionStart context and AgentK's mod (`/mod/*`). It binds under a temporary name and renames into place, so closing never removes another server's socket; `socketId()` tells its file from one put there since (the server binds again when it changes). |
 | `src/server/instance.ts` | One server per AgentK home, even across hosts sharing it over NFS: the `server.lock` lease (heartbeat, stale after 45 s), taken before `serve` opens anything; on this host it waits for the old lease to be released or go stale, and a refused start exits 75. |
-| `src/server/tmux.ts`, `git.ts`, `github.ts` | Thin wrappers over the tmux, git and gh CLIs. |
+| `src/server/host/host.ts`, `host/protocol.ts` | The session host (`agent-k-local host`): every Claude in a node-pty pty, a headless xterm per pane for the screen a new viewer gets and for answering terminal queries, panes kept with their exit status, pastes, captures, attach streams with the active viewer's size and a fresh screen for a viewer that fell behind, `run/host.json`, and the home's host lease (`host.lock`, as `instance.ts` guards the server). Its protocol on `host.sock` (one JSON request per connection; `attach` then frames) and `PROTOCOL`/`MIN_PROTOCOL`. |
+| `src/server/hostclient.ts` | The server's side of the host (`SessionHost`): requests, telling "no host" from other failures, starting a host (through its service when installed, never one of our own then; else detached), attach streams, `paneName()`. |
+| `src/server/attachcli.ts` | `agent-k-local attach [name]`: a session's terminal in your own (`Ctrl+\` detaches). |
+| `src/server/legacytmux.ts` | Moving an install off tmux (versions before the session host): ending this home's sessions still in tmux at startup, so recovery resumes them in the host, and removing the tmux service once the update is final. Remove after 2026-10-14. |
+| `src/server/git.ts`, `github.ts` | Thin wrappers over the git and gh CLIs. |
 | `src/server/worktrees.ts` | The worktree pool: which session owns each worktree, idle ones shared by every project on a repo (keyed by its real path) so build outputs carry over, claiming, releasing, trimming to `[worktrees] idle_per_repo`, removing ones unused for `idle_days`, and the startup sweep. |
 | `src/server/design.ts` | Reading a session's design: the markdown design file, or the page and claude.ai link of a published Artifact; its open questions (`questions.json` beside it, or a markdown design's "Open questions" list) and the answers formatted for Claude. The Design-stage edit guard is `SessionManager.guard()` (hook `guard.sh`, route `/guard` on the hook socket). |
 | `src/server/pastes.ts` | Images pasted into a terminal (`POST /api/sessions/:id/images`): checked by their bytes (PNG, JPEG, GIF, WebP; 20 MB), saved owner-only under `pastes/<session>/` for Claude Code to read by path, and removed when the session is archived. Images added in the New session dialog (`POST /api/projects/:id/images`) are staged under `pastes/.new/<project>/`, named by id in `CreateSessionRequest.images` (never a path), moved into the session's folder when it's created, and swept after a day. The routes' `image/*` body parser exists only in their own Fastify scope. |
@@ -66,6 +70,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/usage.ts` | Token usage: incremental transcript reader (main + subagents), which also finds pushes to the base branch and Meko calls, and per session/project/model/day totals and costs plus the all-projects overview (`GET /api/usage`). |
 | `src/server/callhome.ts`, `filetypes.ts` | Anonymous usage stats: the report (`buildReport`, counts only, Meko use included; its contract is `CallHomeReport` and `docs/call-home-report.schema.json`), sending it to the collector (hourly in an install's first day, then daily; `[call_home]`, or the `CALL_HOME_URL` a release carries), and file types (paths reduced to extensions right away). |
 | `src/server/mekousage.ts`, `mekosavings.ts` | Meko calls in transcripts: finding them and their results (found, empty, failed), the counts per session and project, a `seed` row for what AgentK's search at start passed to Claude, and the tokens Meko brought into first turns, and for the usage stats calls by tool (`toolCounts`, naming only the lookups and saves) and the searches at start (`mekoStarts`), the tokens calls sent (`toolSent`), learn steps (`learnRuns`), AgentK's own calls and transcript captures; the fixed formula, with its constants, for what a search that found something (or a seed) saved. |
+| `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `agent-k-local attach` drop them, since the session host answers them. |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`) and pasting into its field, and the most one invite can send to. Used by the server and the web UI. |
 | `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, and the web app that goes with an MCP URL (`mekoWebUrl`). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
@@ -73,8 +78,8 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/server/auth.ts`, `tls.ts`, `trust.ts` | Login, TOTP, rate limiting; TLS certs; Claude Code folder trust. |
 | `src/server/updater.ts`, `install.ts` | Self-update with rollback (tarball per platform and CPU); host install. |
 | `src/server/mekosetup.ts` | Meko set up for Claude Code (plugin, MCP server, key): reading it from Claude Code's settings and `~/.claude.json` (the user-scope `meko` server), what keeps it off AgentK's Meko, and running Meko's own setup package from npm (integrity-checked) with the bundled Node. |
-| `scripts/install.sh` | The installer: stops early where AgentK Local is already installed (unless `--reinstall`), installs missing tools (tmux, git, curl, gh, Claude Code) after asking, downloads and verifies the release, then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
-| `src/server/service.ts` | The two background services (server, tmux) behind one `ServiceManager`: systemd user units on Linux (run only on the install host, `ConditionHost=`), LaunchAgents on macOS. Install, start, state, remove, boot check. |
+| `scripts/install.sh` | The installer: stops early where AgentK Local is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, Claude Code) after asking, downloads and verifies the release, then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
+| `src/server/service.ts` | The two background services (server, session host) behind one `ServiceManager`, and removing the tmux service of older versions; `servicesFor(home)` uses them only when they run this home: systemd user units on Linux (run only on the install host, `ConditionHost=`), LaunchAgents on macOS. Install, start, state, remove, boot check. |
 | `src/server/tty.ts`, `health.ts` | CLI output helpers (sections, marks, color only on a TTY); local `/healthz` probe used by `install` and `status`. |
 | `src/web/components/StartupPanel.tsx` | The "Starting…" view over the terminal, shown as soon as the New session dialog closes: startup steps from `Session.startup`, elapsed time, and the opening stage; after 90 s on the last steps, **Show terminal** hides it for that start. |
 | `src/web/components/AskSheet.tsx` | Claude's `AskUserQuestion` questions (`Session.asking`): the *AgentK asks* bar above the terminal, the full-screen dialog (a full-height sheet on a phone) it opens, and the form, also shown at the top of the design's Questions view; each option's preview has a **Wrap lines** toggle (`AskPreview`). |
@@ -89,18 +94,18 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 | `src/web/events.ts`, `hooks/useEvents.ts` | The `/ws/events` connection behind the UI's `AppState`: reconnecting with backoff, and pinging a socket that has been quiet for 30 seconds or whose page was just shown again or came back online, then replacing it when no answer comes back (a phone often never hears that the server dropped its socket); deadlines that pass double the next ones, for slow links. |
 | `src/web/reload.ts`, `hooks/useReload.ts` | Reloading an open page once the server runs another version than the one stamped into the page (`<meta name="ak-version">`, added in `server.ts`), waiting while the user is busy (a dialog open, a field focused, unsent text, images held for Claude), with a Reload banner meanwhile and a once-per-version guard. |
 | `src/web/notifyLeader.ts`, `public/sw.js` | Which open page shows browser notifications (the one used last, through a Web Lock it steals on focus), and the service worker that shows them and, on a click, switches to the tab already showing the session. |
-| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (tmux OSC 52, ⌘C/Ctrl+C, and the key bar's select mode on touch screens, via `clipboard.ts`), holds images for Claude (paste, drop, Ctrl+V, a paste into the compose box, or the key bar's image key: uploaded at once, held in a strip by `heldImages.ts` and `HeldImages.tsx`, and the saved paths pasted with the next Enter or Send), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input, reconnecting (backoff, and the login screen on a 4401 close via `checkLogin()` in `api.ts`) and releasing phone terminals that are hidden or off screen. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
+| `src/web/` | React + xterm.js UI. `api.ts` wraps every route; `terminals.ts` caches one terminal per session, copies selections to the clipboard (OSC 52 from a program, ⌘C/Ctrl+C, and the key bar's select mode on touch screens, via `clipboard.ts`), holds images for Claude (paste, drop, Ctrl+V, a paste into the compose box, or the key bar's image key: uploaded at once, held in a strip by `heldImages.ts` and `HeldImages.tsx`, and the saved paths pasted with the next Enter or Send), and handles touch scrolling (batched wheel steps, momentum after a flick, WebGL rendering on touch screens), the key bar's input, reconnecting (backoff, and the login screen on a 4401 close via `checkLogin()` in `api.ts`) and releasing phone terminals that are hidden or off screen. Has its own [AGENTS.md](src/web/AGENTS.md) and [REVIEW.md](src/web/REVIEW.md): every UI change must work on a phone. |
 | `src/web/hooks/useMedia.ts`, `components/TopBar.tsx`, `SessionSheet.tsx`, `TermKeys.tsx` | The phone layout: breakpoint hooks and `--app-h`/`--app-top` (pin the app, the dialog and sheet overlays and the sign-in screens to the visible viewport, above the on-screen keyboard; `keepFocusInView` brings the sign-in screens' focused field back into view once the keyboard is up), the app bar (on the session screen it holds the session tabs), the ⋯ session sheet (which also holds the stage bar), and the terminal key bar and compose box. `src/web/keys.ts` holds the key sequences, bracketed paste and wheel reports they send. |
 | `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, CI and releases (Linux and macOS), and Dependabot (`dependabot.yml`). `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release-notes.sh` decides which types release; their type lists are the ones the tests check (the docs and the commit skill repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`. |
-| `test/` | Unit tests, and integration tests against real tmux and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
+| `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 
 ## Invariants (don't break these)
 
-1. **Sessions survive the server.** tmux runs in its own service (`agent-k-local-tmux.service` on
-   Linux, the `com.yugabyte.agent-k-local.tmux` LaunchAgent on macOS). Never start tmux or Claude as
+1. **Sessions survive the server.** The session host runs in its own service (`agent-k-local-host.service`
+   on Linux, the `com.yugabyte.agent-k-local.host` LaunchAgent on macOS). Never start the host or Claude as
    children of the server's service or process group. Server restarts and updates must never stop a
-   session. Manage the services only through `service.ts`. When the tmux service is installed, the server
-   never starts tmux itself; it reports the service as down.
+   session. Manage the services only through `service.ts`. When the host service is installed, the server
+   never starts a host itself; it reports the service as down.
 2. **Recovery is idempotent.** `recover()` and `reconcile()` may run at any time. A session with a live
    pane is left alone, and so is one still being created or launched (it has no pane yet); a missing
    pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes; after two
@@ -117,9 +122,10 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
 4. **No shell interpolation of user input.** Use `execFile`/`spawn` with argument arrays. The only
    shell text we generate is the launcher script, and every value in it goes through `shq()`.
 5. **Migrations are append-only.** Add a new entry to `MIGRATIONS` in `db.ts`; never edit a shipped one.
-6. **tmux 2.7 compatibility** (RHEL 8): no `new-session -e`, window options via `set-window-option`,
-   exact targets as `=name:`. macOS needs tmux 3.2 (the launchd job runs `tmux -D`), so 3.2-only
-   flags are allowed only on the macOS path.
+6. **The session host outlives updates.** A running host keeps the code it started with, and restarting
+   it ends every Claude: nothing restarts it by itself. Keep `src/server/host/` small; bump `PROTOCOL` in
+   `host/protocol.ts` for a change an older peer can't read, and keep the server working with hosts back
+   to `MIN_PROTOCOL`. The updater keeps the version directory the host runs from.
 7. **Meko is optional; a project has at most one dedicated datapack.** Without a key (or with
    `[meko] enabled = false`) AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
    lines in their prompt, and nothing is saved there. Each session gets its own
@@ -145,7 +151,7 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
   **AgentK**; **Claude** is only for the Claude Code process and its terminal (starting, exits,
   Resume, typing into it). Prompts sent to Claude still address Claude.
 - The server is the source of truth; the UI renders `AppState` pushed over `/ws/events`.
-- Tests: new behavior gets a test. Integration tests use real tmux and git; GitHub is mocked with
+- Tests: new behavior gets a test. Integration tests use a real session host and git; GitHub is mocked with
   `vi.mock('../../src/server/github.js')`. Tests must never touch the real `~/.claude.json` or Meko
   (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
   `CLAUDE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty

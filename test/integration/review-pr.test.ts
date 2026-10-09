@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FoundPr, PrInfo, PrPeople, PrWatch } from '../../src/server/github.js';
 
-// GitHub is mocked; git (with "GitHub" repos as local bare repos), tmux and the fake claude are real.
+// GitHub is mocked; git (with "GitHub" repos as local bare repos), the session host and the fake claude are real.
 const gh = vi.hoisted(() => ({
   info: new Map<string, PrInfo>(),
   watch: new Map<string, PrWatch>(),
@@ -44,7 +44,7 @@ type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const DP = '0f1e2d3c-1111-4222-8333-444455556666';
 
-describe('Review a PR sessions (real tmux + git, fake claude, GitHub mocked)', () => {
+describe('Review a PR sessions (real session host + git, fake claude, GitHub mocked)', () => {
   let env: TestEnv;
   /** "github.com/acme/demo": a bare repo, reached through url.insteadOf. */
   let upstream: string;

@@ -9,7 +9,7 @@ import { repoFolder } from '../../src/server/worktrees.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
-describe('sessions in another repo and on a branch you name (real tmux + git, fake claude)', () => {
+describe('sessions in another repo and on a branch you name (real session host + git, fake claude)', () => {
   let env: TestEnv;
   /** A second scanned repo, cloned from origin.git, whose default branch is trunk. */
   let other: string;

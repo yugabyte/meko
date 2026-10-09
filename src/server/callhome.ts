@@ -62,7 +62,7 @@ const KV_FIRST_SENT = 'call_home_first_sent';
 /** Plain model ids (`claude-opus-5-5`), as the collector's schema has them. Anything else is `other`. */
 export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 /**
- * Versions (ours, Node's, tmux's `3.2a`, Claude Code's), as the collector's schema has them: dotted
+ * Versions (ours, Node's, Claude Code's), as the collector's schema has them: dotted
  * numbers, one letter after them, and a prerelease that is a lane word or a number, so a version
  * can't spell a name.
  */
@@ -416,10 +416,7 @@ export interface InstallInputs {
 
 export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   const probe = o.probe ?? defaultProbe;
-  const [tmux, claudeCode] = await Promise.all([
-    probeVersion(probe, 'tmux', ['-V'], /(\d+(?:\.\d+)*[a-z]?)/),
-    probeVersion(probe, o.config.claude.command, ['--version'], /(\d+\.\d+\.\d+)/),
-  ]);
+  const claudeCode = await probeVersion(probe, o.config.claude.command, ['--version'], /(\d+\.\d+\.\d+)/);
   const meko = mekoConfigured(o.config);
   return {
     version: reportVersion(o.version),
@@ -427,7 +424,6 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     platform: process.platform,
     arch: process.arch,
     node: reportVersion(process.versions.node),
-    tmux,
     claudeCode,
     access: isLoopback(o.config.server.bind) ? 'local' : 'remote',
     service: serviceKind(),
