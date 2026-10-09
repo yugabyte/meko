@@ -459,6 +459,16 @@ type ConnectivitySupporter interface {
 	SupportsConnectivity() bool
 }
 
+// SourceRangesUpdater is implemented by a deployer that can replace an nlb_*
+// endpoint's allowlist on its live load-balancer Service. It patches that one
+// field and nothing else, for the reason ResizeEndpoint does not patch the pod
+// template: re-rendering the release would also apply whatever else the stored
+// record says — a resized endpoint's new size, for one — and roll the pod.
+// Durability across a later redeploy is the caller's job (it persists the list).
+type SourceRangesUpdater interface {
+	UpdateSourceRanges(ctx context.Context, name string, cidrs []string) error
+}
+
 // IngressSupporter is implemented by a deployer that can place an endpoint on a
 // shared ingress shard. Separate from ConnectivitySupporter because the two ask
 // different questions: that one is "can this driver render an exposure at all",

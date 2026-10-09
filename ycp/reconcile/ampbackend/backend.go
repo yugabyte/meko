@@ -703,7 +703,7 @@ func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
 	}
 	apply, ok := updateFuncs[r.Kind]
 	if !ok {
-		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only branch and endpoint settings, endpoint resize, branch extensions, extension registrations, and the controller and fleet versions)", r.Kind))
+		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only branch and endpoint settings, endpoint resize and allowed CIDRs, branch extensions, extension registrations, and the controller and fleet versions)", r.Kind))
 	}
 	return apply(b, ctx, r)
 }
@@ -903,14 +903,22 @@ func (d *driftSet) err(format string, args ...any) error {
 		fmt.Errorf(format+": %s", append(args, strings.Join(d.reasons, "; "))...))
 }
 
-// updateEndpoint converges an endpoint's settings and its compute reservation.
+// updateEndpoint converges an endpoint's settings, its allowed CIDRs and its
+// compute reservation.
 //
-// Two calls, and which one carries the generation is the whole ordering argument.
-// The settings PATCH goes FIRST and is synchronous, so a 200 means the row is
-// written; the resize that may follow is a task, and the worker stamps the
-// generation only once that task has succeeded — by which time the settings have
-// provably landed. A retryable PATCH failure returns before the resize is issued,
-// so no generation can ever be claimed for settings that did not land.
+// Up to three calls, and which one carries the generation is the whole ordering
+// argument: only the LAST call issued may. The settings PATCH goes FIRST and is
+// synchronous, so a 200 means the row is written; the connectivity update and the
+// resize after it are tasks, and the worker stamps the generation only once its
+// task has succeeded — by which time everything before it has provably landed. A
+// retryable PATCH failure returns before any task is issued, so no generation can
+// ever be claimed for settings that did not land.
+//
+// The two tasks are issued in one tick only on a drifted update, which has no next
+// tick. Otherwise this backend follows one task per resource (setInflight), so the
+// connectivity update goes alone, carrying the generation only when no resize
+// follows, and returns Pending; the next tick finds the row reporting the new
+// ranges and issues the resize with the generation.
 //
 // The resize is issued only when the spec declares resources. It used to go out
 // unconditionally, which was harmless — an omitted dimension keeps the endpoint's
@@ -932,8 +940,8 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 	}
 
 	// Computed before anything is issued, for the same reason as updateBranch: a
-	// spec declaring connectivity — which no update verb carries — never fully
-	// lands, and claiming the generation would leave the engine Noop'ing the
+	// spec declaring a field no update verb carries (connectivity.mode, role,
+	// tags) never fully lands, and claiming the generation would leave the engine Noop'ing the
 	// endpoint forever at a generation its spec never met.
 	spec, err := endpointSpecOf(r)
 	if err != nil {
@@ -942,6 +950,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 	ep := idx.endpointRow[r.Name]
 	drift := driftSet{reasons: unappliedEndpoint(spec, ep)}
 	resizing := spec.Resources != nil
+	cidrs, recidr := cidrsToApply(spec, ep)
 
 	// Before anything is issued, and before anything can claim a generation: the
 	// last update may have planned a task that is still running or has failed. See
@@ -962,7 +971,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 	// Drift excluded because there would be nothing to stamp: a spec that never fully
 	// lands claims no generation, so the call would carry an empty body and no
 	// generation either.
-	if !changed && !resizing && !drift.any() && b.generationBehind(r, ep.YcpGeneration) {
+	if !changed && !resizing && !recidr && !drift.any() && b.generationBehind(r, ep.YcpGeneration) {
 		changed = true
 	}
 	if changed {
@@ -970,7 +979,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 		if drift.any() {
 			gen = 0 // claim nothing; see the drift note above
 		}
-		if !resizing && gen > 0 {
+		if !resizing && !recidr && gen > 0 {
 			body.YcpGeneration = &gen
 		}
 		if err := b.patchSettings(ctx, func(c context.Context) (*http.Response, error) {
@@ -988,6 +997,22 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 			// generation is now unclaimable, which the drift list takes care of.
 			drift.fold(err)
 		}
+	}
+
+	if recidr && !drift.any() {
+		gen := r.Generation
+		if resizing {
+			gen = 0 // the resize carries it, next tick
+		}
+		// Pending on success; the resize, if any, follows once this task is done.
+		return b.applyUpdate(ctx, key, gen,
+			func(c context.Context, gen int64) (*http.Response, error) {
+				req := ampclient.UpdateEndpointConnectivityRequest{AllowedCidrs: cidrs}
+				if gen > 0 {
+					req.YcpGeneration = &gen
+				}
+				return b.api.UpdateEndpointConnectivity(c, poolID, clusterID, branchID, endpointID, req)
+			})
 	}
 
 	if resizing {
@@ -1013,6 +1038,25 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 			// outcome has nowhere to be returned to. Folding it in is the only way it
 			// is reported at all: dropped, a refused resize leaves the row naming an
 			// unrelated immutable field and nothing else.
+			drift.fold(err)
+		}
+	}
+	if recidr && drift.any() {
+		// A drifted update is reported once and never re-issued (driftSet.fold), so
+		// there is no next tick to defer to: both tasks go out now, the resize first.
+		// Not through applyUpdate, whose priorTask would read the resize just planned
+		// as in flight and send nothing; nothing reads the in-flight record of a
+		// drifted update back, so there is none to keep. The controller's endpoint
+		// lock serializes the two.
+		resp, err := b.api.UpdateEndpointConnectivity(ctx, poolID, clusterID, branchID, endpointID,
+			ampclient.UpdateEndpointConnectivityRequest{AllowedCidrs: cidrs})
+		if err == nil {
+			var taskID *openapi_types.UUID
+			if taskID, err = b.mutateTask(resp); err == nil && taskID != nil {
+				err = reconcile.Pending(fmt.Errorf("controller task %s planned for generation 0", *taskID))
+			}
+		}
+		if err != nil {
 			drift.fold(err)
 		}
 	}
@@ -1055,23 +1099,31 @@ func connectivityMode(c *ampclient.EndpointConnectivity) ampclient.EndpointConne
 	return *c.Mode
 }
 
-// allowedCidrs is the declared or reported source ranges, sorted so an
-// order-only difference is not reported as drift.
+// allowedCidrs is the declared or reported source ranges, normalised as the
+// controller stores them — trimmed, empty entries dropped — and sorted, so neither
+// a padded entry nor an order-only difference reads as a change.
 func allowedCidrs(c *ampclient.EndpointConnectivity) []string {
 	if c == nil || c.AllowedCidrs == nil {
 		return nil
 	}
-	out := append([]string(nil), (*c.AllowedCidrs)...)
+	var out []string
+	for _, cidr := range *c.AllowedCidrs {
+		if cidr = strings.TrimSpace(cidr); cidr != "" {
+			out = append(out, cidr)
+		}
+	}
 	sort.Strings(out)
 	return out
 }
 
 // unappliedEndpoint names the endpoint-spec fields whose declared value the
 // controller does not report, i.e. the ones this update did not and cannot
-// apply. What is left here after the settings verb is wired is create-time in the
-// controller — connectivity, role and tags, which no update verb carries — plus
-// extended_config, which is the one surface updateEndpointSettings does NOT take,
-// so it stays unfixable for a reason of its own.
+// apply. What is left here is create-time in the controller — connectivity.mode,
+// role and tags, which no update verb carries — plus extended_config, which is the
+// one surface updateEndpointSettings does NOT take, so it stays unfixable for a
+// reason of its own. allowed_cidrs is here only alongside a mode change: the
+// controller validates a new list against the CURRENT mode, so it cannot be
+// applied while the mode is wrong (cidrsToApply).
 //
 // disk_type is deliberately not compared: the Endpoint response does not report
 // it, so a declared value cannot be told from the one the endpoint was created
@@ -1082,9 +1134,7 @@ func unappliedEndpoint(spec endpointSpec, ep ampclient.Endpoint) []string {
 		if connectivityMode(spec.Connectivity) != connectivityMode(ep.Connectivity) {
 			out = append(out, "connectivity.mode")
 		}
-		// Only compared when declared: an omitted list leaves whatever create set.
-		if spec.Connectivity.AllowedCidrs != nil &&
-			!equalStrings(allowedCidrs(spec.Connectivity), allowedCidrs(ep.Connectivity)) {
+		if _, recidr := cidrsToApply(spec, ep); !recidr && cidrsDiffer(spec, ep) {
 			out = append(out, "connectivity.allowed_cidrs")
 		}
 	}
@@ -1174,6 +1224,28 @@ func branchSettingsPatch(spec branchSpec, br ampclient.Branch) (ampclient.Update
 	req.WriteTokenSettings = (*ampclient.WriteTokenSettings)(settingsSurface(
 		(*map[string]interface{})(spec.WriteTokenSettings), (*map[string]interface{})(br.WriteTokenSettings)))
 	return req, req.PgSettings != nil || req.WriteTokenSettings != nil
+}
+
+// cidrsDiffer reports whether the spec declares an allowed_cidrs list the
+// endpoint does not report. Only compared when declared: an omitted list leaves
+// whatever is in force.
+func cidrsDiffer(spec endpointSpec, ep ampclient.Endpoint) bool {
+	return spec.Connectivity != nil && spec.Connectivity.AllowedCidrs != nil &&
+		!equalStrings(allowedCidrs(spec.Connectivity), allowedCidrs(ep.Connectivity))
+}
+
+// cidrsToApply is the list updateEndpointConnectivity should be sent, and whether
+// it should be sent at all: the declared list differs from the reported one and
+// the mode matches, since the controller judges a list by the mode in force.
+func cidrsToApply(spec endpointSpec, ep ampclient.Endpoint) ([]string, bool) {
+	if !cidrsDiffer(spec, ep) || connectivityMode(spec.Connectivity) != connectivityMode(ep.Connectivity) {
+		return nil, false
+	}
+	out := allowedCidrs(spec.Connectivity)
+	if out == nil {
+		out = []string{} // [] removes the restriction; the field is required
+	}
+	return out, true
 }
 
 func equalStrings(a, b []string) bool {

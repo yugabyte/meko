@@ -57,13 +57,14 @@ type StoragePoolAssignment struct {
 //
 // poolSpec is the synthesized storage-pool spec used only when the pool row is
 // auto-created (the caller derived its owner from the pool name).
+// guard, when non-nil, vets every update onto an existing resource (UpdateGuard).
 //
 // A lost deadlock (40P01) is translated to ErrConcurrentPoolUpdate so the caller can
 // map it to a retryable status; every other error is returned verbatim.
 func (r *EnvironmentRepo) ApplyStoragePoolPatches(
-	storagePool string, regions []models.RegionResources, poolSpec []byte,
+	storagePool string, regions []models.RegionResources, poolSpec []byte, guard UpdateGuard,
 ) ([]StoragePoolAssignment, error) {
-	assignments, err := r.applyStoragePoolPatches(storagePool, regions, poolSpec)
+	assignments, err := r.applyStoragePoolPatches(storagePool, regions, poolSpec, guard)
 	if err != nil && isDeadlock40P01(err) {
 		return nil, fmt.Errorf("%w: %v", ErrConcurrentPoolUpdate, err)
 	}
@@ -71,7 +72,7 @@ func (r *EnvironmentRepo) ApplyStoragePoolPatches(
 }
 
 func (r *EnvironmentRepo) applyStoragePoolPatches(
-	storagePool string, regions []models.RegionResources, poolSpec []byte,
+	storagePool string, regions []models.RegionResources, poolSpec []byte, guard UpdateGuard,
 ) ([]StoragePoolAssignment, error) {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -122,7 +123,7 @@ func (r *EnvironmentRepo) applyStoragePoolPatches(
 				Kind: "storage-pool", Name: storagePool, Spec: poolSpec,
 			}}, patches...)
 		}
-		if err := applyDesiredPatchesTx(tx, envUUID, storagePool, patches); err != nil {
+		if err := applyDesiredPatchesTx(tx, envUUID, storagePool, patches, guard); err != nil {
 			return nil, err
 		}
 		assignments = append(assignments, StoragePoolAssignment{EnvUUID: envUUID, Region: rr.Region})

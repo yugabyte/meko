@@ -663,6 +663,27 @@ func (b *PgBackend) UpdateEndpointResources(ctx context.Context, endpointID uuid
 	return nil
 }
 
+// UpdateEndpointAllowedCIDRs replaces config.allowed_cidrs, leaving the other
+// config fields intact. An empty list is stored as [], which reads back as no
+// restriction. Idempotent; an absent row is a no-op.
+func (b *PgBackend) UpdateEndpointAllowedCIDRs(ctx context.Context, endpointID uuid.UUID, cidrs []string) error {
+	if cidrs == nil {
+		cidrs = []string{}
+	}
+	payload, err := json.Marshal(cidrs)
+	if err != nil {
+		return fmt.Errorf("marshal allowed cidrs: %w", err)
+	}
+	if _, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints
+		    SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object('allowed_cidrs', $2::jsonb)
+		  WHERE id = $1::uuid`,
+		endpointID.String(), payload); err != nil {
+		return fmt.Errorf("update endpoint allowed cidrs: %w", err)
+	}
+	return nil
+}
+
 // SetEndpointYCPGeneration records the YCP desired-state generation fully applied
 // to an endpoint (meko#985). Called by the task worker once every step of the
 // task carrying it succeeded, so the value means "the work landed" rather than

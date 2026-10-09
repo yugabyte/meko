@@ -31,6 +31,11 @@ var ErrResizeInProgress = errors.New("a resize is already in progress for this e
 // not remove it: two adds of different names both leave every endpoint behind.
 var ErrBranchExtensionsInProgress = errors.New("an extension add is already in progress for this branch")
 
+// ErrConnectivityInProgress is the update_endpoint_connectivity twin: the
+// in-flight update holds the endpoint's allowlist until it reaches a terminal
+// status, so two replacements cannot land in an order neither caller chose.
+var ErrConnectivityInProgress = errors.New("a connectivity update is already in progress for this endpoint")
+
 // ErrMigrationRunInProgress is the start_migration_run twin: the in-flight
 // launcher holds the migration until it reaches a terminal status. It closes the
 // window before the launcher writes its run row, where two concurrent assess,

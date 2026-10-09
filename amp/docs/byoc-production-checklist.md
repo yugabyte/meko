@@ -356,12 +356,11 @@ nothing in the control plane holds credentials in the customer's cloud account.
 Procedure: [`runbooks/psc-endpoint-publishing.md`](../runbooks/psc-endpoint-publishing.md).
 The three things to raise on the call before anyone commits to it:
 
-- **Reserve the NAT CIDR before creating the endpoint.** PSC traffic arrives sourced from
-  the NAT subnet, not the consumer's real address, so it has to be in `allowed_cidrs` —
-  and `allowed_cidrs` is **create-time only**. The endpoint's mutable surface is
-  `/settings` and `/resize`; there is no update path for connectivity. Getting it wrong
-  means deleting and recreating the endpoint, which changes the forwarding rule and
-  invalidates the attachment built on it.
+- **Put the NAT CIDR in the endpoint's allowlist.** PSC traffic arrives sourced from the
+  NAT subnet, not the consumer's real address, so it has to be in `allowed_cidrs`. The
+  list can be replaced in place (`POST …/endpoints/{endpointId}/connectivity`) without
+  touching the forwarding rule; the connectivity **mode** cannot, and changing it means
+  recreating the endpoint, which invalidates the attachment built on it.
 - **One NAT subnet per published endpoint.** A NAT subnet cannot be shared between service
   attachments, so N published endpoints means N subnets, each created and destroyed by
   hand in the right order.

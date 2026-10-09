@@ -28,12 +28,18 @@ as-is here, but the resource shape and its caveats are the same. This runbook is
 
 ## 1. Let the PSC NAT range through the endpoint's allowlist
 
-Adding the NAT range to `allowed_cidrs` is all this takes — but it has to happen **when
-the endpoint is created**. `allowed_cidrs` has no update path: an endpoint's mutable
-surface is `/settings` (pg / pageserver / safekeeper settings) and `/resize` (CPU and
-memory), and neither touches connectivity. Fixing it afterwards means deleting and
-recreating the endpoint, which replaces the load balancer and invalidates any attachment
-already built on it.
+Adding the NAT range to `allowed_cidrs` is all this takes, at create or afterwards. On an
+existing endpoint, replace the whole list — it is not merged — and poll the task:
+
+```
+POST /api/v1/storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/connectivity
+{ "allowed_cidrs": ["10.72.4.0/29", "<everything already allowed>"] }
+```
+
+That patches `loadBalancerSourceRanges` on the existing `<release>-lb` Service and nothing
+else, so the pod, the load balancer, the forwarding rule and any attachment built on it
+stay. The connectivity **mode** has
+no such path: changing it means recreating the endpoint.
 
 PSC traffic arrives at the load balancer sourced from the **NAT subnet**, not from the
 consumer's real address. `allowed_cidrs` is rendered into `loadBalancerSourceRanges`, so

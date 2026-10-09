@@ -289,6 +289,12 @@ type ResizeEndpointRequest struct {
 	Resources EndpointResources `json:"resources"`
 }
 
+// UpdateEndpointConnectivityRequest replaces an existing endpoint's allowed
+// source ranges, whole; [] removes the restriction.
+type UpdateEndpointConnectivityRequest struct {
+	AllowedCIDRs []string `json:"allowed_cidrs"`
+}
+
 // In-place resize outcomes a resize_endpoint task's final step reports. Only a
 // deployer error fails the task: pending/infeasible/unsupported are successful
 // terminal states in which the new size is persisted and converges on the next
@@ -807,6 +813,12 @@ func (c *Client) ResizeEndpoint(ctx context.Context, poolID, clusterID, branchID
 	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID+"/resize", req)
 }
 
+// UpdateEndpointConnectivity plans an async in-place allowlist replacement (202).
+// First-writer-wins like resize: a concurrent one is a 409 *APIError.
+func (c *Client) UpdateEndpointConnectivity(ctx context.Context, poolID, clusterID, branchID, endpointID string, req UpdateEndpointConnectivityRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID+"/connectivity", req)
+}
+
 // UpdateBranchSettings replaces the branch-wide settings named in the body
 // (sync, 200) and asks every endpoint on the branch to re-read them.
 func (c *Client) UpdateBranchSettings(ctx context.Context, poolID, clusterID, branchID string, req UpdateSettingsRequest) (SettingsUpdateResult, error) {
@@ -1094,6 +1106,16 @@ func (c *Client) CreateEndpointAndWait(ctx context.Context, poolID, clusterID, b
 // error and result), alongside the failure error.
 func (c *Client) ResizeEndpointAndWait(ctx context.Context, poolID, clusterID, branchID, endpointID string, req ResizeEndpointRequest) (Task, error) {
 	task, loc, err := c.ResizeEndpoint(ctx, poolID, clusterID, branchID, endpointID, req)
+	if err != nil {
+		return Task{}, err
+	}
+	return c.WaitTask(ctx, taskRef(task, loc))
+}
+
+// UpdateEndpointConnectivityAndWait replaces an endpoint's allowed CIDRs and
+// waits for its task to reach a terminal status.
+func (c *Client) UpdateEndpointConnectivityAndWait(ctx context.Context, poolID, clusterID, branchID, endpointID string, req UpdateEndpointConnectivityRequest) (Task, error) {
+	task, loc, err := c.UpdateEndpointConnectivity(ctx, poolID, clusterID, branchID, endpointID, req)
 	if err != nil {
 		return Task{}, err
 	}

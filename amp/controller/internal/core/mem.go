@@ -870,6 +870,18 @@ func (m *MemBackend) UpdateEndpointResources(_ context.Context, endpointID uuid.
 	return nil
 }
 
+// UpdateEndpointAllowedCIDRs mirrors PgBackend's config merge. Absent endpoint
+// is a no-op.
+func (m *MemBackend) UpdateEndpointAllowedCIDRs(_ context.Context, endpointID uuid.UUID, cidrs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		ep.AllowedCIDRs = append([]string(nil), cidrs...)
+		m.endpoints[endpointID] = ep
+	}
+	return nil
+}
+
 // SetEndpointYCPGeneration mirrors PgBackend's monotonic write: GREATEST, so a
 // task carrying an older generation that completes late cannot drag the value
 // backwards. Absent endpoint is a no-op.

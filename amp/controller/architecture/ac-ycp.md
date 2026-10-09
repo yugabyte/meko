@@ -153,8 +153,9 @@ reports its `pg_settings` and `write_token_settings`, an endpoint its
 `pg_settings`, `pageserver_settings`, `safekeeper_settings` and
 `extended_config` — see [below](#settings-are-reported-whole). A branch and an
 endpoint also report `applied_generation` — see below.
-The connectivity pair is the observed counterpart of the create-time field
-[endpoints cannot converge](#what-an-endpoint-spec-can-declare-and-not-get).
+The connectivity pair is the observed counterpart of the `connectivity` spec field:
+the mode is one [endpoints cannot converge](#what-an-endpoint-spec-can-declare-and-not-get),
+the allowlist one they can.
 `connectivity_mode` is emitted by every agent at this release or later, and is
 **resolved** — an endpoint predating the field reports none and behaves as
 `cluster_ip` — so the inventory records the exposure that was *asked* for, which
@@ -414,14 +415,25 @@ pod, where most `pg_settings` reload in place.
 
 ### What an endpoint spec can declare and not get
 
-An endpoint converges `resources` and its three settings surfaces. What is left
-over — `connectivity`, `role`, `tags`, `extended_config` — is permanent drift on an
-**existing** endpoint, named in the resource's `Error`. Omitting a field leaves it
-unmanaged.
+An endpoint converges `resources`, its three settings surfaces and
+`connectivity.allowed_cidrs`. What is left over — `connectivity.mode`, `role`, `tags`,
+`extended_config` — is permanent drift on an **existing** endpoint, named in the
+resource's `Error`. Omitting a field leaves it unmanaged.
 
-The reasons differ. `connectivity`, `role` and `tags` are create-time in the controller:
-no update verb carries them, so they can never converge and recreating the endpoint
-is the only path. `extended_config` is the odd one out — it is the single surface
+The control plane refuses an update changing any of those four with
+`400 CREATE_TIME_FIELD` once the agent reports the endpoint as listed (its row carries
+the endpoint `id`, or reads `unreadable` — the state alone cannot say, since an existing
+endpoint whose last update was refused reads `rejected` like a refused create), rather
+than storing a spec that can only drift; a field the stored spec never declared is
+compared against its default (`cluster_ip`, `{}`), or not at all for `role`. A new value
+equal to what the agent reports (`connectivity_mode`, `role`, `extended_config`) is
+allowed, so a spec that had already drifted can be put back. The agent's drift
+report stays for specs written before that check, or through `ReplaceDesired`, which
+does not run it.
+
+The reasons differ. `connectivity.mode`, `role` and `tags` are create-time in the
+controller: no update verb carries them, so they can never converge and recreating the
+endpoint is the only path. `extended_config` is the odd one out — it is the single surface
 `updateEndpointSettings` does *not* take, so it stays unfixable for a reason of its
 own now that its three neighbours converge.
 
@@ -435,6 +447,15 @@ every tick, which was harmless in itself — the handler keeps a dimension the r
 does not name, so an empty body resized the endpoint to the size it already had —
 but it was also the only thing that could stamp the generation, so a settings-only
 spec planned a task purely to get one. The PATCH carries it now.
+
+A changed `allowed_cidrs` goes out as `updateEndpointConnectivity`, after the PATCH and
+before the resize, and not in the same tick as the resize: the agent follows one task
+per resource. It carries the generation only when no resize follows; otherwise it
+returns pending and the next tick, finding the row reporting the new list, issues the
+resize with the generation. A drifted update is the exception: it is reported once
+and never re-issued, so both go out in that tick, resize first, neither carrying a
+generation. The controller validates the list against the mode in
+force, so while the declared mode differs the list is not sent and both are drift.
 
 Reporting the rest matters more than the refusal reading well. A dropped field that
 still stamped `ycp_generation` would have the engine Noop the endpoint forever,

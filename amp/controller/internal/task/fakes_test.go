@@ -44,6 +44,7 @@ type fakeStateStore struct {
 	createdEndpoints           map[uuid.UUID]string   // endpoint id -> role
 	endpointAddresses          map[uuid.UUID]string
 	endpointResources          map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
+	endpointCIDRs              map[uuid.UUID][]string  // endpoint id -> allowed cidrs last persisted
 	// The applied YCP generation the worker stamped, per resource. Monotonic, like
 	// the real GREATEST write, so a test can assert a late older task cannot regress it.
 	endpointYCPGeneration  map[uuid.UUID]int64
@@ -480,6 +481,16 @@ func (f *fakeStateStore) UpdateEndpointResources(_ context.Context, endpointID u
 	return nil
 }
 
+func (f *fakeStateStore) UpdateEndpointAllowedCIDRs(_ context.Context, endpointID uuid.UUID, cidrs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endpointCIDRs == nil {
+		f.endpointCIDRs = map[uuid.UUID][]string{}
+	}
+	f.endpointCIDRs[endpointID] = append([]string(nil), cidrs...)
+	return nil
+}
+
 func (f *fakeStateStore) SetEndpointYCPGeneration(_ context.Context, endpointID uuid.UUID, gen int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -629,6 +640,9 @@ type fakeDeployer struct {
 	createErrAfter int
 	deleteErr      error
 	resizeErr      error
+	// sourceRanges records UpdateSourceRanges calls; sourceRangesErr fails them.
+	sourceRanges    []sourceRangesCall
+	sourceRangesErr error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
@@ -669,6 +683,19 @@ func (f *fakeDeployer) ResizeEndpoint(_ context.Context, spec deploy.ResizeSpec)
 		return deploy.ResizeResult{}, f.resizeErr
 	}
 	return deploy.ResizeResult{Outcome: deploy.ResizeCompleted, Message: "resized in place"}, nil
+}
+
+// sourceRangesCall is one UpdateSourceRanges call.
+type sourceRangesCall struct {
+	name  string
+	cidrs []string
+}
+
+func (f *fakeDeployer) UpdateSourceRanges(_ context.Context, name string, cidrs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sourceRanges = append(f.sourceRanges, sourceRangesCall{name, append([]string(nil), cidrs...)})
+	return f.sourceRangesErr
 }
 
 func (f *fakeDeployer) EndpointSafekeeperURL(id string) string {

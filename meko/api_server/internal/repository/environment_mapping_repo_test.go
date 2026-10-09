@@ -71,7 +71,7 @@ func TestApplyStoragePoolPatches_FirstTouchAssignsAndSynthesizes(t *testing.T) {
 			Region:    poolRegion,
 			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{"pg_version":17}`)}},
 		}},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if err != nil {
 		t.Fatalf("ApplyStoragePoolPatches: %v", err)
@@ -116,7 +116,7 @@ func TestApplyStoragePoolPatches_ReusesPinNoSynthesis(t *testing.T) {
 			Region:    poolRegion,
 			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{"pg_version":17}`)}},
 		}},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	); err != nil {
 		t.Fatalf("ApplyStoragePoolPatches: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestApplyStoragePoolPatches_NoEligibleEnvIsError(t *testing.T) {
 			Region:    poolRegion,
 			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{}`)}},
 		}},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if err == nil {
 		t.Fatal("err = nil, want ErrNoEligibleEnvironment")
@@ -201,7 +201,7 @@ func TestApplyStoragePoolPatches_DeregisteredPinFailsOverAndRepins(t *testing.T)
 			Region:    poolRegion,
 			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{"pg_version":17}`)}},
 		}},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if err != nil {
 		t.Fatalf("ApplyStoragePoolPatches: %v", err)
@@ -258,7 +258,7 @@ func TestApplyStoragePoolPatches_MultiRegionAtomic(t *testing.T) {
 			{Region: "us-east-1", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/east-db", Spec: []byte(`{}`)}}},
 			{Region: "us-west-2", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/west-db", Spec: []byte(`{}`)}}},
 		},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if err != nil {
 		t.Fatalf("ApplyStoragePoolPatches: %v", err)
@@ -312,7 +312,7 @@ func TestApplyStoragePoolPatches_RollsBackWhenSecondRegionFails(t *testing.T) {
 			{Region: "us-east-1", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/east-db", Spec: []byte(`{}`)}}},
 			{Region: "us-west-2", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/west-db", Spec: []byte(`{}`)}}},
 		},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if err == nil {
 		t.Fatal("err = nil, want the second region to fail the whole call")
@@ -370,7 +370,7 @@ func TestApplyStoragePoolPatches_CrossRegionClusterCollisionRollsBack(t *testing
 			{Region: "us-east-1", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/shared-db", Spec: []byte(`{}`), Create: true}}},
 			{Region: "us-west-2", Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/shared-db", Spec: []byte(`{}`), Create: true}}},
 		},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if !errors.Is(err, ErrClusterNameInUse) {
 		t.Fatalf("err = %v, want ErrClusterNameInUse", err)
@@ -418,7 +418,7 @@ func TestApplyStoragePoolPatches_ExplicitPoolSkipsSynthesis(t *testing.T) {
 				{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{}`)},
 			},
 		}},
-		[]byte(`{"owner":"synth"}`),
+		[]byte(`{"owner":"synth"}`), nil,
 	); err != nil {
 		t.Fatalf("ApplyStoragePoolPatches: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestApplyStoragePoolPatches_DeleteOnlyBatchNoSynthesis(t *testing.T) {
 			Region:    poolRegion,
 			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Delete: true}},
 		}},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	); err != nil {
 		t.Fatalf("ApplyStoragePoolPatches: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestApplyStoragePoolPatches_DeadlockTranslated(t *testing.T) {
 			Region:    poolRegion,
 			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{}`)}},
 		}},
-		[]byte(`{"owner":"x"}`),
+		[]byte(`{"owner":"x"}`), nil,
 	)
 	if !errors.Is(err, ErrConcurrentPoolUpdate) {
 		t.Fatalf("err = %v, want ErrConcurrentPoolUpdate", err)

@@ -465,7 +465,9 @@ func (r *EnvironmentRepo) DeleteDesired(envUUID, kind, name string) error {
 // resource is touched. The per-item upsert reuses ReplaceDesired's spec-defaulting ({})
 // and generation rule — a generation bumps only when the merged spec is semantically
 // different.
-func applyDesiredPatchesTx(tx *sql.Tx, envUUID, storagePool string, patches []models.ResourcePatch) error {
+func applyDesiredPatchesTx(
+	tx *sql.Tx, envUUID, storagePool string, patches []models.ResourcePatch, guard UpdateGuard,
+) error {
 	for _, p := range patches {
 		if p.Delete {
 			// Removes the resource AND every descendant (endpoints under a branch,
@@ -479,7 +481,7 @@ func applyDesiredPatchesTx(tx *sql.Tx, envUUID, storagePool string, patches []mo
 			}
 			continue
 		}
-		merged, existed, err := mergeDesiredSpec(tx, envUUID, p.Kind, p.Name, p.Spec)
+		merged, before, existed, err := mergeDesiredSpec(tx, envUUID, p.Kind, p.Name, p.Spec)
 		if err != nil {
 			return err
 		}
@@ -497,6 +499,15 @@ func applyDesiredPatchesTx(tx *sql.Tx, envUUID, storagePool string, patches []mo
 				}
 			} else if existed {
 				return fmt.Errorf("%w: %s/%s", ErrResourceExists, p.Kind, p.Name)
+			}
+		}
+		// After the create guard, so a create colliding with an existing resource is
+		// still the 409 it always was rather than a complaint about its fields.
+		if existed && !p.Create && guard != nil {
+			kind, name := p.Kind, p.Name
+			observed := func() (*ObservedResource, error) { return observedResource(tx, envUUID, kind, name) }
+			if err := guard(p.Kind, p.Name, before, merged, observed); err != nil {
+				return err
 			}
 		}
 		if _, err := tx.Exec(
@@ -522,15 +533,18 @@ func applyDesiredPatchesTx(tx *sql.Tx, envUUID, storagePool string, patches []mo
 // is replaced wholesale — matching the backend's "a declared settings surface owns
 // the whole map". An absent row (or an empty stored/patch spec) merges onto {}, so a
 // first patch becomes the whole spec. The returned existed reports whether the row was
-// already present, so a caller can enforce a create/update assertion off the same read.
-func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMessage) (json.RawMessage, bool, error) {
+// already present, so a caller can enforce a create/update assertion off the same read,
+// and before is the stored spec the patch was merged onto.
+func mergeDesiredSpec(
+	tx *sql.Tx, envUUID, kind, name string, patch json.RawMessage,
+) (json.RawMessage, json.RawMessage, bool, error) {
 	var existingText string
 	err := tx.QueryRow(
 		`SELECT COALESCE(spec::text, '{}') FROM meko_system.environment_desired_resources
 		 WHERE env_uuid=$1 AND kind=$2 AND name=$3 FOR UPDATE`,
 		envUUID, kind, name).Scan(&existingText)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, false, fmt.Errorf("read desired %s/%s: %w", kind, name, err)
+		return nil, nil, false, fmt.Errorf("read desired %s/%s: %w", kind, name, err)
 	}
 	existed := err == nil
 
@@ -545,7 +559,7 @@ func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMess
 	if len(bytes.TrimSpace(patch)) > 0 {
 		var incoming map[string]json.RawMessage
 		if uerr := json.Unmarshal(patch, &incoming); uerr != nil {
-			return nil, false, fmt.Errorf("%w: spec for %s/%s is not a JSON object", ErrSpecNotObject, kind, name)
+			return nil, nil, false, fmt.Errorf("%w: spec for %s/%s is not a JSON object", ErrSpecNotObject, kind, name)
 		}
 		for k, v := range incoming {
 			merged[k] = v
@@ -553,9 +567,55 @@ func mergeDesiredSpec(tx *sql.Tx, envUUID, kind, name string, patch json.RawMess
 	}
 	out, err := json.Marshal(merged)
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal merged spec for %s/%s: %w", kind, name, err)
+		return nil, nil, false, fmt.Errorf("marshal merged spec for %s/%s: %w", kind, name, err)
 	}
-	return out, existed, nil
+	return out, json.RawMessage(existingText), existed, nil
+}
+
+// UpdateGuard vets a write onto an EXISTING desired resource from inside the
+// patch's transaction, so a refusal rolls the whole batch back. before is the stored
+// spec and after the merged one; observed reads the agent's last report of the
+// resource, nil when it reports none. Whether the write is allowed is the caller's
+// policy — this package only supplies the locked reads.
+type UpdateGuard func(
+	kind, name string, before, after json.RawMessage, observed func() (*ObservedResource, error),
+) error
+
+// ObservedResource is the part of an agent-reported inventory row a guard reads.
+// Attrs is set only on a row the backend listed and read this tick: a create that
+// never landed carries none, and neither does a listed row reported "unreadable".
+type ObservedResource struct {
+	State string            `json:"state"`
+	Attrs map[string]string `json:"attrs"`
+}
+
+// observedResource finds kind/name in the environment's last reported inventory.
+func observedResource(tx *sql.Tx, envUUID, kind, name string) (*ObservedResource, error) {
+	var text string
+	err := tx.QueryRow(
+		`SELECT COALESCE(resources::text, '[]') FROM meko_system.environments WHERE uuid=$1`,
+		envUUID).Scan(&text)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read observed resources: %w", err)
+	}
+	var rows []struct {
+		ID string `json:"id"`
+		ObservedResource
+	}
+	// An error, not "nothing reported": a guard reading that as absence would let
+	// every write through for as long as the inventory stays unreadable.
+	if err := json.Unmarshal([]byte(text), &rows); err != nil {
+		return nil, fmt.Errorf("decode observed resources: %w", err)
+	}
+	for _, r := range rows {
+		if r.ID == kind+"/"+name {
+			return &r.ObservedResource, nil
+		}
+	}
+	return nil, nil
 }
 
 // clusterNameInPool reports whether a cluster of the given full name already exists in

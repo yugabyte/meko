@@ -1145,7 +1145,8 @@ func (s *EnvironmentService) SetResourcesByStoragePool(
 	if err != nil {
 		return nil, err
 	}
-	assignments, err := s.repo.ApplyStoragePoolPatches(storagePool, createOnlyDefault(regions), poolSpec)
+	assignments, err := s.repo.ApplyStoragePoolPatches(storagePool, createOnlyDefault(regions), poolSpec,
+		refuseCreateTimeChange)
 	if err != nil {
 		return nil, err
 	}

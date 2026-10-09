@@ -137,6 +137,10 @@ func (h *EnvironmentHandler) SetResourcesByRegion(c echo.Context) error {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
+		// Refused rather than stored: the agent could only report it as drift.
+		if errors.Is(err, service.ErrCreateTimeField) {
+			return apiError(c, http.StatusBadRequest, "CREATE_TIME_FIELD", err.Error())
+		}
 		// A region with no READY MANAGED environment cannot be served — a 404, the
 		// same as naming an environment that does not exist.
 		if errors.Is(err, service.ErrNoManagedEnv) {

@@ -155,6 +155,11 @@ type StateStore interface {
 	// write, paired with the deployer's live pod resize.
 	UpdateEndpointResources(ctx context.Context, endpointID uuid.UUID, cpu, memory string) error
 
+	// UpdateEndpointAllowedCIDRs replaces the source ranges in the endpoint's
+	// stored config, the same absolute jsonb merge, so a later redeploy renders
+	// them. Idempotent; an absent endpoint is a no-op.
+	UpdateEndpointAllowedCIDRs(ctx context.Context, endpointID uuid.UUID, cidrs []string) error
+
 	// SetEndpointYCPGeneration records the YCP desired-state generation fully
 	// applied to an endpoint. The worker calls it after every step of the task
 	// carrying it has succeeded, so the stored value means the work landed rather

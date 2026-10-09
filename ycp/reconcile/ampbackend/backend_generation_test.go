@@ -95,14 +95,15 @@ type genServer struct {
 	registered []ampclient.Extension
 	extPuts    []ampclient.RegisterExtensionRequest
 
-	fleetRolls int // POST /endpoint-upgrades calls
-	resizes    []ampclient.ResizeEndpointRequest
-	extAdds    []ampclient.AddBranchExtensionsRequest
-	epPatches  []ampclient.UpdateEndpointSettingsRequest
-	brPatches  []ampclient.UpdateBranchSettingsRequest
-	taskGets   int
-	epCreates  int // POST …/endpoints calls
-	clCreates  int // POST …/clusters calls
+	fleetRolls  int // POST /endpoint-upgrades calls
+	resizes     []ampclient.ResizeEndpointRequest
+	connUpdates []ampclient.UpdateEndpointConnectivityRequest
+	extAdds     []ampclient.AddBranchExtensionsRequest
+	epPatches   []ampclient.UpdateEndpointSettingsRequest
+	brPatches   []ampclient.UpdateBranchSettingsRequest
+	taskGets    int
+	epCreates   int // POST …/endpoints calls
+	clCreates   int // POST …/clusters calls
 }
 
 func (g *genServer) start(t *testing.T) *Backend {
@@ -186,6 +187,13 @@ func (g *genServer) start(t *testing.T) *Backend {
 				body["error_code"] = g.taskErrorCode
 			}
 			_ = json.NewEncoder(w).Encode(body)
+		case strings.HasSuffix(p, "/connectivity"):
+			var req ampclient.UpdateEndpointConnectivityRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode connectivity body: %v", err)
+			}
+			g.connUpdates = append(g.connUpdates, req)
+			g.writeMutateResponse(w)
 		case strings.HasSuffix(p, "/resize"):
 			var req ampclient.ResizeEndpointRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -987,9 +995,136 @@ func TestUpdateEndpointWithConnectivityDriftClaimsNoGeneration(t *testing.T) {
 	}
 }
 
-// The allowed CIDR list is create-time for the same reason, so a change to it is
-// drift even when the mode already matches.
-func TestUpdateEndpointWithAllowedCidrDriftClaimsNoGeneration(t *testing.T) {
+// A changed allowed_cidrs list goes out as its own task (CLOUDGA-37410). With a
+// resize to follow it claims no generation and the resize waits a tick, because
+// this backend follows one task per resource and only the last call may stamp.
+func TestUpdateEndpointCidrChangeGoesBeforeTheResize(t *testing.T) {
+	g := &genServer{
+		endpointGen:          gen64(1),
+		endpointConnectivity: `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16"]}`,
+	}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":["10.1.0.0/16","10.0.0.0/16"]}}`),
+	}))
+
+	if len(g.connUpdates) != 1 {
+		t.Fatalf("connectivity calls = %d, want 1", len(g.connUpdates))
+	}
+	if got, want := g.connUpdates[0].AllowedCidrs, []string{"10.0.0.0/16", "10.1.0.0/16"}; !equalStrings(got, want) {
+		t.Errorf("sent allowed_cidrs = %v, want %v", got, want)
+	}
+	if got := g.connUpdates[0].YcpGeneration; got != nil {
+		t.Errorf("connectivity ycp_generation = %d, want none — the resize is still to come", *got)
+	}
+	if len(g.resizes) != 0 {
+		t.Errorf("resize calls = %d, want none until the connectivity task is done", len(g.resizes))
+	}
+
+	// Next tick: the task succeeded and the row reports the new ranges, so the
+	// resize goes out and is the call that carries the generation.
+	g.taskStatus = "succeeded"
+	g.endpointConnectivity = `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16","10.1.0.0/16"]}`
+	if _, err := b.List(t.Context()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":["10.1.0.0/16","10.0.0.0/16"]}}`),
+	}))
+	if len(g.connUpdates) != 1 {
+		t.Errorf("connectivity calls = %d, want no second one once the row matches", len(g.connUpdates))
+	}
+	if len(g.resizes) != 1 || g.resizes[0].YcpGeneration == nil || *g.resizes[0].YcpGeneration != 4 {
+		t.Errorf("resizes = %+v, want one carrying generation 4", g.resizes)
+	}
+}
+
+// With nothing after it, the connectivity task is the last call and carries the
+// generation, so the worker stamping it is what converges the endpoint.
+func TestUpdateEndpointCidrChangeAloneClaimsTheGeneration(t *testing.T) {
+	g := &genServer{
+		endpointGen:          gen64(1),
+		endpointConnectivity: `{"mode":"nlb_external","allowed_cidrs":["103.200.215.98/32"]}`,
+	}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 2,
+		Spec: json.RawMessage(`{"connectivity":{"mode":"nlb_external","allowed_cidrs":[]}}`),
+	}))
+
+	if len(g.connUpdates) != 1 {
+		t.Fatalf("connectivity calls = %d, want 1", len(g.connUpdates))
+	}
+	req := g.connUpdates[0]
+	if req.AllowedCidrs == nil || len(req.AllowedCidrs) != 0 {
+		t.Errorf("sent allowed_cidrs = %#v, want [] to remove the restriction", req.AllowedCidrs)
+	}
+	if req.YcpGeneration == nil || *req.YcpGeneration != 2 {
+		t.Errorf("connectivity ycp_generation = %v, want 2", req.YcpGeneration)
+	}
+	if len(g.epPatches) != 0 {
+		t.Errorf("settings PATCHes = %d, want none — the task stamps the generation", len(g.epPatches))
+	}
+}
+
+// A drifted update is reported once and never re-issued, so it cannot defer the
+// resize to a later tick: both go out now, and neither claims a generation.
+func TestUpdateEndpointDriftWithCidrsAndResizeIssuesBoth(t *testing.T) {
+	g := &genServer{
+		endpointGen:          gen64(1),
+		endpointConnectivity: `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16"]}`,
+	}
+	b := g.start(t)
+
+	err := b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},"role":"read_only",` +
+			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":["10.1.0.0/16"]}}`),
+	})
+
+	var perm *reconcile.PermanentError
+	if !errors.As(err, &perm) || !strings.Contains(err.Error(), "role") {
+		t.Fatalf("Update = %v, want permanent drift naming role", err)
+	}
+	if len(g.resizes) != 1 || g.resizes[0].YcpGeneration != nil {
+		t.Errorf("resizes = %+v, want one, carrying no generation", g.resizes)
+	}
+	if len(g.connUpdates) != 1 || g.connUpdates[0].YcpGeneration != nil {
+		t.Errorf("connectivity calls = %+v, want one, carrying no generation", g.connUpdates)
+	}
+}
+
+// The controller trims entries and drops empty ones before storing, so a declared
+// list must be compared the same way or it never matches and is re-sent forever.
+func TestUpdateEndpointCidrsAreNormalisedLikeTheController(t *testing.T) {
+	g := &genServer{
+		endpointGen:          gen64(1),
+		endpointConnectivity: `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16"]}`,
+	}
+	b := g.start(t)
+
+	mustIssue(t, b.Update(t.Context(), api.DesiredResource{
+		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
+		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
+			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":[" 10.0.0.0/16 ",""]}}`),
+	}))
+	if len(g.connUpdates) != 0 {
+		t.Errorf("connectivity calls = %d, want none — the list matches once normalised", len(g.connUpdates))
+	}
+	if len(g.resizes) != 1 {
+		t.Errorf("resize calls = %d, want the resize issued", len(g.resizes))
+	}
+}
+
+// The controller judges a list against the mode in force, so with the mode wrong
+// the list cannot be sent and both are drift.
+func TestUpdateEndpointCidrsWithAModeChangeAreDrift(t *testing.T) {
 	g := &genServer{
 		endpointGen:          gen64(1),
 		endpointConnectivity: `{"mode":"nlb_internal","allowed_cidrs":["10.0.0.0/16"]}`,
@@ -999,18 +1134,20 @@ func TestUpdateEndpointWithAllowedCidrDriftClaimsNoGeneration(t *testing.T) {
 	err := b.Update(t.Context(), api.DesiredResource{
 		Kind: KindEndpoint, Name: genEndpointPath, Generation: 4,
 		Spec: json.RawMessage(`{"resources":{"cpu":"4","memory":"8Gi"},` +
-			`"connectivity":{"mode":"nlb_internal","allowed_cidrs":["10.1.0.0/16"]}}`),
+			`"connectivity":{"mode":"nlb_external","allowed_cidrs":["10.1.0.0/16"]}}`),
 	})
 
 	var perm *reconcile.PermanentError
 	if !errors.As(err, &perm) {
 		t.Fatalf("Update = %v (%T), want the drift reported as permanent", err, err)
 	}
-	if !strings.Contains(err.Error(), "connectivity.allowed_cidrs") {
-		t.Errorf("err = %v, want it to name the field it cannot apply", err)
+	for _, field := range []string{"connectivity.mode", "connectivity.allowed_cidrs"} {
+		if !strings.Contains(err.Error(), field) {
+			t.Errorf("err = %v, want it to name %s", err, field)
+		}
 	}
-	if got := g.resizes[0].YcpGeneration; got != nil {
-		t.Errorf("sent ycp_generation = %d, want none", *got)
+	if len(g.connUpdates) != 0 {
+		t.Errorf("connectivity calls = %d, want none while the mode differs", len(g.connUpdates))
 	}
 }
 

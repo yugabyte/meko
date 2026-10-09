@@ -1060,6 +1060,9 @@ type EndpointConnectivity struct {
 	// Empty means unrestricted. On `nlb_external` that puts Postgres on the
 	// public internet with password authentication as the only barrier, so
 	// set it for anything but a deliberately open test endpoint.
+	//
+	// Can be replaced after create with
+	// `POST .../endpoints/{endpointId}/connectivity`; the mode cannot.
 	AllowedCidrs *[]string `json:"allowed_cidrs,omitempty"`
 
 	// Mode Client reachability for the Postgres port. Requires the Kubernetes
@@ -1878,6 +1881,30 @@ type UpdateBranchSettingsRequest struct {
 	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
 }
 
+// UpdateEndpointConnectivityRequest Request to replace an existing endpoint's allowed source ranges. The whole
+// list is replaced, not merged; `[]` removes the restriction.
+type UpdateEndpointConnectivityRequest struct {
+	// AllowedCidrs The new `connectivity.allowed_cidrs`, validated as on create: each entry
+	// a CIDR with a prefix length, and only on an `nlb_*` endpoint.
+	AllowedCidrs []string `json:"allowed_cidrs"`
+
+	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
+	// applies. Recorded on the target resource once the work has actually landed,
+	// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+	// can tell an update that landed from one that never finished.
+	//
+	// Who records it follows what the call does. An **asynchronous** verb is
+	// stamped by the task worker, once every step of the task has succeeded; a
+	// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+	// part of the same write, because there the handler *is* the work. Either way
+	// it is never recorded for a request that was refused: a `400` stores nothing
+	// and stamps nothing.
+	//
+	// Omit it: it is for the reconcile agent, and any other caller leaves the
+	// recorded value untouched.
+	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
+}
+
 // UpdateEndpointSettingsRequest This endpoint's settings to replace. Every field is optional and an
 // omitted one is left as it is; send `{}` for a surface to clear it.
 type UpdateEndpointSettingsRequest struct {
@@ -2252,6 +2279,9 @@ type CreateBranchJSONRequestBody = CreateBranchRequest
 // CreateEndpointJSONRequestBody defines body for CreateEndpoint for application/json ContentType.
 type CreateEndpointJSONRequestBody = CreateEndpointRequest
 
+// UpdateEndpointConnectivityJSONRequestBody defines body for UpdateEndpointConnectivity for application/json ContentType.
+type UpdateEndpointConnectivityJSONRequestBody = UpdateEndpointConnectivityRequest
+
 // ResizeEndpointJSONRequestBody defines body for ResizeEndpoint for application/json ContentType.
 type ResizeEndpointJSONRequestBody = ResizeEndpointRequest
 
@@ -2593,6 +2623,11 @@ type ClientInterface interface {
 
 	// GetEndpointCaBundle request
 	GetEndpointCaBundle(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateEndpointConnectivityWithBody request with any body
+	UpdateEndpointConnectivityWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateEndpointConnectivity(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ResizeEndpointWithBody request with any body
 	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3183,6 +3218,30 @@ func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, clusterId Clust
 
 func (c *Client) GetEndpointCaBundle(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetEndpointCaBundleRequest(c.Server, poolId, clusterId, branchId, endpointId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointConnectivityWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointConnectivityRequestWithBody(c.Server, poolId, clusterId, branchId, endpointId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointConnectivity(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointConnectivityRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -5046,6 +5105,74 @@ func NewGetEndpointCaBundleRequest(server string, poolId PoolId, clusterId Clust
 	return req, nil
 }
 
+// NewUpdateEndpointConnectivityRequest calls the generic UpdateEndpointConnectivity builder with application/json body
+func NewUpdateEndpointConnectivityRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointConnectivityJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateEndpointConnectivityRequestWithBody(server, poolId, clusterId, branchId, endpointId, "application/json", bodyReader)
+}
+
+// NewUpdateEndpointConnectivityRequestWithBody generates requests for UpdateEndpointConnectivity with any type of body
+func NewUpdateEndpointConnectivityRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "endpointId", endpointId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s/connectivity", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewResizeEndpointRequest calls the generic ResizeEndpoint builder with application/json body
 func NewResizeEndpointRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -5855,6 +5982,11 @@ type ClientWithResponsesInterface interface {
 
 	// GetEndpointCaBundleWithResponse request
 	GetEndpointCaBundleWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointCaBundleResponse, error)
+
+	// UpdateEndpointConnectivityWithBodyWithResponse request with any body
+	UpdateEndpointConnectivityWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointConnectivityResponse, error)
+
+	UpdateEndpointConnectivityWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointConnectivityResponse, error)
 
 	// ResizeEndpointWithBodyWithResponse request with any body
 	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
@@ -7048,6 +7180,41 @@ func (r GetEndpointCaBundleResponse) ContentType() string {
 	return ""
 }
 
+type UpdateEndpointConnectivityResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateEndpointConnectivityResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateEndpointConnectivityResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateEndpointConnectivityResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ResizeEndpointResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -7852,6 +8019,23 @@ func (c *ClientWithResponses) GetEndpointCaBundleWithResponse(ctx context.Contex
 		return nil, err
 	}
 	return ParseGetEndpointCaBundleResponse(rsp)
+}
+
+// UpdateEndpointConnectivityWithBodyWithResponse request with arbitrary body returning *UpdateEndpointConnectivityResponse
+func (c *ClientWithResponses) UpdateEndpointConnectivityWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointConnectivityResponse, error) {
+	rsp, err := c.UpdateEndpointConnectivityWithBody(ctx, poolId, clusterId, branchId, endpointId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointConnectivityResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateEndpointConnectivityWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointConnectivityResponse, error) {
+	rsp, err := c.UpdateEndpointConnectivity(ctx, poolId, clusterId, branchId, endpointId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointConnectivityResponse(rsp)
 }
 
 // ResizeEndpointWithBodyWithResponse request with arbitrary body returning *ResizeEndpointResponse
@@ -9761,6 +9945,67 @@ func ParseGetEndpointCaBundleResponse(rsp *http.Response) (*GetEndpointCaBundleR
 	return response, nil
 }
 
+// ParseUpdateEndpointConnectivityResponse parses an HTTP response from a UpdateEndpointConnectivityWithResponse call
+func ParseUpdateEndpointConnectivityResponse(rsp *http.Response) (*UpdateEndpointConnectivityResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateEndpointConnectivityResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseResizeEndpointResponse parses an HTTP response from a ResizeEndpointWithResponse call
 func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -10485,6 +10730,9 @@ type ServerInterface interface {
 	// The CA a client needs to verify this endpoint
 	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/ca)
 	GetEndpointCaBundle(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
+	// Replace an endpoint's allowed CIDRs (in place)
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/connectivity)
+	UpdateEndpointConnectivity(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
 	// Resize an endpoint's compute (in place)
 	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
@@ -11282,6 +11530,46 @@ func (w *ServerInterfaceWrapper) GetEndpointCaBundle(ctx echo.Context) error {
 	return err
 }
 
+// UpdateEndpointConnectivity converts echo context to params.
+func (w *ServerInterfaceWrapper) UpdateEndpointConnectivity(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// ------------- Path parameter "endpointId" -------------
+	var endpointId EndpointId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpointId", ctx.Param("endpointId"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter endpointId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.UpdateEndpointConnectivity(ctx, poolId, clusterId, branchId, endpointId)
+	return err
+}
+
 // ResizeEndpoint converts echo context to params.
 func (w *ServerInterfaceWrapper) ResizeEndpoint(ctx echo.Context) error {
 	var err error
@@ -11667,6 +11955,7 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint, options.OperationMiddlewares["deleteEndpoint"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint, options.OperationMiddlewares["getEndpoint"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/ca", wrapper.GetEndpointCaBundle, options.OperationMiddlewares["getEndpointCaBundle"]...)
+	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/connectivity", wrapper.UpdateEndpointConnectivity, options.OperationMiddlewares["updateEndpointConnectivity"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint, options.OperationMiddlewares["resizeEndpoint"]...)
 	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/settings", wrapper.UpdateEndpointSettings, options.OperationMiddlewares["updateEndpointSettings"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/extensions", wrapper.AddBranchExtensions, options.OperationMiddlewares["addBranchExtensions"]...)
@@ -14291,6 +14580,104 @@ func (response GetEndpointCaBundle404JSONResponse) VisitGetEndpointCaBundleRespo
 	return err
 }
 
+type UpdateEndpointConnectivityRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	ClusterId  ClusterId  `json:"clusterId"`
+	BranchId   BranchId   `json:"branchId"`
+	EndpointId EndpointId `json:"endpointId"`
+	Body       *UpdateEndpointConnectivityJSONRequestBody
+}
+
+type UpdateEndpointConnectivityResponseObject interface {
+	VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error
+}
+
+type UpdateEndpointConnectivity202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response UpdateEndpointConnectivity202JSONResponse) VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointConnectivity400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateEndpointConnectivity400JSONResponse) VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointConnectivity404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateEndpointConnectivity404JSONResponse) VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointConnectivity409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateEndpointConnectivity409JSONResponse) VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointConnectivity500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateEndpointConnectivity500JSONResponse) VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointConnectivity503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response UpdateEndpointConnectivity503JSONResponse) VisitUpdateEndpointConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ResizeEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
 	ClusterId  ClusterId  `json:"clusterId"`
@@ -15302,6 +15689,9 @@ type StrictServerInterface interface {
 	// The CA a client needs to verify this endpoint
 	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/ca)
 	GetEndpointCaBundle(ctx context.Context, request GetEndpointCaBundleRequestObject) (GetEndpointCaBundleResponseObject, error)
+	// Replace an endpoint's allowed CIDRs (in place)
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/connectivity)
+	UpdateEndpointConnectivity(ctx context.Context, request UpdateEndpointConnectivityRequestObject) (UpdateEndpointConnectivityResponseObject, error)
 	// Resize an endpoint's compute (in place)
 	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error)
@@ -16292,6 +16682,40 @@ func (sh *strictHandler) GetEndpointCaBundle(ctx echo.Context, poolId PoolId, cl
 		return err
 	} else if validResponse, ok := response.(GetEndpointCaBundleResponseObject); ok {
 		return validResponse.VisitGetEndpointCaBundleResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// UpdateEndpointConnectivity operation middleware
+func (sh *strictHandler) UpdateEndpointConnectivity(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error {
+	var request UpdateEndpointConnectivityRequestObject
+
+	request.PoolId = poolId
+	request.ClusterId = clusterId
+	request.BranchId = branchId
+	request.EndpointId = endpointId
+
+	var body UpdateEndpointConnectivityJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateEndpointConnectivity(ctx.Request().Context(), request.(UpdateEndpointConnectivityRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateEndpointConnectivity")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(UpdateEndpointConnectivityResponseObject); ok {
+		return validResponse.VisitUpdateEndpointConnectivityResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

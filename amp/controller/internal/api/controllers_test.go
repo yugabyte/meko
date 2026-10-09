@@ -523,6 +523,9 @@ type fakeDeployer struct {
 	// resizeErr, when set, makes ResizeEndpoint fail (exercises a failed task).
 	resizeOutcome deploy.ResizeOutcome
 	resizeErr     error
+	// sourceRanges records UpdateSourceRanges calls.
+	sourceRanges    []sourceRangesCall
+	sourceRangesErr error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
@@ -564,6 +567,19 @@ func (f *fakeDeployer) ResizeEndpoint(_ context.Context, spec deploy.ResizeSpec)
 		outcome = deploy.ResizeCompleted
 	}
 	return deploy.ResizeResult{Outcome: outcome, Message: string(outcome)}, nil
+}
+
+// sourceRangesCall is one UpdateSourceRanges call.
+type sourceRangesCall struct {
+	name  string
+	cidrs []string
+}
+
+func (f *fakeDeployer) UpdateSourceRanges(_ context.Context, name string, cidrs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sourceRanges = append(f.sourceRanges, sourceRangesCall{name, append([]string(nil), cidrs...)})
+	return f.sourceRangesErr
 }
 
 // resizedSpecs returns a copy of the recorded resize calls under the lock, so

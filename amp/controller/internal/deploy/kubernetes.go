@@ -230,6 +230,9 @@ var (
 	// able to place one has to be a compile error rather than a silent reopening
 	// of the window where the mode is accepted and nothing honours it.
 	_ IngressPlacer = (*KubernetesDeployer)(nil)
+	// The API accepts an allowlist change on any deployer that renders the load
+	// balancer, so the one that does must also be able to change it.
+	_ SourceRangesUpdater = (*KubernetesDeployer)(nil)
 )
 
 // SupportsConnectivity reports that this deployer renders the per-endpoint
@@ -611,7 +614,7 @@ func (k *KubernetesDeployer) k8sAPIGetErr(ctx context.Context, path string) ([]b
 	if host == "" || port == "" {
 		return nil, errNotInCluster
 	}
-	const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+	saDir := serviceAccountDir
 	token, err := os.ReadFile(saDir + "/token")
 	if err != nil {
 		return nil, fmt.Errorf("read service account token: %w", err)
@@ -663,7 +666,7 @@ func (k *KubernetesDeployer) k8sAPIPatch(ctx context.Context, path, contentType 
 	if host == "" || port == "" {
 		return nil, 0, fmt.Errorf("not running in-cluster (KUBERNETES_SERVICE_HOST unset)")
 	}
-	const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+	saDir := serviceAccountDir
 	token, err := os.ReadFile(saDir + "/token")
 	if err != nil {
 		return nil, 0, fmt.Errorf("read service-account token: %w", err)
@@ -1096,6 +1099,36 @@ func (k *KubernetesDeployer) ResizeEndpoint(ctx context.Context, spec ResizeSpec
 	}
 	k.logger.Info("endpoint resized", "endpoint", spec.Name, "pod", pod, "cpu", cpu, "memory", memory, "in_place", result.Outcome)
 	return result, nil
+}
+
+// serviceAccountDir is where the in-cluster API helpers read the pod's token and
+// CA. A variable only so a test can stand in a fake API server.
+var serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+
+// UpdateSourceRanges sets loadBalancerSourceRanges on the endpoint's
+// load-balancer Service (the chart's <release>-lb), satisfying
+// deploy.SourceRangesUpdater. A JSON merge patch replaces the list whole, and
+// null removes the field, which is what the chart renders for an empty list, so
+// the next helm upgrade of the release finds nothing to change.
+func (k *KubernetesDeployer) UpdateSourceRanges(ctx context.Context, name string, cidrs []string) error {
+	patch, err := sourceRangesPatch(cidrs)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s-lb", k.cfg.Namespace, name)
+	if _, _, err := k.k8sAPIPatch(ctx, path, "application/merge-patch+json", patch); err != nil {
+		return fmt.Errorf("patch load balancer source ranges of %s: %w", name, err)
+	}
+	k.logger.Info("endpoint load balancer source ranges updated", "endpoint", name, "allowed_cidrs", cidrs)
+	return nil
+}
+
+func sourceRangesPatch(cidrs []string) ([]byte, error) {
+	var ranges any = cidrs
+	if len(cidrs) == 0 {
+		ranges = nil
+	}
+	return json.Marshal(map[string]any{"spec": map[string]any{"loadBalancerSourceRanges": ranges}})
 }
 
 // podName returns the name of the endpoint's (single) pod, found by its instance

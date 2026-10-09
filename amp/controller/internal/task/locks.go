@@ -350,8 +350,11 @@ const holderField = "task="
 // `fleet:endpoints` does not cover them either — it serializes rolls against each
 // other, not a roll against a cascade.
 // https://github.com/yugabyte/meko/issues/976
-func (s *createEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
-func (s *resizeEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
+func (s *createEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
+func (s *resizeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
+func (s *updateEndpointConnectivityStep) Lock() ResourceLock {
+	return EndpointLock(s.EndpointID.String())
+}
 func (s *upgradeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
 func (s *deleteEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 
@@ -368,6 +371,7 @@ func (s *planEndpointRerendersStep) Lock() ResourceLock { return FleetEndpointsL
 var (
 	_ Locking = (*createEndpointStep)(nil)
 	_ Locking = (*resizeEndpointStep)(nil)
+	_ Locking = (*updateEndpointConnectivityStep)(nil)
 	_ Locking = (*upgradeEndpointStep)(nil)
 	_ Locking = (*rerenderEndpointStep)(nil)
 	_ Locking = (*planEndpointRerendersStep)(nil)

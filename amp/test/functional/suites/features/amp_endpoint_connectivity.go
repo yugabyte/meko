@@ -48,7 +48,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip or on a shared-ingress mode, an ingress_* mode on a controller with no shared ingress, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for. An nlb_external endpoint with allowed_cidrs gets an internet-facing Service whose loadBalancerSourceRanges is exactly that list, no internal annotation, only the Postgres port, and the Service is gone once the endpoint is deleted.",
+		Description: "Endpoint connectivity: a malformed connectivity block (unknown mode, a bare IP in allowed_cidrs, cidrs on cluster_ip or on a shared-ingress mode, an ingress_* mode on a controller with no shared ingress, connectivity on a cluster create without with_writer) is refused with 400; a cluster_ip endpoint gets no load-balancer Service; an nlb_internal endpoint gets a Postgres-only LoadBalancer Service carrying the cloud's internal annotation, its recorded address is the load balancer's, and the Service is gone once the endpoint is deleted. On a cluster whose cloud the controller cannot name the create must fail rather than publish an internet-facing load balancer. A cluster create that does carry with_writer must hand that writer the load balancer it asked for. An nlb_external endpoint with allowed_cidrs gets an internet-facing Service whose loadBalancerSourceRanges is exactly that list, no internal annotation, only the Postgres port; replacing the list after a resize changes the Service's source ranges and what GET reports, and leaves the pod, the load balancer and the address untouched; and the Service is gone once the endpoint is deleted.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		// Two load balancers, each waited out to a cloud-assigned ingress.
 		Timeout: 45 * time.Minute,
@@ -528,10 +528,105 @@ func (a *ampFeatureRun) nlbExternalAllowedCIDRs(ctx context.Context) error {
 	if err := lbAddressVerdict(ep.Address, lbHost); err != nil {
 		return err
 	}
+	if err := a.allowedCIDRsInPlace(ctx, cl, kube, ep, lbHost); err != nil {
+		return err
+	}
 	if _, err := cl.DeleteEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID); err != nil {
 		return fmt.Errorf("delete the nlb_external endpoint: %w", err)
 	}
 	return waitLBGone(ctx, kube, ep.ID, lbGoneTimeout)
+}
+
+// nlbExternalSecondNoAdmit is a second TEST-NET-1 address, so a widened list
+// still admits nobody.
+const nlbExternalSecondNoAdmit = "192.0.2.2/32"
+
+// allowedCIDRsInPlace replaces the allowlist of a live endpoint and checks that
+// only the Service changed: the same pod, the same load balancer, the same
+// address (CLOUDGA-37410). It resizes first, because a resize patches only the
+// pod, so anything that re-rendered the release to apply the list would roll the
+// pod onto the new size — the failure a Service-only patch exists to avoid.
+func (a *ampFeatureRun) allowedCIDRsInPlace(ctx context.Context, cl *controller.Client, kube *k8s.Kubectl,
+	ep controller.Endpoint, lbHost string) error {
+	if _, err := cl.ResizeEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID,
+		controller.ResizeEndpointRequest{Resources: controller.EndpointResources{CPU: "1", Memory: "8Gi"}}); err != nil {
+		if !resizeInPlaceUnsupportedByRuntime(err) {
+			return fmt.Errorf("resize before the allowlist change: %w", err)
+		}
+		a.f.logf("no in-place resize on this runtime, so the allowlist change is checked without one: %v", err)
+	}
+	roller := &kubeComputeRoller{kube: kube}
+	pod, err := roller.podName(ctx, ep.ID)
+	if err != nil {
+		return err
+	}
+	uid, err := kube.Get(ctx, "pod", pod, "{.metadata.uid}")
+	if err != nil {
+		return fmt.Errorf("read the uid of pod %s: %w", pod, err)
+	}
+
+	for _, want := range [][]string{{nlbExternalNoAdmit, nlbExternalSecondNoAdmit}, {nlbExternalSecondNoAdmit}} {
+		if _, err := cl.UpdateEndpointConnectivityAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID,
+			controller.UpdateEndpointConnectivityRequest{AllowedCIDRs: want}); err != nil {
+			var apiErr *controller.APIError
+			if errors.As(err, &apiErr) && (apiErr.StatusCode == 404 || apiErr.StatusCode == 405) {
+				a.f.t.Skip("this controller has no allowlist update route, so it predates CLOUDGA-37410: " + err.Error())
+				return nil
+			}
+			return fmt.Errorf("replace allowed_cidrs with %v: %w", want, err)
+		}
+		ranges, err := kube.Get(ctx, "service", lbServiceName(ep.ID), `{.spec.loadBalancerSourceRanges[*]}`)
+		if err != nil {
+			return fmt.Errorf("read loadBalancerSourceRanges of %s: %w", lbServiceName(ep.ID), err)
+		}
+		if got := strings.Fields(ranges); !sameSet(got, want) {
+			return fmt.Errorf("loadBalancerSourceRanges is %v after replacing allowed_cidrs with %v", got, want)
+		}
+		got, err := cl.GetEndpoint(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID)
+		if err != nil {
+			return fmt.Errorf("get endpoint: %w", err)
+		}
+		if got.Connectivity == nil || !sameSet(got.Connectivity.AllowedCIDRs, want) {
+			return fmt.Errorf("the endpoint records connectivity %+v, want allowed_cidrs %v", got.Connectivity, want)
+		}
+		if got.Address != ep.Address {
+			return fmt.Errorf("address moved from %s to %s on an allowlist change", ep.Address, got.Address)
+		}
+	}
+
+	host, err := lbServiceIngress(ctx, kube, ep.ID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(host) != strings.TrimSpace(lbHost) {
+		return fmt.Errorf("load balancer ingress moved from %s to %s on an allowlist change: the load balancer was replaced", lbHost, host)
+	}
+	nowPod, err := roller.podName(ctx, ep.ID)
+	if err != nil {
+		return err
+	}
+	nowUID, _ := kube.Get(ctx, "pod", nowPod, "{.metadata.uid}")
+	if strings.TrimSpace(nowUID) != strings.TrimSpace(uid) {
+		return fmt.Errorf("pod %s (%s) was replaced by %s (%s) on an allowlist change, want it untouched",
+			pod, strings.TrimSpace(uid), nowPod, strings.TrimSpace(nowUID))
+	}
+	return nil
+}
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		if seen[x]--; seen[x] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // externalLBVerdict: a LoadBalancer on exactly the Postgres port, the caller's

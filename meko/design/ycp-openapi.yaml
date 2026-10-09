@@ -267,6 +267,13 @@ paths:
         is 404 `RESOURCE_NOT_FOUND`. A region with no READY MANAGED amp environment is a 404. The
         batch is capped at 100 items across all regions.
 
+        An update that changes an endpoint field amp fixes at create — `connectivity.mode`,
+        `role`, `tags`, `extended_config` — is 400 `CREATE_TIME_FIELD` once the agent reports the
+        endpoint, rather than stored and left as drift; a value equal to what the agent reports is
+        allowed, so a drifted spec can be put back. `connectivity.allowed_cidrs` is applied in
+        place, but `connectivity` is a top-level key and so replaced whole: send `mode` with the
+        new list, or the omitted mode reads as `cluster_ip` and the write is refused.
+
         The response mirrors the LIST: the pool's desired and observed resources per environment
         touched.
       security: [{ aeonOIDC: ['fleet:write'] }]

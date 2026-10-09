@@ -62,11 +62,13 @@ var (
 	KindCreateCluster  = Kind{"create_cluster", "", "", nil}
 	KindBranch         = Kind{"branch", "", "", nil}
 	KindCreateEndpoint = Kind{"create_endpoint", "", "", nil}
-	// resize_endpoint and add_branch_extensions are the two kinds YCP drives as an
-	// UPDATE, so they are the two that stamp a generation. Creates and deletes
+	// resize_endpoint, update_endpoint_connectivity and add_branch_extensions are
+	// the kinds YCP drives as an UPDATE, so they are the ones that stamp a generation. Creates and deletes
 	// self-heal through presence — the next diff sees the resource absent or still
 	// there — and so need no echo.
-	KindResizeEndpoint = Kind{"resize_endpoint", "endpoint", "tasks_one_active_resize_per_endpoint", ErrResizeInProgress}
+	KindResizeEndpoint             = Kind{"resize_endpoint", "endpoint", "tasks_one_active_resize_per_endpoint", ErrResizeInProgress}
+	KindUpdateEndpointConnectivity = Kind{"update_endpoint_connectivity", "endpoint",
+		"tasks_one_active_connectivity_per_endpoint", ErrConnectivityInProgress}
 	// A fleet roll has no target_ref, so a partial unique index cannot constrain it
 	// — NULLs are distinct. Store.ActiveByKind is the plan-time gate instead, and
 	// the no-wait fleet lock is what actually decides.
@@ -88,6 +90,7 @@ var allKinds = []Kind{
 	KindBranch,
 	KindCreateEndpoint,
 	KindResizeEndpoint,
+	KindUpdateEndpointConnectivity,
 	KindUpgradeEndpoints,
 	KindRerenderEndpoints,
 	KindDeleteEndpoint,
@@ -408,6 +411,32 @@ func (s *Service) ResizeEndpoint(ctx context.Context, in ResizeEndpointInput) (*
 		}),
 	}
 	return s.create(ctx, KindResizeEndpoint, in, in.ClusterID, in.EndpointID.String(), steps)
+}
+
+// UpdateEndpointConnectivityInput is the request for an
+// update_endpoint_connectivity task: replace an existing endpoint's allowed
+// source ranges. The mode is not here because it cannot change in place.
+type UpdateEndpointConnectivityInput struct {
+	ClusterID    uuid.UUID `json:"cluster_id"`
+	EndpointID   uuid.UUID `json:"endpoint_id"`
+	AllowedCIDRs []string  `json:"allowed_cidrs"`
+	// YCPGeneration: see ResizeEndpointInput.
+	YCPGeneration *int64 `json:"ycp_generation,omitempty"`
+}
+
+func (in UpdateEndpointConnectivityInput) ycpGeneration() *int64 { return in.YCPGeneration }
+
+// UpdateEndpointConnectivity records an update_endpoint_connectivity task: one
+// step that patches the ranges onto the live load-balancer Service and then
+// persists them. The release is not re-rendered.
+func (s *Service) UpdateEndpointConnectivity(ctx context.Context, in UpdateEndpointConnectivityInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepUpdateEndpointConnectivity, UpdateEndpointConnectivityArgs{
+			EndpointID:   in.EndpointID,
+			AllowedCIDRs: in.AllowedCIDRs,
+		}),
+	}
+	return s.create(ctx, KindUpdateEndpointConnectivity, in, in.ClusterID, in.EndpointID.String(), steps)
 }
 
 // ErrFleetRollInProgress means a fleet roll is already under way and this one is

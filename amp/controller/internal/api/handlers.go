@@ -1402,6 +1402,61 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	}}, nil
 }
 
+// UpdateEndpointConnectivity plans the in-place replacement of an endpoint's
+// allowed CIDRs. The list is validated against the endpoint's current mode by
+// endpointConnectivity, the create path's own rules, so what an update accepts
+// cannot drift from what a create does.
+func (c *Controllers) UpdateEndpointConnectivity(ctx context.Context, request UpdateEndpointConnectivityRequestObject) (UpdateEndpointConnectivityResponseObject, error) {
+	if c.prov.Deployer == nil {
+		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
+	}
+	if request.Body == nil || request.Body.AllowedCidrs == nil {
+		return UpdateEndpointConnectivity400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"allowed_cidrs is required; send [] to remove the restriction"))}, nil
+	}
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return UpdateEndpointConnectivity404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get endpoint: %w", err)
+	}
+	mode := EndpointConnectivityMode(ep.Connectivity)
+	if mode == "" {
+		mode = ClusterIp
+	}
+	_, cidrs, apiErr := endpointConnectivity(&EndpointConnectivity{
+		Mode:         &mode,
+		AllowedCidrs: &request.Body.AllowedCidrs,
+	}, c.prov.Deployer)
+	if apiErr != nil {
+		return UpdateEndpointConnectivity400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
+	}
+
+	t, err := c.tasks.UpdateEndpointConnectivity(ctx, task.UpdateEndpointConnectivityInput{
+		ClusterID:     request.ClusterId,
+		EndpointID:    request.EndpointId,
+		AllowedCIDRs:  cidrs,
+		YCPGeneration: request.Body.YcpGeneration,
+	})
+	switch {
+	case errors.Is(err, task.ErrConnectivityInProgress):
+		return UpdateEndpointConnectivity409JSONResponse{ConflictJSONResponse(apiError("conflict", task.ErrConnectivityInProgress.Error()))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("update endpoint connectivity task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "update endpoint connectivity task accepted",
+		slog.String(applog.KeyEndpointID, request.EndpointId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()),
+		slog.Any("allowed_cidrs", cidrs))
+
+	return UpdateEndpointConnectivity202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
 // UpgradeEndpoints plans a fleet roll: one parent task that owns an
 // upgrade_endpoint child per endpoint and runs them itself
 // (architecture/ac-endpoint-upgrade.md §6).

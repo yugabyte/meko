@@ -555,10 +555,14 @@ a shared load balancer cannot carry a per-endpoint allowlist.
 `connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`,
 which covers the gateway port as well as Postgres's; empty is unrestricted, which on `nlb_external` leaves password authentication as
 the only barrier. Each `nlb_*` endpoint provisions its own load balancer — a
-billed resource that counts against the account's per-region quota. Both fields
-are **create-time only** — the endpoint's update paths are `/settings` and `/resize`,
-neither of which touches connectivity — so a wrong allowlist is fixed by recreating the
-endpoint. Reaching one from another VPC needs a service attachment the customer creates:
+billed resource that counts against the account's per-region quota. The mode is
+**create-time only**: changing it replaces the load balancer and the address. The
+allowlist is not — `POST …/endpoints/{endpointId}/connectivity` plans an
+`update_endpoint_connectivity` task that patches `loadBalancerSourceRanges` on the live
+`<release>-lb` Service and persists the list for the next render. It does not
+helm-upgrade: a re-render applies everything else the stored record says too, and after
+a resize (which patches only the pod) that changes the pod template and rolls the pod.
+Reaching one from another VPC needs a service attachment the customer creates:
 [`runbooks/psc-endpoint-publishing.md`](../../runbooks/psc-endpoint-publishing.md).
 
 **Portable across clouds.** The mode is the concept; the annotations that

@@ -1022,6 +1022,57 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/connectivity:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+      - $ref: '#/components/parameters/EndpointId'
+    post:
+      tags: [endpoints]
+      operationId: updateEndpointConnectivity
+      summary: Replace an endpoint's allowed CIDRs (in place)
+      description: |
+        Plans an asynchronous `update_endpoint_connectivity` task that replaces the
+        endpoint's `allowed_cidrs` with the list in the body. The task patches
+        `loadBalancerSourceRanges` on the endpoint's load-balancer Service and
+        nothing else — the release is not re-rendered — so the pod, the load
+        balancer and the endpoint's address are left alone. The list is persisted
+        only once the patch has succeeded, so a failed task leaves `GET` reporting
+        the ranges actually in force. Returns `202` + the `Task` with a `Location`
+        header.
+
+        The mode cannot be changed: moving between `cluster_ip`, `nlb_*` and
+        `ingress_*` replaces the load balancer and with it the address. The list is
+        validated against the endpoint's current mode by the same rules as create:
+        `400` for an entry that is not a CIDR, for a non-empty list on
+        `cluster_ip`, and for one on an `ingress_*` endpoint. An empty list removes
+        the restriction.
+
+        **First-writer-wins**: while one is in flight, another for the same
+        endpoint is rejected with `409`. Requires the endpoint deployer
+        (`--deploy`); returns `501` otherwise. `404` if the pool / cluster / branch
+        / endpoint does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEndpointConnectivityRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /endpoint-upgrades:
     post:
       tags: [endpoints]
@@ -2863,6 +2914,9 @@ components:
             public internet with password authentication as the only barrier, so
             set it for anything but a deliberately open test endpoint.
 
+            Can be replaced after create with
+            `POST .../endpoints/{endpointId}/connectivity`; the mode cannot.
+
     Tags:
       type: object
       maxProperties: 50
@@ -2939,6 +2993,23 @@ components:
       properties:
         resources:
           $ref: '#/components/schemas/EndpointResources'
+        ycp_generation:
+          $ref: '#/components/schemas/YCPGenerationApplied'
+
+    UpdateEndpointConnectivityRequest:
+      type: object
+      required: [allowed_cidrs]
+      description: |
+        Request to replace an existing endpoint's allowed source ranges. The whole
+        list is replaced, not merged; `[]` removes the restriction.
+      properties:
+        allowed_cidrs:
+          type: array
+          items:
+            type: string
+          description: |
+            The new `connectivity.allowed_cidrs`, validated as on create: each entry
+            a CIDR with a prefix length, and only on an `nlb_*` endpoint.
         ycp_generation:
           $ref: '#/components/schemas/YCPGenerationApplied'
 

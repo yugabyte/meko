@@ -147,8 +147,9 @@ because a later step of the same task may still be operating on the resource.
 type Locking interface{ Lock() ResourceLock }
 ```
 
-`create_endpoint`, `resize_endpoint`, `upgrade_endpoint` and `delete_endpoint`
-declare `endpoint:<endpoint-id>`. The declarations sit together in `locks.go`
+`create_endpoint`, `resize_endpoint`, `update_endpoint_connectivity`,
+`upgrade_endpoint`, `rerender_endpoint` and `delete_endpoint` declare
+`endpoint:<endpoint-id>`. The declarations sit together in `locks.go`
 rather than one per step file, so what serializes against what is answerable from
 one place.
 

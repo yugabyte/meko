@@ -51,7 +51,11 @@
 #      all, so nothing may touch compute. Opt-in for the
 #      same reason as smoke-test.sh's extension scenario: the images and the
 #      controller catalog only exist under /ci amp_deploy_gke_extensions;
-#   8. withdraws the cluster subtree from desired state (leaving just the pool)
+#   8. adds a second cluster whose writer is nlb_internal and replaces its allowed_cidrs
+#      through desired state, asserting the inventory and the load-balancer
+#      Service carry the new list, the generation is stamped, and the pod and
+#      address are untouched (CLOUDGA-37410);
+#   9. withdraws the cluster subtree from desired state (leaving just the pool)
 #      and asserts the agent deletes it — the authoritative GC path.
 #
 # It leaves the pool in desired state on purpose: storage pools have no controller
@@ -453,6 +457,9 @@ else
   WITH_EXT=$(jq -nc --argjson r "$DESIRED" --arg n "${POOL_NAME}/${CLUSTER_NAME}/${BRANCH_NAME}" --arg ext "$BRANCH_EXT" \
     '[ $r[] | if .kind=="branch" and .name==$n then .spec.extensions=[$ext] else . end ]')
   set_desired "$WITH_EXT" && ok "desired state updated with extensions" || bad "POST desired (extensions) failed"
+  # Later edits build on this: a branch's extension set only grows, so one that
+  # dropped it would leave the branch in drift.
+  DESIRED="$WITH_EXT"
 
   exts=""
   for ((i=0; i<60; i++)); do
@@ -641,6 +648,83 @@ if [ "${total:-0}" -gt 0 ]; then
   else
     printf '  \033[1;33mskip\033[0m task history across an agent restart (no amp-reconcile-agent deployment)\n'
   fi
+fi
+
+# --- allowed CIDRs change in place (CLOUDGA-37410) ---
+# The path the ticket broke end to end: an allowlist edit in desired state used to be
+# accepted, reported as drift by the agent and never applied. A writer on its own
+# cluster — a reader beside the first writer would wait on that writer's branch
+# write token and never start (meko#833) — on nlb_internal, the cheaper load
+# balancer, gets its list replaced; the agent must send it, the controller must
+# patch only the Service, and the endpoint must keep its pod and its address.
+hdr "endpoint allowed_cidrs converge in place from desired state"
+LB_CLUSTER="lbproj"
+LB_EP="lb-rw"
+LB_EP_PATH="${POOL_NAME}/${LB_CLUSTER}/${BRANCH_NAME}/${LB_EP}"
+lb_attr() {
+  env_json | jq -r --arg n "$LB_EP" --arg k "$1" \
+    ".resources[]?|select(.kind==\"endpoint\" and .name==\$n)|.attrs[\$k] // empty" 2>/dev/null | head -1
+}
+lb_state() {
+  env_json | jq -r --arg n "$LB_EP" \
+    '.resources[]?|select(.kind=="endpoint" and .name==$n)|.state // empty' 2>/dev/null | head -1
+}
+WITH_LB=$(jq -nc --argjson r "$DESIRED" --arg pool "$POOL_NAME" --arg c "$LB_CLUSTER" \
+  --arg b "$BRANCH_NAME" --arg n "$LB_EP_PATH" --arg eppw "$EP_PASSWORD" '
+  $r + [ {kind:"cluster", name:($pool+"/"+$c),          spec:{}},
+         {kind:"branch",  name:($pool+"/"+$c+"/"+$b),   spec:{}},
+         {kind:"endpoint", name:$n,
+          spec:{role:"read_write", password:$eppw,
+                connectivity:{mode:"nlb_internal", allowed_cidrs:["10.0.0.0/8"]}}} ]')
+set_desired "$WITH_LB" && ok "desired state declares $LB_EP (nlb_internal, allowed_cidrs [10.0.0.0/8])" \
+  || bad "POST desired ($LB_EP) failed"
+# A load balancer is cloud-provisioned, so this waits longer than the writer did.
+lbs=""
+for ((i=0; i<120; i++)); do lbs=$(lb_state); [ "$lbs" = ready ] && break; sleep 5; done
+if [ "$lbs" != ready ]; then
+  bad "endpoint $LB_EP not READY (state='${lbs:-none}') — skipping the allowlist change"
+else
+  ok "endpoint $LB_EP reported READY"
+  LB_EP_ID=$(lb_attr id); LB_ADDR=$(lb_attr address)
+  lb_pod=$(kubectl -n "$NS" get pods -l "app.kubernetes.io/instance=yb-ep-${LB_EP_ID}" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  lb_uid=$(kubectl -n "$NS" get "pod/$lb_pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+  gen_before=$(lb_attr applied_generation)
+
+  WIDENED=$(jq -nc --argjson r "$WITH_LB" --arg n "$LB_EP_PATH" \
+    '[ $r[] | if .kind=="endpoint" and .name==$n
+              then .spec.connectivity.allowed_cidrs=["10.0.0.0/8","192.0.2.10/32"] else . end ]')
+  set_desired "$WIDENED" && ok "desired state adds 192.0.2.10/32 to $LB_EP" \
+    || bad "POST desired (widen $LB_EP) failed"
+  DESIRED="$WIDENED"
+
+  cidrs=""; gen=""
+  for ((i=0; i<60; i++)); do
+    cidrs=$(lb_attr connectivity_allowed_cidrs); gen=$(lb_attr applied_generation)
+    [ "$cidrs" = "10.0.0.0/8,192.0.2.10/32" ] && [ -n "$gen" ] && [ "$gen" != "$gen_before" ] && break
+    sleep 5
+  done
+  [ "$cidrs" = "10.0.0.0/8,192.0.2.10/32" ] \
+    && ok "inventory reports attrs.connectivity_allowed_cidrs=$cidrs" \
+    || bad "attrs.connectivity_allowed_cidrs='${cidrs:-none}' (state '$(lb_state)'), want 10.0.0.0/8,192.0.2.10/32"
+  [ -n "$gen" ] && [ "$gen" != "$gen_before" ] \
+    && ok "applied_generation advanced to $gen (the update task stamped it)" \
+    || bad "applied_generation='${gen:-none}' did not advance past '${gen_before:-none}'"
+
+  ranges=$(kubectl -n "$NS" get "svc/yb-ep-${LB_EP_ID}-lb" \
+    -o jsonpath='{.spec.loadBalancerSourceRanges[*]}' 2>/dev/null | tr ' ' '\n' | sort | paste -sd, -)
+  [ "$ranges" = "10.0.0.0/8,192.0.2.10/32" ] \
+    && ok "Service yb-ep-${LB_EP_ID}-lb carries loadBalancerSourceRanges $ranges" \
+    || bad "Service loadBalancerSourceRanges='${ranges:-none}', want 10.0.0.0/8,192.0.2.10/32"
+  now_uid=$(kubectl -n "$NS" get "pod/$lb_pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+  [ -n "$lb_uid" ] && [ "$now_uid" = "$lb_uid" ] \
+    && ok "endpoint pod $lb_pod untouched by the allowlist change" \
+    || bad "endpoint pod changed on an allowlist change (uid '${lb_uid:-none}' -> '${now_uid:-none}')"
+  [ "$(lb_attr address)" = "$LB_ADDR" ] && ok "endpoint address unchanged ($LB_ADDR)" \
+    || bad "endpoint address moved from $LB_ADDR to $(lb_attr address)"
+  st=$(lb_state)
+  [ "$st" = ready ] && ok "$LB_EP settles back to ready, not drift" \
+    || bad "$LB_EP state='$st' after the allowlist change, want ready"
 fi
 
 # --- authoritative GC: withdraw the cluster subtree, keep the pool ---
