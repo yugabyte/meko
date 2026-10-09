@@ -62,7 +62,7 @@ export function SetupScreen({ reset, onDone }: { reset: boolean; onDone: () => v
         >
           <input id="setup-token" className="input mono" value={token} onChange={(e) => setToken(e.target.value)} required />
         </Field>
-        <Field label="Username" hint="Letters, digits, dots, @, dashes or underscores. An email address works.">
+        <Field label="Username" hint="Up to 64 letters, digits, dots, @, dashes or underscores. Most email addresses work, but not ones with +.">
           <input
             id="setup-username"
             className="input"

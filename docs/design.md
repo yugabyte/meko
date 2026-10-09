@@ -2011,9 +2011,9 @@ their own copy.
   included: on a shared host, or behind a proxy, choose remote.
 - **First run.** With remote access, the installer prints a one-time setup link:
   `https://host:7777/setup?token=…`. You open it, choose a username (up to 64 letters, digits,
-  `.`, `@`, `-` or `_`, so an email address works) and password, and can optionally enrol TOTP.
-  The token stops working after it is used. With local access it prints the address instead;
-  `agent-k-local setup-link` still makes a login for a later switch to remote.
+  `.`, `@`, `-` or `_`: most email addresses work, but not ones with `+`) and password, and can
+  optionally enrol TOTP. The token stops working after it is used. With local access it prints
+  the address instead; `agent-k-local setup-link` still makes a login for a later switch to remote.
 - **Forgot password.** The sign-in screen's **Forgot password?** says how to get back in: run
   `agent-k-local setup-link` on the host and open the link it prints. There is no email or
   self-service reset in the browser, on purpose: the one login guards a shell on the host, so a
