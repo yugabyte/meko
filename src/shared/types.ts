@@ -397,6 +397,7 @@ export interface CallHomeMeko {
 /** Learn steps as the report counts them, by when they began. */
 export interface CallHomeLearn {
   runs: number;
+  /** `discard` is optional in the schema: reports from before Discard ran learn steps lack it. */
   byTrigger: { merge: number; manual: number; discard: number };
   /** `mod`: through AgentK's mod; `turn`: a typed prompt; `none`: skipped at Merge & Close or Discard. */
   byPath: { mod: number; turn: number; none: number };
@@ -1591,9 +1592,9 @@ export type TermServerMessage =
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
 //        none is queued, or while the merge is being requested). learn starts the learn step: 409 without a
 //        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs. merge and discard take
-//        an optional CloseSessionRequest: skipLearn skips the learn step they run first. A discard that runs one answers
-//        with the session still running (Session.discarding) and discards it when the step ends; asked again with
-//        skipLearn, it discards now)
+//        an optional CloseSessionRequest (400 for a skipLearn that isn't a boolean): skipLearn skips the learn step they
+//        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
+//        when the step ends; asked again with skipLearn, it discards now)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)

@@ -1671,10 +1671,12 @@ to Merge & Close stands for it.
 
 **Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
 checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
-Checked, the action's `CloseSessionRequest` carries `skipLearn`, no learn step runs, and the
-timeline says so (`learn-skipped`, once). Merge & Close keeps the choice in `sessions.skip_learn`
-until the PR merges (a queued merge too; withdrawing a queued merge clears it, and every press sets
-it again); a PR merged on GitHub without the button runs the step as usual. Nothing is recorded in
+Checked, the action's `CloseSessionRequest` carries `skipLearn` (400 when it isn't a boolean), no
+learn step runs, and the timeline says so (`learn-skipped`, once, and not for **Discard now**,
+whose step is recorded as interrupted). Merge & Close writes the choice to `sessions.skip_learn`
+only once the merge is requested or queued, and keeps it until the PR merges; a merge given up on
+clears it (a queued merge withdrawn or dropped, GitHub refusing it, or the session back in Review),
+so a PR merged on GitHub without the button runs the step as usual. Nothing is recorded in
 `meko_learns` for a skipped step, so the usage stats' *skipped* count stays the sessions Claude
 was gone or busy in.
 
@@ -1684,7 +1686,9 @@ the confirmation shows *Saving learnings, then discarding* with **Discard now**,
 once (`skipLearn`, interrupting the step). When the step ends, done, failed, timed out or
 interrupted (`Lifecycle.afterLearn`, and `onTurnEnd` for a typed step, which then does nothing else
 for the session), `SessionManager.discardNow()` discards the session, once however many ask. A
-restart that cut the step short finishes the discard in `recover()`. Archive clears `discarding`.
+restart that cut the step short finishes the discard in `recover()`, unless the step was a typed
+turn in a Claude still running: that turn goes on, and its end discards the session. Archive
+clears `discarding`.
 
 **Through the mod** (its link live, protocol 2):
 
@@ -1939,8 +1943,8 @@ reports.
   AgentK's searches at session start by outcome with the milliseconds they took in all. Calls go on
   the day they were made, seeds and searches at start on the day the search ran. Added since
   (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
-  Meko (their input, characters ÷ 4), also by tool; [learn steps](#the-learn-step) by trigger,
-  path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
+  Meko (their input, characters ÷ 4), also by tool; [learn steps](#the-learn-step) by trigger
+  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
   typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
   recorded in `MekoClient.call`: searches at start, what shipped, designs, the learn step's) with

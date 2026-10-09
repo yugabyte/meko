@@ -980,6 +980,7 @@ export class Lifecycle {
         ? `PR #${st.number} was closed without merging`
         : `PR #${st.number} still isn't merged (it may have left the merge queue)`);
       this.sessions.setStage(id, 'review', 'auto');
+      this.giveUpMerge(id);
       row = this.sessions.row(id);
     }
     const settings = parseSettings(p.settings_json);
@@ -1442,8 +1443,9 @@ export class Lifecycle {
     if (row.stage !== 'review' || !row.pr_number || !row.pr_url) throw new HttpError(409, 'Merge is only available in the Review stage.');
     if (!projectRow(this.db, row.project_id)) throw new HttpError(404, 'Project not found.');
     if (this.merging.has(row.id)) throw new HttpError(409, 'A merge is already in progress.');
-    // Kept until the merge lands (a queued one too), when the learn step runs or doesn't (Learner.beforeClose).
-    this.sessions.update(row.id, { skip_learn: req.skipLearn ? 1 : 0 });
+    // Written only once the merge is requested or queued, and kept until it lands, when the learn
+    // step runs or doesn't (Learner.beforeClose); a merge given up on clears it (giveUpMerge).
+    const skip = { skip_learn: req.skipLearn ? 1 : 0 };
     this.merging.add(row.id);
     try {
       await this.serial(row.id, async () => {
@@ -1451,8 +1453,12 @@ export class Lifecycle {
         const fresh = this.sessions.row(row.id);
         if (fresh.stage !== 'review') return; // merged elsewhere and already cleaned up
         const info = this.sessions.runtime(row.id);
-        if (info.canMerge) return this.doMerge(row.id);
+        if (info.canMerge) {
+          this.sessions.update(row.id, skip);
+          return this.doMerge(row.id);
+        }
         if (!info.mergeQueueable) throw new HttpError(409, `Not ready to merge: ${info.mergeBlockers.join(' ')}`);
+        this.sessions.update(row.id, skip);
         if (fresh.queued_gate !== 'merge') {
           this.queueGate(row.id, 'merge', `Merge queued: it goes once nothing blocks it (now: ${info.mergeBlockers.join(' ')})`);
         }
@@ -1480,6 +1486,7 @@ export class Lifecycle {
       await github.merge(row.worktree_path, row.pr_url, method);
     } catch (e) {
       if (this.sessions.row(id).stage === 'merge') this.sessions.setStage(id, 'review', 'auto');
+      this.giveUpMerge(id);
       throw new HttpError(502, `GitHub refused the merge: ${errMsg(e)}`);
     } finally {
       this.sessions.setBusy(id, false);
@@ -1508,8 +1515,16 @@ export class Lifecycle {
     if (!gate) throw new HttpError(409, 'Nothing is queued.');
     if (gate === 'merge' && this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');
     this.setQueued(row.id, null);
-    if (gate === 'merge') this.sessions.update(row.id, { skip_learn: 0 });
+    if (gate === 'merge') this.giveUpMerge(row.id);
     this.sessions.event(row.id, 'queued', `Queued ${GATE_NAMES[gate]} withdrawn`);
+  }
+
+  /**
+   * A requested or queued merge that won't happen (withdrawn, dropped, refused by GitHub, or back
+   * in Review): its Don't save learnings goes with it, so a PR merged on GitHub later runs the learn step.
+   */
+  private giveUpMerge(id: string): void {
+    if (sessionRow(this.db, id)?.skip_learn) this.sessions.update(id, { skip_learn: 0 });
   }
 
   /** Drops a queued gate (only `only`, when given), saying why in the activity log. */
@@ -1517,6 +1532,7 @@ export class Lifecycle {
     const gate = sessionRow(this.db, id)?.queued_gate;
     if (!gate || (only && gate !== only)) return;
     this.setQueued(id, null);
+    if (gate === 'merge') this.giveUpMerge(id);
     this.sessions.event(id, 'queued', `Queued ${GATE_NAMES[gate]} dropped: ${why}`);
   }
 

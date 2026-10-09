@@ -205,6 +205,11 @@ export class Learner {
     return get<LearnRow>(this.db, 'SELECT id, session_id, trigger, path, started_at FROM meko_learns WHERE session_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', sessionId) ?? null;
   }
 
+  /** How the session's latest learn step ran (or was skipped); null before its first. */
+  lastPath(sessionId: string): LearnPath | null {
+    return get<{ path: LearnPath }>(this.db, 'SELECT path FROM meko_learns WHERE session_id = ? ORDER BY started_at DESC LIMIT 1', sessionId)?.path ?? null;
+  }
+
   /** True while the session has a learn step running. */
   running(sessionId: string): boolean {
     return !!this.openRow(sessionId);
@@ -278,9 +283,12 @@ export class Learner {
     return this.beforeEnd(row, 'discard');
   }
 
-  /** Notes in the timeline, once, that the user asked a closing session to skip the learn step (when it had one to run). */
+  /**
+   * Notes in the timeline, once, that the user asked a closing session to skip the learn step (when
+   * it had one to run). Not while one runs: Discard now cuts it short, and it's recorded as interrupted.
+   */
   skipped(row: SessionRow): void {
-    if (!this.datapack(row) || get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'learn-skipped'", row.id)) return;
+    if (!this.datapack(row) || this.openRow(row.id) || get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'learn-skipped'", row.id)) return;
     this.core.sessions.event(row.id, 'learn-skipped', SKIPPED_TEXT);
   }
 

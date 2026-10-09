@@ -57,9 +57,10 @@ export function sessionName(v: unknown): string {
   return name;
 }
 
-/** The body of a merge or discard action (CloseSessionRequest); anything else asks for nothing. */
+/** The body of a merge or discard action (CloseSessionRequest); none asks for nothing. 400 for a skipLearn that isn't a boolean. */
 export function closeRequest(body: unknown): CloseSessionRequest {
   const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (b.skipLearn !== undefined && typeof b.skipLearn !== 'boolean') throw new HttpError(400, 'skipLearn must be true or false.');
   return { skipLearn: b.skipLearn === true };
 }
 
@@ -1422,12 +1423,15 @@ export class SessionManager {
     }
     for (const row of sessionRows(this.db)) {
       if (!this.recoverable(row) || !projectRow(this.db, row.project_id)) continue;
-      // A Discard that waited for a learn step the restart cut short (Learner.recover ended it).
-      if (row.discarding && !this.core.learn.running(row.id)) {
+      const pane = panes.get(row.tmux_name);
+      // A Discard that waited for a learn step the restart cut short (Learner.recover ended it): a
+      // mod step lived in the old server, so it's gone. A typed one's turn goes on in a live Claude,
+      // and its end discards the session (Lifecycle.onTurnEnd).
+      const typedTurnGoesOn = !!pane && !pane.dead && this.core.learn.lastPath(row.id) === 'turn';
+      if (row.discarding && !this.core.learn.running(row.id) && !typedTurnGoesOn) {
         await this.discardNow(row.id).catch((e) => this.core.log.error(`discarding ${row.id} failed`, e));
         continue;
       }
-      const pane = panes.get(row.tmux_name);
       if (pane && !pane.dead) {
         // Server restart; Claude kept running. One still starting lost its progress with the old
         // server, and its startup hooks may have come while no server was listening.

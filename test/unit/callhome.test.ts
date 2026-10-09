@@ -465,6 +465,11 @@ describe('the usage stats report', () => {
     expect(validate({ ...r, install: { ...r.install, platform: 'Alice’s Mac' } }, SCHEMA)).toHaveLength(1);
     expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, query: 1 } } }, SCHEMA)).toEqual(['$.totals.meko: unexpected query']);
     expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, byTool: { 'alice/zeta': 1 } } } }, SCHEMA)).toHaveLength(1);
+    // A report from before Discard ran learn steps has no byTrigger.discard, and still checks.
+    const learn = { runs: 0, byTrigger: { merge: 0, manual: 0 }, byPath: { mod: 0, turn: 0, none: 0 }, byOutcome: { done: 0, failed: 0, interrupted: 0, skipped: 0 },
+      candidates: 0, saves: 0, updates: 0, skips: 0, empty: 0, lookups: 0, errors: 0, sentTokens: 0,
+      tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 }])), usdCents: 0 };
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, learn } } }, SCHEMA)).toEqual([]);
     // The schema names exactly the tools the report does.
     const tools = (SCHEMA.$defs as Record<string, Schema>).toolCounts.propertyNames as { enum: string[] };
     expect([...tools.enum].sort()).toEqual([...REPORTED_TOOLS, 'other'].sort());

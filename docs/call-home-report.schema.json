@@ -274,7 +274,7 @@
         "byTrigger": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["merge", "manual", "discard"],
+          "required": ["merge", "manual"],
           "properties": { "merge": { "$ref": "#/$defs/count" }, "manual": { "$ref": "#/$defs/count" }, "discard": { "$ref": "#/$defs/count" } }
         },
         "byPath": {
