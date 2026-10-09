@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -788,14 +789,14 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 	if name != "" {
 		for _, ep := range m.endpoints {
 			if ep.BranchID == branchID && ep.Name == name {
-				return ErrConflict
+				return fmt.Errorf("the branch already has an endpoint named %q: %w", name, ErrConflict)
 			}
 		}
 	}
 	if role == RoleReadWrite {
 		k := branchKey{clusterID: clusterID, branchID: branchID}
 		if _, taken := m.writers[k]; taken {
-			return ErrConflict
+			return fmt.Errorf("the branch already has a read_write endpoint: %w", ErrConflict)
 		}
 		m.writers[k] = struct{}{}
 	}

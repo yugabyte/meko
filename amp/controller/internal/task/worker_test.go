@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/core"
 )
 
 // These tests cover the Worker (worker.go) against the in-memory MemStore and
@@ -243,6 +245,42 @@ func TestWorkerFailsTaskAndHaltsLaterSteps(t *testing.T) {
 	}
 	if stepRows[1].Status != StatusPending {
 		t.Errorf("step after the failure = %q, want pending (never started)", stepRows[1].Status)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+// A failed task's ErrorCode classifies its cause — a second read_write endpoint is
+// core.ErrConflict, wrapped by the step — so a caller need not match on the
+// free-text Error.
+func TestWorkerClassifiesFailedTaskErrorCode(t *testing.T) {
+	for _, tc := range []struct {
+		cause error
+		want  *string
+	}{
+		{fmt.Errorf("ensure endpoint record: %w", core.ErrConflict), strPtr(ErrorCodeConflict)},
+		{fmt.Errorf("load branch: %w", core.ErrNotFound), strPtr(ErrorCodeNotFound)},
+		{errors.New("helm install: timed out"), nil},
+	} {
+		t.Run(tc.cause.Error(), func(t *testing.T) {
+			store := NewMemStore()
+			w := testWorker(store, regWith(&fakeStep{kind: "kfail", failWith: tc.cause}))
+			task, steps := pendingTask("kfail")
+			store.Seed(task, steps)
+
+			claimAndExecute(t, w)
+
+			got, _ := store.Get(t.Context(), task.ID)
+			if got.Status != StatusFailed {
+				t.Fatalf("task status = %q, want failed", got.Status)
+			}
+			switch {
+			case tc.want == nil && got.ErrorCode != nil:
+				t.Errorf("error_code = %q, want nil", *got.ErrorCode)
+			case tc.want != nil && (got.ErrorCode == nil || *got.ErrorCode != *tc.want):
+				t.Errorf("error_code = %v, want %q", got.ErrorCode, *tc.want)
+			}
+		})
 	}
 }
 

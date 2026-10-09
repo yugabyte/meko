@@ -292,6 +292,31 @@ func TestInventorySeparatesRejectionFromImmutability(t *testing.T) {
 	}
 }
 
+// A create in flight has no backend row, so without a synthetic one the resource
+// is invisible for as long as its task runs — minutes, for an endpoint.
+func TestInventoryShowsACreateInFlight(t *testing.T) {
+	rw := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/rw"}
+	rw2 := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/rw2"}
+	res := reconcile.Result{
+		Actual: []reconcile.Actual{{Key: rw, Ready: true, State: "ready"}},
+		Updating: map[reconcile.ResourceKey]error{
+			rw:  errors.New("controller task t1 planned for generation 2"),
+			rw2: errors.New("controller task t2 is creating it (running)"),
+		},
+	}
+
+	byID := map[string]api.ResourceStatus{}
+	for _, r := range inventory(res) {
+		byID[r.ID] = r
+	}
+	if got := byID["endpoint/p/c/main/rw2"]; got.State != "creating" || got.Name != "rw2" || got.Error == "" {
+		t.Errorf("rw2 row = %+v, want state=creating carrying the task", got)
+	}
+	if got := byID["endpoint/p/c/main/rw"]; got.State != "updating" {
+		t.Errorf("rw row = %+v, want state=updating — a row that exists is not creating", got)
+	}
+}
+
 // A backend's own reason for a non-Ready resource reaches the row: on its own
 // before the resource is stuck, and appended to the stuck message after.
 func TestInventoryCarriesBackendDetail(t *testing.T) {

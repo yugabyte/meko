@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"meko/ycp/internal/ampclient"
 	"meko/ycp/internal/api"
 	"meko/ycp/reconcile"
@@ -41,8 +43,14 @@ type genServer struct {
 	endpointGen *int64
 	// taskStatus / taskError script GET /tasks/{id}. An empty taskStatus makes the
 	// server 404 the task, i.e. "the controller no longer knows it".
-	taskStatus string
-	taskError  string
+	taskStatus    string
+	taskError     string
+	taskErrorCode string
+	// taskStatusOf overrides taskStatus for one task id, for a test that needs a
+	// second task in a different state.
+	taskStatusOf map[string]string
+	// noEndpoints lists the branch with no endpoints, as after a delete.
+	noEndpoints bool
 	// ctlImageTag is the tag the controller's pod template carries; empty takes it
 	// from whatever helm last deployed. controllerVersion is what GET /version
 	// reports — helm starts at an empty release, so a declared version always
@@ -93,6 +101,8 @@ type genServer struct {
 	epPatches  []ampclient.UpdateEndpointSettingsRequest
 	brPatches  []ampclient.UpdateBranchSettingsRequest
 	taskGets   int
+	epCreates  int // POST …/endpoints calls
+	clCreates  int // POST …/clusters calls
 }
 
 func (g *genServer) start(t *testing.T) *Backend {
@@ -163,10 +173,17 @@ func (g *genServer) start(t *testing.T) *Backend {
 				io.WriteString(w, `{"error":{"code":"not_found","message":"unknown task"}}`)
 				return
 			}
-			body := map[string]any{"id": genTaskID, "kind": "resize_endpoint", "status": g.taskStatus,
+			status := g.taskStatus
+			if s, ok := g.taskStatusOf[strings.TrimPrefix(p, "/tasks/")]; ok {
+				status = s
+			}
+			body := map[string]any{"id": genTaskID, "kind": "resize_endpoint", "status": status,
 				"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}
 			if g.taskError != "" {
 				body["error"] = g.taskError
+			}
+			if g.taskErrorCode != "" {
+				body["error_code"] = g.taskErrorCode
 			}
 			_ = json.NewEncoder(w).Encode(body)
 		case strings.HasSuffix(p, "/resize"):
@@ -196,6 +213,14 @@ func (g *genServer) start(t *testing.T) *Backend {
 				t.Errorf("decode add-extensions body: %v", err)
 			}
 			g.extAdds = append(g.extAdds, req)
+			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/endpoints") && r.Method == http.MethodPost:
+			g.epCreates++
+			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/endpoints") && g.noEndpoints:
+			io.WriteString(w, `{"endpoints":[]}`)
+		case strings.HasSuffix(p, "/clusters") && r.Method == http.MethodPost:
+			g.clCreates++
 			g.writeMutateResponse(w)
 		case strings.HasSuffix(p, "/endpoints"):
 			conn := ""
@@ -513,6 +538,194 @@ func TestCreateConflictStaysSuccess(t *testing.T) {
 	}
 	if err := b.Create(t.Context(), api.DesiredResource{Kind: KindPool, Name: "pool-a", Spec: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("Create on 409 = %v, want success", err)
+	}
+}
+
+// A create plans a task the 202 cannot report the outcome of, so the agent
+// follows it the way it follows an update's: pending while it runs, without a
+// second POST, and the task's own error once it fails. A conflict — a second
+// read_write endpoint on a branch, which the controller refuses only inside the
+// task — is Rejected, so the engine stops re-planning the same doomed create every
+// tick (CLOUDGA-37405); any other failure stays retryable.
+func TestCreateFollowsItsTask(t *testing.T) {
+	rw2 := api.DesiredResource{Kind: KindEndpoint, Name: genBranchPath + "/rw2", Generation: 1,
+		Spec: json.RawMessage(`{"role":"read_write"}`)}
+
+	for _, tc := range []struct {
+		name, code string
+		rejected   bool
+	}{
+		{"conflict is rejected", "conflict", true},
+		{"other failures retry", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &genServer{taskStatus: "running"}
+			b := g.start(t)
+
+			mustIssue(t, b.Create(t.Context(), rw2))
+			mustIssue(t, b.Create(t.Context(), rw2))
+			if g.epCreates != 1 {
+				t.Fatalf("create calls = %d, want 1 — a running task must not be re-issued", g.epCreates)
+			}
+
+			g.taskStatus, g.taskError, g.taskErrorCode = "failed", "ensure endpoint record: conflict", tc.code
+			err := b.Create(t.Context(), rw2)
+			if err == nil || !strings.Contains(err.Error(), "ensure endpoint record: conflict") {
+				t.Fatalf("Create after a failed task = %v, want the task's own error", err)
+			}
+			var perm *reconcile.PermanentError
+			var pending *reconcile.PendingError
+			switch {
+			case errors.As(err, &pending):
+				t.Fatalf("err = %v, want a failure, not pending", err)
+			case tc.rejected && reconcile.PermanentReasonOf(err) != reconcile.ReasonRejected:
+				t.Errorf("err = %v, want Rejected", err)
+			case !tc.rejected && errors.As(err, &perm):
+				t.Errorf("err = %v, want a plain retryable error", err)
+			}
+			if g.epCreates != 1 {
+				t.Errorf("create calls = %d, want 1 — reading the failure must not re-issue", g.epCreates)
+			}
+
+			// The failed task is forgotten, so the next attempt — after the backoff,
+			// or a re-declaration — issues afresh.
+			mustIssue(t, b.Create(t.Context(), rw2))
+			if g.epCreates != 2 {
+				t.Errorf("create calls = %d, want 2", g.epCreates)
+			}
+		})
+	}
+}
+
+func conflictFailed(g *genServer) {
+	g.taskStatus, g.taskError, g.taskErrorCode = "failed", "ensure endpoint record: conflict", "conflict"
+}
+
+// The swap: one declaration withdraws a branch's writer and adds another, and the
+// new one's create fails while the old one's delete is still running. That clears
+// by itself, so it must be retried rather than held until the spec changes.
+func TestCreateConflictRetriesWhileASiblingIsBeingDeleted(t *testing.T) {
+	const deleteTask = "88888888-8888-8888-8888-888888888888"
+	g := &genServer{taskStatus: "running", taskStatusOf: map[string]string{deleteTask: "running"}}
+	b := g.start(t)
+	rw2 := api.DesiredResource{Kind: KindEndpoint, Name: genBranchPath + "/rw2", Spec: json.RawMessage(`{"role":"read_write"}`)}
+
+	mustIssue(t, b.Create(t.Context(), rw2))
+	b.deleting[reconcile.ResourceKey{Kind: KindEndpoint, Name: genEndpointPath}] = openapi_types.UUID(uuid.MustParse(deleteTask))
+	conflictFailed(g)
+
+	err := b.Create(t.Context(), rw2)
+	if err == nil || reconcile.PermanentReasonOf(err) == reconcile.ReasonRejected {
+		t.Fatalf("Create = %v, want a retryable failure while a sibling's delete runs", err)
+	}
+	var perm *reconcile.PermanentError
+	if errors.As(err, &perm) {
+		t.Fatalf("Create = %v, want retryable, not permanent", err)
+	}
+}
+
+// A conflict with nothing being deleted is held — but only until something under
+// the parent goes. Withdrawing the conflicting writer in a later declaration does
+// not touch rw2's generation, so without Reconsider rw2 would stay rejected.
+func TestRejectedCreateReconsideredWhenASiblingGoes(t *testing.T) {
+	g := &genServer{taskStatus: "running"}
+	b := g.start(t)
+	rw2 := api.DesiredResource{Kind: KindEndpoint, Name: genBranchPath + "/rw2", Spec: json.RawMessage(`{"role":"read_write"}`)}
+
+	mustIssue(t, b.Create(t.Context(), rw2))
+	conflictFailed(g)
+	if err := b.Create(t.Context(), rw2); reconcile.PermanentReasonOf(err) != reconcile.ReasonRejected {
+		t.Fatalf("Create = %v, want Rejected", err)
+	}
+	if got := b.Reconsider(); len(got) != 0 {
+		t.Fatalf("Reconsider = %v before anything was removed, want none", got)
+	}
+
+	g.noEndpoints = true // rw is gone
+	if _, err := b.List(t.Context()); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := reconcile.ResourceKey{Kind: KindEndpoint, Name: rw2.Name}
+	if got := b.Reconsider(); len(got) != 1 || got[0] != want {
+		t.Fatalf("Reconsider = %v, want [%v]", got, want)
+	}
+	if got := b.Reconsider(); len(got) != 0 {
+		t.Errorf("Reconsider = %v on the next tick, want it to report a key once", got)
+	}
+}
+
+// A cluster has no update path and echoes no generation, so once its create lands
+// the engine plans an Update whenever the create carried a generation above 0.
+// Update must read the create's task — Pending while it runs, applied once it
+// succeeded at this generation — or the cluster is drift forever.
+func TestUpdateAfterCreateReadsTheCreatesTask(t *testing.T) {
+	g := &genServer{taskStatus: "running"}
+	b := g.start(t)
+	cl := api.DesiredResource{Kind: KindCluster, Name: "pool-a/recproj2", Generation: 2, Spec: json.RawMessage(`{}`)}
+
+	mustIssue(t, b.Create(t.Context(), cl))
+	mustIssue(t, b.Update(t.Context(), cl))
+
+	g.taskStatus = "succeeded"
+	if err := b.Update(t.Context(), cl); err != nil {
+		t.Fatalf("Update after the create succeeded at this generation = %v, want applied", err)
+	}
+	if g.clCreates != 1 {
+		t.Errorf("create calls = %d, want 1", g.clCreates)
+	}
+	// Only the once: a later edit is a real update, which a cluster refuses.
+	cl.Generation = 3
+	var perm *reconcile.PermanentError
+	if err := b.Update(t.Context(), cl); !errors.As(err, &perm) || perm.Reason != reconcile.ReasonUnsupported {
+		t.Errorf("Update at a later generation = %v, want unsupported", err)
+	}
+}
+
+// A create's task can succeed between a tick's List and its Create. Issuing it
+// again then is no no-op for a cluster or branch — a duplicate name fails inside
+// its task with conflict, and that would replace the success Update reads — so
+// the agent waits one tick for the listing. Only one: a resource deleted since it
+// was created must still be re-created.
+func TestCreateWaitsOneTickForTheListingOnceItsTaskSucceeded(t *testing.T) {
+	g := &genServer{taskStatus: "running"}
+	b := g.start(t)
+	cl := api.DesiredResource{Kind: KindCluster, Name: "pool-a/recproj2", Generation: 1, Spec: json.RawMessage(`{}`)}
+
+	mustIssue(t, b.Create(t.Context(), cl))
+	g.taskStatus = "succeeded"
+	mustIssue(t, b.Create(t.Context(), cl))
+	if g.clCreates != 1 {
+		t.Fatalf("create calls = %d, want 1 — a succeeded create must not be re-issued at once", g.clCreates)
+	}
+	mustIssue(t, b.Create(t.Context(), cl))
+	if g.clCreates != 2 {
+		t.Errorf("create calls = %d, want 2 — still unlisted a tick later, it is re-created", g.clCreates)
+	}
+}
+
+// A delete whose task has finished frees the conflict at most once. If its
+// resource is still listed afterwards (a task the controller forgot reads as
+// succeeded), it is not what clears the conflict, and must not keep the create
+// retrying on backoff forever.
+func TestFinishedDeleteExcusesAConflictOnce(t *testing.T) {
+	const deleteTask = "88888888-8888-8888-8888-888888888888"
+	g := &genServer{taskStatus: "running", taskStatusOf: map[string]string{deleteTask: "succeeded"}}
+	b := g.start(t)
+	rw2 := api.DesiredResource{Kind: KindEndpoint, Name: genBranchPath + "/rw2", Spec: json.RawMessage(`{"role":"read_write"}`)}
+	b.deleting[reconcile.ResourceKey{Kind: KindEndpoint, Name: genEndpointPath}] = openapi_types.UUID(uuid.MustParse(deleteTask))
+
+	mustIssue(t, b.Create(t.Context(), rw2))
+	conflictFailed(g)
+	var perm *reconcile.PermanentError
+	if err := b.Create(t.Context(), rw2); err == nil || errors.As(err, &perm) {
+		t.Fatalf("first conflict = %v, want retryable — the delete may have just landed", err)
+	}
+
+	g.taskStatus, g.taskError, g.taskErrorCode = "running", "", ""
+	mustIssue(t, b.Create(t.Context(), rw2))
+	conflictFailed(g)
+	if err := b.Create(t.Context(), rw2); reconcile.PermanentReasonOf(err) != reconcile.ReasonRejected || !errors.As(err, &perm) {
+		t.Fatalf("second conflict = %v, want Rejected — the finished delete freed nothing", err)
 	}
 }
 

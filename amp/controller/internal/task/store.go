@@ -263,7 +263,7 @@ var _ Store = (*PgStore)(nil)
 // every fresh install create it only to lose it.
 // Cleanup: https://github.com/yugabyte/meko/issues/975
 const taskColumns = `id::text, kind, status::text, cluster_id::text, target_ref,
-	params, step_ids::text[], error, owner, ycp_resource, ycp_resource_id::text, ycp_generation,
+	params, step_ids::text[], error, error_code, owner, ycp_resource, ycp_resource_id::text, ycp_generation,
 	created_at, updated_at, cancel_requested_at`
 
 func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
@@ -486,9 +486,9 @@ func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, owner 
 		return err
 	}
 	if _, err := tx.Exec(ctx,
-		`UPDATE tasks SET status = 'failed', error = $2, updated_at = now()
+		`UPDATE tasks SET status = 'failed', error = $2, error_code = $4, updated_at = now()
 		 WHERE id = $1::uuid AND owner = $3`,
-		taskID.String(), msg, owner); err != nil {
+		taskID.String(), msg, owner, errorCode(cause)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -496,7 +496,7 @@ func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, owner 
 
 func (s *PgStore) CompleteTask(ctx context.Context, taskID uuid.UUID, owner string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE tasks SET status = 'succeeded', error = NULL, updated_at = now()
+		`UPDATE tasks SET status = 'succeeded', error = NULL, error_code = NULL, updated_at = now()
 		 WHERE id = $1::uuid AND owner = $2`,
 		taskID.String(), owner)
 	return err
@@ -651,7 +651,7 @@ func scanTask(r row) (*Task, error) {
 		t          Task
 	)
 	if err := r.Scan(&idStr, &t.Kind, &statusStr, &clusterStr, &t.TargetRef,
-		&params, &stepIDStrs, &t.Error, &t.Owner, &ycpRes, &ycpResID, &ycpGen,
+		&params, &stepIDStrs, &t.Error, &t.ErrorCode, &t.Owner, &ycpRes, &ycpResID, &ycpGen,
 		&t.CreatedAt, &t.UpdatedAt, &t.CancelRequestedAt); err != nil {
 		return nil, err
 	}

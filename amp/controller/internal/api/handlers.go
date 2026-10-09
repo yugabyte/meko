@@ -2091,6 +2091,7 @@ func taskToAPI(t *task.Task) Task {
 		ClusterId: t.ClusterID,
 		TargetRef: t.TargetRef,
 		Error:     t.Error,
+		ErrorCode: t.ErrorCode,
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: t.UpdatedAt,
 	}

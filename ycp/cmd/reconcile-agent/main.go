@@ -572,8 +572,9 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 		out = append(out, rs)
 	}
 
-	// Failed/permanent keys with no actual row (a create that never landed, a
-	// withdrawn pool that cannot be deleted) still need a row to carry the reason.
+	// Failed/permanent/pending keys with no actual row (a create that never landed
+	// or is still running, a withdrawn pool that cannot be deleted) still need a row
+	// to carry the reason.
 	type orphan struct{ state, err string }
 	orphans := map[reconcile.ResourceKey]orphan{}
 	for k, err := range res.Failed {
@@ -588,6 +589,14 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 				// refused reads "rejected", not the generic "error" that says nothing
 				// about whether re-declaring would help.
 				orphans[k] = orphan{state: reconcile.PermanentReasonOf(err).State(), err: err.Error()}
+			}
+		}
+	}
+	// Only a create can be in flight with no row to report it on.
+	for k, err := range res.Updating {
+		if !inActual[k] {
+			if _, dup := orphans[k]; !dup {
+				orphans[k] = orphan{state: "creating", err: err.Error()}
 			}
 		}
 	}

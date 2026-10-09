@@ -243,6 +243,7 @@ func (s *MemStore) FailStep(_ context.Context, taskID, stepID uuid.UUID, owner s
 	if t := s.tasks[taskID]; t != nil {
 		t.Status = StatusFailed
 		t.Error = &msg
+		t.ErrorCode = errorCode(cause)
 		t.UpdatedAt = s.now()
 	}
 	return nil
@@ -257,6 +258,7 @@ func (s *MemStore) CompleteTask(_ context.Context, taskID uuid.UUID, owner strin
 	if t := s.tasks[taskID]; t != nil {
 		t.Status = StatusSucceeded
 		t.Error = nil
+		t.ErrorCode = nil
 		t.UpdatedAt = s.now()
 	}
 	return nil

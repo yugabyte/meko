@@ -268,13 +268,17 @@ type ResourceStatus struct {
 	// renders a different sentence for each, so they must not be conflated:
 	//
 	//   updating  an async task for this resource is in flight; wait.
+	//   creating  the same, for a resource whose create is in flight and so has
+	//             no backend row yet.
 	//   drift     no verb exists for this resource as declared — a kind with no
 	//             update/delete path, or a field only create carries. Nothing the
 	//             operator writes changes it; this is the "cannot be changed in
 	//             place" case.
 	//   rejected  this declaration cannot be applied but another could — the
-	//             remote refused it (a 400) or the agent refused it before
-	//             sending. Fixed by re-declaring, and Error says how.
+	//             remote refused it (a 400, or a create task that failed on a
+	//             conflict with an existing resource) or the agent refused it
+	//             before sending. Fixed by re-declaring, or by removing what it
+	//             conflicts with, and Error says how.
 	//   blocked   the agent is not permitted: credentials, a scope it lacks, or a
 	//             quota no rewrite clears. Neither the spec nor the resource is
 	//             wrong.

@@ -44,6 +44,9 @@ func TestWorkerCancelBetweenStepsFailsTaskWithACancelReason(t *testing.T) {
 	if got.Error == nil || !strings.Contains(*got.Error, ErrCancelled.Error()) {
 		t.Errorf("task error = %v, want it to carry %q so a cancel is distinguishable from a real failure", got.Error, ErrCancelled)
 	}
+	if got.ErrorCode == nil || *got.ErrorCode != ErrorCodeCancelled {
+		t.Errorf("task error_code = %v, want %q", got.ErrorCode, ErrorCodeCancelled)
+	}
 	if !got.CancelRequested() {
 		t.Error("the cancelled task carries no cancel_requested_at")
 	}

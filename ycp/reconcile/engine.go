@@ -150,6 +150,16 @@ type Backend interface {
 	Parent(r api.DesiredResource) (ResourceKey, bool)
 }
 
+// Reconsiderer is implemented by a backend whose permanent verdict can stop being
+// true without the resource's own spec changing: a create refused because a
+// sibling holds what it needs (a branch's one read_write slot) is answerable once
+// that sibling is gone, and nothing bumps the refused resource's generation. Each
+// tick, right after List, the engine drops the permanent mark of every key it
+// returns, so the verb is asked again.
+type Reconsiderer interface {
+	Reconsider() []ResourceKey
+}
+
 // PermanentReason says WHY an error is permanent. The engine treats all three
 // alike — no retry, no DEGRADED — but they ask different things of whoever reads
 // the resource row, so they must not arrive as one word.

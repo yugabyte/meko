@@ -1759,8 +1759,17 @@ type Task struct {
 	ClusterId         *openapi_types.UUID `json:"cluster_id,omitempty"`
 	CreatedAt         time.Time           `json:"created_at"`
 	Error             *string             `json:"error,omitempty"`
-	Id                openapi_types.UUID  `json:"id"`
-	Kind              string              `json:"kind"`
+
+	// ErrorCode A failed task's `error`, classified: `conflict` (the work collides
+	// with existing state — a second `read_write` endpoint on a branch, or a
+	// name already taken), `not_found` (a resource it needs is gone), or
+	// `cancelled` (`POST /tasks/{taskId}/cancel` stopped it). These are the
+	// refusals a synchronous call would have answered with 409 / 404.
+	// `null` when the task has not failed or its cause has no code; treat an
+	// unknown value as `null`.
+	ErrorCode *string            `json:"error_code,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+	Kind      string             `json:"kind"`
 
 	// Params The originating request, as opaque JSON.
 	Params interface{} `json:"params,omitempty"`

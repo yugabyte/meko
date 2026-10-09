@@ -3056,6 +3056,17 @@ components:
         error:
           type: string
           nullable: true
+        error_code:
+          type: string
+          nullable: true
+          description: |
+            A failed task's `error`, classified: `conflict` (the work collides
+            with existing state — a second `read_write` endpoint on a branch, or a
+            name already taken), `not_found` (a resource it needs is gone), or
+            `cancelled` (`POST /tasks/{taskId}/cancel` stopped it). These are the
+            refusals a synchronous call would have answered with 409 / 404.
+            `null` when the task has not failed or its cause has no code; treat an
+            unknown value as `null`.
         ycp_generation:
           type: integer
           format: int64

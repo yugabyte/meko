@@ -54,7 +54,11 @@ sketch in §8.1 of the high-level doc):
 - **`task`** — one per operation, the user-visible unit (`GET /tasks/{id}`). Holds
   the kind, a coarse status, the target cluster/ref (for monitoring), the
   originating request (`params`), `step_ids` (its steps in execution order), the
-  owner, and (on failure) the error. Ownership's *expiry* is not here — it is a
+  owner, and (on failure) the error plus `error_code` — `conflict`, `not_found`
+  or `cancelled`, derived from the step's cause by `errors.Is`. A code classifies
+  the failure; it does not say whether a retry can succeed — a `conflict` can be a
+  second writer, or a delete the controller asks the caller to retry
+  (`DeleteBranch` blocked by a child). Ownership's *expiry* is not here — it is a
   lease in `amp_registry.resource_token` ([`ac-locking.md`](ac-locking.md)), and
   `tasks.lease_expiry` is a deprecated leftover nothing reads.
 - **`task_step`** — the idempotent steps, one row each, keyed by its own `id`

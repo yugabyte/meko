@@ -8,9 +8,12 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/internal/core"
 )
 
 // Status is the lifecycle state shared by tasks and steps.
@@ -22,6 +25,31 @@ const (
 	StatusSucceeded Status = "succeeded"
 	StatusFailed    Status = "failed"
 )
+
+// Codes a failed task's ErrorCode can carry. They mirror the API's synchronous
+// 404/409 codes, because a create planned as a task reports there what used to be
+// a synchronous refusal (a second read_write endpoint on a branch, say).
+const (
+	ErrorCodeConflict  = "conflict"
+	ErrorCodeNotFound  = "not_found"
+	ErrorCodeCancelled = "cancelled"
+)
+
+// errorCode classifies a step's failure cause into an ErrorCode*, or nil.
+func errorCode(cause error) *string {
+	var code string
+	switch {
+	case errors.Is(cause, ErrCancelled):
+		code = ErrorCodeCancelled
+	case errors.Is(cause, core.ErrConflict):
+		code = ErrorCodeConflict
+	case errors.Is(cause, core.ErrNotFound):
+		code = ErrorCodeNotFound
+	default:
+		return nil
+	}
+	return &code
+}
 
 // Task is one row of the `task` table: a single initiated operation. StepIDs is
 // its steps in execution order; the steps themselves are StepRecord rows keyed by
@@ -35,6 +63,9 @@ type Task struct {
 	Params    json.RawMessage
 	StepIDs   []uuid.UUID
 	Error     *string
+	// ErrorCode classifies a failed task's Error; nil when the cause is none of the
+	// ErrorCode* values.
+	ErrorCode *string
 	// Owner is the process that claimed the task, stamped once at claim. Its
 	// expiry is not here: ownership is a lease in amp_registry.resource_token
 	// (architecture/ac-locking.md), and a copy of the expiry would have to be

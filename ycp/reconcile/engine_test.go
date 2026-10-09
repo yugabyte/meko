@@ -345,6 +345,43 @@ func TestReconcilePermanentRetiredByNewGeneration(t *testing.T) {
 	}
 }
 
+// reconsideringFake is a backend that can withdraw its own permanent verdicts.
+type reconsideringFake struct {
+	*fakeBackend
+	reconsider []ResourceKey
+}
+
+func (r *reconsideringFake) Reconsider() []ResourceKey {
+	out := r.reconsider
+	r.reconsider = nil
+	return out
+}
+
+// A rejection whose cause was a sibling — a branch's read_write slot already
+// taken — must be asked again once the backend sees the sibling go, though the
+// refused resource's own generation never moves.
+func TestReconcilePermanentRetiredByReconsider(t *testing.T) {
+	f := &reconsideringFake{fakeBackend: newFake()}
+	k := key("endpoint", "p/c/b/rw2")
+	f.perm[k] = true
+	f.permReason[k] = ReasonRejected
+	e := New(f, Options{})
+	desired := []api.DesiredResource{d("endpoint", "p/c/b/rw2", 0)}
+
+	e.Reconcile(context.Background(), desired, true)
+	if res, _ := e.Reconcile(context.Background(), desired, true); len(res.Permanent) != 1 || f.attempts[k] != 1 {
+		t.Fatalf("tick2: permanent=%d attempts=%d, want 1/1", len(res.Permanent), f.attempts[k])
+	}
+
+	f.perm[k] = false
+	f.reconsider = []ResourceKey{k}
+	res, _ := e.Reconcile(context.Background(), desired, true)
+	if res.Created != 1 || len(res.Permanent) != 0 {
+		t.Fatalf("tick3: created=%d permanent=%d, want 1/0 — a reconsidered key must be asked again",
+			res.Created, len(res.Permanent))
+	}
+}
+
 // A resource that sits non-Ready in the same state past StuckAfter is flagged,
 // and the flag clears once it makes progress.
 func TestReconcileStuck(t *testing.T) {

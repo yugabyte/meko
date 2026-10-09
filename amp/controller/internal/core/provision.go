@@ -488,6 +488,23 @@ func orEmptyJSON(doc []byte) []byte {
 	return doc
 }
 
+// endpointConflict names which unique index a duplicate endpoint can have hit.
+// This error reaches a caller only as a failed create_endpoint task, so its text
+// is all an operator sees. The two indexes are told apart by role rather than by
+// the violated constraint's name, which has no portable field on YSQL — it is
+// formatted into the message, and scraping that is brittle (ac-tasks.md). A
+// read_only endpoint can only have hit the name index.
+func endpointConflict(role, name string) error {
+	switch {
+	case role != RoleReadWrite:
+		return fmt.Errorf("the branch already has an endpoint named %q: %w", name, ErrConflict)
+	case name == "":
+		return fmt.Errorf("the branch already has a read_write endpoint: %w", ErrConflict)
+	default:
+		return fmt.Errorf("the branch already has a read_write endpoint, or an endpoint named %q: %w", name, ErrConflict)
+	}
+}
+
 // EnsureEndpointRecord idempotently records an endpoint with the given id on
 // branchID (the create_endpoint step's first effect). Re-running with the same id
 // is a no-op (ON CONFLICT (id) DO NOTHING), so the single-writer partial unique
@@ -545,7 +562,7 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, cluste
 			// (endpoints_one_writer_per_branch) or an endpoint by that name
 			// (endpoints_name_per_branch).
 			case "23505":
-				return ErrConflict
+				return endpointConflict(role, name)
 			case "23503": // foreign_key_violation: the branch does not exist
 				return ErrNotFound
 			}

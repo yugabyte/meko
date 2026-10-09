@@ -195,15 +195,23 @@ file the rest separately.
 
 ---
 
-## `ensure endpoint record: conflict` — a failed create is holding the writer slot
+## `ensure endpoint record: the branch already has a read_write endpoint` — a failed create is holding the writer slot
 
-A `create_endpoint` task that fails with **`ensure endpoint record: conflict`** on a
-branch with no working writer is almost always this: an *earlier* failed create left
-its row behind. The step records the endpoint before deploying, so the row already
+A `create_endpoint` task that fails with **`ensure endpoint record: the branch
+already has a read_write endpoint…: conflict`** (`error_code: conflict`) on a branch
+with no working writer is almost always this: an *earlier* failed create left its
+row behind. The step records the endpoint before deploying, so the row already
 holds the branch's single-writer slot when the deploy fails, and
 `endpoints_one_writer_per_branch` rejects every later writer for that branch.
 (Note the failure is a **failed task**, not a synchronous 409 — the single-writer
-rule is enforced in the step, not the handler.)
+rule is enforced in the step, not the handler.) Controllers before `error_code`
+existed report it as the bare `ensure endpoint record: conflict`.
+
+When the create came from YCP, the agent holds it: the endpoint shows `rejected`
+in the environment inventory with this error, and no further create is planned.
+It is retried by itself as soon as anything under the branch is removed — the
+sweeper reclaiming the orphan below, or a delete you issue — so clearing the row
+is the whole fix.
 
 The tell is an endpoint row with no `address`, whose creating task failed:
 

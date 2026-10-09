@@ -259,6 +259,26 @@ has nothing else — but it is now only ever written for work that *completed*,
 because an `ampbackend` verb that plans a task returns `reconcile.Pending`, which
 records nothing.
 
+**A create follows its task too**, although presence alone would re-issue it.
+Re-issuing heals a create that failed transiently, but not one the controller
+refuses from inside the task — a second `read_write` endpoint on a branch fails the
+task with `error_code: conflict`, where a synchronous call would have answered 409 —
+and that one would be re-planned every tick with nothing on the resource
+(CLOUDGA-37405). `createTask` (`ampbackend/creates.go`) records the task: the
+resource reports `creating` while it runs, and a failure reports the task's error.
+A `conflict` is Rejected only when nothing under the same parent has been removed
+since the create was issued and no delete the agent issued there is in flight;
+otherwise it is the writer swap (one declaration withdraws `rw` and adds `rw2`,
+and `rw2`'s task runs before `rw`'s delete lands) and is retried on backoff. A
+rejection is retired, through `reconcile.Reconsiderer`, as soon as anything under
+its parent is removed, so withdrawing the conflicting resource later is enough.
+
+A create carries no generation and a cluster echoes none, so the generation the
+create was issued at is kept with its task: an Update planned for the new resource
+reports Pending while the create runs and applied once it succeeded at that
+generation. Without it a cluster created at generation ≥ 1 would be planned an
+Update it has no verb for, and sit as drift.
+
 **The generation rides the last call the agent issues for a resource in a tick** —
 synchronous, so the handler stamps; asynchronous, so the worker does. An endpoint
 declaring `resources` sends its settings PATCH first without one and lets the resize

@@ -179,6 +179,11 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 	}
 
 	e.mu.Lock()
+	if r, ok := e.backend.(Reconsiderer); ok {
+		for _, k := range r.Reconsider() {
+			delete(e.permanent, k)
+		}
+	}
 	actions := Diff(desired, actual, e.cache)
 	// Which updates this tick still wants, so trackStuck can drop the in-flight
 	// mark of one that has since converged (the echo caught up, so no update is

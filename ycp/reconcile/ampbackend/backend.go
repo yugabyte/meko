@@ -89,6 +89,12 @@ type Backend struct {
 	// re-issued regardless, and a task still holding the resource answers 409, which
 	// this path reads as pending.
 	inflight map[reconcile.ResourceKey]openapi_types.UUID
+	// creating, deleting, removals and rejected are the create path's equivalent;
+	// see creates.go. All guarded by mu.
+	creating map[reconcile.ResourceKey]createMark
+	deleting map[reconcile.ResourceKey]openapi_types.UUID
+	removals map[string]int
+	rejected map[reconcile.ResourceKey]rejectMark
 	// ctl is everything the controller kind needs that is not the REST API. See
 	// ControllerConfig.
 	ctl *controllerState
@@ -191,6 +197,10 @@ func New(baseURL, authToken string, httpDoer ampclient.HttpRequestDoer, ctl Cont
 		api:      c,
 		idx:      newIndex(),
 		inflight: map[reconcile.ResourceKey]openapi_types.UUID{},
+		creating: map[reconcile.ResourceKey]createMark{},
+		deleting: map[reconcile.ResourceKey]openapi_types.UUID{},
+		removals: map[string]int{},
+		rejected: map[reconcile.ResourceKey]rejectMark{},
 		ctl:      &controllerState{cfg: ctl},
 	}, nil
 }
@@ -415,6 +425,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 	out = append(out, singletons...)
 	idx.ext = cat
 	b.mu.Lock()
+	b.noteRemovals(b.idx, idx)
 	b.idx = idx
 	b.mu.Unlock()
 	return out, nil
@@ -557,7 +568,8 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 
 // Create issues the async create task for r. A 409 (already exists / in flight)
 // is treated as success so an in-flight create is never re-driven into an
-// error.
+// error. Cluster, branch and endpoint creates plan a task, which createTask
+// follows; the pool and its owner are synchronous and go through mutate.
 func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 	b.mu.RLock()
 	idx := b.idx
@@ -601,7 +613,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 			}
 		}
 		req.Name = name
-		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+		return b.createTask(ctx, r, func(c context.Context) (*http.Response, error) {
 			return b.api.CreateCluster(c, poolID, req)
 		})
 	case KindBranch:
@@ -637,7 +649,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 			return err
 		}
 		req.Name = name
-		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+		return b.createTask(ctx, r, func(c context.Context) (*http.Response, error) {
 			return b.api.CreateBranch(c, poolID, clusterID, req)
 		})
 	case KindEndpoint:
@@ -650,7 +662,7 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 			return err
 		}
 		req.Name = &name
-		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+		return b.createTask(ctx, r, func(c context.Context) (*http.Response, error) {
 			return b.api.CreateEndpoint(c, poolID, clusterID, branchID, req)
 		})
 	case KindController:
@@ -676,6 +688,19 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 // surfaces as drift rather than retrying forever; the branch fields Update does
 // not apply are reported the same way (see updateBranch).
 func (b *Backend) Update(ctx context.Context, r api.DesiredResource) error {
+	// A resource whose create is still in flight, or landed carrying this very
+	// generation, has nothing to update: see priorCreate.
+	key := reconcile.ResourceKey{Kind: r.Kind, Name: r.Name}
+	if gen, err := b.priorCreate(ctx, key); err != nil {
+		return err
+	} else if gen != nil {
+		b.mu.Lock()
+		delete(b.creating, key)
+		b.mu.Unlock()
+		if *gen == r.Generation {
+			return nil
+		}
+	}
 	apply, ok := updateFuncs[r.Kind]
 	if !ok {
 		return reconcile.Permanent(fmt.Errorf("update not supported for kind %q (only branch and endpoint settings, endpoint resize, branch extensions, extension registrations, and the controller and fleet versions)", r.Kind))
@@ -754,7 +779,7 @@ func (b *Backend) priorTask(ctx context.Context, key reconcile.ResourceKey) erro
 	if !ok {
 		return nil
 	}
-	status, taskErr, err := b.taskOutcome(ctx, taskID)
+	status, taskErr, _, err := b.taskOutcome(ctx, taskID)
 	switch {
 	case err != nil:
 		return fmt.Errorf("read task %s for %s: %w", taskID, key, err)
@@ -799,6 +824,10 @@ const (
 	taskStatusRunning   = "running"
 	taskStatusSucceeded = "succeeded"
 	taskStatusFailed    = "failed"
+
+	// taskErrorConflict is the failed task's error_code for work that collides
+	// with existing state — what a synchronous call would have answered 409.
+	taskErrorConflict = "conflict"
 )
 
 // taskOutcome reads a planned task's status and, when it failed, its error. A
@@ -806,22 +835,22 @@ const (
 // left to wait for, and the echoed generation is the authority on whether the work
 // landed. Defensive rather than observed — the controller has no task retention
 // today, so its log only grows; nothing in YCP should depend on that staying true.
-func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (status, taskErr string, err error) {
+func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (status, taskErr, code string, err error) {
 	resp, err := b.api.GetTask(ctx, taskID)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
-		return taskStatusSucceeded, "", nil
+		return taskStatusSucceeded, "", "", nil
 	}
 	if resp.StatusCode >= 300 {
-		return "", "", httpErr(resp.StatusCode, body)
+		return "", "", "", httpErr(resp.StatusCode, body)
 	}
 	var t ampclient.Task
 	if err := json.Unmarshal(body, &t); err != nil {
-		return "", "", fmt.Errorf("decode task: %w", err)
+		return "", "", "", fmt.Errorf("decode task: %w", err)
 	}
 	if t.Error != nil {
 		taskErr = *t.Error
@@ -829,7 +858,10 @@ func (b *Backend) taskOutcome(ctx context.Context, taskID openapi_types.UUID) (s
 	if taskErr == "" {
 		taskErr = "no error reported"
 	}
-	return string(t.Status), taskErr, nil
+	if t.ErrorCode != nil {
+		code = *t.ErrorCode
+	}
+	return string(t.Status), taskErr, code, nil
 }
 
 // driftSet collects the reasons an update could not fully land, and the reason
@@ -1389,7 +1421,7 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 		if !ok {
 			return nil // already gone
 		}
-		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+		return b.deleteTask(ctx, key, func(c context.Context) (*http.Response, error) {
 			return b.api.DeleteCluster(c, poolID, clusterID)
 		})
 	case KindBranch:
@@ -1397,7 +1429,7 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 		if !ok {
 			return nil
 		}
-		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+		return b.deleteTask(ctx, key, func(c context.Context) (*http.Response, error) {
 			return b.api.DeleteBranch(c, poolID, clusterID, branchID)
 		})
 	case KindEndpoint:
@@ -1409,7 +1441,7 @@ func (b *Backend) Delete(ctx context.Context, key reconcile.ResourceKey) error {
 		if !ok {
 			return nil
 		}
-		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+		return b.deleteTask(ctx, key, func(c context.Context) (*http.Response, error) {
 			return b.api.DeleteEndpoint(c, poolID, clusterID, branchID, endpointID)
 		})
 	case KindController:
