@@ -9,6 +9,14 @@ describe('router', () => {
     expect(parseRoute('/p/a/home')).toEqual({ view: 'home', projectId: 'a' });
     expect(parseRoute('/p/a/s/b')).toEqual({ view: 'project', projectId: 'a', sessionId: 'b' });
     expect(parseRoute('/p/a/s/b/design')).toEqual({ view: 'design', projectId: 'a', sessionId: 'b' });
+    expect(parseRoute('/p/a/meko')).toEqual({ view: 'meko', projectId: 'a', sessionId: null });
+    expect(parseRoute('/p/a/meko/b')).toEqual({ view: 'meko', projectId: 'a', sessionId: 'b' });
+  });
+
+  it("round-trips the Meko calls page, with and without a session", () => {
+    for (const r of [{ view: 'meko', projectId: 'a b', sessionId: 's/1' }, { view: 'meko', projectId: 'a', sessionId: null }] as const) {
+      expect(parseRoute(routePath(r))).toEqual(r);
+    }
   });
 
   it('round-trips ids that need encoding', () => {

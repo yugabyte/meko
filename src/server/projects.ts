@@ -424,6 +424,7 @@ export class ProjectService {
       if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
         throw new HttpError(400, 'Reviewer must be All reviewers, AgentK + People or People only.');
       }
+      if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);
     }
     if (req.position !== undefined) this.move(id, req.position);

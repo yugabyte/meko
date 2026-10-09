@@ -235,7 +235,7 @@ export function ProjectHomeView({
           </section>
         </div>
         {home && <UsagePanel projectId={project.id} usage={home.usage} mekoOn={mekoConfigured && project.datapacks.length > 0} />}
-        <ProjectSettingsForm project={project} order={order} onMove={onMove} ghLogin={ghLogin} onError={onError} />
+        <ProjectSettingsForm project={project} order={order} onMove={onMove} ghLogin={ghLogin} mekoConfigured={mekoConfigured} onError={onError} />
       </div>
       {dialog?.kind === 'share' && dedicated && (
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
@@ -392,12 +392,15 @@ function ProjectSettingsForm({
   order,
   onMove,
   ghLogin,
+  mekoConfigured,
   onError,
 }: {
   project: ProjectWithSessions;
   order: { index: number; count: number };
   onMove: (index: number) => void;
   ghLogin: string | null;
+  /** Meko is on: Log Meko calls is offered (and kept on show while it's on, so it can be turned off). */
+  mekoConfigured: boolean;
   onError: (m: string) => void;
 }) {
   const [name, setName] = useState(project.name);
@@ -493,6 +496,22 @@ function ProjectSettingsForm({
             <input id="ps-notify" type="checkbox" checked={s.notify} onChange={(e) => set('notify', e.target.checked)} />
             <span>Browser notifications</span>
           </label>
+          {(mekoConfigured || project.settings.mekoLog) && (
+            <div className="check-row">
+              <label className="check">
+                <input id="ps-mekolog" type="checkbox" checked={s.mekoLog} onChange={(e) => set('mekoLog', e.target.checked)} />
+                <span>
+                  Log Meko calls
+                  <span className="muted small check-hint">
+                    What AgentK sends to Meko for each session, and what comes back. Deleted with the session.
+                  </span>
+                </span>
+              </label>
+              <button type="button" className="link-btn" onClick={() => navigate({ view: 'meko', projectId: project.id, sessionId: null })}>
+                View calls
+              </button>
+            </div>
+          )}
         </div>
         {order.count > 1 && (
           <div className="settings-actions">

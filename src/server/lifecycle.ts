@@ -9,7 +9,7 @@ import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveRevi
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
-import { launchedAgentId } from './meko.js';
+import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
@@ -218,7 +218,7 @@ export class Lifecycle {
     if (!parts.length) return;
     const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv);
+      await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
       // The version is used; it's the current design only if nothing changed while it was sent.
       run(this.db, p.sent, p.version, p.text, id);
     }));
@@ -1611,11 +1611,11 @@ export class Lifecycle {
         this.sessions.ingestUsage(row.id);
         const u = this.sessions.runtime(row.id).usage;
         const tokens = `Token usage: ${u.output} output, ${u.input} input, ${u.cacheWrite} cache write, ${u.cacheRead} cache read tokens over ${u.messages} responses.`;
-        await this.core.meko.addMemory(
+        await withMekoScope(row, () => this.core.meko.addMemory(
           `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}. ${tokens}${body ? `\n\n${body}` : ''}`,
           dp.id, launchedAgentId(row), conv,
           { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },
-        );
+        ));
         this.sessions.event(row.id, 'shipped', `Saved what shipped to ${dp.name}`);
       } catch (e) {
         this.core.log.warn(`saving the shipped summary to Meko failed for ${row.id}`, errMsg(e));

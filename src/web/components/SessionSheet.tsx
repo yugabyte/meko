@@ -252,6 +252,7 @@ export function SessionSheet({
   onDesign,
   onAsk,
   onHome,
+  onMekoCalls,
   onMove,
   onRename,
   onAct,
@@ -277,6 +278,8 @@ export function SessionSheet({
   /** Opens the questions Claude is asking (Session.asking). */
   onAsk: () => void;
   onHome: () => void;
+  /** Opens the session's Meko call log; left out when the project doesn't log Meko calls. */
+  onMekoCalls?: () => void;
   /** Opens the Move to another stage dialog. */
   onMove: () => void;
   /** Opens the Rename session dialog. */
@@ -326,6 +329,11 @@ export function SessionSheet({
         <SheetItem hint="›" onClick={then(onRename)}>
           Rename session
         </SheetItem>
+        {onMekoCalls && (
+          <SheetItem hint="›" onClick={then(onMekoCalls)}>
+            Meko calls
+          </SheetItem>
+        )}
         <SheetItem hint="›" onClick={then(onHome)}>
           Project home
         </SheetItem>

@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
+  mekoLog: false,
 };
 
 export interface ProjectRow {
