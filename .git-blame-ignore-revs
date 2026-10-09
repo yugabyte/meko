@@ -1,0 +1,9 @@
+# Commits that only reformat code. `git blame` skips them and attributes each
+# line to the change before it. GitHub's blame view reads this file
+# automatically; locally, run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# PRs merge squashed, so list the squash commit on main.
+
+# [#1788] ci: format shell and TypeScript/JS/CSS, and check them in CI (#1817)
+b0116abebadac7fb7e9a35b1ec95de56d25dc8cb
