@@ -2010,7 +2010,8 @@ their own copy.
   everything that can connect to 127.0.0.1, every user of the computer and any reverse proxy on it
   included: on a shared host, or behind a proxy, choose remote.
 - **First run.** With remote access, the installer prints a one-time setup link:
-  `https://host:7777/setup?token=…`. You open it, choose a username and password, and can
+  `https://host:7777/setup?token=…`. You open it, choose a username (up to 64 letters, digits,
+  `.`, `@`, `-` or `_`: most email addresses work, but not ones with `+`) and password, and can
   optionally enrol TOTP. The token stops working after it is used. With local access it prints
   the address instead; `agent-k-local setup-link` still makes a login for a later switch to remote.
 - **Forgot password.** The sign-in screen's **Forgot password?** says how to get back in: run
