@@ -14,7 +14,7 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
   const [showTable, setShowTable] = useState(false);
   const t = usage.total;
   const empty = t.messages === 0;
-  const showMeko = usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || mekoOn;
+  const showMeko = usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || usage.mekoLearning.runs > 0 || mekoOn;
   const mekoColumn = usage.bySession.some((s) => s.meko.lookups + s.meko.saves > 0);
   return (
     <section className="box usage-box">
@@ -49,7 +49,7 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
 
           {showMeko && (
             <div className="usage-meko">
-              <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} />
+              <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} learning={usage.mekoLearning} />
             </div>
           )}
 

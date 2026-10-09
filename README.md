@@ -170,8 +170,9 @@ your phone can connect.
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
-  cost that Meko searches saved, and how many sessions had something from Meko in their first
-  turn, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
+  cost that Meko searches saved, how many sessions had something from Meko in their first
+  turn, and what the learn step saved (memories added and corrected) and cost, on the project home
+  and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.

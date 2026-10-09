@@ -1849,8 +1849,14 @@ only move when a session gets a reply, so the rail says when they were last repo
   tooltip says how many sessions the search at start ran in; `firstTurnText` in
   `src/web/util.ts`), tokens found, and **Est. saved** in USD and tokens (searches and seeds), green for a saving
   (a negative estimate is in the normal text color, and a dash means no search has found
-  anything and no session was seeded). It shows once there's any
-  Meko call or seed, or before that while Meko is on (and, on the project home, the project has a datapack).
+  anything and no session was seeded), then two tiles for the [learn step](#the-learn-step)
+  (`MekoLearning`, from `meko_learns` and the steps' own `usage_messages` rows; `learningText` in
+  `src/web/util.ts`): **Learned**, the memories it saved, with `2 corrected · 3 steps` on the line
+  under it and a tooltip that adds the facts found already known, the steps that didn't finish and
+  the Merge & Close sessions it was skipped in; and **Learning cost**, the steps' model calls in USD
+  with their tokens under it (tokens alone when no model had a price). Both are a dash before any
+  step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
+  (and, on the project home, the project has a datapack).
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The
   cost is an estimate at API list prices, not a bill.

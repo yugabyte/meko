@@ -199,6 +199,25 @@ export interface MekoUsage {
 }
 
 /**
+ * What the learn step (src/server/learn.ts) saved to Meko and what it cost, for the project home and
+ * the Usage page.
+ */
+export interface MekoLearning {
+  /** Learn steps that ran, and those of them that didn't finish (failed or interrupted). */
+  runs: number;
+  failed: number;
+  /** Merge & Close sessions whose Claude was gone or busy, so no step ran. */
+  skipped: number;
+  /** Memories added and corrected, and facts found already known. */
+  saves: number;
+  updates: number;
+  skips: number;
+  /** Tokens the steps' model calls used, all kinds together, and their price; null when none had a known price. */
+  tokens: number;
+  usd: number | null;
+}
+
+/**
  * About how many tokens Meko brought into sessions' first turns: what AgentK's search at session
  * start passed to Claude (the seed, `src/server/recall.ts`), and Claude's own lookups before the turn ended.
  * Characters ÷ 4, like `MekoUsage.foundTokens`. Only sessions in projects with datapacks count.
@@ -253,6 +272,7 @@ export interface ProjectUsage {
   cost: UsageCost;
   meko: MekoUsage;
   mekoFirstTurn: MekoFirstTurn;
+  mekoLearning: MekoLearning;
   byModel: ModelUsage[];
   /** Every session with usage, archived ones included, largest first. */
   bySession: SessionUsage[];
@@ -285,6 +305,7 @@ export interface UsageOverview {
   cost: UsageCost;
   meko: MekoUsage;
   mekoFirstTurn: MekoFirstTurn;
+  mekoLearning: MekoLearning;
   mergedPrs: number;
   directPushes: number;
   directCommits: number;

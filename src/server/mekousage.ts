@@ -1,5 +1,5 @@
 import { costOf, priceFor } from '../shared/pricing.js';
-import type { CallHomeAgentkMeko, CallHomeLearn, CallHomeMekoTool, CallHomeTokens, MekoFirstTurn, MekoUsage, SessionUsage } from '../shared/types.js';
+import type { CallHomeAgentkMeko, CallHomeLearn, CallHomeMekoTool, CallHomeTokens, MekoFirstTurn, MekoLearning, MekoUsage, SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 
@@ -369,12 +369,14 @@ export interface LearnRun {
 }
 
 /**
- * Every learn step, with its model calls: through the mod, the rows learn.ts recorded for its
- * fork and duplicate check; as a typed turn, the session's responses while it ran.
+ * Every learn step, for one project or all of them, with its model calls: through the mod, the
+ * rows learn.ts recorded for its fork and duplicate check; as a typed turn, the session's
+ * responses while it ran.
  */
-export function learnRuns(db: Db): LearnRun[] {
+export function learnRuns(db: Db, projectId?: string): LearnRun[] {
   const runs = all<{ id: string; at: number; trigger: LearnRun['trigger']; path: LearnRun['path']; outcome: LearnRun['outcome']; candidates: number; saves: number; updates: number; skips: number; lookups: number; errors: number; sent_chars: number }>(db,
-    'SELECT id, started_at AS at, trigger, path, outcome, candidates, saves, updates, skips, lookups, errors, sent_chars FROM meko_learns');
+    `SELECT l.id, l.started_at AS at, l.trigger, l.path, l.outcome, l.candidates, l.saves, l.updates, l.skips, l.lookups, l.errors, l.sent_chars
+     FROM meko_learns l JOIN sessions s ON s.id = l.session_id${projectId ? ' WHERE s.project_id = ?' : ''}`, ...(projectId ? [projectId] : []));
   if (!runs.length) return [];
   const tokens = new Map<string, LearnTokens[]>();
   for (const u of all<{ learn_id: string; phase: string; model: string; input: number; output: number; cache_read: number; cache_write: number; cache_write_1h: number }>(db,
@@ -431,6 +433,33 @@ export function summarizeLearn(runs: LearnRun[]): CallHomeLearn {
     }
   }
   l.usdCents = Math.round(usd * 100);
+  return l;
+}
+
+/** Learn steps as the project home and the Usage page show them (`MekoLearning`). */
+export function learningOf(runs: LearnRun[]): MekoLearning {
+  const l: MekoLearning = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null };
+  let usd = 0;
+  let priced = false;
+  for (const r of runs) {
+    if (r.outcome === 'skipped') {
+      l.skipped++;
+      continue;
+    }
+    l.runs++;
+    if (r.outcome === 'failed' || r.outcome === 'interrupted') l.failed++;
+    l.saves += r.saves;
+    l.updates += r.updates;
+    l.skips += r.skips;
+    for (const t of r.tokens) {
+      l.tokens += t.input + t.output + t.cacheRead + t.cacheWrite;
+      const price = priceFor(t.model);
+      if (!price) continue;
+      usd += costOf(t, price);
+      priced = true;
+    }
+  }
+  l.usd = priced ? usd : null;
   return l;
 }
 

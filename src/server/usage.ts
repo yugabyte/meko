@@ -4,7 +4,7 @@ import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
 import {
-  firstTurnMeko, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult,
+  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult,
 } from './mekousage.js';
 import type { SessionRow } from './store.js';
 
@@ -358,7 +358,10 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
     `SELECT ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.project_id = ? GROUP BY u.model`, projectId));
 
   const daily = dailyUsage(db, days, now, projectId);
-  return { total, cost, meko: summarizeMeko(calls), mekoFirstTurn: firstTurnMeko(db, projectId), byModel, bySession, daily };
+  return {
+    total, cost, meko: summarizeMeko(calls), mekoFirstTurn: firstTurnMeko(db, projectId), mekoLearning: learningOf(learnRuns(db, projectId)),
+    byModel, bySession, daily,
+  };
 }
 
 /** Daily totals for the last `days` days (in the server's time zone), for one project or all of them. */
@@ -443,6 +446,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
     cost: toCost(all<CostRow>(db, `SELECT ${COST_SUMS} FROM usage_messages u GROUP BY u.model`)),
     meko: summarizeMeko(calls),
     mekoFirstTurn: firstTurnMeko(db),
+    mekoLearning: learningOf(learnRuns(db)),
     mergedPrs: sum((p) => p.mergedPrs),
     directPushes: sum((p) => p.directPushes),
     directCommits: sum((p) => p.directCommits),
