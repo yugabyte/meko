@@ -464,7 +464,6 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
             mekoConfigured={state.meko.configured}
-            sharing={state.meko.sharing}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
             onError={showToast}

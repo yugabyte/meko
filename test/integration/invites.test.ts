@@ -270,7 +270,6 @@ describe('datapacks shared with us', () => {
     env.core.updateConfig((c) => {
       c.meko.url = 'https://meko.example.com/mcp';
     });
-    expect(env.core.mekoStatus.sharing).toBe(false);
     await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/API URL isn't known/) });
     expect(() => env.core.invites.later('nope')).toThrow(/no longer waiting/);
   });

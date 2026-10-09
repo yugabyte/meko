@@ -660,11 +660,6 @@ export interface MekoStatus {
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
-   * AgentK shares datapacks and answers invites through Meko's share API with our key: Meko is on
-   * and its API URL is known.
-   */
-  sharing: boolean;
-  /**
    * Whether Claude Code's sessions reach the Meko AgentK uses: the same server in Claude Code's
    * settings and on its `meko` MCP server, tokens there that work (accepted, and seeing AgentK's
    * project datapacks), and the plugin. Fixed only when the user asks (POST
@@ -1554,7 +1549,7 @@ export type TermServerMessage =
 //        the email is remembered for that GitHub login)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
-//        The four above answer 409 when AgentK can't share (AppState.meko.sharing false).
+//        The four above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
 // POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the Open project dialog's one read of Meko)
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204

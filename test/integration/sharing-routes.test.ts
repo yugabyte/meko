@@ -77,7 +77,6 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     env.core.updateConfig((c) => {
       c.meko.url = '';
     });
-    expect(env.core.mekoStatus.sharing).toBe(true);
 
     let shareStatus = 200;
     env.mekoApi.handle((c: ApiCall) => {
@@ -133,12 +132,11 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(partly.json()).toMatchObject({ members: [], invites: [], refreshError: expect.stringMatching(/Couldn't read the list again: boom/) });
     expect(env.mekoApi.calls.length).toBeGreaterThan(handler);
 
-    // Meko refuses the key: an error that says to check it, and sharing stays in AgentK.
+    // Meko refuses the key: an error that says to check it.
     shareStatus = 401;
     const keyRefused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'carol@example.com', grant: 'viewer' });
     expect(keyRefused.statusCode).toBe(502);
     expect(keyRefused.json().error).toBe("Meko: AgentK's API key wasn't accepted (invalid or expired token). Check the key on the Meko tab in Settings.");
-    expect(env.core.mekoStatus.sharing).toBe(true);
   });
 
   it('invites a list of emails one after another and says who went through', async () => {
@@ -288,7 +286,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).toContain('meko.example.com/mcp');
     // A self-hosted MCP URL has no web app to work out until one is typed, and no API URL to check
     // (or share through).
-    expect(env.core.state().meko).toMatchObject({ webUrl: null, sharing: false });
+    expect(env.core.state().meko).toMatchObject({ webUrl: null });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
 
     // Back on Meko Cloud, its web app and API URLs are worked out and trusted: the API URL isn't checked.
@@ -296,7 +294,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(cloud.statusCode).toBe(200);
     expect(cloud.json().meko).toMatchObject({ url: '', effectiveWebUrl: 'https://cloud.mekodata.ai', effectiveApiUrl: 'https://cloud.mekodata.ai/api/v1' });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
-    expect(env.core.state().meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai', sharing: true });
+    expect(env.core.state().meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai' });
 
     // A typed web app URL moves the API URL: that is checked (without the key), and nothing reconnects.
     const checks = env.mekoTools.calls.length;

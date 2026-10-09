@@ -137,7 +137,7 @@ export function ProjectView({
     || (session.stage === 'review' && session.canMerge)
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
-  const canShare = !!dedicated && meko.sharing;
+  const canShare = !!dedicated && meko.configured;
   // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
   const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
   const learnDisabled = acting || !!session?.busy || !!session?.learning;

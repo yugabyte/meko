@@ -180,7 +180,7 @@ export class Core extends EventEmitter {
     });
     this.mekoStatus = this.mekoStatusFor(o.config);
     this.callHome = new CallHomeService({
-      db: this.db, config: () => this.cfg, version: this.version, meko: () => this.mekoStatus, log: this.log, fetch: o.callHomeFetch,
+      db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
     this.invites = new InviteService(this, o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey })));
   }
@@ -212,8 +212,7 @@ export class Core extends EventEmitter {
   }
 
   private mekoStatusFor(cfg: Config): MekoStatus {
-    const configured = mekoConfigured(cfg);
-    return { configured, webUrl: resolveMekoWebUrl(cfg), sharing: configured && !!resolveMekoApiUrl(cfg), claude: this.claudeMeko.status };
+    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status };
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */
