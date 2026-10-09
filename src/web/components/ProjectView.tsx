@@ -15,7 +15,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, repoFolder, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
@@ -402,6 +402,20 @@ function newCommitsText(n: number | null): string {
   return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
+/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
+function queuedGate(session: Session, blocked: boolean, onAct: (a: SessionAction) => Promise<void>, title: string): ReactNode {
+  return (
+    <span className="gate-group">
+      <span className="gate-pill" title={title}>
+        {queuedText(session)}
+      </span>
+      <button className="btn small" disabled={blocked} onClick={() => onAct('cancel-queued')}>
+        Cancel
+      </button>
+    </span>
+  );
+}
+
 function StageBar({
   session,
   project,
@@ -492,25 +506,27 @@ function StageBar({
       );
       break;
     }
-    case 'code':
-      reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
+    case 'code': {
+      if (session.queued === 'open-pr') {
+        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends');
+        break;
+      }
+      const pr = openPrGate(session);
+      reason = pr.reason;
       gate = (
-        <button
-          className="gate"
-          disabled={blocked || !!reason}
-          title={reason ?? 'Commit, push and open a pull request'}
-          onClick={() => onAct('open-pr')}
-        >
-          Open PR
+        <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
+          {pr.label}
         </button>
       );
       break;
+    }
     case 'pr':
       gate = <span className="gate-pill">
           <Busy label="Opening PR" />
         </span>;
       break;
-    case 'review':
+    case 'review': {
+      const merge = mergeGate(session);
       gate = (
         <span className="gate-group">
           {onShare && session.prNumber && (
@@ -538,17 +554,17 @@ function StageBar({
               {session.agentkSeen ? 'Request another round' : 'Request AgentK review'}
             </button>
           )}
-          <button
-            className="gate"
-            disabled={blocked || !session.canMerge}
-            title={session.canMerge ? 'Merge the pull request, then remove the worktree and branch' : session.mergeBlockers.join('\n')}
-            onClick={() => onAct('merge')}
-          >
-            Merge &amp; Close
-          </button>
+          {session.queued === 'merge' ? (
+            queuedGate(session, blocked, onAct, 'The pull request is merged once nothing blocks it')
+          ) : (
+            <button className="gate" disabled={blocked || !!merge.reason} title={merge.title} onClick={() => onAct('merge')}>
+              {merge.label}
+            </button>
+          )}
         </span>
       );
       break;
+    }
     case 'merge':
       gate = <span className="gate-pill"><Busy label="Merging and closing" /></span>;
       break;
@@ -645,7 +661,9 @@ function StageBar({
         {actions && <div className="stage-actions">{actions}</div>}
       </div>
       {session.stage === 'review' && !session.canMerge && session.mergeBlockers.length > 0 && (
-        <div className="blockers">Merge is waiting on: {session.mergeBlockers.join(' · ')}</div>
+        <div className="blockers">
+          {session.queued === 'merge' ? 'Merges when these clear' : 'Merge is waiting on'}: {session.mergeBlockers.join(' · ')}
+        </div>
       )}
       {reasons && reason && <div className="blockers">{reason}</div>}
     </div>

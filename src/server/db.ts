@@ -392,6 +392,11 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN start_images TEXT;
   `,
+  // 26: a gate pressed before it could go (QueuedGate: 'open-pr' or 'merge'), kept until it goes or
+  // is dropped, so a merge waiting on CI isn't lost to a restart. NULL: none.
+  `
+  ALTER TABLE sessions ADD COLUMN queued_gate TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

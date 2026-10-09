@@ -793,12 +793,207 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(transcript(s.id)).not.toContain('CI failed on PR');
   });
 
-  it('refuses Open PR while Claude is working', async () => {
+  /** A new session whose first turn is still running (it takes 3 s). */
+  async function working(name: string) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     mkdirSync(env.fakeDir, { recursive: true });
     writeFileSync(join(env.fakeDir, 'turn-ms'), '3000');
-    const s = await env.core.sessions.create(p.id, { name: 'Busy', prompt: 'slow', kind: 'quick' });
+    const s = await env.core.sessions.create(p.id, { name, prompt: 'slow', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
-    await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/still working/);
+    return s;
+  }
+  const queuedGate = (id: string) => env.core.sessions.row(id).queued_gate;
+
+  it('queues Open PR while Claude is working, and sends it when the turn ends', async () => {
+    const s = await working('Busy');
+    const submit = vi.spyOn(env.core.tmux, 'submit');
+    await env.core.sessions.action(s.id, 'open-pr');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', queued: 'open-pr' });
+    expect(lastEvent(s.id, 'queued')).toBe('Open PR queued: it goes when AgentK finishes its turn');
+    // Pressed again: still one queued Open PR.
+    await env.core.sessions.action(s.id, 'open-pr');
+    expect(submit).not.toHaveBeenCalled();
+    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+    gh.status = status();
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review', 15000, 'PR opened');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(submit.mock.calls.filter((c) => String(c[1]).startsWith('Open a pull request'))).toHaveLength(1);
+    expect(stages(s.id)).toEqual(['code', 'pr', 'review']);
+  });
+
+  it('withdraws a queued Open PR, and drops one when Claude exits', async () => {
+    const s = await working('Changed my mind');
+    await env.core.sessions.action(s.id, 'open-pr');
+    await env.core.sessions.action(s.id, 'cancel-queued');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR withdrawn');
+    await expect(env.core.sessions.action(s.id, 'cancel-queued')).rejects.toMatchObject({ status: 409, message: 'Nothing is queued.' });
+    await env.core.sessions.action(s.id, 'open-pr');
+    (env.core.sessions as unknown as { forgetClaude(id: string, why?: string, ended?: string): void }).forgetClaude(s.id, 'x', 'Claude exited');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR dropped: Claude exited');
+    await idle(s.id, 'turn over');
+    expect(transcript(s.id)).not.toContain('Open a pull request');
+    expect(env.core.sessions.row(s.id).stage).toBe('code');
+  });
+
+  it('drops a queued Open PR when Claude is found exited, as at startup', async () => {
+    const s = await working('Died while down');
+    await env.core.sessions.action(s.id, 'open-pr');
+    env.core.sessions.setStatus(s.id, 'exited', 'Claude exited while the server was down');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR dropped: Claude exited while the server was down');
+  });
+
+  it('honors a Cancel that comes while a queued Open PR waits on Meko', async () => {
+    let answer: ((id: string) => void) | null = null;
+    const s = await working('Cancel in flight');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    env.meko.ensureConversation = () => new Promise<string>((r) => (answer = r));
+    await env.core.sessions.action(s.id, 'open-pr');
+    // The turn ends: the queued PR starts out and waits for Meko to name the conversation.
+    await waitFor(() => answer, (a) => a !== null, 15000, 'the Meko lookup');
+    await env.core.sessions.action(s.id, 'cancel-queued');
+    answer!('conv-1');
+    await waitFor(() => lastEvent(s.id, 'queued'), (t) => t === 'Queued Open PR withdrawn', 5000, 'withdrawn');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(transcript(s.id)).not.toContain('Open a pull request');
+    expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'code', queued_gate: null });
+    expect(notify.mock.calls.filter((c) => c[1] === 'Open PR not sent')).toEqual([]);
+  });
+
+  it('sends an Open PR still queued after a restart once Claude is between turns', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Restarted', prompt: 'do it', kind: 'quick' });
+    await idle(s.id, 'first turn');
+    // As state.db had it: the turn ended while the server was down.
+    env.core.sessions.update(s.id, { queued_gate: 'open-pr' });
+    env.core.sessions.setStatus(s.id, 'recovered');
+    await pollAll();
+    await waitFor(() => transcript(s.id), (t) => t.includes('Open a pull request'), 10000, 'PR prompt');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(['pr', 'review']).toContain(env.core.sessions.row(s.id).stage);
+  });
+
+  it('refuses Open PR when Claude has exited', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Gone', prompt: 'do it', kind: 'quick' });
+    await idle(s.id, 'first turn');
+    env.core.sessions.setStatus(s.id, 'exited', 'Claude exited');
+    await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409, message: 'Claude has exited. Resume the session first.' });
+    expect(queuedGate(s.id)).toBeNull();
+  });
+
+  it('tells blockers that clear by themselves from the rest', async () => {
+    const s = await inReview('Queueable');
+    const approved = gh.status!;
+    const infoFor = async (over: Partial<PrStatus>) => {
+      gh.status = { ...approved, ...over };
+      await poll(s.id);
+      const x = env.core.sessions.get(s.id);
+      return { canMerge: x.canMerge, queueable: x.mergeQueueable };
+    };
+    expect(await infoFor({})).toEqual({ canMerge: true, queueable: false });
+    expect(await infoFor({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] })).toEqual({ canMerge: false, queueable: true });
+    expect(await infoFor({ statusCheckRollup: [{ status: 'IN_PROGRESS' }], reviewDecision: 'REVIEW_REQUIRED' })).toEqual({ canMerge: false, queueable: false });
+    expect(await infoFor({ reviewDecision: 'CHANGES_REQUESTED' })).toEqual({ canMerge: false, queueable: false });
+    expect(await infoFor({ mergeStateStatus: 'DRAFT' })).toEqual({ canMerge: false, queueable: false });
+    env.core.sessions.update(s.id, { status: 'working' });
+    expect(await infoFor({})).toEqual({ canMerge: false, queueable: true });
+    // Unpushed commits are AgentK's work in progress mid-turn, and the user's to sort out between turns.
+    const pushed = tip(env.core.sessions.row(s.id).worktree_path);
+    commitIn(env.core.sessions.row(s.id).worktree_path);
+    expect(await infoFor({ headRefOid: pushed })).toEqual({ canMerge: false, queueable: true });
+    env.core.sessions.update(s.id, { status: 'idle' });
+    expect(await infoFor({ headRefOid: pushed })).toEqual({ canMerge: false, queueable: false });
+    // ...unless they were measured mid-turn: the turn may have pushed and ended during the poll.
+    const row = () => env.core.sessions.row(s.id);
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people', { unpushed: true, turnAtStart: true }).queueable).toBe(true);
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people', { uncommitted: 2, turnAtStart: true }).queueable).toBe(true);
+    // A Needs you with no turn behind it (a parked recovery) needs the user.
+    env.core.sessions.setStatus(s.id, 'needs_input', 'Recovered twice in the last hour; waiting for you before continuing');
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people')).toMatchObject({ canMerge: false, queueable: false });
+    // Findings being addressed clear by themselves only while Claude runs.
+    env.core.sessions.update(s.id, { status: 'idle', review_state: 'addressing' });
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people').queueable).toBe(true);
+    env.core.sessions.setStatus(s.id, 'exited', 'Claude exited');
+    expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people').queueable).toBe(false);
+  });
+
+  it('holds a queued merge until CI shows up on a new head, then takes no checks as no CI', async () => {
+    const s = await inReview('No checks yet');
+    const approved = gh.status!;
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await env.core.sessions.action(s.id, 'merge');
+    // A fresh push: GitHub lists no checks on it yet.
+    commitIn(env.core.sessions.row(s.id).worktree_path);
+    gh.status = { ...approved, statusCheckRollup: [] };
+    await poll(s.id);
+    expect(gh.merges).toEqual([]);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ queued: 'merge', mergeBlockers: ["CI hasn't started on the latest push yet."] });
+    // Still no checks two minutes after the head first showed up: the repo runs none on it.
+    const seen = (env.core.lifecycle as unknown as { headSeen: Map<string, { head: string; at: number }> }).headSeen;
+    seen.set(s.id, { ...seen.get(s.id)!, at: Date.now() - 3 * 60 * 1000 });
+    await poll(s.id);
+    expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
+  });
+
+  it('queues Merge & Close while CI runs, and merges once it passes', async () => {
+    const s = await inReview('Merge when ready');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    const approved = gh.status!;
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await env.core.sessions.action(s.id, 'merge');
+    expect(gh.merges).toEqual([]);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'review', queued: 'merge', mergeQueueable: true, mergeBlockers: ['CI is still running.'] });
+    expect(lastEvent(s.id, 'queued')).toBe('Merge queued: it goes once nothing blocks it (now: CI is still running.)');
+    await poll(s.id);
+    expect(gh.merges).toEqual([]);
+    gh.status = approved;
+    await poll(s.id);
+    expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
+    expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'done', queued_gate: null });
+    expect(notify).toHaveBeenCalledWith(s.id, 'Merging', 'PR #7 is ready: merging it now, as you queued.');
+    expect(stages(s.id).slice(-2)).toEqual(['merge', 'done']);
+  });
+
+  it('drops a queued merge when CI fails, and tells the user', async () => {
+    const s = await inReview('CI fails later');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    const approved = gh.status!;
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await env.core.sessions.action(s.id, 'merge');
+    gh.status = { ...approved, statusCheckRollup: [failing()] };
+    await poll(s.id);
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toMatch(/^Queued merge dropped: .*CI is failing\.$/);
+    expect(notify).toHaveBeenCalledWith(s.id, 'Queued merge dropped', expect.stringContaining('CI is failing.') as string);
+    await idle(s.id, 'CI prompt done');
+    gh.status = approved;
+    await poll(s.id);
+    expect(gh.merges).toEqual([]);
+    expect(env.core.sessions.row(s.id).stage).toBe('review');
+  });
+
+  it('refuses to queue a merge for required approvals, and drops a queued one on a move or cancel', async () => {
+    const s = await inReview('Not queueable');
+    const approved = gh.status!;
+    gh.status = { ...approved, reviewDecision: 'REVIEW_REQUIRED', statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('Required approvals are missing.') as string });
+    expect(queuedGate(s.id)).toBeNull();
+
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
+    await env.core.sessions.action(s.id, 'merge');
+    await env.core.sessions.action(s.id, 'cancel-queued');
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toBe('Queued merge withdrawn');
+
+    await env.core.sessions.action(s.id, 'merge');
+    await env.core.sessions.move(s.id, { stage: 'code', prompt: false });
+    expect(queuedGate(s.id)).toBeNull();
+    expect(lastEvent(s.id, 'queued')).toBe('Queued merge dropped: the session moved to Code');
+    gh.status = approved;
+    await pollAll();
+    expect(gh.merges).toEqual([]);
   });
 });

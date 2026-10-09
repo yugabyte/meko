@@ -151,7 +151,9 @@ your phone can connect.
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
   takes you to them first. You approve the design, opening the PR, and Merge & Close, which merges the PR and
-  cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
+  cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
+  **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
+  and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and
   people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
   you turn that off in Settings → General) and CI failures to Claude. Only reviews
   from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;

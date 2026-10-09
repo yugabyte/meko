@@ -102,7 +102,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 3. Lifecycle and GitHub
 
-- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
+- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically. A gate
+      pressed early (`sessions.queued_gate`) goes only as that press would have, shows with Cancel (honored
+      until the prompt is typed or the merge requested), and is dropped (logged) when what it waited for is
+      gone: a queued Open PR when Claude exits by any path (`setStatus` to exited, a relaunch), either one on
+      a move or archive, and a queued merge when a blocker appears that won't clear by itself.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
@@ -119,7 +123,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead
       (with a live mod they go through it, and Claude holds them until the turn ends).
       Prompts to one session go one at a time.
-- [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
+- [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users. Only
+      blockers that clear by themselves let it be queued (`MergeInfo.queueable`); any other one drops
+      a queued merge, and the user is told.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
