@@ -38,6 +38,7 @@ import type {
   SetDedicatedDatapackRequest,
   SetupRequest,
   ShareDatapackRequest,
+  ShareDatapackResult,
   StagedImage,
   TotpEnrollResponse,
   UpdateProjectRequest,
@@ -120,7 +121,7 @@ export const api = {
   cloneRepo: (b: CloneRepoRequest) => post<RepoInfo>('/api/repos/clone', b),
   datapacks: () => get<MekoDatapack[]>('/api/meko/datapacks'),
   datapackPeople: (id: string) => get<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`),
-  shareDatapack: (id: string, b: ShareDatapackRequest) => post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`, b),
+  shareDatapack: (id: string, b: ShareDatapackRequest) => post<ShareDatapackResult>(`/api/meko/datapacks/${enc(id)}/people`, b),
   resendDatapackInvite: (id: string, inviteId: string) =>
     post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}/resend`),
   revokeDatapackInvite: (id: string, inviteId: string) =>

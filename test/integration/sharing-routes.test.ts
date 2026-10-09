@@ -141,6 +141,83 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(env.core.mekoStatus.sharing).toBe(true);
   });
 
+  it('invites a list of emails one after another and says who went through', async () => {
+    await project();
+    /** Meko's answer to /share per address; anything not here is invited. */
+    let refuse: Record<string, number> = {};
+    env.mekoApi.handle((c: ApiCall) => {
+      if (c.path === '/datapacks/incoming-shares') return { body: { data: [] } };
+      if (c.path.endsWith('/member-list')) return { body: { data: { members: [{ is_owner: true, user_name: 'Me', user_email_id: 'me@example.com', grant: 'owner' }] } } };
+      if (c.path.endsWith('/outgoing-shares')) return { body: { data: { pending_invites: [] } } };
+      if (c.path.endsWith('/share')) {
+        const to = (c.body as { recipient_email: string }).recipient_email;
+        const status = refuse[to];
+        if (!status) return { body: { data: { status: 'pending', invite_id: `i-${to}` } } };
+        return status === 401
+          ? { status, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } }
+          : { status, body: { error: { code: 'CONFLICT', message: `an invite for ${to} is already pending` } } };
+      }
+      return { body: { data: {} } };
+    });
+    const shares = () => env.mekoApi.calls.filter((c) => c.path === '/datapacks/dp-1/share').map((c) => c.body);
+    const lists = () => env.mekoApi.calls.filter((c) => c.path.endsWith('/member-list')).length;
+    const post = (body: object) => call('POST', '/api/meko/datapacks/dp-1/people', body);
+
+    // Every one is invited, in order, at the grant asked for, with repeats sent once; the lists are read once.
+    const before = lists();
+    const all3 = await post({ emails: ['a@example.com', ' b@example.com ', 'c@example.com', 'A@example.com'], grant: 'maintainer' });
+    expect(all3.statusCode).toBe(200);
+    expect(all3.json()).toMatchObject({ invited: ['a@example.com', 'b@example.com', 'c@example.com'], failed: [], members: [{ email: 'me@example.com' }] });
+    expect(shares()).toEqual(['a', 'b', 'c'].map((n) => ({ recipient_email: `${n}@example.com`, grant: 'maintainer' })));
+    expect(lists() - before).toBe(1);
+
+    // One refused: the rest still go through, and it says which one didn't and why.
+    refuse = { 'e@example.com': 409 };
+    const partly = await post({ emails: ['d@example.com', 'e@example.com', 'f@example.com'], grant: 'viewer' });
+    expect(partly.statusCode).toBe(200);
+    expect(partly.json()).toMatchObject({
+      invited: ['d@example.com', 'f@example.com'],
+      failed: [{ email: 'e@example.com', error: 'Meko: an invite for e@example.com is already pending' }],
+    });
+
+    // None went through: the first error, as for one email.
+    refuse = { 'g@example.com': 409, 'h@example.com': 409 };
+    const none = await post({ emails: ['g@example.com', 'h@example.com'], grant: 'viewer' });
+    expect(none.statusCode).toBe(409);
+    expect(none.json().error).toBe('Meko: an invite for g@example.com is already pending');
+
+    // A refused key stops the list: the rest aren't sent.
+    refuse = { 'j@example.com': 401, 'k@example.com': 401 };
+    let sent = shares().length;
+    const keyRefused = await post({ emails: ['j@example.com', 'k@example.com'], grant: 'viewer' });
+    expect(keyRefused.statusCode).toBe(502);
+    expect(keyRefused.json().error).toMatch(/AgentK's API key wasn't accepted/);
+    expect(shares().length - sent).toBe(1);
+    // …and after some went through, the rest are listed as failed with that error.
+    refuse = { 'm@example.com': 401, 'n@example.com': 401 };
+    sent = shares().length;
+    const keyLater = await post({ emails: ['l@example.com', 'm@example.com', 'n@example.com'], grant: 'viewer' });
+    expect(keyLater.statusCode).toBe(200);
+    expect(keyLater.json().invited).toEqual(['l@example.com']);
+    expect(keyLater.json().failed.map((f: { email: string }) => f.email)).toEqual(['m@example.com', 'n@example.com']);
+    expect(shares().length - sent).toBe(2);
+
+    // Checked before anything is sent.
+    sent = shares().length;
+    const bad = await post({ emails: ['p@example.com', 'nope', ''], grant: 'viewer' });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('Not an email: nope, (blank).');
+    const many = Array.from({ length: 51 }, (_, i) => `u${i}@example.com`);
+    expect((await post({ emails: many, grant: 'viewer' })).json().error).toBe('Invite at most 50 people at a time.');
+    expect((await post({ emails: [], grant: 'viewer' })).statusCode).toBe(400);
+    expect((await post({ emails: 'p@example.com', grant: 'viewer' })).statusCode).toBe(400);
+    expect((await post({ email: 'p@example.com', emails: ['q@example.com'], grant: 'viewer' })).statusCode).toBe(400);
+    expect((await post({ grant: 'viewer' })).statusCode).toBe(400);
+    expect((await post({ emails: ['p@example.com', 'q@example.com'], grant: 'viewer', login: 'p' })).statusCode).toBe(400);
+    expect((await post({ emails: ['p@example.com'], grant: 'owner' })).json().error).toBe('Access must be viewer, contributor or maintainer.');
+    expect(shares().length).toBe(sent);
+  });
+
   it('lists invites in the state and puts one off with Later', async () => {
     const rows: MekoDatapackRow[] = [
       { id: 'dp-own', name: 'x', grant: 'owner', createdAt: null, ownerName: null, ownerEmail: null, description: null, ownerUserId: 'u-self' },

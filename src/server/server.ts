@@ -9,9 +9,10 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
-  ShareDatapackRequest, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
+import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
@@ -21,6 +22,7 @@ import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
+import { MekoApiError } from './mekoapi.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
 import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
@@ -252,11 +254,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- sharing (Meko's share API) ----
   /** Runs a share API call for a datapack one of our projects uses; Meko's errors become HTTP errors (see apiFailure). */
-  const sharing = async <T>(datapackId: string, fn: () => Promise<T>): Promise<T> => {
+  const shareable = (datapackId: string): void => {
     const inUse = get(db, `SELECT 1 AS x FROM project_datapacks d JOIN projects p ON p.id = d.project_id
                            WHERE d.datapack_id = ? AND p.deleted_at IS NULL`, datapackId);
     if (!inUse) throw new HttpError(404, "That datapack isn't in any of your projects.");
     core.invites.requireSharing('share datapacks');
+  };
+  const sharing = async <T>(datapackId: string, fn: () => Promise<T>): Promise<T> => {
+    shareable(datapackId);
     try {
       return await fn();
     } catch (e) {
@@ -268,16 +273,44 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.invites.api.people(id).catch((e) => ({ members: [], invites: [], refreshError: `Couldn't read the list again: ${errMsg(e)}` }));
   app.get<{ Params: { id: string } }>('/api/meko/datapacks/:id/people', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.people(req.params.id)));
-  app.post<{ Params: { id: string }; Body: ShareDatapackRequest }>('/api/meko/datapacks/:id/people', async (req): Promise<DatapackPeople> => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
-    const grant = req.body?.grant;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter the email address of the person to share with.');
-    if (!SHARE_GRANTS.includes(grant)) throw new HttpError(400, 'Access must be contributor, maintainer or viewer.');
-    await sharing(req.params.id, () => core.invites.api.share(req.params.id, email, grant));
-    core.log.info(`invited ${email} to datapack ${req.params.id} as ${grant}`);
+  app.post<{ Params: { id: string }; Body: ShareDatapackRequest }>('/api/meko/datapacks/:id/people', async (req): Promise<ShareDatapackResult> => {
+    const { email, emails: list, grant, login } = req.body ?? ({} as ShareDatapackRequest);
+    if ((email === undefined) === (list === undefined)) throw new HttpError(400, 'Give either one email or a list of emails.');
+    if (list !== undefined && !Array.isArray(list)) throw new HttpError(400, 'The list of emails must be an array.');
+    const typed = (list ?? [email]).map((e) => (typeof e === 'string' ? e.trim() : ''));
+    if (!typed.length) throw new HttpError(400, 'Enter the email address of the person to share with.');
+    const bad = typed.filter((e) => !EMAIL_RE.test(e));
+    if (bad.length) {
+      throw new HttpError(400, list === undefined ? 'Enter the email address of the person to share with.'
+        : `Not an email: ${bad.map((e) => e || '(blank)').join(', ')}.`);
+    }
+    const emails = typed.filter((e, i) => typed.findIndex((o) => o.toLowerCase() === e.toLowerCase()) === i);
+    if (emails.length > MAX_SHARE_EMAILS) throw new HttpError(400, `Invite at most ${MAX_SHARE_EMAILS} people at a time.`);
+    if (!SHARE_GRANTS.includes(grant)) throw new HttpError(400, 'Access must be viewer, contributor or maintainer.');
+    if (login != null && emails.length !== 1) throw new HttpError(400, 'A GitHub login goes with a single email.');
+    shareable(req.params.id);
+    // One after another, in the order given. When none go through, the first error is the answer.
+    const invited: string[] = [];
+    const failed: ShareFailure[] = [];
+    let first: Error | null = null;
+    for (const [i, to] of emails.entries()) {
+      try {
+        await core.invites.api.share(req.params.id, to, grant);
+        invited.push(to);
+        core.log.info(`invited ${to} to datapack ${req.params.id} as ${grant}`);
+      } catch (e) {
+        const err = core.invites.apiFailure(e, 'Meko');
+        first ??= err;
+        // A refused key fails the rest the same way: don't send them.
+        const rest = e instanceof MekoApiError && e.status === 401 ? emails.slice(i) : [to];
+        failed.push(...rest.map((r) => ({ email: r, error: err.message })));
+        if (rest.length > 1) break;
+      }
+    }
+    if (!invited.length && first) throw first;
     // Shared with a PR's reviewer: their email comes up for them next time.
-    if (req.body.login != null) core.prReview.rememberEmail(req.body.login, email);
-    return peopleAfter(req.params.id);
+    if (login != null) core.prReview.rememberEmail(login, emails[0]);
+    return { ...(await peopleAfter(req.params.id)), invited, failed };
   });
   app.post<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId/resend', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.resend(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
