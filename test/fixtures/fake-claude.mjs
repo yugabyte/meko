@@ -101,7 +101,10 @@ let planWaiting = false;
 // it polls the hook socket for prompts, acks each and takes it as a typed prompt (mod-prompts.jsonl
 // records them, mod-acks.jsonl the server's answer to each ack), and reports a measurement after
 // each turn. A `mod-silent` file makes it take prompts without acking them; a `mod-drop` file makes
-// it ack them, then report them refused (their text put in the prompt box).
+// it ack them, then report them refused (their text put in the prompt box). A learn step on a poll
+// is answered like the mod's fork and duplicate check would: the `learn-facts` file's text (else no
+// facts), then the `learn-decisions` file's (else none); each post and answer goes to mod-learn.jsonl.
+// A `learn-silent` file makes it never answer a learn step.
 const pluginDir = opt('--plugin-dir');
 const modOn = !!pluginDir && existsSync(join(pluginDir, 'hooks', 'register.ts')) && existsSync(join(dir, 'mod'));
 
@@ -126,13 +129,32 @@ let modTurns = Promise.resolve();
 const held = new Set();
 const reportHeld = () => modPost('/mod/held', { held: [...held] }).catch(() => undefined);
 
+const LEARN_USAGE = { input_tokens: 10, output_tokens: 200, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 };
+
+/** Like the mod's learn step: the fork's reply, then (if AgentK asks for it) the duplicate check's. */
+async function modLearn(job) {
+  if (existsSync(join(dir, 'learn-silent'))) return;
+  const read = (f, fallback) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : fallback);
+  const log = (x) => appendFileSync(join(dir, 'mod-learn.jsonl'), JSON.stringify(x) + '\n');
+  const facts = { id: job.id, step: 'facts', model: 'claude-fake-1', text: read('learn-facts', '{"facts":[]}'), usage: LEARN_USAGE };
+  const r1 = await modPost('/mod/learn', facts);
+  const a1 = r1.text ? JSON.parse(r1.text) : null;
+  log({ job, post: facts, status: r1.status, answer: a1 });
+  if (r1.status !== 200 || typeof a1?.prompt !== 'string') return;
+  const decisions = { id: job.id, step: 'decisions', model: a1.model, text: read('learn-decisions', '{"decisions":[]}'), usage: LEARN_USAGE };
+  const r2 = await modPost('/mod/learn', decisions);
+  log({ post: decisions, status: r2.status, answer: r2.text ? JSON.parse(r2.text) : null });
+}
+
 async function modLoop() {
-  await modPost('/mod/hello', { protocol: 1 }).catch(() => undefined);
+  await modPost('/mod/hello', { protocol: 2 }).catch(() => undefined);
   for (;;) {
     try {
       const r = await modPost('/mod/poll', { held: [...held] });
       if (r.status === 200) {
-        for (const p of JSON.parse(r.text).prompts) {
+        const answer = JSON.parse(r.text);
+        if (answer.learn) void modLearn(answer.learn).catch(() => undefined);
+        for (const p of answer.prompts) {
           appendFileSync(join(dir, 'mod-prompts.jsonl'), JSON.stringify(p) + '\n');
           if (existsSync(join(dir, 'mod-silent'))) continue;
           // Like the mod: only a 204 means AgentK still wants it run.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCEPT_MS, LINK_STALE_MS, ModLinks, POLL_HOLD_MS, type DroppedPrompt } from '../../src/server/modlink.js';
+import { ACCEPT_MS, LEARN_PROTOCOL, LINK_STALE_MS, ModLinks, POLL_HOLD_MS, type DroppedPrompt } from '../../src/server/modlink.js';
 
 describe('the link to AgentK\'s mod', () => {
   let now = 1_000_000;
@@ -261,5 +261,32 @@ describe('the link to AgentK\'s mod', () => {
     links.hold('s1', 'p3');
     links.reset('s1');
     expect(links.heldCount('s1')).toBe(0);
+  });
+
+  it('runs learn steps only through a mod that speaks their protocol', () => {
+    links.hello('old', 1);
+    expect(links.live('old')).toBe(true);
+    expect(links.learnReady('old')).toBe(false);
+    links.hello('none');
+    expect(links.learnReady('none')).toBe(false); // a hello without a protocol is the first one
+    links.hello('new', LEARN_PROTOCOL);
+    expect(links.learnReady('new')).toBe(true);
+    now += LINK_STALE_MS;
+    expect(links.learnReady('new')).toBe(false); // gone stale
+  });
+
+  it('hands a learn step to a held poll, once, beside the prompts', async () => {
+    links.hello('s1', LEARN_PROTOCOL);
+    const held = links.poll('s1');
+    links.queueLearn('s1', { id: 'L1', prompt: 'What did you learn?' });
+    expect(await held).toEqual({ prompts: [], learn: { id: 'L1', prompt: 'What did you learn?' } });
+    links.queueLearn('s1', { id: 'L2', prompt: 'Again?' });
+    const send = links.send('s1', 'Next prompt.');
+    expect(await links.poll('s1')).toEqual({ prompts: [{ id: expect.any(String), text: 'Next prompt.' }], learn: { id: 'L2', prompt: 'Again?' } });
+    const next = links.poll('s1');
+    vi.advanceTimersByTime(POLL_HOLD_MS);
+    expect(await next).toBeNull();
+    vi.advanceTimersByTime(ACCEPT_MS);
+    await expect(send).rejects.toThrow();
   });
 });

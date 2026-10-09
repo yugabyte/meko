@@ -16,8 +16,17 @@ const TAKEN_KEEP_MS = 10 * 60 * 1000;
 /** How often links are checked for going stale, and asks for being abandoned. */
 const SWEEP_MS = 2_000;
 
-/** What a poll answers: the prompts to submit, or null for none. */
-export type PollAnswer = { prompts: { id: string; text: string }[] } | null;
+/** A learn step for the mod (learn.ts): fork the session with `prompt`, and post what it says to /mod/learn. */
+export interface LearnJob {
+  id: string;
+  prompt: string;
+}
+
+/** What a poll answers: the prompts to submit and a learn step to run, or null for neither. */
+export type PollAnswer = { prompts: { id: string; text: string }[]; learn?: LearnJob } | null;
+
+/** The mod protocol that runs learn steps (its /mod/hello says which it speaks). */
+export const LEARN_PROTOCOL = 2;
 
 /** A prompt another plugin in Claude refused after the mod took it. */
 export interface DroppedPrompt {
@@ -60,6 +69,10 @@ interface Ask {
 interface Link {
   /** When the mod last said hello or polled; 0 before it ever has. */
   seenAt: number;
+  /** The protocol its /mod/hello named (1 before learn steps); 0 until it says hello. */
+  protocol: number;
+  /** A learn step waiting for the mod, until a poll hands it over. */
+  learn: LearnJob | null;
   /** Whether the link was live when that was last reported (onChange). */
   reported: boolean;
   /** The questions Claude is asking through the mod, if any: one AskUserQuestion runs at a time. */
@@ -114,7 +127,7 @@ export class ModLinks {
 
   private link(session: string): Link {
     let l = this.links.get(session);
-    if (!l) this.links.set(session, (l = { seenAt: 0, reported: false, ask: null, held: new Set(), waiter: null, queue: [], taken: new Map() }));
+    if (!l) this.links.set(session, (l = { seenAt: 0, protocol: 0, learn: null, reported: false, ask: null, held: new Set(), waiter: null, queue: [], taken: new Map() }));
     return l;
   }
 
@@ -144,11 +157,27 @@ export class ModLinks {
   }
 
   /** The mod loaded in the session's Claude. True the first time since the session was last launched. */
-  hello(session: string): boolean {
+  hello(session: string, protocol?: unknown): boolean {
     const l = this.link(session);
     const first = l.seenAt === 0;
+    l.protocol = typeof protocol === 'number' && Number.isInteger(protocol) ? protocol : 1;
     this.seen(session, l);
     return first;
+  }
+
+  /** True while the session's mod is live and runs learn steps (a mod loaded before them doesn't). */
+  learnReady(session: string): boolean {
+    return this.live(session) && (this.links.get(session)?.protocol ?? 0) >= LEARN_PROTOCOL;
+  }
+
+  /** Hands a learn step to the mod with its next poll (at once when one is held). */
+  queueLearn(session: string, job: LearnJob): void {
+    const l = this.link(session);
+    l.learn = job;
+    if (l.waiter) {
+      const a = this.hand(l);
+      if (a) l.waiter.answer(a);
+    }
   }
 
   /**
@@ -180,12 +209,14 @@ export class ModLinks {
     });
   }
 
-  /** The prompts not handed over yet, marked handed; null when there are none. */
+  /** The prompts not handed over yet, marked handed, and a learn step waiting; null when there are none. */
   private hand(l: Link): PollAnswer {
     const fresh = l.queue.filter((p) => !p.handed);
-    if (!fresh.length) return null;
+    const learn = l.learn;
+    if (!fresh.length && !learn) return null;
     for (const p of fresh) p.handed = true;
-    return { prompts: fresh.map((p) => ({ id: p.id, text: p.text })) };
+    l.learn = null;
+    return { prompts: fresh.map((p) => ({ id: p.id, text: p.text })), ...(learn ? { learn } : {}) };
   }
 
   /**

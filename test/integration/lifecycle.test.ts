@@ -130,8 +130,11 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     };
     await env.core.sessions.action(s.id, 'merge');
     expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
+    // What the session learned goes to Meko first (a typed learn turn: this fake Claude has no mod).
+    await closed(s.id);
     const row = env.core.sessions.row(s.id);
     expect(row.stage).toBe('done');
+    expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'turn', outcome: 'done' }]);
     expect(row.desired).toBe('archived');
     expect(existsSync(worktree)).toBe(true); // idle, for the next session on the repo
     expect(env.core.sessions.ownsWorktree(row)).toBe(false);
@@ -163,6 +166,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     return s;
   }
 
+  /** Waits for Merge & Close to finish: after the learn step's turn, the cleanup. */
+  const closed = (id: string) => waitFor(() => env.core.sessions.row(id).stage, (st) => st === 'done', 10000, 'Merge & Close');
+  const learns = (id: string) => all<{ trigger: string; path: string; outcome: string }>(env.core.db,
+    'SELECT trigger, path, outcome FROM meko_learns WHERE session_id = ? ORDER BY started_at', id);
   const stages = (id: string) => all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => r.stage);
   const shipped = () => env.meko.calls.filter((c) => c.name === 'addMemory').length;
 
@@ -170,7 +177,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await inReview('Merged elsewhere');
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
     expect(shipped()).toBe(1);
   });
@@ -180,7 +187,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.stats = new Error('gh: rate limited');
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
     const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
     expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
   });
@@ -190,7 +197,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, state: 'MERGED' };
     const row = env.core.sessions.row(s.id);
     await Promise.all([env.core.lifecycle.pollReview(row), env.core.lifecycle.pollReview(row)]);
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
     expect(shipped()).toBe(1);
     expect(stages(s.id).filter((x) => x === 'merge')).toHaveLength(1);
   });
@@ -201,7 +208,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     env.core.sessions.setStage(s.id, 'merge', 'you');
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
     expect(shipped()).toBe(1);
   });
 
@@ -279,7 +286,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await inReview('Elsewhere', undefined, { repoPath: other });
     const worktree = env.core.sessions.row(s.id).worktree_path;
     await env.core.sessions.action(s.id, 'merge');
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: other, encoding: 'utf8' }).trim()).toBe('');
     expect(dbGet<{ repo: string }>(env.core.db, 'SELECT repo FROM worktrees WHERE path = ? AND session_id IS NULL', worktree)?.repo).toBe(other);
   });
@@ -299,7 +306,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const results = await Promise.allSettled([env.core.sessions.action(s.id, 'merge'), env.core.sessions.action(s.id, 'merge')]);
     expect(gh.merges).toHaveLength(1);
     expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
   });
 
   it('keeps the branch when it has commits the merged PR lacks', async () => {
@@ -309,7 +316,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     commitIn(row.worktree_path);
     gh.status = { ...gh.status!, state: 'MERGED', headRefOid: pushed };
     await env.core.lifecycle.pollReview(row);
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
+    await closed(s.id);
     expect(env.core.sessions.ownsWorktree(env.core.sessions.row(s.id))).toBe(false);
     expect(execFileSync('git', ['branch', '--list', row.branch], { cwd: env.repo, encoding: 'utf8' }).trim()).not.toBe('');
     expect(lastEvent(s.id, 'cleanup')).toMatch(/branch .* kept because it has commits PR #7 doesn't have/);
@@ -356,6 +363,101 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     // Archiving again keeps the first archive time and adds no second "Archived" event.
     expect(env.core.sessions.row(s.id).archived_at).toBe(archivedAt);
     expect(dbGet<{ n: number }>(env.core.db, "SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'archived'", s.id)!.n).toBe(1);
+    // Claude was gone by the merge: nothing could be learned from it.
+    expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'none', outcome: 'skipped' }]);
+  });
+
+  /** Files in the fake Claude's dir that turn its behaviours on (see fake-claude.mjs); before the session starts. */
+  function fakeFiles(files: Record<string, string>): void {
+    mkdirSync(env.fakeDir, { recursive: true });
+    for (const [f, text] of Object.entries(files)) writeFileSync(join(env.fakeDir, f), text);
+  }
+
+  /** What the fake mod posted for learn steps, and what AgentK answered. */
+  const modLearn = (): { post: { step: string }; status: number; answer: Record<string, unknown> | null }[] => {
+    const f = join(env.fakeDir, 'mod-learn.jsonl');
+    return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  };
+
+  it('saves what the session learned through the mod before closing a merged session', async () => {
+    fakeFiles({ mod: '', 'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"update","id":"m1","text":"Decision: polls run in one queue per session."}]}' });
+    const s = await inReview('Learned');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const worktree = env.core.sessions.row(s.id).worktree_path;
+    fakeFiles({
+      'learn-facts': JSON.stringify({ facts: [
+        { kind: 'gotcha', component: 'src/server/db.ts', text: 'Migrations are append-only: never edit a shipped one.' },
+        { kind: 'decision', component: 'src/server/lifecycle.ts', text: 'Polls for a session run one at a time.' },
+        { kind: 'gotcha', component: '', text: `The worktree at ${worktree} has a stale lock.` },
+      ] }),
+    });
+    const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => (query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : []));
+    Object.assign(env.meko, { similar });
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    await closed(s.id);
+
+    const row = env.core.sessions.row(s.id);
+    // The fact naming this machine was left out; the other two were checked against Meko.
+    expect(similar.mock.calls.map((c) => [c[0], c[1], c[2]])).toEqual([
+      ['Gotcha (src/server/db.ts): Migrations are append-only: never edit a shipped one.', 'dp-1', sessionAgentId(row)],
+      ['Decision (src/server/lifecycle.ts): Polls for a session run one at a time.', 'dp-1', sessionAgentId(row)],
+    ]);
+    const added = env.meko.calls.filter((c) => c.name === 'addMemory');
+    expect(added[0].args.slice(0, 3)).toEqual(['Gotcha (src/server/db.ts): Migrations are append-only: never edit a shipped one.', 'dp-1', sessionAgentId(row)]);
+    expect(added[0].args[4]).toMatchObject({ source: 'agent-k-local', kind: 'learned', fact: 'gotcha', component: 'src/server/db.ts', session: s.id });
+    expect(String(added[1].args[0])).toMatch(/^Shipped in Demo/); // then what shipped, as before
+    const updated = env.meko.calls.find((c) => c.name === 'updateMemory');
+    expect(updated?.args.slice(0, 4)).toEqual(['m1', 'Decision: polls run in one queue per session.', 'dp-1', 'claude_code:other-1']);
+    expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'done' }]);
+    expect(dbGet(env.core.db, 'SELECT candidates, saves, updates, skips FROM meko_learns WHERE session_id = ?', s.id))
+      .toEqual({ candidates: 2, saves: 1, updates: 1, skips: 0 });
+    expect(lastEvent(s.id, 'learned')).toBe('Saved 1 memory and corrected 1 in team/demo');
+    // The fork's and the check's tokens count as the session's.
+    expect(all(env.core.db, "SELECT agent, model, output FROM usage_messages WHERE session_id = ? AND agent = 'agentk:learn' ORDER BY message_id DESC", s.id))
+      .toEqual([{ agent: 'agentk:learn', model: 'claude-fake-1', output: 200 }, { agent: 'agentk:learn', model: 'claude-haiku-4-5-20251001', output: 200 }]);
+    expect(modLearn().map((x) => x.answer)).toEqual([
+      { prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-4-5-20251001' },
+      { done: 'Saved 1 memory and corrected 1 in team/demo.' },
+    ]);
+  });
+
+  it("closes a merged session when the mod never finishes its learn step", async () => {
+    fakeFiles({ mod: '', 'learn-silent': '' });
+    const s = await inReview('Silent');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    env.core.learn.timeoutMs = 300;
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.get(s.id).learning).toBe(true);
+    await closed(s.id);
+    expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'failed' }]);
+    expect(lastEvent(s.id, 'learned')).toBe("AgentK couldn't save what this session learned: AgentK's mod in Claude didn't finish in time");
+    expect(shipped()).toBe(1);
+  });
+
+  it('saves learnings when asked, from the session menu or /agentk_learn', async () => {
+    fakeFiles({ mod: '' });
+    const s = await inReview('Asked');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    await env.core.sessions.action(s.id, 'learn');
+    await expect(env.core.sessions.action(s.id, 'learn')).rejects.toThrow(/already saving/);
+    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+    expect(learns(s.id)).toEqual([{ trigger: 'manual', path: 'mod', outcome: 'done' }]);
+    expect(lastEvent(s.id, 'learned')).toBe('Nothing new to save to team/demo');
+    expect(env.core.sessions.row(s.id).stage).toBe('review'); // nothing else moves
+    // /agentk_learn in the terminal asks the same through the mod.
+    const r = await env.core.sessions.onMod(env.core.sessions.row(s.id).hook_token, '/mod/learn/start', {}, new AbortController().signal);
+    expect(r).toEqual({ status: 200, body: { text: 'AgentK is saving what this session learned to Meko.' } });
+    await waitFor(() => learns(s.id).length, (n) => n === 2 && !env.core.sessions.get(s.id).learning, 10000, 'the second learn step');
+  });
+
+  it('offers no learn step without a datapack to save to', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'No Meko', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Plain', prompt: 'do it', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
+    await expect(env.core.sessions.action(s.id, 'learn')).rejects.toThrow(/no Meko datapack/);
+    expect(learns(s.id)).toEqual([]);
   });
 
   it('goes back to Review when a requested merge does not happen', async () => {
@@ -952,6 +1054,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = approved;
     await poll(s.id);
     expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
+    await closed(s.id); // after the learn step's turn
     expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'done', queued_gate: null });
     expect(notify).toHaveBeenCalledWith(s.id, 'Merging', 'PR #7 is ready: merging it now, as you queued.');
     expect(stages(s.id).slice(-2)).toEqual(['merge', 'done']);

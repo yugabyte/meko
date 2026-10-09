@@ -71,7 +71,7 @@ test('says hello, then submits each prompt AgentK has as the person own, acked f
   const submitted = engine(on)
   await $.session.start(START)
   await clock.advance(5)
-  expect(calls[0]).toEqual({ path: '/mod/hello', body: { protocol: 1 }, socketPath: '/ak/hook.sock', token: 'tok' })
+  expect(calls[0]).toEqual({ path: '/mod/hello', body: { protocol: 2 }, socketPath: '/ak/hook.sock', token: 'tok' })
   expect(calls.map((c) => c.path).slice(0, 3)).toEqual(['/mod/hello', '/mod/poll', '/mod/ack'])
   expect(calls[2]?.body).toEqual({ id: 'p1', state: 'accepted' })
   expect(submitted.map((s) => s.text)).toEqual(['Implement the design.'])
@@ -318,4 +318,117 @@ test('tells AgentK which prompts Claude still holds, until each starts its turn'
   await clock.advance(5)
   expect(calls.filter((c) => c.path === '/mod/held').map((c) => c.body)).toEqual([{ held: [] }])
   expect(polls().at(-1)).toEqual({ held: [] })
+})
+
+const USAGE = { input_tokens: 12, output_tokens: 300, cache_read_input_tokens: 150000, cache_creation_input_tokens: 0 }
+
+/**
+ * The engine's model calls and toasts for a learn step: `fork` and `check` answer the fork and the
+ * duplicate check; what each was asked, and the toasts, are kept.
+ */
+function models(on: On, fork: unknown, check: unknown) {
+  const asked: { fork: string[]; check: { model: string; prompt: string }[]; toasts: string[] } = { fork: [], check: [], toasts: [] }
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('model.fork', (_$, e) => {
+    asked.fork.push(e.prompt)
+    return { value: fork as never }
+  })
+  on('model.complete', (_$, e) => {
+    asked.check.push({ model: e.model, prompt: e.prompt })
+    return { value: check as never }
+  })
+  on('ui.toast', (_$, e) => {
+    asked.toasts.push(e.text)
+    return { value: undefined }
+  })
+  return asked
+}
+
+test('runs a learn step: forks the session, runs the duplicate check AgentK builds, and shows what was saved', async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  let polled = false
+  const calls = routes(on, (path, body) => {
+    if (path === '/mod/poll' && !polled) {
+      polled = true
+      return answer(200, { prompts: [], learn: { id: 'L1', prompt: 'What did you learn?' } })
+    }
+    if (path === '/mod/learn' && body.step === 'facts') return answer(200, { prompt: 'Check these.', model: 'claude-haiku-4-5-20251001' })
+    if (path === '/mod/learn' && body.step === 'decisions') return answer(200, { done: 'Saved 1 memory and corrected 0 in team/demo.' })
+    return answer(204)
+  })
+  const asked = models(on, { isAnswered: true, text: '{"facts":[]}', usage: USAGE }, { isAnswered: true, text: '{"decisions":[]}', usage: USAGE })
+  engine(on)
+  await $.session.start(START)
+  await clock.advance(5)
+  expect(asked.fork).toEqual(['What did you learn?'])
+  expect(asked.check).toEqual([{ model: 'claude-haiku-4-5-20251001', prompt: 'Check these.' }])
+  const learn = calls.filter((c) => c.path === '/mod/learn').map((c) => c.body)
+  expect(learn).toEqual([
+    { id: 'L1', step: 'facts', model: 'claude-opus-5-5', text: '{"facts":[]}', usage: USAGE },
+    { id: 'L1', step: 'decisions', model: 'claude-haiku-4-5-20251001', text: '{"decisions":[]}', usage: USAGE },
+  ])
+  expect(asked.toasts).toEqual(['Saved 1 memory and corrected 0 in team/demo.'])
+})
+
+test('tells AgentK why a fork gave nothing, and stops when AgentK says it is done', async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  let polled = false
+  const calls = routes(on, (path) => {
+    if (path === '/mod/poll' && !polled) {
+      polled = true
+      return answer(200, { prompts: [], learn: { id: 'L2', prompt: 'What did you learn?' } })
+    }
+    if (path === '/mod/learn') return answer(200, { done: "AgentK couldn't save what this session learned: nothing-to-fork." })
+    return answer(204)
+  })
+  const asked = models(on, { isAnswered: false, reason: 'nothing-to-fork' }, null)
+  engine(on)
+  await $.session.start(START)
+  await clock.advance(5)
+  expect(calls.filter((c) => c.path === '/mod/learn').map((c) => c.body))
+    .toEqual([{ id: 'L2', step: 'facts', model: 'claude-opus-5-5', reason: 'nothing-to-fork', usage: null }])
+  expect(asked.check).toEqual([])
+  expect(asked.toasts).toEqual(["AgentK couldn't save what this session learned: nothing-to-fork."])
+})
+
+test('gives the terminal /agentk_learn, which asks AgentK to start a learn step', async ($, on) => {
+  mock.env(on, ENV)
+  mock.clock(on)
+  const registered: string[] = []
+  on('command.register', (_$, e) => {
+    registered.push(e.name)
+    return { value: { command: e.name } }
+  })
+  const calls = routes(on, (path) => (path === '/mod/learn/start' ? answer(200, { text: 'AgentK is saving what this session learned to Meko.' }) : answer(204)))
+  engine(on)
+  await $.session.start(START)
+  expect(registered).toEqual(['agentk_learn'])
+  const r = await $.command.run({ command: 'agentk_learn', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+  expect(r.text).toBe('AgentK is saving what this session learned to Meko.')
+  expect(calls.some((c) => c.path === '/mod/learn/start')).toBe(true)
+})
+
+test("tells AgentK at once when this Claude Code can't fork the session", async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  let polled = false
+  const calls = routes(on, (path) => {
+    if (path === '/mod/poll' && !polled) {
+      polled = true
+      return answer(200, { prompts: [], learn: { id: 'L3', prompt: 'What did you learn?' } })
+    }
+    if (path === '/mod/learn') return answer(200, { done: "AgentK couldn't save what this session learned: the model call failed." })
+    return answer(204)
+  })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('model.fork', () => {
+    throw new Error('not in this build')
+  })
+  engine(on)
+  await $.session.start(START)
+  await clock.advance(5)
+  expect(calls.filter((c) => c.path === '/mod/learn').map((c) => c.body))
+    .toEqual([{ id: 'L3', step: 'facts', model: 'claude-opus-5-5', reason: 'the model call failed' }])
 })

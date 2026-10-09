@@ -17,7 +17,7 @@ import { ciState, ciSummary, isLogin, isTrustedAuthor } from '../../src/server/g
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, type PromptName,
+  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
@@ -235,6 +235,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -244,7 +245,7 @@ describe('config and db', () => {
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 9}`);
+    db.exec(`PRAGMA user_version = ${version - 10}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -264,6 +265,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -271,7 +273,7 @@ describe('config and db', () => {
     dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 7}`);
+    db.exec(`PRAGMA user_version = ${version - 8}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -296,6 +298,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -337,6 +340,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -383,6 +387,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -412,6 +417,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -446,6 +452,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -482,6 +489,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -513,6 +521,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -548,6 +557,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV27(db);
     dropV26(db);
     dropV25(db);
     dropV24(db);
@@ -587,6 +597,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 27 (the learn step, AgentK's own Meko calls and transcript captures), for tests that rewind the schema. */
+function dropV27(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs');
+}
 
 /** Undoes migration 26 (a gate pressed before it could go), for tests that rewind the schema. */
 function dropV26(db: ReturnType<typeof openDb>) {
@@ -691,6 +706,19 @@ describe('Meko recall in prompts', () => {
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
+  });
+
+  it('says what to save for the team, and what never, with no limit', () => {
+    const rule = mekoSaveSystemLine('s-1');
+    expect(rule).toMatch(/^Saving to Meko: this project's datapack is shared by the team working on it\./);
+    expect(rule).toContain("Don't save anything about this machine, worktree, paths, ports or environment, one person's preferences");
+    expect(rule).toContain('search Meko for it: skip it if an equivalent memory exists');
+    expect(rule).toContain('there is no limit');
+    expect(rule).toContain('{"source":"agent-k-local","kind":"learned","session":"s-1"}');
+    // Explore ends by saving under that rule, and the typed learn step asks for the same.
+    expect(DEFAULT_PROMPTS.explore).toMatch(/save what you learned to Meko, following the saving rule in your system prompt\.$/);
+    expect(DEFAULT_PROMPTS.learn).toMatch(/^Save what this session learned to Meko/);
+    expect(mekoRecallLine('learn')).toBe('');
   });
 
   it('names the ToolSearch query that loads the Meko tools under any server name', () => {

@@ -769,6 +769,8 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row) return;
     this.sessions.setBusy(id, false);
+    // A typed learn step's turn (no mod) is over; at Merge & Close the poll below then cleans up.
+    this.core.learn.turnEnded(id);
     if (row.stage === 'code') {
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'pr') {
@@ -1513,6 +1515,16 @@ export class Lifecycle {
     this.sessions.event(id, 'queued', `Queued ${GATE_NAMES[gate]} dropped: ${why}`);
   }
 
+  /**
+   * A learn step ended (or Claude went away during it). One that ran at Merge & Close held the
+   * cleanup back: look at the PR again, which finishes Merge & Close.
+   */
+  afterLearn(id: string, trigger: 'merge' | 'manual'): void {
+    const row = sessionRow(this.db, id);
+    if (trigger !== 'merge' || row?.stage !== 'merge') return;
+    void this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
+  }
+
   /** The PR is merged (here, or on GitHub): finish Merge & Close. Safe to call again after a restart. */
   private async merged(row: SessionRow, st: github.PrStatus): Promise<void> {
     if (row.stage === 'done' || this.closing.has(row.id)) return;
@@ -1536,6 +1548,9 @@ export class Lifecycle {
         await this.recordPrStats(row, st);
       }
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
+      // What the session learned goes to Meko first, while Claude is still there; this runs again
+      // when the learn step ends (afterLearn).
+      if (await this.core.learn.beforeClose(this.sessions.row(row.id))) return;
       await this.cleanup(this.sessions.row(row.id), st);
     } finally {
       this.closing.delete(row.id);

@@ -10,7 +10,7 @@ import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
 import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
-import { all, type Db } from './db.js';
+import { all, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles, writeModFiles } from './claude.js';
 import { PlanLimitsStore } from './limits.js';
@@ -25,6 +25,7 @@ import { defaultMekoTools, type MekoTools } from './mekosettings.js';
 import type { Paths } from './paths.js';
 import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
+import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
 import { openProjectDatapacks, projectRows, pruneSessionEvents, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
@@ -85,6 +86,8 @@ export class Core extends EventEmitter {
   readonly worktrees: WorktreePool;
   readonly sessions: SessionManager;
   readonly lifecycle: Lifecycle;
+  /** The learn step: what sessions learned, saved to their project's datapack. */
+  readonly learn: Learner;
   readonly comments: CommentService;
   readonly questions: DesignQuestionStore;
   readonly prReview: PrReviewService;
@@ -122,7 +125,10 @@ export class Core extends EventEmitter {
     this.capture = new TranscriptCapture(o.mekoCaptureScript ?? null, () => {
       const m = resolveMeko(this.cfg);
       return { MEKO_MCP_URL: m.url, MEKO_API_KEY: m.apiKey };
-    }, this.log);
+    }, this.log, undefined, (ok, ms) => this.record('INSERT INTO meko_capture_runs(at, ok, ms) VALUES (?, ?, ?)', Date.now(), ok ? 1 : 0, ms));
+    // AgentK's own Meko calls, for the usage report (counts and sizes, never their content).
+    this.meko.onCall = (r) => this.record('INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      r.at, r.tool, r.inputChars, r.resultChars, r.ok ? 1 : 0, r.ms, r.tag);
     this.tmux = o.tmux ?? new Tmux(o.config.tmux.socket, o.paths.tmuxConf);
     this.timersOn = o.timers ?? true;
     this.username = safeUsername();
@@ -136,6 +142,7 @@ export class Core extends EventEmitter {
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
     this.lifecycle = new Lifecycle(this);
+    this.learn = new Learner(this);
     this.comments = new CommentService(this);
     this.questions = new DesignQuestionStore(this);
     this.prReview = new PrReviewService(this);
@@ -159,6 +166,16 @@ export class Core extends EventEmitter {
       db: this.db, config: () => this.cfg, version: this.version, meko: () => this.mekoStatus, log: this.log, fetch: o.callHomeFetch,
     });
     this.invites = new InviteService(this, o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey })));
+  }
+
+  /** A usage row that may come after stop() closed the database: dropped then. */
+  private record(sql: string, ...args: (string | number | null)[]): void {
+    if (this.stopped) return;
+    try {
+      run(this.db, sql, ...args);
+    } catch (e) {
+      this.log.warn('recording Meko usage failed', errMsg(e));
+    }
   }
 
   get config(): Config {
@@ -281,6 +298,7 @@ export class Core extends EventEmitter {
     // A tmux service that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs tmux) retries on every reconcile tick.
     await this.tmux.ensureServer().catch((e) => this.log.error('tmux is not available', e));
+    this.learn.recover();
     await this.sessions.recover();
     void this.sessions.refreshDiffStats().catch(() => undefined);
     pruneSessionEvents(this.db);
@@ -312,6 +330,7 @@ export class Core extends EventEmitter {
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
+    this.learn.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again.
     await this.capture.settled(STOP_CAPTURE_MS);

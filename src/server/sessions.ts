@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -927,6 +927,7 @@ export class SessionManager {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
     if (dps.length) lines.push(mekoRecallSystemLine());
+    if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
     return lines.join('\n');
   }
@@ -1131,7 +1132,7 @@ export class SessionManager {
     if (!row || row.desired !== 'running') return { status: 403 };
     switch (route) {
       case '/mod/hello':
-        if (this.mod.hello(row.id)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
+        if (this.mod.hello(row.id, body.protocol)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
         return { status: 204 };
       case '/mod/poll': {
         // The socket is closing (a rebind or a stop), or the mod was turned off in the config: the
@@ -1173,6 +1174,16 @@ export class SessionManager {
         return { status: 204 };
       case '/mod/questions':
         return this.core.lifecycle.questionsFromTool(row, body.questions);
+      case '/mod/learn':
+        return this.core.learn.fromMod(row, body);
+      case '/mod/learn/start':
+        // /agentk_learn in the terminal: the answer is the command's output there.
+        try {
+          await this.core.learn.start(row, 'manual');
+          return { status: 200, body: { text: 'AgentK is saving what this session learned to Meko.' } };
+        } catch (e) {
+          return { status: 200, body: { text: errMsg(e) } };
+        }
     }
     return { status: 404 };
   }
@@ -1218,6 +1229,7 @@ export class SessionManager {
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
+    this.core.learn.interrupted(id);
     this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
     // The turn a queued Open PR waited for is gone with it.
@@ -1607,6 +1619,7 @@ export class SessionManager {
       case 'discard': await this.archive(row, { keepBranch: !!row.branch_reused, force: true }); break;
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
+      case 'learn': await this.core.learn.start(row, 'manual'); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);

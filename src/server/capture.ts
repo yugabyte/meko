@@ -57,6 +57,8 @@ export class TranscriptCapture {
     private env: () => Record<string, string>,
     private log: Logger,
     private timeoutMs = 60000,
+    /** Told how each run went (for the usage report): whether it worked, and how long it took. */
+    private onRun: (ok: boolean, ms: number) => void = () => undefined,
   ) {}
 
   get enabled(): boolean {
@@ -92,14 +94,21 @@ export class TranscriptCapture {
   }
 
   private runOnce(sessionId: string, transcriptPath: string): Promise<void> {
+    const started = Date.now();
     return new Promise((resolve) => {
       const child = execFile(
         process.execPath,
         [this.script!, 'checkpoint'],
         { timeout: this.timeoutMs, env: { ...process.env, ...this.env() } },
         (err, _stdout, stderr) => {
+          const failed = !!err || /failed/i.test(stderr);
           if (err) this.log.warn(`Meko transcript capture failed for ${sessionId}`, errMsg(err));
-          else if (/failed/i.test(stderr)) this.log.warn(`Meko transcript capture for ${sessionId} reported errors`, stderr.trim().split('\n').slice(-3).join(' '));
+          else if (failed) this.log.warn(`Meko transcript capture for ${sessionId} reported errors`, stderr.trim().split('\n').slice(-3).join(' '));
+          try {
+            this.onRun(!failed, Date.now() - started);
+          } catch {
+            /* the record is best-effort */
+          }
           resolve();
         },
       );
