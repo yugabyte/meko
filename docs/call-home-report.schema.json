@@ -20,7 +20,7 @@
         "platform": { "enum": ["aix", "android", "cygwin", "darwin", "freebsd", "haiku", "linux", "netbsd", "openbsd", "sunos", "win32"] },
         "arch": { "enum": ["arm", "arm64", "ia32", "loong64", "mips", "mipsel", "ppc", "ppc64", "riscv64", "s390", "s390x", "x64"] },
         "node": { "$ref": "#/$defs/version" },
-        "tmux": { "$ref": "#/$defs/optionalVersion" },
+        "tmux": { "$ref": "#/$defs/optionalVersion", "description": "Sent only by versions before the session host (no longer by current ones); kept so their reports still validate." },
         "claudeCode": { "$ref": "#/$defs/optionalVersion" },
         "access": { "enum": ["local", "remote"] },
         "service": { "enum": ["systemd", "launchd", "none"] },

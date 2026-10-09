@@ -39,7 +39,7 @@ installer is fetched with `gh`:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
-It offers to install anything that's missing (tmux, git, gh, Claude Code) and to set up Meko for
+It offers to install anything that's missing (git, gh, Claude Code) and to set up Meko for
 Claude Code, asking first. It asks for **local** access (this computer only, no login) or
 **remote** access (other devices too, like your phone, over HTTPS with a login); remote is the
 default over SSH or on a machine with no display. Then it prints the address, or for remote
@@ -115,9 +115,9 @@ your phone can connect.
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
-  in the browser, and sessions are backed by tmux, so they keep running when you disconnect. You
-  can still attach from iTerm: `tmux -L agentk attach -t ak-<project>--<session>` (sessions created
-  before this naming keep `ak-<project>-<session>`).
+  in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
+  running when you disconnect or the server updates. You can still attach from iTerm:
+  `agent-k-local attach <session>` (`Ctrl+\` detaches).
 - **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
   colors makes them light or has them follow the app's theme, remembered per browser.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next
@@ -197,7 +197,8 @@ Design: [`docs/design.md`](docs/design.md).
 | `agent-k-local logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
 | `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
 | `agent-k-local uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
-| `tmux -L agentk attach -t ak-<project>--<session>` | Attach to a session from any terminal |
+| `agent-k-local attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
+| `agent-k-local host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
 
 ## Develop
 

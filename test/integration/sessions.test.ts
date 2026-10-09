@@ -8,7 +8,7 @@ import { PIN_KEEP_MS } from '../../src/server/projects.js';
 import { postHook } from '../hook-client.js';
 import { get, run } from '../../src/server/db.js';
 import { usageOverview } from '../../src/server/usage.js';
-import { sleep } from '../../src/server/tmux.js';
+import { sleep } from '../../src/server/hostclient.js';
 import { transcriptPathFor } from '../../src/server/claude.js';
 import { socketId, startHookServer } from '../../src/server/hooks.js';
 import { MISSED_START_MS } from '../../src/server/sessions.js';
@@ -41,7 +41,7 @@ function captureLog(env: TestEnv): { args: string[]; input: { transcript_path: s
   return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
 }
 
-describe('projects and sessions (real tmux + git, fake claude)', () => {
+describe('projects and sessions (real session host + git, fake claude)', () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv();
@@ -80,12 +80,12 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await expect(env.core.projects.create({ repoPath: env.repo, name: ' demo ', datapack: { mode: 'existing', id: 'dp-x', name: 'x' } }))
       .rejects.toThrow(/already has a project named "Demo"/);
 
-    // The same session name in both projects gets separate branches, worktrees and tmux sessions.
+    // The same session name in both projects gets separate branches, worktrees and panes.
     const a = await env.core.sessions.create(first.id, { name: 'Fix it', prompt: 'hi', kind: 'quick' });
     const b = await env.core.sessions.create(second.id, { name: 'Fix it', prompt: 'hi', kind: 'quick' });
     expect([a.branch, b.branch]).toEqual(['ak/fix-it', 'ak/fix-it-2']);
     expect(a.worktreePath).not.toBe(b.worktreePath);
-    expect(a.tmuxName).not.toBe(b.tmuxName);
+    expect(a.paneName).not.toBe(b.paneName);
     await waitFor(() => env.core.sessions.get(b.id).status, (st) => st === 'idle', 10000, 'second project session');
     // Each session has its own agent id and pin, for its own project's datapack.
     const [rowA, rowB] = [env.core.sessions.row(a.id), env.core.sessions.row(b.id)];
@@ -100,7 +100,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(existsSync(a.worktreePath)).toBe(true);
     expect(env.core.sessions.ownsWorktree(env.core.sessions.row(a.id))).toBe(false);
     expect(existsSync(b.worktreePath)).toBe(true);
-    expect((await env.core.tmux.panes()).has(b.tmuxName)).toBe(true);
+    expect((await env.core.host.panes()).has(b.paneName)).toBe(true);
     expect(env.core.sessions.get(b.id).status).toBe('idle');
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).toContain('ak/fix-it-2');
     expect((await env.core.projects.repos()).repos[0].projects).toEqual([{ id: 'demo-repo-release-tooling', name: 'Release tooling' }]);
@@ -157,8 +157,8 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     await env.core.sessions.action(s.id, 'archive');
     expect(captureLog(env).length).toBeGreaterThan(capturedBeforeArchive); // final capture before Claude is stopped
-    const panes = await env.core.tmux.panes();
-    expect(panes.has(s.tmuxName)).toBe(false);
+    const panes = await env.core.host.panes();
+    expect(panes.has(s.paneName)).toBe(false);
     // The clean worktree waits for the next session, detached so the branch is free.
     expect(existsSync(s.worktreePath)).toBe(true);
     expect(detached(s.worktreePath)).toBe(true);
@@ -185,14 +185,14 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
   });
 
-  it('renames a session, and its Meko conversation, but keeps its branch, worktree, tmux session and Meko agent id', async () => {
+  it('renames a session, and its Meko conversation, but keeps its branch, worktree, pane and Meko agent id', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Old name', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const agentId = sessionAgentId(env.core.sessions.row(s.id));
 
     const renamed = env.core.sessions.rename(s.id, { name: '  New\n  name ' });
-    expect(renamed).toMatchObject({ name: 'New name', branch: s.branch, worktreePath: s.worktreePath, tmuxName: s.tmuxName });
+    expect(renamed).toMatchObject({ name: 'New name', branch: s.branch, worktreePath: s.worktreePath, paneName: s.paneName });
     expect(env.core.state().projects[0].sessions[0].name).toBe('New name');
     expect(env.core.sessions.row(s.id).meko_agent_id).toBe(agentId);
     expect((await env.core.projects.home(p.id)).activity.find((a) => a.kind === 'renamed')).toMatchObject({ text: 'Renamed from "Old name" to "New name"' });
@@ -256,7 +256,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(argv[argv.length - 1]).toMatch(/search Meko for earlier designs, decisions and gotchas about this task/);
 
     // A resumed session starts without it.
-    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await env.core.host.submit(s.paneName, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -363,7 +363,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
       status: 409, message: "This session's worktree has 1 uncommitted file. Ask AgentK to commit, or Discard the session to throw the changes away.",
     });
     expect(env.core.sessions.get(s.id).desired).toBe('running');
-    expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(true);
+    expect((await env.core.host.panes()).has(s.paneName)).toBe(true);
 
     const g = (...a: string[]) => execFileSync('git', a, { cwd: s.worktreePath, stdio: 'ignore' });
     g('add', 'draft.txt');
@@ -386,7 +386,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: true, uncommittedFiles: 1, unpushedCommits: 1 });
 
     await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
-    expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
+    expect((await env.core.host.panes()).has(s.paneName)).toBe(false);
     // The changes are gone; the worktree itself waits, clean and detached, for the next session.
     expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(false);
     expect(detached(s.worktreePath)).toBe(true);
@@ -798,7 +798,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Exit test', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
-    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await env.core.host.submit(s.paneName, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -810,7 +810,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(last.args).toEqual(expect.arrayContaining(['--resume', s.claudeSessionId]));
   });
 
-  it('recovers after tmux dies: auto-continues mid-turn sessions, with a 15 minute guard', async () => {
+  it('recovers after the session host dies: auto-continues mid-turn sessions, with a 15 minute guard', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Crash test', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
@@ -818,7 +818,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     // Simulate a host crash in the middle of a turn.
     let launches = argvLog(env).length;
     run(env.core.db, "UPDATE sessions SET status = 'working' WHERE id = ?", s.id);
-    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.killHost();
     await env.core.sessions.reconcile();
     let after = env.core.sessions.get(s.id);
     expect(after.recoveredAt).not.toBeNull();
@@ -832,7 +832,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     // A second crash right away: resumed, but not auto-continued.
     launches = argvLog(env).length;
     run(env.core.db, "UPDATE sessions SET status = 'working' WHERE id = ?", s.id);
-    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.killHost();
     await env.core.sessions.reconcile();
     after = env.core.sessions.get(s.id);
     expect(after.status).toBe('recovered');
@@ -864,7 +864,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     };
     const s = await env.core.sessions.create(p.id, { name: 'Late', prompt: 'hi', kind: 'quick' });
     await discarding;
-    expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
+    expect((await env.core.host.panes()).has(s.paneName)).toBe(false);
     expect(env.core.sessions.ownsWorktree(env.core.sessions.row(s.id))).toBe(false);
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).not.toContain('ak/late');
     expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'archived', status: 'archived' });
@@ -875,41 +875,41 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
       return 'conv-2';
     };
     await expect(env.core.sessions.create(p.id, { name: 'Gone', prompt: 'hi', kind: 'quick' })).rejects.toThrow(/archived while it was starting/);
-    expect((await env.core.tmux.panes()).has('ak-demo-repo--gone')).toBe(false);
+    expect((await env.core.host.panes()).has('ak-demo-repo--gone')).toBe(false);
     expect(env.core.sessions.row('demo-repo--gone').status).toBe('archived');
   });
 
-  it('keeps the tmux sessions of two projects on one repo apart', async () => {
+  it('keeps the panes of two projects on one repo apart', async () => {
     const first = await newProject();
     const second = await env.core.projects.create({ repoPath: env.repo, name: 'X', datapack: { mode: 'create', name: 'agent-k-local/test/x' } });
     expect(second.id).toBe('demo-repo-x');
-    // "demo-repo" + "x-fix" and "demo-repo-x" + "fix" used to share the tmux name ak-demo-repo-x-fix.
+    // "demo-repo" + "x-fix" and "demo-repo-x" + "fix" used to share the pane name ak-demo-repo-x-fix.
     const a = await env.core.sessions.create(first.id, { name: 'X fix', prompt: 'hi', kind: 'quick' });
     const b = await env.core.sessions.create(second.id, { name: 'Fix', prompt: 'hi', kind: 'quick' });
-    expect([a.tmuxName, b.tmuxName]).toEqual(['ak-demo-repo--x-fix', 'ak-demo-repo-x--fix']);
+    expect([a.paneName, b.paneName]).toEqual(['ak-demo-repo--x-fix', 'ak-demo-repo-x--fix']);
     await waitFor(() => [env.core.sessions.get(a.id).status, env.core.sessions.get(b.id).status], (st) => st.every((x) => x === 'idle'), 10000, 'both sessions');
-    const panes = await env.core.tmux.panes();
-    expect([panes.get(a.tmuxName)?.dead, panes.get(b.tmuxName)?.dead]).toEqual([false, false]);
+    const panes = await env.core.host.panes();
+    expect([panes.get(a.paneName)?.dead, panes.get(b.paneName)?.dead]).toEqual([false, false]);
 
     // A name some other session (such as one from before this naming) holds is never reused.
     await env.core.sessions.action(a.id, 'archive');
     run(env.core.db, 'UPDATE sessions SET tmux_name = ? WHERE id = ?', 'ak-demo-repo-x--dup', a.id);
     const c = await env.core.sessions.create(second.id, { name: 'Dup', prompt: 'hi', kind: 'quick' });
-    expect(c.tmuxName).toBe('ak-demo-repo-x--dup-2');
+    expect(c.paneName).toBe('ak-demo-repo-x--dup-2');
   });
 
-  it('never relaunches over a live Claude, and skips a reconcile tick when tmux fails', async () => {
+  it('never relaunches over a live Claude, and skips a reconcile tick when the host fails', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Live', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
     const launches = argvLog(env).length;
     await expect(env.core.sessions.launch(env.core.sessions.row(s.id), { resume: true, prompt: null })).rejects.toThrow(/already running/);
-    const panes = env.core.tmux.panes.bind(env.core.tmux);
-    env.core.tmux.panes = async () => {
-      throw new Error('tmux hiccup');
+    const panes = env.core.host.panes.bind(env.core.host);
+    env.core.host.panes = async () => {
+      throw new Error('host hiccup');
     };
     await expect(env.core.sessions.reconcile()).rejects.toThrow(/hiccup/);
-    env.core.tmux.panes = panes;
+    env.core.host.panes = panes;
     await env.core.sessions.reconcile();
     expect(argvLog(env)).toHaveLength(launches);
     expect(env.core.sessions.get(s.id).status).toBe('idle');
@@ -923,7 +923,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const history = [now - 40 * 60 * 1000, now - 20 * 60 * 1000];
     run(env.core.db, "UPDATE sessions SET status = 'working', auto_continue_at = ? WHERE id = ?", JSON.stringify(history), s.id);
     const launches = argvLog(env).length;
-    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.killHost();
     await env.core.sessions.reconcile();
     const after = env.core.sessions.get(s.id);
     expect(after.status).toBe('needs_input');
@@ -939,10 +939,10 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Clear me', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
-    await env.core.tmux.submit(s.tmuxName, '/clear');
+    await env.core.host.submit(s.paneName, '/clear');
     const moved = await waitFor(() => env.core.sessions.row(s.id).claude_session_id, (id) => id !== s.claudeSessionId, 10000, 'new session id');
     expect(env.core.sessions.get(s.id).status).toBe('idle'); // /clear's SessionEnd isn't an exit
-    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await env.core.host.submit(s.paneName, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -968,7 +968,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Trust me', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
     writeFileSync(join(env.fakeDir, 'trust-prompt'), '');
-    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.killHost();
     await env.core.sessions.reconcile();
     expect(env.core.sessions.get(s.id).status).toBe('recovered');
     await waitFor(async () => {
@@ -976,7 +976,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
       return env.core.sessions.get(s.id);
     }, (x) => x.status === 'needs_input' && /trust this folder/.test(x.statusDetail ?? ''), 15000, 'trust prompt noticed');
     rmSync(join(env.fakeDir, 'trust-prompt'));
-    await env.core.tmux.sendKeys(s.tmuxName, 'Enter');
+    await env.core.host.sendKeys(s.paneName, 'Enter');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'answered');
   });
 
@@ -988,7 +988,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     // The worktree is gone and can't be restored (as when the remote is unreachable).
     run(env.core.db, 'UPDATE sessions SET repo_path = ? WHERE id = ?', join(env.home, 'gone'), s.id);
     rmSync(s.worktreePath, { recursive: true, force: true });
-    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.killHost();
     await env.core.sessions.reconcile();
     expect(tries).toHaveBeenCalledTimes(1);
     expect(env.core.sessions.get(s.id).status).toBe('exited');
@@ -1003,7 +1003,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Branchless', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
     const tries = vi.spyOn(env.core.sessions, 'recoverOne');
-    execFileSync('tmux', ['-L', env.socket, 'kill-server']);
+    await env.killHost();
     execFileSync('git', ['worktree', 'remove', '--force', s.worktreePath], { cwd: env.repo });
     execFileSync('git', ['branch', '-D', s.branch], { cwd: env.repo, stdio: 'ignore' });
     await env.core.sessions.reconcile();
@@ -1033,7 +1033,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     // Gone (say, cleaned up by hand): resuming pins it again.
     rmSync(sessionPinFile(row));
-    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await env.core.host.submit(s.paneName, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -1055,7 +1055,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(env.meko.calls.find((c) => c.name === 'ensureConversation')?.args[0]).toBe(legacyAgentId(p.id));
 
     // Launched again, it gets its own.
-    await env.core.tmux.submit(s.tmuxName, 'exit');
+    await env.core.host.submit(s.paneName, 'exit');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id).status;
@@ -1099,7 +1099,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(existsSync(join(kept.worktreePath, 'draft.txt'))).toBe(true);
     expect(existsSync(join(dirty.worktreePath, 'draft.txt'))).toBe(true);
     expect(existsSync(clean.worktreePath)).toBe(false);
-    expect((await env.core.tmux.panes()).has(dirty.tmuxName)).toBe(false);
+    expect((await env.core.host.panes()).has(dirty.paneName)).toBe(false);
   });
 
   it("reports plan limits from the status line and still prints the user's own status line", async () => {

@@ -22,7 +22,7 @@ import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import {
-  EDIT_TOOLS, modDirPath, shq, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
+  EDIT_TOOLS, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
 } from './claude.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
 import { DESIGN_READY } from './lifecycle.js';
@@ -31,7 +31,7 @@ import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
   type MergeInfo, type SessionRow, type SessionRuntime,
 } from './store.js';
-import { sleep, tmuxName, type PaneInfo } from './tmux.js';
+import { paneName, sleep, type PaneInfo } from './hostclient.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 
@@ -126,7 +126,7 @@ const SETTLE_MS = 60000;
 const RECOVERY_BACKOFF_MS = 5 * 60 * 1000;
 /**
  * Session variables the launcher clears when it doesn't set them, so a value inherited from
- * tmux's environment or the user's profile can't leak in. MEKO_CHECKPOINT_INTERVAL is only
+ * the session host's environment or the user's profile can't leak in. MEKO_CHECKPOINT_INTERVAL is only
  * set with capture off; inherited with capture on, it would silently turn capture off.
  */
 const SESSION_ENV_UNSET = ['MEKO_CHECKPOINT_INTERVAL'];
@@ -504,7 +504,7 @@ export class SessionManager {
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
                       pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, tmuxName(projectId, slug),
+        id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
@@ -679,7 +679,7 @@ export class SessionManager {
     for (let i = 1; ; i++) {
       const slug = i === 1 ? base : `${base}-${i}`;
       const taken =
-        get(this.db, 'SELECT 1 AS x FROM sessions WHERE (project_id = ? AND slug = ?) OR tmux_name = ?', projectId, slug, tmuxName(projectId, slug)) ||
+        get(this.db, 'SELECT 1 AS x FROM sessions WHERE (project_id = ? AND slug = ?) OR tmux_name = ?', projectId, slug, paneName(projectId, slug)) ||
         (prefix !== null && (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${prefix}${slug}`)));
       if (!taken) return slug;
     }
@@ -991,7 +991,7 @@ export class SessionManager {
   }
 
   /**
-   * Starts (or restarts) Claude in the session's tmux session. Callers mark the session as
+   * Starts (or restarts) Claude in the session's pane in the session host. Callers mark the session as
    * creating or launching for the whole start (see `starting()`).
    */
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null }): Promise<void> {
@@ -1019,19 +1019,17 @@ export class SessionManager {
       env: this.env(row, !!mod),
       unsetEnv: SESSION_ENV_UNSET,
     });
-    const command = `exec sh ${shq(script)}`;
-    const pane = (await this.core.tmux.panes()).get(row.tmux_name);
+    const pane = (await this.core.host.panes()).get(row.tmux_name);
     // Archived (or its project deleted) while it was starting: Claude must not start behind its back.
     if (sessionRow(this.db, row.id)?.desired !== 'running') throw new HttpError(409, 'This session was archived while it was starting.');
-    // Never replace a live Claude: respawn-pane -k would end it (or start this one twice).
+    // Never replace a live Claude (the host refuses to as well).
     if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
     this.awaitingStart.add(row.id);
     // A new Claude process: the last one's mod and measurements are gone with it.
     this.forgetClaude(row.id);
     this.contextFill.delete(row.id);
     try {
-      if (pane) await this.core.tmux.respawn(row.tmux_name, row.worktree_path, command);
-      else await this.core.tmux.newSession(row.tmux_name, row.worktree_path, command);
+      await this.core.host.spawn(row.tmux_name, row.worktree_path, ['/bin/sh', script]);
     } catch (e) {
       this.awaitingStart.delete(row.id);
       throw e;
@@ -1078,7 +1076,7 @@ export class SessionManager {
           return;
         }
       } else {
-        await this.core.tmux.submit(r.tmux_name, text);
+        await this.core.host.submit(r.tmux_name, text);
       }
       this.setStatus(id, 'working');
     });
@@ -1412,13 +1410,15 @@ export class SessionManager {
       void this.captureTranscript(r.id); // catches up on turns from before this server version
     }
     this.backfillUsage();
+    // Sessions may still run in tmux (an install moving off it): starting them here would run them twice.
+    if (!this.core.tmuxMoved) return;
     let panes: Map<string, PaneInfo>;
     try {
-      await this.core.tmux.ensureServer();
-      panes = await this.core.tmux.panes();
+      await this.core.host.ensureServer();
+      panes = await this.core.host.panes();
     } catch (e) {
       // Without a reliable pane list, relaunching could start Claude twice; reconcile tries again.
-      this.core.log.error('recovery skipped: tmux is not answering', e);
+      this.core.log.error('recovery skipped: the session host is not answering', e);
       return;
     }
     for (const row of sessionRows(this.db)) {
@@ -1469,16 +1469,17 @@ export class SessionManager {
     }
   }
 
-  /** Periodic check: dead panes become `exited`; missing panes (tmux died) are recovered. */
+  /** Periodic check: dead panes become `exited`; missing panes (the host died) are recovered. */
   async reconcile(): Promise<void> {
-    if (!(await this.core.tmux.serverRunning())) {
-      this.core.log.warn('tmux server is gone; recovering sessions');
+    if (!this.core.tmuxMoved) return;
+    if (!(await this.core.host.serverRunning())) {
+      this.core.log.warn('the session host is gone; recovering sessions');
       await this.recover();
       return;
     }
-    // Throws when tmux fails for any reason but "no server": this tick is skipped rather than
+    // Throws when the host fails for any reason but "no host": this tick is skipped rather than
     // every session looking lost.
-    const panes = await this.core.tmux.panes();
+    const panes = await this.core.host.panes();
     for (const row of sessionRows(this.db)) {
       if (!this.recoverable(row)) continue;
       const pane = panes.get(row.tmux_name);
@@ -1490,7 +1491,7 @@ export class SessionManager {
       } else if (!pane.dead && (row.status === 'starting' || this.awaitingStart.has(row.id)) && !trustShown && Date.now() - (row.last_event_at ?? 0) > 4000) {
         if (this.followTranscript(row)) continue;
         // Claude fires no hooks until the folder-trust dialog is answered (new, resumed or recovered).
-        const screen = await this.core.tmux.capture(row.tmux_name).catch(() => '');
+        const screen = await this.core.host.capture(row.tmux_name).catch(() => '');
         if (TRUST_PROMPT_RE.test(screen)) {
           const repo = sessionRepo(this.db, row);
           if (repo) await this.trustRepo(repo); // so the next session skips it
@@ -1565,7 +1566,7 @@ export class SessionManager {
   }
 
   /**
-   * Relaunches a session whose tmux pane is gone (host reboot, tmux crash).
+   * Relaunches a session whose pane is gone (a reboot, the session host restarted or crashed).
    * A session that was mid-turn gets a continue prompt, at most once per
    * 15 minutes; after two recoveries in an hour it waits for the user instead.
    */
@@ -1692,7 +1693,7 @@ export class SessionManager {
   }
 
   /**
-   * Renames a session. Only its name changes: the branch, worktree, tmux session and Meko agent id
+   * Renames a session. Only its name changes: the branch, worktree, pane and Meko agent id
    * were named once, at the start. The running Claude sees the new name in its system prompt at its
    * next launch, and the session's Meko conversation is retitled in the background.
    */
@@ -1736,10 +1737,10 @@ export class SessionManager {
   private async resumeNow(row: SessionRow): Promise<void> {
     // Claude's SessionEnd hook fires just before its process ends, so give a pane
     // that is still shutting down a moment before calling it "already running".
-    let pane = (await this.core.tmux.panes()).get(row.tmux_name);
+    let pane = (await this.core.host.panes()).get(row.tmux_name);
     for (let i = 0; pane && !pane.dead && row.status === 'exited' && i < 30; i++) {
       await sleep(100);
-      pane = (await this.core.tmux.panes()).get(row.tmux_name);
+      pane = (await this.core.host.panes()).get(row.tmux_name);
     }
     if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
     const p = projectRow(this.db, row.project_id);
@@ -1826,7 +1827,7 @@ export class SessionManager {
       run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', discarding = 0, archived_at = COALESCE(?, archived_at) WHERE id = ?`,
         wasArchived ? null : Date.now(), row.id);
       await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
-      await this.core.tmux.kill(row.tmux_name);
+      await this.core.host.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
       const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
       const worktree: WorktreeFate = repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
@@ -1930,7 +1931,7 @@ export class SessionManager {
         this.stopping.add(row.id);
         run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = ? WHERE id = ?`, Date.now(), row.id);
         await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
-        await this.core.tmux.kill(row.tmux_name);
+        await this.core.host.kill(row.tmux_name);
         this.stopping.delete(row.id);
         this.awaitingStart.delete(row.id);
         this.recoverRetryAt.delete(row.id);

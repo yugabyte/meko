@@ -23,8 +23,15 @@ export interface Paths {
   /** Per-session launcher scripts and the Claude hooks settings file. */
   run: string;
   hookSock: string;
+  /** The session host's socket (host/host.ts): every Claude runs in a pty the host holds. */
+  hostSock: string;
+  /** What the running session host wrote about itself: pid, version, app dir, protocol. */
+  hostState: string;
+  /** The running session host's lease on this home (instance.ts): one host per home. */
+  hostLock: string;
   /** The running server's lease on this home (instance.ts): one server per home, even across hosts. */
   lock: string;
+  /** Written by versions that ran sessions in tmux; removed once a session host has taken over. */
   tmuxConf: string;
   logs: string;
   /** Written by the updater before a restart; read by the bin wrapper for rollback. */
@@ -45,7 +52,10 @@ export function getPaths(home: string = akHome()): Paths {
     designs: join(home, 'designs'),
     pastes: join(home, 'pastes'),
     run: join(home, 'run'),
-    hookSock: hookSockPath(home),
+    hookSock: sockPath(home, 'hook'),
+    hostSock: sockPath(home, 'host'),
+    hostState: join(home, 'run', 'host.json'),
+    hostLock: join(home, 'host.lock'),
     lock: join(home, 'server.lock'),
     tmuxConf: join(home, 'tmux.conf'),
     logs: join(home, 'logs'),
@@ -60,12 +70,13 @@ export function getPaths(home: string = akHome()): Paths {
  * fits both. When the home path is too long, use a short socket in a private
  * per-user directory under the temp dir.
  */
-function hookSockPath(home: string): string {
-  const preferred = join(home, 'hook.sock');
+function sockPath(home: string, name: 'hook' | 'host'): string {
+  const preferred = join(home, `${name}.sock`);
   if (Buffer.byteLength(preferred) <= 100) return preferred;
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   const tag = createHash('sha256').update(home).digest('hex').slice(0, 12);
-  return join(tmpdir(), `agent-k-local-${uid}`, `${tag}.sock`);
+  // The hook socket kept its old name here, so a running Claude's hooks still find it.
+  return join(tmpdir(), `agent-k-local-${uid}`, name === 'hook' ? `${tag}.sock` : `${tag}-host.sock`);
 }
 
 export function expandHome(p: string): string {
