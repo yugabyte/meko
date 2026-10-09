@@ -221,9 +221,20 @@ are no yb-amp-specific expected files, because the compute runs with
 defines for this suite (it lets `CREATE TABLESPACE` through, which
 `test_setup`, `tablespace` and `stats` need).
 
+`--contrib <name>` (repeatable) then runs a contrib module's own upstream
+regression tests, the ones its Makefile lists in `REGRESS` (not its `ISOLATION`
+specs), against the same compute. CI passes `--all-contrib`: every module in
+`postgres.mk`'s `CONTRIB_MODULES`, so shipping a new one also tests it.
+`pg_stat_statements`' suite lists the server-wide view, so before it runs the
+script stops tracking the compute's own background queries (compute_ctl's
+activity monitor, pgsentinel's sampler) and restarts the endpoint. A by-design
+divergence is a patch under [`contrib_regress_patches/`](contrib_regress_patches/),
+applied to a copy of the module: `test_decoding.patch` hides the walproposer's own
+replication slot from that suite's slot listings.
+
 In CI it runs as a second step of the integration job (`amp-pr-build.yml`), right
-after `run.sh`, as `pg_regress.sh --no-build`: it builds nothing and runs on what
-that step produced, taking the profile from whatever is in `target/`.
+after `run.sh`, as `pg_regress.sh --no-build --all-contrib`: it builds nothing and
+runs on what that step produced, taking the profile from whatever is in `target/`.
 
 > Defaults to **debug**, matching `run.sh`, so running both does not recompile
 > the workspace twice. `--release` is faster over 230 tests but builds release
@@ -315,6 +326,7 @@ test/integration/
   compute/                 this suite (the `integration_tests` crate)
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
     pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
+    contrib_regress_patches/  amp patches to contrib suites for pg_regress.sh --contrib
     extensions.sh          driver: externalized extension smoke + --regress suite on local deploy (see above)
     ext_regress_expected/  amp expected-output variants for extensions.sh --regress
     clean.sh               teardown (kill procs, drop DB, wipe run dir)

@@ -35,6 +35,10 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 
+# Patch context lines carry trailing whitespace that must match
+[*.patch]
+trim_trailing_whitespace = false
+
 # Makefiles require tabs
 [Makefile]
 indent_style = tab

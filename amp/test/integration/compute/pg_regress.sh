@@ -47,10 +47,15 @@ Options:
                       but more PS->YB connection-pool pressure.
   --schedule <file>   schedule to run (default: the vendored parallel_schedule).
                       Relative to the regress dir or an absolute path.
-  --contrib <name>    also run contrib/<name>'s own upstream suite against the
-                      same cluster, after the schedule above. Repeatable. The
+  --contrib <name>    also run contrib/<name>'s own upstream REGRESS tests (not
+                      its ISOLATION specs) against the same cluster, after the
+                      schedule above. Repeatable. The
                       module must be one postgres.mk installs, or its .so is
-                      absent and every test fails to load it.
+                      absent and every test fails to load it. A by-design amp
+                      divergence is patched in from
+                      contrib_regress_patches/<name>.patch.
+  --all-contrib       --contrib for each of postgres.mk's CONTRIB_MODULES. What CI
+                      runs.
   --keep              leave the cluster + regression DB up for postmortem
                       (default: tear down on exit).
   -h, --help          show this help
@@ -74,6 +79,7 @@ PROFILE=debug
 JOBS=8
 SCHEDULE=parallel_schedule
 CONTRIB=()
+ALL_CONTRIB=0
 KEEP=0
 NO_BUILD=0
 while [[ $# -gt 0 ]]; do
@@ -84,12 +90,21 @@ while [[ $# -gt 0 ]]; do
         -j|--jobs) JOBS="$2"; shift ;;
         --schedule) SCHEDULE="$2"; shift ;;
         --contrib) CONTRIB+=("$2"); shift ;;
+        --all-contrib) ALL_CONTRIB=1 ;;
         --keep) KEEP=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown arg: $1" >&2; usage; exit 2 ;;
     esac
     shift
 done
+
+if [[ $ALL_CONTRIB == 1 ]]; then
+    _mods="$(env -u PROFILE make -s -C "$REPO" -f postgres.mk \
+        --eval='amp-print-%: ; @echo $($*)' amp-print-CONTRIB_MODULES)"
+    [[ -n $_mods ]] || { echo "--all-contrib: postgres.mk has no CONTRIB_MODULES" >&2; exit 1; }
+    for _m in $_mods; do CONTRIB+=("$_m"); done
+    unset _mods _m
+fi
 
 REG="$REPO/compute/vendor/postgres-v18/src/test/regress"
 
@@ -301,9 +316,14 @@ BID=$(yb cluster create pgregress --pg-version 18 | grep -oE '[0-9a-f]{8}-[0-9a-
 # pg_stat_statements turns the default `auto` on, and EXPLAIN VERBOSE would then
 # print a "Query Identifier" line the goldens don't have. `regress` keeps the ids
 # (pg_stat_statements needs them) and suppresses that line.
+# max_prepared_transactions as pg_regress's own temp instance has it; the other two
+# as test_decoding's logical.conf, plus a slot for the walproposer's own.
 yb endpoint create main --branch-id "$BID" \
     --pg-setting yb_amp.regress_test_mode=on \
     --pg-setting compute_query_id=regress \
+    --pg-setting max_prepared_transactions=2 \
+    --pg-setting max_replication_slots=5 \
+    --pg-setting logical_decoding_work_mem=64kB \
     --pg-version 18 --pg-port "$COMPUTE"
 yb endpoint start main --start-timeout 600s
 
@@ -325,13 +345,44 @@ status=0
     --host=127.0.0.1 --port="$COMPUTE" --user=cloud_admin --dbname=regression \
     --max-connections="$JOBS" || status=$?
 
+# pg_stat_statements' suite lists the server-wide view, so untrack the compute's own
+# background sessions (compute_ctl's monitor, pgsentinel), both cloud_admin in
+# `postgres`. They connect at startup, hence the restart.
+if [[ " ${CONTRIB[*]-} " == *" pg_stat_statements "* ]]; then
+    echo ">>> untracking cloud_admin in postgres for pg_stat_statements; restarting the endpoint"
+    "$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d postgres -v ON_ERROR_STOP=1 \
+        -c "ALTER ROLE cloud_admin IN DATABASE postgres SET pg_stat_statements.track = 'none'" >/dev/null
+    yb endpoint stop main
+    yb endpoint start main --start-timeout 600s
+fi
+
 # Contrib modules keep their suite next to their source (sql/ + expected/) with
 # no schedule, so drive pg_regress at the test list from their Makefile's REGRESS.
 # Same endpoint as above — the cluster bring-up is the expensive part.
+ran=" "
 for mod in ${CONTRIB[@]+"${CONTRIB[@]}"}; do
+    [[ $ran != *" $mod "* ]] || continue
+    ran+="$mod "
     src="$REPO/compute/vendor/postgres-v18/contrib/$mod"
     [[ -d "$src/sql" ]] || { echo ">>> $mod has no sql/ suite" >&2; status=1; continue; }
-    tests="$(sed -n 's/^REGRESS[[:space:]]*=[[:space:]]*//p' "$src/Makefile" | head -1)"
+    mkdir -p "$OUTDIR/contrib-$mod"
+
+    # A by-design amp divergence is a patch, contrib_regress_patches/<mod>.patch,
+    # applied to a copy of the suite so the submodule stays clean. --forward: an
+    # already-applied patch is an error, where --batch alone would reverse it.
+    patchf="$REPO/test/integration/compute/contrib_regress_patches/$mod.patch"
+    if [[ -f $patchf ]]; then
+        cp -r "$src" "$OUTDIR/contrib-$mod/src"
+        src="$OUTDIR/contrib-$mod/src"
+        patch --batch --forward --fuzz=0 -s -p1 -d "$src" < "$patchf" || {
+            echo ">>> $mod.patch no longer applies to contrib/$mod" >&2; status=1; continue; }
+    fi
+
+    # Read REGRESS through make, from the patched copy: btree_gin and others
+    # continue it over lines.
+    tests="$(env -u PROFILE make -s -C "$src" USE_PGXS=1 PG_CONFIG="$PG_CONFIG" \
+        --eval='amp-print-%: ; @echo $($*)' amp-print-REGRESS)" || {
+        echo ">>> cannot read REGRESS from contrib/$mod" >&2; status=1; continue; }
     [[ -n "$tests" ]] || tests="$mod"
 
     # Add a peer superuser role for the run, as extensions.sh does for
@@ -350,12 +401,13 @@ for mod in ${CONTRIB[@]+"${CONTRIB[@]}"}; do
         -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$osuser') THEN EXECUTE format('CREATE ROLE %I SUPERUSER LOGIN', '$osuser'); END IF; END \$\$" >/dev/null
 
     echo ">>> running pg_regress (contrib/$mod: $tests) against 127.0.0.1:$COMPUTE as $osuser"
-    mkdir -p "$OUTDIR/contrib-$mod"
-    "$PGINST/lib/postgresql/pgxs/src/test/regress/pg_regress" \
+    # From the module dir, as `make installcheck` runs it: pg_trgm's \copy
+    # paths are relative to it.
+    ( cd "$src" && "$PGINST/lib/postgresql/pgxs/src/test/regress/pg_regress" \
         --inputdir="$src" --outputdir="$OUTDIR/contrib-$mod" --bindir="$PGINST/bin" \
         --dlpath="$PKGLIB" \
         --host=127.0.0.1 --port="$COMPUTE" --user="$osuser" --dbname="contrib_$mod" \
-        $tests || {
+        $tests ) || {
         status=$?
         # The results dir survives teardown but the workflow's artifact upload
         # globs *.log, so a diff is unreachable from CI unless printed here —

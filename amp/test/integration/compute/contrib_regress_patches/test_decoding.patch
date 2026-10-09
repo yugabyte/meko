@@ -1,0 +1,132 @@
+Every yb-amp compute holds the walproposer's physical slot, wal_proposer_slot,
+so it shows in each pg_replication_slots listing, with a pid and LSN that vary
+per run. Filter it out of the listings; the decoding output is untouched.
+
+--- a/sql/ddl.sql
++++ b/sql/ddl.sql
+@@ -30,7 +30,7 @@
+     NOT catalog_xmin IS NULL AS catalog_xmin_set,
+     xmin IS NULl  AS data_xmin_not_set,
+     pg_wal_lsn_diff(restart_lsn, '0/01000000') > 0 AS some_wal
+-FROM pg_replication_slots;
++FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ 
+ /*
+  * Check that changes are handled correctly when interleaved with ddl
+@@ -441,5 +441,5 @@
+ 
+ /* check that the slot is gone */
+ \x
+-SELECT * FROM pg_replication_slots;
++SELECT * FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ \x
+--- a/expected/ddl.out
++++ b/expected/ddl.out
+@@ -59,7 +59,7 @@
+     NOT catalog_xmin IS NULL AS catalog_xmin_set,
+     xmin IS NULl  AS data_xmin_not_set,
+     pg_wal_lsn_diff(restart_lsn, '0/01000000') > 0 AS some_wal
+-FROM pg_replication_slots;
++FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+     slot_name    |    plugin     | slot_type | active | catalog_xmin_set | data_xmin_not_set | some_wal 
+ -----------------+---------------+-----------+--------+------------------+-------------------+----------
+  regression_slot | test_decoding | logical   | f      | t                | t                 | t
+@@ -851,7 +851,7 @@
+ 
+ /* check that the slot is gone */
+ \x
+-SELECT * FROM pg_replication_slots;
++SELECT * FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ (0 rows)
+ 
+ \x
+--- a/sql/permissions.sql
++++ b/sql/permissions.sql
+@@ -50,15 +50,15 @@
+ 
+ -- all users can see existing slots
+ SET ROLE regress_lr_superuser;
+-SELECT slot_name, plugin FROM pg_replication_slots;
++SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ RESET ROLE;
+ 
+ SET ROLE regress_lr_replication;
+-SELECT slot_name, plugin FROM pg_replication_slots;
++SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ RESET ROLE;
+ 
+ SET ROLE regress_lr_normal;
+-SELECT slot_name, plugin FROM pg_replication_slots;
++SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ RESET ROLE;
+ 
+ -- cleanup
+--- a/expected/permissions.out
++++ b/expected/permissions.out
+@@ -101,7 +101,7 @@
+ RESET ROLE;
+ -- all users can see existing slots
+ SET ROLE regress_lr_superuser;
+-SELECT slot_name, plugin FROM pg_replication_slots;
++SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+     slot_name    |    plugin     
+ -----------------+---------------
+  regression_slot | test_decoding
+@@ -109,7 +109,7 @@
+ 
+ RESET ROLE;
+ SET ROLE regress_lr_replication;
+-SELECT slot_name, plugin FROM pg_replication_slots;
++SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+     slot_name    |    plugin     
+ -----------------+---------------
+  regression_slot | test_decoding
+@@ -117,7 +117,7 @@
+ 
+ RESET ROLE;
+ SET ROLE regress_lr_normal;
+-SELECT slot_name, plugin FROM pg_replication_slots;
++SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+     slot_name    |    plugin     
+ -----------------+---------------
+  regression_slot | test_decoding
+--- a/sql/slot.sql
++++ b/sql/slot.sql
+@@ -145,7 +145,7 @@
+ SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot1', 'copied_slot1_temp', true);
+ 
+ -- Check all copied slots status. Since all slots don't reserve WAL we check only other fields.
+-SELECT slot_name, slot_type, temporary FROM pg_replication_slots;
++SELECT slot_name, slot_type, temporary FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ 
+ -- Cannot copy a physical slot to a logical slot
+ SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot1', 'failed'); -- error
+@@ -184,7 +184,7 @@
+ SELECT 'init' FROM pg_create_logical_replication_slot('failover_true_temp_slot', 'test_decoding', true, false, true);
+ SELECT 'init' FROM pg_create_physical_replication_slot('physical_slot');
+ 
+-SELECT slot_name, slot_type, failover FROM pg_replication_slots;
++SELECT slot_name, slot_type, failover FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+ 
+ SELECT pg_drop_replication_slot('failover_true_slot');
+ SELECT pg_drop_replication_slot('failover_false_slot');
+--- a/expected/slot.out
++++ b/expected/slot.out
+@@ -320,7 +320,7 @@
+ (1 row)
+ 
+ -- Check all copied slots status. Since all slots don't reserve WAL we check only other fields.
+-SELECT slot_name, slot_type, temporary FROM pg_replication_slots;
++SELECT slot_name, slot_type, temporary FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+        slot_name        | slot_type | temporary 
+ ------------------------+-----------+-----------
+  orig_slot1             | physical  | f
+@@ -433,7 +433,7 @@
+  init
+ (1 row)
+ 
+-SELECT slot_name, slot_type, failover FROM pg_replication_slots;
++SELECT slot_name, slot_type, failover FROM pg_replication_slots WHERE slot_name <> 'wal_proposer_slot';
+        slot_name       | slot_type | failover 
+ -----------------------+-----------+----------
+  failover_true_slot    | logical   | t

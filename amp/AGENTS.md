@@ -196,7 +196,9 @@ Code anchors:
   which is stock Postgres behaviour over the `yb_amp` smgr rather than
   amp-specific scenarios. CI runs it as a second step of the integration job, on
   the build `run.sh` just produced — same profile and features, so its own build
-  steps are no-ops.
+  steps are no-ops. CI also passes `--all-contrib`, which then runs the upstream
+  regression tests (`REGRESS`, not `ISOLATION`) of each contrib module
+  `postgres.mk` ships against the same compute.
 
 ## Live dev cluster cheat-sheet
 

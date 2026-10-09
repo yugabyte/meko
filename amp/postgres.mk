@@ -109,26 +109,21 @@ $(BUILD_DIR)/%/config.status:
 # the same thing
 $(foreach pg_version,$(POSTGRES_VERSIONS),postgres-configure-$(pg_version)): postgres-configure-%: FORCE $(BUILD_DIR)/%/config.status
 
-# Compile and install PostgreSQL (and the contrib modules the compute ships).
-# pg_stat_statements is preloaded by default (endpoint chart + yb_amp_local), so an
-# install without it cannot start the postmaster.
+# The contrib modules the compute ships. pg_stat_statements is preloaded by
+# default (endpoint chart + yb_amp_local), so an install without it cannot start
+# the postmaster.
+CONTRIB_MODULES := pg_prewarm pg_buffercache pg_visibility pageinspect pg_trgm \
+	btree_gin amcheck test_decoding pg_stat_statements tsm_system_rows \
+	postgres_fdw dict_int unaccent
+
+# Compile and install PostgreSQL and CONTRIB_MODULES.
 postgres-install-%: postgres-configure-% \
 		  postgres-headers-install-% # to prevent `make install` conflicts with neon's `postgres-headers-install`
 	+@echo "Compiling PostgreSQL $*"
 	$(MAKE) -C $(BUILD_DIR)/$* MAKELEVEL=0 install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_prewarm install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_buffercache install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_visibility install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pageinspect install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_trgm install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/btree_gin install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/amcheck install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/test_decoding install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_stat_statements install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/tsm_system_rows install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/postgres_fdw install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/dict_int install
-	$(MAKE) -C $(BUILD_DIR)/$*/contrib/unaccent install
+	for m in $(CONTRIB_MODULES); do \
+		$(MAKE) -C $(BUILD_DIR)/$*/contrib/$$m install || exit 1; \
+	done
 
 .PHONY: FORCE
 FORCE:

@@ -489,7 +489,7 @@ jobs:
 
       # The upstream PostgreSQL suite (230 tests) against a yb-amp compute — stock
       # Postgres behaviour over the yb_amp smgr, which the scenarios above do not
-      # cover. ~7 min: cluster bring-up plus the suite.
+      # cover. Most of the step is cluster bring-up plus the core suite.
       #
       # --no-build: run on the build the step above produced and touch nothing
       # else — it fails loudly if that step ever stops producing one. Both steps
@@ -500,12 +500,13 @@ jobs:
       # the OS ephemeral floor — above it, an outbound socket can take a port
       # between pg_regress.sh's probe and the bind (INTEGRATION_PORT_BASE is its
       # first candidate, not a hard pin).
-      # --contrib runs each module's own upstream suite against the same cluster
-      # once the core schedule finishes; the bring-up is what costs, not the suite.
+      # --all-contrib runs each shipped contrib module's own upstream regression
+      # tests against the same cluster once the core schedule finishes; the
+      # bring-up is what costs, not the suite.
       - name: pg_regress suite (upstream PostgreSQL + contrib)
         env:
           INTEGRATION_PORT_BASE: "18000"
-        run: test/integration/compute/pg_regress.sh --no-build --contrib postgres_fdw --contrib dict_int --contrib unaccent
+        run: test/integration/compute/pg_regress.sh --no-build --all-contrib
 
       - name: Collect YugabyteDB logs
         if: failure()
