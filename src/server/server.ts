@@ -253,13 +253,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   // ---- sharing (Meko's share API) ----
-  /** Runs a share API call for a datapack one of our projects uses; Meko's errors become HTTP errors (see apiFailure). */
+  /** Throws unless the datapack is in a live project here and AgentK can share. */
   const shareable = (datapackId: string): void => {
     const inUse = get(db, `SELECT 1 AS x FROM project_datapacks d JOIN projects p ON p.id = d.project_id
                            WHERE d.datapack_id = ? AND p.deleted_at IS NULL`, datapackId);
     if (!inUse) throw new HttpError(404, "That datapack isn't in any of your projects.");
     core.invites.requireSharing('share datapacks');
   };
+  /** Runs a share API call for a datapack one of our projects uses; Meko's errors become HTTP errors (see apiFailure). */
   const sharing = async <T>(datapackId: string, fn: () => Promise<T>): Promise<T> => {
     shareable(datapackId);
     try {
@@ -282,7 +283,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const bad = typed.filter((e) => !EMAIL_RE.test(e));
     if (bad.length) {
       throw new HttpError(400, list === undefined ? 'Enter the email address of the person to share with.'
-        : `Not an email: ${bad.map((e) => e || '(blank)').join(', ')}.`);
+        : `Not an email: ${bad.map((e) => e || '(blank)').join(', ')}. Fix or remove ${bad.length === 1 ? 'it' : 'them'}.`);
     }
     const emails = typed.filter((e, i) => typed.findIndex((o) => o.toLowerCase() === e.toLowerCase()) === i);
     if (emails.length > MAX_SHARE_EMAILS) throw new HttpError(400, `Invite at most ${MAX_SHARE_EMAILS} people at a time.`);
@@ -301,8 +302,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       } catch (e) {
         const err = core.invites.apiFailure(e, 'Meko');
         first ??= err;
-        // A refused key fails the rest the same way: don't send them.
-        const rest = e instanceof MekoApiError && e.status === 401 ? emails.slice(i) : [to];
+        // A refused key or an unreachable Meko (status 0, after a timeout of up to 30 s) fails the
+        // rest the same way: don't send them.
+        const rest = e instanceof MekoApiError && (e.status === 401 || e.status === 0) ? emails.slice(i) : [to];
         failed.push(...rest.map((r) => ({ email: r, error: err.message })));
         if (rest.length > 1) break;
       }

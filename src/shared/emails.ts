@@ -1,6 +1,7 @@
 // Email addresses typed or pasted into the Share dialog. Shared by the server and the web UI.
 
-export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** No quotes, brackets or separators either: a stray `<` or a quoted address is a typo to report, not an address. */
+export const EMAIL_RE = /^[^\s@<>"(),;:]+@[^\s@<>"(),;:]+\.[^\s@<>"(),;:]+$/;
 
 /** How many addresses one invite can send to. */
 export const MAX_SHARE_EMAILS = 50;
@@ -26,8 +27,8 @@ export function parseEmails(text: string): { emails: string[]; invalid: string[]
     seen.add(key);
     emails.push(token);
   };
-  // A quoted display name can hold a comma: drop it before splitting.
-  for (const part of text.replace(/"[^"]*"/g, ' ').split(/[,;\r\n]+/)) {
+  // A quoted display name (one followed by `<…>`) can hold a comma: drop it before splitting.
+  for (const part of text.replace(/"[^"]*"(?=\s*<)/g, ' ').split(/[,;\r\n]+/)) {
     const bracketed = [...part.matchAll(/<([^<>]*)>/g)].map((m) => m[1].trim());
     if (!bracketed.length) {
       part.split(/\s+/).forEach(add);
@@ -54,4 +55,17 @@ export function flattenPastedEmails(text: string): string {
     .map((s) => s.trim())
     .filter(Boolean)
     .join(', ');
+}
+
+/**
+ * The field after pasting `flat` over `value`'s selection [start, end), with `, ` added at a join
+ * whose neighbour isn't already a separator, so it stays apart from an address on either side;
+ * `caret` is just after the paste.
+ */
+export function spliceEmails(value: string, start: number, end: number, flat: string): { value: string; caret: number } {
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const join = (c: string) => (c && !/[\s,;]/.test(c) ? ', ' : '');
+  const added = join(before.slice(-1)) + flat + join(after.slice(0, 1));
+  return { value: before + added + after, caret: before.length + added.length };
 }

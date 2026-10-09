@@ -152,7 +152,8 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
       if (c.path.endsWith('/share')) {
         const to = (c.body as { recipient_email: string }).recipient_email;
         const status = refuse[to];
-        if (!status) return { body: { data: { status: 'pending', invite_id: `i-${to}` } } };
+        if (status === 0) throw new Error('connect ECONNREFUSED');
+        if (status === undefined) return { body: { data: { status: 'pending', invite_id: `i-${to}` } } };
         return status === 401
           ? { status, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } }
           : { status, body: { error: { code: 'CONFLICT', message: `an invite for ${to} is already pending` } } };
@@ -201,12 +202,25 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(keyLater.json().invited).toEqual(['l@example.com']);
     expect(keyLater.json().failed.map((f: { email: string }) => f.email)).toEqual(['m@example.com', 'n@example.com']);
     expect(shares().length - sent).toBe(2);
+    // So does an unreachable Meko (each try could wait out a timeout), first or partway through.
+    refuse = { 'o@example.com': 0, 'q@example.com': 0, 'r@example.com': 0 };
+    sent = shares().length;
+    const down = await post({ emails: ['o@example.com', 'q@example.com'], grant: 'viewer' });
+    expect(down.statusCode).toBe(502);
+    expect(down.json().error).toMatch(/Couldn't reach Meko's API at .*: connect ECONNREFUSED/);
+    expect(shares().length - sent).toBe(1);
+    sent = shares().length;
+    const downLater = await post({ emails: ['p@example.com', 'q@example.com', 'r@example.com'], grant: 'viewer' });
+    expect(downLater.statusCode).toBe(200);
+    expect(downLater.json().invited).toEqual(['p@example.com']);
+    expect(downLater.json().failed.map((f: { email: string }) => f.email)).toEqual(['q@example.com', 'r@example.com']);
+    expect(shares().length - sent).toBe(2);
 
     // Checked before anything is sent.
     sent = shares().length;
     const bad = await post({ emails: ['p@example.com', 'nope', ''], grant: 'viewer' });
     expect(bad.statusCode).toBe(400);
-    expect(bad.json().error).toBe('Not an email: nope, (blank).');
+    expect(bad.json().error).toBe('Not an email: nope, (blank). Fix or remove them.');
     const many = Array.from({ length: 51 }, (_, i) => `u${i}@example.com`);
     expect((await post({ emails: many, grant: 'viewer' })).json().error).toBe('Invite at most 50 people at a time.');
     expect((await post({ emails: [], grant: 'viewer' })).statusCode).toBe(400);

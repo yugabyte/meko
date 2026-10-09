@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flattenPastedEmails, parseEmails } from '../../src/shared/emails.js';
+import { flattenPastedEmails, parseEmails, spliceEmails } from '../../src/shared/emails.js';
 
 describe('parseEmails', () => {
   it('splits on commas, semicolons and whitespace', () => {
@@ -29,6 +29,26 @@ describe('parseEmails', () => {
     expect(parseEmails('Jane <jane@x.com> a@x.com <nope>')).toEqual({ emails: ['jane@x.com', 'a@x.com'], invalid: ['nope'] });
     // Without brackets, a name is just words that aren't addresses.
     expect(parseEmails('Jane Doe').invalid).toEqual(['Jane', 'Doe']);
+  });
+
+  it('reports a quoted address or a stray bracket instead of dropping or sending it', () => {
+    expect(parseEmails('"jane@x.com", b@x.com')).toEqual({ emails: ['b@x.com'], invalid: ['"jane@x.com"'] });
+    expect(parseEmails('Jane <jane@x.com')).toEqual({ emails: [], invalid: ['Jane', '<jane@x.com'] });
+    expect(parseEmails('jane@x.com>')).toEqual({ emails: [], invalid: ['jane@x.com>'] });
+  });
+});
+
+describe('spliceEmails', () => {
+  it('keeps a paste apart from an address on either side', () => {
+    expect(spliceEmails('jane@x.com', 10, 10, 'bob@x.com, c@x.com')).toEqual({ value: 'jane@x.com, bob@x.com, c@x.com', caret: 30 });
+    expect(spliceEmails('jane@x.com', 0, 0, 'bob@x.com')).toEqual({ value: 'bob@x.com, jane@x.com', caret: 11 });
+    expect(spliceEmails('a@x.com, z@x.com', 9, 9, 'm@x.com')).toEqual({ value: 'a@x.com, m@x.com, z@x.com', caret: 18 });
+  });
+
+  it('adds nothing next to a separator or at an empty edge, and replaces the selection', () => {
+    expect(spliceEmails('', 0, 0, 'a@x.com')).toEqual({ value: 'a@x.com', caret: 7 });
+    expect(spliceEmails('a@x.com;', 8, 8, 'b@x.com')).toEqual({ value: 'a@x.com;b@x.com', caret: 15 });
+    expect(spliceEmails('a@x.com old@x.com', 8, 17, 'b@x.com')).toEqual({ value: 'a@x.com b@x.com', caret: 15 });
   });
 });
 

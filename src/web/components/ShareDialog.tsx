@@ -2,7 +2,7 @@ import { useEffect, useState, type ClipboardEvent, type FormEvent } from 'react'
 import type { DatapackPeople, DatapackRef, ShareGrant } from '../../shared/types';
 import { SHARE_GRANTS } from '../../shared/types';
 import { isProjectDatapack } from '../../shared/datapacks';
-import { MAX_SHARE_EMAILS, flattenPastedEmails, parseEmails } from '../../shared/emails';
+import { MAX_SHARE_EMAILS, flattenPastedEmails, parseEmails, spliceEmails } from '../../shared/emails';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
 import { Busy, Dialog, ErrorText } from './common';
@@ -16,8 +16,8 @@ const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
 
 /**
  * Invite people to a project's dedicated datapack through Meko's share API, the reviewers of the
- * project's open PRs first. The Emails field takes a list; addresses that already have access or
- * an invite are left out.
+ * project's open PRs first. The Emails field takes a list; addresses the lists shown already have
+ * (as members or pending invites) are left out.
  */
 export function ShareDialog({
   projectId,
@@ -75,10 +75,12 @@ export function ShareDialog({
     }
   };
 
-  const listed = parseEmails(email).emails.length;
+  // From the lists shown: while they load, or when they couldn't be read, nothing is left out.
   const withAccess = new Set(
     [...(people?.members ?? []).map((m) => m.email), ...(people?.invites ?? []).map((i) => i.email)].map((a) => a.toLowerCase()),
   );
+  /** How many the Invite button would send. */
+  const toSend = parseEmails(email).emails.filter((a) => !withAccess.has(a.toLowerCase())).length;
 
   const invite = (e: FormEvent) => {
     e.preventDefault();
@@ -88,6 +90,10 @@ export function ShareDialog({
     setSkipped(null);
     if (invalid.length) {
       setError(`Not an email: ${invalid.join(', ')}. Fix or remove ${invalid.length === 1 ? 'it' : 'them'}, then press Invite.`);
+      return;
+    }
+    if (!emails.length) {
+      setError('Enter an email address.');
       return;
     }
     const have = emails.filter((a) => withAccess.has(a.toLowerCase()));
@@ -120,11 +126,10 @@ export function ShareDialog({
     if (!/[\r\n\t]/.test(text)) return;
     e.preventDefault();
     const el = e.currentTarget;
-    const flat = flattenPastedEmails(text);
     const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? start;
-    setEmail(el.value.slice(0, start) + flat + el.value.slice(end));
-    requestAnimationFrame(() => el.setSelectionRange(start + flat.length, start + flat.length));
+    const next = spliceEmails(el.value, start, el.selectionEnd ?? start, flattenPastedEmails(text));
+    setEmail(next.value);
+    requestAnimationFrame(() => el.setSelectionRange(next.caret, next.caret));
   };
 
   const shareReviewer = (login: string, to: string, g: ShareGrant) =>
@@ -183,7 +188,7 @@ export function ShareDialog({
         <div className="share-actions">
           {sent && <span className="ok-text">{sent}</span>}
           <button className="btn primary" type="submit" disabled={!email.trim() || busy !== null}>
-            {busy === 'invite' ? <Busy label="Inviting" /> : listed > 1 ? `Invite ${listed}` : 'Invite'}
+            {busy === 'invite' ? <Busy label="Inviting" /> : toSend > 1 ? `Invite ${toSend}` : 'Invite'}
           </button>
         </div>
         {skipped && <p className="hint">{skipped}</p>}
