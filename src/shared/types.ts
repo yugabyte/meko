@@ -1559,7 +1559,7 @@ export type TermServerMessage =
 //        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
 //        none is queued, or while the merge is being requested). learn starts the learn step: 409 without a
-//        dedicated datapack or Meko, while Claude is busy or exited, or while one runs)
+//        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
 //        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
 //        502 when the move was made but its prompt couldn't be sent)

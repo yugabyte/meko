@@ -39,7 +39,7 @@ describe('the Claude Code sessions launch with', () => {
     expect(state.changes).toBe(2);
   });
 
-  it('is too old for the mod below 2.1.286, and unknown when its version can\'t be read', async () => {
+  it('is too old for the mod below 2.1.287, and unknown when its version can\'t be read', async () => {
     const old = setup('2.1.280');
     expect(await old.cc.supportsMod()).toBe(false);
     expect(old.cc.status()).toMatchObject({ version: '2.1.280', supportsMod: false });

@@ -1516,12 +1516,13 @@ export class Lifecycle {
   }
 
   /**
-   * A learn step ended (or Claude went away during it). One that ran at Merge & Close held the
-   * cleanup back: look at the PR again, which finishes Merge & Close.
+   * A learn step ended (or Claude went away during it). In Merge & Close it held the cleanup back,
+   * whether it ran for the merge or was Save learnings already running: look at the PR again, which
+   * finishes Merge & Close.
    */
-  afterLearn(id: string, trigger: 'merge' | 'manual'): void {
+  afterLearn(id: string): void {
     const row = sessionRow(this.db, id);
-    if (trigger !== 'merge' || row?.stage !== 'merge') return;
+    if (row?.stage !== 'merge') return;
     void this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
   }
 

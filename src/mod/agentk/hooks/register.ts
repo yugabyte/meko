@@ -15,9 +15,10 @@
 //                 meanwhile, and whichever answers first wins
 //   /mod/ask/done the call has its answer (or ended): the server stops offering the questions
 //   /mod/questions the design's questions from the design_questions tool the mod gives Claude
-//   /mod/learn    a learn step's results: what forking the session found (step "facts"), answered
-//                 with the duplicate check to run on a small model, then that check's answer (step
-//                 "decisions"), answered with what AgentK saved to Meko
+//   /mod/learn    a learn step's results, answered at once: what forking the session found (step
+//                 "facts"), then the duplicate check's answer (step "decisions"). Each part of the
+//                 step (`learn` on a poll answer) and the line saying what AgentK saved (`toast`)
+//                 come on polls
 //   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
@@ -28,7 +29,10 @@
 // module, typed by the declarations Claude Code writes into .claude-plugin/types when it loads the mod.
 import type { EngineInterface, ModelForkResult, Register } from 'claude-code'
 
-/** The protocol version the server checks in /mod/hello: 2 runs learn steps. */
+/**
+ * The protocol the server checks, on /mod/hello and on every poll: 2 runs learn steps. AgentK loads
+ * the mod only into Claude Code that has what they use (MIN_MOD_CLAUDE in src/server/claude.ts).
+ */
 const PROTOCOL = 2
 /** How long to wait after a poll failed (the server restarting, say) before the next one. */
 const RETRY_MS = 3000
@@ -50,10 +54,12 @@ interface Prompt {
   text: string
 }
 
-/** A learn step from the server: fork the session with `prompt`. */
+/** A part of a learn step from the server: fork the session with `prompt` (extract), or run it on `model` (check). */
 interface LearnJob {
   id: string
+  kind: 'extract' | 'check'
   prompt: string
+  model?: string
 }
 
 // Per load: a reload of the module evaluates it again, runs register() and session.start again,
@@ -195,47 +201,42 @@ function modelReply(r: ModelForkResult | null): Record<string, unknown> {
   return { reason: r.reason, usage: 'usage' in r ? r.usage : null }
 }
 
-/** Posts a learn step's result; the server's answer, or null when it gave up on the step. */
-async function learnPost($: EngineInterface, l: Link, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-  const r = await post($, l, '/mod/learn', body).catch(() => null)
-  return r?.status === 200 ? json(r.text) : null
-}
-
 /**
- * A learn step: asks the session's own context (a fork: no tools, nothing added to the transcript,
- * the prefix served from the prompt cache) what it learned, then runs the duplicate check AgentK
- * builds from what Meko already has on a small model, and shows what AgentK saved. Started from a
- * timer by poll, so it outlives the poll's dispatch; every failure goes to the server as a reason.
+ * A part of a learn step. `extract` asks the session's own context (a fork: no tools, nothing added
+ * to the transcript, the prefix served from the prompt cache) what it learned; `check` runs the
+ * duplicate check AgentK built from what Meko already has on a small model. Either way the reply
+ * goes to /mod/learn, which answers at once. Started from a timer by poll, so it outlives the
+ * poll's dispatch; each call is guarded on its own, so a failure reaches AgentK as a reason at once.
  */
 async function learn($: EngineInterface, l: Link, job: LearnJob): Promise<void> {
-  // Each call is guarded on its own: a Claude Code without one of them throws, and AgentK should
-  // hear why at once rather than wait for the step to time out.
-  let model: string | null = null
-  let fork: ModelForkResult | null = null
+  let reply: ModelForkResult | null = null
+  let model: string | null = job.model ?? null
+  if (job.kind === 'check') {
+    try {
+      reply = await $.model.complete({ model: job.model ?? 'haiku', prompt: job.prompt, maxTokens: DEDUP_MAX_TOKENS })
+    } catch {
+      // reported as the call failing
+    }
+    await post($, l, '/mod/learn', { id: job.id, step: 'decisions', model, ...modelReply(reply) }).catch(() => undefined)
+    return
+  }
   try {
     model = await $.session.model()
   } catch {
     // the model only labels the usage
   }
   try {
-    fork = await $.model.fork({ prompt: job.prompt })
+    reply = await $.model.fork({ prompt: job.prompt })
   } catch {
     // reported as the call failing
   }
-  const found = await learnPost($, l, { id: job.id, step: 'facts', model, ...modelReply(fork) })
-  if (!found) return
-  let done = found.done
-  if (typeof found.prompt === 'string' && typeof found.model === 'string') {
-    let check: ModelForkResult | null = null
-    try {
-      check = await $.model.complete({ model: found.model, prompt: found.prompt, maxTokens: DEDUP_MAX_TOKENS })
-    } catch {
-      // reported as the call failing
-    }
-    done = (await learnPost($, l, { id: job.id, step: 'decisions', model: found.model, ...modelReply(check) }))?.done
-  }
+  await post($, l, '/mod/learn', { id: job.id, step: 'facts', model, ...modelReply(reply) }).catch(() => undefined)
+}
+
+/** Shows a line from AgentK (what a learn step saved). */
+function toast($: EngineInterface, text: string): void {
   try {
-    if (typeof done === 'string') $.ui.toast(done)
+    $.ui.toast(text)
   } catch {
     // the timeline has it too
   }
@@ -253,11 +254,13 @@ async function registerLearnCommand($: EngineInterface): Promise<void> {
 async function poll($: EngineInterface, l: Link): Promise<void> {
   let wait = 1
   try {
-    const r = await post($, l, '/mod/poll', { held: [...held] })
+    // The protocol too: a server restarted since hello hears it here.
+    const r = await post($, l, '/mod/poll', { held: [...held], protocol: PROTOCOL })
     if (r.status === 200) {
-      const answer = JSON.parse(r.text) as { prompts?: Prompt[]; learn?: LearnJob }
+      const answer = JSON.parse(r.text) as { prompts?: Prompt[]; learn?: LearnJob; toast?: unknown }
       const job = answer.learn
       if (typeof job?.id === 'string' && typeof job.prompt === 'string') $.clock.after(1, () => void learn($, l, job).catch(() => undefined))
+      if (typeof answer.toast === 'string') toast($, answer.toast)
       await take($, l, answer.prompts ?? [])
     } else if (r.status !== 204) wait = RETRY_MS
   } catch {

@@ -373,11 +373,14 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     for (const [f, text] of Object.entries(files)) writeFileSync(join(env.fakeDir, f), text);
   }
 
-  /** What the fake mod posted for learn steps, and what AgentK answered. */
-  const modLearn = (): { post: { step: string }; status: number; answer: Record<string, unknown> | null }[] => {
-    const f = join(env.fakeDir, 'mod-learn.jsonl');
-    return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
-  };
+  /** What the fake mod got and posted for learn steps, and AgentK's answer to each post. */
+  const modLearn = (): { job: { kind: string; prompt: string; model?: string }; post: { step: string }; status: number }[] => jsonl('mod-learn.jsonl');
+  /** The lines AgentK had the fake mod show. */
+  const toasts = (): string[] => jsonl('mod-toasts.jsonl');
+  function jsonl<T>(file: string): T[] {
+    const f = join(env.fakeDir, file);
+    return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as T) : [];
+  }
 
   it('saves what the session learned through the mod before closing a merged session', async () => {
     fakeFiles({ mod: '', 'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"update","id":"m1","text":"Decision: polls run in one queue per session."}]}' });
@@ -416,10 +419,65 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     // The fork's and the check's tokens count as the session's.
     expect(all(env.core.db, "SELECT agent, model, output FROM usage_messages WHERE session_id = ? AND agent = 'agentk:learn' ORDER BY message_id DESC", s.id))
       .toEqual([{ agent: 'agentk:learn', model: 'claude-fake-1', output: 200 }, { agent: 'agentk:learn', model: 'claude-haiku-4-5-20251001', output: 200 }]);
-    expect(modLearn().map((x) => x.answer)).toEqual([
-      { prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-4-5-20251001' },
-      { done: 'Saved 1 memory and corrected 1 in team/demo.' },
-    ]);
+    // Each part reached the mod on a poll, and each post was answered at once.
+    expect(modLearn().map((x) => [x.job.kind, x.post.step, x.status])).toEqual([['extract', 'facts', 204], ['check', 'decisions', 204]]);
+    expect(modLearn()[1].job).toMatchObject({ prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-4-5-20251001' });
+    await waitFor(toasts, (t) => t.length === 1, 5000, 'the toast');
+    expect(toasts()).toEqual(['Saved 1 memory and corrected 1 in team/demo.']);
+  });
+
+  it("keeps a local path out of a corrected memory's new text", async () => {
+    fakeFiles({ mod: '' });
+    const s = await inReview('Corrected');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const worktree = env.core.sessions.row(s.id).worktree_path;
+    fakeFiles({
+      'learn-facts': '{"facts":[{"kind":"gotcha","component":"x.ts","text":"The cache is per process."}]}',
+      'learn-decisions': JSON.stringify({ decisions: [{ n: 1, action: 'update', id: 'm1', text: `The cache in ${worktree} is per process.` }] }),
+    });
+    Object.assign(env.meko, { similar: async () => [{ id: 'm1', text: 'The cache is shared.', agentId: 'claude_code:other-1' }] });
+    await env.core.sessions.action(s.id, 'learn');
+    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+    expect(env.meko.calls.find((c) => c.name === 'updateMemory')?.args.slice(0, 2)).toEqual(['m1', 'Gotcha (x.ts): The cache is per process.']);
+  });
+
+  it('lets a Save learnings step that finishes during Merge & Close stand for it', async () => {
+    fakeFiles({ mod: '', 'learn-delay': '1500' });
+    const s = await inReview('Saved first');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    await env.core.sessions.action(s.id, 'learn');
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    expect(env.core.sessions.row(s.id).stage).toBe('merge'); // waiting for the step
+    await closed(s.id);
+    expect(learns(s.id)).toEqual([{ trigger: 'manual', path: 'mod', outcome: 'done' }]);
+    expect(shipped()).toBe(1);
+  });
+
+  it("records a fork's usage that comes after AgentK gave up on its step", async () => {
+    fakeFiles({ mod: '', 'learn-silent': '' });
+    const s = await inReview('Late');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    env.core.learn.timeoutMs = 200;
+    await env.core.sessions.action(s.id, 'learn');
+    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 5000, 'the timeout');
+    const { id } = dbGet<{ id: string }>(env.core.db, 'SELECT id FROM meko_learns WHERE session_id = ?', s.id)!;
+    const usage = { input_tokens: 3, output_tokens: 400, cache_read_input_tokens: 90000, cache_creation_input_tokens: 0 };
+    const late = env.core.learn.fromMod(env.core.sessions.row(s.id), { id, step: 'facts', model: 'claude-fake-1', text: '{"facts":[]}', usage });
+    expect(late).toEqual({ status: 410 });
+    expect(dbGet(env.core.db, "SELECT output, cache_read FROM usage_messages WHERE message_id = ?", `learn:${id}:extract`)).toEqual({ output: 400, cache_read: 90000 });
+    // Another session's post for it is refused, and records nothing.
+    expect(env.core.learn.fromMod({ ...env.core.sessions.row(s.id), id: 'other' }, { id, step: 'decisions', usage })).toEqual({ status: 410 });
+  });
+
+  it("says to resume Claude when asked to save learnings after it exited", async () => {
+    const s = await inReview('Exited');
+    await env.core.tmux.submit(env.core.sessions.row(s.id).tmux_name, 'exit');
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).status;
+    }, (st) => st === 'exited', 10000, 'exited');
+    await expect(env.core.sessions.action(s.id, 'learn')).rejects.toThrow(/Claude has exited in this session\. Resume it, then try again\./);
   });
 
   it("closes a merged session when the mod never finishes its learn step", async () => {

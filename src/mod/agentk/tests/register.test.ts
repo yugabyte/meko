@@ -312,12 +312,12 @@ test('tells AgentK which prompts Claude still holds, until each starts its turn'
   await $.session.start(START)
   await clock.advance(5)
   const polls = () => calls.filter((c) => c.path === '/mod/poll').map((c) => c.body)
-  expect(polls()[0]).toEqual({ held: [] })
-  expect(polls().at(-1)).toEqual({ held: ['p1'] })
+  expect(polls()[0]).toEqual({ held: [], protocol: 2 })
+  expect(polls().at(-1)).toEqual({ held: ['p1'], protocol: 2 })
   start()
   await clock.advance(5)
   expect(calls.filter((c) => c.path === '/mod/held').map((c) => c.body)).toEqual([{ held: [] }])
-  expect(polls().at(-1)).toEqual({ held: [] })
+  expect(polls().at(-1)).toEqual({ held: [], protocol: 2 })
 })
 
 const USAGE = { input_tokens: 12, output_tokens: 300, cache_read_input_tokens: 150000, cache_creation_input_tokens: 0 }
@@ -344,43 +344,44 @@ function models(on: On, fork: unknown, check: unknown) {
   return asked
 }
 
-test('runs a learn step: forks the session, runs the duplicate check AgentK builds, and shows what was saved', async ($, on) => {
+test('runs a learn step: forks the session, runs the duplicate check AgentK hands over, and shows what was saved', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
-  let polled = false
-  const calls = routes(on, (path, body) => {
-    if (path === '/mod/poll' && !polled) {
-      polled = true
-      return answer(200, { prompts: [], learn: { id: 'L1', prompt: 'What did you learn?' } })
+  // AgentK's side: each part of the step, then the line saying what it saved, comes on a poll.
+  const answers = [
+    { prompts: [], learn: { id: 'L1', kind: 'extract', prompt: 'What did you learn?' } },
+    { prompts: [], learn: { id: 'L1', kind: 'check', prompt: 'Check these.', model: 'claude-haiku-4-5-20251001' } },
+    { prompts: [], toast: 'Saved 1 memory and corrected 0 in team/demo.' },
+  ]
+  const calls = routes(on, (path) => {
+    if (path === '/mod/poll') {
+      const next = answers.shift()
+      return next ? answer(200, next) : answer(204)
     }
-    if (path === '/mod/learn' && body.step === 'facts') return answer(200, { prompt: 'Check these.', model: 'claude-haiku-4-5-20251001' })
-    if (path === '/mod/learn' && body.step === 'decisions') return answer(200, { done: 'Saved 1 memory and corrected 0 in team/demo.' })
-    return answer(204)
+    return answer(204) // /mod/learn answers at once
   })
   const asked = models(on, { isAnswered: true, text: '{"facts":[]}', usage: USAGE }, { isAnswered: true, text: '{"decisions":[]}', usage: USAGE })
   engine(on)
   await $.session.start(START)
-  await clock.advance(5)
+  await clock.advance(10)
   expect(asked.fork).toEqual(['What did you learn?'])
   expect(asked.check).toEqual([{ model: 'claude-haiku-4-5-20251001', prompt: 'Check these.' }])
-  const learn = calls.filter((c) => c.path === '/mod/learn').map((c) => c.body)
-  expect(learn).toEqual([
+  expect(calls.filter((c) => c.path === '/mod/learn').map((c) => c.body)).toEqual([
     { id: 'L1', step: 'facts', model: 'claude-opus-5-5', text: '{"facts":[]}', usage: USAGE },
     { id: 'L1', step: 'decisions', model: 'claude-haiku-4-5-20251001', text: '{"decisions":[]}', usage: USAGE },
   ])
   expect(asked.toasts).toEqual(['Saved 1 memory and corrected 0 in team/demo.'])
 })
 
-test('tells AgentK why a fork gave nothing, and stops when AgentK says it is done', async ($, on) => {
+test('tells AgentK why a fork gave nothing', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
   let polled = false
   const calls = routes(on, (path) => {
     if (path === '/mod/poll' && !polled) {
       polled = true
-      return answer(200, { prompts: [], learn: { id: 'L2', prompt: 'What did you learn?' } })
+      return answer(200, { prompts: [], learn: { id: 'L2', kind: 'extract', prompt: 'What did you learn?' } })
     }
-    if (path === '/mod/learn') return answer(200, { done: "AgentK couldn't save what this session learned: nothing-to-fork." })
     return answer(204)
   })
   const asked = models(on, { isAnswered: false, reason: 'nothing-to-fork' }, null)
@@ -390,7 +391,6 @@ test('tells AgentK why a fork gave nothing, and stops when AgentK says it is don
   expect(calls.filter((c) => c.path === '/mod/learn').map((c) => c.body))
     .toEqual([{ id: 'L2', step: 'facts', model: 'claude-opus-5-5', reason: 'nothing-to-fork', usage: null }])
   expect(asked.check).toEqual([])
-  expect(asked.toasts).toEqual(["AgentK couldn't save what this session learned: nothing-to-fork."])
 })
 
 test('gives the terminal /agentk_learn, which asks AgentK to start a learn step', async ($, on) => {
@@ -417,9 +417,8 @@ test("tells AgentK at once when this Claude Code can't fork the session", async 
   const calls = routes(on, (path) => {
     if (path === '/mod/poll' && !polled) {
       polled = true
-      return answer(200, { prompts: [], learn: { id: 'L3', prompt: 'What did you learn?' } })
+      return answer(200, { prompts: [], learn: { id: 'L3', kind: 'extract', prompt: 'What did you learn?' } })
     }
-    if (path === '/mod/learn') return answer(200, { done: "AgentK couldn't save what this session learned: the model call failed." })
     return answer(204)
   })
   on('session.model', () => ({ value: 'claude-opus-5-5' }))

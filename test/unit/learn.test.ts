@@ -33,13 +33,19 @@ describe('the learn step', () => {
     expect(firstJson('')).toBeNull();
   });
 
-  it('leaves out facts that name this machine', () => {
+  it('leaves out text that names this machine', () => {
     const paths = ['/home/alice', '/home/alice/.agent-k-local', '/work/wt-3'];
-    expect(machineSpecific({ kind: 'gotcha', component: '', text: 'The worktree at /work/wt-3 has a stale lock.' }, paths)).toBe(true);
-    expect(machineSpecific({ kind: 'gotcha', component: '/home/alice/notes', text: 'x' }, paths)).toBe(true);
-    expect(machineSpecific({ kind: 'gotcha', component: 'src/server/db.ts', text: 'Migrations are append-only.' }, paths)).toBe(false);
+    expect(machineSpecific('The worktree at /work/wt-3 has a stale lock.', paths)).toBe(true);
+    expect(machineSpecific('/home/alice/notes x', paths)).toBe(true);
+    expect(machineSpecific('src/server/db.ts Migrations are append-only.', paths)).toBe(false);
     // An empty or root path names nothing.
-    expect(machineSpecific({ kind: 'gotcha', component: '', text: 'a/b' }, ['', '/'])).toBe(false);
+    expect(machineSpecific('a/b', ['', '/'])).toBe(false);
+  });
+
+  it("reads a kind named like an object's own property as how it works", () => {
+    const facts = parseFacts(JSON.stringify({ facts: ['constructor', 'toString', '__proto__', 'hasOwnProperty'].map((kind) => ({ kind, text: 'x' })) }));
+    expect(facts?.map((f) => f.kind)).toEqual(['how-it-works', 'how-it-works', 'how-it-works', 'how-it-works']);
+    expect(memoryText({ kind: 'constructor', component: '', text: 'x' })).toBe('How it works: x');
   });
 
   it('saves each fact with its kind and component first', () => {

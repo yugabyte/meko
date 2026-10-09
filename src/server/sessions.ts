@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -836,7 +836,7 @@ export class SessionManager {
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
     const p = projectRow(this.db, row.project_id);
     const settings = p ? parseSettings(p.settings_json) : null;
-    const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name)].filter(Boolean) : [];
+    const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name), mekoLearnLine(name, row.id)].filter(Boolean) : [];
     // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the
     // fork. Its base is the remote's branch the review fetched, since the local one may follow a
     // fork, lag behind, or not exist.
@@ -1139,6 +1139,7 @@ export class SessionManager {
         // mod waits a few seconds and polls again. Sessions keep the mod until they're relaunched.
         if (!this.mod.accepting || !this.core.config.claude.mod) return { status: 503 };
         if (body.held !== undefined) this.heldReported(row.id, body.held);
+        this.mod.reportProtocol(row.id, body.protocol);
         const answer = await this.mod.poll(row.id, signal);
         return answer ? { status: 200, body: answer } : { status: 204 };
       }

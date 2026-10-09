@@ -275,14 +275,28 @@ describe('the link to AgentK\'s mod', () => {
     expect(links.learnReady('new')).toBe(false); // gone stale
   });
 
-  it('hands a learn step to a held poll, once, beside the prompts', async () => {
+  it("knows a mod's protocol from its polls, after a server restart lost its hello", () => {
+    void links.poll('s1'); // the running mod's next poll: no hello since the restart
+    expect(links.learnReady('s1')).toBe(false);
+    links.reportProtocol('s1', LEARN_PROTOCOL);
+    expect(links.learnReady('s1')).toBe(true);
+    links.reportProtocol('s1', undefined); // a mod from before learn steps names none: nothing changes
+    expect(links.learnReady('s1')).toBe(true);
+  });
+
+  it('hands a part of a learn step and a line to show to a held poll, once, beside the prompts', async () => {
     links.hello('s1', LEARN_PROTOCOL);
     const held = links.poll('s1');
-    links.queueLearn('s1', { id: 'L1', prompt: 'What did you learn?' });
-    expect(await held).toEqual({ prompts: [], learn: { id: 'L1', prompt: 'What did you learn?' } });
-    links.queueLearn('s1', { id: 'L2', prompt: 'Again?' });
+    links.queueLearn('s1', { id: 'L1', kind: 'extract', prompt: 'What did you learn?' });
+    expect(await held).toEqual({ prompts: [], learn: { id: 'L1', kind: 'extract', prompt: 'What did you learn?' } });
+    links.queueLearn('s1', { id: 'L1', kind: 'check', prompt: 'Check these.', model: 'haiku' });
+    links.queueToast('s1', 'Saved 2 memories.');
     const send = links.send('s1', 'Next prompt.');
-    expect(await links.poll('s1')).toEqual({ prompts: [{ id: expect.any(String), text: 'Next prompt.' }], learn: { id: 'L2', prompt: 'Again?' } });
+    expect(await links.poll('s1')).toEqual({
+      prompts: [{ id: expect.any(String), text: 'Next prompt.' }],
+      learn: { id: 'L1', kind: 'check', prompt: 'Check these.', model: 'haiku' },
+      toast: 'Saved 2 memories.',
+    });
     const next = links.poll('s1');
     vi.advanceTimersByTime(POLL_HOLD_MS);
     expect(await next).toBeNull();

@@ -187,8 +187,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and never a fact that names this machine (home, AgentK's home, worktree, repo path). It
-      never holds Merge & Close past its timeout on the mod path, a failure at any step closes it
-      and lets the close go on, and one runs at a time per session. Its model calls' usage is
+      never holds Merge & Close past its timeout on the mod path (writes included), never holds a
+      hook-socket request while it works with Meko (`/mod/learn` answers at once; what follows goes
+      on a poll), a failure at any step closes it and lets the close go on, and one runs at a time
+      per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless

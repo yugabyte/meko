@@ -7,17 +7,16 @@ import { errMsg } from './log.js';
 import { launchedAgentId, mekoTag, type SimilarMemory } from './meko.js';
 import { LEARN_AGENT } from './mekousage.js';
 import { HttpError } from './projects.js';
+import { SAVING_RULE } from './prompts.js';
 import type { DatapackRef } from '../shared/types.js';
-import { sessionDatapack, sessionRow, type SessionRow } from './store.js';
+import { sessionDatapack, sessionRepo, sessionRow, type SessionRow } from './store.js';
 
 export type LearnTrigger = 'merge' | 'manual';
 export type LearnPath = 'mod' | 'turn' | 'none';
 export type LearnOutcome = 'done' | 'failed' | 'interrupted' | 'skipped';
 
-/** How long a learn step through the mod may take, all steps together, before it's given up. */
+/** How long a learn step through the mod may take, all its parts and writes together, before it's given up. */
 export const LEARN_TIMEOUT_MS = 180_000;
-/** How long a finished step's answer is kept, for a mod that posts the same step again. */
-const DONE_KEEP_MS = 10 * 60 * 1000;
 /** The small model that checks the facts against what Meko already has. */
 export const DEDUP_MODEL = 'claude-haiku-4-5-20251001';
 /** How many saved memories each fact is checked against. */
@@ -33,8 +32,11 @@ const KINDS: Record<string, string> = {
   measured: 'Measured',
 };
 
-/** What the fork is asked: the facts this session learned, as JSON. The saving rule is in the system prompt it reuses. */
-export const EXTRACT_PROMPT = `Don't call any tools. List what this session learned that passes the saving rule in your system prompt: facts about how the product and repo work, decisions and why, root causes, gotchas, quirks, measured numbers. Leave out anything about this machine, one person's preferences, task or PR status, and what the diff or PR description already says. Each fact must make sense on its own to a teammate who never saw this session; name the component, file or function it's about.
+/**
+ * What the fork is asked: the facts this session learned, as JSON. It states the saving rule in
+ * full: a session launched before the rule was in the system prompt doesn't have it.
+ */
+export const EXTRACT_PROMPT = `Don't call any tools. List what this session learned that is worth keeping for the team working on this product. ${SAVING_RULE} Each fact must make sense on its own to a teammate who never saw this session.
 
 Reply with JSON only, no other text:
 {"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact"}]}
@@ -78,7 +80,7 @@ export function parseFacts(text: string): Fact[] | null {
     const t = typeof f?.text === 'string' ? f.text.trim() : '';
     if (!t) continue;
     out.push({
-      kind: typeof f.kind === 'string' && f.kind in KINDS ? f.kind : 'how-it-works',
+      kind: typeof f.kind === 'string' && Object.hasOwn(KINDS, f.kind) ? f.kind : 'how-it-works',
       component: typeof f.component === 'string' ? f.component.trim().slice(0, 200) : '',
       text: t.slice(0, FACT_CHARS),
     });
@@ -87,17 +89,16 @@ export function parseFacts(text: string): Fact[] | null {
 }
 
 /**
- * Facts that name this machine are left out, whatever the model thought: the home folder, AgentK's
- * own folders, the worktree. The datapack is shared by a team, so these never help anyone else.
+ * Text that names this machine is left out, whatever the model thought: the home folder, AgentK's
+ * own folders, the worktree, the repo. The datapack is shared by a team, so it never helps anyone else.
  */
-export function machineSpecific(f: Fact, paths: string[]): boolean {
-  const s = `${f.component} ${f.text}`;
-  return paths.some((p) => p.length > 1 && s.includes(p));
+export function machineSpecific(text: string, paths: string[]): boolean {
+  return paths.some((p) => p.length > 1 && text.includes(p));
 }
 
 /** The text saved for a fact: its kind and component first, as the saving rule asks for. */
 export function memoryText(f: Fact): string {
-  const label = KINDS[f.kind] ?? 'How it works';
+  const label = Object.hasOwn(KINDS, f.kind) ? KINDS[f.kind] : 'How it works';
   if (f.text.toLowerCase().startsWith(label.toLowerCase())) return f.text;
   return `${label}${f.component ? ` (${f.component})` : ''}: ${f.text}`;
 }
@@ -165,13 +166,15 @@ interface LearnRow {
 interface Job {
   id: string;
   sessionId: string;
-  trigger: LearnTrigger;
   datapack: DatapackRef;
-  step: 'extract' | 'dedup';
+  /** extract: waiting for the fork; search: AgentK looks up what Meko has; check: waiting for the duplicate check; save: AgentK writes. */
+  step: 'extract' | 'search' | 'check' | 'save';
   facts: Fact[];
   similar: SimilarMemory[][];
-  /** The duplicate check's prompt, once built (a repeated facts post gets it again). */
-  dedup: string | null;
+  saves: number;
+  updates: number;
+  skips: number;
+  /** Fails the step when its time is up, wherever it is (writes included). */
   timer: NodeJS.Timeout;
 }
 
@@ -179,14 +182,13 @@ interface Job {
  * The learn step: what a session learned about the product and repo goes to the project's
  * dedicated datapack. Through AgentK's mod when it's live: the mod forks the session's own context
  * for the facts, AgentK finds the saved memories most like each, the mod asks a small model which
- * are new, known or corrections, and AgentK writes them. Without the mod, a typed `learn` prompt
- * asks Claude to save them itself. Runs at Merge & Close (before cleanup), and when the user asks
- * (the session menu, or /agentk_learn in the terminal).
+ * are new, known or corrections, and AgentK writes them. Every part of it reaches the mod on a poll
+ * and its reply comes back on /mod/learn, which answers at once, so no request is held while Meko
+ * works. Without the mod, a typed `learn` prompt asks Claude to save them itself. Runs at Merge &
+ * Close (before cleanup), and when the user asks (the session menu, or /agentk_learn in the terminal).
  */
 export class Learner {
   private jobs = new Map<string, Job>();
-  /** Answers of finished mod steps, by job id, for a repeated post. */
-  private done = new Map<string, { sessionId: string; reply: ModReply; at: number }>();
   /** How long a step through the mod may take (tests shorten it). */
   timeoutMs = LEARN_TIMEOUT_MS;
 
@@ -213,9 +215,15 @@ export class Learner {
     return dp?.role === 'dedicated' ? dp : null;
   }
 
-  /** Claude is there and between turns, so a learn step can run in it now. */
-  private idle(row: SessionRow): boolean {
-    return row.desired === 'running' && (row.status === 'idle' || row.status === 'recovered') && !this.core.sessions.runtime(row.id).busy;
+  /** Why a learn step can't run in the session's Claude now, or null when it can. */
+  private notNow(row: SessionRow): string | null {
+    if (row.desired !== 'running') return 'This session is archived.';
+    if (row.status === 'exited') return 'Claude has exited in this session. Resume it, then try again.';
+    if (row.status === 'starting') return 'Claude is still starting. Try again in a moment.';
+    if ((row.status !== 'idle' && row.status !== 'recovered') || this.core.sessions.runtime(row.id).busy) {
+      return 'Claude is busy. Try again when its turn has ended.';
+    }
+    return null;
   }
 
   /**
@@ -225,9 +233,9 @@ export class Learner {
   async start(row: SessionRow, trigger: LearnTrigger): Promise<LearnPath> {
     const dp = this.datapack(row);
     if (!dp) throw new HttpError(409, "This session's project has no Meko datapack to save to.");
-    if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     if (this.openRow(row.id)) throw new HttpError(409, 'AgentK is already saving what this session learned.');
-    if (!this.idle(row)) throw new HttpError(409, 'Claude is busy. Try again when its turn has ended.');
+    const why = this.notNow(row);
+    if (why) throw new HttpError(409, why);
     if (this.core.config.claude.mod && this.core.sessions.mod.learnReady(row.id)) {
       this.startMod(row, trigger, dp);
       return 'mod';
@@ -238,14 +246,17 @@ export class Learner {
 
   /**
    * At Merge & Close, before cleanup: true while the cleanup should wait for a learn step (one ran
-   * now, or is still running); `merged` runs again once it ends (Lifecycle.afterLearn). A session
-   * that can't run one (Claude isn't there or is busy) is recorded as skipped.
+   * now, or one is still running, Save learnings' too); `merged` runs again once it ends
+   * (Lifecycle.afterLearn). One that finished since the session got to Merge & Close covers it. A
+   * session that can't run one (Claude isn't there or is busy) is recorded as skipped.
    */
   async beforeClose(row: SessionRow): Promise<boolean> {
     if (this.openRow(row.id)) return true;
     if (get(this.db, "SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND trigger = 'merge'", row.id)) return false;
     if (!this.datapack(row)) return false;
-    if (!this.idle(row)) {
+    const merging = get<{ at: number | null }>(this.db, "SELECT MAX(entered_at) AS at FROM session_stages WHERE session_id = ? AND stage = 'merge'", row.id)?.at;
+    if (merging && get(this.db, "SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND outcome = 'done' AND ended_at >= ?", row.id, merging)) return false;
+    if (this.notNow(row)) {
       this.insert(row.id, randomUUID(), 'merge', 'none', 'skipped');
       return false;
     }
@@ -272,90 +283,96 @@ export class Learner {
     this.insert(row.id, id, trigger, 'mod', null);
     const timer = setTimeout(() => {
       const job = this.jobs.get(id);
-      if (job) void this.fail(job, job.step, "AgentK's mod in Claude didn't finish in time");
+      if (job) this.fail(job, job.step, job.step === 'save' ? 'Meko took too long to save them' : "AgentK's mod in Claude didn't finish in time");
     }, this.timeoutMs);
     timer.unref?.();
-    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], dedup: null, timer });
-    this.core.sessions.mod.queueLearn(row.id, { id, prompt: EXTRACT_PROMPT });
+    this.jobs.set(id, { id, sessionId: row.id, datapack: dp, step: 'extract', facts: [], similar: [], saves: 0, updates: 0, skips: 0, timer });
+    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: EXTRACT_PROMPT });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
   }
 
   /**
-   * The mod's `/mod/learn` posts: the fork's reply (`step: "facts"`), answered with the duplicate
-   * check's prompt and model (or `done` when there's nothing to check), then the small model's
-   * reply (`step: "decisions"`), answered `done` with what was saved. 410 for a step AgentK gave up
-   * on. Each post carries the call's usage, recorded as the session's tokens.
+   * The mod's `/mod/learn` posts: the fork's reply (`step: "facts"`), then the duplicate check's
+   * (`step: "decisions"`). Answered at once (204); what follows comes on the mod's polls. Each post's
+   * usage is recorded as the session's tokens, even for a step AgentK gave up on meanwhile (410).
    */
-  async fromMod(row: SessionRow, body: Record<string, unknown>): Promise<ModReply> {
+  fromMod(row: SessionRow, body: Record<string, unknown>): ModReply {
     const id = typeof body.id === 'string' ? body.id : '';
-    this.sweepDone();
-    const finished = this.done.get(id);
-    if (finished?.sessionId === row.id) return finished.reply;
+    if (!get(this.db, 'SELECT 1 AS x FROM meko_learns WHERE id = ? AND session_id = ?', id, row.id)) return { status: 410 };
+    const step = body.step === 'decisions' ? 'check' : 'extract';
+    this.recordUsage(row.id, id, step === 'check' ? 'dedup' : 'extract', body.model, body.usage);
     const job = this.jobs.get(id);
-    if (!job || job.sessionId !== row.id) return { status: 410 };
-    const step = body.step === 'decisions' ? 'dedup' : 'extract';
-    this.recordUsage(row.id, id, step, body.model, body.usage);
-    if (step === 'extract') {
-      if (job.dedup) return { status: 200, body: { prompt: job.dedup, model: DEDUP_MODEL } };
-      if (job.step !== 'extract') return { status: 409 };
-      return this.facts(row, job, body);
-    }
-    if (job.step !== 'dedup') return { status: 409 };
-    return this.decisions(row, job, body);
+    if (!job) return { status: 410 };
+    if (job.step !== step) return { status: 204 }; // a repeat
+    if (step === 'extract') this.facts(row, job, body);
+    else this.decisions(row, job, body);
+    return { status: 204 };
   }
 
-  private async facts(row: SessionRow, job: Job, body: Record<string, unknown>): Promise<ModReply> {
+  /** The local paths a fact must not name. */
+  private localPaths(row: SessionRow): string[] {
+    return [homedir(), this.core.paths.home, row.worktree_path, sessionRepo(this.db, row) ?? ''].filter(Boolean);
+  }
+
+  private facts(row: SessionRow, job: Job, body: Record<string, unknown>): void {
     if (typeof body.text !== 'string') return this.fail(job, 'extract', reasonOf(body.reason, 'the fork gave no reply'));
     const parsed = parseFacts(body.text);
     if (!parsed) return this.fail(job, 'extract', "the fork's reply wasn't the JSON asked for");
-    const local = [homedir(), this.core.paths.home, row.worktree_path, row.repo_path ?? ''].filter(Boolean);
-    const facts = parsed.filter((f) => !machineSpecific(f, local));
-    job.facts = facts;
-    run(this.db, 'UPDATE meko_learns SET candidates = ? WHERE id = ?', facts.length, job.id);
-    if (!facts.length) return this.finish(job, 0, 0, 0);
+    const local = this.localPaths(row);
+    job.facts = parsed.filter((f) => !machineSpecific(`${f.component} ${f.text}`, local));
+    run(this.db, 'UPDATE meko_learns SET candidates = ? WHERE id = ?', job.facts.length, job.id);
+    if (!job.facts.length) return this.finish(job);
+    job.step = 'search';
+    void this.search(row, job);
+  }
+
+  /** Finds the saved memories most like each fact, then hands the mod the duplicate check. */
+  private async search(row: SessionRow, job: Job): Promise<void> {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      job.similar = await mekoTag.run(job.id, () => Promise.all(facts.map((f) =>
+      job.similar = await mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
         this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => []))));
     } catch (e) {
-      return this.fail(job, 'search', errMsg(e));
+      if (this.jobs.has(job.id)) this.fail(job, 'search', errMsg(e));
+      return;
     }
-    if (!this.jobs.has(job.id)) return { status: 410 }; // timed out meanwhile
-    job.step = 'dedup';
-    job.dedup = dedupPrompt(facts, job.similar);
-    return { status: 200, body: { prompt: job.dedup, model: DEDUP_MODEL } };
+    if (!this.jobs.has(job.id)) return; // timed out meanwhile
+    job.step = 'check';
+    this.core.sessions.mod.queueLearn(job.sessionId, { id: job.id, kind: 'check', prompt: dedupPrompt(job.facts, job.similar), model: DEDUP_MODEL });
   }
 
-  private async decisions(row: SessionRow, job: Job, body: Record<string, unknown>): Promise<ModReply> {
+  private decisions(row: SessionRow, job: Job, body: Record<string, unknown>): void {
     if (typeof body.text !== 'string') return this.fail(job, 'dedup', reasonOf(body.reason, 'the duplicate check gave no reply'));
     const decided = parseDecisions(body.text);
     if (!decided) return this.fail(job, 'dedup', "the duplicate check's reply wasn't the JSON asked for");
-    // Taken off the jobs at once: the timeout can't fail it while the writes run, and a repeated
-    // post waits for nothing (it gets 410 until the answer is kept).
-    this.jobs.delete(job.id);
-    clearTimeout(job.timer);
-    let saves = 0;
-    let updates = 0;
-    let skips = 0;
+    job.step = 'save';
+    void this.save(row, job, decided);
+  }
+
+  /** Writes what the duplicate check decided, one fact at a time, until the step's time is up. */
+  private async save(row: SessionRow, job: Job, decided: Map<number, Decision>): Promise<void> {
+    const local = this.localPaths(row);
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
       await mekoTag.run(job.id, async () => {
         for (const [i, f] of job.facts.entries()) {
+          if (!this.jobs.has(job.id)) return; // the time was up: the timer closed the step
           const d = decided.get(i + 1) ?? { action: 'add', id: null, text: null };
           const target = d.action === 'update' ? (job.similar[i] ?? []).find((m) => m.id === d.id) : undefined;
           try {
             if (d.action === 'skip') {
-              skips++;
+              job.skips++;
             } else if (target) {
-              await this.core.meko.updateMemory(target.id, d.text ?? memoryText(f), job.datapack.id, target.agentId, conv);
-              updates++;
+              const text = d.text && !machineSpecific(d.text, local) ? d.text : memoryText(f);
+              await this.core.meko.updateMemory(target.id, text, job.datapack.id, target.agentId, conv);
+              job.updates++;
             } else {
               await this.core.meko.addMemory(memoryText(f), job.datapack.id, agent, conv, {
                 source: 'agent-k-local', kind: 'learned', fact: f.kind, component: f.component || null, session: row.id, learn: job.id,
               });
-              saves++;
+              job.saves++;
             }
           } catch (e) {
             this.core.log.warn(`saving a learned fact for ${row.id} failed`, errMsg(e));
@@ -363,9 +380,10 @@ export class Learner {
         }
       });
     } catch (e) {
-      return this.fail(job, 'save', errMsg(e));
+      if (this.jobs.has(job.id)) this.fail(job, 'save', errMsg(e));
+      return;
     }
-    return this.finish(job, saves, updates, skips);
+    if (this.jobs.has(job.id)) this.finish(job);
   }
 
   /** Records a learn model call's tokens as one of the session's responses (so usage shows them too). */
@@ -378,39 +396,34 @@ export class Learner {
       count(u.input_tokens), count(u.output_tokens), count(u.cache_read_input_tokens), count(u.cache_creation_input_tokens));
   }
 
-  private finish(job: Job, saves: number, updates: number, skips: number): ModReply {
+  /** Closes a step through the mod with what it got done, done or failed (with the part it reached). */
+  private close(job: Job, outcome: 'done' | 'failed', failedStep: string | null): void {
     this.jobs.delete(job.id);
     clearTimeout(job.timer);
     const c = get<{ lookups: number; errors: number; sent: number }>(this.db,
       `SELECT COALESCE(SUM(tool = 'context_search'), 0) AS lookups, COALESCE(SUM(ok = 0), 0) AS errors, COALESCE(SUM(input_chars), 0) AS sent
        FROM meko_agentk_calls WHERE learn_id = ?`, job.id);
-    run(this.db, `UPDATE meko_learns SET ended_at = ?, outcome = 'done', saves = ?, updates = ?, skips = ?, lookups = ?, errors = ?, sent_chars = ?
+    run(this.db, `UPDATE meko_learns SET ended_at = ?, outcome = ?, failed_step = ?, saves = ?, updates = ?, skips = ?, lookups = ?, errors = ?, sent_chars = ?
                   WHERE id = ? AND ended_at IS NULL`,
-      Date.now(), saves, updates, skips, c?.lookups ?? 0, c?.errors ?? 0, c?.sent ?? 0, job.id);
-    const text = job.facts.length ? learnSummary(saves, updates, job.datapack.name) : `Nothing new to save to ${job.datapack.name}`;
-    this.core.sessions.event(job.sessionId, 'learned', text, { saves, updates, skips, candidates: job.facts.length });
-    return this.closed(job, { status: 200, body: { done: `${text}.` } });
-  }
-
-  private fail(job: Job, step: string, reason: string): ModReply {
-    this.jobs.delete(job.id);
-    clearTimeout(job.timer);
-    run(this.db, "UPDATE meko_learns SET ended_at = ?, outcome = 'failed', failed_step = ? WHERE id = ? AND ended_at IS NULL", Date.now(), step, job.id);
-    this.core.sessions.event(job.sessionId, 'learned', `AgentK couldn't save what this session learned: ${reason}`);
-    this.core.log.warn(`the learn step for ${job.sessionId} failed at ${step}`, reason);
-    return this.closed(job, { status: 200, body: { done: `AgentK couldn't save what this session learned: ${reason}.` } });
-  }
-
-  private closed(job: Job, reply: ModReply): ModReply {
-    this.done.set(job.id, { sessionId: job.sessionId, reply, at: Date.now() });
+      Date.now(), outcome, failedStep, job.saves, job.updates, job.skips, c?.lookups ?? 0, c?.errors ?? 0, c?.sent ?? 0, job.id);
     this.core.changed();
-    this.core.lifecycle.afterLearn(job.sessionId, job.trigger);
-    return reply;
+    this.core.lifecycle.afterLearn(job.sessionId);
   }
 
-  private sweepDone(): void {
-    const now = Date.now();
-    for (const [id, d] of this.done) if (now - d.at > DONE_KEEP_MS) this.done.delete(id);
+  private finish(job: Job): void {
+    this.close(job, 'done', null);
+    const text = job.facts.length ? learnSummary(job.saves, job.updates, job.datapack.name) : `Nothing new to save to ${job.datapack.name}`;
+    this.core.sessions.event(job.sessionId, 'learned', text, { saves: job.saves, updates: job.updates, skips: job.skips, candidates: job.facts.length });
+    this.core.sessions.mod.queueToast(job.sessionId, `${text}.`);
+  }
+
+  private fail(job: Job, step: string, reason: string): void {
+    this.close(job, 'failed', step);
+    const saved = job.saves + job.updates ? ` (${learnSummary(job.saves, job.updates, job.datapack.name).replace(/^S/, 's')} first)` : '';
+    const text = `AgentK couldn't save what this session learned: ${reason}${saved}`;
+    this.core.sessions.event(job.sessionId, 'learned', text);
+    this.core.sessions.mod.queueToast(job.sessionId, `${text}.`);
+    this.core.log.warn(`the learn step for ${job.sessionId} failed at ${step}`, reason);
   }
 
   // ---- as a typed turn (no mod) ----
@@ -460,8 +473,9 @@ export class Learner {
       clearTimeout(job.timer);
       this.jobs.delete(open.id);
     }
-    run(this.db, "UPDATE meko_learns SET ended_at = ?, outcome = 'interrupted' WHERE id = ?", Date.now(), open.id);
-    this.core.lifecycle.afterLearn(sessionId, open.trigger);
+    run(this.db, "UPDATE meko_learns SET ended_at = ?, outcome = 'interrupted', saves = ?, updates = ?, skips = ? WHERE id = ?",
+      Date.now(), job?.saves ?? 0, job?.updates ?? 0, job?.skips ?? 0, open.id);
+    this.core.lifecycle.afterLearn(sessionId);
   }
 
   /**
@@ -474,7 +488,7 @@ export class Learner {
     }
   }
 
-  /** The server is stopping: no timer outlives it. */
+  /** The server is stopping: no timer outlives it, and a step still writing stops at its next fact. */
   stop(): void {
     for (const j of this.jobs.values()) clearTimeout(j.timer);
     this.jobs.clear();

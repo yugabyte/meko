@@ -111,15 +111,17 @@ hooks module whatever the variable says, and AgentK types prompts as before. It 
 
 - `[claude] mod` is on (the default);
 - the mod's files are there;
-- `claude --version` (read at startup, then at most every 10 minutes) is 2.1.286 or later. Older
-  versions frame a plugin's prompt as the plugin's message, not the person's.
+- `claude --version` (read at startup, then at most every 10 minutes) is 2.1.287 or later. Older
+  versions frame a plugin's prompt as the plugin's message, not the person's (before 2.1.286),
+  or may lack what the learn step uses (`$.model.fork`, `$.model.complete`, `$.command.register`
+  and `command.run`, all in 2.1.287's declarations; 2.1.286's couldn't be checked).
 
 **Claude Code's version.** AgentK installs Claude Code with Anthropic's installer (`install.sh`) and
 never updates it; Claude Code updates itself, unless that's turned off or it hasn't run for a while.
 `ClaudeCode` (`claudecode.ts`) keeps the version read above and puts it in `AppState.claudeCode`,
 with whether it runs the mod. A running session keeps the version it started with until Claude
 restarts in it, so what matters is the version the next launch gets. While `[claude] mod` is on and
-that version is older than 2.1.286, a banner says so, and that AgentK types its prompts instead:
+that version is older than 2.1.287, a banner says so, and that AgentK types its prompts instead:
 
 - **Update Claude Code** runs `claude update`, Claude Code's own updater (`POST /api/claude/update`,
   one at a time, stopped after 5 minutes), then reads the version again;
@@ -139,15 +141,15 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 
 | Route | What it does |
 |---|---|
-| `/mod/hello` | Sent once per load, from `session.start`, with the mod's protocol: 2 runs learn steps, so a session still running a mod from before them gets the typed learn prompt instead. |
-| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The poll carries the ids of the prompts the mod submitted that Claude still holds (`{ held: [...] }`). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`, with `learn: { id, prompt }` when a learn step is waiting), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
+| `/mod/hello` | Sent once per load, from `session.start`, with the mod's protocol: 2 runs learn steps, so a session still running a mod from before them gets the typed learn prompt instead. Every poll names it too, since a server restarted since the hello hears it only there. |
+| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The poll carries the ids of the prompts the mod submitted that Claude still holds and its protocol (`{ held: [...], protocol }`). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`, with `learn: { id, kind, prompt, model? }` when a part of a learn step is waiting and `toast` when the mod should show a line), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
 | `/mod/ack` | `accepted` for each prompt as it arrives. The server answers 204 when it still wants the prompt, and only then does the mod hand it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words; 410 (it gave up on the prompt) or no answer, and the mod drops it. `dropped` with a reason, and whether it filled the prompt box, when another plugin's `prompt.submit` hook refused it. |
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
 | `/mod/held` | `{ held: [...] }`, as on a poll, as soon as it changes: a held prompt's `$.prompt.submit` resolved (its turn started) or another plugin refused it. |
 | `/mod/ask` | From a `tool.call` hook on Claude's `AskUserQuestion`: `{ id, questions }` (the call's `tool_use_id` and its questions). The server holds it up to 20 seconds and answers the user's answers by question index (`{ answers: { 0: "Blue" } }`), or 204, and the mod asks again; 410 when it dropped the ask, 400 (`{ error }`) for questions it can't show. Either way the mod then leaves the question to the terminal's dialog. |
 | `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK Local or the terminal, or ended. |
 | `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions, checked and saved (`{ text }` for Claude), or what's wrong (400, `{ error }`). |
-| `/mod/learn` | A [learn step](#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`), answered with the duplicate check to run (`{ prompt, model }`) or `{ done }`; then that check's reply (`step: "decisions"`), answered `{ done }` with what AgentK saved, which the mod shows as a toast. 410 for a step AgentK gave up on. |
+| `/mod/learn` | A [learn step](#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
 | `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
@@ -187,7 +189,7 @@ open in the terminal as always (`next(e)`), and sends the questions to the serve
 (`/mod/ask`, asked again after each hold). Whichever is answered first wins: the terminal's answer
 is returned as it is; AgentK Local's comes back as the tool's result,
 `{ questions, answers: { "<question>": "<answer>" } }`, which closes the terminal's dialog (checked
-on Claude Code 2.1.286, the oldest that loads the mod, and on 2.1.287 and 2.1.291; so is the
+on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2.1.291; so is the
 `design_questions` tool below). The hook's `.catch` falls back to `next(e)`, and any failure
 leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
 call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
@@ -1641,7 +1643,8 @@ datapack, which the team working on the project shares.
 
 **The saving rule.** Every session whose project has a dedicated datapack gets it in its system
 prompt (`mekoSaveSystemLine()` in `prompts.ts`), so it holds for saves Claude makes on its own
-too. Save what a teammate on this product would want and couldn't easily get from the code, the
+too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `EXTRACT_PROMPT` and
+the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line. Save what a teammate on this product would want and couldn't easily get from the code, the
 PR, the design or the git log: how a subsystem works, decisions and the rejected alternatives,
 root causes, traps and invariants, build/test/CI quirks, measured numbers. Never anything about
 the machine, worktree or environment, one person's preferences, task or PR status, what the diff
@@ -1650,33 +1653,40 @@ correct a memory that's now wrong with `memory_update`. No limit. It says it ove
 plugin's advice not to call `memory_add`. The Explore prompt ends by saving under it.
 
 **When.** At Merge & Close, before the cleanup (`Lifecycle.merged()` asks `Learner.beforeClose`,
-and runs again when the step ends), once per session; and when the user asks: the **learn**
-session action (**Save learnings** in the header, or the ⋯ sheet), or `/agentk_learn` in the
-terminal. It needs Meko on, a dedicated datapack, and Claude there and between turns; asked for
-otherwise, it's a 409 that says why. At Merge & Close a session whose Claude is gone or busy is
-recorded as skipped and closes as before. One runs at a time per session (`Session.learning`).
+and runs again when any learn step ends there, `afterLearn`), once per session; and when the user
+asks: the **learn** session action (**Save learnings** in the header, or the ⋯ sheet), or
+`/agentk_learn` in the terminal. It needs Meko on, a dedicated datapack, and Claude there and
+between turns; asked for otherwise, it's a 409 that says why (exited: resume it; starting; busy).
+At Merge & Close a session whose Claude is gone or busy is recorded as skipped and closes as
+before. One runs at a time per session (`Session.learning`): a Save learnings step still running
+when the PR merges holds the cleanup like one of its own, and a step that ended done since the
+session got to Merge & Close stands for it.
 
 **Through the mod** (its link live, protocol 2):
 
-1. The server records a `meko_learns` row and puts the job on the session's next poll.
+1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll.
 2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
    served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
-   as JSON (`EXTRACT_PROMPT`), and posts the reply, the model and the usage to `/mod/learn`.
+   as JSON (`EXTRACT_PROMPT`), and posts the reply, the model and the usage to `/mod/learn`, which
+   answers at once.
 3. The server parses the facts (the first JSON object in the reply), drops any that name the home
-   folder, AgentK's home, the worktree or the repo path, and finds the 3 saved memories most like
-   each (`MekoClient.similar`: `context_search`, memories only, in parallel). It answers with the
-   duplicate check's prompt (`dedupPrompt()`): each fact numbered, with those memories and their ids.
+   folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
+   saved memories most like each (`MekoClient.similar`: `context_search`, memories only, in
+   parallel). It puts a `check` part on the next poll: the duplicate check's prompt
+   (`dedupPrompt()`), each fact numbered with those memories and their ids.
 4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Haiku) and posts the reply.
 5. For each fact the server adds it (`memory_add`, as "Gotcha (component): …", with metadata
    `{ source, kind: "learned", fact, component, session, learn }`), skips it, or updates the memory
-   it corrects (`memory_update`, as the agent that wrote it; an update naming a memory that wasn't
-   offered becomes an add). A fact the check left out is added.
+   it corrects (`memory_update`, as the agent that wrote it, with the check's corrected text unless
+   that names a local path, then the fact's own; an update naming a memory that wasn't offered
+   becomes an add). A fact the check left out is added. One at a time.
 6. The row closes with its counts, the session's timeline says "Saved N memories and corrected M in
-   <datapack>", and the mod shows the same as a toast.
+   <datapack>", and the next poll has the mod show the same as a toast.
 
-The whole step has 3 minutes (`LEARN_TIMEOUT_MS`); then, or when the fork or the check gives no
-usable reply, it closes as `failed` with the step it reached and why, nothing more is written, and
-Merge & Close goes on. A relaunch, exit or archive closes a running step as `interrupted`, and so
+The whole step, writes included, has 3 minutes (`LEARN_TIMEOUT_MS`): when they're up the step
+closes as `failed` with the part it reached (what it saved by then counted), no further fact is
+written, and Merge & Close goes on. So does a fork or check that gives no usable reply. A model
+call's usage that comes after AgentK gave up is still recorded. A relaunch, exit or archive closes a running step as `interrupted`, and so
 does a server restart (the job lived in memory). Each model call's usage is stored as a
 `usage_messages` row (`message_id` `learn:<id>:extract|dedup`, agent `agentk:learn`), so the
 session's tokens and cost include it, though it's never in the transcript.

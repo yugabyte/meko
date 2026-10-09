@@ -237,9 +237,11 @@ export function writeHookFiles(paths: Paths): void {
 
 /**
  * The oldest Claude Code AgentK's mod runs in: plugins' hooks modules, `$.prompt.submit` with
- * `asUser` (older ones frame the prompt as a plugin's message) and `session.measure`.
+ * `asUser` (older ones frame the prompt as a plugin's message) and `session.measure` (2.1.286), and
+ * for the learn step `$.model.fork`, `$.model.complete`, `$.command.register` and `command.run`
+ * (checked in 2.1.287's declarations; 2.1.286's couldn't be).
  */
-export const MIN_MOD_CLAUDE = '2.1.286';
+export const MIN_MOD_CLAUDE = '2.1.287';
 
 /**
  * The mod's files, relative to its folder: src/mod/agentk in the repo (tsx, tests), dist/mod/agentk

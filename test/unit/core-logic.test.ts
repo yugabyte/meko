@@ -14,10 +14,11 @@ import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor } from '../../src/server/github.js';
+import { EXTRACT_PROMPT } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, type PromptName,
+  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
@@ -719,6 +720,16 @@ describe('Meko recall in prompts', () => {
     expect(DEFAULT_PROMPTS.explore).toMatch(/save what you learned to Meko, following the saving rule in your system prompt\.$/);
     expect(DEFAULT_PROMPTS.learn).toMatch(/^Save what this session learned to Meko/);
     expect(mekoRecallLine('learn')).toBe('');
+  });
+
+  it('states the saving rule in full in both ways of the learn step, for sessions launched before it', () => {
+    expect(mekoSaveSystemLine('s-1')).toContain(SAVING_RULE);
+    expect(EXTRACT_PROMPT).toContain(SAVING_RULE);
+    const line = mekoLearnLine('learn', 's-1');
+    expect(line).toMatch(/^What to save: /);
+    expect(line).toContain(SAVING_RULE);
+    expect(line).toContain('"session":"s-1"');
+    expect(mekoLearnLine('code', 's-1')).toBe('');
   });
 
   it('names the ToolSearch query that loads the Meko tools under any server name', () => {
