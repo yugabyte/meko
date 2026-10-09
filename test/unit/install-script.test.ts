@@ -1,16 +1,16 @@
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 
-// Runs the real scripts/install.sh (up to --deps-only) against stand-in tools: a PATH with only
+// Runs the real scripts/install.sh (mostly up to --deps-only) against stand-in tools: a PATH with only
 // the basic utilities it needs, plus stubs for uname, package managers, sudo, curl, gh and friends.
 const SCRIPT = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
-const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname'];
+const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink'];
 const GH_VERSION = '2.60.0';
 
 let root: string;
@@ -81,7 +81,12 @@ const calls = () =>
 const have = (...tools: string[]) => tools.forEach((t) => execFileSync('cp', [join(repo, t), join(bin, t)]));
 
 function run(args: string[], env: Record<string, string> = {}) {
-  const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--deps-only', ...args], {
+  return runAll(['--deps-only', ...args], env);
+}
+
+/** Runs the whole installer, past the tools to the download and `agent-k-local install`. */
+function runAll(args: string[], env: Record<string, string> = {}) {
+  const r = spawnSync(join(bin, 'sh'), [SCRIPT, ...args], {
     env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '', ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -317,5 +322,164 @@ describe('install.sh: installing missing tools', () => {
     const r = await runInTerminal('y', 'Sign in now (claude auth login)?');
     expect(r.code).toBe(0);
     expect(r.calls).toEqual(['claude auth login']);
+  });
+});
+
+describe('install.sh: when AgentK Local is already installed', () => {
+  const akHome = () => join(home, '.agent-k-local');
+  const current = (h = akHome()) => readlinkSync(join(h, 'app', 'current'));
+
+  /**
+   * An install of `version`: unpacked, linked as app/current and ~/.local/bin/agent-k-local, and
+   * set up (config.toml, and both services, as long as there's no `no-services` file).
+   */
+  function installed(version: string, h = akHome()) {
+    mkdirSync(join(h, 'app', version, 'bin'), { recursive: true });
+    stub(join(h, 'app', version, 'bin'), 'agent-k-local', 'exit 0');
+    symlinkSync(version, join(h, 'app', 'current'));
+    writeFileSync(join(h, 'config.toml'), '');
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    symlinkSync(join(h, 'app', 'current', 'bin', 'agent-k-local'), join(home, '.local', 'bin', 'agent-k-local'));
+    const services = `[ -f "${root}/no-services" ] && exit 1`;
+    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled agent-k-local.service" ] || [ "$*" = "--user is-enabled agent-k-local-tmux.service" ] || exit 1; ${services}; echo enabled`);
+    stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.tmux) ;; *) exit 1 ;; esac; ${services}; exit 0`);
+  }
+
+  /** Release `version` of AgentK Local, as `gh release download` hands it out. */
+  function release(version: string) {
+    const dir = join(repo, 'ak', `agent-k-local-${version}`);
+    mkdirSync(join(dir, 'bin'), { recursive: true });
+    mkdirSync(join(dir, 'node', 'bin'), { recursive: true });
+    stub(join(dir, 'bin'), 'agent-k-local', `echo "agent-k-local $*" >> "${log}"`);
+    // Stands in for the bundled Node renaming app/current.tmp over app/current.
+    stub(join(dir, 'node', 'bin'), 'node', 'ln -sfn "$(readlink "$3")" "$4" && rm "$3"');
+    const tarball = `agent-k-local-${version}-linux-x64.tar.gz`;
+    mkdirSync(join(repo, 'release-ak'), { recursive: true });
+    execFileSync('tar', ['-czf', join(repo, 'release-ak', tarball), `agent-k-local-${version}`], { cwd: join(repo, 'ak') });
+    const digest = createHash('sha256').update(readFileSync(join(repo, 'release-ak', tarball))).digest('hex');
+    writeFileSync(join(repo, 'release-ak', 'SHA256SUMS'), `${digest}  ${tarball}\n`);
+    stub(bin, 'gh', `echo "gh $*" >> "${log}"
+case "$1 $2" in
+  "release view") echo "v${version}" ;;
+  "release download") while [ $# -gt 0 ]; do [ "$1" = --dir ] && cp "${repo}/release-ak/"* "$2/"; shift; done ;;
+esac
+exit 0`);
+  }
+
+  const downloads = (calls: string[]) => calls.filter((c) => c.startsWith('gh release'));
+
+  beforeEach(() => {
+    have('tmux', 'git', 'curl');
+    installed('1.2.3');
+    release('1.2.4');
+  });
+
+  it('says so and stops, changing nothing', () => {
+    const r = runAll([]);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('1.2.3 in ~/.agent-k-local');
+    expect(r.err).toContain('AgentK Local is already installed, so nothing was changed');
+    expect(r.err).toContain('Update banner or button');
+    // ~/.local/bin isn't on this PATH, so the commands are shown with it.
+    expect(r.err).toContain('~/.local/bin/agent-k-local status');
+    expect(r.err).toContain('--output - | sh -s -- --reinstall');
+    expect(r.calls).toEqual([]);
+    expect(current()).toBe('1.2.3');
+
+    const onPath = runAll([], { PATH: `${bin}:${join(home, '.local', 'bin')}` });
+    expect(onPath.code).toBe(0);
+    expect(onPath.err).toMatch(/Status\S* +agent-k-local status/);
+  });
+
+  it('stops before the tools, even with tools missing and --install-deps', () => {
+    rmSync(join(bin, 'tmux'));
+    const r = runAll(['--non-interactive', '--install-deps']);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('AgentK Local is already installed');
+    expect(r.err).not.toContain('Missing');
+    expect(r.calls).toEqual([]);
+  });
+
+  it('installs the latest release again with --reinstall, without passing that on', () => {
+    const r = runAll(['--reinstall', '--non-interactive']);
+    expect(r.err).not.toContain('already installed');
+    expect(r.code).toBe(0);
+    expect(downloads(r.calls)).toHaveLength(2);
+    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(current()).toBe('1.2.4');
+  });
+
+  it('installs another --version, and stops for the one installed', () => {
+    const same = runAll(['--version', 'v1.2.3']);
+    expect(same.code).toBe(0);
+    expect(same.err).toContain('AgentK Local is already installed');
+    expect(same.calls).toEqual([]);
+
+    const other = runAll(['--version', '1.2.4']);
+    expect(other.code).toBe(0);
+    expect(downloads(other.calls)).toEqual([expect.stringMatching(/^gh release download v1\.2\.4 /)]);
+    expect(current()).toBe('1.2.4');
+  });
+
+  it('installs again when the services aren\'t set up (an install that failed there, or was uninstalled)', () => {
+    writeFileSync(join(root, 'no-services'), '');
+    const r = runAll(['--non-interactive']);
+    expect(r.err).not.toContain('already installed');
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(current()).toBe('1.2.4');
+  });
+
+  it('installs again when ~/.local/bin/agent-k-local is gone', () => {
+    rmSync(join(home, '.local', 'bin', 'agent-k-local'));
+    const r = runAll(['--non-interactive']);
+    expect(r.err).not.toContain('already installed');
+    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(existsSync(join(home, '.local', 'bin', 'agent-k-local'))).toBe(true);
+  });
+
+  it('passes options for agent-k-local install on rather than dropping them', () => {
+    const r = runAll(['--non-interactive', '--port', '8443', '--no-meko']);
+    expect(r.err).not.toContain('already installed');
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain("agent-k-local install --non-interactive --port 8443 --no-meko");
+  });
+
+  it('checks the LaunchAgents on a Mac', () => {
+    const env = { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' };
+    const set = runAll([], env);
+    expect(set.code).toBe(0);
+    expect(set.err).toContain('AgentK Local is already installed');
+    expect(set.calls).toEqual([]);
+
+    writeFileSync(join(root, 'no-services'), '');
+    const unset = runAll(['--non-interactive'], env);
+    expect(unset.err).not.toContain('already installed');
+    expect(downloads(unset.calls).length).toBeGreaterThan(0);
+  });
+
+  it('finishes an install that stopped before its setup was saved', () => {
+    rmSync(join(akHome(), 'config.toml'));
+    const r = runAll(['--non-interactive']);
+    expect(r.err).not.toContain('already installed');
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(current()).toBe('1.2.4');
+  });
+
+  it('installs into another AK_HOME', () => {
+    const other = join(root, 'other-home');
+    const r = runAll(['--non-interactive'], { AK_HOME: other });
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(current(other)).toBe('1.2.4');
+    expect(current()).toBe('1.2.3');
+  });
+
+  it('still checks the tools with --deps-only', () => {
+    const r = run(['--non-interactive']);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('Tools');
+    expect(r.err).not.toContain('already installed');
   });
 });

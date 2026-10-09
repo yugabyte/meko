@@ -1938,7 +1938,8 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 - **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
   host name at install time. On any other host systemd skips them: nothing starts and nothing is
-  logged. Renaming the host means running the installer again.
+  logged. Renaming the host means running `agent-k-local install` again, which rewrites the units
+  (the one-line installer stops early on an install it finds set up).
 - **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
   anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it
   rewrites every 10 seconds; a lease not rewritten for 45 seconds is free. A lease from another
@@ -2033,6 +2034,11 @@ comes back. **Auto-continue is on by default**, with guards:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
+#  0. stops, saying so, if AgentK Local is already installed in AK_HOME and set up: app/current,
+#     config.toml, ~/.local/bin/agent-k-local, and both services enabled (systemd) or loaded
+#     (launchd). Updates are offered in the app, and `agent-k-local install` redoes the setup.
+#     --reinstall, --deps-only, a --version other than the installed one, or options for
+#     `agent-k-local install` (other than --non-interactive) go on
 #  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, curl, gh and Claude Code; offers to
 #     install whatever is missing (it shows the commands and asks first): brew on macOS, the
 #     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
