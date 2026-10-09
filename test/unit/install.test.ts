@@ -214,6 +214,6 @@ describe('CLI labels', () => {
   it('always leave a space before the detail, even when the label is long', () => {
     expect(pad('Meko')).toBe('Meko'.padEnd(14));
     expect(pad('Meko in Claude')).toBe('Meko in Claude ');
-    expect(pad('com.yugabyte.agent-k-local.tmux')).toBe('com.yugabyte.agent-k-local.tmux ');
+    expect(pad('com.yugabyte.agent-k-local.host')).toBe('com.yugabyte.agent-k-local.host ');
   });
 });

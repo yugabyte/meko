@@ -333,10 +333,10 @@ function respond() {
   writeFileSync(transcript, entry(null) + entry('end_turn'), { flag: 'a' });
 }
 
-// Claude's TUI enables bracketed paste at startup; tmux only wraps pastes when it's on.
+// Claude's TUI enables bracketed paste at startup; the session host only wraps pastes when it's on.
 process.stdout.write('\x1b[?2004h');
 
-// Like Claude Code: when tmux dies the pane's process gets SIGHUP and fires SessionEnd.
+// Like Claude Code: when the session host ends its pane, the process gets SIGHUP and fires SessionEnd.
 process.on('SIGHUP', () => {
   hook('SessionEnd', { reason: 'other' });
   process.exit(129);

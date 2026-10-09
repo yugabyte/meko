@@ -10,7 +10,7 @@ function jsonl<T>(env: TestEnv, file: string): T[] {
   return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as T) : [];
 }
 
-describe("Claude's questions and the design through AgentK's mod (real tmux + git, fake claude)", () => {
+describe("Claude's questions and the design through AgentK's mod (real session host + git, fake claude)", () => {
   let env: TestEnv;
   afterEach(async () => {
     await env.cleanup();
@@ -180,7 +180,7 @@ describe("Claude's questions and the design through AgentK's mod (real tmux + gi
     await waitFor(() => get(id).status, (st) => st === 'working', 10000, 'a turn');
     await env.core.sessions.action(id, 'approve-design');
     expect(get(id).approvalQueued).toBe(true);
-    await env.core.tmux.submit(row(id).tmux_name, 'crash');
+    await env.core.host.submit(row(id).tmux_name, 'crash');
     const s = await waitFor(async () => {
       await env.core.sessions.reconcile();
       return get(id);

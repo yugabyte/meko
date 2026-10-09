@@ -10,7 +10,7 @@ import { repoFolder } from '../../src/server/worktrees.js';
 
 const out = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 
-describe('worktree reuse (real tmux + git, fake claude)', () => {
+describe('worktree reuse (real session host + git, fake claude)', () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv();

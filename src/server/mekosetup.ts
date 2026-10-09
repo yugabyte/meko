@@ -135,7 +135,7 @@ export function mekoClaudeGaps(c: ClaudeMeko, url: string, mcpRegistered: () => 
   if (c.plugin === 'missing') gaps.push("The meko-agent-skills plugin isn't installed in Claude Code.");
   else if (c.plugin === 'disabled') gaps.push("The meko-agent-skills plugin is installed in Claude Code but not enabled.");
   // The hooks in every session read the key from settings.json's env: sessions don't inherit
-  // the installer's environment (they start under the tmux service).
+  // the installer's environment (they start under the session host's service).
   if (!c.settings.token) gaps.push("Claude Code's settings have no MEKO_API_KEY.");
   if (!sameMekoUrl(settingsUrl(c), url)) gaps.push(`Claude Code's settings point at ${mekoUrlHost(settingsUrl(c))}, not ${ours}.`);
   if (c.server) {

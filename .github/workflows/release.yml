@@ -81,7 +81,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux git build-essential
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends git build-essential
       - run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.com"

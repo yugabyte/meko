@@ -5,7 +5,7 @@ import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { all } from '../../src/server/db.js';
 import type { DesignAnswersRequest } from '../../src/shared/types.js';
 
-describe("a design's open questions (real tmux + git, fake claude)", () => {
+describe("a design's open questions (real session host + git, fake claude)", () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv();
@@ -137,9 +137,9 @@ describe("a design's open questions (real tmux + git, fake claude)", () => {
     await designReady(s.id, 'design with questions');
     const before = readFileSync(env.core.sessions.questionsFile(row(s.id)), 'utf8');
     const answers = { answers: [{ questionId: 'store', choice: 1, label: 'Repo', text: '' }], feedback: '' };
-    vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(revise(s.id, answers)).rejects.toMatchObject({ status: 502 });
-    vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(env.core.sessions.action(s.id, 'approve-design', answers)).rejects.toMatchObject({ status: 502 });
     expect(get(s.id).stage).toBe('design');
     expect(decided(s.id)).toEqual([['store', 'open', null], ['tabs', 'open', null]]);

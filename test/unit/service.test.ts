@@ -9,6 +9,7 @@ import {
   renderServiceFiles,
   renderTemplate,
   ServiceError,
+  servicesFor,
   SystemdServices,
   type Runner,
 } from '../../src/server/service.js';
@@ -16,7 +17,7 @@ import { tempDir } from '../helpers.js';
 
 const ok = { ok: true, out: '', err: '' };
 const fail = (err: string) => ({ ok: false, out: '', err });
-const files = { server: 'server file\n', tmux: 'tmux file\n' };
+const files = { server: 'server file\n', host: 'host file\n' };
 
 const PRINT_RUNNING = `gui/501/com.yugabyte.agent-k-local = {
 \tactive count = 1
@@ -48,40 +49,61 @@ describe('hostServices', () => {
 
 describe('service templates', () => {
   it('escapes values for property lists only', () => {
-    expect(renderTemplate('<string>@AK_HOME@</string>', 'launchd', { AK_HOME: '/Users/a&b', TMUX: '', HOST: 'mac' })).toBe('<string>/Users/a&amp;b</string>');
-    expect(renderTemplate('Environment=AK_HOME=@AK_HOME@', 'systemd', { AK_HOME: '/home/a&b', TMUX: '', HOST: 'box' })).toBe('Environment=AK_HOME=/home/a&b');
+    expect(renderTemplate('<string>@AK_HOME@</string>', 'launchd', { AK_HOME: '/Users/a&b', HOST: 'mac' })).toBe('<string>/Users/a&amp;b</string>');
+    expect(renderTemplate('Environment=AK_HOME=@AK_HOME@', 'systemd', { AK_HOME: '/home/a&b', HOST: 'box' })).toBe('Environment=AK_HOME=/home/a&b');
   });
 
-  it('renders the launchd jobs: tmux in the foreground, the server kept alive', () => {
+  it('renders the launchd jobs: the session host and the server, both kept alive', () => {
     const svc = new LaunchdServices(() => ok, '/Users/me', 501);
-    const out = renderServiceFiles(svc, { AK_HOME: '/Users/me/.agent-k-local', TMUX: '/opt/homebrew/bin/tmux', HOST: 'mac' });
+    const out = renderServiceFiles(svc, { AK_HOME: '/Users/me/.agent-k-local', HOST: 'mac' });
     for (const text of Object.values(out)) {
       expect(text).not.toContain('@');
       expect(text).toContain('<key>KeepAlive</key>\n  <true/>');
       expect(text).toContain('<string>en_US.UTF-8</string>');
     }
-    expect(out.tmux).toContain('<string>com.yugabyte.agent-k-local.tmux</string>');
-    expect(out.tmux).toMatch(/<string>\/opt\/homebrew\/bin\/tmux<\/string>\s*<string>-D<\/string>\s*<string>-L<\/string>\s*<string>agentk<\/string>/);
+    expect(out.host).toContain('<string>com.yugabyte.agent-k-local.host</string>');
+    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/app\/current\/bin\/agent-k-local<\/string>\s*<string>host<\/string>/);
     expect(out.server).toContain('<string>/Users/me/.agent-k-local/app/current/bin/agent-k-local</string>');
     expect(out.server).toContain('<key>AbandonProcessGroup</key>\n  <true/>');
   });
 
-  it('renders the systemd units with a keepalive every sleep understands', () => {
+  it('renders the systemd units: the session host, and the server that wants it', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
-    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', TMUX: '/usr/bin/tmux', HOST: 'box' });
-    expect(out.tmux).toContain('ExecStart=/usr/bin/tmux -L agentk -f /home/me/.agent-k-local/tmux.conf new-session -d -s _ak "sleep 2147483647"');
+    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
+    expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local host\n');
     expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local serve');
+    expect(out.server).toContain('Wants=agent-k-local-host.service\n');
+    expect(out.server).not.toContain('tmux');
   });
 
   it('runs the systemd units only on the host they were installed on, and never restarts a refused server', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
-    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', TMUX: '/usr/bin/tmux', HOST: 'box' });
+    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
     // A home shared over NFS: every other host that mounts it would start its own server on it.
     for (const text of Object.values(out)) {
       expect(text).not.toContain('@');
       expect(text).toMatch(/^\[Unit\]\n(?:.*\n)*?ConditionHost=box\n(?:.*\n)*?\[Service\]/m);
     }
     expect(out.server).toContain(`RestartPreventExitStatus=${EXIT_BUSY}\n`);
+    // A second host on one home exits busy too.
+    expect(out.host).toContain(`RestartPreventExitStatus=${EXIT_BUSY}\n`);
+  });
+});
+
+describe('servicesFor', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = tempDir('akl-svcfor-');
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("uses the services only when they run this home, so a dev server never waits on an install's", () => {
+    const svc = new SystemdServices(() => ok, { XDG_CONFIG_HOME: dir }, '/home/me');
+    expect(servicesFor('/home/me/.agent-k-local', svc)).toBe(svc); // nothing installed yet
+    svc.install({ server: 'Environment=AK_HOME=/home/me/.agent-k-local\n', host: 'host\n' });
+    expect(servicesFor('/home/me/.agent-k-local', svc)).toBe(svc);
+    expect(servicesFor('/home/me/code/agent-k-local/.dev-home', svc)).toBeNull();
+    expect(servicesFor('/x', null)).toBeNull();
   });
 });
 
@@ -101,18 +123,38 @@ describe('SystemdServices', () => {
     return { svc: new SystemdServices(run, { XDG_CONFIG_HOME: dir }, '/home/me', () => 'me'), calls };
   }
 
-  it('writes both units, starts tmux without restarting it, and restarts the server', () => {
+  it('writes both units, starts the host without restarting it, and restarts the server', () => {
     const { svc, calls } = make();
     svc.install(files);
-    expect(readFileSync(join(dir, 'systemd', 'user', 'agent-k-local-tmux.service'), 'utf8')).toBe(files.tmux);
+    expect(readFileSync(join(dir, 'systemd', 'user', 'agent-k-local-host.service'), 'utf8')).toBe(files.host);
     expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
     expect(calls).toEqual([
       'systemctl --user daemon-reload',
-      'systemctl --user enable --now agent-k-local-tmux.service',
+      'systemctl --user enable --now agent-k-local-host.service',
       'systemctl --user enable agent-k-local.service',
       'systemctl --user restart agent-k-local.service',
     ]);
-    expect(svc.installed('tmux')).toBe(true);
+    expect(svc.installed('host')).toBe(true);
+  });
+
+  it('adds the host service for a server that updated itself, without restarting that server', () => {
+    const { svc, calls } = make();
+    svc.addHost(files);
+    expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
+    expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
+    expect(calls).toEqual(['systemctl --user daemon-reload', 'systemctl --user enable --now agent-k-local-host.service']);
+  });
+
+  it('removes the tmux unit of older versions', () => {
+    const { svc, calls } = make();
+    const tmuxUnit = join(dir, 'systemd', 'user', 'agent-k-local-tmux.service');
+    expect(svc.legacyTmuxInstalled()).toBe(false);
+    mkdirSync(dirname(tmuxUnit), { recursive: true });
+    writeFileSync(tmuxUnit, 'tmux unit\n');
+    expect(svc.legacyTmuxInstalled()).toBe(true);
+    svc.removeLegacyTmux();
+    expect(existsSync(tmuxUnit)).toBe(false);
+    expect(calls).toEqual(['systemctl --user disable --now agent-k-local-tmux.service', 'systemctl --user daemon-reload']);
   });
 
   it('reports a failed systemctl call as a ServiceError', () => {
@@ -124,7 +166,7 @@ describe('SystemdServices', () => {
   it('reads the state that is-active prints, even when it exits non-zero', () => {
     expect(make(() => ({ ok: true, out: 'active', err: '' })).svc.state('server')).toEqual({ running: true, text: 'active' });
     expect(make(() => ({ ok: false, out: 'failed', err: '' })).svc.state('server')).toEqual({ running: false, text: 'failed' });
-    expect(make(() => fail('')).svc.state('tmux')).toEqual({ running: false, text: 'inactive' });
+    expect(make(() => fail('')).svc.state('host')).toEqual({ running: false, text: 'inactive' });
   });
 
   it('turns lingering on for boot, and explains when it cannot', () => {
@@ -145,10 +187,10 @@ describe('SystemdServices', () => {
     calls.length = 0;
     svc.remove();
     expect(existsSync(svc.file('server'))).toBe(false);
-    expect(existsSync(svc.file('tmux'))).toBe(false);
+    expect(existsSync(svc.file('host'))).toBe(false);
     expect(calls).toEqual([
       'systemctl --user disable --now agent-k-local.service',
-      'systemctl --user disable --now agent-k-local-tmux.service',
+      'systemctl --user disable --now agent-k-local-host.service',
       'systemctl --user daemon-reload',
     ]);
   });
@@ -193,33 +235,53 @@ describe('LaunchdServices', () => {
   it('keeps its property lists in ~/Library/LaunchAgents', () => {
     const { svc } = make();
     expect(svc.file('server')).toBe(join(agents(), 'com.yugabyte.agent-k-local.plist'));
-    expect(svc.file('tmux')).toBe(join(agents(), 'com.yugabyte.agent-k-local.tmux.plist'));
+    expect(svc.file('host')).toBe(join(agents(), 'com.yugabyte.agent-k-local.host.plist'));
   });
 
-  it('loads both jobs on a fresh install, tmux first', () => {
+  it('loads both jobs on a fresh install, the host first', () => {
     const { svc, calls, loaded } = make();
     svc.install(files);
     expect(calls).toEqual([
-      `bootstrap gui/501 ${svc.file('tmux')}`,
+      `bootstrap gui/501 ${svc.file('host')}`,
       `bootstrap gui/501 ${svc.file('server')}`,
     ]);
-    expect([...loaded]).toEqual(['com.yugabyte.agent-k-local.tmux', 'com.yugabyte.agent-k-local']);
-    expect(readFileSync(svc.file('tmux'), 'utf8')).toBe(files.tmux);
+    expect([...loaded]).toEqual(['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local']);
+    expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
     expect(svc.state('server')).toEqual({ running: true, text: 'running' });
   });
 
-  it('never reloads a loaded tmux job, and restarts an unchanged server in place', () => {
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.tmux', 'com.yugabyte.agent-k-local'] });
+  it('never reloads a loaded host job, and restarts an unchanged server in place', () => {
+    const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local'] });
     mkdirSync(agents(), { recursive: true });
-    writeFileSync(svc.file('tmux'), 'older tmux file\n');
+    writeFileSync(svc.file('host'), 'older host file\n');
     writeFileSync(svc.file('server'), files.server);
     svc.install(files);
     expect(calls).toEqual(['kickstart -k gui/501/com.yugabyte.agent-k-local']);
-    expect(readFileSync(svc.file('tmux'), 'utf8')).toBe(files.tmux);
+    expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
+  });
+
+  it('adds the host job for a server that updated itself, leaving the server job loaded as it is', () => {
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local.tmux', 'com.yugabyte.agent-k-local'] });
+    svc.addHost(files);
+    expect(calls).toEqual([`bootstrap gui/501 ${svc.file('host')}`]);
+    expect(loaded.has('com.yugabyte.agent-k-local.host')).toBe(true);
+    expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
+  });
+
+  it('removes the tmux job of older versions', () => {
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local.tmux'] });
+    const plist = join(agents(), 'com.yugabyte.agent-k-local.tmux.plist');
+    mkdirSync(agents(), { recursive: true });
+    writeFileSync(plist, 'tmux job\n');
+    expect(svc.legacyTmuxInstalled()).toBe(true);
+    svc.removeLegacyTmux();
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local.tmux']);
+    expect(loaded.size).toBe(0);
+    expect(existsSync(plist)).toBe(false);
   });
 
   it('reloads the server job when its file changed', () => {
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.tmux', 'com.yugabyte.agent-k-local'] });
+    const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('server'), 'older server file\n');
     svc.install(files);
@@ -237,19 +299,19 @@ describe('LaunchdServices', () => {
   });
 
   it('starts a job without disturbing a running one', () => {
-    const running = make({ loaded: ['com.yugabyte.agent-k-local.tmux'] });
-    running.svc.start('tmux');
-    expect(running.calls).toEqual(['kickstart gui/501/com.yugabyte.agent-k-local.tmux']);
+    const running = make({ loaded: ['com.yugabyte.agent-k-local.host'] });
+    running.svc.start('host');
+    expect(running.calls).toEqual(['kickstart gui/501/com.yugabyte.agent-k-local.host']);
 
     const unloaded = make();
-    mkdirSync(dirname(unloaded.svc.file('tmux')), { recursive: true });
-    writeFileSync(unloaded.svc.file('tmux'), files.tmux);
-    unloaded.svc.start('tmux');
-    expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('tmux')}`]);
+    mkdirSync(dirname(unloaded.svc.file('host')), { recursive: true });
+    writeFileSync(unloaded.svc.file('host'), files.host);
+    unloaded.svc.start('host');
+    expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('host')}`]);
   });
 
   it('reports an unloaded job', () => {
-    expect(make().svc.state('tmux')).toEqual({ running: false, text: 'not loaded' });
+    expect(make().svc.state('host')).toEqual({ running: false, text: 'not loaded' });
   });
 
   it('removes both jobs and their files', () => {
@@ -257,10 +319,10 @@ describe('LaunchdServices', () => {
     svc.install(files);
     calls.length = 0;
     svc.remove();
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.tmux']);
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.host']);
     expect(loaded.size).toBe(0);
     expect(existsSync(svc.file('server'))).toBe(false);
-    expect(existsSync(svc.file('tmux'))).toBe(false);
+    expect(existsSync(svc.file('host'))).toBe(false);
   });
 
   it('says the services start at login', () => {

@@ -51,6 +51,7 @@ export interface SessionRow {
   worktree_path: string;
   /** 1 once the session let go of its worktree (idle, another session's, or removed). */
   worktree_released: number;
+  /** The session's pane name in the session host (the column kept its name from when panes were tmux sessions). */
   tmux_name: string;
   hook_token: string;
   desired: 'running' | 'archived';
@@ -240,7 +241,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     branchReused: !!r.branch_reused,
     repoPath: sessionRepo(db, r) ?? '',
     worktreePath: r.worktree_path,
-    tmuxName: r.tmux_name,
+    paneName: r.tmux_name,
     desired: r.desired,
     status: r.status,
     statusDetail: r.status_detail,

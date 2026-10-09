@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- AgentK Local web server. Written by `agent-k-local install`; changes are overwritten. -->
-<!-- tmux runs in its own job (com.yugabyte.agent-k-local.tmux) so restarting or updating
-     this one never ends a session. -->
+<!-- The session host runs in its own job (com.yugabyte.agent-k-local.host) so restarting or
+     updating this one never ends a session. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -16,7 +16,7 @@
   <dict>
     <key>AK_HOME</key>
     <string>@AK_HOME@</string>
-    <!-- launchd sets no locale; tmux clients need a UTF-8 one to draw Claude's UI. -->
+    <!-- launchd sets no locale; git, gh and Claude need a UTF-8 one. -->
     <key>LANG</key>
     <string>en_US.UTF-8</string>
   </dict>
@@ -26,7 +26,7 @@
   <true/>
   <key>ThrottleInterval</key>
   <integer>2</integer>
-  <!-- Stopping the server never takes down a tmux it had to start itself. -->
+  <!-- Stopping the server never takes down a session host it had to start itself. -->
   <key>AbandonProcessGroup</key>
   <true/>
   <key>ExitTimeOut</key>

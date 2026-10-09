@@ -98,8 +98,8 @@ export function pastePath(path: string, bracketed: boolean): string {
 }
 
 /**
- * One mouse-wheel step at a cell (1-based), as an SGR mouse report (tmux turns SGR reporting on
- * with `mouse on`). Coordinates are clamped to the terminal.
+ * One mouse-wheel step at a cell (1-based), as an SGR mouse report (sent only while the program
+ * tracks the mouse; Claude Code turns SGR reporting on with it). Coordinates are clamped to the terminal.
  */
 export function wheelReport(up: boolean, col: number, row: number, cols: number, rows: number): string {
   const clamp = (v: number, max: number) => Math.min(Math.max(1, Math.round(v)), Math.max(1, max));
@@ -155,4 +155,25 @@ export const FONT_MAX = 16;
 
 export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
+}
+
+/**
+ * Whether input from xterm.js is its answer to a query from the program (device attributes, cursor
+ * position, mode and status reports, colors, version, keyboard flags) rather than something typed.
+ * The session host answers those itself, once, so every viewer's own answers are dropped. A modified
+ * F3 (`ESC [1;2R` … `ESC [1;8R`) reads like a cursor position report and is kept.
+ */
+export function isTerminalReport(data: string): boolean {
+  /* eslint-disable no-control-regex */
+  return (
+    /^\x1b\[[?>][\d;]*c$/.test(data) || // device attributes
+    (/^\x1b\[\d+;\d+R$/.test(data) && !/^\x1b\[1;[2-8]R$/.test(data)) || // cursor position
+    /^\x1b\[\??\d+(;\d+)*\$y$/.test(data) || // mode report
+    /^\x1b\[[0-3]n$/.test(data) || // status
+    /^\x1b\[\?\d+u$/.test(data) || // keyboard flags
+    /^\x1b\[\d+;\d+;\d+t$/.test(data) || // window size
+    /^\x1b\][\d;]+[^\x07\x1b]*(\x07|\x1b\\)$/.test(data) || // OSC answers (colors)
+    /^\x1bP[\s\S]*\x1b\\$/.test(data) // DCS answers (version, settings)
+  );
+  /* eslint-enable no-control-regex */
 }

@@ -539,8 +539,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   function closeRevokedSockets() {
     for (const [ws, s] of sockets) if (s.token !== null && !authSessionLive(db, s.token)) ws.close(4401, 'unauthorized');
   }
-  // Heartbeat: a phone that drops off the network sends no close, and its `tmux attach` would
-  // otherwise stay attached (holding the window at its size) until the server restarts.
+  // Heartbeat: a phone that drops off the network sends no close, and its attach to the session
+  // host would otherwise stay open (perhaps holding the pane at its size) until the server restarts.
   const heartbeat = setInterval(() => {
     for (const [ws, s] of sockets) {
       if (!s.alive) {

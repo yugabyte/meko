@@ -48,7 +48,6 @@ beforeEach(() => {
   stub(bin, 'brew', `echo "brew $*" >> "${log}"; case $1 in list) exit 1 ;; --prefix) echo /nowhere; exit 0 ;; esac; shift; ${installs(repo, bin)}`);
 
   // What the package managers hand out.
-  stub(repo, 'tmux', 'echo "tmux ${FAKE_NEW_TMUX:-3.3a}"');
   stub(repo, 'git', 'exit 0');
   stub(repo, 'gh', 'exit 0');
   // curl serves gh's GitHub release from files in the repo dir.
@@ -99,17 +98,17 @@ describe('install.sh: installing missing tools', () => {
     const r = run(['--non-interactive']);
     expect(r.code).toBe(1);
     expect(r.err).toContain('Missing');
-    expect(r.err).toContain('sudo -n dnf install -y tmux git curl');
+    expect(r.err).toContain('sudo -n dnf install -y git curl');
     expect(r.err).toContain('download gh from github.com/cli/cli releases into ~/.local/bin');
     expect(r.err).toMatch(/Rerun with --install-deps/);
     expect(r.calls).toEqual([]); // nothing was installed
   });
 
-  it('installs tmux, git and curl with the package manager, and gh from its release, with --install-deps', () => {
+  it('installs git and curl with the package manager, and gh from its release, with --install-deps', () => {
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.err).toContain('Installed');
     expect(r.code).toBe(0);
-    expect(r.calls).toContain('sudo -n dnf install -y tmux git curl');
+    expect(r.calls).toContain('sudo -n dnf install -y git curl');
     expect(r.calls).toContain(`curl https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz`);
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
   });
@@ -120,13 +119,13 @@ describe('install.sh: installing missing tools', () => {
     have('gh');
     const r = run(['--non-interactive', '--install-deps'], { FAKE_UID: '0' });
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(['apt-get update', 'apt-get install -y tmux git curl']);
+    expect(r.calls).toEqual(['apt-get update', 'apt-get install -y git curl']);
     // The plan shows the command exactly as it runs.
-    expect(r.err).toContain('apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get install -y tmux git curl');
+    expect(r.err).toContain('apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get install -y git curl');
   });
 
   it('refuses a gh download whose checksum is wrong', () => {
-    have('tmux', 'git', 'curl');
+    have('git', 'curl');
     writeFileSync(join(repo, 'release', `gh_${GH_VERSION}_checksums.txt`), `${'0'.repeat(64)}  gh_${GH_VERSION}_linux_amd64.tar.gz\n`);
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
@@ -134,17 +133,8 @@ describe('install.sh: installing missing tools', () => {
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(false);
   });
 
-  it('says so when the installed tmux is still too old', () => {
-    have('git', 'curl', 'gh');
-    stub(bin, 'tmux', 'echo "tmux 1.8"');
-    const r = run(['--non-interactive', '--install-deps'], { FAKE_NEW_TMUX: '1.8' });
-    expect(r.err).toContain('tmux 2.7+ (found 1.8)');
-    expect(r.code).toBe(1);
-    expect(r.err).toMatch(/tmux 2\.7 or newer is still not on PATH/);
-  });
-
   it('installs Claude Code with its own installer when it is missing', () => {
-    have('tmux', 'git', 'curl', 'gh');
+    have('git', 'curl', 'gh');
     execFileSync('mv', [join(bin, 'claude'), join(repo, 'claude')]);
     // Anthropic's installer copies claude from here.
     writeFileSync(join(repo, 'release', 'install.sh'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/claude" "$HOME/.local/bin/claude"; echo "claude installer ran" >> "${log}"\n`);
@@ -158,17 +148,17 @@ describe('install.sh: installing missing tools', () => {
   });
 
   it('finds tools in ~/.local/bin even when it is not on PATH, and shows root commands plainly without sudo', () => {
-    have('tmux', 'git', 'curl');
+    have('git', 'curl');
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
     execFileSync('mv', [join(bin, 'claude'), join(home, '.local', 'bin', 'claude')]);
     execFileSync('cp', [join(repo, 'gh'), join(home, '.local', 'bin', 'gh')]);
     expect(run(['--non-interactive']).code).toBe(0);
     rmSync(join(bin, 'sudo'));
-    rmSync(join(bin, 'tmux'));
+    rmSync(join(bin, 'git'));
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
     expect(r.err).toContain('As root, run:');
-    expect(r.err).toContain('dnf install -y tmux');
+    expect(r.err).toContain('dnf install -y git');
     expect(r.err).not.toContain('(as root) dnf');
   });
 
@@ -176,49 +166,41 @@ describe('install.sh: installing missing tools', () => {
     have('git', 'curl');
     const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
     expect(r.code).toBe(0);
-    expect(r.calls).toContain('brew install tmux gh');
+    expect(r.calls).toContain('brew install gh');
     expect(r.calls.some((c) => c.startsWith('sudo'))).toBe(false);
   });
 
   // A brew that installs what it can from the repo, then exits with an error (as on a macOS
-  // Homebrew builds from source for). `list` says whether tmux came from Homebrew.
-  const failingBrew = (tmuxFromBrew = false) =>
-    stub(bin, 'brew', `echo "brew $*" >> "${log}"; case $1 in list) exit ${tmuxFromBrew ? 0 : 1} ;; --prefix) echo /nowhere; exit 0 ;; esac; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
+  // Homebrew builds from source for).
+  const failingBrew = () =>
+    stub(bin, 'brew', `echo "brew $*" >> "${log}"; case $1 in list) exit 1 ;; --prefix) echo /nowhere; exit 0 ;; esac; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
 
   it('goes on when Homebrew exits with an error but installed the tools anyway', () => {
-    have('git', 'curl');
+    have('git');
     failingBrew();
     const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
-    expect(r.err).toContain('brew          exited with an error, but tmux gh work: going on');
+    expect(r.err).toContain('brew          exited with an error, but curl gh work: going on');
     expect(r.code).toBe(0);
   });
 
   it('names the tool Homebrew failed to install, and how to see why', () => {
-    have('git', 'curl');
-    // gh lands, tmux doesn't.
-    rmSync(join(repo, 'tmux'));
+    have('git');
+    // curl lands, gh doesn't.
+    rmSync(join(repo, 'gh'));
     failingBrew();
     const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
     expect(r.code).toBe(1);
     expect(r.err).toContain('brew failed (see the output above');
-    expect(r.err).toContain('tmux 3.2 or newer is still not on PATH');
-    expect(r.err).toContain("Run 'brew install tmux' yourself to see what went wrong");
+    expect(r.err).toContain('gh is still not available after installing it');
+    expect(r.err).toContain("Run 'brew install gh' yourself to see what went wrong");
     expect(r.err).not.toContain('going on');
   });
 
-  it('upgrades tmux even when installing the other tools with Homebrew fails', () => {
-    have('git', 'curl');
-    stub(bin, 'tmux', 'echo "tmux 3.0"');
-    failingBrew(true);
-    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
-    expect(r.calls).toEqual(expect.arrayContaining(['brew install gh', 'brew upgrade tmux']));
-    expect(r.err).toContain('going on');
+  it('needs no tmux', () => {
+    have('git', 'curl', 'gh');
+    const r = run(['--non-interactive']);
     expect(r.code).toBe(0);
-    // When the upgrade leaves tmux too old, the hint is the upgrade.
-    stub(bin, 'tmux', 'echo "tmux 3.0"');
-    const old = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', FAKE_NEW_TMUX: '3.0' });
-    expect(old.code).toBe(1);
-    expect(old.err).toContain("found: 3.0). Run 'brew upgrade tmux' yourself to see what went wrong");
+    expect(r.err).not.toMatch(/tmux/i);
   });
 
   it('stops when the Linux package manager exits with an error, even if the tools landed', () => {
@@ -227,7 +209,7 @@ describe('install.sh: installing missing tools', () => {
     stub(bin, 'dnf', `echo "dnf $*" >> "${log}"; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('installing tmux git curl failed (see the output above). Install them yourself and run this installer again.');
+    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run this installer again.');
     expect(r.err).not.toContain('going on');
   });
 
@@ -239,13 +221,13 @@ describe('install.sh: installing missing tools', () => {
     execFileSync('mv', [join(bin, 'brew'), join(brewDir, 'brew')]);
     const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', AK_BREW_DIRS: brewDir });
     expect(r.code).toBe(0);
-    expect(r.calls).toContain('brew install tmux gh');
+    expect(r.calls).toContain('brew install gh');
     // The folder it looked in never leaks into the messages (it once shared a name with a color code).
     expect(r.err).not.toContain(brewDir);
   });
 
   it('goes on without gh when GITHUB_TOKEN can do the downloads, unless told to install it', () => {
-    have('tmux', 'git', 'curl');
+    have('git', 'curl');
     const r = run(['--non-interactive'], { GITHUB_TOKEN: 't' });
     expect(r.code).toBe(0);
     expect(r.err).toMatch(/gh isn't installed: downloading with GITHUB_TOKEN/);
@@ -263,12 +245,12 @@ describe('install.sh: installing missing tools', () => {
   });
 
   it('installs nothing when every tool is there, and never with --no-install-deps', () => {
-    have('tmux', 'git', 'curl', 'gh');
+    have('git', 'curl', 'gh');
     const ok = run(['--non-interactive']);
     expect(ok.code).toBe(0);
     expect(ok.calls).toEqual([]);
     expect(ok.err).toContain('Tools');
-    rmSync(join(bin, 'tmux'));
+    rmSync(join(bin, 'git'));
     const no = run(['--no-install-deps']);
     expect(no.code).toBe(1);
     expect(no.err).toMatch(/drop --no-install-deps/);
@@ -295,9 +277,9 @@ describe('install.sh: installing missing tools', () => {
   it('asks before installing anything, and installs on yes', async () => {
     have('gh');
     const r = await runInTerminal('y');
-    expect(r.out).toContain('sudo dnf install -y tmux git curl');
+    expect(r.out).toContain('sudo dnf install -y git curl');
     expect(r.code).toBe(0);
-    expect(r.calls).toContain('sudo dnf install -y tmux git curl');
+    expect(r.calls).toContain('sudo dnf install -y git curl');
   });
 
   it('installs nothing on no', async () => {
@@ -309,7 +291,7 @@ describe('install.sh: installing missing tools', () => {
   });
 
   it('offers to sign gh in to GitHub', async () => {
-    have('tmux', 'git', 'curl');
+    have('git', 'curl');
     stub(bin, 'gh', `echo "gh $*" >> "${log}"; [ "$1 $2" = "auth login" ]`);
     const r = await runInTerminal('y', 'Sign in now (gh auth login)?');
     expect(r.code).toBe(0);
@@ -317,7 +299,7 @@ describe('install.sh: installing missing tools', () => {
   });
 
   it('offers to sign Claude Code in', async () => {
-    have('tmux', 'git', 'curl', 'gh');
+    have('git', 'curl', 'gh');
     stub(bin, 'claude', `echo "claude $*" >> "${log}"; [ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'; exit 0`);
     const r = await runInTerminal('y', 'Sign in now (claude auth login)?');
     expect(r.code).toBe(0);
@@ -331,9 +313,10 @@ describe('install.sh: when AgentK Local is already installed', () => {
 
   /**
    * An install of `version`: unpacked, linked as app/current and ~/.local/bin/agent-k-local, and
-   * set up (config.toml, and both services, as long as there's no `no-services` file).
+   * set up (config.toml, and both services, as long as there's no `no-services` file). `second`
+   * is the service beside the server's: the session host, or tmux on versions before it.
    */
-  function installed(version: string, h = akHome()) {
+  function installed(version: string, h = akHome(), second: 'host' | 'tmux' = 'host') {
     mkdirSync(join(h, 'app', version, 'bin'), { recursive: true });
     stub(join(h, 'app', version, 'bin'), 'agent-k-local', 'exit 0');
     symlinkSync(version, join(h, 'app', 'current'));
@@ -341,8 +324,8 @@ describe('install.sh: when AgentK Local is already installed', () => {
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
     symlinkSync(join(h, 'app', 'current', 'bin', 'agent-k-local'), join(home, '.local', 'bin', 'agent-k-local'));
     const services = `[ -f "${root}/no-services" ] && exit 1`;
-    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled agent-k-local.service" ] || [ "$*" = "--user is-enabled agent-k-local-tmux.service" ] || exit 1; ${services}; echo enabled`);
-    stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.tmux) ;; *) exit 1 ;; esac; ${services}; exit 0`);
+    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled agent-k-local.service" ] || [ "$*" = "--user is-enabled agent-k-local-${second}.service" ] || exit 1; ${services}; echo enabled`);
+    stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.${second}) ;; *) exit 1 ;; esac; ${services}; exit 0`);
   }
 
   /** Release `version` of AgentK Local, as `gh release download` hands it out. */
@@ -369,7 +352,7 @@ exit 0`);
   const downloads = (calls: string[]) => calls.filter((c) => c.startsWith('gh release'));
 
   beforeEach(() => {
-    have('tmux', 'git', 'curl');
+    have('git', 'curl');
     installed('1.2.3');
     release('1.2.4');
   });
@@ -391,8 +374,19 @@ exit 0`);
     expect(onPath.err).toMatch(/Status\S* +agent-k-local status/);
   });
 
+  it('counts an install from before the session host, with its tmux service, as installed', () => {
+    rmSync(join(akHome(), 'app', 'current'));
+    rmSync(join(home, '.local', 'bin', 'agent-k-local'));
+    installed('1.2.2', akHome(), 'tmux');
+    for (const env of [{}, { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' }] as Record<string, string>[]) {
+      const r = runAll([], env);
+      expect(r.code).toBe(0);
+      expect(r.err).toContain('AgentK Local is already installed');
+    }
+  });
+
   it('stops before the tools, even with tools missing and --install-deps', () => {
-    rmSync(join(bin, 'tmux'));
+    rmSync(join(bin, 'git'));
     const r = runAll(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(0);
     expect(r.err).toContain('AgentK Local is already installed');

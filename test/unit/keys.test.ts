@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
@@ -176,5 +176,20 @@ describe('swipe momentum', () => {
     expect(wheelSteps(-95, 30)).toEqual({ steps: -3, rest: -5 });
     expect(wheelSteps(20, 30)).toEqual({ steps: 0, rest: 20 });
     expect(wheelSteps(20, 0)).toEqual({ steps: 0, rest: 20 });
+  });
+});
+
+describe('terminal reports', () => {
+  it("drops xterm.js's answers to the program's queries, which the session host gives itself", () => {
+    for (const r of ['\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[12;40R', '\x1b[?2004;1$y', '\x1b[0n', '\x1b[?0u', '\x1b[8;24;80t',
+      '\x1b]11;rgb:1010/1414/1212\x1b\\', '\x1b]10;rgb:d5d5/dddd/d8d8\x07', '\x1bP>|xterm.js(6.0.0)\x1b\\']) {
+      expect(isTerminalReport(r), JSON.stringify(r)).toBe(true);
+    }
+  });
+
+  it('keeps what was typed, modified F3 included', () => {
+    for (const t of ['a', '\r', '\x1b', '\x1b[A', '\x1bOR', '\x1b[1;2R', '\x1b[1;5R', '\x1b[I', '\x1b[O', '\x1b[200~text\x1b[201~', '\x1b[<64;10;5M']) {
+      expect(isTerminalReport(t), JSON.stringify(t)).toBe(false);
+    }
   });
 });

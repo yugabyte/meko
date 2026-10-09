@@ -341,7 +341,7 @@ export class Lifecycle {
         throw new HttpError(409, "AgentK hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
       }
       // Claude's plan dialog has "Yes" selected by default.
-      await this.core.tmux.sendKeys(row.tmux_name, 'Enter');
+      await this.core.host.sendKeys(row.tmux_name, 'Enter');
       this.sessions.planPending.delete(row.id);
       this.designApproved(row.id, 'you');
       return;

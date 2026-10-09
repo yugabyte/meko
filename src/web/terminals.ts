@@ -11,7 +11,8 @@ import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clip
 import { HeldImages, type HeldImage } from './heldImages';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, ctrlSequence, decayVelocity, flingVelocity, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps, FLING_WINDOW_MS,
+  clampFont, ctrlSequence, decayVelocity, flingVelocity, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
+  FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
 
@@ -59,8 +60,8 @@ function storedFont(): number | null {
 }
 
 /**
- * Finger travel, in rows, per mouse-wheel step. Claude Code runs full screen and takes the mouse,
- * so tmux hands it the steps and Claude Code decides how far each one scrolls.
+ * Finger travel, in rows, per mouse-wheel step. When Claude Code runs full screen it takes the
+ * mouse, gets the steps and decides how far each one scrolls; otherwise the terminal scrolls itself.
  */
 const SWIPE_ROWS = 2.5;
 /** A swipe let go faster than this (px/ms) coasts; momentum stops below FLING_STOP. */
@@ -77,7 +78,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * the server upgrades first, then may turn the socket away (a lost login, a failed attach).
  */
 const STABLE_MS = 5000;
-/** On phones, a terminal taken off screen lets go of its tmux window after this long. */
+/** On phones, a terminal taken off screen lets go of its session after this long. */
 const DETACH_RELEASE_MS = 5000;
 
 /** Why the pty behind a terminal exited, in words (the UI adds the dots while it reconnects). */
@@ -99,7 +100,13 @@ class SessionTerminal {
   private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private resizeObs: ResizeObserver | null = null;
+  /** The size this terminal last asked for (what fits its box). */
   private lastSize = { cols: 0, rows: 0 };
+  /**
+   * This terminal sets the session's size (it was opened or used last). Otherwise it shows the
+   * session at the size another viewer set, until it's used.
+   */
+  private active = true;
   private refitFrame = 0;
   /** Disconnected on purpose while the page is hidden; reconnects when it's shown again. */
   private paused = false;
@@ -164,8 +171,8 @@ class SessionTerminal {
       scrollback: 10000,
       theme: THEME,
       macOptionIsMeta: true,
-      // tmux has the mouse, so a plain drag selects in tmux (copied through OSC 52 below);
-      // Shift-drag, or Option-drag on a Mac, selects in the browser instead.
+      // While Claude has the mouse, a plain drag goes to Claude; Shift-drag, or Option-drag on a
+      // Mac, selects in the browser instead.
       macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
@@ -177,7 +184,7 @@ class SessionTerminal {
     this.term.open(this.el);
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
-    // Not passive: in select mode a touch is prevented, so no tap reaches tmux as a mouse click.
+    // Not passive: in select mode a touch is prevented, so no tap reaches Claude as a mouse click.
     this.el.addEventListener('touchstart', this.touchStart, { capture: true, passive: false });
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: false });
@@ -197,13 +204,17 @@ class SessionTerminal {
       },
       () => undefined,
     );
+    // Focusing a terminal makes it the one whose size the session takes.
+    this.term.textarea?.addEventListener('focus', () => this.claimActive());
     this.term.onData((data) => {
+      // The session host answers the program's queries itself; this terminal's answers would repeat them.
+      if (isTerminalReport(data)) return;
       // In typing mode the phone keyboard types here; a sticky Ctrl applies to its next character.
       if (this.ctrl && this.typeCtrl(data)) return;
       this.input(data);
     });
     this.term.onBinary((data) => this.send({ type: 'input', data }));
-    // tmux sends a mouse selection as OSC 52 (set-clipboard on); put it on the browser clipboard.
+    // A program copying text sends it as OSC 52; put it on the browser clipboard.
     this.term.parser.registerOscHandler(52, (data) => {
       const text = decodeOsc52(data);
       if (text) void this.copy(text);
@@ -412,14 +423,39 @@ class SessionTerminal {
   private send(msg: TermClientMessage): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
     this.ws.send(JSON.stringify(msg));
+    // Input makes this the active terminal (the host does the same on its side): take its size back.
+    if (msg.type === 'input' && !this.active) {
+      this.active = true;
+      this.refit();
+    }
     return true;
+  }
+
+  /** This terminal was used: the session takes its size. */
+  private claimActive() {
+    if (this.active || !this.send({ type: 'active' })) return;
+    this.active = true;
+    this.refit();
+  }
+
+  /** What fits this terminal's box, or null when it isn't laid out. */
+  private wantedSize(): { cols: number; rows: number } | null {
+    if (!this.el.isConnected || this.el.clientWidth === 0) return null;
+    try {
+      const d = this.fit.proposeDimensions();
+      return d && Number.isFinite(d.cols) && Number.isFinite(d.rows) ? { cols: d.cols, rows: d.rows } : null;
+    } catch {
+      return null;
+    }
   }
 
   private connect() {
     if (this.disposed) return;
     this.started = true;
     this.setConn('connecting');
-    // Fit first when on screen, so the server starts the tmux client at this terminal's size.
+    // A terminal that connects is the newest viewer: the session takes its size.
+    this.active = true;
+    // Fit first when on screen, so the session starts at this terminal's size.
     if (this.el.isConnected && this.el.clientWidth) {
       try {
         this.fit.fit();
@@ -436,7 +472,7 @@ class SessionTerminal {
       this.setConn('open');
       this.lastSize = { cols: 0, rows: 0 };
       this.refit();
-      // Off screen refit does nothing: report the size anyway, so tmux doesn't keep the start size.
+      // Off screen refit does nothing: report the size anyway, so the session doesn't keep the start size.
       if (!this.lastSize.cols) {
         this.lastSize = { cols: this.term.cols, rows: this.term.rows };
         this.send({ type: 'resize', ...this.lastSize });
@@ -451,7 +487,12 @@ class SessionTerminal {
         } catch {
           return;
         }
-        if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
+        if (msg.type === 'size') {
+          // The session's size: this terminal's own while it's active, else another viewer's.
+          this.active = msg.active;
+          if (msg.active) this.refit();
+          else if (this.term.cols !== msg.cols || this.term.rows !== msg.rows) this.term.resize(msg.cols, msg.rows);
+        } else if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
         else if (msg.type === 'error') {
           // A missing or archived session is final (Try again); a failed attach may pass, so back off and retry.
           this.failed = !msg.retry;
@@ -499,7 +540,7 @@ class SessionTerminal {
     this.connect();
   }
 
-  /** Drops the connection until resume(), so this viewer stops holding the tmux window at its size. */
+  /** Drops the connection until resume(), so a hidden phone stops holding a connection open. */
   pause() {
     if (this.paused || this.disposed) return;
     this.paused = true;
@@ -817,7 +858,7 @@ class SessionTerminal {
     this.resizeObs?.disconnect();
     this.resizeObs = null;
     this.el.remove();
-    // tmux sizes a window to its smallest viewer: on a phone, let go of sessions no longer shown.
+    // On a phone, let go of sessions no longer shown: they hold a connection each.
     if (matches(MOBILE_QUERY)) {
       if (this.releaseTimer) clearTimeout(this.releaseTimer);
       this.releaseTimer = setTimeout(() => {
@@ -838,13 +879,17 @@ class SessionTerminal {
   }
 
   refit() {
-    if (!this.el.isConnected || this.el.clientWidth === 0) return;
-    try {
-      this.fit.fit();
-    } catch {
-      return;
+    const want = this.wantedSize();
+    if (!want) return;
+    // Only the active terminal fits its box; another shows the session at its size.
+    if (this.active) {
+      try {
+        this.fit.fit();
+      } catch {
+        return;
+      }
     }
-    const { cols, rows } = this.term;
+    const { cols, rows } = want;
     if (cols !== this.lastSize.cols || rows !== this.lastSize.rows) {
       this.lastSize = { cols, rows };
       this.send({ type: 'resize', cols, rows });
@@ -933,9 +978,8 @@ export function setTerminalFontSize(size: number) {
 }
 
 /**
- * tmux draws a window at the size of its smallest viewer, so a phone left attached narrows the same
- * session on a desktop. On phones, let go of the terminals once the page has been hidden a while
- * (and of each terminal taken off screen: see detach()).
+ * On phones, let go of the terminals once the page has been hidden a while (and of each terminal
+ * taken off screen: see detach()), so a phone in a pocket holds no connections open.
  */
 const HIDDEN_RELEASE_MS = 30_000;
 let hiddenTimer: ReturnType<typeof setTimeout> | null = null;

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
 import type { CreateSessionRequest, MoveSessionRequest } from '../../src/shared/types.js';
 
-// GitHub is mocked; git, tmux and the (fake) claude process are real.
+// GitHub is mocked; git, the session host and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
   pr: null as null | { number: number; url: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; createdAt?: string },
   status: null as null | PrStatus,
@@ -76,7 +76,7 @@ describe('moves: moving a task session between stages', () => {
   const transcript = (id: string) => readFileSync(join(env.fakeDir, `${row(id).claude_session_id}.jsonl`), 'utf8');
   /** Everything typed into Claude from now on. */
   const typed = () => {
-    const spy = vi.spyOn(env.core.tmux, 'submit');
+    const spy = vi.spyOn(env.core.host, 'submit');
     return () => spy.mock.calls.map((c) => String(c[1]));
   };
 
@@ -286,12 +286,12 @@ describe('moves: moving a task session between stages', () => {
 
   it("keeps a move whose prompt couldn't be typed, but rolls back a PR prompt that couldn't", async () => {
     const s = await session({ start: 'explore', prompt: 'look around' });
-    vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 502, message: /^Moved to Code, but couldn't type the Code prompt/ });
     expect(row(s.id).stage).toBe('code');
 
     const t = await session({ start: 'explore', prompt: 'look around', name: 'Ship it' });
-    vi.spyOn(env.core.tmux, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(move(t.id, { stage: 'review' })).rejects.toMatchObject({ status: 502 });
     expect(get(t.id)).toMatchObject({ stage: 'explore', busy: false });
   });

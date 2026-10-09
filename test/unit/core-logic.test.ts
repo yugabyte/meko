@@ -132,7 +132,8 @@ describe('config and db', () => {
     const cfg = loadConfig(paths, (m) => warnings.push(m));
     expect(cfg.repos).toEqual({ roots: ['~/code'], depth: 3, cloneInto: '~/code' });
     expect(cfg.server.port).toBe(7777);
-    expect(cfg.tmux.socket).toBe('mine');
+    // Versions before the session host had [tmux]: ignored now.
+    expect(cfg).not.toHaveProperty('tmux');
     expect(cfg.update.requireAttestation).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('repos.roots should be a list of strings');

@@ -347,7 +347,7 @@ export interface LaunchSpec {
   appendSystemPrompt: string;
   prompt: string | null;
   env: Record<string, string>;
-  /** Variables the session must not inherit (from tmux's environment or the user's profile). */
+  /** Variables the session must not inherit (from the session host's environment or the user's profile). */
   unsetEnv?: string[];
 }
 
@@ -373,8 +373,8 @@ export function loginShellCommand(shell: string, script: string): [string, strin
 
 /**
  * Writes the per-session launcher. It runs Claude through the user's login
- * shell so PATH and tools match an interactive terminal, even when the tmux
- * server was started by systemd or launchd with a bare environment. The script
+ * shell so PATH and tools match an interactive terminal, even when the session
+ * host was started by systemd or launchd with a bare environment. The script
  * runs twice: first it clears inherited markers and re-runs itself inside the
  * login shell; then, after the user's profile, it sets the session's variables
  * (so a profile can't override them) and starts Claude.

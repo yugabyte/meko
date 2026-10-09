@@ -8,7 +8,7 @@ import { ensureFirstCommit } from '../../src/server/git.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
-describe('repos with no commits yet (real tmux + git, fake claude)', () => {
+describe('repos with no commits yet (real session host + git, fake claude)', () => {
   let env: TestEnv;
   let code: string;
 
