@@ -708,7 +708,8 @@ export interface MekoDatapack {
 /** Access to a shared datapack, as Meko names it. */
 export type ShareGrant = 'viewer' | 'contributor' | 'maintainer';
 
-export const SHARE_GRANTS: ShareGrant[] = ['contributor', 'maintainer', 'viewer'];
+/** From the least access to the most, the order the Share dialog lists them in. */
+export const SHARE_GRANTS: ShareGrant[] = ['viewer', 'contributor', 'maintainer'];
 
 /**
  * A project datapack (named `adlc/proj/…`) shared with you. `invited`: an invite waiting in Meko
@@ -767,11 +768,28 @@ export interface DatapackPeople {
   refreshError?: string;
 }
 
+/** Exactly one of `email` and `emails` (at most MAX_SHARE_EMAILS, invited one after another). */
 export interface ShareDatapackRequest {
-  email: string;
+  email?: string;
+  emails?: string[];
   grant: ShareGrant;
-  /** The GitHub login this email is for (sharing with a PR's reviewer): the email is remembered for it. */
+  /** The GitHub login this email is for (sharing with a PR's reviewer): the email is remembered for it. Only with `email`. */
   login?: string;
+}
+
+/** An address Meko didn't invite, and why. */
+export interface ShareFailure {
+  email: string;
+  error: string;
+}
+
+/**
+ * The lists after inviting, with who was invited and who wasn't. When none went through, the
+ * route fails with the first error instead.
+ */
+export interface ShareDatapackResult extends DatapackPeople {
+  invited: string[];
+  failed: ShareFailure[];
 }
 
 /** A person who reviews, or is asked to review, one of the project's PRs. */
@@ -1413,8 +1431,9 @@ export type TermServerMessage =
 //        clone of the same remote there is returned as it is, anything else there is a 409)
 // GET    /api/meko/datapacks                   → MekoDatapack[]
 // GET    /api/meko/datapacks/:id/people        → DatapackPeople   (the datapack must be in a project here)
-// POST   /api/meko/datapacks/:id/people ShareDatapackRequest → DatapackPeople   (invites by email; Meko emails them;
-//        with `login`, the email is remembered for that GitHub login)
+// POST   /api/meko/datapacks/:id/people ShareDatapackRequest → ShareDatapackResult   (invites by email, or a list of
+//        emails one after another; Meko emails them; fails with the first error when none went through; with `login`,
+//        the email is remembered for that GitHub login)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
 //        The four above answer 409 when AgentK can't share (AppState.meko.sharing false).
