@@ -1204,7 +1204,7 @@ tests:
           content: --metric-annotations-allowlist=pods=[amp.yugabyte.com/storage-pool-name,amp.yugabyte.com/cluster-name,amp.yugabyte.com/branch-name,amp.yugabyte.com/endpoint-name]
 
   # Appended after cadvisor, so the indexed assertions above do not move.
-  - it: scrapes kube-state-metrics for endpoint pods only, with the identity labels renamed
+  - it: scrapes kube-state-metrics for endpoint pods only, with the identity labels under both namings
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -1215,12 +1215,13 @@ tests:
       - equal:
           path: spec.config.receivers.prometheus.config.scrape_configs[7].job_name
           value: amp-kube-state-metrics
+      # No labeldrop of the raw names: YBM's metering query joins on
+      # (label|annotation)_amp_yugabyte_com_* (CLOUDGA-37406).
       - equal:
           path: spec.config.receivers.prometheus.config.scrape_configs[7].metric_relabel_configs
           value:
             - {source_labels: [pod], action: keep, regex: "(yb-ep-.*)"}
             - {action: labelmap, regex: "(?:label|annotation)_amp_yugabyte_com_(.+)", replacement: "$1"}
-            - {action: labeldrop, regex: "(?:label|annotation)_amp_yugabyte_com_.+"}
 
   - it: drops the kube-state-metrics Deployment when disabled
     capabilities:

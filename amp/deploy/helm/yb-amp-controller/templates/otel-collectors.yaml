@@ -397,6 +397,11 @@ spec:
             # kube_pod_labels carries it under the same label names, and
             # kube_pod_annotations the names as storage_pool_name, cluster_name,
             # branch_name and endpoint_name, for a join on (namespace, pod).
+            # The identity rides under both namings: the raw
+            # (label|annotation)_amp_yugabyte_com_* names, which YBM's metering
+            # query joins on (CLOUDGA-37406) and which a kube-state-metrics
+            # scraped without this chart ships anyway, and the bare names from
+            # the labelmap for dashboards.
             - job_name: amp-kube-state-metrics
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
@@ -406,7 +411,6 @@ spec:
               metric_relabel_configs:
                 - {source_labels: [pod], action: keep, regex: "({{ .Values.otel.podMetricsSelector | default "yb-ep-.*" }})"}
                 - {action: labelmap, regex: "(?:label|annotation)_amp_yugabyte_com_(.+)", replacement: "$1"}
-                - {action: labeldrop, regex: "(?:label|annotation)_amp_yugabyte_com_.+"}
             {{- end }}
     processors:
       batch: {}
