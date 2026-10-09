@@ -347,6 +347,9 @@ describe('the usage stats report', () => {
         searches: 2, seeds: 1, tokens: Math.round(saved.tokens), usdCents: Math.round(saved.usd! * 100), unpricedSearches: 1, unpricedSeeds: 0,
       },
       starts: { found: 1, empty: 1, error: 0, late: 1, ms: 6500 },
+      // Each call sent 40 characters; seeds send nothing.
+      sentTokens: 60,
+      sentByTool: { context_search: 10, memory_search: 10, memory_add: 10, other: 10, memory_get_by_id: 10, knowledgebase_search: 10 },
     });
     expect(r.totals.meko.savings.usdCents).toBeGreaterThan(0);
     expect(r.totals.mekoFirstTurn).toEqual({ sessions: 1, startSearches: 1, searchedTokens: 1000, seedTokens: 200 });
@@ -362,6 +365,7 @@ describe('the usage stats report', () => {
       calls: 1, lookups: 1, found: 0, empty: 0, errors: 1, saves: 0, foundTokens: 0, byTool: { memory_get_by_id: 1 },
       savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
       starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
+      sentTokens: 10, sentByTool: { memory_get_by_id: 10 },
     });
     expect(day('2026-09-26').meko).toMatchObject({ calls: 0, byTool: {}, starts: { late: 1, ms: 5000 } });
     // A day with no Meko activity leaves it out.
@@ -372,6 +376,64 @@ describe('the usage stats report', () => {
     expect(first.days.reduce((n, d) => n + (d.meko?.calls ?? 0), 0)).toBe(5);
   });
 
+  it("counts learn steps, AgentK's own Meko calls and transcript captures, on the day each began", () => {
+    const db = seeded();
+    const learn = (id: string, s: string, trigger: string, path: string, start: string, end: string, outcome: string, c: number[]) =>
+      run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, candidates, saves, updates, skips, lookups, errors, sent_chars)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, s, trigger, path, at(start), at(end), outcome, ...c);
+    const usage = (s: string, id: string, agent: string | null, model: string, iso: string, u: number[]) =>
+      run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        s, id, agent, model, at(iso), ...u);
+    // Through the mod at Merge & Close: the fork and the duplicate check, recorded by learn.ts.
+    learn('L1', 's1', 'merge', 'mod', '2026-09-27T17:00:00Z', '2026-09-27T17:01:00Z', 'done', [4, 2, 1, 1, 4, 0, 400]);
+    usage('s1', 'learn:L1:extract', 'agentk:learn', 'claude-opus-5-5', '2026-09-27T17:00:30Z', [12, 300, 150000, 0]);
+    usage('s1', 'learn:L1:dedup', 'agentk:learn', 'claude-haiku-4-5-20251001', '2026-09-27T17:00:50Z', [800, 100, 0, 0]);
+    // As a typed turn when asked for: the session's responses while it ran.
+    learn('L2', 's1', 'manual', 'turn', '2026-09-28T03:00:00Z', '2026-09-28T03:05:00Z', 'done', [1, 1, 0, 0, 1, 0, 80]);
+    usage('s1', 'm6', null, 'claude-opus-5-5', '2026-09-28T03:02:00Z', [5, 50, 2000, 0]);
+    // Skipped at a Discard: Claude was busy.
+    learn('L3', 's2', 'discard', 'none', '2026-09-28T04:00:00Z', '2026-09-28T04:00:00Z', 'skipped', [0, 0, 0, 0, 0, 0, 0]);
+    const own = (iso: string, tool: string, chars: number, ok: number, ms: number) =>
+      run(db, 'INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, 10, ?, ?, NULL)', at(iso), tool, chars, ok, ms);
+    own('2026-09-27T17:00:40Z', 'context_search', 120, 1, 200);
+    own('2026-09-27T17:00:55Z', 'memory_add', 200, 0, 900);
+    own('2026-09-28T05:00:00Z', 'Weird.Tool', 40, 1, 100);
+    run(db, 'INSERT INTO meko_capture_runs(at, ok, ms) VALUES (?, 1, 300), (?, 0, 100)', at('2026-09-27T18:00:00Z'), at('2026-09-28T06:00:00Z'));
+
+    const r = report(db);
+    const tokens = (input: number, output: number, cacheRead: number) => ({ input, output, cacheRead, cacheWrite: 0, messages: 1 });
+    expect(r.totals.meko.learn).toEqual({
+      runs: 3, byTrigger: { merge: 1, manual: 1, discard: 1 }, byPath: { mod: 1, turn: 1, none: 1 },
+      byOutcome: { done: 2, failed: 0, interrupted: 0, skipped: 1 },
+      candidates: 5, saves: 3, updates: 1, skips: 1, empty: 0, lookups: 5, errors: 0, sentTokens: 120,
+      tokens: { extract: tokens(12, 300, 150000), dedup: tokens(800, 100, 0), turn: tokens(5, 50, 2000) },
+      // Opus 5.5 for the fork and the turn, Haiku 4.5 for the check: $0.0388.
+      usdCents: 4,
+    });
+    expect(r.totals.meko.agentk).toEqual({ calls: 3, errors: 1, sentTokens: 90, ms: 1200, byTool: { context_search: 1, memory_add: 1, other: 1 } });
+    expect(r.totals.meko.capture).toEqual({ runs: 2, failures: 1, ms: 400 });
+    const day = (d: string) => r.days.find((x) => x.day === d)!;
+    expect(day('2026-09-27').meko?.learn).toMatchObject({ runs: 1, saves: 2, updates: 1 });
+    expect(day('2026-09-28').meko?.learn).toMatchObject({ runs: 2, byOutcome: { done: 1, skipped: 1 } });
+    expect(day('2026-09-28').meko?.agentk).toMatchObject({ calls: 1, byTool: { other: 1 } });
+    expect(day('2026-09-26').meko?.learn).toBeUndefined();
+    expect(validate(r, SCHEMA)).toEqual([]);
+  });
+
+  it("names AgentK's nine most used tools, and the rest as other", () => {
+    const db = openDb(':memory:');
+    for (let i = 0; i < 12; i++) {
+      for (let n = 0; n <= i; n++) {
+        run(db, 'INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms) VALUES (?, ?, 4, 0, 1, 1)', NOW - 1000, `tool_${String.fromCharCode(97 + i)}`);
+      }
+    }
+    const byTool = report(db).totals.meko.agentk!.byTool;
+    expect(Object.keys(byTool)).toHaveLength(10);
+    expect(byTool.tool_l).toBe(12);
+    expect(byTool.tool_d).toBe(4);
+    expect(byTool.other).toBe(1 + 2 + 3);
+  });
+
   it('counts no Meko use without any', () => {
     const r = report(openDb(':memory:'));
     expect(r.days.some((d) => d.meko)).toBe(false);
@@ -379,6 +441,7 @@ describe('the usage stats report', () => {
       calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, byTool: {},
       savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
       starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
+      sentTokens: 0, sentByTool: {},
     });
     expect(r.totals.mekoFirstTurn).toEqual({ sessions: 0, startSearches: 0, searchedTokens: 0, seedTokens: 0 });
   });
@@ -402,6 +465,11 @@ describe('the usage stats report', () => {
     expect(validate({ ...r, install: { ...r.install, platform: 'Alice’s Mac' } }, SCHEMA)).toHaveLength(1);
     expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, query: 1 } } }, SCHEMA)).toEqual(['$.totals.meko: unexpected query']);
     expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, byTool: { 'alice/zeta': 1 } } } }, SCHEMA)).toHaveLength(1);
+    // A report from before Discard ran learn steps has no byTrigger.discard, and still checks.
+    const learn = { runs: 0, byTrigger: { merge: 0, manual: 0 }, byPath: { mod: 0, turn: 0, none: 0 }, byOutcome: { done: 0, failed: 0, interrupted: 0, skipped: 0 },
+      candidates: 0, saves: 0, updates: 0, skips: 0, empty: 0, lookups: 0, errors: 0, sentTokens: 0,
+      tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 }])), usdCents: 0 };
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, learn } } }, SCHEMA)).toEqual([]);
     // The schema names exactly the tools the report does.
     const tools = (SCHEMA.$defs as Record<string, Schema>).toolCounts.propertyNames as { enum: string[] };
     expect([...tools.enum].sort()).toEqual([...REPORTED_TOOLS, 'other'].sort());
@@ -415,6 +483,20 @@ describe('the usage stats report', () => {
       byTool: Object.fromEntries([...REPORTED_TOOLS, 'other'].map((t) => [t, big])),
       savings: { searches: big, seeds: big, tokens: big, usdCents: big, unpricedSearches: big, unpricedSeeds: big },
       starts: { found: big, empty: big, error: big, late: big, ms: big },
+      sentTokens: big,
+      sentByTool: Object.fromEntries([...REPORTED_TOOLS, 'other'].map((t) => [t, big])),
+      learn: {
+        runs: big, byTrigger: { merge: big, manual: big, discard: big }, byPath: { mod: big, turn: big, none: big },
+        byOutcome: { done: big, failed: big, interrupted: big, skipped: big },
+        candidates: big, saves: big, updates: big, skips: big, empty: big, lookups: big, errors: big, sentTokens: big,
+        tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }])) as never,
+        usdCents: big,
+      },
+      agentk: {
+        calls: big, errors: big, sentTokens: big, ms: big,
+        byTool: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`meko_tool_name_${String.fromCharCode(97 + i)}`, big])),
+      },
+      capture: { runs: big, failures: big, ms: big },
     };
     r.totals.fileTypes = Array.from({ length: 26 }, (_, i) => ({ ext: `ext${i}`, files: big, additions: big, deletions: big }));
     r.totals.meko = meko;

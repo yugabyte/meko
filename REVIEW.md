@@ -102,7 +102,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 3. Lifecycle and GitHub
 
-- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically.
+- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically. A gate
+      pressed early (`sessions.queued_gate`) goes only as that press would have, shows with Cancel (honored
+      until the prompt is typed or the merge requested), and is dropped (logged) when what it waited for is
+      gone: a queued Open PR when Claude exits by any path (`setStatus` to exited, a relaunch), either one on
+      a move or archive, and a queued merge when a blocker appears that won't clear by itself.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
@@ -119,7 +123,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead
       (with a live mod they go through it, and Claude holds them until the turn ends).
       Prompts to one session go one at a time.
-- [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users.
+- [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users. Only
+      blockers that clear by themselves let it be queued (`MergeInfo.queueable`); any other one drops
+      a queued merge, and the user is told.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
@@ -179,6 +185,17 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
       session launch, after Claude Code's setup), in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
+- [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
+      one, and on the mod path never a fact that names this machine (home, AgentK's home,
+      worktree, repo path); the typed path relies on the saving rule in its prompt. It
+      never holds Merge & Close or Discard past its timeout on the mod path (writes included), and
+      a Discard waiting for it always ends (step done, failed, interrupted, or Discard now; a
+      restart finishes it), and **Don't save learnings** skips it entirely; it never holds a
+      hook-socket request while it works with Meko (`/mod/learn` answers at once; what follows goes
+      on a poll), a failure at any step closes it and lets the close go on, and one runs at a time
+      per session. Its model calls' usage is
+      recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
+      tokens only, never a fact's text.
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
       the user asked: the installer's question (or `--install-deps`) or **Set up Claude Code with
       this Meko**. A Claude Code token is only ever sent to AgentK's server, and only when Claude

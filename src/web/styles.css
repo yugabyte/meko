@@ -502,6 +502,16 @@ textarea.input {
   font-weight: 600;
   color: var(--bad);
 }
+/* Don't save learnings, beside Discard and Merge & Close. */
+.check.skip-learn {
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.check.skip-learn input {
+  margin-top: 0;
+}
 .tag {
   font-size: 10.5px;
   font-weight: 600;
@@ -2365,11 +2375,21 @@ div[id^='dak-mermaid-'] .label {
 }
 
 /* ---------- Auth ---------- */
+/* Scrolls itself, not the page: trackAppHeight() puts the page's scroll back at the top (for the
+   app, which is pinned to the visible viewport), which undid the browser's scroll to a focused
+   field and kept a tall card from scrolling at all. */
 .auth-page {
-  min-height: 100%;
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: grid;
   place-items: center;
-  padding: 24px 16px;
+  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
+    calc(24px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+}
+.auth-page .field {
+  scroll-margin: 16px;
 }
 .auth-card {
   width: min(400px, 100%);
@@ -4225,6 +4245,16 @@ div[id^='dak-mermaid-'] .label {
   }
   .dp-row > .mono + .tag {
     margin-left: 24px;
+  }
+  /* On the visible viewport, like the app, so the fields scroll above the on-screen keyboard. */
+  .auth-page {
+    bottom: auto;
+    top: var(--app-top, 0px);
+    height: var(--app-h, 100dvh);
+  }
+  /* The keyboard covers the home indicator, so nothing needs to clear it. */
+  html.kb-open .auth-page {
+    padding-bottom: 24px;
   }
   .auth-card {
     padding: 22px;

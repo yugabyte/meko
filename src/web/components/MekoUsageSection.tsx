@@ -1,15 +1,16 @@
-import type { MekoFirstTurn, MekoSavings, MekoUsage } from '../../shared/types';
-import { cx, firstTurnText, formatCost, formatTokens } from '../util';
+import type { MekoFirstTurn, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
+import { cx, firstTurnText, formatCost, formatTokens, learningText, type LearningTile } from '../util';
 
 const ESTIMATE =
   'Estimate: each Meko search that found something, and each seed AgentK passed at session start, is credited with the exploring it most likely replaced ' +
   '(3 tool calls, each re-reading the context and adding about 2,000 tokens). Anthropic API list prices.';
 
 /**
- * Meko lookups and saves Claude made, what they're estimated to have saved, and how many tokens Meko brought into
- * sessions' first turns: the project home and the Usage page.
+ * Meko lookups and saves Claude made, what they're estimated to have saved, how many tokens Meko brought into
+ * sessions' first turns, and what the learn step saved and cost: the project home and the Usage page.
  */
-export function MekoUsageSection({ meko, firstTurn }: { meko: MekoUsage; firstTurn: MekoFirstTurn }) {
+export function MekoUsageSection({ meko, firstTurn, learning }: { meko: MekoUsage; firstTurn: MekoFirstTurn; learning: MekoLearning }) {
+  const learned = learningText(learning);
   const f = (n: number) => n.toLocaleString();
   return (
     <div className="meko-usage">
@@ -37,6 +38,8 @@ export function MekoUsageSection({ meko, firstTurn }: { meko: MekoUsage; firstTu
           <span className="usage-lbl">Tokens found</span>
         </div>
         <SavedStat savings={meko.savings} />
+        <LearningStat tile={learned.learned} label="Learned" />
+        <LearningStat tile={learned.cost} label="Learning cost" />
       </div>
     </div>
   );
@@ -63,6 +66,17 @@ function SavedStat({ savings: s }: { savings: MekoSavings }) {
           $ leaves out {countText(s.unpricedSearches, s.unpricedSeeds, 'unpriced ')}
         </span>
       )}
+    </div>
+  );
+}
+
+/** A learn-step tile (`learningText`): a dash before any step ran. */
+function LearningStat({ tile, label }: { tile: LearningTile; label: string }) {
+  return (
+    <div className="usage-stat" title={tile.title}>
+      <span className={cx('usage-num', tile.num === '—' && 'muted')}>{tile.num}</span>
+      <span className="usage-lbl">{label}</span>
+      {tile.line && <span className="usage-lbl">{tile.line}</span>}
     </div>
   );
 }

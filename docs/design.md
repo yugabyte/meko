@@ -111,15 +111,17 @@ hooks module whatever the variable says, and AgentK types prompts as before. It 
 
 - `[claude] mod` is on (the default);
 - the mod's files are there;
-- `claude --version` (read at startup, then at most every 10 minutes) is 2.1.286 or later. Older
-  versions frame a plugin's prompt as the plugin's message, not the person's.
+- `claude --version` (read at startup, then at most every 10 minutes) is 2.1.287 or later. Older
+  versions frame a plugin's prompt as the plugin's message, not the person's (before 2.1.286),
+  or may lack what the learn step uses (`$.model.fork`, `$.model.complete`, `$.command.register`
+  and `command.run`, all in 2.1.287's declarations; 2.1.286's couldn't be checked).
 
 **Claude Code's version.** AgentK installs Claude Code with Anthropic's installer (`install.sh`) and
 never updates it; Claude Code updates itself, unless that's turned off or it hasn't run for a while.
 `ClaudeCode` (`claudecode.ts`) keeps the version read above and puts it in `AppState.claudeCode`,
 with whether it runs the mod. A running session keeps the version it started with until Claude
 restarts in it, so what matters is the version the next launch gets. While `[claude] mod` is on and
-that version is older than 2.1.286, a banner says so, and that AgentK types its prompts instead:
+that version is older than 2.1.287, a banner says so, and that AgentK types its prompts instead:
 
 - **Update Claude Code** runs `claude update`, Claude Code's own updater (`POST /api/claude/update`,
   one at a time, stopped after 5 minutes), then reads the version again;
@@ -139,14 +141,16 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 
 | Route | What it does |
 |---|---|
-| `/mod/hello` | Sent once per load, from `session.start`. |
-| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The poll carries the ids of the prompts the mod submitted that Claude still holds (`{ held: [...] }`). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
+| `/mod/hello` | Sent once per load, from `session.start`, with the mod's protocol: 2 runs learn steps, so a session still running a mod from before them gets the typed learn prompt instead. Every poll names it too, since a server restarted since the hello hears it only there. |
+| `/mod/poll` | A loop the mod keeps going with `$.clock.after` (a reload drops the old module's timers, so only the new loop polls). The poll carries the ids of the prompts the mod submitted that Claude still holds and its protocol (`{ held: [...], protocol }`). The server holds each poll up to 20 seconds and answers the prompts it has for the session (`{ prompts: [{ id, text }] }`, with `learn: { id, kind, prompt, model? }` when a part of a learn step is waiting and `toast` when the mod should show a line), or 204. A newer poll answers the one before it with nothing. Unknown tokens get 403; a closing socket, or `[claude] mod` turned off, 503. The mod waits 3 seconds after any failure. |
 | `/mod/ack` | `accepted` for each prompt as it arrives. The server answers 204 when it still wants the prompt, and only then does the mod hand it to `$.prompt.submit({ text, asUser: true })`, so the model reads it as the person's own words; 410 (it gave up on the prompt) or no answer, and the mod drops it. `dropped` with a reason, and whether it filled the prompt box, when another plugin's `prompt.submit` hook refused it. |
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
 | `/mod/held` | `{ held: [...] }`, as on a poll, as soon as it changes: a held prompt's `$.prompt.submit` resolved (its turn started) or another plugin refused it. |
 | `/mod/ask` | From a `tool.call` hook on Claude's `AskUserQuestion`: `{ id, questions }` (the call's `tool_use_id` and its questions). The server holds it up to 20 seconds and answers the user's answers by question index (`{ answers: { 0: "Blue" } }`), or 204, and the mod asks again; 410 when it dropped the ask, 400 (`{ error }`) for questions it can't show. Either way the mod then leaves the question to the terminal's dialog. |
 | `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK Local or the terminal, or ended. |
 | `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions, checked and saved (`{ text }` for Claude), or what's wrong (400, `{ error }`). |
+| `/mod/learn` | A [learn step](#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
+| `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
@@ -185,7 +189,7 @@ open in the terminal as always (`next(e)`), and sends the questions to the serve
 (`/mod/ask`, asked again after each hold). Whichever is answered first wins: the terminal's answer
 is returned as it is; AgentK Local's comes back as the tool's result,
 `{ questions, answers: { "<question>": "<answer>" } }`, which closes the terminal's dialog (checked
-on Claude Code 2.1.286, the oldest that loads the mod, and on 2.1.287 and 2.1.291; so is the
+on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2.1.291; so is the
 `design_questions` tool below). The hook's `.catch` falls back to `next(e)`, and any failure
 leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
 call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
@@ -798,10 +802,13 @@ app bar also holds the session tabs, between the drawer button and ⋯, so the s
 repeated above them (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, and
-the overlay behind a dialog or sheet, are pinned to the visible viewport (its height and, where iOS
-pans the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
-covering the prompt or a dialog's fields; while you type, the terminal stays scrolled to its newest line. On
+you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, the
+overlay behind a dialog or sheet, and the sign-in and setup screens are pinned to the visible
+viewport (its height and, where iOS pans the page for a focused field, its offset), so the on-screen
+keyboard shrinks them instead of covering the prompt or a dialog's fields. The sign-in screens
+scroll inside themselves and bring the field being typed in back into view once the keyboard is up
+(`keepFocusInView`); the page itself never scrolls, since the app puts its scroll back at the top.
+While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,
 Home, End, Page Up and Page Down; the row stays open until ▾ is tapped again, and ▾ stays lit while
@@ -945,7 +952,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Close tab | Kills the pty only. tmux and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise kills the tmux session. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
-| Discard | Chosen in Archive's confirmation step. Kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
+| Discard | Chosen in Archive's confirmation step. First runs the [learn step](#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then kills the tmux session, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
 | Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](#open-project)). |
 
 ```sql
@@ -985,6 +992,10 @@ CREATE TABLE sessions (
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
                                    --   heads in a row did (both cleared once the PR merges cleanly)
+  queued_gate TEXT,                -- a gate pressed before it could go: 'open-pr' (at the turn's end) | 'merge' (once
+                                   --   nothing blocks it); NULL: none
+  skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
+  discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
@@ -1143,10 +1154,10 @@ stateDiagram-v2
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
-| 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. The button is disabled while Claude is mid-turn. |
+| 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. |
-| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
+| 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running, AgentK's review to come), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
+| 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when **Don't save learnings** beside the button was checked), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the tmux session, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **AgentK in the loop.** AgentK doesn't re-review on push, so after fixes the header offers
   **Request another round**, which posts `/agentk review` (**Request AgentK review** before AgentK
@@ -1181,7 +1192,9 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-comments`) with `.agent-k/stages/<name>.md`. This lets a team
+  `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
+  `learn`) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
@@ -1190,6 +1203,43 @@ stateDiagram-v2
   through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
 - **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
   enforce a branch-name prefix with rulesets.
+
+### Queued gates
+
+**Open PR** and **Merge & Close** can be pressed before they could go; the server keeps the press
+in `sessions.queued_gate` (so it survives a restart, a self-update included) and carries it out
+later. The gate then shows a pill (*✓ Open PR queued: goes when the turn ends*, *✓ Merge queued:
+waiting on CI*) with **Cancel** (`cancel-queued`), and the activity log says when it was queued,
+sent, withdrawn or dropped.
+
+- **Open PR after this turn.** In Code, while AgentK is mid-turn (working, or a question or
+  permission prompt during a turn) or Claude is starting, Open PR queues the PR prompt instead of
+  being refused. It goes when the turn ends (at the `Stop`, before review comments), or at the next
+  poll when Claude is back at its prompt (a turn that ended while the server was down), exactly as a
+  press between turns would send it. It waits another turn while Claude holds prompts you sent
+  mid-turn, and is dropped when Claude exits (however that's found: its `SessionEnd`, a dead pane at
+  startup, a failed restart) or is relaunched, on a move and on archive. A Cancel, a move or an exit
+  while the prompt is being prepared (the PR prompt waits on GitHub and Meko first) still stops it. With
+  Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
+  AgentK's mod.
+- **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
+  AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
+  being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
+  (AgentK's work in progress; mid-turn when they were measured counts too, since a turn can push and
+  end during the look at the PR). The others don't: CI failing, changes requested, required approvals
+  missing (only on repos that require them, since people's approvals can take days), merge conflicts,
+  a branch behind its base, a draft, a PR that isn't open, unpushed or uncommitted work between turns,
+  a Needs you with no turn behind it (a parked recovery), and findings left mid-address by a Claude
+  that exited. With only
+  the first kind left (`Session.mergeQueueable`), the gate reads **Merge when ready** and a press
+  queues the merge; the reasons line reads *Merges when these clear*. While it waits, the PR is
+  checked at every 15-second pass instead of every 45 seconds. A queued merge also waits for CI to
+  show up on a new head: GitHub lists no checks on a fresh push for a moment, so *CI hasn't started on
+  the latest push yet* holds it for up to 2 minutes after the head first appeared, after which a head
+  with no checks counts as one without CI. At the first look that finds no blocker it merges, as
+  Merge & Close does, and you're notified; a blocker of the second kind drops it, mid-turn or not, and you're
+  notified to press Merge & Close again once that's fixed. A move out of Review, archive or a merge
+  on GitHub clears it too. While the merge is being requested, Cancel is refused.
 
 ### Reviewing a PR
 
@@ -1511,7 +1561,7 @@ or API URL changes or a sync works.
 
 | | |
 |---|---|
-| Share | The Share dialog: the reviewers of the project's open PRs (below), email, role, the people with access and pending invites (Resend, Revoke). Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). |
+| Share | The Share dialog: the reviewers of the project's open PRs (below), emails, role (Viewer, Contributor, Maintainer, least to most; Contributor by default), the people with access and pending invites (Resend, Revoke). The Emails field takes a list separated by commas, semicolons or whitespace (new lines and tabs pasted from a spreadsheet become commas); `Jane Doe <jane@example.com>` counts as the address in `<…>`, and repeats are sent once. Anything that isn't an address stops the invite and is named. Addresses the dialog's lists show as members or pending invites are left out and named (while the lists load, or when they can't be read, those go to Meko, which refuses a repeat invite). The server invites up to 50 one after another (`emails` in `ShareDatapackRequest`) and reads the lists once: when some fail it answers with who was invited and who wasn't, and why (`ShareDatapackResult`), and the failed ones stay in the field; when none go through it fails with the first error. A refused key or an unreachable Meko stops the list, so a Meko that times out costs one 30-second wait, not one per address. Meko has no route to remove someone who has accepted; that's done in Meko. When an invite goes through but the lists can't be read again, it still says the invite was sent (`refreshError`). |
 | An invite for you | A banner (and a notification) from `incoming-shares`: **Open as project** (creating the project accepts it), **Decline**, **Later**. A viewer invite gets **Accept** instead of Open as project. |
 | A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). |
 
@@ -1599,6 +1649,97 @@ while it's being created share the one `conversation_create`.
 
 Nothing waits for the search: the session starts the same when it's slow, fails, or Meko is off
 (then there's no search at all).
+
+### The learn step
+
+Meko's automatic extraction of captured conversations reads only the user's side of each turn, and
+in AgentK sessions that is mostly AgentK's own prompts and the skills Claude loads. What the
+session found out (how the code works, root causes, gotchas) is in Claude's replies and never
+became a memory. The learn step (`src/server/learn.ts`) saves it to the project's dedicated
+datapack, which the team working on the project shares.
+
+**The saving rule.** Every session whose project has a dedicated datapack gets it in its system
+prompt (`mekoSaveSystemLine()` in `prompts.ts`), so it holds for saves Claude makes on its own
+too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `EXTRACT_PROMPT` and
+the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line,
+and so does the Explore prompt, which ends by saving under it. Only the mod path also filters what
+is written (local paths); on the typed path, and for Claude's own saves, the rule is all there is. Save what a teammate on this product would want and couldn't easily get from the code, the
+PR, the design or the git log: how a subsystem works, decisions and the rejected alternatives,
+root causes, traps and invariants, build/test/CI quirks, measured numbers. Never anything about
+the machine, worktree or environment, one person's preferences, task or PR status, what the diff
+or PR already says, or AgentK's process steps. Search before each save; skip what's known, and
+correct a memory that's now wrong with `memory_update`. No limit. It says it overrides the Meko
+plugin's advice not to call `memory_add`. The Explore prompt ends by saving under it (the rule appended in code, when the project has datapacks).
+
+**When.** At Merge & Close, before the cleanup (`Lifecycle.merged()` asks `Learner.beforeClose`,
+and runs again when any learn step ends there, `afterLearn`), once per session; at Discard, before
+the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn** session action
+(**Save learnings** in the header, or the ⋯ sheet), or `/agentk_learn` in the terminal. It needs
+Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
+that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
+Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
+(`Session.learning`): a Save learnings step still running when the PR merges, or when Discard is
+asked for, holds the close like one of its own, and a step that ended done since the session got
+to Merge & Close stands for it.
+
+**Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
+checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
+Checked, the action's `CloseSessionRequest` carries `skipLearn` (400 when it isn't a boolean), no
+learn step runs, and the timeline says so (`learn-skipped`, once, and not for **Discard now**,
+whose step is recorded as interrupted). Merge & Close writes the choice to `sessions.skip_learn`
+only once the merge is requested or queued, and keeps it until the PR merges; a merge given up on
+clears it (a queued merge withdrawn or dropped, GitHub refusing it, or the session back in Review),
+so a PR merged on GitHub without the button runs the step as usual. Nothing is recorded in
+`meko_learns` for a skipped step, so the usage stats' *skipped* count stays the sessions Claude
+was gone or busy in.
+
+**Discard waits for it.** Unless skipped, Discard starts the step (trigger `discard`), sets
+`sessions.discarding` (`Session.discarding`) and answers at once with the session still running:
+the confirmation shows *Saving learnings, then discarding* with **Discard now**, which discards at
+once (`skipLearn`, interrupting the step). When the step ends, done, failed, timed out or
+interrupted (`Lifecycle.afterLearn`, and `onTurnEnd` for a typed step, which then does nothing else
+for the session), `SessionManager.discardNow()` discards the session, once however many ask. A
+restart that cut the step short finishes the discard in `recover()`, unless the step was a typed
+turn in a Claude still running: that turn goes on, and its end discards the session. Archive
+clears `discarding`.
+
+**Through the mod** (its link live, protocol 2):
+
+1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll.
+2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
+   served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
+   as JSON (`EXTRACT_PROMPT`), and posts the reply, the model and the usage to `/mod/learn`, which
+   answers at once.
+3. The server parses the facts (the first JSON object in the reply), drops any that name the home
+   folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
+   saved memories most like each (`MekoClient.similar`: `context_search`, memories only, in
+   parallel). It puts a `check` part on the next poll: the duplicate check's prompt
+   (`dedupPrompt()`), each fact numbered with those memories and their ids.
+4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Haiku) and posts the reply.
+5. For each fact the server adds it (`memory_add`, as "Gotcha (component): …", with metadata
+   `{ source, kind: "learned", fact, component, session, learn }`), skips it, or updates the memory
+   it corrects (`memory_update`, as the agent that wrote it, with the check's corrected text unless
+   that names a local path, then the fact's own; an update naming a memory that wasn't offered
+   becomes an add). A fact the check left out is added. One at a time.
+6. The row closes with its counts, the session's timeline says "Saved N memories and corrected M in
+   <datapack>", and the next poll has the mod show the same as a toast.
+
+The whole step, writes included, has 3 minutes (`LEARN_TIMEOUT_MS`): when they're up the step
+closes as `failed` with the part it reached (what it saved by then counted), no further fact is
+written, and Merge & Close goes on. So does a fork or check that gives no usable reply. A model
+call's usage that comes after AgentK gave up is still recorded. A relaunch, exit or archive closes a running step as `interrupted`, and so
+does a server restart (the job lived in memory). Each model call's usage is stored as a
+`usage_messages` row (`message_id` `learn:<id>:extract|dedup`, agent `agentk:learn`), so the
+session's tokens and cost include it, though it's never in the transcript.
+
+**Without the mod** (older Claude Code, the rollout switch off, `[claude] mod` off, or a mod from
+before protocol 2), AgentK types the `learn` stage prompt instead, and Claude searches and saves
+under the saving rule itself. The step ends with that turn (`Lifecycle.onTurnEnd`), counted from
+the Meko calls in the transcript during it.
+
+**Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
+candidates, saves, updates, skips, lookups, errors, sent_chars)`, with `trigger` `merge`, `discard`
+or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id.
 
 ## Token usage
 
@@ -1749,8 +1890,14 @@ only move when a session gets a reply, so the rail says when they were last repo
   tooltip says how many sessions the search at start ran in; `firstTurnText` in
   `src/web/util.ts`), tokens found, and **Est. saved** in USD and tokens (searches and seeds), green for a saving
   (a negative estimate is in the normal text color, and a dash means no search has found
-  anything and no session was seeded). It shows once there's any
-  Meko call or seed, or before that while Meko is on (and, on the project home, the project has a datapack).
+  anything and no session was seeded), then two tiles for the [learn step](#the-learn-step)
+  (`MekoLearning`, from `meko_learns` and the steps' own `usage_messages` rows; `learningText` in
+  `src/web/util.ts`): **Learned**, the memories it saved, with `2 corrected · 3 steps` on the line
+  under it and a tooltip that adds the facts found already known, the steps that didn't finish and
+  the Merge & Close sessions it was skipped in; and **Learning cost**, the steps' model calls in USD
+  with their tokens under it (tokens alone when no model had a price). Both are a dash before any
+  step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
+  (and, on the project home, the project has a datapack).
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The
   cost is an estimate at API list prices, not a bill.
@@ -1807,7 +1954,17 @@ reports.
   estimated savings (searches and seeds credited, tokens, and dollars in whole cents). It adds calls
   by tool, naming only the lookup and save tools (every other Meko tool counts as `other`), and
   AgentK's searches at session start by outcome with the milliseconds they took in all. Calls go on
-  the day they were made, seeds and searches at start on the day the search ran.
+  the day they were made, seeds and searches at start on the day the search ran. Added since
+  (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
+  Meko (their input, characters ÷ 4), also by tool; [learn steps](#the-learn-step) by trigger
+  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
+  failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
+  typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
+  recorded in `MekoClient.call`: searches at start, what shipped, designs, the learn step's) with
+  failures, tokens sent, time taken and the 9 most used tools (the rest as `other`); and the Meko
+  plugin's transcript captures AgentK ran (`meko_capture_runs`: runs, failures, time). What a
+  capture sends isn't counted: AgentK can't see it. Each goes on the day it began, and is left out
+  when there was none.
 
 Never sent: project, session, repo, branch, datapack or file names, paths, prompts, designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and
@@ -1866,7 +2023,8 @@ their own copy.
   everything that can connect to 127.0.0.1, every user of the computer and any reverse proxy on it
   included: on a shared host, or behind a proxy, choose remote.
 - **First run.** With remote access, the installer prints a one-time setup link:
-  `https://host:7777/setup?token=…`. You open it, choose a username and password, and can
+  `https://host:7777/setup?token=…`. You open it, choose a username (up to 64 letters, digits,
+  `.`, `@`, `-` or `_`: most email addresses work, but not ones with `+`) and password, and can
   optionally enrol TOTP. The token stops working after it is used. With local access it prints
   the address instead; `agent-k-local setup-link` still makes a login for a later switch to remote.
 - **Forgot password.** The sign-in screen's **Forgot password?** says how to get back in: run
@@ -1948,7 +2106,8 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 - **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
   host name at install time. On any other host systemd skips them: nothing starts and nothing is
-  logged. Renaming the host means running the installer again.
+  logged. Renaming the host means running `agent-k-local install` again, which rewrites the units
+  (the one-line installer stops early on an install it finds set up).
 - **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
   anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it
   rewrites every 10 seconds; a lease not rewritten for 45 seconds is free. A lease from another
@@ -2043,6 +2202,11 @@ comes back. **Auto-continue is on by default**, with guards:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
+#  0. stops, saying so, if AgentK Local is already installed in AK_HOME and set up: app/current,
+#     config.toml, ~/.local/bin/agent-k-local, and both services enabled (systemd) or loaded
+#     (launchd). Updates are offered in the app, and `agent-k-local install` redoes the setup.
+#     --reinstall, --deps-only, a --version other than the installed one, or options for
+#     `agent-k-local install` (other than --non-interactive) go on
 #  1. checks for tmux (≥ 2.7 on Linux, ≥ 3.2 on macOS), git, curl, gh and Claude Code; offers to
 #     install whatever is missing (it shows the commands and asks first): brew on macOS, the
 #     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux

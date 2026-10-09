@@ -392,6 +392,79 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN start_images TEXT;
   `,
+  // 26: a gate pressed before it could go (QueuedGate: 'open-pr' or 'merge'), kept until it goes or
+  // is dropped, so a merge waiting on CI isn't lost to a restart. NULL: none.
+  `
+  ALTER TABLE sessions ADD COLUMN queued_gate TEXT;
+  `,
+  // 27: the learn step (learn.ts): each run with what it found and wrote, the Meko calls AgentK
+  // itself makes (tagged with the learn step that made them), and the Meko plugin's transcript
+  // captures, for the usage report. A learn step's own model calls are usage_messages rows with
+  // agent 'agentk:learn'.
+  `
+  CREATE TABLE meko_learns (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL CHECK (trigger IN ('merge', 'manual')),
+    path TEXT NOT NULL CHECK (path IN ('mod', 'turn', 'none')),
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    outcome TEXT CHECK (outcome IN ('done', 'failed', 'interrupted', 'skipped')),
+    failed_step TEXT,
+    candidates INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    updates INTEGER NOT NULL DEFAULT 0,
+    skips INTEGER NOT NULL DEFAULT 0,
+    lookups INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    sent_chars INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX meko_learns_session ON meko_learns(session_id, started_at);
+  CREATE TABLE meko_agentk_calls (
+    at INTEGER NOT NULL,
+    tool TEXT NOT NULL,
+    input_chars INTEGER NOT NULL,
+    result_chars INTEGER NOT NULL,
+    ok INTEGER NOT NULL,
+    ms INTEGER NOT NULL,
+    learn_id TEXT
+  );
+  CREATE INDEX meko_agentk_calls_at ON meko_agentk_calls(at);
+  CREATE TABLE meko_capture_runs (
+    at INTEGER NOT NULL,
+    ok INTEGER NOT NULL,
+    ms INTEGER NOT NULL
+  );
+  `,
+  // 28: Discard runs the learn step too (trigger 'discard', so meko_learns is made again for its
+  // CHECK), and waits for it (sessions.discarding, so a restart finishes the discard); Merge &
+  // Close and Discard can skip it (sessions.skip_learn, the merge's choice kept until it lands).
+  `
+  ALTER TABLE sessions ADD COLUMN discarding INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN skip_learn INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE meko_learns_v28 (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL CHECK (trigger IN ('merge', 'manual', 'discard')),
+    path TEXT NOT NULL CHECK (path IN ('mod', 'turn', 'none')),
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    outcome TEXT CHECK (outcome IN ('done', 'failed', 'interrupted', 'skipped')),
+    failed_step TEXT,
+    candidates INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    updates INTEGER NOT NULL DEFAULT 0,
+    skips INTEGER NOT NULL DEFAULT 0,
+    lookups INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    sent_chars INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO meko_learns_v28(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step, candidates, saves, updates, skips, lookups, errors, sent_chars)
+    SELECT id, session_id, trigger, path, started_at, ended_at, outcome, failed_step, candidates, saves, updates, skips, lookups, errors, sent_chars FROM meko_learns;
+  DROP TABLE meko_learns;
+  ALTER TABLE meko_learns_v28 RENAME TO meko_learns;
+  CREATE INDEX meko_learns_session ON meko_learns(session_id, started_at);
+  `,
 ];
 
 export function openDb(path: string): Db {

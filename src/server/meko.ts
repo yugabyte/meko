@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -52,6 +53,29 @@ export function pinSlug(agentId: string): string {
 
 type Json = Record<string, unknown>;
 
+/** One Meko call AgentK made itself (not Claude's), for the usage report: never its content. */
+export interface MekoCallRecord {
+  tool: string;
+  at: number;
+  inputChars: number;
+  resultChars: number;
+  ok: boolean;
+  ms: number;
+  /** The learn step that made it (mekoTag), if any. */
+  tag: string | null;
+}
+
+/** Tags AgentK's Meko calls made inside `mekoTag.run(tag, fn)`, such as a learn step's. */
+export const mekoTag = new AsyncLocalStorage<string>();
+
+/** A memory like a given text, as `similar` finds them: what an update needs to name it. */
+export interface SimilarMemory {
+  id: string;
+  text: string;
+  /** The agent that wrote it: memory_update must name the writer's agent id. */
+  agentId: string | null;
+}
+
 /** Session key of the conversation used for server-originated calls. */
 const SERVICE_KEY = 'agent-k-local-service';
 
@@ -89,6 +113,9 @@ export class MekoClient {
   private gen = 0;
   /** Conversation used for server-originated calls (describe, list). */
   private serviceConversation: string | null = null;
+
+  /** Told of every call (onCall in Core records them); a failing listener never fails the call. */
+  onCall: ((r: MekoCallRecord) => void) | null = null;
 
   constructor(private creds: () => MekoCreds, private version = '0.0.0') {}
 
@@ -169,12 +196,30 @@ export class MekoClient {
   }
 
   async call(name: string, args: Json, timeoutMs = 30000): Promise<unknown> {
+    const at = Date.now();
+    let resultChars = 0;
+    let ok = false;
+    try {
+      const r = await this.callOnce(name, args, timeoutMs, (n) => (resultChars = n));
+      ok = true;
+      return r;
+    } finally {
+      try {
+        this.onCall?.({ tool: name, at, inputChars: JSON.stringify(args).length, resultChars, ok, ms: Date.now() - at, tag: mekoTag.getStore() ?? null });
+      } catch {
+        /* the record is best-effort */
+      }
+    }
+  }
+
+  private callOnce(name: string, args: Json, timeoutMs: number, got: (chars: number) => void): Promise<unknown> {
     return this.request(!NOT_IDEMPOTENT.has(name), async (c) => {
       const res = (await c.callTool({ name, arguments: args }, undefined, { timeout: timeoutMs })) as {
         content?: { type: string; text?: string }[];
         isError?: boolean;
       };
       const text = res.content?.find((x) => x.type === 'text')?.text ?? '';
+      got(text.length);
       let parsed: unknown = text;
       try {
         parsed = JSON.parse(text);
@@ -312,6 +357,40 @@ export class MekoClient {
       agent_id: agentId,
       conversation_id: conversationId,
       metadata: metadata ? JSON.stringify(metadata) : null,
+    }, 60000);
+  }
+
+  /**
+   * Memories in a datapack like `query` (context_search, memories only), with the ids and writers
+   * an update needs. At most `limit`.
+   */
+  async similar(query: string, datapackId: string, agentId: string, conversationId: string, limit = 3, timeoutMs = 30000): Promise<SimilarMemory[]> {
+    const r = (await this.call('context_search', {
+      query,
+      conversation_id: conversationId,
+      datapack_id: datapackId,
+      agent_id: agentId,
+      force_source: 'memory',
+      limit,
+    }, timeoutMs)) as Json;
+    const items = ((r.results ?? {}) as Json).memory;
+    if (!Array.isArray(items)) return [];
+    const out: SimilarMemory[] = [];
+    for (const it of items as Json[]) {
+      const text = pickText(it);
+      if (typeof it.id === 'string' && it.id && text) out.push({ id: it.id, text, agentId: strOrNull(it.agent_id) });
+    }
+    return out.slice(0, limit);
+  }
+
+  /** Overwrites a memory's text. `agentId` must be the agent that wrote it. */
+  async updateMemory(memoryId: string, text: string, datapackId: string, agentId: string | null, conversationId: string): Promise<void> {
+    await this.call('memory_update', {
+      memory_id: memoryId,
+      text,
+      datapack_id: datapackId,
+      agent_id: agentId,
+      conversation_id: conversationId,
     }, 60000);
   }
 

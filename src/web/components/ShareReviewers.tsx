@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { DatapackPeople, PrReviewer, PrReviewers, ShareGrant } from '../../shared/types';
 import { SHARE_GRANTS } from '../../shared/types';
+import { EMAIL_RE } from '../../shared/emails';
 import { api, errorMessage } from '../api';
 import { Busy } from './common';
 
-const GRANT_NAMES: Record<ShareGrant, string> = { contributor: 'Contributor', maintainer: 'Maintainer', viewer: 'Viewer' };
+const GRANT_NAMES: Record<ShareGrant, string> = { viewer: 'Viewer', contributor: 'Contributor', maintainer: 'Maintainer' };
 
 /**
  * The Share dialog's Reviewers section: who reviews each open PR of the project's running sessions
@@ -111,7 +112,7 @@ function ReviewerRow({
   const [email, setEmail] = useState(reviewer.email ?? '');
   const [grant, setGrant] = useState<ShareGrant>('contributor');
   const [done, setDone] = useState(false);
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const valid = EMAIL_RE.test(email.trim());
   const id = `share-rv-${reviewer.login}`;
 
   return (

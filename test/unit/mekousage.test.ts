@@ -153,11 +153,11 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
-    db.exec('DROP TABLE design_answers');
-    for (const c of ['start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+    db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs');
+    for (const c of ['discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
@@ -165,7 +165,7 @@ describe('Meko calls in transcripts', () => {
     db.exec('ALTER TABLE sessions DROP COLUMN meko_agent_id; DROP TABLE project_events');
     db.exec('DROP TABLE meko_preloads; ALTER TABLE sessions DROP COLUMN first_turn_end_at');
     db.exec('ALTER TABLE sessions DROP COLUMN meko_datapack_id; ALTER TABLE sessions DROP COLUMN meko_datapack_name');
-    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 9}`);
+    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 12}`);
     db.close();
     db = openDb(path);
     expect(schemaVersion(db)).toBe(v);
@@ -240,8 +240,33 @@ describe('what Meko saved', () => {
   it('shows nothing saved, and no Meko use, for a project that never called Meko', () => {
     const { db } = setup();
     expect(projectUsage(db, 'p').meko).toEqual({
-      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, savings: { searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 },
+      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0, savings: { searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 },
     });
+  });
+
+  it('shows what learn steps saved and cost, for the project and across projects', () => {
+    const { db } = setup();
+    expect(projectUsage(db, 'p').mekoLearning).toEqual({ runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null });
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at) VALUES ('s2', 'q', 's2', 'S2', 'c2', 'b2', 'main', '/w2', 't2', 'tok2', 'running', 'idle', 'code', 0)`);
+    const learn = (id: string, s: string, outcome: string, c: number[]) =>
+      run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, saves, updates, skips) VALUES (?, ?, 'merge', 'mod', 1, 2, ?, ?, ?, ?)`,
+        id, s, outcome, ...c);
+    learn('L1', 's1', 'done', [3, 1, 2]);
+    learn('L2', 's1', 'failed', [1, 0, 0]);
+    learn('L3', 's1', 'skipped', [0, 0, 0]);
+    learn('L4', 's2', 'done', [5, 0, 0]);
+    const usage = (id: string, model: string, u: number[]) =>
+      run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write) VALUES ('s1', ?, 'agentk:learn', ?, 1, ?, ?, ?, ?)`, id, model, ...u);
+    usage('learn:L1:extract', 'claude-opus-5-5', [10, 200, 100_000, 0]);
+    usage('learn:L1:dedup', 'claude-haiku-4-5-20251001', [800, 100, 0, 0]);
+    const p = projectUsage(db, 'p').mekoLearning;
+    // Opus 5.5: 10 × 4 + 200 × 20 + 100,000 × 0.2 per million; Haiku 4.5: 800 × 1 + 100 × 5.
+    expect(p).toEqual({ runs: 2, failed: 1, skipped: 1, saves: 4, updates: 1, skips: 2, tokens: 101_110, usd: expect.closeTo((40 + 4000 + 20_000 + 800 + 500) / 1e6, 10) });
+    expect(usageOverview(db).mekoLearning).toMatchObject({ runs: 3, saves: 9, tokens: 101_110 });
+    // The steps' own calls count in the project's tokens too.
+    expect(projectUsage(db, 'p').total.output).toBe(300);
   });
 
   it('credits a seed AgentK passed at start like a search by the first response, once there is one', () => {

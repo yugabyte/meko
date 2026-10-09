@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   KIND_STAGES,
   STAGE_LABELS,
+  type CloseSessionRequest,
   type MekoStatus,
   type MoveTarget,
   type ProjectWithSessions,
@@ -15,7 +16,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, repoFolder, totalTokens, usageTitle } from '../util';
+import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
@@ -101,7 +102,7 @@ export function ProjectView({
   // One session action at a time, so a double tap can't send two merges or resumes.
   const [acting, setActing] = useState(false);
   const actingRef = useRef(false);
-  const act = async (action: SessionAction) => {
+  const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
     // With open questions, approving starts with answering them; the approval goes from there.
     if (action === 'approve-design' && session.designQuestions.open > 0) {
@@ -114,8 +115,8 @@ export function ProjectView({
     setActing(true);
     try {
       if (action === 'approve-design') await approveDesign(session.id);
-      else await api.sessionAction(session.id, action);
-      if (action === 'archive' || action === 'discard') disposeTerminal(session.id);
+      // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
+      else if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
     } catch (e) {
       onError(errorMessage(e));
     } finally {
@@ -137,6 +138,13 @@ export function ProjectView({
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.sharing;
+  // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
+  const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
+  const learnDisabled = acting || !!session?.busy || !!session?.learning;
+  // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
+  // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
+  const learnTo = canLearn && dedicated ? dedicated.name : null;
+  const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -250,6 +258,7 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
+          learnTo={mergeLearnTo}
           onMove={onMove}
           onShare={canShare ? () => setSharing(true) : undefined}
           acting={acting}
@@ -273,12 +282,22 @@ export function ProjectView({
                   )}
                 </button>
               )}
+              {canLearn && (
+                <button
+                  className="btn small"
+                  disabled={learnDisabled}
+                  title={`Have AgentK save what this session learned to ${dedicated?.name ?? 'Meko'}`}
+                  onClick={() => act('learn')}
+                >
+                  {session?.learning ? <Busy label="Saving learnings" /> : 'Save learnings'}
+                </button>
+              )}
               {session?.status === 'exited' && (
                 <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
                   Resume
                 </button>
               )}
-              {session && <EndSessionButton key={session.id} session={session} onAct={act} disabled={acting} />}
+              {session && <EndSessionButton key={session.id} session={session} onAct={act} learnTo={learnTo} disabled={acting} />}
             </>
           }
         />
@@ -344,6 +363,7 @@ export function ProjectView({
               session={session}
               project={project}
               onAct={act}
+              learnTo={mergeLearnTo}
               onMove={(preset) => {
                 setSheet(false);
                 onMove(preset);
@@ -362,6 +382,9 @@ export function ProjectView({
             />
           }
           canDesign={canDesign}
+          canLearn={canLearn}
+          learnDisabled={learnDisabled}
+          learnTo={learnTo}
           openQuestions={openQuestions}
           acting={acting}
           info={
@@ -402,19 +425,36 @@ function newCommitsText(n: number | null): string {
   return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
+/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
+function queuedGate(session: Session, blocked: boolean, onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>, title: string): ReactNode {
+  return (
+    <span className="gate-group">
+      <span className="gate-pill" title={title}>
+        {queuedText(session)}
+      </span>
+      <button className="btn small" disabled={blocked} onClick={() => onAct('cancel-queued')}>
+        Cancel
+      </button>
+    </span>
+  );
+}
+
 function StageBar({
   session,
   project,
   onAct,
   onMove,
   onShare,
+  learnTo = null,
   acting = false,
   actions,
   reasons = false,
 }: {
   session: Session | null;
   project: ProjectWithSessions;
-  onAct: (a: SessionAction) => Promise<void>;
+  onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
+  /** The datapack Merge & Close saves what the session learned to first; null when it has none (or Meko is off). */
+  learnTo?: string | null;
   onMove: (preset?: MovePreset) => void;
   /** Opens the Share dialog at the PR's reviewers; absent when the project can't be shared from here. */
   onShare?: () => void;
@@ -424,6 +464,9 @@ function StageBar({
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
 }) {
+  // Don't save learnings at Merge & Close, for the session it was checked on (unchecked by default).
+  const [skipFor, setSkipFor] = useState<string | null>(null);
+  const skipLearn = !!session && skipFor === session.id;
   if (!session) {
     return (
       <div className="stages-wrap">
@@ -492,25 +535,27 @@ function StageBar({
       );
       break;
     }
-    case 'code':
-      reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
+    case 'code': {
+      if (session.queued === 'open-pr') {
+        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends');
+        break;
+      }
+      const pr = openPrGate(session);
+      reason = pr.reason;
       gate = (
-        <button
-          className="gate"
-          disabled={blocked || !!reason}
-          title={reason ?? 'Commit, push and open a pull request'}
-          onClick={() => onAct('open-pr')}
-        >
-          Open PR
+        <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
+          {pr.label}
         </button>
       );
       break;
+    }
     case 'pr':
       gate = <span className="gate-pill">
           <Busy label="Opening PR" />
         </span>;
       break;
-    case 'review':
+    case 'review': {
+      const merge = mergeGate(session);
       gate = (
         <span className="gate-group">
           {onShare && session.prNumber && (
@@ -538,17 +583,30 @@ function StageBar({
               {session.agentkSeen ? 'Request another round' : 'Request AgentK review'}
             </button>
           )}
-          <button
-            className="gate"
-            disabled={blocked || !session.canMerge}
-            title={session.canMerge ? 'Merge the pull request, then remove the worktree and branch' : session.mergeBlockers.join('\n')}
-            onClick={() => onAct('merge')}
-          >
-            Merge &amp; Close
-          </button>
+          {session.queued === 'merge' ? (
+            queuedGate(session, blocked, onAct, 'The pull request is merged once nothing blocks it')
+          ) : (
+            <>
+              {learnTo && (
+                <label className="check skip-learn" title={`Unchecked, AgentK saves what this session learned to ${learnTo} before closing it`}>
+                  <input type="checkbox" checked={skipLearn} disabled={blocked} onChange={(e) => setSkipFor(e.target.checked ? session.id : null)} />
+                  <span>Don't save learnings</span>
+                </label>
+              )}
+              <button
+                className="gate"
+                disabled={blocked || !!merge.reason}
+                title={merge.title}
+                onClick={() => onAct('merge', learnTo && skipLearn ? { skipLearn: true } : undefined)}
+              >
+                {merge.label}
+              </button>
+            </>
+          )}
         </span>
       );
       break;
+    }
     case 'merge':
       gate = <span className="gate-pill"><Busy label="Merging and closing" /></span>;
       break;
@@ -645,7 +703,9 @@ function StageBar({
         {actions && <div className="stage-actions">{actions}</div>}
       </div>
       {session.stage === 'review' && !session.canMerge && session.mergeBlockers.length > 0 && (
-        <div className="blockers">Merge is waiting on: {session.mergeBlockers.join(' · ')}</div>
+        <div className="blockers">
+          {session.queued === 'merge' ? 'Merges when these clear' : 'Merge is waiting on'}: {session.mergeBlockers.join(' · ')}
+        </div>
       )}
       {reasons && reason && <div className="blockers">{reason}</div>}
     </div>

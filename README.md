@@ -46,6 +46,13 @@ default over SSH or on a machine with no display. Then it prints the address, or
 access a one-time setup link that creates your login. Local access trusts everyone who can log
 in to the computer, so pick remote on a shared host.
 
+Run again where AgentK Local is already installed with its services set up, the installer says so
+and stops without changing anything. Newer releases are offered in AgentK Local itself (the Update
+banner, or the button in Settings). To change its setup (repos folder, access, port, Meko) or set
+up its services again, run `agent-k-local install`; to download and install it again, pass
+`--reinstall` (`… | sh -s -- --reinstall`). Options for `agent-k-local install`, like `--port`,
+also make it install again, so they're never dropped.
+
 Forgot your password? Run `agent-k-local setup-link` on the host and open the link it prints to
 choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 
@@ -84,6 +91,16 @@ your phone can connect.
   detached. When a session starts, AgentK searches the project's datapacks for its task (and the
   GitHub issues it names) and gives Claude what Meko already knows, and the prompts ask Claude to
   search Meko before reading code.
+- **What sessions learn goes to the team's datapack.** When a PR merges or a session is discarded,
+  before the session closes, AgentK asks the session what it learned about the product and repo (how things work, decisions
+  and why, root causes, gotchas, measured numbers) and saves each new fact, after checking it
+  against what the datapack already has: known facts are skipped, and ones that correct a memory
+  replace it. Claude is told to leave out anything about your machine or one person's
+  preferences. With AgentK's mod it runs out of sight (one cached look at the session, plus a small
+  model for the duplicate check), and AgentK also drops any fact that names a local path; without
+  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
+  header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
+  Check **Don't save learnings** beside Merge & Close or Discard to close a session without it.
 - **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
   with you shows a banner and a notification, and opens as a new project with the repo and name
   filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
@@ -119,7 +136,7 @@ your phone can connect.
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
-- **AgentK's mod in Claude:** with Claude Code 2.1.286 or later, each session loads a small Claude
+- **AgentK's mod in Claude:** with Claude Code 2.1.287 or later, each session loads a small Claude
   Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
   never land in a permission dialog or a running turn. When Claude asks you something
   (`AskUserQuestion`), the question shows in AgentK Local too, on a phone as well: answer it there or
@@ -146,7 +163,9 @@ your phone can connect.
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
   takes you to them first. You approve the design, opening the PR, and Merge & Close, which merges the PR and
-  cleans up the branches, leaving the worktree for the next session. The server watches the PR and hands reviews (AgentK's and
+  cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
+  **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
+  and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and
   people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
   you turn that off in Settings → General) and CI failures to Claude. Only reviews
   from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
@@ -155,8 +174,9 @@ your phone can connect.
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
-  cost that Meko searches saved, and how many sessions had something from Meko in their first
-  turn, on the project home and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
+  cost that Meko searches saved, how many sessions had something from Meko in their first
+  turn, and what the learn step saved (memories added and corrected) and cost, on the project home
+  and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
   and when they reset.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.

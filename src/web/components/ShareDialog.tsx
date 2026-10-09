@@ -1,21 +1,23 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ClipboardEvent, type FormEvent } from 'react';
 import type { DatapackPeople, DatapackRef, ShareGrant } from '../../shared/types';
 import { SHARE_GRANTS } from '../../shared/types';
 import { isProjectDatapack } from '../../shared/datapacks';
+import { MAX_SHARE_EMAILS, flattenPastedEmails, parseEmails, spliceEmails } from '../../shared/emails';
 import { api, errorMessage } from '../api';
 import { cx } from '../util';
 import { Busy, Dialog, ErrorText } from './common';
 import { ShareReviewers } from './ShareReviewers';
 
 const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
+  viewer: { title: 'Viewer', text: 'Read only. They can attach it to a project but can’t open it as one.' },
   contributor: { title: 'Contributor', text: 'Runs sessions and adds their own memories.' },
   maintainer: { title: 'Maintainer', text: 'Can also promote memories to shared knowledge and invite others.' },
-  viewer: { title: 'Viewer', text: 'Read only. They can attach it to a project but can’t open it as one.' },
 };
 
 /**
  * Invite people to a project's dedicated datapack through Meko's share API, the reviewers of the
- * project's open PRs first.
+ * project's open PRs first. The Emails field takes a list; addresses the lists shown already have
+ * (as members or pending invites) are left out.
  */
 export function ShareDialog({
   projectId,
@@ -37,6 +39,8 @@ export function ShareDialog({
   const [grant, setGrant] = useState<ShareGrant>('contributor');
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  /** Addresses in the list that already had access or an invite, so weren't sent. */
+  const [skipped, setSkipped] = useState<string | null>(null);
   /** The change went through, but the lists couldn't be read again: the ones shown may be out of date. */
   const [stale, setStale] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -48,11 +52,12 @@ export function ShareDialog({
       .catch((e) => setLoadError(errorMessage(e)));
   }, [datapack.id]);
 
-  /** Runs one change and shows the lists it returns; false when it failed (the error is shown). */
-  const run = async (key: string, fn: () => Promise<DatapackPeople>, done?: string): Promise<boolean> => {
+  /** Runs one change and shows the lists it returns; null when it failed (the error is shown). */
+  const run = async <T extends DatapackPeople>(key: string, fn: () => Promise<T>, done?: string): Promise<T | null> => {
     setBusy(key);
     setError(null);
     setSent(null);
+    setSkipped(null);
     try {
       const next = await fn();
       if (next.refreshError) setStale(next.refreshError);
@@ -61,25 +66,76 @@ export function ShareDialog({
         setStale(null);
       }
       if (done) setSent(done);
-      return true;
+      return next;
     } catch (e) {
       setError(errorMessage(e));
-      return false;
+      return null;
     } finally {
       setBusy(null);
     }
   };
 
+  // From the lists shown: while they load, or when they couldn't be read, nothing is left out.
+  const withAccess = new Set(
+    [...(people?.members ?? []).map((m) => m.email), ...(people?.invites ?? []).map((i) => i.email)].map((a) => a.toLowerCase()),
+  );
+  /** How many the Invite button would send. */
+  const toSend = parseEmails(email).emails.filter((a) => !withAccess.has(a.toLowerCase())).length;
+
   const invite = (e: FormEvent) => {
     e.preventDefault();
-    const to = email.trim();
-    void run('invite', () => api.shareDatapack(datapack.id, { email: to, grant }), `Invited ${to}. Meko emails them the invite.`).then((ok) => {
-      if (ok) setEmail((v) => (v.trim() === to ? '' : v));
+    const typed = email;
+    const { emails, invalid } = parseEmails(typed);
+    setSent(null);
+    setSkipped(null);
+    if (invalid.length) {
+      setError(`Not an email: ${invalid.join(', ')}. Fix or remove ${invalid.length === 1 ? 'it' : 'them'}, then press Invite.`);
+      return;
+    }
+    if (!emails.length) {
+      setError('Enter an email address.');
+      return;
+    }
+    const have = emails.filter((a) => withAccess.has(a.toLowerCase()));
+    const to = emails.filter((a) => !withAccess.has(a.toLowerCase()));
+    if (to.length > MAX_SHARE_EMAILS) {
+      setError(`Invite at most ${MAX_SHARE_EMAILS} people at a time. This list has ${to.length}.`);
+      return;
+    }
+    const skippedText = have.length ? `Already has access or an invite: ${have.join(', ')}.` : null;
+    // Only the addresses still to invite stay in the field (unless it was changed meanwhile).
+    const keep = (rest: string[]) => setEmail((v) => (v === typed ? rest.join(', ') : v));
+    if (!to.length) {
+      setError(null);
+      setSkipped(skippedText);
+      keep([]);
+      return;
+    }
+    void run('invite', () => api.shareDatapack(datapack.id, { emails: to, grant })).then((r) => {
+      setSkipped(skippedText);
+      if (!r) return;
+      setSent(`Invited ${r.invited.join(', ')}. Meko emails them the invite.`);
+      if (r.failed.length) setError(r.failed.map((f) => `Couldn't invite ${f.email}: ${f.error}`).join(' '));
+      keep(r.failed.map((f) => f.email));
     });
   };
 
+  /** A column or row pasted from a spreadsheet: its new lines and tabs become separators. */
+  const pasteEmails = (e: ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData('text');
+    if (!/[\r\n\t]/.test(text)) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? el.value.length;
+    const next = spliceEmails(el.value, start, el.selectionEnd ?? start, flattenPastedEmails(text));
+    setEmail(next.value);
+    requestAnimationFrame(() => el.setSelectionRange(next.caret, next.caret));
+  };
+
   const shareReviewer = (login: string, to: string, g: ShareGrant) =>
-    run(`reviewer-${login}`, () => api.shareDatapack(datapack.id, { email: to, grant: g, login }), `Invited ${to}. Meko emails them the invite.`);
+    run(`reviewer-${login}`, () => api.shareDatapack(datapack.id, { email: to, grant: g, login }), `Invited ${to}. Meko emails them the invite.`).then(
+      (r) => r !== null,
+    );
 
   return (
     <Dialog title={`Share “${projectName}”`} onClose={onClose}>
@@ -93,16 +149,20 @@ export function ShareDialog({
           </p>
         )}
         <label className="field">
-          <span className="label">Email</span>
+          <span className="label">Emails</span>
           <input
             id="share-email"
             className="input"
-            type="email"
+            type="text"
+            inputMode="email"
             autoComplete="off"
-            placeholder="name@example.com"
+            spellCheck={false}
+            placeholder="name@example.com, other@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onPaste={pasteEmails}
           />
+          <span className="hint">Several at once: separate them with commas, semicolons or spaces.</span>
         </label>
         <div className="field" role="radiogroup" aria-label="Access">
           <span className="label">Access</span>
@@ -128,9 +188,10 @@ export function ShareDialog({
         <div className="share-actions">
           {sent && <span className="ok-text">{sent}</span>}
           <button className="btn primary" type="submit" disabled={!email.trim() || busy !== null}>
-            {busy === 'invite' ? <Busy label="Inviting" /> : 'Invite'}
+            {busy === 'invite' ? <Busy label="Inviting" /> : toSend > 1 ? `Invite ${toSend}` : 'Invite'}
           </button>
         </div>
+        {skipped && <p className="hint">{skipped}</p>}
         <ErrorText error={error} />
       </form>
 

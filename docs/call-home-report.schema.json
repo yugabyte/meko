@@ -220,7 +220,99 @@
             "late": { "$ref": "#/$defs/count" },
             "ms": { "$ref": "#/$defs/count" }
           }
+        },
+        "sentTokens": { "$ref": "#/$defs/count" },
+        "sentByTool": { "$ref": "#/$defs/toolCounts" },
+        "learn": { "$ref": "#/$defs/learn" },
+        "agentk": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["calls", "errors", "sentTokens", "ms", "byTool"],
+          "properties": {
+            "calls": { "$ref": "#/$defs/count" },
+            "errors": { "$ref": "#/$defs/count" },
+            "sentTokens": { "$ref": "#/$defs/count" },
+            "ms": { "$ref": "#/$defs/count" },
+            "byTool": {
+              "type": "object",
+              "propertyNames": { "pattern": "^[a-z][a-z_]{0,39}$" },
+              "maxProperties": 10,
+              "additionalProperties": { "$ref": "#/$defs/count" }
+            }
+          }
+        },
+        "capture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runs", "failures", "ms"],
+          "properties": {
+            "runs": { "$ref": "#/$defs/count" },
+            "failures": { "$ref": "#/$defs/count" },
+            "ms": { "$ref": "#/$defs/count" }
+          }
         }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "cacheRead", "cacheWrite", "messages"],
+      "properties": {
+        "input": { "$ref": "#/$defs/count" },
+        "output": { "$ref": "#/$defs/count" },
+        "cacheRead": { "$ref": "#/$defs/count" },
+        "cacheWrite": { "$ref": "#/$defs/count" },
+        "messages": { "$ref": "#/$defs/count" }
+      }
+    },
+    "learn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runs", "byTrigger", "byPath", "byOutcome", "candidates", "saves", "updates", "skips", "empty", "lookups", "errors", "sentTokens", "tokens", "usdCents"],
+      "properties": {
+        "runs": { "$ref": "#/$defs/count" },
+        "byTrigger": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["merge", "manual"],
+          "properties": { "merge": { "$ref": "#/$defs/count" }, "manual": { "$ref": "#/$defs/count" }, "discard": { "$ref": "#/$defs/count" } }
+        },
+        "byPath": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mod", "turn", "none"],
+          "properties": { "mod": { "$ref": "#/$defs/count" }, "turn": { "$ref": "#/$defs/count" }, "none": { "$ref": "#/$defs/count" } }
+        },
+        "byOutcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["done", "failed", "interrupted", "skipped"],
+          "properties": {
+            "done": { "$ref": "#/$defs/count" },
+            "failed": { "$ref": "#/$defs/count" },
+            "interrupted": { "$ref": "#/$defs/count" },
+            "skipped": { "$ref": "#/$defs/count" }
+          }
+        },
+        "candidates": { "$ref": "#/$defs/count" },
+        "saves": { "$ref": "#/$defs/count" },
+        "updates": { "$ref": "#/$defs/count" },
+        "skips": { "$ref": "#/$defs/count" },
+        "empty": { "$ref": "#/$defs/count" },
+        "lookups": { "$ref": "#/$defs/count" },
+        "errors": { "$ref": "#/$defs/count" },
+        "sentTokens": { "$ref": "#/$defs/count" },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["extract", "dedup", "turn"],
+          "properties": {
+            "extract": { "$ref": "#/$defs/tokens" },
+            "dedup": { "$ref": "#/$defs/tokens" },
+            "turn": { "$ref": "#/$defs/tokens" }
+          }
+        },
+        "usdCents": { "$ref": "#/$defs/count" }
       }
     },
     "mekoFirstTurn": {

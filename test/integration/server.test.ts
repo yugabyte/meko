@@ -58,6 +58,21 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(good.statusCode).toBe(204);
   });
 
+  it('accepts an email address as the username and refuses other characters', async () => {
+    const setupAs = (username: string) =>
+      app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token: issueSetupToken(env.core.db), username, password: 'correct horse battery' } });
+    for (const bad of ['jane doe', 'jane/doe', 'jane+tag@example.com', '', 'a'.repeat(65)]) {
+      const res = await setupAs(bad);
+      expect(res.statusCode, bad).toBe(400);
+      expect(res.json().error).toMatch(/@/);
+    }
+    expect((await setupAs('jane.doe@example.com')).statusCode).toBe(204);
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'jane.doe@example.com', password: 'correct horse battery' } });
+    expect(login.statusCode).toBe(204);
+    const enroll = await app.inject({ method: 'POST', url: '/api/auth/totp/enroll', headers: { cookie: cookieOf(login) } });
+    expect(enroll.json().otpauthUrl).toContain(':jane.doe%40example.com?');
+  });
+
   it('says a setup link replaces the existing login, so the setup screen can offer a reset', async () => {
     const status = async () => (await app.inject({ url: '/api/auth/status' })).json();
     expect(await status()).toMatchObject({ setupRequired: true, reset: false });

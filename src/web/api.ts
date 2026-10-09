@@ -4,6 +4,7 @@ import type {
   AttachDatapackRequest,
   AuthStatus,
   ChangeSide,
+  CloseSessionRequest,
   ClaudeCodeStatus,
   CreateProjectRequest,
   CreateSessionRequest,
@@ -38,6 +39,7 @@ import type {
   SetDedicatedDatapackRequest,
   SetupRequest,
   ShareDatapackRequest,
+  ShareDatapackResult,
   StagedImage,
   TotpEnrollResponse,
   UpdateProjectRequest,
@@ -120,7 +122,7 @@ export const api = {
   cloneRepo: (b: CloneRepoRequest) => post<RepoInfo>('/api/repos/clone', b),
   datapacks: () => get<MekoDatapack[]>('/api/meko/datapacks'),
   datapackPeople: (id: string) => get<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`),
-  shareDatapack: (id: string, b: ShareDatapackRequest) => post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people`, b),
+  shareDatapack: (id: string, b: ShareDatapackRequest) => post<ShareDatapackResult>(`/api/meko/datapacks/${enc(id)}/people`, b),
   resendDatapackInvite: (id: string, inviteId: string) =>
     post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}/resend`),
   revokeDatapackInvite: (id: string, inviteId: string) =>
@@ -158,7 +160,8 @@ export const api = {
       raw: { data: image, type: image.type.startsWith('image/') ? image.type : 'image/png' },
     }),
   dismissFailedStart: (id: string) => request<void>('DELETE', `/api/failed-starts/${enc(id)}`),
-  sessionAction: (id: string, action: SessionAction) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`),
+  /** merge and discard take a CloseSessionRequest (skip the learn step). */
+  sessionAction: (id: string, action: SessionAction, b?: CloseSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`, b),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),

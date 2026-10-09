@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { DiscardCheck, Session, SessionAction } from '../../shared/types';
+import type { CloseSessionRequest, DiscardCheck, Session, SessionAction } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
@@ -72,25 +72,30 @@ export function SheetItem({
 
 /**
  * Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost
- * (a branch the session started on that existed before it is kept).
+ * (a branch the session started on that existed before it is kept). Discard saves what the session
+ * learned to Meko first, unless Don't save learnings is checked (it starts unchecked).
  * Archive waits for uncommitted files to be committed (the server refuses it too).
  * Shown in the session header on desktop and in the session sheet on phones.
  */
 export function EndSessionButton({
   session,
   onAct,
+  learnTo,
   label = 'Archive',
   className = 'btn small',
   disabled,
 }: {
   session: Session;
-  onAct: (a: SessionAction) => Promise<void>;
+  onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
+  /** The datapack Discard saves what the session learned to first; null when it can't (no Meko or datapack, Claude gone). */
+  learnTo: string | null;
   label?: string;
   className?: string;
   /** Another session action is in flight. */
   disabled?: boolean;
 }) {
   const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
+  const [skipLearn, setSkipLearn] = useState(false);
   /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
   const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -99,6 +104,7 @@ export function EndSessionButton({
 
   const open = () => {
     setStep('choose');
+    setSkipLearn(false);
     setCheck(undefined);
     const p = api.discardCheck(session.id).catch(() => null);
     pending.current = p;
@@ -107,10 +113,10 @@ export function EndSessionButton({
     });
   };
 
-  const run = async (action: SessionAction) => {
+  const run = async (action: SessionAction, req?: CloseSessionRequest) => {
     setBusy(true);
     try {
-      await onAct(action);
+      await onAct(action, req);
     } finally {
       setBusy(false);
       setStep('closed');
@@ -126,6 +132,19 @@ export function EndSessionButton({
     setStep('discard');
   };
 
+  // Discard waits for the learn step; Discard now stops waiting and leaves it unsaved.
+  if (session.discarding) {
+    return (
+      <span className="confirm-inline">
+        <span className="confirm-prompt">
+          <Busy label="Saving learnings, then discarding" />
+        </span>
+        <button className="btn danger" disabled={busy || disabled} onClick={() => run('discard', { skipLearn: true })}>
+          Discard now
+        </button>
+      </span>
+    );
+  }
   if (step === 'closed') {
     return (
       <button className={className} disabled={disabled} onClick={open}>
@@ -179,7 +198,13 @@ export function EndSessionButton({
           {w}
         </span>
       ))}
-      <button className="btn danger" disabled={busy || disabled} onClick={() => run('discard')}>
+      {learnTo && (
+        <label className="check skip-learn" title={`Unchecked, AgentK saves what this session learned to ${learnTo} before discarding it`}>
+          <input type="checkbox" checked={skipLearn} disabled={busy} onChange={(e) => setSkipLearn(e.target.checked)} />
+          <span>Don't save learnings</span>
+        </label>
+      )}
+      <button className="btn danger" disabled={busy || disabled} onClick={() => run('discard', learnTo && skipLearn ? { skipLearn: true } : undefined)}>
         Discard
       </button>
       {cancel}
@@ -218,6 +243,9 @@ export function SessionSheet({
   session,
   stage,
   canDesign,
+  canLearn,
+  learnDisabled,
+  learnTo,
   openQuestions,
   acting,
   info,
@@ -233,6 +261,12 @@ export function SessionSheet({
   /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
+  /** Save learnings to Meko is offered (the project has a datapack, and Claude is there). */
+  canLearn: boolean;
+  /** It waits: another action is in flight, Claude is busy, or AgentK is already saving them. */
+  learnDisabled: boolean;
+  /** The datapack Discard saves learnings to first (EndSessionButton). */
+  learnTo: string | null;
   /** The design's open questions, shown on its row during Design. */
   openQuestions: number;
   /** A session action is in flight: Resume and Archive wait for it. */
@@ -247,7 +281,7 @@ export function SessionSheet({
   onMove: () => void;
   /** Opens the Rename session dialog. */
   onRename: () => void;
-  onAct: (a: SessionAction) => Promise<void>;
+  onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   onClose: () => void;
 }) {
   const then = (f: () => void) => () => {
@@ -279,6 +313,11 @@ export function SessionSheet({
             PR #{session.prNumber} on GitHub
           </SheetItem>
         )}
+        {canLearn && (
+          <SheetItem disabled={learnDisabled} onClick={then(() => void onAct('learn'))}>
+            {session.learning ? <Busy label="Saving learnings to Meko" /> : 'Save learnings to Meko'}
+          </SheetItem>
+        )}
         {!moveBlockedIn(session.stage) && (
           <SheetItem hint="›" onClick={then(onMove)}>
             Move to another stage
@@ -296,6 +335,7 @@ export function SessionSheet({
         <EndSessionButton
           session={session}
           onAct={onAct}
+          learnTo={learnTo}
           disabled={acting}
           label="Archive or discard…"
           className="btn block danger-outline"

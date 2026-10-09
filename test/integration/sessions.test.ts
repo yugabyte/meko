@@ -250,6 +250,9 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     const argv = argvLog(env)[0].args;
     const sys = argv[argv.indexOf('--append-system-prompt') + 1];
     expect(sys).toContain('ToolSearch query "+meko context_search"');
+    // And the rule for what the session saves there for the team.
+    expect(sys).toContain(`Saving to Meko: this project's datapack is shared by the team working on it.`);
+    expect(sys).toContain(`"session":"${s.id}"`);
     expect(argv[argv.length - 1]).toMatch(/search Meko for earlier designs, decisions and gotchas about this task/);
 
     // A resumed session starts without it.
@@ -382,7 +385,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
 
     expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: true, uncommittedFiles: 1, unpushedCommits: 1 });
 
-    await env.core.sessions.action(s.id, 'discard');
+    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
     expect((await env.core.tmux.panes()).has(s.tmuxName)).toBe(false);
     // The changes are gone; the worktree itself waits, clean and detached, for the next session.
     expect(existsSync(join(s.worktreePath, 'draft.txt'))).toBe(false);
@@ -408,7 +411,7 @@ describe('projects and sessions (real tmux + git, fake claude)', () => {
     expect(c.files).toMatchObject([{ path: 'notes.txt', kind: 'untracked', added: 2, uncommitted: true }]);
     await env.core.sessions.refreshDiff(s.id);
     expect(env.core.sessions.get(s.id).diffStat).toEqual({ added: 2, removed: 0 });
-    await env.core.sessions.action(s.id, 'discard');
+    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
     await expect(env.core.sessions.changes(s.id)).rejects.toThrow(/worktree is gone/);
   });
 

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -29,7 +29,7 @@ import { DESIGN_READY } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
-  type SessionRow, type SessionRuntime,
+  type MergeInfo, type SessionRow, type SessionRuntime,
 } from './store.js';
 import { sleep, tmuxName, type PaneInfo } from './tmux.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
@@ -55,6 +55,13 @@ export function sessionName(v: unknown): string {
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) throw new HttpError(400, 'The name can\'t have control characters.');
   return name;
+}
+
+/** The body of a merge or discard action (CloseSessionRequest); none asks for nothing. 400 for a skipLearn that isn't a boolean. */
+export function closeRequest(body: unknown): CloseSessionRequest {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (b.skipLearn !== undefined && typeof b.skipLearn !== 'boolean') throw new HttpError(400, 'skipLearn must be true or false.');
+  return { skipLearn: b.skipLearn === true };
 }
 
 /** The status detail while Claude asks the user something: its first question, shortened. */
@@ -191,7 +198,7 @@ const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<vo
 export class SessionManager {
   private busy = new Set<string>();
   private diffs = new Map<string, { added: number; removed: number } | null>();
-  private mergeInfo = new Map<string, { canMerge: boolean; blockers: string[] }>();
+  private mergeInfo = new Map<string, MergeInfo>();
   /** Sessions showing Claude's plan-approval dialog. */
   readonly planPending = new Set<string>();
   /** Sessions being launched right now; reconcile leaves them alone. */
@@ -200,6 +207,8 @@ export class SessionManager {
   private creating = new Set<string>();
   /** Sessions we are deliberately stopping; their exit isn't an event. */
   private stopping = new Set<string>();
+  /** Sessions being discarded now (discardNow). */
+  private discardingNow = new Set<string>();
   /** Sessions whose Claude was launched but hasn't sent SessionStart yet (it may be showing the folder-trust dialog). */
   private awaitingStart = new Set<string>();
   /** The tail of each session's prompt submissions, so two prompts are never pasted at once. */
@@ -265,6 +274,7 @@ export class SessionManager {
       diffStat: this.diffs.get(id) ?? null,
       canMerge: m?.canMerge ?? false,
       mergeBlockers: m?.blockers ?? [],
+      mergeQueueable: m?.queueable ?? false,
       contextPercent: this.contextFill.get(id) ?? null,
       modLive: this.modLive(id),
       midTurn: this.midTurn(id),
@@ -336,7 +346,7 @@ export class SessionManager {
     this.core.changed();
   }
 
-  setMergeInfo(id: string, info: { canMerge: boolean; blockers: string[] }): void {
+  setMergeInfo(id: string, info: MergeInfo): void {
     this.mergeInfo.set(id, info);
   }
 
@@ -352,6 +362,8 @@ export class SessionManager {
 
   setStatus(id: string, status: SessionStatus, detail: string | null = null): void {
     this.update(id, { status, status_detail: detail, last_event_at: Date.now() });
+    // However Claude was found gone (its SessionEnd, a dead pane at startup, a failed restart), the turn a queued Open PR waited for is over.
+    if (status === 'exited') this.core.lifecycle.dropQueued(id, detail ?? 'Claude exited', 'open-pr');
   }
 
   event(id: string, kind: string, text: string | null, payload?: unknown): void {
@@ -833,7 +845,7 @@ export class SessionManager {
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
     const p = projectRow(this.db, row.project_id);
     const settings = p ? parseSettings(p.settings_json) : null;
-    const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name)].filter(Boolean) : [];
+    const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name), mekoLearnLine(name, row.id)].filter(Boolean) : [];
     // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the
     // fork. Its base is the remote's branch the review fetched, since the local one may follow a
     // fork, lag behind, or not exist.
@@ -924,6 +936,7 @@ export class SessionManager {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
     if (dps.length) lines.push(mekoRecallSystemLine());
+    if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
     return lines.join('\n');
   }
@@ -1128,13 +1141,14 @@ export class SessionManager {
     if (!row || row.desired !== 'running') return { status: 403 };
     switch (route) {
       case '/mod/hello':
-        if (this.mod.hello(row.id)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
+        if (this.mod.hello(row.id, body.protocol)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
         return { status: 204 };
       case '/mod/poll': {
         // The socket is closing (a rebind or a stop), or the mod was turned off in the config: the
         // mod waits a few seconds and polls again. Sessions keep the mod until they're relaunched.
         if (!this.mod.accepting || !this.core.config.claude.mod) return { status: 503 };
         if (body.held !== undefined) this.heldReported(row.id, body.held);
+        this.mod.reportProtocol(row.id, body.protocol);
         const answer = await this.mod.poll(row.id, signal);
         return answer ? { status: 200, body: answer } : { status: 204 };
       }
@@ -1170,6 +1184,16 @@ export class SessionManager {
         return { status: 204 };
       case '/mod/questions':
         return this.core.lifecycle.questionsFromTool(row, body.questions);
+      case '/mod/learn':
+        return this.core.learn.fromMod(row, body);
+      case '/mod/learn/start':
+        // /agentk_learn in the terminal: the answer is the command's output there.
+        try {
+          await this.core.learn.start(row, 'manual');
+          return { status: 200, body: { text: 'AgentK is saving what this session learned to Meko.' } };
+        } catch (e) {
+          return { status: 200, body: { text: errMsg(e) } };
+        }
     }
     return { status: 404 };
   }
@@ -1210,13 +1234,16 @@ export class SessionManager {
 
   /**
    * Claude's process ended or is being replaced: its mod link (prompts on their way fail with `why`,
-   * by default that Claude restarted), the prompts it held and an approval queued for its turn's
-   * end (`ended` says why in the activity log) go with it.
+   * by default that Claude restarted), the prompts it held, and an approval or Open PR queued for
+   * its turn's end (`ended` says why in the activity log) go with it.
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
+    this.core.learn.interrupted(id);
     this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
+    // The turn a queued Open PR waited for is gone with it.
+    this.core.lifecycle.dropQueued(id, ended, 'open-pr');
   }
 
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
@@ -1397,6 +1424,14 @@ export class SessionManager {
     for (const row of sessionRows(this.db)) {
       if (!this.recoverable(row) || !projectRow(this.db, row.project_id)) continue;
       const pane = panes.get(row.tmux_name);
+      // A Discard that waited for a learn step the restart cut short (Learner.recover ended it): a
+      // mod step lived in the old server, so it's gone. A typed one's turn goes on in a live Claude,
+      // and its end discards the session (Lifecycle.onTurnEnd).
+      const typedTurnGoesOn = !!pane && !pane.dead && this.core.learn.lastPath(row.id) === 'turn';
+      if (row.discarding && !this.core.learn.running(row.id) && !typedTurnGoesOn) {
+        await this.discardNow(row.id).catch((e) => this.core.log.error(`discarding ${row.id} failed`, e));
+        continue;
+      }
       if (pane && !pane.dead) {
         // Server restart; Claude kept running. One still starting lost its progress with the old
         // server, and its startup hooks may have come while no server was listening.
@@ -1588,8 +1623,9 @@ export class SessionManager {
     switch (action) {
       case 'approve-design': await lc.approveDesign(row, body); break;
       case 'cancel-approval': lc.cancelApproval(row); break;
+      case 'cancel-queued': lc.cancelQueued(row); break;
       case 'open-pr': await lc.openPr(row); break;
-      case 'merge': await lc.merge(row); break;
+      case 'merge': await lc.merge(row, closeRequest(body)); break;
       case 'request-review': await lc.requestReview(row, false); break;
       case 'force-review': await lc.requestReview(row, true); break;
       case 'resume': await this.resume(row); break;
@@ -1597,13 +1633,56 @@ export class SessionManager {
         await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');
         await this.archive(row, { keepBranch: true });
         break;
-      // A branch the session started on existed before it, and isn't the session's to delete.
-      case 'discard': await this.archive(row, { keepBranch: !!row.branch_reused, force: true }); break;
+      case 'discard': await this.discard(row, closeRequest(body)); break;
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
+      case 'learn': await this.core.learn.start(row, 'manual'); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
+  }
+
+  /**
+   * Discard: what the session learned goes to the project's datapack first, unless skipLearn, and
+   * the session is discarded once that learn step ends (Lifecycle.afterLearn; `discarding` keeps
+   * it waiting across a restart). Asked again while it waits, with skipLearn, it goes now.
+   */
+  private async discard(row: SessionRow, req: CloseSessionRequest): Promise<void> {
+    if (req.skipLearn) {
+      this.core.learn.skipped(row);
+    } else if (row.discarding) {
+      return;
+    } else {
+      // Set first: a learn step that ends at once must find the discard waiting for it.
+      this.update(row.id, { discarding: 1 });
+      let waits = false;
+      try {
+        waits = await this.core.learn.beforeDiscard(this.row(row.id));
+      } finally {
+        if (!waits) this.update(row.id, { discarding: 0 });
+      }
+      if (waits) {
+        this.event(row.id, 'discarding', 'Discarding once AgentK has saved what this session learned');
+        // It may have ended meanwhile, before the event.
+        if (!this.core.learn.running(row.id)) await this.discardNow(row.id);
+        return;
+      }
+    }
+    await this.discardNow(row.id);
+  }
+
+  /** Discards the session now (once, however many callers ask). */
+  async discardNow(id: string): Promise<void> {
+    if (this.discardingNow.has(id)) return;
+    const row = this.row(id);
+    if (row.desired !== 'running') return;
+    this.discardingNow.add(id);
+    try {
+      // A branch the session started on existed before it, and isn't the session's to delete.
+      await this.archive(row, { keepBranch: !!row.branch_reused, force: true });
+    } finally {
+      this.discardingNow.delete(id);
+    }
   }
 
   /** Changes the session's type, stage or both, at the user's request (see Lifecycle.move). */
@@ -1744,7 +1823,7 @@ export class SessionManager {
     this.stopping.add(row.id);
     try {
       this.ingestUsage(row.id);
-      run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = COALESCE(?, archived_at) WHERE id = ?`,
+      run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', discarding = 0, archived_at = COALESCE(?, archived_at) WHERE id = ?`,
         wasArchived ? null : Date.now(), row.id);
       await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
       await this.core.tmux.kill(row.tmux_name);
@@ -1765,6 +1844,7 @@ export class SessionManager {
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
       this.forgetClaude(row.id, 'The session was archived');
+      this.core.lifecycle.dropQueued(row.id, 'The session was archived');
       this.contextFill.delete(row.id);
       // A kept branch is one that existed before the session (see Discard in action()).
       const kept = `branch ${row.branch} kept (it existed before the session)`;

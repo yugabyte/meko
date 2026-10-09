@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCEPT_MS, LINK_STALE_MS, ModLinks, POLL_HOLD_MS, type DroppedPrompt } from '../../src/server/modlink.js';
+import { ACCEPT_MS, LEARN_PROTOCOL, LINK_STALE_MS, ModLinks, POLL_HOLD_MS, type DroppedPrompt } from '../../src/server/modlink.js';
 
 describe('the link to AgentK\'s mod', () => {
   let now = 1_000_000;
@@ -261,5 +261,55 @@ describe('the link to AgentK\'s mod', () => {
     links.hold('s1', 'p3');
     links.reset('s1');
     expect(links.heldCount('s1')).toBe(0);
+  });
+
+  it('runs learn steps only through a mod that speaks their protocol', () => {
+    links.hello('old', 1);
+    expect(links.live('old')).toBe(true);
+    expect(links.learnReady('old')).toBe(false);
+    links.hello('none');
+    expect(links.learnReady('none')).toBe(false); // a hello without a protocol is the first one
+    links.hello('new', LEARN_PROTOCOL);
+    expect(links.learnReady('new')).toBe(true);
+    now += LINK_STALE_MS;
+    expect(links.learnReady('new')).toBe(false); // gone stale
+  });
+
+  it('takes back a part of a learn step the mod has not polled for, only for that step', async () => {
+    links.hello('s1', LEARN_PROTOCOL);
+    links.queueLearn('s1', { id: 'L1', kind: 'extract', prompt: 'What did you learn?' });
+    links.withdrawLearn('s1', 'L2'); // another step's: left alone
+    links.withdrawLearn('s1', 'L1');
+    links.queueToast('s1', "AgentK couldn't save what this session learned.");
+    expect(await links.poll('s1')).toEqual({ prompts: [], toast: "AgentK couldn't save what this session learned." });
+  });
+
+  it("knows a mod's protocol from its polls, after a server restart lost its hello", () => {
+    void links.poll('s1'); // the running mod's next poll: no hello since the restart
+    expect(links.learnReady('s1')).toBe(false);
+    links.reportProtocol('s1', LEARN_PROTOCOL);
+    expect(links.learnReady('s1')).toBe(true);
+    links.reportProtocol('s1', undefined); // a mod from before learn steps names none: nothing changes
+    expect(links.learnReady('s1')).toBe(true);
+  });
+
+  it('hands a part of a learn step and a line to show to a held poll, once, beside the prompts', async () => {
+    links.hello('s1', LEARN_PROTOCOL);
+    const held = links.poll('s1');
+    links.queueLearn('s1', { id: 'L1', kind: 'extract', prompt: 'What did you learn?' });
+    expect(await held).toEqual({ prompts: [], learn: { id: 'L1', kind: 'extract', prompt: 'What did you learn?' } });
+    links.queueLearn('s1', { id: 'L1', kind: 'check', prompt: 'Check these.', model: 'haiku' });
+    links.queueToast('s1', 'Saved 2 memories.');
+    const send = links.send('s1', 'Next prompt.');
+    expect(await links.poll('s1')).toEqual({
+      prompts: [{ id: expect.any(String), text: 'Next prompt.' }],
+      learn: { id: 'L1', kind: 'check', prompt: 'Check these.', model: 'haiku' },
+      toast: 'Saved 2 memories.',
+    });
+    const next = links.poll('s1');
+    vi.advanceTimersByTime(POLL_HOLD_MS);
+    expect(await next).toBeNull();
+    vi.advanceTimersByTime(ACCEPT_MS);
+    await expect(send).rejects.toThrow();
   });
 });

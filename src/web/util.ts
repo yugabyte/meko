@@ -1,6 +1,6 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
-import type { MekoFirstTurn, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<SessionStatus, number> = {
@@ -286,6 +286,43 @@ export function firstTurnText(t: MekoFirstTurn): { split: string | null; title: 
   };
 }
 
+/** A learn-step tile's text: the number, a line under its label (shown, since tooltips aren't seen on touch) and a tooltip. */
+export interface LearningTile {
+  num: string;
+  line: string | null;
+  title: string;
+}
+
+/**
+ * The Meko section's Learned and Learning cost tiles in words: what the learn steps saved to the
+ * datapack (memories added, with corrections and steps on the line under it), and what their model
+ * calls cost.
+ */
+export function learningText(l: MekoLearning): { learned: LearningTile; cost: LearningTile } {
+  const f = (n: number) => n.toLocaleString();
+  const n = (k: number, one: string, many: string) => `${f(k)} ${k === 1 ? one : many}`;
+  const skipped = l.skipped > 0 ? ` ${n(l.skipped, 'session was', 'sessions were')} closed without one, since Claude was gone or busy.` : '';
+  if (l.runs === 0) {
+    const none = 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.';
+    return { learned: { num: '—', line: null, title: none + skipped }, cost: { num: '—', line: null, title: none } };
+  }
+  const failed = l.failed > 0 ? `; ${f(l.failed)} didn't finish` : '';
+  return {
+    learned: {
+      num: f(l.saves),
+      line: `${f(l.updates)} corrected · ${n(l.runs, 'step', 'steps')}`,
+      title: `${n(l.runs, 'learn step', 'learn steps')} saved ${n(l.saves, 'memory', 'memories')} to the datapack, corrected ${f(l.updates)} and ` +
+        `found ${n(l.skips, 'fact', 'facts')} already known${failed}.${skipped}`,
+    },
+    cost: {
+      num: l.usd !== null ? formatCost(l.usd) : `≈ ${formatTokens(l.tokens)}`,
+      line: l.usd !== null ? `≈ ${formatTokens(l.tokens)} tokens` : null,
+      title: `What the learn steps' model calls cost: the look back over each session, the duplicate check and typed learn turns ` +
+        `(${f(l.tokens)} tokens${l.usd !== null ? ', at Anthropic API list prices' : ', on models without a known price'}).`,
+    },
+  };
+}
+
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
 const DESIGN_READY = 'Design ready for your approval';
 
@@ -327,6 +364,53 @@ export function designApprovalBlocker(session: Session): string | null {
   // A question or permission prompt from Claude isn't the design; the server refuses to approve over it.
   if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
+}
+
+/** A gate button: its label, why it's disabled (null when it isn't), and its tooltip. */
+export interface GateButton {
+  label: string;
+  reason: string | null;
+  title: string;
+}
+
+/** The Open PR gate in Code. Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the server's checks. */
+export function openPrGate(session: Session): GateButton {
+  const gate = (reason: string | null, title = 'Commit, push and open a pull request'): GateButton => ({ label: 'Open PR', reason, title: reason ?? title });
+  if (session.status === 'exited') return gate('Claude has exited. Resume the session first.');
+  if (!session.busy && (session.status === 'working' || session.status === 'starting' || session.midTurn)) {
+    return { label: 'Open PR after this turn', reason: null, title: 'AgentK is mid-turn: the PR prompt goes when the turn ends' };
+  }
+  if (session.status === 'needs_input') return gate('AgentK is waiting on you in the terminal. Answer it first.');
+  if (session.promptsHeld > 0) return gate('AgentK has prompts from you to take first. Open the PR once it has.');
+  return gate(null);
+}
+
+/** The Merge & Close gate in Review. With only blockers that clear by themselves left, a press queues the merge. */
+export function mergeGate(session: Session): GateButton {
+  if (session.canMerge) return { label: 'Merge & Close', reason: null, title: 'Merge the pull request, then remove the worktree and branch' };
+  const blockers = session.mergeBlockers.join('\n');
+  if (session.mergeQueueable) {
+    return { label: 'Merge when ready', reason: null, title: `Merge the pull request once nothing blocks it. Waiting on:\n${blockers}` };
+  }
+  const reason = blockers || 'Not ready to merge yet.';
+  return { label: 'Merge & Close', reason, title: reason };
+}
+
+/** What a queued merge waits on, from its first blocker, for the gate's pill. */
+const MERGE_WAITS: [string, string][] = [
+  ['CI is still running.', 'waiting on CI'],
+  ["CI hasn't started on the latest push yet.", 'waiting on CI'],
+  ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
+  ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
+];
+
+/** The pill a queued gate shows in place of its button (`Session.queued`); null when nothing is queued. */
+export function queuedText(session: Session): string | null {
+  if (session.queued === 'open-pr') return '✓ Open PR queued: goes when the turn ends';
+  if (session.queued !== 'merge') return null;
+  const first = session.mergeBlockers[0];
+  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
+  return `✓ Merge queued: ${waits}`;
 }
 
 /** Why answers can't be sent for AgentK to revise the design right now, or null when they can. */

@@ -88,7 +88,7 @@ describe('sessions in another repo and on a branch you name (real tmux + git, fa
     expect(next.worktreePath).toBe(s.worktreePath);
 
     // Discard deletes the branch in the session's repo.
-    await env.core.sessions.action(next.id, 'discard');
+    await env.core.sessions.action(next.id, 'discard', { skipLearn: true });
     expect(branches(other)).not.toContain('ak/next-there');
 
     // The last project using the repo takes its idle worktrees along.

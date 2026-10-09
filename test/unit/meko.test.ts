@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MekoClient } from '../../src/server/meko.js';
+import { MekoClient, mekoTag, type MekoCallRecord } from '../../src/server/meko.js';
 
 type Handler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 
@@ -131,6 +131,42 @@ describe('Meko client', () => {
     });
     meko.tools.conversation_update = () => ({ error: 'not_found' });
     await expect(client.retitleConversation('claude_code:x-1', 'd1', 'conv-9', 'New (Demo)')).rejects.toThrow(/not_found/);
+  });
+
+  it('finds memories like a text, with the ids and writers an update needs, and updates one as its writer', async () => {
+    meko.tools.context_search = () => ({ results: { memory: [
+      { id: 'm1', memory: 'Migrations are append-only.', agent_id: 'claude_code:a-1', score: 0.8 },
+      { id: 'm2', memory: '  ', agent_id: 'claude_code:a-2' },
+      { memory: 'No id.' },
+    ], knowledge_base: [{ id: 'k1', text: 'From the knowledge base.' }] } });
+    meko.tools.memory_update = () => ({ status: 'updated' });
+    expect(await client.similar('migrations', 'd1', 'claude_code:me', 'conv')).toEqual([{ id: 'm1', text: 'Migrations are append-only.', agentId: 'claude_code:a-1' }]);
+    expect(meko.calls.find((c) => c.name === 'context_search')?.args).toEqual({
+      query: 'migrations', conversation_id: 'conv', datapack_id: 'd1', agent_id: 'claude_code:me', force_source: 'memory', limit: 3,
+    });
+    await client.updateMemory('m1', 'Corrected.', 'd1', 'claude_code:a-1', 'conv');
+    expect(meko.calls.find((c) => c.name === 'memory_update')?.args).toEqual({
+      memory_id: 'm1', text: 'Corrected.', datapack_id: 'd1', agent_id: 'claude_code:a-1', conversation_id: 'conv',
+    });
+  });
+
+  it("records each of AgentK's calls by tool and size, tagged with the step that made it, never their content", async () => {
+    const records: MekoCallRecord[] = [];
+    client.onCall = (r) => records.push(r);
+    meko.tools.memory_add = () => ({ results: [] });
+    meko.tools.memory_update = () => ({ error: 'not_found' });
+    await mekoTag.run('L1', () => client.addMemory('Gotcha: x.', 'd1', 'agent', 'conv'));
+    await expect(client.updateMemory('m9', 'y', 'd1', null, 'conv')).rejects.toThrow(/not_found/);
+    expect(records).toEqual([
+      { tool: 'memory_add', at: expect.any(Number), inputChars: expect.any(Number), resultChars: '{"results":[]}'.length, ok: true, ms: expect.any(Number), tag: 'L1' },
+      { tool: 'memory_update', at: expect.any(Number), inputChars: expect.any(Number), resultChars: '{"error":"not_found"}'.length, ok: false, ms: expect.any(Number), tag: null },
+    ]);
+    expect(records[0].inputChars).toBeGreaterThan('Gotcha: x.'.length);
+    // A listener that throws never fails the call.
+    client.onCall = () => {
+      throw new Error('db closed');
+    };
+    await client.addMemory('z', 'd1', 'agent', 'conv');
   });
 
   it('uses the service conversation when Meko creates one', async () => {
