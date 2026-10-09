@@ -792,10 +792,13 @@ app bar also holds the session tabs, between the drawer button and ⋯, so the s
 repeated above them (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, and
-the overlay behind a dialog or sheet, are pinned to the visible viewport (its height and, where iOS
-pans the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
-covering the prompt or a dialog's fields; while you type, the terminal stays scrolled to its newest line. On
+you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, the
+overlay behind a dialog or sheet, and the sign-in and setup screens are pinned to the visible
+viewport (its height and, where iOS pans the page for a focused field, its offset), so the on-screen
+keyboard shrinks them instead of covering the prompt or a dialog's fields. The sign-in screens
+scroll inside themselves and bring the field being typed in back into view once the keyboard is up
+(`keepFocusInView`); the page itself never scrolls, since the app puts its scroll back at the top.
+While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,
 Home, End, Page Up and Page Down; the row stays open until ▾ is tapped again, and ▾ stays lit while
