@@ -22,7 +22,8 @@ export function Sheet({ label, onClose, children }: { label: string; onClose: ()
       trapTab(e, ref.current);
     };
     window.addEventListener('keydown', onKey, true);
-    // Focus the sheet itself, not its first button: that can be a gate, and Enter would pass it.
+    // Focus the sheet itself, not a button: Enter would close it on the ×, or pass the gate that can
+    // be the first row after it.
     ref.current?.focus({ preventScroll: true });
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);

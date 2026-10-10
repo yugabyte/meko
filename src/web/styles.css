@@ -3556,7 +3556,7 @@ div[id^='dak-mermaid-'] .label {
   flex-direction: column;
   gap: 10px;
 }
-/* The sheet takes focus on open (not its first button, which can be a gate). */
+/* The sheet takes focus on open (not its ×, or the gate that can be the first row after it). */
 .sheet:focus {
   outline: none;
 }
