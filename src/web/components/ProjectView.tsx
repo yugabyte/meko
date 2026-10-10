@@ -434,10 +434,9 @@ function newCommitsText(n: number | null): string {
   return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
-/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
 /**
  * The + notes button beside Open PR: opens the Open PR with instructions dialog, or, with an Open
- * PR queued, the instructions it goes with. Captioned where there's no hover (styles.css).
+ * PR queued, the instructions it goes with.
  */
 function InstructionsButton({ queued, disabled, title, onClick }: { queued: boolean; disabled: boolean; title: string; onClick: () => void }) {
   return (
@@ -449,13 +448,11 @@ function InstructionsButton({ queued, disabled, title, onClick }: { queued: bool
       onClick={onClick}
     >
       +<NotesIcon />
-      <span className="gate-note-text" aria-hidden="true">
-        Instructions
-      </span>
     </button>
   );
 }
 
+/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
 function queuedGate(
   session: Session,
   blocked: boolean,

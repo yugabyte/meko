@@ -1463,9 +1463,8 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
 ("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
 stays one click; the **+** notes button beside it (and *Open PR … with instructions* in the command
-palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is captioned
-*Instructions* where there's no hover (a phone, a touch screen), and is 40 px square under a coarse
-pointer. Approve design takes none
+palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is just the
+**+** and the notes icon, with no caption, and is 40 px square under a coarse pointer. Approve design takes none
 of its own: the design's **Other feedback** already goes with the approval. Merge & Close prompts
 Claude for nothing, so it takes none either.
 

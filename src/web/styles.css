@@ -4025,17 +4025,7 @@ div[id^='dak-mermaid-'] .label {
     touch-action: none;
   }
 }
-/* The + notes button beside Open PR: its caption shows where there's no hover to show its tooltip
-   (and in the phone's ⋯ sheet, where it sits beside Open PR); a finger-sized box on touch. */
-.gate-note-text {
-  display: none;
-}
-@media (max-width: 760px), (hover: none) {
-  .gate-note-text {
-    display: inline;
-    margin-left: 3px;
-  }
-}
+/* The + notes button beside Open PR: a finger-sized box on touch. */
 @media (pointer: coarse) {
   .btn.small.gate-note {
     min-width: 40px;
