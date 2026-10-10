@@ -261,7 +261,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(await blockersFor({})).toEqual(['AgentK is waiting on you in the terminal.']);
     env.core.sessions.setStatus(s.id, 'idle');
 
-    // A file left uncommitted, which the cleanup would take with the worktree.
+    // A file left uncommitted, which the merged PR wouldn't have.
     writeFileSync(join(env.core.sessions.row(s.id).worktree_path, 'draft.txt'), 'wip\n');
     expect(await blockersFor({})).toEqual(['The worktree has 1 uncommitted file: commit or discard them.']);
 

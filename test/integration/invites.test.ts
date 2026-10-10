@@ -310,12 +310,13 @@ describe('datapacks shared with us', () => {
     ['origin', 'git@github.com:corp/demo-repo.git', null, 'git@github.com:corp/demo-repo.git'],
     ["origin, as a fork's upstream is only a local path", 'git@github.com:hari90/demo-repo.git', '/mnt/mirror/demo-repo.git', 'git@github.com:hari90/demo-repo.git'],
     ['origin, without its credentials', 'https://x-access-token:ghp_secret123@github.com/corp/demo-repo.git', null, 'https://github.com/corp/demo-repo.git'],
+    ['nothing, when origin is only a local path', '/home/alice/src/demo-repo.git', null, null],
   ])("puts the repo's %s in the description of a datapack it creates", async (_, origin, upstream, want) => {
     execFileSync('git', ['remote', 'add', 'origin', origin], { cwd: env.repo });
     if (upstream) execFileSync('git', ['remote', 'add', 'upstream', upstream], { cwd: env.repo });
     await env.core.projects.create({ repoPath: env.repo, name: 'fresh', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/fresh' } });
     const call = env.meko.calls.find((c) => c.name === 'setDatapackDescription');
-    expect(call?.args).toEqual(['dp-adlc-proj-demo-repo-fresh', `AgentK Local project "fresh" · repo ${want}`]);
+    expect(call?.args).toEqual(['dp-adlc-proj-demo-repo-fresh', `AgentK Local project "fresh"${want ? ` · repo ${want}` : ''}`]);
   });
 
   it("writes a fork's upstream remote into the description, not the fork", async () => {

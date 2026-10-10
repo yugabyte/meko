@@ -116,7 +116,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     await waitFor(() => modPrompts(env).map((p) => p.text), (t) => t.includes('after the rebind'), 10000, 'the prompt');
   });
 
-  it('types prompts again once the config turns the mod off, though running sessions keep it loaded', async () => {
+  it('types prompts again once the config turns the mod off, though running sessions keep it loaded, and leaves it out of new ones', async () => {
     env = await makeEnv();
     fakeFiles(env, { mod: '', debug: '' });
     const s = await session();
@@ -127,6 +127,11 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     await env.core.sessions.submit(s.id, 'typed after turning it off');
     await waitFor(() => typed(env), (t) => t.includes('typed after turning it off'), 10000, 'the typed prompt');
     expect(modPrompts(env)).toEqual([]);
+    // A new session launches without it, though this Claude Code could load it.
+    await session('Mod off');
+    expect(launches(env)[0].args).toContain('--plugin-dir');
+    expect(launches(env).at(-1)!.args).not.toContain('--plugin-dir');
+    expect(launches(env).at(-1)!.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBeUndefined();
   });
 
   it('forgets the mod when Claude is relaunched, until the new one polls', async () => {
