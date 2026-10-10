@@ -1181,6 +1181,47 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(stages(s.id)).toEqual(['code', 'pr', 'review']);
   });
 
+  it("sends the user's instructions after the PR prompt", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const now = await env.core.sessions.create(p.id, { name: 'Draft it', prompt: 'do it', kind: 'quick' });
+    await idle(now.id, 'first turn');
+    const submit = vi.spyOn(env.core.host, 'submit');
+    await expect(env.core.sessions.action(now.id, 'open-pr', { instructions: 7 })).rejects.toMatchObject({ status: 400 });
+    await env.core.sessions.action(now.id, 'open-pr', { instructions: '  Open it as a draft.  ' });
+    const sent = String(submit.mock.calls[0][1]);
+    expect(sent).toMatch(/^Open a pull request for this work\./);
+    expect(sent.indexOf('Open a pull request')).toBeLessThan(sent.indexOf('The user added these instructions'));
+    expect(sent.endsWith("follow the user's.\n\nOpen it as a draft.")).toBe(true);
+  });
+
+  it("keeps a queued Open PR's instructions until it goes, the latest press's", async () => {
+    const s = await working('Draft it later');
+    const submit = vi.spyOn(env.core.host, 'submit');
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
+    expect(lastEvent(s.id, 'queued')).toBe('Open PR queued with your instructions: it goes when AgentK finishes its turn');
+    expect(env.core.sessions.row(s.id).queued_instructions).toBe('Open it as a draft.');
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft, against release-2.4.' });
+    expect(lastEvent(s.id, 'queued')).toBe('Your instructions for the queued Open PR changed');
+    await env.core.sessions.action(s.id, 'open-pr');
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_instructions: 'Open it as a draft, against release-2.4.' });
+    await waitFor(() => submit.mock.calls.map((c) => String(c[1])), (c) => c.some((x) => x.startsWith('Open a pull request')), 15000, 'queued PR prompt');
+    const queued = submit.mock.calls.map((c) => String(c[1])).filter((x) => x.startsWith('Open a pull request'));
+    expect(queued).toHaveLength(1);
+    expect(queued[0].endsWith('\n\nOpen it as a draft, against release-2.4.')).toBe(true);
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, queued_instructions: null });
+  });
+
+  it("drops a queued Open PR's instructions with it", async () => {
+    const s = await working('Never mind');
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
+    await env.core.sessions.action(s.id, 'cancel-queued');
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, queued_instructions: null });
+    // Queued again without instructions: the old ones don't come back.
+    await env.core.sessions.action(s.id, 'open-pr');
+    expect(lastEvent(s.id, 'queued')).toBe('Open PR queued: it goes when AgentK finishes its turn');
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_instructions: null });
+  });
+
   it('withdraws a queued Open PR, and drops one when Claude exits', async () => {
     const s = await working('Changed my mind');
     await env.core.sessions.action(s.id, 'open-pr');

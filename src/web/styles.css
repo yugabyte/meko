@@ -177,6 +177,10 @@ code,
   font-size: 12px;
   color: var(--muted);
 }
+/* Instructions for AgentK past their limit (InstructionsField). */
+.hint .over {
+  color: var(--bad);
+}
 .error-text {
   color: var(--bad);
   font-size: 13px;
@@ -412,6 +416,15 @@ textarea.input {
   padding: 0 12px;
   font-size: 12px;
   color: var(--muted);
+}
+/* Beside the Open PR gate: open it with instructions for AgentK. Keeps its size in the phone's gate rows. */
+.gate-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.gate-group > .btn.gate-note {
+  flex: 0 0 auto;
 }
 /* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
 .move-stages {

@@ -1,5 +1,6 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
+import { INSTRUCTIONS_MAX } from '../shared/types';
 import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
@@ -341,6 +342,23 @@ function otherPrompt(session: Session): boolean {
   if (session.statusDetail.startsWith(ASKING)) return true;
   // (Plan mode's approval dialog can carry Claude's own wording, so any mention of a plan is allowed.)
   return !/plan/i.test(session.statusDetail);
+}
+
+/**
+ * Why Claude can't take a prompt typed by a move (its stage's, or the user's instructions), or null.
+ * Mirrors checkPromptable in lifecycle.ts; the move dialog checks the turn itself.
+ */
+export function promptBlocker(session: Session): string | null {
+  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (session.status === 'needs_input' && session.statusDetail !== DESIGN_READY) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  return null;
+}
+
+/** Why the user's instructions for a move or Open PR can't go: too long (INSTRUCTIONS_MAX), or null. */
+export function instructionsBlocker(text: string): string | null {
+  const n = text.trim().length;
+  if (n <= INSTRUCTIONS_MAX) return null;
+  return `Instructions can be at most ${INSTRUCTIONS_MAX.toLocaleString('en-US')} characters; these have ${n.toLocaleString('en-US')}.`;
 }
 
 /**

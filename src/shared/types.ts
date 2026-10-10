@@ -1485,23 +1485,38 @@ export interface CreateSessionRequest {
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
 export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
 
+/** The most characters of instructions a move or Open PR takes (`MoveSessionRequest`, `OpenPrRequest`). */
+export const INSTRUCTIONS_MAX = 10_000;
+
 /** Moves a task session to another stage (see `src/shared/stages.ts` for the rules). */
 export interface MoveSessionRequest {
   stage: MoveTarget;
   /**
-   * Send the new stage's prompt. Left out, it follows promptByDefault. Ignored for PR & Review,
-   * which picks up the branch's open PR, or sends the PR prompt when there's work to push.
+   * Send the new stage's prompt. Left out, it follows promptByDefault, as the move dialog leaves it;
+   * kept for pages from before the dialog dropped its checkbox. Ignored for PR & Review, which
+   * picks up the branch's open PR, or sends the PR prompt when there's work to push.
    */
   prompt?: boolean;
   /** The task, for a session that has none yet (one started at Explore without a first prompt). */
   task?: string;
+  /**
+   * The user's instructions for the new stage (at most INSTRUCTIONS_MAX characters; blank is
+   * none): sent after the stage's prompt, or after the `moved` line when the move sends none.
+   */
+  instructions?: string;
+}
+
+/** The optional body of the open-pr action. */
+export interface OpenPrRequest {
+  /** The user's instructions, sent after the PR prompt (at most INSTRUCTIONS_MAX characters; blank is none). */
+  instructions?: string;
 }
 
 export type SessionAction =
   | 'approve-design'
   /** Withdraws an approval waiting for AgentK's turn to end (`Session.approvalQueued`). */
   | 'cancel-approval'
-  /** Sends the PR prompt, or mid-turn queues it for the turn's end (`Session.queued`). */
+  /** Sends the PR prompt, or mid-turn queues it for the turn's end (`Session.queued`); takes an optional OpenPrRequest. */
   | 'open-pr'
   /** Merges now, or queues the merge when only blockers that clear by themselves are left (`Session.mergeQueueable`). */
   | 'merge'
@@ -1650,7 +1665,9 @@ export type TermServerMessage =
 //        end (Session.approvalQueued) and dropped if the turn changes the design; without the mod that's a 409. Once
 //        sent, every open question is resolved, with its answer or left to AgentK (reopened on a move back to Design).
 //        cancel-approval withdraws it: 409 when none is queued. open-pr while AgentK is mid-turn or Claude is starting is
-//        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it.
+//        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it;
+//        it takes an optional OpenPrRequest (400 for instructions that aren't text or are too long), whose instructions
+//        go after the PR prompt and are kept with a queued one (a later press with instructions replaces them).
 //        merge while the only blockers clear by themselves (Session.mergeQueueable) is queued and goes at the first poll
 //        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
@@ -1659,9 +1676,10 @@ export type TermServerMessage =
 //        an optional CloseSessionRequest (400 for a skipLearn that isn't a boolean): skipLearn skips the learn step they
 //        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
 //        when the step ends; asked again with skipLearn, it discards now)
-// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
-//        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
-//        502 when the move was made but its prompt couldn't be sent)
+// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
+//        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
+//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when the move
+//        was made but its prompt couldn't be sent)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
 //        and resolves the questions answered with their answers in questions.json, unless the questions come from a

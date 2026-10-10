@@ -472,6 +472,11 @@ const MIGRATIONS: string[] = [
   UPDATE projects SET settings_json = json_set(settings_json, '$.branchPrefix', 'ak_{login}/')
     WHERE json_valid(settings_json) AND json_extract(settings_json, '$.branchPrefix') = 'ak/';
   `,
+  // 30: the user's instructions given with an Open PR queued for the turn's end (OpenPrRequest),
+  // sent with it and cleared with queued_gate. NULL: none.
+  `
+  ALTER TABLE sessions ADD COLUMN queued_instructions TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

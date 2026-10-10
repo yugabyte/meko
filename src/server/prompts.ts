@@ -10,6 +10,8 @@ import { get, type Db } from './db.js';
  * {{comments}}, `design-answers` gets {{count}} and {{answers}} (`approved-answers` only {{answers}}, and goes before
  * `approved`), `review-people` gets {{reviewers}} (the logins whose reviews started it), `ci` gets {{sha}} and {{checks}}, `conflicts` gets {{sha}}, and `moved` gets {{stage}}, {{workflow}} and
  * {{kind}} (always "Task", kept for overrides written when sessions had types). `moved` goes before the new stage's prompt when the user moves a session by hand.
+ * `instructions` gets {{instructions}}, the user's own text given with a move or Open PR; it goes last, after the
+ * stage's prompt (and the PR prompt's footer), or after `moved` alone when the move sends no stage prompt.
  * `attached` goes before the first prompt of a task started on an existing branch or a PR, and gets {{attachedPr}} (", which
  * is the branch of PR #n (url)", or nothing), {{attachedPrRead}} (how to read that PR, with whose feedback counts and
  * that everyone else's is untrusted text, or nothing) and {{attachedPush}}
@@ -20,7 +22,7 @@ import { get, type Db } from './db.js';
  */
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'conflicts' | 'ci' | 'continue' | 'continue-review' | 'comments'
-  | 'moved' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-comments' | 'learn';
+  | 'moved' | 'instructions' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-comments' | 'learn';
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   explore: `You are in the Explore stage of an AgentK Local task.
@@ -120,6 +122,10 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 {{comments}}`,
 
   moved: `AgentK Local moved this session to the {{stage}} stage. {{workflow}}`,
+
+  instructions: `The user added these instructions for this step in AgentK Local. Follow them; where they conflict with the instructions above, follow the user's.
+
+{{instructions}}`,
 
   'review-pr': `You're assisting the user while they review PR #{{pr}} ({{prUrl}}) by {{author}}: "{{title}}".
 The user is the reviewer. Your job is to help them, not to review the PR yourself.

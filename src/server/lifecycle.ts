@@ -13,7 +13,7 @@ import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
+import { INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type MergeInfo, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
@@ -91,6 +91,24 @@ const REVIEW_REQUEST = /^\/agentk review\b/;
 /** The reviews' authors, each once, as `a, b`. */
 function loginList(reviews: github.PrReview[]): string {
   return [...new Set(reviews.map((r) => r.author?.login))].join(', ');
+}
+
+/** The user's instructions in a move or Open PR request: trimmed, '' when there are none. */
+export function checkInstructions(v: unknown): string {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') throw new HttpError(400, 'Instructions must be text.');
+  const text = v.trim();
+  if (text.length > INSTRUCTIONS_MAX) {
+    throw new HttpError(400, `Instructions can be at most ${INSTRUCTIONS_MAX.toLocaleString('en-US')} characters; these have ${text.length.toLocaleString('en-US')}.`);
+  }
+  return text;
+}
+
+/** The instructions in an open-pr action's body (OpenPrRequest), or '' when it has none. */
+export function openPrInstructions(body: unknown): string {
+  if (body === undefined || body === null) return '';
+  if (typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'The Open PR request must be {instructions}.');
+  return checkInstructions((body as Record<string, unknown>).instructions);
 }
 
 /**
@@ -506,15 +524,23 @@ export class Lifecycle {
    * Sends the PR prompt, or, while AgentK is mid-turn (or Claude is starting), queues it for the
    * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go.
    */
-  async openPr(row: SessionRow): Promise<void> {
+  async openPr(row: SessionRow, body?: unknown): Promise<void> {
+    const instructions = openPrInstructions(body);
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
-      if (row.queued_gate !== 'open-pr') this.queueGate(row.id, 'open-pr', 'Open PR queued: it goes when AgentK finishes its turn');
+      if (row.queued_gate !== 'open-pr') {
+        const text = instructions ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
+        this.queueGate(row.id, 'open-pr', text, instructions);
+      } else if (instructions) {
+        // Pressed again with instructions: they replace the ones queued.
+        this.sessions.update(row.id, { queued_instructions: instructions });
+        this.sessions.event(row.id, 'queued', "Your instructions for the queued Open PR changed");
+      }
       return;
     }
     const check = this.prCheck(row.id, false);
     check(row);
-    await this.sendPr(row, check);
+    await this.sendPr(row, check, { instructions });
   }
 
   /**
@@ -564,21 +590,24 @@ export class Lifecycle {
   }
 
   /**
-   * Types the PR prompt (with a moved session's `moved` line first, `lead`): the session goes to the
-   * PR stage, and back to where it was if the prompt can't be typed. `check` runs again after
-   * waiting on GitHub and Meko, which gave Claude and the user time to move on.
+   * Types the PR prompt (with a moved session's `moved` line first, `lead`, and the user's
+   * `instructions` last, else those kept with a queued Open PR): the session goes to the PR stage,
+   * and back to where it was if the prompt can't be typed. `check` runs again after waiting on
+   * GitHub and Meko, which gave Claude and the user time to move on.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, lead?: string): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string } = {}): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
     const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
     const cur = this.sessions.row(row.id);
+    // Read before the check, which clears a queued Open PR with its instructions.
+    const instructions = opts.instructions || (cur.queued_gate === 'open-pr' ? cur.queued_instructions : null) || '';
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
     try {
-      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
+      await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
@@ -611,10 +640,15 @@ export class Lifecycle {
     if (!MOVE_TARGETS.includes(stage)) throw new HttpError(400, `Pick a stage to move to: ${MOVE_TARGETS.join(', ')}.`);
     if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
-    await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim()));
+    const instructions = checkInstructions(req?.instructions);
+    await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim(), instructions));
   }
 
-  private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
+  /**
+   * `instructions`: the user's, sent after the stage's prompt, or after the `moved` line alone
+   * when the move sends no stage prompt; '' for none.
+   */
+  private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string, instructions: string): Promise<void> {
     const cur = this.sessions.row(id);
     if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     const blocked = moveBlockedIn(cur.stage);
@@ -628,9 +662,10 @@ export class Lifecycle {
     this.checkBetweenTurns(cur);
     // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes.
     const dropQueued = () => this.dropQueued(id, `the session moved to ${STAGE_LABELS[stage]}`);
+    if (instructions) this.checkPromptable(cur);
     if (stage === 'review' && movesStep(cur.stage, stage)) {
       dropQueued();
-      return this.moveToReview(this.sessions.row(id));
+      return this.moveToReview(this.sessions.row(id), instructions);
     }
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
@@ -649,21 +684,23 @@ export class Lifecycle {
       // Back in Design, what an approval left to AgentK is open again.
       if (stage === 'design') this.questionsUpdate(id, 'Reopening', (row) => this.core.questions.reopen(row));
     }
-    if (!send) return;
+    if (!send && !instructions) return;
     const row = this.sessions.row(id);
-    const body = this.sessions.prompt(row, this.sessions.firstPrompt(row));
+    const body = send ? this.sessions.prompt(row, this.sessions.firstPrompt(row)) : '';
     try {
-      await this.sessions.submit(id, `${this.movedLine(row)}\n\n${body}`);
+      await this.sessions.submit(id, [this.movedLine(row), body, this.instructionsPrompt(row, instructions)].filter(Boolean).join('\n\n'));
     } catch (e) {
-      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send the ${STAGE_LABELS[stage]} prompt to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      const what = send ? `the ${STAGE_LABELS[stage]} prompt` : 'your instructions';
+      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send ${what} to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
     }
   }
 
   /**
    * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
-   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does.
+   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does. The
+   * user's `instructions` go after the PR prompt, or with the `moved` line before a PR is picked up.
    */
-  private async moveToReview(row: SessionRow): Promise<void> {
+  private async moveToReview(row: SessionRow, instructions: string): Promise<void> {
     const cwd = this.ghCwd(row);
     const pr = await this.branchPr(row, true).catch(() => null);
     let adopt = false;
@@ -685,11 +722,25 @@ export class Lifecycle {
       await this.sendPr(cur, (r) => {
         check(r);
         this.checkPromptable(r);
-      }, cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'));
+      }, { lead: cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'), instructions });
       return;
+    }
+    if (instructions) {
+      // Typed before the PR is picked up, so the review prompts that may be waiting go after this turn.
+      this.checkPromptable(cur);
+      try {
+        await this.sessions.submit(row.id, `${this.movedLine(cur, 'review')}\n\n${this.instructionsPrompt(cur, instructions)}`);
+      } catch (e) {
+        throw new HttpError(502, `Couldn't send your instructions to Claude: ${errMsg(e)}. The session stays in ${STAGE_LABELS[cur.stage]}; try again.`);
+      }
     }
     if (cur.stage === 'design') this.leaveDesign(row.id, false);
     await this.adoptPr(row.id, pr, 'you');
+  }
+
+  /** The `instructions` prompt with the user's text, or '' when they gave none. */
+  private instructionsPrompt(row: SessionRow, instructions: string): string {
+    return instructions ? this.sessions.prompt(row, 'instructions', { instructions }) : '';
   }
 
   /** The `moved` line: where the session is now, since Claude's system prompt still says where it was. */
@@ -1491,13 +1542,14 @@ export class Lifecycle {
 
   // ---- queued gates ----
 
-  private setQueued(id: string, gate: QueuedGate | null): void {
-    this.sessions.update(id, { queued_gate: gate });
+  /** Sets or clears the queued gate; its instructions (a queued Open PR's) go with it. */
+  private setQueued(id: string, gate: QueuedGate | null, instructions = ''): void {
+    this.sessions.update(id, { queued_gate: gate, queued_instructions: gate && instructions ? instructions : null });
     this.core.changed();
   }
 
-  private queueGate(id: string, gate: QueuedGate, text: string): void {
-    this.setQueued(id, gate);
+  private queueGate(id: string, gate: QueuedGate, text: string, instructions = ''): void {
+    this.setQueued(id, gate, instructions);
     this.sessions.event(id, 'queued', text);
   }
 

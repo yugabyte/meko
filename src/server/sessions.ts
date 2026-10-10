@@ -1634,7 +1634,10 @@ export class SessionManager {
 
   // ---- actions ----
 
-  /** `body` is the request's: approve-design takes the user's answers to the design (DesignAnswersRequest). */
+  /**
+   * `body` is the request's: approve-design takes the user's answers to the design (DesignAnswersRequest),
+   * open-pr the user's instructions (OpenPrRequest), merge and discard a CloseSessionRequest.
+   */
   async action(id: string, action: SessionAction, body?: unknown): Promise<Session> {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
@@ -1643,7 +1646,7 @@ export class SessionManager {
       case 'approve-design': await lc.approveDesign(row, body); break;
       case 'cancel-approval': lc.cancelApproval(row); break;
       case 'cancel-queued': lc.cancelQueued(row); break;
-      case 'open-pr': await lc.openPr(row); break;
+      case 'open-pr': await lc.openPr(row, body); break;
       case 'merge': await lc.merge(row, closeRequest(body)); break;
       case 'request-review': await lc.requestReview(row, false); break;
       case 'force-review': await lc.requestReview(row, true); break;

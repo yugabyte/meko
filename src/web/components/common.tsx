@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { SessionStatus, StartStage } from '../../shared/types';
-import { STATUS_TEXT, contextArc, contextLevel, cx, mekoDatapackUrl } from '../util';
+import { STATUS_TEXT, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
 export function StatusDot({ status, title }: { status: SessionStatus; title?: string }) {
   const cls =
@@ -221,6 +221,51 @@ export function Check({ size = 10 }: { size?: number }) {
     <svg className="check" width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2.5 6.3 5 8.7l4.5-5.1" />
     </svg>
+  );
+}
+
+/** A note with lines: shown beside a gate to add instructions for AgentK (Open PR with instructions). */
+export function NotesIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 1.75h6l3 3v9.5h-9z" />
+      <path d="M6 7.5h4M6 10h4M6 12.5h2.5" />
+    </svg>
+  );
+}
+
+/**
+ * Optional instructions for AgentK, sent after a move's or Open PR's prompt; left empty, nothing
+ * extra goes. Says so in place of the hint when the text is too long (instructionsBlocker).
+ */
+export function InstructionsField({
+  id,
+  value,
+  onChange,
+  hint,
+  placeholder,
+  autoFocus = false,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  hint: ReactNode;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
+  const tooLong = instructionsBlocker(value);
+  return (
+    <Field label="Instructions for AgentK (optional)" hint={tooLong ? <span className="over">{tooLong}</span> : hint}>
+      <textarea
+        id={id}
+        className="input"
+        rows={3}
+        value={value}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </Field>
   );
 }
 

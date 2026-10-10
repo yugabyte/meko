@@ -18,7 +18,7 @@ import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -52,6 +52,7 @@ export function ProjectView({
   meko,
   onNewSession,
   onMove,
+  onOpenPr,
   onRename,
   onMenu,
   onError,
@@ -64,6 +65,8 @@ export function ProjectView({
   onNewSession: () => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMove: (preset?: MovePreset) => void;
+  /** Opens the Open PR with instructions dialog for the session on screen. */
+  onOpenPr: () => void;
   /** Opens the Rename session dialog. */
   onRename: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
@@ -260,6 +263,7 @@ export function ProjectView({
           onAct={act}
           learnTo={mergeLearnTo}
           onMove={onMove}
+          onOpenPr={onOpenPr}
           onShare={canShare ? () => setSharing(true) : undefined}
           acting={acting}
           actions={
@@ -368,6 +372,10 @@ export function ProjectView({
                 setSheet(false);
                 onMove(preset);
               }}
+              onOpenPr={() => {
+                setSheet(false);
+                onOpenPr();
+              }}
               onShare={
                 canShare
                   ? () => {
@@ -445,6 +453,7 @@ function StageBar({
   project,
   onAct,
   onMove,
+  onOpenPr,
   onShare,
   learnTo = null,
   acting = false,
@@ -457,6 +466,8 @@ function StageBar({
   /** The datapack Merge & Close saves what the session learned to first; null when it has none (or Meko is off). */
   learnTo?: string | null;
   onMove: (preset?: MovePreset) => void;
+  /** Opens the Open PR with instructions dialog. */
+  onOpenPr: () => void;
   /** Opens the Share dialog at the PR's reviewers; absent when the project can't be shared from here. */
   onShare?: () => void;
   /** A session action is in flight. */
@@ -544,9 +555,20 @@ function StageBar({
       const pr = openPrGate(session);
       reason = pr.reason;
       gate = (
-        <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
-          {pr.label}
-        </button>
+        <span className="gate-group">
+          <button
+            className="btn small gate-note"
+            disabled={blocked || !!reason}
+            title={reason ?? 'Open PR with instructions for AgentK'}
+            aria-label="Open PR with instructions"
+            onClick={onOpenPr}
+          >
+            +<NotesIcon />
+          </button>
+          <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
+            {pr.label}
+          </button>
+        </span>
       );
       break;
     }
