@@ -1,8 +1,11 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { Session, SessionStatus } from '../../src/shared/types.js';
-import { runningSessions } from '../../src/web/util.js';
+import type { ProjectWithSessions, Session, SessionStatus } from '../../src/shared/types.js';
+import { StatusDot } from '../../src/web/components/common.js';
+import { aggregateDot, dotState, runningSessions, type DotState } from '../../src/web/util.js';
 
-const session = (status: SessionStatus, desired: Session['desired'] = 'running') => ({ id: status, status, desired }) as Session;
+const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false) => ({ id: status, status, desired, learning }) as Session;
 
 describe('runningSessions', () => {
   it('counts sessions whose Claude is up', () => {
@@ -12,5 +15,34 @@ describe('runningSessions', () => {
 
   it('leaves out a session being archived', () => {
     expect(runningSessions([session('idle', 'archived')])).toEqual([]);
+  });
+});
+
+describe('dotState', () => {
+  // A learn step shows over Claude between turns (the mod's step) and the typed learn turn; what needs you, or a Claude that isn't there, wins.
+  it.each<[SessionStatus, boolean, DotState]>([
+    ['idle', true, 'learning'],
+    ['recovered', true, 'learning'],
+    ['working', true, 'learning'],
+    ['needs_input', true, 'needs_input'],
+    ['exited', true, 'exited'],
+    ['starting', true, 'starting'],
+    ['archived', true, 'archived'],
+    ['idle', false, 'idle'],
+    ['working', false, 'working'],
+  ])('%s, learning %s → %s', (status, learning, dot) => {
+    expect(dotState({ status, learning })).toBe(dot);
+  });
+
+  it('shows in the rail like working: over idle, under needs you', () => {
+    const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
+    expect(aggregateDot(project(session('idle'), session('idle', 'running', true)))).toBe('learning');
+    expect(aggregateDot(project(session('idle', 'running', true), session('needs_input')))).toBe('needs_input');
+  });
+
+  it('draws a learning dot with its own class and says so', () => {
+    const html = renderToStaticMarkup(createElement(StatusDot, { status: 'learning' }));
+    expect(html).toContain('class="dot learning"');
+    expect(html).toContain('aria-label="learning"');
   });
 });

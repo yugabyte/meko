@@ -3,7 +3,7 @@ import { STAGE_LABELS, type ProjectWithSessions, type Session } from '../../shar
 import { moveBlockedIn } from '../../shared/stages';
 import { filterItems, type LabelPart } from '../palette';
 import { navigate } from '../router';
-import { STATUS_TEXT, cx, liveSessions } from '../util';
+import { STATUS_TEXT, cx, dotState, liveSessions, type DotState } from '../util';
 import { StatusDot, trapTab } from './common';
 
 interface Item {
@@ -13,7 +13,7 @@ interface Item {
   hint: string;
   keywords: string;
   run: () => void;
-  dot?: ProjectWithSessions['sessions'][number]['status'];
+  dot?: DotState;
 }
 
 export function CommandPalette({
@@ -103,9 +103,9 @@ export function CommandPalette({
         out.push({
           id: `s-${s.id}`,
           label: [{ session: s.name }],
-          hint: `${p.name} · ${STAGE_LABELS[s.stage]} · ${STATUS_TEXT[s.status]}`,
+          hint: `${p.name} · ${STAGE_LABELS[s.stage]} · ${STATUS_TEXT[dotState(s)]}`,
           keywords: `${p.name} ${s.name} ${s.branch}`,
-          dot: s.status,
+          dot: dotState(s),
           run: () => navigate({ view: 'project', projectId: p.id, sessionId: s.id }),
         });
       }

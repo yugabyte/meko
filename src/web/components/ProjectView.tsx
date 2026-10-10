@@ -16,7 +16,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, approveLabel, cx, dotState, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
@@ -206,12 +206,14 @@ export function ProjectView({
           onDoubleClick={mobile ? undefined : () => onRename(s.id)}
           title={[
             s.name,
-            STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
+            dotState(s) === 'learning'
+              ? LEARNING_TITLE
+              : STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
             STAGE_LABELS[s.stage],
             `${formatTokens(totalTokens(s.usage))} tokens`,
           ].join(' · ') + (mobile ? '' : '\nDouble-click to rename')}
         >
-          <StatusDot status={s.status} />
+          <StatusDot status={dotState(s)} />
           <span className="tab-name">{s.name}</span>
           <span className="stchip">{STAGE_LABELS[s.stage]}</span>
         </button>

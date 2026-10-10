@@ -347,6 +347,11 @@ Session states, shown with a dot in the rail and on each tab:
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
+- **Learning:** AgentK is saving what the session learned to Meko (the
+  [learn step](#the-learn-step), `Session.learning`). The dot becomes a ring of dots turning around
+  Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
+  status idle; without the mod it's a working turn), never over needs you, exited or starting
+  (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
 
 **Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
@@ -1820,9 +1825,9 @@ the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn*
 Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
 that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
 Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
-(`Session.learning`): a Save learnings step still running when the PR merges, or when Discard is
-asked for, holds the close like one of its own, and a step that ended done since the session got
-to Merge & Close stands for it.
+(`Session.learning`, which turns the session's dot into the learning ring): a Save learnings step
+still running when the PR merges, or when Discard is asked for, holds the close like one of its
+own, and a step that ended done since the session got to Merge & Close stands for it.
 
 **Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
 checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
