@@ -24,6 +24,9 @@ export const DEDUP_MODEL = 'claude-haiku-4-5-20251001';
 const SIMILAR = 3;
 /** A fact longer than this is cut (a reply that put a whole document in one fact). */
 const FACT_CHARS = 2000;
+/** The most facts from earlier learn steps a new one is told about (the latest), and how much of each. */
+const COVERED_MAX = 60;
+const COVERED_CHARS = 400;
 
 const KINDS: Record<string, string> = {
   'how-it-works': 'How it works',
@@ -34,14 +37,31 @@ const KINDS: Record<string, string> = {
 };
 
 /**
- * What the fork is asked: the facts this session learned, as JSON. It states the saving rule in
- * full: a session launched before the rule was in the system prompt doesn't have it.
+ * What the fork is asked: the facts this session learned, as JSON, leaving out what it already
+ * saved itself and what earlier learn steps covered (`covered`; a fork leaves nothing in the
+ * transcript, so it can't see them). It states the saving rule in full: a session launched before
+ * the rule was in the system prompt doesn't have it.
  */
-export const EXTRACT_PROMPT = `Don't call any tools. List what this session learned that is worth keeping for the team working on this product. ${SAVING_RULE} Each fact must make sense on its own to a teammate who never saw this session.
+export function extractPrompt(covered: string[]): string {
+  return `Don't call any tools. List what this session learned that is worth keeping for the team working on this product. ${SAVING_RULE} Each fact must make sense on its own to a teammate who never saw this session. Leave out what you already saved to Meko yourself in this session (memory_add), unless the session has since shown it wrong.${coveredText(covered)}
 
 Reply with JSON only, no other text:
 {"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact"}]}
-Reply {"facts":[]} when there is nothing worth saving.`;
+Reply {"facts":[]} when there is nothing new worth saving.`;
+}
+
+/**
+ * The facts earlier learn steps covered, for the next step's prompt (the fork's, or the typed
+ * one's): the latest `COVERED_MAX`, oldest first, each cut to `COVERED_CHARS`. Empty when there are none.
+ */
+export function coveredText(covered: string[]): string {
+  if (!covered.length) return '';
+  const list = covered.slice(-COVERED_MAX).map((t) => {
+    const one = t.replace(/\s+/g, ' ').trim();
+    return `- ${one.length > COVERED_CHARS ? `${one.slice(0, COVERED_CHARS)}…` : one}`;
+  }).join('\n');
+  return `\n\nEarlier learn steps in this session already saved these, or found them already in Meko. Leave them out, and anything that only restates them; this step is for what's new since, or what shows one of them wrong:\n${list}`;
+}
 
 export interface Fact {
   kind: string;
@@ -205,6 +225,11 @@ interface Job {
  */
 export class Learner {
   private jobs = new Map<string, Job>();
+  /**
+   * By session, the facts its learn steps through the mod covered, for the next step's prompt. Kept
+   * in memory only: after a restart the next step lists them again, and the duplicate check skips them.
+   */
+  private coveredFacts = new Map<string, string[]>();
   /** How long a step through the mod may take (tests shorten it). */
   timeoutMs = LEARN_TIMEOUT_MS;
 
@@ -222,6 +247,16 @@ export class Learner {
   /** How the session's latest learn step ran (or was skipped); null before its first. */
   lastPath(sessionId: string): LearnPath | null {
     return get<{ path: LearnPath }>(this.db, 'SELECT path FROM meko_learns WHERE session_id = ? ORDER BY started_at DESC LIMIT 1', sessionId)?.path ?? null;
+  }
+
+  /** What the session's earlier learn steps through the mod saved, corrected or found already saved, oldest first. */
+  private covered(sessionId: string): string[] {
+    return this.coveredFacts.get(sessionId) ?? [];
+  }
+
+  /** Notes a fact this step saved, corrected or found already saved, for the session's next learn step (the latest COVERED_MAX). */
+  private cover(job: Job, text: string): void {
+    this.coveredFacts.set(job.sessionId, [...this.covered(job.sessionId), text].slice(-COVERED_MAX));
   }
 
   /** True while the session has a learn step running. */
@@ -340,7 +375,7 @@ export class Learner {
     }, this.timeoutMs);
     timer.unref?.();
     this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], saves: 0, updates: 0, skips: 0, timer });
-    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: EXTRACT_PROMPT });
+    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id)) });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
   }
 
@@ -428,6 +463,7 @@ export class Learner {
               });
               job.saves++;
             }
+            this.cover(job, memoryText(f));
           } catch (e) {
             this.core.log.warn(`saving a learned fact for ${row.id} failed`, errMsg(e));
           }
@@ -490,7 +526,8 @@ export class Learner {
     const id = randomUUID();
     this.insert(row.id, id, trigger, 'turn', null);
     try {
-      await this.core.sessions.submit(row.id, this.core.sessions.prompt(row, 'learn'));
+      // Claude sees its own earlier saves in the transcript, but not what a step through the mod saved.
+      await this.core.sessions.submit(row.id, this.core.sessions.prompt(row, 'learn') + coveredText(this.covered(row.id)));
     } catch (e) {
       run(this.db, 'DELETE FROM meko_learns WHERE id = ?', id);
       throw e;

@@ -14,7 +14,7 @@ import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor } from '../../src/server/github.js';
-import { EXTRACT_PROMPT } from '../../src/server/learn.js';
+import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
@@ -616,7 +616,7 @@ describe('Meko recall in prompts', () => {
 
   it('states the saving rule in full in both ways of the learn step, for sessions launched before it', () => {
     expect(mekoSaveSystemLine('s-1')).toContain(SAVING_RULE);
-    expect(EXTRACT_PROMPT).toContain(SAVING_RULE);
+    expect(extractPrompt([])).toContain(SAVING_RULE);
     const line = mekoLearnLine('learn', 's-1');
     expect(line).toMatch(/^What to save: /);
     expect(line).toContain(SAVING_RULE);

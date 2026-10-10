@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dedupPrompt, firstJson, machineSpecific, memoryText, parseDecisions, parseFacts } from '../../src/server/learn.js';
+import { coveredText, dedupPrompt, firstJson, machineSpecific, memoryText, parseDecisions, parseFacts } from '../../src/server/learn.js';
 
 describe('the learn step', () => {
   it('reads the facts from a reply, whatever wraps the JSON', () => {
@@ -59,6 +59,14 @@ describe('the learn step', () => {
     expect(memoryText({ kind: 'root-cause', component: '', text: 'The poll ran twice.' })).toBe('Root cause: The poll ran twice.');
     expect(memoryText({ kind: 'decision', component: 'x', text: 'Decision: use SQLite.' })).toBe('Decision: use SQLite.');
     expect(memoryText({ kind: 'constructor', component: '', text: 'x' })).toBe('How it works: x');
+  });
+
+  it('tells a learn step the latest facts earlier ones covered, each cut short', () => {
+    expect(coveredText([])).toBe('');
+    const list = coveredText([...Array.from({ length: 61 }, (_, i) => `Fact ${i}.`), `Long\n${'x'.repeat(500)}`]).split('\n').filter((l) => l.startsWith('- '));
+    expect(list).toHaveLength(60);
+    expect(list[0]).toBe('- Fact 2.');
+    expect(list[59]).toBe(`- Long ${'x'.repeat(395)}…`);
   });
 
   it('asks the duplicate check about each fact beside the memories most like it', () => {

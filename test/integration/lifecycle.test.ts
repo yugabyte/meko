@@ -440,6 +440,25 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.meko.calls.find((c) => c.name === 'updateMemory')?.args.slice(0, 2)).toEqual(['m1', 'Gotcha (x.ts): The cache is per process.']);
   });
 
+  it('tells a later learn step what earlier ones saved or found known, so it lists only what is new', async () => {
+    fakeFiles({
+      mod: '',
+      'learn-facts': JSON.stringify({ facts: ['Saved', 'Known', 'Failed'].map((text) => ({ kind: 'gotcha', component: 'a.ts', text })) }),
+      'learn-decisions': '{"decisions":[{"n":2,"action":"skip"}]}',
+    });
+    const s = await inReview('Twice');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    Object.assign(env.meko, { addMemory: async (text: string) => { if (text.endsWith('Failed')) throw new Error('Meko is down'); } });
+    for (let i = 0; i < 2; i++) {
+      await env.core.sessions.action(s.id, 'learn');
+      await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+    }
+    const [first, second] = modLearn().filter((x) => x.job.kind === 'extract').map((x) => x.job.prompt);
+    expect(first).not.toContain('Earlier learn steps');
+    // The fact whose write failed is left for the next step to find again.
+    expect(second).toMatch(/Earlier learn steps .*:\n- Gotcha \(a\.ts\): Saved\n- Gotcha \(a\.ts\): Known\n\nReply with JSON/);
+  });
+
   it('lets a Save learnings step that finishes during Merge & Close stand for it', async () => {
     fakeFiles({ mod: '', 'learn-delay': '1500' });
     const s = await inReview('Saved first');

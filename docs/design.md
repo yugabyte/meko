@@ -1806,7 +1806,7 @@ datapack, which the team working on the project shares.
 
 **The saving rule.** Every session whose project has a dedicated datapack gets it in its system
 prompt (`mekoSaveSystemLine()` in `prompts.ts`), so it holds for saves Claude makes on its own
-too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `EXTRACT_PROMPT` and
+too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `extractPrompt()` and
 the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line,
 and so does the Explore prompt, which ends by saving under it. Only the mod path also filters what
 is written (local paths); on the typed path, and for Claude's own saves, the rule is all there is. Save what a teammate on this product would want and couldn't easily get from the code, the
@@ -1849,12 +1849,21 @@ restart that cut the step short finishes the discard in `recover()`, unless the 
 turn in a Claude still running: that turn goes on, and its end discards the session. Archive
 clears `discarding`.
 
+**Only what's new.** Each step looks back over the whole session, but asks only for what earlier
+saves didn't cover. The prompt says to leave out what Claude saved itself (its `memory_add` calls are
+in the transcript), and after the first step through the mod it lists the facts earlier steps saved,
+corrected or found already in Meko (noted as each fact is handled; the latest 60, each cut to 400
+characters: `coveredText()`), since a fork leaves nothing in the transcript. The list is kept in
+the server's memory only: after a restart the next step lists everything again and the duplicate
+check skips what's known. A fact whose write failed isn't listed, so the next step finds it again.
+A typed step gets the same list. The duplicate check still runs on what comes back.
+
 **Through the mod** (its link live, protocol 2):
 
 1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll.
 2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
    served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
-   as JSON (`EXTRACT_PROMPT`), and posts the reply, the model and the usage to `/mod/learn`, which
+   as JSON (`extractPrompt()`), and posts the reply, the model and the usage to `/mod/learn`, which
    answers at once.
 3. The server parses the facts (the first JSON object in the reply), drops any that name the home
    folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
